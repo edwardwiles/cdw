@@ -1459,12 +1459,14 @@ function GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, 
 
     
     if sameMarginalsMoment == 0 # calculate if we do not know the value of the first moment
+        refIndex = 1
+        refIndex1 = refIndex + (refIndex - 1) * D
+        
         dInd = counterType == 1 ? D^2 + 2 * D : D^2 + (D - 1) + 2 * D
         for o = 1:D
             for d = 1:D
                 o1 = o + (d - 1) * D
-                ν_od = ν[o, d]
-                @. G[:, dInd+o1] = Ū[:, o1, 1] .- ν_od .- PMM[dInd+o1]
+                @. G[:, dInd+o1] =  Ū[:, o1, 1] ./ ν[o, d] .- Ū[:, refIndex1, 1] ./ ν[refIndex, refIndex].- PMM[dInd+o1]
             end
         end
     end
@@ -1658,7 +1660,7 @@ function moments!(K, G, θ, U, obj)
             ν = ones(D,D)
             GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, sameMarginalsMoment)
         else
-            ν = reshape(θ[counterType_θ_offset+3+2*D:counterType_θ_offset3+2*D+D^2-1], (D, D))
+            ν = reshape(vcat(1, θ[counterType_θ_offset+3+2*D:counterType_θ_offset+3+2*D+D^2-2]), (D, D))
             GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, sameMarginalsMoment)
          end
     end
@@ -1962,7 +1964,7 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
 
 
         if GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
-            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, , ones(D^2))
+            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2 - 1))
         end
 
         if sameMarginalsMoment == 1 && NoScalingforSameMartingale == 0
@@ -2010,7 +2012,7 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
 
         if GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
             #θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], reshape(cHat, (D^2, 1))[:])
-            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2))
+            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2 - 1))
         end
 
         if sameMarginalsMoment == 1 && NoScalingforSameMartingale == 0
