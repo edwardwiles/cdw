@@ -801,7 +801,7 @@ function smoothMinIndNew!(xInd, x, D, tuner)
 
 end
 
-function hFunction!(K, G, UPow, Uσ, Ū, w, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, μHat)
+function hFunction!(K, G, UPow, Uσ, Ū, w, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat)
     # main function to fill in the moment matrix G for the baseline moments 
 
     D = size(τ, 1) # num countries 
@@ -886,11 +886,11 @@ function hFunction!(K, G, UPow, Uσ, Ū, w, τ, σ, μ, γ, L, P, PMM, counterE
 
                 if localGravityMoment == 1
                     μTarget = true ? μHat : μ
-                    localGravityMoment!(G, PMM, D, ω, pricesTemp, ξ, σ, μTarget, d, max_price, gravMoment, strongGravityMoment)
+                    localGravityMoment!(G, PMM, D, ω, pricesTemp, ξ, σ, μTarget, d, max_price, gravMoment, GravityMomentFirstApproach)
                 end
 
                 if localGravityCrossMoment == 1
-                    localGravityCrossMoment!(G, PMM, D, ω, pricesTemp, ξ, σ, d, max_price, gravMoment, localGravityMoment, strongGravityMoment)
+                    localGravityCrossMoment!(G, PMM, D, ω, pricesTemp, ξ, σ, d, max_price, gravMoment, localGravityMoment, GravityMomentFirstApproach)
                 end
             end
 
@@ -1008,7 +1008,7 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, L, P, PMM, counterExp
 
 end
 
-function gravityMoment!(G, τ, c, D, W, γ, strongGravityMoment)
+function gravityMoment!(G, τ, c, D, W, γ, GravityMomentFirstApproach)
     # constructs gravity moment, if using (see theory note)
 
     #deltaτ = zeros(eltype(γ),size(τ))
@@ -1034,12 +1034,12 @@ function gravityMoment!(G, τ, c, D, W, γ, strongGravityMoment)
     sumGrav /= (D - 1)^2
 
     for i = 1:W
-        G[i, end-strongGravityMoment] = sumGrav
+        G[i, end-GravityMomentFirstApproach] = sumGrav
     end
 end
 
-function newGravityMoment!(G, PMM, τ, D, W, γ, U, strongGravityMoment)
-    # constructs gravity moment, if using (see theory note)
+function newGravityMoment!(G, PMM, τ, D, W, γ, U, GravityMomentFirstApproach)
+    # constructs gravity moment, second approach [without additional parameters] (see theory note)
 
     deltaτ = doubleDiff(τ)
 
@@ -1072,16 +1072,16 @@ function newGravityMoment!(G, PMM, τ, D, W, γ, U, strongGravityMoment)
             end
         end
         sumGrav /= (D - 1)^2
-        G[ω, end-strongGravityMoment] = 1000.0 * sumGrav - PMM[end-strongGravityMoment]
+        G[ω, end-GravityMomentFirstApproach] = 1000.0 * sumGrav - PMM[end-GravityMomentFirstApproach]
     end
 
 end
 
-function sameMarginalsMomentold!(Ū, G, PMM, D, W, X, μ_σ, ν, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+function sameMarginalsMomentold!(Ū, G, PMM, D, W, X, μ_σ, ν, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, baseIndex)
     # old implementation, not used
     # assures the marginals are equal amongst themselves
 
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2)
 
     Γ = gamma(1 + μ_σ)
     U_pow = zeros(momentOrder + 1)
@@ -1131,10 +1131,10 @@ function sameMarginalsMomentold!(Ū, G, PMM, D, W, X, μ_σ, ν, momentOrder, g
         end
     end
 end
-function sameMarginalsMoment!(Ū, G, PMM, D, W, μ_σ, ν, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+function sameMarginalsMoment!(Ū, G, PMM, D, W, μ_σ, ν, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, baseIndex)
     # assures the marginals are equal amongst themselves
     # scaled Uod moments are equalized
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach
     
     refIndex = 1 #do not change
     refIndex1 = refIndex + (refIndex - 1) * D
@@ -1176,10 +1176,10 @@ function sameMarginalsMoment!(Ū, G, PMM, D, W, μ_σ, ν, momentOrder, gravMom
 
 end
 
-function sameMarginalsMomentCDF!(Ū, G, PMM, D, W, μ_σ, ν, CDF_X, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+function sameMarginalsMomentCDF!(Ū, G, PMM, D, W, μ_σ, ν, CDF_X, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, baseIndex)
     # assures the marginals are equal amongst themselves
     # CFDs are equalized at specific quantiles
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach
 
     #CDF_X is a vector of increasing values of X. 
     # the moment condition is CDF_od(X) = CDF_11(X)
@@ -1215,17 +1215,17 @@ function sameMarginalsMomentCDF!(Ū, G, PMM, D, W, μ_σ, ν, CDF_X, gravMoment
     end
 end
 
-function sameMarginalsMomentCDFNoScaling!(G, PMM, D, W, CDF_Moments, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+function sameMarginalsMomentCDFNoScaling!(G, PMM, D, W, CDF_Moments, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, baseIndex)
     # imposes Uods have the same CDF. It uses cached realizations as the moment condition does not depend on the parameters 
     K_ = size(CDF_Moments, 2)
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach
     @. G[:, end-offset-K_+1:end-offset] = CDF_Moments[:, :]
 end
 
-function independenceMomentold!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
+function independenceMomentold!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
     # assures the marginals are identical and independent,
     # old implementation not used
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2
     for ω = 1:W
         for d = 1:D
             for o = 1:D
@@ -1249,9 +1249,9 @@ function independenceMomentold!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, 
     end
 end
 
-function uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
+function uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
     # assures the marginals are identical and independent
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex)
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach  + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex)
 
     refIndex = 1
     refIndex1 = refIndex + (refIndex - 1) * D
@@ -1279,9 +1279,9 @@ function uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrd
     end
 end
 
-function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
+function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
     # imposes zero coreelation between Uods, implementation used cached realizations
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 +momentOrderForBaseIndex)
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach + sameMarginalsMoment * ((2 * momentOrder) * D^2 +momentOrderForBaseIndex)
     
     refIndex = 1
     refIndex1 = refIndex + (refIndex - 1) * D
@@ -1296,10 +1296,10 @@ function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, mome
 
 end
 
-function independenceMoment!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
+function independenceMoment!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
     # assures the marginals are identical and independent
     # old implementation not used
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2
 
     νk = zeros(D, D, momentOrder + 2)
     for o = 1:D
@@ -1452,13 +1452,14 @@ function strongGravityMomentold2!(G, PMM, τ, ν, D, W, Ū, Σ, Mτ, counterTyp
     @. G[:, end] = MDD - PMM[end]
 end
 
-function strongGravityMoment!(G, PMM, τ, ν, D, W, Ū, Σ, Mτ, counterType, baseIndex, sameMarginalsMoment)
+function GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, sameMarginalsMoment)
 
-    # constructs the moment that ΔΔ E[ln U] is mean independent of ΔΔ lnτ  
+    # constructs the moment that ΔΔ E[ln U] = ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
+    # this is NOT the strong gravitymoment in the notes 
 
-    dInd = counterType == 1 ? D^2 + 2 * D : D^2 + (D - 1) + 2 * D
-
-    if sameMarginalsMoment == 0
+    
+    if sameMarginalsMoment == 0 # calculate if we do not know the value of the first moment
+        dInd = counterType == 1 ? D^2 + 2 * D : D^2 + (D - 1) + 2 * D
         for o = 1:D
             for d = 1:D
                 o1 = o + (d - 1) * D
@@ -1467,8 +1468,10 @@ function strongGravityMoment!(G, PMM, τ, ν, D, W, Ū, Σ, Mτ, counterType, b
             end
         end
     end
+    # if sameMarginalsMoment == 1, we know that E[Ū] = constant * ν_od
 
     ΔΔlnν = doubleDiff(ν)
+    ΔΔlncHat = doubleDiff(cHat)
     deltaτ = doubleDiff(τ)
 
 
@@ -1483,18 +1486,18 @@ function strongGravityMoment!(G, PMM, τ, ν, D, W, Ū, Σ, Mτ, counterType, b
 
     sumGrav = 0
     for o = 2:D
-        sumGrav += (deltaτ[o, 1] - meanτ) * ΔΔlnν[o, 1]
+        sumGrav += (deltaτ[o, 1] - meanτ) * (ΔΔlnν[o, 1]+ΔΔlncHat[o,1])
         for d = 3:D
-            sumGrav += (deltaτ[o, d] - meanτ) * ΔΔlnν[o, d]
+            sumGrav += (deltaτ[o, d] - meanτ) * (ΔΔlnν[o, d]+ΔΔlncHat[o,d])
         end
     end
     sumGrav /= (D - 1)^2
 
-    @. G[:, end] = sumGrav - PMM[end]
+    @. G[:, end] = sumGrav - PMM[end] # this condition is added last because it is a condition on parameters only, so it goes into the outerloop
 
 end
 
-function localGravityMoment!(G, PMM, D, ω, prices, ξ, σ, μ, d, max_price, gravMoment, strongGravityMoment)
+function localGravityMoment!(G, PMM, D, ω, prices, ξ, σ, μ, d, max_price, gravMoment, GravityMomentFirstApproach)
     tuner = -100.0
     β = 0.01
     pricesInd_without_o = copy(prices)
@@ -1513,13 +1516,13 @@ function localGravityMoment!(G, PMM, D, ω, prices, ξ, σ, μ, d, max_price, gr
 
             moment_idx = (D - 1) * (d - 1) + counter
 
-            G[ω, end-strongGravityMoment-gravMoment-moment_idx] = σ - 1 + A / ξ[o] + B / ξ[d] - 1 / μ - PMM[end-strongGravityMoment-gravMoment-moment_idx]
+            G[ω, end-GravityMomentFirstApproach-gravMoment-moment_idx] = σ - 1 + A / ξ[o] + B / ξ[d] - 1 / μ - PMM[end-GravityMomentFirstApproach-gravMoment-moment_idx]
         end
     end
 
 end
 
-function localGravityCrossMoment!(G, PMM, D, ω, prices, ξ, σ, d, max_price, gravMoment, localGravityMoment, strongGravityMoment)
+function localGravityCrossMoment!(G, PMM, D, ω, prices, ξ, σ, d, max_price, gravMoment, localGravityMoment, GravityMomentFirstApproach)
     tuner = -100.0
     β = 0.01
     pricesInd_without_c = copy(prices)
@@ -1537,7 +1540,7 @@ function localGravityCrossMoment!(G, PMM, D, ω, prices, ξ, σ, d, max_price, g
                     A = prices[o]^(1 - σ) * pricesInd_without_c[o]SmoothDirac(β, log(prices[c] / prices[o]))
                     B = prices[d]^(1 - σ) * pricesInd_without_c[d] * SmoothDirac(β, log(prices[c] / prices[d]))
                     moment_idx = localGravityMoment * D * (D - 1) + (D - 1) * (D - 2) * (d - 1) + counter
-                    G[ω, end-strongGravityMoment-gravMoment-moment_idx] = A / ξ[o] - B / ξ[d] - PMM[end-strongGravityMoment-gravMoment-moment_idx]
+                    G[ω, end-GravityMomentFirstApproach-gravMoment-moment_idx] = A / ξ[o] - B / ξ[d] - PMM[end-GravityMomentFirstApproach-gravMoment-moment_idx]
                 end
             end
         end
@@ -1548,8 +1551,8 @@ function moments!(K, G, θ, U, obj)
     # main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 
     # unpack the gamma (auxiliary parameters) vector
-    @unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, indicators, Uσ, Ū, Σ_od, Mτ, μHat, CDF_X, CDF_Moments, Ind_Moments = obj.γ
-    @unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching = indicators
+    @unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, indicators, Uσ, Ū, Σ_od, Mτ, μHat, CDF_X, CDF_Moments, Ind_Moments , cHat= obj.γ
+    @unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching = indicators
 
     W = size(U, 1)
     D = size(τ, 1)
@@ -1604,11 +1607,11 @@ function moments!(K, G, θ, U, obj)
             UPow[i] = U[i]^(-μ)
             UσPow[i] = Uσ[i]^(-μ)
         end
-        hFunction!(K, G, UPow, UσPow, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, μHat) # fill in G with baseline moments 
+        hFunction!(K, G, UPow, UσPow, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat) # fill in G with baseline moments 
         hFunctionCounter!(K, G, UPow, UσPow, wPrime, τPrime, σ, γ_prime, LPrime, P, PMM, counterExplicit, counterType, baseIndex) # fill in G with counterfactual moments, fill in K 
     else
 
-        hFunction!(K, G, U, Uσ, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, μHat)
+        hFunction!(K, G, U, Uσ, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat)
         hFunctionCounter!(K, G, U, Uσ, wPrime, τPrime, σ, γ_prime, LPrime, P, PMM, counterExplicit, counterType, baseIndex)
     end
 
@@ -1619,11 +1622,11 @@ function moments!(K, G, θ, U, obj)
             ν = reshape(vcat(1, θ[counterType_θ_offset+3+2*D:counterType_θ_offset+3+2*D+D^2-2]), (D, D))
         end
         if useCDFforMarginalMatching == 0
-            sameMarginalsMoment!(Ū, G, PMM, D, W, (1 - σ) * μ, ν, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+            sameMarginalsMoment!(Ū, G, PMM, D, W, (1 - σ) * μ, ν, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, baseIndex)
         elseif NoScalingforSameMartingale == 0
-            sameMarginalsMomentCDF!(Ū, G, PMM, D, W, (1 - σ) * μ, ν, CDF_X, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+            sameMarginalsMomentCDF!(Ū, G, PMM, D, W, (1 - σ) * μ, ν, CDF_X, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, baseIndex)
         else
-            sameMarginalsMomentCDFNoScaling!(G, PMM, D, W, CDF_Moments, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+            sameMarginalsMomentCDFNoScaling!(G, PMM, D, W, CDF_Moments, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, baseIndex)
         end
     end
 
@@ -1635,32 +1638,37 @@ function moments!(K, G, θ, U, obj)
         if NoScalingforSameMartingale == 0
             ν = reshape(vcat(1, θ[counterType_θ_offset+3+2*D:counterType_θ_offset+3+2*D+D^2-2]), (D, D))
             ηk = θ[counterType_θ_offset+3+2*D+D^2-1:counterType_θ_offset+3+2*D+D^2-1]
-            uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
+            uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
         else
-            uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
+            uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
         end
 
 
-        #independenceMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, gravMoment, localGravityMoment, strongGravityMoment,localGravityCrossMoment, sameMarginalsMoment)
+        #independenceMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach,localGravityCrossMoment, sameMarginalsMoment)
     end
 
 
     if gravMoment == 1
-        newGravityMoment!(G, PMM, τ, D, W, γ, U, strongGravityMoment) # add gravity moment if using 
+        newGravityMoment!(G, PMM, τ, D, W, γ, U, GravityMomentFirstApproach) # add gravity moment if using 
     end
 
 
-    if strongGravityMoment == 1
-        ν = reshape(θ[counterType_θ_offset+3+2*D:counterType_θ_offset3+2*D+D^2-1], (D, D))
-        strongGravityMoment!(G, PMM, τ, ν, D, W, Ū, Σ_od, Mτ, counterType, baseIndex)
+    if GravityMomentFirstApproach == 1
+        if sameMarginalsMoment ==1 && NoScalingforSameMartingale == 1
+            ν = ones(D,D)
+            GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, sameMarginalsMoment)
+        else
+            ν = reshape(θ[counterType_θ_offset+3+2*D:counterType_θ_offset3+2*D+D^2-1], (D, D))
+            GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, sameMarginalsMoment)
+         end
     end
 
 end
-function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
+function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
     # function that runs the CC outer loop 
     D = length(γ.L)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
 
     if counterType != 1
         numMoments += (D - 1)
@@ -1673,7 +1681,7 @@ function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravity
         (moments!)=moments!,
         #moments_jacobian! = rust_moments_jacobian!,
         d=numMoments,
-        outer_constr_index=numMoments + 1 - strongGravityMoment,
+        outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
         inequality_index=Int64[],
         l=size(θ_initial, 1),
         U=U,
@@ -1687,11 +1695,11 @@ function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravity
     return (val, x, nStatus)
 end
 
-function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType, useParallel, file_name)
+function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType, useParallel, file_name)
     # function that runs the CC outer loop 
     D = length(γ.L)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
 
     if counterType != 1
         numMoments += (D - 1)
@@ -1716,7 +1724,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
 
 
     # if NoScalingforSameMartingale == 1, then we do not need to scale the Us.
-    if strongGravityMoment == 1 || (sameMarginalsMoment == 1 && NoScalingforSameMartingale == 0)
+    if GravityMomentFirstApproach == 1 || (sameMarginalsMoment == 1 && NoScalingforSameMartingale == 0)
         θ_lower_all[3+D+1:3+D+1+D^2-2] = 0.8 * θ_initial_all[3+D+1:3+D+1+D^2-2] # lower and upper bounds for ν_{od}
         θ_upper_all[3+D+1:3+D+1+D^2-2] = 1.2 * θ_initial_all[3+D+1:3+D+1+D^2-2]
     end
@@ -1758,7 +1766,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
                 (moments!)=moments!,
                 #moments_jacobian! = rust_moments_jacobian!,
                 d=numMoments,
-                outer_constr_index=numMoments + 1 - strongGravityMoment,
+                outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
                 inequality_index=Int64[],
                 l=size(θ_initial, 1),
                 U=U,
@@ -1774,7 +1782,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
                 (moments!)=moments!,
                 #moments_jacobian! = rust_moments_jacobian!,
                 d=numMoments,
-                outer_constr_index=numMoments + 1 - strongGravityMoment,
+                outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
                 inequality_index=Int64[],
                 l=size(θ_initial, 1),
                 U=U,
@@ -1824,7 +1832,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
                     (moments!)=moments!,
                     #moments_jacobian! = rust_moments_jacobian!,
                     d=numMoments,
-                    outer_constr_index=numMoments + 1 - strongGravityMoment,
+                    outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
                     inequality_index=Int64[],
                     #l=size(θ_initial, 1),
                     l=length(θ_initial),
@@ -1843,7 +1851,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
                     (moments!)=moments!,
                     #moments_jacobian! = rust_moments_jacobian!,
                     d=numMoments,
-                    outer_constr_index=numMoments + 1 - strongGravityMoment,
+                    outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
                     inequality_index=Int64[],
                     #l=size(θ_initial, 1),
                     l=length(θ_initial),
@@ -1874,7 +1882,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
                     (moments!)=moments!,
                     #moments_jacobian! = rust_moments_jacobian!,
                     d=numMoments,
-                    outer_constr_index=numMoments + 1 - strongGravityMoment,
+                    outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
                     inequality_index=Int64[],
                     #l=size(θ_initial, 1),
                     l=length(θ_initial),
@@ -1893,7 +1901,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
                     (moments!)=moments!,
                     #moments_jacobian! = rust_moments_jacobian!,
                     d=numMoments,
-                    outer_constr_index=numMoments + 1 - strongGravityMoment,
+                    outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
                     inequality_index=Int64[],
                     #l=size(θ_initial, 1),
                     l=length(θ_initial),
@@ -1922,7 +1930,7 @@ end
 function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime, Uσ, Ū, Σ_od, Mτ, μHat, PMM=zeros(1), CDF_X=zeros(1), CDF_Moments=zeros(1), Ind_Moments=zeros(1))
     # constructs object containing fixed parameters (L, tau, data, etc) to feed into moment functions
 
-    @unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching = globParams
+    @unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching = globParams
     @unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = preStepOutput
     @unpack λData, LData, τData = data
 
@@ -1934,7 +1942,7 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
         gravMoment=gravMoment,
         localGravityMoment=localGravityMoment,
         localGravityCrossMoment=localGravityCrossMoment,
-        strongGravityMoment=strongGravityMoment,
+        GravityMomentFirstApproach=GravityMomentFirstApproach,
         sameMarginalsMoment=sameMarginalsMoment,
         NoScalingforSameMartingale=NoScalingforSameMartingale,
         independenceMoment=independenceMoment,
@@ -1953,8 +1961,8 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
         θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
 
 
-        if strongGravityMoment == 1
-            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, reshape(cHat, (D^2, 1))[:])
+        if GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
+            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, , ones(D^2))
         end
 
         if sameMarginalsMoment == 1 && NoScalingforSameMartingale == 0
@@ -1990,7 +1998,8 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
             D=D,
             CDF_X=CDF_X,
             CDF_Moments=CDF_Moments,
-            Ind_Moments=Ind_Moments
+            Ind_Moments=Ind_Moments,
+            cHat = cHat
         )
 
         return γ, θ_initial
@@ -1999,8 +2008,9 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
 
         θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
 
-        if strongGravityMoment == 1
-            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], reshape(cHat, (D^2, 1))[:])
+        if GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
+            #θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], reshape(cHat, (D^2, 1))[:])
+            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2))
         end
 
         if sameMarginalsMoment == 1 && NoScalingforSameMartingale == 0
@@ -2037,7 +2047,8 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
             D=D,
             CDF_X=CDF_X,
             CDF_Moments=CDF_Moments,
-            Ind_Moments=Ind_Moments
+            Ind_Moments=Ind_Moments,
+            cHat = cHat
         )
 
         return γ, θ_initial
@@ -2045,11 +2056,11 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
 
 end
 
-function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType)
+function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType)
     # function that generate the LFD for a particular θ, by running the innerloop
     D = length(γ.L)
     W = size(U, 1)
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
 
     if counterType != 1
         numMoments += (D - 1)
@@ -2065,7 +2076,7 @@ function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCros
         (moments!)=moments!,
         #moments_jacobian! = rust_moments_jacobian!,
         d=numMoments,
-        outer_constr_index=numMoments + 1 - strongGravityMoment,
+        outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
         inequality_index=Int64[],
         l=size(θ_initial, 1),
         U=U,
@@ -2088,7 +2099,7 @@ function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCros
 
     meanLDF = 0
     for ω = 1:W
-        arg0[ω] = -x[1] - dot(G[ω, 1:numMoments-strongGravityMoment], x[2:length(x)])
+        arg0[ω] = -x[1] - dot(G[ω, 1:numMoments-GravityMomentFirstApproach], x[2:length(x)])
     end
 
     dPsi!(LFD, arg0)
@@ -2101,16 +2112,17 @@ end
 
 function checkParams(globParams)
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM = globParams
 
-    if strongGravityMoment + sameMarginalsMoment + independenceMoment > 1
+    if GravityMomentFirstApproach + sameMarginalsMoment + independenceMoment > 1
         error("parameters are not compatible")
     end
 end
+
 function runMainClosedFormeFrechet(globParams)
     # this function runs the outer loop, using the same distribution for the F* and the initial point of the optimizer
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching = globParams
 
     λData, LData, τData = importData(server, fakeData, DFake, seed)
     data = (λData=λData, LData=LData, τData=τData)
@@ -2242,7 +2254,7 @@ function runMainClosedFormeFrechet(globParams)
     Ind_Moments = zeros(1, 1)
     #=
     if independenceMoment == 1 && NoScalingforSameMartingale == 1
-        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2
+        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2
         Ind_Moments = zeros(W, D^4 - floor(Int, D^2 * (1 + D^2) / 2))
 
         idx_corss_moment = 0
@@ -2265,7 +2277,7 @@ function runMainClosedFormeFrechet(globParams)
 
 
     if independenceMoment == 1 && NoScalingforSameMartingale == 1
-        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2
+        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2
         Ind_Moments = zeros(W, D * (D^2 - floor(Int, D * (1 + D) / 2)))
 
         idx_corss_moment = 0
@@ -2285,9 +2297,9 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
-    #numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2 + independenceMoment * (D^4 - floor(Int, D^2 * (1 + D^2) / 2) + 1)
+    #numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2 + independenceMoment * (D^4 - floor(Int, D^2 * (1 + D^2) / 2) + 1)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
 
 
     if counterType != 1
@@ -2312,6 +2324,7 @@ function runMainClosedFormeFrechet(globParams)
     end
 
 
+    ##### Naming the Moments
     for d = 1:D
         for o = 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data 
             d1 = d + (o - 1) * D
@@ -2331,8 +2344,16 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
-    if strongGravityMoment == 1
-        MomentNames[end] = "Strong Gravity"
+    if GravityMomentFirstApproach == 1
+        MomentNames[end] = "Gravity First Approach"
+        if sameMarginalsMoment == 0
+            for o = 1:D
+                for d = 1:D
+                    o1 = o + (d - 1) * D
+                    MomentNames[dInd+o1] = "First Moment [$o , $d]"
+                end
+            end
+        end
     end
 
     for d = 1:D
@@ -2342,7 +2363,7 @@ function runMainClosedFormeFrechet(globParams)
                 counter += 1
                 if o != d
                     moment_idx = (D - 1) * (d - 1) + counter
-                    MomentNames[end-strongGravityMoment-gravMoment-moment_idx] = "Local ACR [$o, $d]"
+                    MomentNames[end-GravityMomentFirstApproach-gravMoment-moment_idx] = "Local ACR [$o, $d]"
                 end
             end
         end
@@ -2357,7 +2378,7 @@ function runMainClosedFormeFrechet(globParams)
                         if c != o && c != d
                             counter += 1
                             moment_idx = localGravityMoment * D * (D - 1) + (D - 1) * (D - 2) * (d - 1) + counter
-                            MomentNames[end-strongGravityMoment-gravMoment-moment_idx] = "Local ACR [$o, $d , $c]"
+                            MomentNames[end-GravityMomentFirstApproach-gravMoment-moment_idx] = "Local ACR [$o, $d , $c]"
                         end
                     end
                 end
@@ -2367,12 +2388,12 @@ function runMainClosedFormeFrechet(globParams)
 
 
     if gravMoment == 1
-        # not implemented
+        MomentNames[end - GravityMomentFirstApproach] = "Gravity Second Approach"
     end
 
 
     if sameMarginalsMoment == 1 && useCDFforMarginalMatching == 0
-        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2)
 
         refIndex = 1 #do not change
         refIndex1 = refIndex + (refIndex - 1) * D
@@ -2395,7 +2416,7 @@ function runMainClosedFormeFrechet(globParams)
             end
         end
     elseif sameMarginalsMoment == 1 && useCDFforMarginalMatching == 1 && NoScalingforSameMartingale == 0
-        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2)
 
         #CDF_X is a vector of increasing values of X. 
         # the moment condition is CDF_od(X) = CDF_11(X)
@@ -2416,7 +2437,7 @@ function runMainClosedFormeFrechet(globParams)
         end
     elseif sameMarginalsMoment == 1 && useCDFforMarginalMatching == 1 && NoScalingforSameMartingale == 1
         K_ = size(CDF_Moments, 2)
-        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2)
         for o = 1:D
             for d = 1:D
                 o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
@@ -2433,7 +2454,7 @@ function runMainClosedFormeFrechet(globParams)
     end
 
     if independenceMoment == 1 && NoScalingforSameMartingale == 1
-        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ( (2 * momentOrder) * D^2 + momentOrderForBaseIndex)
+        offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * ( (2 * momentOrder) * D^2 + momentOrderForBaseIndex)
 
         MomentNames[end-offset] = "Uncorrelation [1, 1, First Moment Value]"
 
@@ -2457,14 +2478,10 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
-
-
-    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", strongGravityMoment, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
 
     writedlm(string("MomentNames_", file_name, ".csv"), MomentNames, ',')
 
-
-    #  @show Ū[1,:,:]
 
     for d = 1:D
         for o = 1:D
@@ -2481,7 +2498,6 @@ function runMainClosedFormeFrechet(globParams)
             Σ_od[o, d] = sqrt(var(Ū[:, o1, 1]))
         end
     end
-
 
     if θConstant == 1
         @. U[:] = U[:] .^ (-μHat) # if theta doesn't vary, then much faster to precalculate this matrix 
@@ -2502,7 +2518,7 @@ function runMainClosedFormeFrechet(globParams)
     @show Dates.format(now(), "HH:MM") # print time 
 
 
-    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType, useParallel, file_name) # run the outer loop 
+    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType, useParallel, file_name) # run the outer loop 
     writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
 
     # store the parameters
@@ -2518,8 +2534,8 @@ function runMainClosedFormeFrechet(globParams)
         LFD_upper = zeros(W, length(δ_grid))
         LFD_lower = zeros(W, length(δ_grid))
         for i = 1:length(δ_grid)
-            LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType)
-            LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType)
+            LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType)
+            LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, counterType)
         end
         writedlm(string("LFD_up_", file_name, ".csv"), LFD_upper, ',')
         writedlm(string("LFD_low_", file_name, ".csv"), LFD_lower, ',')
@@ -2534,13 +2550,13 @@ function runLFD(globParams)
     # this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
     # U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM = globParams
 
     λData, LData, τData = importData(server, fakeData, DFake, seed)
     τPrime, LPrime = defineCounter(τData, LData, counterType)
     D = length(LData)
 
-    # get the pre step values for optimiser starting point, using closed form Frecht 
+    # get the pre step values for optimiser starting point, using closed form Frechet 
     preStepOutput = preStep(LData, LPrime, τData, τPrime, λData, θHat, σHat, baseIndex, counterType)
 
 
@@ -2864,11 +2880,12 @@ function runLFD(globParams)
 
 end
 
+###### !!!!!This Function needs updating.... do not use for now!!!!!!!
 function runMainGeneric(globParams)
-    ###### This Function needs updating.... do not use now.
+    ###### !!!!!This Function needs updating.... do not use for now!!!!!!!
     # this function runs the outer loop, using the same distribution for the F* and the initial point of the optimizer
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, StarDistributionType, StarDistributionCorr, StarDistributionParam, usePMM = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, StarDistributionType, StarDistributionCorr, StarDistributionParam, usePMM = globParams
 
     checkParams(globParams)
 
@@ -2924,7 +2941,7 @@ function runMainGeneric(globParams)
     Mτ = calcMτ(τData, D)
     print(MartingalDifferenceDivergence(cHat, Mτ, D))
 
-    numMoments = counterType == 1 ? D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2 + independenceMoment * D * D * momentOrder * (1 + D * momentOrder) : D^2 + (D - 1) + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (1 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2 + independenceMoment * D * D * momentOrder * (1 + D * momentOrder)
+    numMoments = counterType == 1 ? D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2 + independenceMoment * D * D * momentOrder * (1 + D * momentOrder) : D^2 + (D - 1) + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2 + independenceMoment * D * D * momentOrder * (1 + D * momentOrder)
 
     PMM = zeros(numMoments)
     ΣMM = zeros(numMoments, numMoments)
@@ -2952,8 +2969,8 @@ function runMainGeneric(globParams)
 
     @show Dates.format(now(), "HH:MM") # print time 
 
-    file_name = string("InitDistributionType", InitDistributionType, "_narrow_countries_", D, "_baseIndex", baseIndex, "_fixMu_gravMoment", gravMoment, "_strongGravityMoment", strongGravityMoment, "_localGravityMoment", localGravityMoment, "_PMM", usePMM, "_new2samemarginals", sameMarginalsMoment, "_independenceMoment", independenceMoment, "_order", momentOrder, "_", Dates.format(now(), "y-m-d"), ".csv")
-    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_Star, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, counterType, useParallel, file_name) # run the outer loop 
+    file_name = string("InitDistributionType", InitDistributionType, "_narrow_countries_", D, "_baseIndex", baseIndex, "_fixMu_gravMoment", gravMoment, "_GravityMomentFirstApproach", GravityMomentFirstApproach, "_localGravityMoment", localGravityMoment, "_PMM", usePMM, "_new2samemarginals", sameMarginalsMoment, "_independenceMoment", independenceMoment, "_order", momentOrder, "_", Dates.format(now(), "y-m-d"), ".csv")
+    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_Star, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, counterType, useParallel, file_name) # run the outer loop 
     writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
 
 
@@ -2964,13 +2981,13 @@ function runMainGeneric(globParams)
         LFD_upper = zeros(W, length(δ_grid))
         LFD_lower = zeros(W, length(δ_grid))
         for i = 1:length(δ_grid)
-            LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
-            LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
+            LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
+            LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
         end
-        file_name = string("LFD_InitDistributionType", InitDistributionType, "_narrow_countries_", D, "_baseIndex", baseIndex, "_fixMu_gravMoment", gravMoment, "_strongGravityMoment", strongGravityMoment, "_localGravityMoment", localGravityMoment, "_PMM", usePMM, "_new2samemarginals", sameMarginalsMoment, "_independenceMoment", independenceMoment, "_order", momentOrder, "_", Dates.format(now(), "y-m-d"), ".csv")
+        file_name = string("LFD_InitDistributionType", InitDistributionType, "_narrow_countries_", D, "_baseIndex", baseIndex, "_fixMu_gravMoment", gravMoment, "_GravityMomentFirstApproach", GravityMomentFirstApproach, "_localGravityMoment", localGravityMoment, "_PMM", usePMM, "_new2samemarginals", sameMarginalsMoment, "_independenceMoment", independenceMoment, "_order", momentOrder, "_", Dates.format(now(), "y-m-d"), ".csv")
         writedlm(file_name, LFD_upper, ',')
 
-        file_name = string("InitDistributionType", InitDistributionType, "_narrow_countries_", D, "_baseIndex", baseIndex, "_fixMu_gravMoment", gravMoment, "_strongGravityMoment", strongGravityMoment, "_localGravityMoment", localGravityMoment, "_PMM", usePMM, "_new2samemarginals", sameMarginalsMoment, "_independenceMoment", independenceMoment, "_order", momentOrder, "_", Dates.format(now(), "y-m-d"), ".csv")
+        file_name = string("InitDistributionType", InitDistributionType, "_narrow_countries_", D, "_baseIndex", baseIndex, "_fixMu_gravMoment", gravMoment, "_GravityMomentFirstApproach", GravityMomentFirstApproach, "_localGravityMoment", localGravityMoment, "_PMM", usePMM, "_new2samemarginals", sameMarginalsMoment, "_independenceMoment", independenceMoment, "_order", momentOrder, "_", Dates.format(now(), "y-m-d"), ".csv")
         writedlm(file_name, LFD_lower, ',')
     end
 
@@ -2995,7 +3012,7 @@ globParams = (θHat=0,
     gravMoment=0, # = 1 impose gravity identification for Frechet, 0 = do not
     localGravityMoment=0, # = 1 impose model implied trade elasticity mtaches θHat, 0 = do not 
     localGravityCrossMoment=0, # = 1 impose model implied trade cross elasticity is zero, 0 = do not 
-    strongGravityMoment=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
+    GravityMomentFirstApproach=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
     sameMarginalsMoment=1, # =1 imposes all od pairs have the same U distribution
     NoScalingforSameMartingale=1,# =1 imposes a strict same marginal condition, without allowing for a multiplicative dergree of freedom   
     independenceMoment=0, # =1 imposes correlation[Uod, Uo'd] = 0 
