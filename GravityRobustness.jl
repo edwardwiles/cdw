@@ -27,7 +27,7 @@ using Random, NLsolve, Optim, SpecialFunctions, DelimitedFiles, Dates, LinearAlg
 
 using Distributions, Statistics, Bigsimr, Plots, InvertedIndices
 
-using MemPoo
+using MemPool
 #so code doesn't throw error messages as it tries to display figures.
 ENV["GKSwstype"] = "nul"
 
