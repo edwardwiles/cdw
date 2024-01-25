@@ -143,8 +143,6 @@ function defineCounter(τData, LData, counterType)
         τPrime = τData .^ Inf
     elseif counterType == 2 # in between custom alternative 
         τPrime = 0.5 .* τData + 0.5 .* ones(D, D) # edit custom alternate matrix here
-    elseif counterType == 3 # in between custom alternative 
-        τPrime = τData  # edit custom alternate matrix here
     end
 
     return τPrime, LPrime
@@ -997,7 +995,7 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, L, P, PMM, counterExp
         end
     else
         @inbounds for ω = 1:W
-            # we need only baseIndex
+            # we need only baseIndex, so we do not need to identify the price index for other countries
             for d = 1:D
                 if d == baseIndex
                     o1 = d + (d - 1) * D # uncomment for A_{od}
@@ -1080,6 +1078,7 @@ function newGravityMoment!(G, PMM, τ, D, W, γ, U, strongGravityMoment)
 end
 
 function sameMarginalsMomentold!(Ū, G, PMM, D, W, X, μ_σ, ν, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+    # old implementation, not used
     # assures the marginals are equal amongst themselves
 
     offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
@@ -1134,7 +1133,11 @@ function sameMarginalsMomentold!(Ū, G, PMM, D, W, X, μ_σ, ν, momentOrder, g
 end
 function sameMarginalsMoment!(Ū, G, PMM, D, W, μ_σ, ν, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
     # assures the marginals are equal amongst themselves
+    # scaled Uod moments are equalized
     offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
+    
+    refIndex = 1 #do not change
+    refIndex1 = refIndex + (refIndex - 1) * D
 
     νk = zeros(D, D, momentOrder * 2)
     for o = 1:D
@@ -1152,8 +1155,7 @@ function sameMarginalsMoment!(Ū, G, PMM, D, W, μ_σ, ν, momentOrder, gravMom
         end
     end
 
-    refIndex = 1 #do not change
-    refIndex1 = refIndex + (refIndex - 1) * D
+    
     for o = 1:D
         for d = 1:D
             o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
@@ -1176,13 +1178,14 @@ end
 
 function sameMarginalsMomentCDF!(Ū, G, PMM, D, W, μ_σ, ν, CDF_X, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
     # assures the marginals are equal amongst themselves
+    # CFDs are equalized at specific quantiles
     offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
 
     #CDF_X is a vector of increasing values of X. 
     # the moment condition is CDF_od(X) = CDF_11(X)
     # E[U_od<=X_k] = E[U_11<=X_k]
+    K = length(CDF_X) + 2 # the two additional momets are for lower and upper "wings" 
 
-    K = length(CDF_X) + 2
     refIndex = 1 #do not change
     refIndex1 = refIndex + (refIndex - 1) * D
     CDF_11_X = zeros(W, K)
@@ -1213,13 +1216,15 @@ function sameMarginalsMomentCDF!(Ū, G, PMM, D, W, μ_σ, ν, CDF_X, gravMoment
 end
 
 function sameMarginalsMomentCDFNoScaling!(G, PMM, D, W, CDF_Moments, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, baseIndex)
+    # imposes Uods have the same CDF. It uses cached realizations as the moment condition does not depend on the parameters 
     K_ = size(CDF_Moments, 2)
     offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2)
     @. G[:, end-offset-K_+1:end-offset] = CDF_Moments[:, :]
 end
 
 function independenceMomentold!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
-    # assures the marginals are identical and independent
+    # assures the marginals are identical and independent,
+    # old implementation not used
     offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2
     for ω = 1:W
         for d = 1:D
@@ -1275,8 +1280,9 @@ function uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrd
 end
 
 function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
+    # imposes zero coreelation between Uods, implementation used cached realizations
     offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 +momentOrderForBaseIndex)
-
+    
     refIndex = 1
     refIndex1 = refIndex + (refIndex - 1) * D
 
@@ -1292,6 +1298,7 @@ end
 
 function independenceMoment!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, strongGravityMoment, localGravityCrossMoment, sameMarginalsMoment)
     # assures the marginals are identical and independent
+    # old implementation not used
     offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * (2 + momentOrder) * D^2
 
     νk = zeros(D, D, momentOrder + 2)
@@ -2039,7 +2046,7 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
 end
 
 function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType)
-    # function that runs the CC outer loop 
+    # function that generate the LFD for a particular θ, by running the innerloop
     D = length(γ.L)
     W = size(U, 1)
     numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + strongGravityMoment * (3 + D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
@@ -2088,7 +2095,7 @@ function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCros
 
     G = LFD .* G
     MomentsMean = mean(G, dims=1)
-    @show MomentsMean
+    @show MomentsMean # all means should be equal to zero [excpet] 
     return LFD
 end
 
@@ -2117,13 +2124,14 @@ function runMainClosedFormeFrechet(globParams)
     # set seed
     Random.seed!(seed)
 
-    # construct matrix of draws from exp(1)
+    # construct matrix of draws from exp(1). We use the Uod model (as oppoed to the Uo model)
     U = zeros(W, D * D)
     genExpRands!(U)
 
     @unpack μHat, wHat, cHat, λPrime, wPrimeHat, γHat, γPrimeHat = preStepOutput
 
-    # Do μHat*(1-σHat) Moment Matching. This is the U power that enters the price expression
+    # Do μHat*(1-σHat) Moment Matching. This is the U power that enters the price expression.
+    # this is definitely not necessary...
     doPriceMomentMatching = true
     Γ_μ_σ = gamma(1 + μHat * (1 - σHat))
     if doPriceMomentMatching
@@ -2141,8 +2149,8 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
-    # we keep a copy of U without exponents or scaling by cHat to calculate E[U^α_k] later
-    Ū = zeros(W, D * D, 1 + sameMarginalsMoment * (momentOrder * 2 - 1)) # α_k \in [1,2, -1,....- momentOrder]
+    # we keep a copy of U without exponents or scaling by cHat to calculate E[U^α_k] later - only if we do not use the CDF methodology
+    Ū = zeros(W, D * D, 1 + (1-useCDFforMarginalMatching)*sameMarginalsMoment * (momentOrder * 2 - 1)) # α_k \in [1,2, -1,....- momentOrder]
 
     Ū[:, :, 1] = U[:, :]
 
@@ -2165,24 +2173,25 @@ function runMainClosedFormeFrechet(globParams)
     end
 
     CDF_X = zeros(1)
-    CDF_X_for_ref = zeros(1)
+    CDF_X_for_base = zeros(1)
     CDF_Moments = zeros(1, 1)
-    CDF_Moments_for_ref = zeros(1, 1)
+    CDF_Moments_for_base = zeros(1, 1)
     # pre-calculate the quantiles for marginal matching with CDF methodology
     if sameMarginalsMoment == 1 && useCDFforMarginalMatching == 1
         CDF_X = quantile(Ū[:, 1, 1], range(1 / (2 * momentOrder - 2), (2 * momentOrder - 3) / (2 * momentOrder - 2), length=2 * momentOrder - 3))
-        CDF_X_for_ref = quantile(Ū[:, 1, 1], range(1 / (momentOrderForBaseIndex - 1), (momentOrderForBaseIndex - 2) / (momentOrderForBaseIndex - 1), length= momentOrderForBaseIndex - 2))
+        CDF_X_for_base = quantile(Ū[:, 1, 1], range(1 / (momentOrderForBaseIndex - 1), (momentOrderForBaseIndex - 2) / (momentOrderForBaseIndex - 1), length= momentOrderForBaseIndex - 2))
     end
+
     # if marginal matching does not allow scaling then we can cach the moment condition and just copy them in the function "moments!"
     if sameMarginalsMoment == 1 && useCDFforMarginalMatching == 1 && NoScalingforSameMartingale == 1
         K = length(CDF_X) + 2
         CDF_Moments = zeros(W, (K + 1) * D^2 + momentOrderForBaseIndex)
-        CDF_Moments_for_ref = zeros(W, momentOrderForBaseIndex)
+        CDF_Moments_for_base = zeros(W, momentOrderForBaseIndex)
 
         refIndex = 1 #do not change
         refIndex1 = refIndex + (refIndex - 1) * D
         CDF_11_X = zeros(W, K)
-        CDF_11_X_for_ref = zeros(W, momentOrderForBaseIndex)
+        CDF_11_X_for_base = zeros(W, momentOrderForBaseIndex)
 
         for ω = 1:W
             smallest_X = searchsortedfirst(CDF_X, Ū[ω, refIndex1, 1]) + 1
@@ -2190,22 +2199,22 @@ function runMainClosedFormeFrechet(globParams)
                 CDF_11_X[ω, i] = 1
             end
 
-            smallest_X_for_ref = searchsortedfirst(CDF_X_for_ref, Ū[ω, refIndex1, 1]) + 1
-            for i = smallest_X_for_ref:momentOrderForBaseIndex
-                CDF_11_X_for_ref[ω, i] = 1
+            smallest_X_for_base = searchsortedfirst(CDF_X_for_base, Ū[ω, refIndex1, 1]) + 1
+            for i = smallest_X_for_base:momentOrderForBaseIndex
+                CDF_11_X_for_base[ω, i] = 1
             end
         end
 
-        # o= ref d = ref
-        o1_ref = baseIndex + (baseIndex - 1) * D
+        # for o= baseIndex d = baseIndex, cach the CDF realizations for momentOrderForBaseIndex points
+        o1_base = baseIndex + (baseIndex - 1) * D
         for i = 1:momentOrderForBaseIndex
-            @. CDF_Moments_for_ref[:, i] += -CDF_11_X_for_ref[:, i]
+            @. CDF_Moments_for_base[:, i] += -CDF_11_X_for_base[:, i]
         end
         for ω = 1:W
-            smallest_X = searchsortedfirst(CDF_X_for_ref, Ū[ω, o1_ref, 1])
+            smallest_X = searchsortedfirst(CDF_X_for_base, Ū[ω, o1_base, 1])
 
             for i = (smallest_X+1):momentOrderForBaseIndex
-                CDF_Moments_for_ref[ω, i] += 1
+                CDF_Moments_for_base[ω, i] += 1
             end
         end
 
@@ -2227,7 +2236,7 @@ function runMainClosedFormeFrechet(globParams)
             end
         end
 
-        @. CDF_Moments[:, (K+1)*D^2+1:end] += CDF_Moments_for_ref[:, :]
+        @. CDF_Moments[:, (K+1)*D^2+1:end] += CDF_Moments_for_base[:, :]
     end
 
     Ind_Moments = zeros(1, 1)
@@ -2417,6 +2426,10 @@ function runMainClosedFormeFrechet(globParams)
                 end
             end
         end
+
+        for i = 1:momentOrderForBaseIndex
+            CDF_Moments[(K+1)*D^2+i] = "Same Marginals CDF for baseIndex [$baseIndex, $baseIndex , k= $i]"
+        end
     end
 
     if independenceMoment == 1 && NoScalingforSameMartingale == 1
@@ -2446,7 +2459,7 @@ function runMainClosedFormeFrechet(globParams)
 
 
 
-    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", strongGravityMoment, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "useCDF_", useCDFforMarginalMatching, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", strongGravityMoment, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
 
     writedlm(string("MomentNames_", file_name, ".csv"), MomentNames, ',')
 
@@ -2493,11 +2506,11 @@ function runMainClosedFormeFrechet(globParams)
     writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
 
     # store the parameters
-    writedlm(string("Theta_initial_Frechet", "_", file_name, ".csv"), θ_initial, ',')
+    writedlm(string("Theta_initial_Frechet", "_", file_name), θ_initial, ',')
 
     for i = 1:length(δ_grid)
-        writedlm(string("Theta_upper_", δ_grid[i], "_", file_name, ".csv"), Θ_upper[:, i], ',')
-        writedlm(string("Theta_lower_", δ_grid[i], "_", file_name, ".csv"), Θ_lower[:, i], ',')
+        writedlm(string("Theta_upper_", δ_grid[i], "_", file_name), Θ_upper[:, i], ',')
+        writedlm(string("Theta_lower_", δ_grid[i], "_", file_name), Θ_lower[:, i], ',')
     end
 
     calculateLFD = true
@@ -2518,12 +2531,12 @@ function runMainClosedFormeFrechet(globParams)
 end
 
 function runLFD(globParams)
-    # this function runs the outer loop, using the same distribution for the F* and the initial point of the optimizer
+    # this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
+    # U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
     counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM = globParams
 
     λData, LData, τData = importData(server, fakeData, DFake, seed)
-    data = (λData=λData, LData=LData, τData=τData)
     τPrime, LPrime = defineCounter(τData, LData, counterType)
     D = length(LData)
 
@@ -2566,12 +2579,11 @@ function runLFD(globParams)
 
     @show Dates.format(now(), "HH:MM") # print time 
 
-
+    #### copy here the name of the file containing the counterfactual bounds
     sourcefilename = "GT_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind1_order5useCDF_1_Frechet_4-1-14.csv"
+    ### use the naming convention to get the LFD_up and LFD_low file paths
     LFD_upper = readdlm(string(folderData, "/LFD_up_", sourcefilename), ',') # import data from csv
     LFD_lower = readdlm(string(folderData, "/LFD_low_", sourcefilename), ',') # import data from csv
-
-    sourcefilename = "GT_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind1_order5useCDF_1_Frechet_4-1-14.csv"
 
     function mCDF(x, o, d, i, up_down)
         o1 = o + (d - 1) * D
@@ -2709,8 +2721,8 @@ function runLFD(globParams)
                 o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o               
                 for c = 1:D
                     for f = 1:D
-                        if c > o || f > d
-                            c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
+                        c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
+                        if o1 > c1
                             for ω = 1:W
                                 corrMatrix[o1, c1] += (Ū[ω, o1, 1]) .* (Ū[ω, c1, 1]) * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / (W * nornamization_factor) - U_Means[o1] * U_Means[c1] / W
                             end
@@ -2725,8 +2737,8 @@ function runLFD(globParams)
                 o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o               
                 for c = 1:D
                     for f = 1:D
-                        if c > o || f > d
-                            c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
+                        c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
+                        if o1 > c1
                             corrMatrix[o1, c1] = corrMatrix[o1, c1] / sqrt(U_Vars[o1] * U_Vars[c1])
                         end
                     end
@@ -2785,10 +2797,8 @@ function runLFD(globParams)
     y0 = mCDF(u_large, 2, 2, 1, 0)
 
     for i = 1:length(δ_grid)
-        y11 = mCDF(u_large, 1, 1, i, 0)
         y11l = mCDF(u_large, 1, 1, i, -1)
         y11u = mCDF(u_large, 1, 1, i, 1)
-        y22 = mCDF(u_large, 1, 1, i, 0)
         y12u = mCDF(u_large, 1, 2, i, 1)
         y22u = mCDF(u_large, 2, 2, i, 1)
         y32u = mCDF(u_large, 3, 2, i, 1)
@@ -2812,10 +2822,8 @@ function runLFD(globParams)
 
     y0 = mCDF(u, 2, 2, 1, 0)
     for i = 1:length(δ_grid)
-        y11 = mCDF(u, 1, 1, i, 0)
         y11l = mCDF(u, 1, 1, i, -1)
         y11u = mCDF(u, 1, 1, i, 1)
-        y22 = mCDF(u, 1, 1, i, 0)
         y12u = mCDF(u, 1, 2, i, 1)
         y22u = mCDF(u, 2, 2, i, 1)
         y32u = mCDF(u, 3, 2, i, 1)
@@ -2857,6 +2865,7 @@ function runLFD(globParams)
 end
 
 function runMainGeneric(globParams)
+    ###### This Function needs updating.... do not use now.
     # this function runs the outer loop, using the same distribution for the F* and the initial point of the optimizer
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
     counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, strongGravityMoment, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, StarDistributionType, StarDistributionCorr, StarDistributionParam, usePMM = globParams
