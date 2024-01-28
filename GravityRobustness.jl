@@ -801,7 +801,7 @@ function smoothMinIndNew!(xInd, x, D, tuner)
 
 end
 
-function hFunction!(K, G, UPow, Uσ, Ū, w, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat)
+function hFunction!(K, G, UPow, Uσ, Ū, w, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat, baseIndex)
     # main function to fill in the moment matrix G for the baseline moments 
 
     D = size(τ, 1) # num countries 
@@ -884,12 +884,12 @@ function hFunction!(K, G, UPow, Uσ, Ū, w, τ, σ, μ, γ, L, P, PMM, counterE
 
                 max_price, max_idx = findmax(pricesTemp[:])
 
-                if localGravityMoment == 1
+                if localGravityMoment == 1 && (d == baseIndex || counterType != 1) # for gains from trade, we are interested only in baseIndex.
                     μTarget = true ? μHat : μ
-                    localGravityMoment!(G, PMM, D, ω, pricesTemp, ξ, σ, μTarget, d, max_price, gravMoment, GravityMomentFirstApproach)
+                    localGravityMoment!(G, PMM, D, ω, pricesTemp, ξ, σ, μTarget, d, max_price, gravMoment, GravityMomentFirstApproach)                    
                 end
 
-                if localGravityCrossMoment == 1
+                if localGravityCrossMoment == 1 && (d == baseIndex || counterType != 1) # for gains from trade, we are interested only in baseIndex.
                     localGravityCrossMoment!(G, PMM, D, ω, pricesTemp, ξ, σ, d, max_price, gravMoment, localGravityMoment, GravityMomentFirstApproach)
                 end
             end
