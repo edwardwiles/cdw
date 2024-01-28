@@ -1950,7 +1950,8 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
         independenceMoment=independenceMoment,
         momentOrder=momentOrder,
         StarDistributionType=StarDistributionType,
-        useCDFforMarginalMatching=useCDFforMarginalMatching)
+        useCDFforMarginalMatching=useCDFforMarginalMatching,
+        momentOrderForBaseIndex = momentOrderForBaseIndex)
 
     # remove the entry of w' that is the wage we are normalising to 1
     # as no point in optimising over this (will add it back inside the moment function)
