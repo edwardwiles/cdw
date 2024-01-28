@@ -1461,7 +1461,7 @@ function GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, 
     if sameMarginalsMoment == 0 # calculate if we do not know the value of the first moment
         refIndex = 1
         refIndex1 = refIndex + (refIndex - 1) * D
-        
+
         dInd = counterType == 1 ? D^2 + 2 * D : D^2 + (D - 1) + 2 * D
         for o = 1:D
             for d = 1:D
@@ -1697,7 +1697,7 @@ function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravity
     return (val, x, nStatus)
 end
 
-function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType, useParallel, file_name)
+function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType, useParallel, file_name)
     # function that runs the CC outer loop 
     D = length(γ.L)
 
@@ -2289,7 +2289,7 @@ function runMainClosedFormeFrechet(globParams)
                 for c = 1:D
                     for f = 1:D
                         c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
-                        if c1 > o1 && d == f # condition on baseIndex only
+                        if c1 > o1 && d == f # condition on Uod, Uo'd only
                             idx_corss_moment += 1
                             @. Ind_Moments[:, idx_corss_moment] = Ū[:, o1, 1] .* Ū[:, c1, 1]
                         end
@@ -2451,7 +2451,7 @@ function runMainClosedFormeFrechet(globParams)
         end
 
         for i = 1:momentOrderForBaseIndex
-            CDF_Moments[(K+1)*D^2+i] = "Same Marginals CDF for baseIndex [$baseIndex, $baseIndex , k= $i]"
+            MomentNames[end-offset-K_+(K+1)*D^2+i] = "Same Marginals CDF for baseIndex [$baseIndex, $baseIndex , k= $i]"
         end
     end
 
@@ -2520,7 +2520,7 @@ function runMainClosedFormeFrechet(globParams)
     @show Dates.format(now(), "HH:MM") # print time 
 
 
-    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, counterType, useParallel, file_name) # run the outer loop 
+    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType, useParallel, file_name) # run the outer loop 
     writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
 
     # store the parameters
