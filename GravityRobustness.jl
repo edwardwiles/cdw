@@ -1609,11 +1609,11 @@ function moments!(K, G, θ, U, obj)
             UPow[i] = U[i]^(-μ)
             UσPow[i] = Uσ[i]^(-μ)
         end
-        hFunction!(K, G, UPow, UσPow, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat) # fill in G with baseline moments 
+        hFunction!(K, G, UPow, UσPow, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat, baseIndex) # fill in G with baseline moments 
         hFunctionCounter!(K, G, UPow, UσPow, wPrime, τPrime, σ, γ_prime, LPrime, P, PMM, counterExplicit, counterType, baseIndex) # fill in G with counterfactual moments, fill in K 
     else
 
-        hFunction!(K, G, U, Uσ, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat)
+        hFunction!(K, G, U, Uσ, Ū, wHat, τ, σ, μ, γ, L, P, PMM, counterExplicit, counterType, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, μHat, baseIndex)
         hFunctionCounter!(K, G, U, Uσ, wPrime, τPrime, σ, γ_prime, LPrime, P, PMM, counterExplicit, counterType, baseIndex)
     end
 
@@ -1670,7 +1670,7 @@ function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravity
     # function that runs the CC outer loop 
     D = length(γ.L)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex)  + independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
 
     if counterType != 1
         numMoments += (D - 1)
@@ -1701,7 +1701,7 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
     # function that runs the CC outer loop 
     D = length(γ.L)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex)  + independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
 
     if counterType != 1
         numMoments += (D - 1)
@@ -2063,7 +2063,7 @@ function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCros
     # function that generate the LFD for a particular θ, by running the innerloop
     D = length(γ.L)
     W = size(U, 1)
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) +  independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
 
     if counterType != 1
         numMoments += (D - 1)
@@ -2281,7 +2281,7 @@ function runMainClosedFormeFrechet(globParams)
 
     if independenceMoment == 1 && NoScalingforSameMartingale == 1
         offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2
-        Ind_Moments = zeros(W, D * (D^2 - floor(Int, D * (1 + D) / 2)))
+        Ind_Moments = zeros(W, D * (D^2 - floor(Int, D * (1 + D) / 2)) + (D-1)* 2 * momentOrder)
 
         idx_corss_moment = 0
         for d = 1:D
@@ -2298,11 +2298,41 @@ function runMainClosedFormeFrechet(globParams)
                 end
             end
         end
+        # only for baseIndex, we equalize the CDF of U_{o}/min_{o-}U_{o'}
+        RatioMinU = zeros(W, D)
+        CDF_Moments_for_ratio_base = zeros(W, 2*momentOrder)
+        for o = 1:D
+            o1 = o + (baseIndex - 1) * D # uncomment to to U_{od} rather than U_o 
+            @. RatioMinU[:, o] = min.(Ū[:, (baseIndex-1)*D+1:(baseIndex)*D .!= o , 1], dims =2) ./Ū[:, o1, 1]
+        end
+
+        CDF_Ratio_X = quantile(RatioMinU[:, baseIndex], range(1 / (2 * momentOrder - 1), (2 * momentOrder - 2) / (2 * momentOrder - 1), length=2 * momentOrder - 2))
+
+
+        for ω = 1:W
+            o1base = baseIndex + (baseIndex - 1) * D
+            smallest_X = searchsortedfirst(CDF_Ratio_X, RatioMinU[ω, o1base])
+
+            for i = (smallest_X+1):2*momentOrder
+                CDF_Moments_for_ratio_base[ω, i] += 1
+            end
+        end
+
+        o_index = 0
+        for o = 1:D
+            if o != baseIndex
+                for ω = 1:W
+                    smallest_X = searchsortedfirst(CDF_Ratio_X, RatioMinU[ω, o])
+                    @. Ind_Moments[ω, end-(o_index+1)*2*momentOrder+(smallest_X+1):end-o_index*2*momentOrder] = 1 .- CDF_Moments_for_ratio_base[ω, (smallest_X+1):2*momentOrder]
+                end 
+                o_index += 1
+            end
+        end
     end
 
     #numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2 + independenceMoment * (D^4 - floor(Int, D^2 * (1 + D^2) / 2) + 1)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
 
 
     if counterType != 1
@@ -2483,7 +2513,7 @@ function runMainClosedFormeFrechet(globParams)
 
     file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
 
-    writedlm(string("MomentNames_", file_name, ".csv"), MomentNames, ',')
+    writedlm(string("MomentNames_", file_name), MomentNames, ',')
 
 
     for d = 1:D
@@ -2540,8 +2570,8 @@ function runMainClosedFormeFrechet(globParams)
             LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType)
             LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, counterType)
         end
-        writedlm(string("LFD_up_", file_name, ".csv"), LFD_upper, ',')
-        writedlm(string("LFD_low_", file_name, ".csv"), LFD_lower, ',')
+        writedlm(string("LFD_up_", file_name), LFD_upper, ',')
+        writedlm(string("LFD_low_", file_name), LFD_lower, ',')
     end
 
     @show Θ_upper[:, 1]
