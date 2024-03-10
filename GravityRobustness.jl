@@ -528,6 +528,38 @@ function genExpRands!(U)
     end
 end
 
+
+function genExpRandsStratified!(U)
+    # draw from exp(1)
+    D = size(U, 2)
+    W = size(U, 1)
+    Half_W = floor(Int, W/ 2)
+    strata_size = floor(Int, Half_W/D^2)
+    # !!!! this assumes that W/(2*D^2) is an integer... 
+
+    rand!(U)
+
+    # We stratify U on two intervals [0, 0.1] & [0.1, 1]. We therefore have to weight the realizations by w_1 = 0.1/0.5 and w_2 = 0.9/0.5 when calculating expectations
+
+    strata_index = 0
+    for o = 1:D
+        for d=1:D
+            o1 = o + (d - 1) * D
+            @. U[1+strata_index*strata_size:(strata_index+1)*strata_size,o1] =  0.1 .* U[1+strata_index*strata_size:(strata_index+1)*strata_size,o1]
+            @. U[Half_W+1+strata_index*strata_size:(strata_index+1)*strata_size,o1] = 0.1 .+ 0.9 .* U[1+strata_index*strata_size:(strata_index+1)*strata_size,o1]
+            strata_index += 1
+        end
+    end
+
+    for i in 1:length(U)
+        U[i] = -log(1 - U[i])
+    end
+
+
+    #we can do this for a vector of cutoff points instead of 
+
+end
+
 function genRands!(U, DistributionType, corr, vol, autocorr, τ=zeros(1))
     D = size(U, 2)
     W = size(U, 1)
@@ -1290,10 +1322,10 @@ function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, mome
     # E[U(ref,ref)^k/k!] = ηk
     @. G[:, end-offset] += Ū[:, refIndex1, 1] .- ηk[1]
 
-    K_ = size(Ind_Moments, 2)
+    K_ = size(Ind_Moments, 2) 
     square_mean = ηk[1]^2
-    @. G[:, end-offset-1-K_+1:end-offset-1] += Ind_Moments[:, :] .- square_mean
-
+    @. G[:, end-offset-1-K_+1:end-offset-1] += Ind_Moments[:, :]
+    @. G[:, end-offset-1-K_+1:end-offset-1-(D-1)* 2 * momentOrder] -= square_mean  # substract square mean for the correlation moments
 end
 
 function independenceMoment!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
@@ -1554,7 +1586,7 @@ function moments!(K, G, θ, U, obj)
 
     # unpack the gamma (auxiliary parameters) vector
     @unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, indicators, Uσ, Ū, Σ_od, Mτ, μHat, CDF_X, CDF_Moments, Ind_Moments , cHat= obj.γ
-    @unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching = indicators
+    @unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching, stratifiedSampling = indicators
 
     W = size(U, 1)
     D = size(τ, 1)
@@ -1655,6 +1687,14 @@ function moments!(K, G, θ, U, obj)
     end
 
 
+    if stratifiedSampling ==1
+    #stratified sampling reweighting
+    # TO DO:  Handle outerloop moments. 
+    half_W = floor(Int, W/2)
+    @. G[1:half_W,:] = (0.1/0.5) .* G[1:half_W,:]  
+    @. G[half_W+1:W,:] = (0.9/0.5) .* G[half_W+1:W,:]
+    end
+
     if GravityMomentFirstApproach == 1
         if sameMarginalsMoment ==1 && NoScalingforSameMartingale == 1
             ν = ones(D,D)
@@ -1664,6 +1704,10 @@ function moments!(K, G, θ, U, obj)
             GravityMomentFirstApproach!(G, PMM, τ, ν, cHat, D, Ū, counterType, sameMarginalsMoment)
          end
     end
+
+
+  
+
 
 end
 function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
@@ -1932,7 +1976,7 @@ end
 function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime, Uσ, Ū, Σ_od, Mτ, μHat, PMM=zeros(1), CDF_X=zeros(1), CDF_Moments=zeros(1), Ind_Moments=zeros(1))
     # constructs object containing fixed parameters (L, tau, data, etc) to feed into moment functions
 
-    @unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching = globParams
+    @unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching,stratifiedSampling = globParams
     @unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = preStepOutput
     @unpack λData, LData, τData = data
 
@@ -1951,7 +1995,8 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
         momentOrder=momentOrder,
         StarDistributionType=StarDistributionType,
         useCDFforMarginalMatching=useCDFforMarginalMatching,
-        momentOrderForBaseIndex = momentOrderForBaseIndex)
+        momentOrderForBaseIndex = momentOrderForBaseIndex,
+        stratifiedSampling = stratifiedSampling)
 
     # remove the entry of w' that is the wage we are normalising to 1
     # as no point in optimising over this (will add it back inside the moment function)
@@ -2125,7 +2170,7 @@ end
 function runMainClosedFormeFrechet(globParams)
     # this function runs the outer loop, using the same distribution for the F* and the initial point of the optimizer
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching, ForceFrechetMarginal, stratifiedSampling = globParams
 
     λData, LData, τData = importData(server, fakeData, DFake, seed)
     data = (λData=λData, LData=LData, τData=τData)
@@ -2141,7 +2186,12 @@ function runMainClosedFormeFrechet(globParams)
 
     # construct matrix of draws from exp(1). We use the Uod model (as oppoed to the Uo model)
     U = zeros(W, D * D)
-    genExpRands!(U)
+
+    if stratifiedSampling == 1
+        genExpRandsStratified!(U)
+    else
+        genExpRands!(U)
+    end
 
     @unpack μHat, wHat, cHat, λPrime, wPrimeHat, γHat, γPrimeHat = preStepOutput
 
@@ -2149,7 +2199,7 @@ function runMainClosedFormeFrechet(globParams)
     # this is definitely not necessary...
     doPriceMomentMatching = true
     Γ_μ_σ = gamma(1 + μHat * (1 - σHat))
-    if doPriceMomentMatching
+    if doPriceMomentMatching && stratifiedSampling == 0
         for d = 1:D
             for o = 1:D
                 o1 = o + (d - 1) * D
@@ -2193,8 +2243,19 @@ function runMainClosedFormeFrechet(globParams)
     CDF_Moments_for_base = zeros(1, 1)
     # pre-calculate the quantiles for marginal matching with CDF methodology
     if sameMarginalsMoment == 1 && useCDFforMarginalMatching == 1
-        CDF_X = quantile(Ū[:, 1, 1], range(1 / (2 * momentOrder - 2), (2 * momentOrder - 3) / (2 * momentOrder - 2), length=2 * momentOrder - 3))
-        CDF_X_for_base = quantile(Ū[:, 1, 1], range(1 / (momentOrderForBaseIndex - 1), (momentOrderForBaseIndex - 2) / (momentOrderForBaseIndex - 1), length= momentOrderForBaseIndex - 2))
+      
+
+        if stratifiedSampling == 1
+            Half_W = floor(Int, W / 2)
+            strata_size = floor(Int, Half_W / D^2)
+
+            CDF_X = quantile(Ū[union(strata_size+1:Half_W, strata_size+1+Half_W:W), 1, 1], range(1 / (2 * momentOrder - 2), (2 * momentOrder - 3) / (2 * momentOrder - 2), length=2 * momentOrder - 3))
+            CDF_X_for_base = quantile(Ū[union(strata_size+1:Half_W, strata_size+1+Half_W:W), 1, 1], range(1 / (momentOrderForBaseIndex - 1), (momentOrderForBaseIndex - 2) / (momentOrderForBaseIndex - 1), length=momentOrderForBaseIndex - 2))
+        else
+
+            CDF_X = quantile(Ū[:, 1, 1], range(1 / (2 * momentOrder - 2), (2 * momentOrder - 3) / (2 * momentOrder - 2), length=2 * momentOrder - 3))
+            CDF_X_for_base = quantile(Ū[:, 1, 1], range(1 / (momentOrderForBaseIndex - 1), (momentOrderForBaseIndex - 2) / (momentOrderForBaseIndex - 1), length=momentOrderForBaseIndex - 2))
+        end
     end
 
     # if marginal matching does not allow scaling then we can cach the moment condition and just copy them in the function "moments!"
@@ -2218,6 +2279,34 @@ function runMainClosedFormeFrechet(globParams)
             for i = smallest_X_for_base:momentOrderForBaseIndex
                 CDF_11_X_for_base[ω, i] = 1
             end
+        end
+
+        if ForceFrechetMarginal == 1 # Replace the realizations with their expectation, this way the CDF does not change with measure change.
+
+            CDF_11_X_expectation = zeros(K)
+            CDF_11_X_for_base_expectation = zeros(momentOrderForBaseIndex)
+            for i = 1:K
+                if stratifiedSampling == 1
+                    Half_W = floor(Int, W / 2)
+                    CDF_11_X_expectation[i] = ((0.1/0.5)*sum(CDF_11_X[1:Half_W,i]) + (0.9/0.5)*sum(CDF_11_X[Half_W+1:W,i])) /W
+                else
+                    CDF_11_X_expectation[i] = sum(CDF_11_X[:,i])/W
+                end
+
+                @. CDF_11_X[:,i] = CDF_11_X_expectation[i]
+            end
+
+            for i = 1:momentOrderForBaseIndex
+                if stratifiedSampling == 1
+                    Half_W = floor(Int, W / 2)
+                    CDF_11_X_for_base_expectation[i] = ((0.1/0.5)*sum(CDF_11_X_for_base[1:Half_W,i]) + (0.9/0.5)*sum(CDF_11_X_for_base[Half_W+1:W,i])) /W
+                else
+                    CDF_11_X_for_base_expectation[i] = sum(CDF_11_X_for_base[:,i])/W
+                end
+
+                @. CDF_11_X_for_base[:,i] = CDF_11_X_for_base_expectation[i]
+            end
+
         end
 
         # for o= baseIndex d = baseIndex, cach the CDF realizations for momentOrderForBaseIndex points
@@ -2298,32 +2387,46 @@ function runMainClosedFormeFrechet(globParams)
                 end
             end
         end
-        # only for baseIndex, we equalize the CDF of U_{o}/min_{o-}U_{o'}
+
+        # Equalize the CDF of U_{o}/min_{o-}U_{o'}, only for baseIndex
         RatioMinU = zeros(W, D)
         CDF_Moments_for_ratio_base = zeros(W, 2*momentOrder)
-        for o = 1:D
-            o1 = o + (baseIndex - 1) * D # uncomment to to U_{od} rather than U_o 
-            @. RatioMinU[:, o] = min.(Ū[:, (baseIndex-1)*D+1:(baseIndex)*D .!= o , 1], dims =2) ./Ū[:, o1, 1]
+        for ω =1:W
+            tempU = Ū[ω, (baseIndex-1)*D+1:baseIndex*D, 1]
+            for o = 1:D
+                o1 = o + (baseIndex - 1) * D # uncomment to to U_{od} rather than U_o 
+                #RatioMinU[ω, o] = minimum(tempU[Not(o)])/Ū[ω, o1, 1]
+                RatioMinU[ω, o] = minimum(tempU[Not(o)])
+            end
+        end
+        if stratifiedSampling == 1
+            Half_W = floor(Int, W / 2)
+            strata_size = floor(Int, Half_W / D^2)
+            strataindex = baseIndex + (baseIndex - 1) * D - 1
+            CDF_Ratio_X = quantile(RatioMinU[Not(union(1+strata_index*strata_size:(strata_index+1)*strata_size, Half_W+1+strata_index*strata_size:Half_W+(strata_index+1)*strata_size)), baseIndex], range(1 / (2 * momentOrder), (2 * momentOrder - 1) / (2 * momentOrder), length=2 * momentOrder - 1))
+        else
+        else
+            CDF_Ratio_X = quantile(RatioMinU[:, baseIndex], range(1 / (2 * momentOrder), (2 * momentOrder - 1) / (2 * momentOrder), length=2 * momentOrder - 1))
         end
 
-        CDF_Ratio_X = quantile(RatioMinU[:, baseIndex], range(1 / (2 * momentOrder - 1), (2 * momentOrder - 2) / (2 * momentOrder - 1), length=2 * momentOrder - 2))
-
-
+        @show CDF_Ratio_X
         for ω = 1:W
-            o1base = baseIndex + (baseIndex - 1) * D
-            smallest_X = searchsortedfirst(CDF_Ratio_X, RatioMinU[ω, o1base])
+            smallest_X = searchsortedfirst(CDF_Ratio_X, RatioMinU[ω, baseIndex])
+            smallest_X = max(1, smallest_X)
 
-            for i = (smallest_X+1):2*momentOrder
+            for i = smallest_X:2*momentOrder
                 CDF_Moments_for_ratio_base[ω, i] += 1
             end
         end
-
+        offset = D * (D^2 - floor(Int, D * (1 + D) / 2))
         o_index = 0
         for o = 1:D
             if o != baseIndex
                 for ω = 1:W
                     smallest_X = searchsortedfirst(CDF_Ratio_X, RatioMinU[ω, o])
-                    @. Ind_Moments[ω, end-(o_index+1)*2*momentOrder+(smallest_X+1):end-o_index*2*momentOrder] = 1 .- CDF_Moments_for_ratio_base[ω, (smallest_X+1):2*momentOrder]
+                    smallest_X = max(1, smallest_X)
+                    # I remove the symmetry condition for now
+                    #@. Ind_Moments[ω, offset+o_index*2*momentOrder+smallest_X:offset+(o_index+1)*2*momentOrder] = 1 .- CDF_Moments_for_ratio_base[ω, smallest_X:2*momentOrder]
                 end 
                 o_index += 1
             end
@@ -2511,7 +2614,7 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
-    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "ForceFrechet_", ForceFrechetMarginal, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
 
     writedlm(string("MomentNames_", file_name), MomentNames, ',')
 
@@ -2629,7 +2732,7 @@ function runLFD(globParams)
     @show Dates.format(now(), "HH:MM") # print time 
 
     #### copy here the name of the file containing the counterfactual bounds
-    sourcefilename = "GT_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind1_order5useCDF_1_Frechet_4-1-14.csv"
+    sourcefilename = "Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind0_order5_baseOrder50useCDF_1_Frechet_4-3-10.csv"
     ### use the naming convention to get the LFD_up and LFD_low file paths
     LFD_upper = readdlm(string(folderData, "/LFD_up_", sourcefilename), ',') # import data from csv
     LFD_lower = readdlm(string(folderData, "/LFD_low_", sourcefilename), ',') # import data from csv
@@ -3037,7 +3140,7 @@ globParams = (θHat=0,
     baseIndex=2, # country to use as wage normalisation and counterfactual 
     server=1, # 1 if using server, 0 otherwise (uses server file path if 1)
     fakeData=1, # 1 to generate data, 0 to use from files
-    DFake=16, # if using fake data, number of countries to gen data
+    DFake=4, # if using fake data, number of countries to gen data
     seed=888, # seed for simulations (different from fake data seed)
     counterType=1, # 0 = zero gravity, 1 = autarky, 2 = custom (adjust above)
     counterExplicit=0, # 1 = explicit counterfactuals (uses kappaStar), 0 = implicit
@@ -3048,10 +3151,12 @@ globParams = (θHat=0,
     GravityMomentFirstApproach=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
     sameMarginalsMoment=1, # =1 imposes all od pairs have the same U distribution
     NoScalingforSameMartingale=1,# =1 imposes a strict same marginal condition, without allowing for a multiplicative dergree of freedom   
-    independenceMoment=0, # =1 imposes correlation[Uod, Uo'd] = 0 
+    independenceMoment=1, # =1 imposes correlation[Uod, Uo'd] = 0 
     momentOrder=5, # number of moment conditions to approximate same marginal condition 
     momentOrderForBaseIndex = 50, # number of moment conditions to approximate same marginal condition for U_baseIndex,baseIndex
     useCDFforMarginalMatching=1, # 1= impose same marginal condition using CDF, 0= using moments 
+    ForceFrechetMarginal = 1, # 1= maintains Frechet marginal and leaves dependency to change
+    stratifiedSampling = 1, # 1= generates half simulations with low price realizations
     useParallel=1, # 1 = parallelise the deltas in outer loop; 0 = do not 
     InitDistributionType=1, # 0 = Frechet, 1 = lognormal, 2= t-dist, 3 = flexible (see genRands. uses corr and Param), 4 = LN productivity correlated with trade costs
     InitDistributionCorr=0.0, #correlation between countries
