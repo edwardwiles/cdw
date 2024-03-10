@@ -531,10 +531,10 @@ end
 
 function genExpRandsStratified!(U)
     # draw from exp(1)
-    D = size(U, 2)
+    D2 = size(U, 2)
     W = size(U, 1)
     Half_W = floor(Int, W/ 2)
-    strata_size = floor(Int, Half_W/D^2)
+    strata_size = floor(Int, Half_W/D2)
     # !!!! this assumes that W/(2*D^2) is an integer... 
 
     rand!(U)
@@ -542,13 +542,10 @@ function genExpRandsStratified!(U)
     # We stratify U on two intervals [0, 0.1] & [0.1, 1]. We therefore have to weight the realizations by w_1 = 0.1/0.5 and w_2 = 0.9/0.5 when calculating expectations
 
     strata_index = 0
-    for o = 1:D
-        for d=1:D
-            o1 = o + (d - 1) * D
-            @. U[1+strata_index*strata_size:(strata_index+1)*strata_size,o1] =  0.1 .* U[1+strata_index*strata_size:(strata_index+1)*strata_size,o1]
-            @. U[Half_W+1+strata_index*strata_size:(strata_index+1)*strata_size,o1] = 0.1 .+ 0.9 .* U[1+strata_index*strata_size:(strata_index+1)*strata_size,o1]
-            strata_index += 1
-        end
+    for od = 1:D2
+        @. U[1+strata_index*strata_size:(strata_index+1)*strata_size,od] =  0.1 .* U[1+strata_index*strata_size:(strata_index+1)*strata_size,od]
+        @. U[Half_W+1+strata_index*strata_size:(strata_index+1)*strata_size,od] = 0.1 .+ 0.9 .* U[Half_W+1+strata_index*strata_size:(strata_index+1)*strata_size,od]
+        strata_index += 1
     end
 
     for i in 1:length(U)
@@ -2405,7 +2402,6 @@ function runMainClosedFormeFrechet(globParams)
             strataindex = baseIndex + (baseIndex - 1) * D - 1
             CDF_Ratio_X = quantile(RatioMinU[Not(union(1+strata_index*strata_size:(strata_index+1)*strata_size, Half_W+1+strata_index*strata_size:Half_W+(strata_index+1)*strata_size)), baseIndex], range(1 / (2 * momentOrder), (2 * momentOrder - 1) / (2 * momentOrder), length=2 * momentOrder - 1))
         else
-        else
             CDF_Ratio_X = quantile(RatioMinU[:, baseIndex], range(1 / (2 * momentOrder), (2 * momentOrder - 1) / (2 * momentOrder), length=2 * momentOrder - 1))
         end
 
@@ -2614,7 +2610,7 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
-    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "ForceFrechet_", ForceFrechetMarginal, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "ForceFrechet_", ForceFrechetMarginal, "stratify_", stratifiedSampling, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
 
     writedlm(string("MomentNames_", file_name), MomentNames, ',')
 
@@ -3151,7 +3147,7 @@ globParams = (θHat=0,
     GravityMomentFirstApproach=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
     sameMarginalsMoment=1, # =1 imposes all od pairs have the same U distribution
     NoScalingforSameMartingale=1,# =1 imposes a strict same marginal condition, without allowing for a multiplicative dergree of freedom   
-    independenceMoment=1, # =1 imposes correlation[Uod, Uo'd] = 0 
+    independenceMoment=0, # =1 imposes correlation[Uod, Uo'd] = 0 
     momentOrder=5, # number of moment conditions to approximate same marginal condition 
     momentOrderForBaseIndex = 50, # number of moment conditions to approximate same marginal condition for U_baseIndex,baseIndex
     useCDFforMarginalMatching=1, # 1= impose same marginal condition using CDF, 0= using moments 
