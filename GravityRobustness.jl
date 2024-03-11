@@ -1790,8 +1790,8 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
     @show θ_initial_all
     @show θ_initial
 
-    #δ_grid = [0.01, 0.1, 0.5, 1, 2] # vector of deltas to run 
-    δ_grid = [1] # vector of deltas to run 
+    δ_grid = [0.01, 0.1, 0.5, 1, 2] # vector of deltas to run 
+    #δ_grid = [1] # vector of deltas to run 
 
     κ_lower = zeros(length(δ_grid))
     κ_upper = zeros(length(δ_grid))
@@ -2399,7 +2399,7 @@ function runMainClosedFormeFrechet(globParams)
         if stratifiedSampling == 1
             Half_W = floor(Int, W / 2)
             strata_size = floor(Int, Half_W / D^2)
-            strataindex = baseIndex + (baseIndex - 1) * D - 1
+            strata_index = baseIndex + (baseIndex - 1) * D - 1
             CDF_Ratio_X = quantile(RatioMinU[Not(union(1+strata_index*strata_size:(strata_index+1)*strata_size, Half_W+1+strata_index*strata_size:Half_W+(strata_index+1)*strata_size)), baseIndex], range(1 / (2 * momentOrder), (2 * momentOrder - 1) / (2 * momentOrder), length=2 * momentOrder - 1))
         else
             CDF_Ratio_X = quantile(RatioMinU[:, baseIndex], range(1 / (2 * momentOrder), (2 * momentOrder - 1) / (2 * momentOrder), length=2 * momentOrder - 1))
@@ -2744,7 +2744,7 @@ function runLFD(globParams)
     @show Dates.format(now(), "HH:MM") # print time 
 
     #### copy here the name of the file containing the counterfactual bounds
-    sourcefilename = "Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind1_order5_baseOrder50useCDF_1ForceFrechet_1_Frechet_4-3-10.csv"
+    sourcefilename = "Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind0_order5_baseOrder50useCDF_1ForceFrechet_1stratify_1_Frechet_4-3-11.csv"
     ### use the naming convention to get the LFD_up and LFD_low file paths
     LFD_upper = readdlm(string(folderData, "/LFD_up_", sourcefilename), ',') # import data from csv
     LFD_lower = readdlm(string(folderData, "/LFD_low_", sourcefilename), ',') # import data from csv
@@ -2915,8 +2915,8 @@ function runLFD(globParams)
     u = range(0, 2, length=100)
     u_large = range(0, 50, length=100)
 
-    #δ_grid = [0.01, 0.1, 0.5, 1, 2]
-    δ_grid = [1]
+    δ_grid = [0.01, 0.1, 0.5, 1, 2]
+    #δ_grid = [1]
 
     for i = 1:length(δ_grid)
         marg_cdf = MarginalPricesCDF(u, baseIndex, i, 0)
@@ -3158,12 +3158,12 @@ globParams = (θHat=0,
     counterExplicit=0, # 1 = explicit counterfactuals (uses kappaStar), 0 = implicit
     θConstant=0, # put 1 if theta and sigma never vary, will precalculate U^((1-sigma)/theta)
     gravMoment=0, # = 1 impose gravity identification for Frechet, 0 = do not
-    localGravityMoment=1, # = 1 impose model implied trade elasticity mtaches θHat, 0 = do not 
-    localGravityCrossMoment=1, # = 1 impose model implied trade cross elasticity is zero, 0 = do not 
+    localGravityMoment=0, # = 1 impose model implied trade elasticity mtaches θHat, 0 = do not 
+    localGravityCrossMoment=0, # = 1 impose model implied trade cross elasticity is zero, 0 = do not 
     GravityMomentFirstApproach=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
     sameMarginalsMoment=1, # =1 imposes all od pairs have the same U distribution
     NoScalingforSameMartingale=1,# =1 imposes a strict same marginal condition, without allowing for a multiplicative dergree of freedom   
-    independenceMoment=0, # =1 imposes correlation[Uod, Uo'd] = 0 
+    independenceMoment=1, # =1 imposes correlation[Uod, Uo'd] = 0 
     momentOrder=5, # number of moment conditions to approximate same marginal condition 
     momentOrderForBaseIndex = 50, # number of moment conditions to approximate same marginal condition for U_baseIndex,baseIndex
     useCDFforMarginalMatching=1, # 1= impose same marginal condition using CDF, 0= using moments 
