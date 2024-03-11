@@ -2682,7 +2682,7 @@ function runLFD(globParams)
     # this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
     # U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, stratifiedSampling, usePMM = globParams
 
     λData, LData, τData = importData(server, fakeData, DFake, seed)
     τPrime, LPrime = defineCounter(τData, LData, counterType)
@@ -2697,14 +2697,19 @@ function runLFD(globParams)
 
     # construct matrix of draws from exp(1)
     U = zeros(W, D * D)
-    genExpRands!(U)
 
+    if stratifiedSampling == 1
+        genExpRandsStratified!(U)
+    else
+        genExpRands!(U)
+    end
+    
     @unpack μHat, wHat, cHat, λPrime, wPrimeHat, γHat, γPrimeHat = preStepOutput
 
     # Do μHat*(1-σHat) Moment Matching. This is the U power that enters the price expression
     doPriceMomentMatching = true
     Γ_μ_σ = gamma(1 + μHat * (1 - σHat))
-    if doPriceMomentMatching
+    if doPriceMomentMatching && stratifiedSampling == 0
         for d = 1:D
             for o = 1:D
                 o1 = o + (d - 1) * D
@@ -2721,6 +2726,17 @@ function runLFD(globParams)
 
     # we keep a copy of U without exponents or scaling by cHat to calculate E[U] later
     Ū = zeros(W, D * D, 1)
+    Half_W = floor(Int, W / 2)
+
+    StrataWeight = zeros(W)
+
+    if stratifiedSampling == 1
+        @. StrataWeight[1:Half_W] = 0.1/0.5
+        @. StrataWeight[Half_W+1:W] = 0.9/0.5
+    else
+        @. StrataWeight[:] = 1.0
+    end
+
 
     Ū[:, :, 1] = U[:, :]
 
@@ -2728,7 +2744,7 @@ function runLFD(globParams)
     @show Dates.format(now(), "HH:MM") # print time 
 
     #### copy here the name of the file containing the counterfactual bounds
-    sourcefilename = "Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind0_order5_baseOrder50useCDF_1_Frechet_4-3-10.csv"
+    sourcefilename = "Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind1_order5_baseOrder50useCDF_1ForceFrechet_1_Frechet_4-3-10.csv"
     ### use the naming convention to get the LFD_up and LFD_low file paths
     LFD_upper = readdlm(string(folderData, "/LFD_up_", sourcefilename), ',') # import data from csv
     LFD_lower = readdlm(string(folderData, "/LFD_low_", sourcefilename), ',') # import data from csv
@@ -2738,9 +2754,9 @@ function runLFD(globParams)
         mcdf = zeros(length(x))
         nornamization_factor = 0
         for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W
+            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i]))*StrataWeight[ω] / W
             for j = 1:length(x)
-                mcdf[j] += Ū[ω, o1, 1] < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W : 0
+                mcdf[j] += Ū[ω, o1, 1] < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W : 0
             end
         end
         return mcdf / nornamization_factor
@@ -2752,13 +2768,13 @@ function runLFD(globParams)
         jcdf = zeros(length(x), length(x))
         nornamization_factor = 0
         for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W
+            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i]))*StrataWeight[ω] / W
             x_ω = Ū[ω, o1:o2, 1]
             price_baseIndex = x_ω[d] / λData[d, d]
             price_rw = minimum(x_ω[Not(d)] ./ λData[Not(d), d])
             for i1 = 1:length(x)
                 for i2 = 1:length(x)
-                    jcdf[i1, i2] += (price_baseIndex < x[i1] && price_rw < x[i2]) ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W : 0
+                    jcdf[i1, i2] += (price_baseIndex < x[i1] && price_rw < x[i2]) ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i]))*StrataWeight[ω] / W : 0
                 end
             end
         end
@@ -2771,14 +2787,14 @@ function runLFD(globParams)
         pcdf = zeros(length(x), 3)
         nornamization_factor = 0
         for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W
+            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W
             for j = 1:length(x)
                 x_ω = Ū[ω, o1:o2, 1]
                 price_baseIndex = x_ω[d] / λData[d, d]
                 price_rw = minimum(x_ω[Not(d)] ./ λData[Not(d), d])
-                pcdf[j, 1] += price_baseIndex < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W : 0
-                pcdf[j, 2] += price_rw < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W : 0
-                pcdf[j, 3] += price_baseIndex / price_rw < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W : 0
+                pcdf[j, 1] += price_baseIndex < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W : 0
+                pcdf[j, 2] += price_rw < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W : 0
+                pcdf[j, 3] += price_baseIndex / price_rw < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i]))*StrataWeight[ω] / W : 0
             end
         end
         return pcdf / nornamization_factor
@@ -2791,14 +2807,14 @@ function runLFD(globParams)
         ppdf = zeros(length(x) - 1, 3)
         nornamization_factor = 0
         for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W
+            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W
             for j = 1:length(x)-1
                 x_ω = Ū[ω, o1:o2, 1]
                 price_baseIndex = x_ω[d] / λData[d, d]
                 price_rw = minimum(x_ω[Not(d)] ./ λData[Not(d), d])
-                ppdf[j, 1] += price_baseIndex >= x[j] && price_baseIndex <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / (W * (x[j+1] - x[j])) : 0
-                ppdf[j, 2] += price_rw >= x[j] && price_rw <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / (W * (x[j+1] - x[j])) : 0
-                ppdf[j, 3] += price_baseIndex / price_rw >= x[j] && price_baseIndex / price_rw <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / (W * (x[j+1] - x[j])) : 0
+                ppdf[j, 1] += price_baseIndex >= x[j] && price_baseIndex <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * (x[j+1] - x[j])) : 0
+                ppdf[j, 2] += price_rw >= x[j] && price_rw <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * (x[j+1] - x[j])) : 0
+                ppdf[j, 3] += price_baseIndex / price_rw >= x[j] && price_baseIndex / price_rw <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i]))*StrataWeight[ω] / (W * (x[j+1] - x[j])) : 0
             end
         end
         return ppdf / nornamization_factor
@@ -2814,17 +2830,17 @@ function runLFD(globParams)
             price_baseIndex = x_ω[d] / λData[d, d]
             price_rw = minimum(x_ω[Not(d)] ./ λData[Not(d), d])
 
-            pmean[1, 1] += price_baseIndex / W
-            pmean[2, 1] += LFD_upper[ω, i] * price_baseIndex / W
-            pmean[3, 1] += LFD_lower[ω, i] * price_baseIndex / W
+            pmean[1, 1] += price_baseIndex *StrataWeight[ω]/ W
+            pmean[2, 1] += LFD_upper[ω, i] * price_baseIndex *StrataWeight[ω]/ W
+            pmean[3, 1] += LFD_lower[ω, i] * price_baseIndex *StrataWeight[ω]/ W
 
-            pmean[1, 2] += price_rw / W
-            pmean[2, 2] += LFD_upper[ω, i] * price_rw / W
-            pmean[3, 2] += LFD_lower[ω, i] * price_rw / W
+            pmean[1, 2] += price_rw *StrataWeight[ω]/ W
+            pmean[2, 2] += LFD_upper[ω, i] * price_rw *StrataWeight[ω]/ W
+            pmean[3, 2] += LFD_lower[ω, i] * price_rw *StrataWeight[ω]/ W
 
-            pcorr[1] += price_rw * price_baseIndex / W
-            pcorr[2] += LFD_upper[ω, i] * price_rw * price_baseIndex / W
-            pcorr[3] += LFD_lower[ω, i] * price_rw * price_baseIndex / W
+            pcorr[1] += price_rw * price_baseIndex *StrataWeight[ω]/ W
+            pcorr[2] += LFD_upper[ω, i] * price_rw * price_baseIndex *StrataWeight[ω]/ W
+            pcorr[3] += LFD_lower[ω, i] * price_rw * price_baseIndex *StrataWeight[ω]/ W
         end
 
         pcorr[1] -= pmean[1, 1] * pmean[1, 2]
@@ -2841,7 +2857,7 @@ function runLFD(globParams)
         corrMatrix = zeros(D^2, D^2)
         nornamization_factor = 0
         for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / W
+            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W
         end
 
 
@@ -2850,8 +2866,8 @@ function runLFD(globParams)
                 o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
                 for ω = 1:W
 
-                    U_Means[o1] += Ū[ω, o1, 1] * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / (W * nornamization_factor)
-                    U_Vars[o1] += Ū[ω, o1, 1] * Ū[ω, o1, 1] * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / (W * nornamization_factor)
+                    U_Means[o1] += Ū[ω, o1, 1] * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * nornamization_factor)
+                    U_Vars[o1] += Ū[ω, o1, 1] * Ū[ω, o1, 1] * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * nornamization_factor)
                 end
             end
         end
@@ -2872,7 +2888,7 @@ function runLFD(globParams)
                         c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
                         if o1 > c1
                             for ω = 1:W
-                                corrMatrix[o1, c1] += (Ū[ω, o1, 1]) .* (Ū[ω, c1, 1]) * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) / (W * nornamization_factor) - U_Means[o1] * U_Means[c1] / W
+                                corrMatrix[o1, c1] += (Ū[ω, o1, 1]) .* (Ū[ω, c1, 1]) * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * nornamization_factor) - U_Means[o1] * U_Means[c1]*StrataWeight[ω]/ W
                             end
                         end
                     end
@@ -3142,8 +3158,8 @@ globParams = (θHat=0,
     counterExplicit=0, # 1 = explicit counterfactuals (uses kappaStar), 0 = implicit
     θConstant=0, # put 1 if theta and sigma never vary, will precalculate U^((1-sigma)/theta)
     gravMoment=0, # = 1 impose gravity identification for Frechet, 0 = do not
-    localGravityMoment=0, # = 1 impose model implied trade elasticity mtaches θHat, 0 = do not 
-    localGravityCrossMoment=0, # = 1 impose model implied trade cross elasticity is zero, 0 = do not 
+    localGravityMoment=1, # = 1 impose model implied trade elasticity mtaches θHat, 0 = do not 
+    localGravityCrossMoment=1, # = 1 impose model implied trade cross elasticity is zero, 0 = do not 
     GravityMomentFirstApproach=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
     sameMarginalsMoment=1, # =1 imposes all od pairs have the same U distribution
     NoScalingforSameMartingale=1,# =1 imposes a strict same marginal condition, without allowing for a multiplicative dergree of freedom   
