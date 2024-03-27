@@ -17,13 +17,13 @@ Pkg.activate("GravityProject")
 #Pkg.add("KNITRO")
 #Pkg.add("Plots")
 #Pkg.add("InvertedIndices")
-
+#Pkg.add("Combinatorics")
 #Pkg.upgrade_manifest()
 #Pkg.resolve()
 #Pkg.update()
 
 using KNITRO
-using Random, NLsolve, Optim, SpecialFunctions, DelimitedFiles, Dates, LinearAlgebra, Parameters
+using Random, NLsolve, Optim, SpecialFunctions, DelimitedFiles, Dates, LinearAlgebra, Parameters, Combinatorics
 
 using Distributions, Statistics, Bigsimr, Plots, InvertedIndices
 
@@ -555,6 +555,31 @@ function genExpRandsStratified!(U)
 
     #we can do this for a vector of cutoff points instead of 
 
+end
+
+function genExpRandsImportanceSampling!(U, λ, ImportanceSampleingWeight)
+    # draw from exp(1)
+    rand!(U)
+    #λ >>1 -> Increase the number of realizations where U is small as this is the part that is determinant for 
+    for i in 1:length(U)
+        U[i] = -log(1 - U[i])/λ
+    end
+    
+    W = size(U, 1)
+    D2 = size(U, 2)
+    ImportanceSampleingWeight = ones(W)
+    for od = 1:D2
+       @. ImportanceSampleingWeight[:] = ImportanceSampleingWeight[:] .* exp.((λ-1) .* U[:,od]) ./ λ
+    end
+
+    for od = 1:D2
+        @show sum(exp.((λ-1) .* U[:,od]) .* U[:,od])/(W*λ)
+        @show sum(exp.((λ-1) .* U[:,od]))/(W*λ)
+    end
+
+    for od = 1:D2
+        @show sum(ImportanceSampleingWeight[:] .* U[:,od])/W
+    end
 end
 
 function genRands!(U, DistributionType, corr, vol, autocorr, τ=zeros(1))
@@ -1308,9 +1333,9 @@ function uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrd
     end
 end
 
-function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
+function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment,useIndependentCFDs,IndMomentOrder,IndCDF_Cells, ν)
     # imposes zero coreelation between Uods, implementation used cached realizations
-    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach + sameMarginalsMoment * ((2 * momentOrder) * D^2 +momentOrderForBaseIndex)
+    offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach + sameMarginalsMoment * ((2 * momentOrder + 1) * D^2 +momentOrderForBaseIndex)
     
     refIndex = 1
     refIndex1 = refIndex + (refIndex - 1) * D
@@ -1322,7 +1347,24 @@ function uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, mome
     K_ = size(Ind_Moments, 2) 
     square_mean = ηk[1]^2
     @. G[:, end-offset-1-K_+1:end-offset-1] += Ind_Moments[:, :]
-    @. G[:, end-offset-1-K_+1:end-offset-1-(D-1)* 2 * momentOrder] -= square_mean  # substract square mean for the correlation moments
+
+    @. G[:, end-offset-1-K_+1:end-offset-1-K_+ D* floor(Int, D * (D-1) / 2)] -= square_mean  # substract square mean for the correlation moments
+
+    if useIndependentCFDs == 1
+        # CDF_i = ν_i
+        for i =1:IndMomentOrder-1
+            @. G[:, end-offset-1-K_+D*floor(Int, D * (D-1) / 2)+i:end-offset-1-K_+ D*floor(Int, D * (D-1) / 2)+i] -= ν[i]
+        end
+        # joint CDF
+        @inbounds for i in 1:length(IndCDF_Cells)
+            this_cdf = 1
+            for o=1:D
+                this_cdf *= ν[floor(Int,IndCDF_Cells[i][o])]
+            end
+            @. G[:, end-offset-1-K_+D*floor(Int, D * (D-1) / 2)+IndMomentOrder-1+i:end-offset-1-K_+D*floor(Int, D * (D-1) / 2)+IndMomentOrder-1+i] -= this_cdf
+        end
+
+    end
 end
 
 function independenceMoment!(Ū, G, PMM, D, W, μ_σ, ν, ηk, momentOrder, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
@@ -1582,8 +1624,8 @@ function moments!(K, G, θ, U, obj)
     # main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 
     # unpack the gamma (auxiliary parameters) vector
-    @unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, indicators, Uσ, Ū, Σ_od, Mτ, μHat, CDF_X, CDF_Moments, Ind_Moments , cHat= obj.γ
-    @unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching, stratifiedSampling = indicators
+    @unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, indicators, Uσ, Ū, Σ_od, Mτ, μHat, CDF_X, CDF_Moments, Ind_Moments , cHat, IndCDF_Cells, importanceSamplingWeights= obj.γ
+    @unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching, stratifiedSampling, useIndependentCFDs,IndMomentOrder  = indicators
 
     W = size(U, 1)
     D = size(τ, 1)
@@ -1671,7 +1713,8 @@ function moments!(K, G, θ, U, obj)
             ηk = θ[counterType_θ_offset+3+2*D+D^2-1:counterType_θ_offset+3+2*D+D^2-1]
             uncorrelationMoment!(Ū, G, PMM, D, W, ν, ηk, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
         else
-            uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment)
+            ν = θ[counterType_θ_offset+3+D+2:counterType_θ_offset+3+D+1+IndMomentOrder-1]
+            uncorrelationMomentNoScaling!(Ū, G, PMM, D, W, ηk, Ind_Moments, momentOrder, momentOrderForBaseIndex, gravMoment, localGravityMoment, GravityMomentFirstApproach, localGravityCrossMoment, sameMarginalsMoment,useIndependentCFDs,IndMomentOrder,IndCDF_Cells, ν )
         end
 
 
@@ -1682,6 +1725,8 @@ function moments!(K, G, θ, U, obj)
     if gravMoment == 1
         newGravityMoment!(G, PMM, τ, D, W, γ, U, GravityMomentFirstApproach) # add gravity moment if using 
     end
+
+
 
 
     if stratifiedSampling ==1
@@ -1703,15 +1748,18 @@ function moments!(K, G, θ, U, obj)
     end
 
 
-  
-
+    #Always multiply by ISW which are defaulted to 1 if the methodology is not used
+    for im=1:obj.d
+        @. G[:,im] *= importanceSamplingWeights[:] 
+    end
+    @. K[:] *= importanceSamplingWeights[:] 
 
 end
-function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, counterType)
+function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex,useIndependentCFDs, IndMomentOrder, counterType)
     # function that runs the CC outer loop 
     D = length(γ.L)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex)  + independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder + 1) * D^2 + momentOrderForBaseIndex) + independenceMoment * (1+ D * (D^2 - floor(Int, D * (1 + D) / 2))+ (1-useIndependentCFDs)*(D-1)* 2 * momentOrder + useIndependentCFDs*((IndMomentOrder-1) + (IndMomentOrder-1)^D))
 
     if counterType != 1
         numMoments += (D - 1)
@@ -1738,11 +1786,11 @@ function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravity
     return (val, x, nStatus)
 end
 
-function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType, useParallel, file_name)
+function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex,useIndependentCFDs,IndMomentOrder, counterType, useParallel, file_name)
     # function that runs the CC outer loop 
     D = length(γ.L)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex)  + independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder + 1) * D^2 + momentOrderForBaseIndex) + independenceMoment * (1+ D * (D^2 - floor(Int, D * (1 + D) / 2))+ (1-useIndependentCFDs)*(D-1)* 2 * momentOrder + useIndependentCFDs*((IndMomentOrder-1) + (IndMomentOrder-1)^D))
 
     if counterType != 1
         numMoments += (D - 1)
@@ -1790,8 +1838,8 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
     @show θ_initial_all
     @show θ_initial
 
-    δ_grid = [0.01, 0.1, 0.5, 1, 2] # vector of deltas to run 
-    #δ_grid = [1] # vector of deltas to run 
+    #δ_grid = [0.01, 0.1, 0.5, 1, 2] # vector of deltas to run 
+    δ_grid = [1] # vector of deltas to run 
 
     κ_lower = zeros(length(δ_grid))
     κ_upper = zeros(length(δ_grid))
@@ -1970,10 +2018,10 @@ function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMom
     return (δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower)
 end
 
-function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime, Uσ, Ū, Σ_od, Mτ, μHat, PMM=zeros(1), CDF_X=zeros(1), CDF_Moments=zeros(1), Ind_Moments=zeros(1))
+function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime, Uσ, Ū, Σ_od, Mτ, μHat, PMM=zeros(1), CDF_X=zeros(1), CDF_Moments=zeros(1), Ind_Moments=zeros(1), IndCDF_Cells =Vector{Vector{Int}}(undef,1), importanceSamplingWeights = ones(1) )
     # constructs object containing fixed parameters (L, tau, data, etc) to feed into moment functions
 
-    @unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching,stratifiedSampling = globParams
+    @unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, StarDistributionType, useCDFforMarginalMatching,stratifiedSampling, useIndependentCFDs,IndMomentOrder = globParams
     @unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = preStepOutput
     @unpack λData, LData, τData = data
 
@@ -1993,7 +2041,9 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
         StarDistributionType=StarDistributionType,
         useCDFforMarginalMatching=useCDFforMarginalMatching,
         momentOrderForBaseIndex = momentOrderForBaseIndex,
-        stratifiedSampling = stratifiedSampling)
+        stratifiedSampling = stratifiedSampling,
+        IndMomentOrder = IndMomentOrder,
+        useIndependentCFDs = useIndependentCFDs)
 
     # remove the entry of w' that is the wage we are normalising to 1
     # as no point in optimising over this (will add it back inside the moment function)
@@ -2021,6 +2071,8 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
         if independenceMoment == 1
             if NoScalingforSameMartingale == 0
                 θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2))
+            elseif useIndependentCFDs == 1
+                θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, range(1/IndMomentOrder, (IndMomentOrder-1) / IndMomentOrder, length=IndMomentOrder-1))
             else
                 θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1)
             end
@@ -2044,7 +2096,9 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
             CDF_X=CDF_X,
             CDF_Moments=CDF_Moments,
             Ind_Moments=Ind_Moments,
-            cHat = cHat
+            cHat = cHat,
+            IndCDF_Cells = IndCDF_Cells,
+            importanceSamplingWeights = importanceSamplingWeights
         )
 
         return γ, θ_initial
@@ -2069,6 +2123,8 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
         if independenceMoment == 1
             if NoScalingforSameMartingale == 0
                 θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2))
+            elseif useIndependentCFDs == 1
+                θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, range(1/IndMomentOrder, (IndMomentOrder-1) / IndMomentOrder, length=IndMomentOrder-1))
             else
                 θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1)
             end
@@ -2093,7 +2149,9 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
             CDF_X=CDF_X,
             CDF_Moments=CDF_Moments,
             Ind_Moments=Ind_Moments,
-            cHat = cHat
+            cHat = cHat,
+            IndCDF_Cells = IndCDF_Cells,
+            importanceSamplingWeights = importanceSamplingWeights
         )
 
         return γ, θ_initial
@@ -2101,11 +2159,12 @@ function buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime
 
 end
 
-function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType)
+function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, useIndependentCFDs, IndMomentOrder, counterType)
     # function that generate the LFD for a particular θ, by running the innerloop
     D = length(γ.L)
     W = size(U, 1)
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) +  independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
+   # numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) +  independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
+   numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder + 1) * D^2 + momentOrderForBaseIndex) + independenceMoment * (1+ D * (D^2 - floor(Int, D * (1 + D) / 2))+ (1-useIndependentCFDs)*(D-1)* 2 * momentOrder + useIndependentCFDs*((IndMomentOrder-1) + (IndMomentOrder-1)^D))
 
     if counterType != 1
         numMoments += (D - 1)
@@ -2149,10 +2208,69 @@ function LFD(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCros
 
     dPsi!(LFD, arg0)
 
-    G = LFD .* G
-    MomentsMean = mean(G, dims=1)
-    @show MomentsMean # all means should be equal to zero [excpet] 
-    return LFD
+    # calculate mean and the variance of the moments
+    MomentsMean = zeros(numMoments)
+    MomentsVar = zeros(numMoments)
+    MomentsMean = mean(LFD .* G, dims=1)
+    MomentsVar = mean(LFD .* G .* G, dims=1) .- (MomentsMean .* MomentsMean)
+    MomentsTest = zeros(numMoments)
+    @show MomentsMean
+    @show MomentsVar
+
+    for i = 1:numMoments
+        MomentsTest[i] = abs(MomentsMean[i])<2*sqrt(MomentsVar[i]/W) ? 1 : 0
+    end
+
+    @show MomentsTest
+    cInd = 0
+
+    if counterType != 1
+        cInd = D^2 + D - 1
+        dInd = D^2 + 2 * D - 1
+    else
+        cInd = D^2
+        dInd = D^2 + D
+    end
+
+    baseIndex = γ.baseIndex
+
+   @show MomentsTest[cInd+baseIndex]
+   @show MomentsTest[dInd+baseIndex]
+
+   # check the confidence interval of the counterfactual bounds
+   paramγ = θ_initial[3:3+D-1]
+   paramγ_prime = copy(paramγ)
+   if counterType != 1
+    paramγ_prime = θ_initial[3+D:3+2*D-1]
+   else
+    paramγ_prime[baseIndex] = θ_initial[3+D] # we are not interested in the other gamma_primes
+   end
+
+   σ = θ_initial[2]
+
+   counterVal = (paramγ[baseIndex] / paramγ_prime[baseIndex])^(σ / (σ - 1)) - 1
+
+   Varγ = MomentsVar[cInd+baseIndex]/W
+   Varγ_prime = MomentsVar[dInd+baseIndex]/W
+  
+   #approximation for the variance of the estimator K as the ratio of two estimators
+    varκ = (σ / (σ - 1))*(counterVal^2)*(Varγ*paramγ[baseIndex]^(-2) + Varγ_prime*paramγ_prime[baseIndex]^(-2))
+    σκ = sqrt(varκ)
+   @show MomentsVar
+   @show MomentsTest
+   @show counterVal
+   @show σκ
+
+   return LFD
+    
+    #=return (LFD = LFD,
+    MomentsMean = MomentsMean,
+    MomentsVar = MomentsVar,
+    MomentsTest = MomentsTest,
+    counterVal_up = counterVal+2*σκ,
+    counterVal = counterVal,
+    counterVal_down = counterVal-2*σκ)
+    =#
 end
 
 function checkParams(globParams)
@@ -2167,7 +2285,7 @@ end
 function runMainClosedFormeFrechet(globParams)
     # this function runs the outer loop, using the same distribution for the F* and the initial point of the optimizer
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching, ForceFrechetMarginal, stratifiedSampling = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching, ForceFrechetMarginal, stratifiedSampling, useIndependentCFDs, IndMomentOrder, importanceSampling, importanceSamplingFactor = globParams
 
     λData, LData, τData = importData(server, fakeData, DFake, seed)
     data = (λData=λData, LData=LData, τData=τData)
@@ -2183,8 +2301,11 @@ function runMainClosedFormeFrechet(globParams)
 
     # construct matrix of draws from exp(1). We use the Uod model (as oppoed to the Uo model)
     U = zeros(W, D * D)
+    ImportanceSamplingWeight = ones(W)
 
-    if stratifiedSampling == 1
+    if importanceSampling == 1
+        genExpRandsImportanceSampling!(U, importanceSamplingFactor, ImportanceSamplingWeight)
+    elseif stratifiedSampling == 1
         genExpRandsStratified!(U)
     else
         genExpRands!(U)
@@ -2196,7 +2317,7 @@ function runMainClosedFormeFrechet(globParams)
     # this is definitely not necessary...
     doPriceMomentMatching = true
     Γ_μ_σ = gamma(1 + μHat * (1 - σHat))
-    if doPriceMomentMatching && stratifiedSampling == 0
+    if doPriceMomentMatching && stratifiedSampling == 0 && importanceSampling == 0
         for d = 1:D
             for o = 1:D
                 o1 = o + (d - 1) * D
@@ -2241,8 +2362,11 @@ function runMainClosedFormeFrechet(globParams)
     # pre-calculate the quantiles for marginal matching with CDF methodology
     if sameMarginalsMoment == 1 && useCDFforMarginalMatching == 1
       
+        if importanceSampling == 1
+            CDF_X = quantile(Ū[:, 1, 1] .* ImportanceSamplingWeight[:], range(1 / (2 * momentOrder - 2), (2 * momentOrder - 3) / (2 * momentOrder - 2), length=2 * momentOrder - 3))
+            CDF_X_for_base = quantile(Ū[:, 1, 1] .* ImportanceSamplingWeight[:], range(1 / (momentOrderForBaseIndex - 1), (momentOrderForBaseIndex - 2) / (momentOrderForBaseIndex - 1), length=momentOrderForBaseIndex - 2))
 
-        if stratifiedSampling == 1
+        elseif stratifiedSampling == 1
             Half_W = floor(Int, W / 2)
             strata_size = floor(Int, Half_W / D^2)
 
@@ -2258,13 +2382,14 @@ function runMainClosedFormeFrechet(globParams)
     # if marginal matching does not allow scaling then we can cach the moment condition and just copy them in the function "moments!"
     if sameMarginalsMoment == 1 && useCDFforMarginalMatching == 1 && NoScalingforSameMartingale == 1
         K = length(CDF_X) + 2
-        CDF_Moments = zeros(W, (K + 1) * D^2 + momentOrderForBaseIndex)
+        CDF_Moments = zeros(W, (K + 1) * D^2 + momentOrderForBaseIndex + D^2)
         CDF_Moments_for_base = zeros(W, momentOrderForBaseIndex)
 
         refIndex = 1 #do not change
         refIndex1 = refIndex + (refIndex - 1) * D
         CDF_11_X = zeros(W, K)
         CDF_11_X_for_base = zeros(W, momentOrderForBaseIndex)
+
 
         for ω = 1:W
             smallest_X = searchsortedfirst(CDF_X, Ū[ω, refIndex1, 1]) + 1
@@ -2283,7 +2408,9 @@ function runMainClosedFormeFrechet(globParams)
             CDF_11_X_expectation = zeros(K)
             CDF_11_X_for_base_expectation = zeros(momentOrderForBaseIndex)
             for i = 1:K
-                if stratifiedSampling == 1
+                if importanceSampling ==1
+                    CDF_11_X_expectation[i] = sum(CDF_11_X[:,i] .* ImportanceSamplingWeight[:])/W
+                elseif stratifiedSampling == 1
                     Half_W = floor(Int, W / 2)
                     CDF_11_X_expectation[i] = ((0.1/0.5)*sum(CDF_11_X[1:Half_W,i]) + (0.9/0.5)*sum(CDF_11_X[Half_W+1:W,i])) /W
                 else
@@ -2294,7 +2421,9 @@ function runMainClosedFormeFrechet(globParams)
             end
 
             for i = 1:momentOrderForBaseIndex
-                if stratifiedSampling == 1
+                if importanceSampling == 1
+                    CDF_11_X_for_base_expectation[i] = sum(CDF_11_X_for_base[:,i].* ImportanceSamplingWeight[:])/W
+                elseif stratifiedSampling == 1
                     Half_W = floor(Int, W / 2)
                     CDF_11_X_for_base_expectation[i] = ((0.1/0.5)*sum(CDF_11_X_for_base[1:Half_W,i]) + (0.9/0.5)*sum(CDF_11_X_for_base[Half_W+1:W,i])) /W
                 else
@@ -2319,10 +2448,13 @@ function runMainClosedFormeFrechet(globParams)
             end
         end
 
+        
         for o = 1:D
             for d = 1:D
                 o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
                 @. CDF_Moments[:, o1] = Ū[:, o1, 1] .- Ū[:, refIndex1, 1]
+                @. CDF_Moments[:,end+1-o1] = Ū[:, o1, 1]^(-1)  .- Ū[:, refIndex1, 1]^(-1) # First Moment of inverse
+
 
                 for i = 1:K
                     @. CDF_Moments[:, o1+i*D^2] += -CDF_11_X[:, i]
@@ -2337,10 +2469,11 @@ function runMainClosedFormeFrechet(globParams)
             end
         end
 
-        @. CDF_Moments[:, (K+1)*D^2+1:end] += CDF_Moments_for_base[:, :]
+        @. CDF_Moments[:, (K+1)*D^2+1:end-D^2] += CDF_Moments_for_base[:, :]
     end
 
     Ind_Moments = zeros(1, 1)
+    IndCDF_Cells = Vector{Vector{Int}}(undef,1)
     #=
     if independenceMoment == 1 && NoScalingforSameMartingale == 1
         offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2
@@ -2365,7 +2498,7 @@ function runMainClosedFormeFrechet(globParams)
     =#
 
 
-    if independenceMoment == 1 && NoScalingforSameMartingale == 1
+    if independenceMoment == 1 && NoScalingforSameMartingale == 1 && useIndependentCFDs == 0
         offset = gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2
         Ind_Moments = zeros(W, D * (D^2 - floor(Int, D * (1 + D) / 2)) + (D-1)* 2 * momentOrder)
 
@@ -2384,7 +2517,6 @@ function runMainClosedFormeFrechet(globParams)
                 end
             end
         end
-
         # Equalize the CDF of U_{o}/min_{o-}U_{o'}, only for baseIndex
         RatioMinU = zeros(W, D)
         CDF_Moments_for_ratio_base = zeros(W, 2*momentOrder)
@@ -2396,6 +2528,7 @@ function runMainClosedFormeFrechet(globParams)
                 RatioMinU[ω, o] = minimum(tempU[Not(o)])
             end
         end
+        ## dropping this min stuff
         if stratifiedSampling == 1
             Half_W = floor(Int, W / 2)
             strata_size = floor(Int, Half_W / D^2)
@@ -2429,9 +2562,59 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
+    if independenceMoment == 1 && NoScalingforSameMartingale == 1&& useIndependentCFDs == 1
+        Ind_Moments = zeros(W, D * (D^2 - floor(Int, D * (1 + D) / 2)) + (IndMomentOrder-1) + (IndMomentOrder-1)^D)
+
+        idx_corss_moment = 0
+        for d = 1:D
+            for o = 1:D
+                o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
+                for c = 1:D
+                    for f = 1:D
+                        c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
+                        if c1 > o1 && d == f # condition on Uod, Uo'd only
+                            idx_corss_moment += 1
+                            @. Ind_Moments[:, idx_corss_moment] = Ū[:, o1, 1] .* Ū[:, c1, 1]
+                        end
+                    end
+                end
+            end
+        end
+
+        # Joint CDF = Product of Marginal CFDs
+
+        IndCDF_K = range(1,(IndMomentOrder-1), (IndMomentOrder-1))
+        IndCDF_X = quantile(Ū[:, 1, 1] .* ImportanceSamplingWeight[:], range(1/IndMomentOrder, (IndMomentOrder-1) / IndMomentOrder, length=IndMomentOrder-1))
+
+        # CDF U11
+        offset = D * (D^2 - floor(Int, D * (1 + D) / 2))
+        for ω =1:W
+            @inbounds for i in 1:length(IndCDF_X)
+                Ind_Moments[ω, offset+i] = (Ū[ω, 1, 1] < IndCDF_X[i]) ? 1 : 0
+            end
+        end
+
+        # Joint CDF
+        IndCDF_Cells = collect(with_replacement_combinations(IndCDF_K,D))
+        offset = D * (D^2 - floor(Int, D * (1 + D) / 2)) + IndMomentOrder-1
+        for ω =1:W
+            idx_corss_moment = 0
+            @inbounds for i in 1:length(IndCDF_Cells)
+                this_cdf = 1
+                for o=1:D
+                    o1 =  o + (baseIndex - 1) * D 
+                    this_cdf *= (Ū[ω, o1, 1] < IndCDF_X[floor(Int,IndCDF_Cells[i][o])]) ? 1 : 0
+                end
+                idx_corss_moment +=1
+                Ind_Moments[ω, offset+idx_corss_moment] = this_cdf
+            end
+        end
+
+    end
+
     #numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (3 + D^2) + sameMarginalsMoment * (2 * momentOrder) * D^2 + independenceMoment * (D^4 - floor(Int, D^2 * (1 + D^2) / 2) + 1)
 
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder) * D^2 + momentOrderForBaseIndex) + independenceMoment * (D * (D^2 - floor(Int, D * (1 + D) / 2) + 1)+ (D-1)* 2 * momentOrder)
+    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder + 1) * D^2 + momentOrderForBaseIndex) + independenceMoment * (1+ D * (D^2 - floor(Int, D * (1 + D) / 2))+ (1-useIndependentCFDs)*(D-1)* 2 * momentOrder + useIndependentCFDs*((IndMomentOrder-1) + (IndMomentOrder-1)^D))
 
 
     if counterType != 1
@@ -2610,7 +2793,7 @@ function runMainClosedFormeFrechet(globParams)
         end
     end
 
-    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "ForceFrechet_", ForceFrechetMarginal, "stratify_", stratifiedSampling, "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "ForceFrechet_", ForceFrechetMarginal, "stratify_", stratifiedSampling, "IndCDF_",useIndependentCFDs, "IndMO_", IndMomentOrder, "ISampling_", importanceSampling,"ISF_", importanceSamplingFactor,  "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
 
     writedlm(string("MomentNames_", file_name), MomentNames, ',')
 
@@ -2643,31 +2826,38 @@ function runMainClosedFormeFrechet(globParams)
     Mτ = calcMτ(τData, D)
     PMM = zeros(numMoments)
 
-    γ, θ_initial = buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime, Uσ, Ū, Σ_od, Mτ, μHat, PMM, CDF_X, CDF_Moments, Ind_Moments)
+    γ, θ_initial = buildObjectsForMoments(globParams, preStepOutput, data, LPrime, τPrime, Uσ, Ū, Σ_od, Mτ, μHat, PMM, CDF_X, CDF_Moments, Ind_Moments, IndCDF_Cells, ImportanceSamplingWeight)
 
     @show θ_initial
 
     @show Dates.format(now(), "HH:MM") # print time 
 
 
-    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType, useParallel, file_name) # run the outer loop 
+    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, useIndependentCFDs,IndMomentOrder, counterType, useParallel, file_name) # run the outer loop 
     writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
 
     # store the parameters
-    writedlm(string("Theta_initial_Frechet", "_", file_name), θ_initial, ',')
+   writedlm(string("Theta_initial_Frechet", "_", file_name), θ_initial, ',')
 
     for i = 1:length(δ_grid)
         writedlm(string("Theta_upper_", δ_grid[i], "_", file_name), Θ_upper[:, i], ',')
         writedlm(string("Theta_lower_", δ_grid[i], "_", file_name), Θ_lower[:, i], ',')
     end
 
+    #= To test stuff with specific theta
+    δ_grid  = [1] 
+    Θ_upper = copy(θ_initial)
+    Θ_lower = copy(θ_initial)
+    Θ_upper[:,1] = readdlm("Theta_upper_1_Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg0_NoSc1_ind0_order5_baseOrder50useCDF_1ForceFrechet_0stratify_0IndCDF_0IndMO_5ISampling_0ISF_2_Frechet_4-3-14.csv", ',')
+    Θ_lower[:,1] = readdlm("Theta_lower_1_Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg0_NoSc1_ind0_order5_baseOrder50useCDF_1ForceFrechet_0stratify_0IndCDF_0IndMO_5ISampling_0ISF_2_Frechet_4-3-14.csv", ',')
+    =#
     calculateLFD = true
     if calculateLFD
         LFD_upper = zeros(W, length(δ_grid))
         LFD_lower = zeros(W, length(δ_grid))
         for i = 1:length(δ_grid)
-            LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, counterType)
-            LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, counterType)
+            LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex,useIndependentCFDs,IndMomentOrder, counterType)
+            LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex,useIndependentCFDs,IndMomentOrder, counterType)
         end
         writedlm(string("LFD_up_", file_name), LFD_upper, ',')
         writedlm(string("LFD_low_", file_name), LFD_lower, ',')
@@ -2682,7 +2872,7 @@ function runLFD(globParams)
     # this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
     # U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, stratifiedSampling, usePMM = globParams
+    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching, ForceFrechetMarginal, stratifiedSampling, useIndependentCFDs, IndMomentOrder, importanceSampling, importanceSamplingFactor = globParams
 
     λData, LData, τData = importData(server, fakeData, DFake, seed)
     τPrime, LPrime = defineCounter(τData, LData, counterType)
@@ -2697,8 +2887,11 @@ function runLFD(globParams)
 
     # construct matrix of draws from exp(1)
     U = zeros(W, D * D)
+    ImportanceSamplingWeight = ones(W)
 
-    if stratifiedSampling == 1
+    if importanceSampling == 1
+        genExpRandsImportanceSampling!(U, importanceSamplingFactor, ImportanceSamplingWeight)
+    elseif stratifiedSampling == 1
         genExpRandsStratified!(U)
     else
         genExpRands!(U)
@@ -2709,7 +2902,7 @@ function runLFD(globParams)
     # Do μHat*(1-σHat) Moment Matching. This is the U power that enters the price expression
     doPriceMomentMatching = true
     Γ_μ_σ = gamma(1 + μHat * (1 - σHat))
-    if doPriceMomentMatching && stratifiedSampling == 0
+    if doPriceMomentMatching && stratifiedSampling == 0 && importanceSampling == 0
         for d = 1:D
             for o = 1:D
                 o1 = o + (d - 1) * D
@@ -2729,14 +2922,14 @@ function runLFD(globParams)
     Half_W = floor(Int, W / 2)
 
     StrataWeight = zeros(W)
-
-    if stratifiedSampling == 1
+    if importanceSampling == 1
+        @. StrataWeight[:] = ImportanceSamplingWeight[:]
+    elseif stratifiedSampling == 1
         @. StrataWeight[1:Half_W] = 0.1/0.5
         @. StrataWeight[Half_W+1:W] = 0.9/0.5
     else
         @. StrataWeight[:] = 1.0
     end
-
 
     Ū[:, :, 1] = U[:, :]
 
@@ -2744,7 +2937,7 @@ function runLFD(globParams)
     @show Dates.format(now(), "HH:MM") # print time 
 
     #### copy here the name of the file containing the counterfactual bounds
-    sourcefilename = "Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg1_NoSc1_ind0_order5_baseOrder50useCDF_1ForceFrechet_1stratify_1_Frechet_4-3-11.csv"
+    sourcefilename = "Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg0_NoSc1_ind0_order5_baseOrder50useCDF_1ForceFrechet_0stratify_0IndCDF_0IndMO_5ISampling_1ISF_2_Frechet_4-3-13.csv"
     ### use the naming convention to get the LFD_up and LFD_low file paths
     LFD_upper = readdlm(string(folderData, "/LFD_up_", sourcefilename), ',') # import data from csv
     LFD_lower = readdlm(string(folderData, "/LFD_low_", sourcefilename), ',') # import data from csv
@@ -2915,8 +3108,8 @@ function runLFD(globParams)
     u = range(0, 2, length=100)
     u_large = range(0, 50, length=100)
 
-    δ_grid = [0.01, 0.1, 0.5, 1, 2]
-    #δ_grid = [1]
+    #δ_grid = [0.01, 0.1, 0.5, 1, 2]
+    δ_grid = [1]
 
     for i = 1:length(δ_grid)
         marg_cdf = MarginalPricesCDF(u, baseIndex, i, 0)
@@ -3161,14 +3354,14 @@ globParams = (θHat=0,
     localGravityMoment=0, # = 1 impose model implied trade elasticity mtaches θHat, 0 = do not 
     localGravityCrossMoment=0, # = 1 impose model implied trade cross elasticity is zero, 0 = do not 
     GravityMomentFirstApproach=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
-    sameMarginalsMoment=1, # =1 imposes all od pairs have the same U distribution
+    sameMarginalsMoment=0, # =1 imposes all od pairs have the same U distribution
     NoScalingforSameMartingale=1,# =1 imposes a strict same marginal condition, without allowing for a multiplicative dergree of freedom   
-    independenceMoment=1, # =1 imposes correlation[Uod, Uo'd] = 0 
+    independenceMoment=0, # =1 imposes correlation[Uod, Uo'd] = 0 
     momentOrder=5, # number of moment conditions to approximate same marginal condition 
     momentOrderForBaseIndex = 50, # number of moment conditions to approximate same marginal condition for U_baseIndex,baseIndex
     useCDFforMarginalMatching=1, # 1= impose same marginal condition using CDF, 0= using moments 
-    ForceFrechetMarginal = 1, # 1= maintains Frechet marginal and leaves dependency to change
-    stratifiedSampling = 1, # 1= generates half simulations with low price realizations
+    ForceFrechetMarginal = 0, # 1= maintains Frechet marginal and leaves dependency to change
+    stratifiedSampling = 0, # 1= generates half simulations with low price realizations
     useParallel=1, # 1 = parallelise the deltas in outer loop; 0 = do not 
     InitDistributionType=1, # 0 = Frechet, 1 = lognormal, 2= t-dist, 3 = flexible (see genRands. uses corr and Param), 4 = LN productivity correlated with trade costs
     InitDistributionCorr=0.0, #correlation between countries
@@ -3177,6 +3370,10 @@ globParams = (θHat=0,
     StarDistributionCorr=0.0, #correlation between countries
     StarDistributionParam=1, #parameter of the distribution (Not used for Frechet & LN)
     usePMM=0, # not really implemented anymore should be removed maybe)
+    useIndependentCFDs = 0,
+    IndMomentOrder = 5,
+    importanceSampling =0,
+    importanceSamplingFactor =2
 )
 @show Dates.format(now(), "HH:MM")
 
