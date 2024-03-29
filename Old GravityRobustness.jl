@@ -45,26 +45,14 @@ include("local_sensitivity.jl")
 
 
 # functions
-function setwd(server, user)
+function setwd(server)
     # sets working directories
     if server == 1 # if working on the econ servers
-        if user == 1
-            cd(raw"/bbkinghome/mhansari/Robustness")
-            global folderData = "/bbkinghome/mhansari/Robustness"
-        end 
-        if user == 2
-            cd(raw"/bbkinghome/edav/gravity")
-            global folderData = "/bbkinghome/edav/gravity"
-        end 
+        cd(raw"/bbkinghome/mhansari/Robustness")
+        global folderData = "/bbkinghome/mhansari/Robustness"
     elseif server == 0 # if working on laptop 
-        if user == 1
-            cd(raw"C:/2. MIT/Model Robustness")
-            global folderData = "C:/2. MIT/Model Robustness/Data"
-        end
-        if user == 2
-            cd(raw"C:/Users/edwar/Dropbox (MIT)/Gravity robustness/Analysis/Julia Consolidated")
-            global folderData = "C:/Users/edwar/Dropbox (MIT)/Gravity robustness/Analysis/WIOD Data"
-        end        
+        cd(raw"C:/2. MIT/Model Robustness")
+        global folderData = "C:/2. MIT/Model Robustness/Data"
     end
 end
 
@@ -120,9 +108,9 @@ function iterWagesTheory!(w0, L, A, tau, theta, lambda)
 
 end
 
-function importData(server, user, fakeData, DFake, seed)
+function importData(server, fakeData, DFake, seed)
 
-    setwd(server, user) # set working and data directories
+    setwd(server) # set working and data directories
 
     if fakeData == 1
         Random.seed!(seed + 1) # set different seed for true data generation
@@ -2296,10 +2284,10 @@ end
 
 function runMainClosedFormeFrechet(globParams)
     # this function runs the outer loop, using the same distribution for the F* and the initial point of the optimizer
-    @unpack θHat, σHat, W, baseIndex, server, user, fakeData, DFake, seed,
+    @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
     counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching, ForceFrechetMarginal, stratifiedSampling, useIndependentCFDs, IndMomentOrder, importanceSampling, importanceSamplingFactor = globParams
 
-    λData, LData, τData = importData(server, user, fakeData, DFake, seed)
+    λData, LData, τData = importData(server, fakeData, DFake, seed)
     data = (λData=λData, LData=LData, τData=τData)
     τPrime, LPrime = defineCounter(τData, LData, counterType)
     D = length(LData)
@@ -2886,7 +2874,7 @@ function runLFD(globParams)
     @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
     counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM, useCDFforMarginalMatching, ForceFrechetMarginal, stratifiedSampling, useIndependentCFDs, IndMomentOrder, importanceSampling, importanceSamplingFactor = globParams
 
-    λData, LData, τData = importData(server, user, fakeData, DFake, seed)
+    λData, LData, τData = importData(server, fakeData, DFake, seed)
     τPrime, LPrime = defineCounter(τData, LData, counterType)
     D = length(LData)
 
@@ -3121,7 +3109,7 @@ function runLFD(globParams)
     u_large = range(0, 50, length=100)
 
     #δ_grid = [0.01, 0.1, 0.5, 1, 2]
-    δ_grid = [0.1, 1]
+    δ_grid = [1]
 
     for i = 1:length(δ_grid)
         marg_cdf = MarginalPricesCDF(u, baseIndex, i, 0)
@@ -3242,7 +3230,7 @@ function runMainGeneric(globParams)
 
     checkParams(globParams)
 
-    λData, LData, τData = importData(server, user, fakeData, DFake, seed)
+    λData, LData, τData = importData(server, fakeData, DFake, seed)
     data = (λData=λData, LData=LData, τData=τData)
     τPrime, LPrime = defineCounter(τData, LData, counterType)
     D = length(LData)
@@ -3356,7 +3344,6 @@ globParams = (θHat=0,
     W=80000, # num draws 
     baseIndex=2, # country to use as wage normalisation and counterfactual 
     server=1, # 1 if using server, 0 otherwise (uses server file path if 1)
-    user = 2, # 1 = Habib, 2 = Ed 
     fakeData=1, # 1 to generate data, 0 to use from files
     DFake=4, # if using fake data, number of countries to gen data
     seed=888, # seed for simulations (different from fake data seed)
@@ -3372,10 +3359,10 @@ globParams = (θHat=0,
     independenceMoment=0, # =1 imposes correlation[Uod, Uo'd] = 0 
     momentOrder=5, # number of moment conditions to approximate same marginal condition 
     momentOrderForBaseIndex = 50, # number of moment conditions to approximate same marginal condition for U_baseIndex,baseIndex
-    useCDFforMarginalMatching=0, # 1= impose same marginal condition using CDF, 0= using moments 
+    useCDFforMarginalMatching=1, # 1= impose same marginal condition using CDF, 0= using moments 
     ForceFrechetMarginal = 0, # 1= maintains Frechet marginal and leaves dependency to change
     stratifiedSampling = 0, # 1= generates half simulations with low price realizations
-    useParallel=0, # 1 = parallelise the deltas in outer loop; 0 = do not 
+    useParallel=1, # 1 = parallelise the deltas in outer loop; 0 = do not 
     InitDistributionType=1, # 0 = Frechet, 1 = lognormal, 2= t-dist, 3 = flexible (see genRands. uses corr and Param), 4 = LN productivity correlated with trade costs
     InitDistributionCorr=0.0, #correlation between countries
     InitDistributionParam=1, #parameter of the distribution (Not used for Frechet & LN)
