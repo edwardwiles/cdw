@@ -1,0 +1,3 @@
+abstract type ObjectiveBundle end
+
+abstract type ObjectiveBundleConditional end
