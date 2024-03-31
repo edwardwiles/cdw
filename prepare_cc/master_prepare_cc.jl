@@ -87,7 +87,8 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
         γ = γ,
         θ_initial = θ_initial,
         numMoments = numMoments,
-        MomentNames = MomentNames
+        MomentNames = MomentNames,
+        file_name = file_name
     )
 
     return prep_output

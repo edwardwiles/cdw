@@ -1,5 +1,11 @@
 
-function ccOuter(θ_initial_all, θ_Star_all, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex,useIndependentCFDs,IndMomentOrder, counterType, useParallel, file_name)
+function ccOuter(prep_output, params)
+    
+    @unpack gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, useIndependentCFDs,IndMomentOrder, counterType, useParallel = params 
+    @unpack θ_initial, γ, file_name = prep_output   
+    
+    U = γ.Ū[:,:,1]  
+    
     # function that runs the CC outer loop 
     D = length(γ.L)
 
