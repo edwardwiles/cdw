@@ -4,6 +4,7 @@ include("prestep/include_prestep.jl")
 include("prepare_cc/include_prepare_cc.jl")
 include("moments/include_moments.jl")
 include("cc_algo/include_cc_algo.jl")
+include("lfd/include_lfd.jl")
 include("misc/include_misc.jl")
 
 using Distributions, Statistics, Plots, .CounterfactualSensitivity
