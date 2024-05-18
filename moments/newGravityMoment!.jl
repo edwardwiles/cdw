@@ -1,4 +1,4 @@
-function newGravityMoment!(G, PMM, τ, D, W, γ, U, GravityMomentFirstApproach)
+function newGravityMoment!(G, PMM, τ, D, W, γ, Aod, U, GravityMomentFirstApproach)
     # constructs gravity moment, second approach [without additional parameters] (see theory note)
 
     deltaτ = doubleDiff(τ)
@@ -14,14 +14,12 @@ function newGravityMoment!(G, PMM, τ, D, W, γ, U, GravityMomentFirstApproach)
     end
     meanτ /= (D - 1)^2
 
-
-
     U_ω = zeros(eltype(γ), size(τ))
 
     for ω = 1:W
         sumGrav = 0
-        U_ω = U[ω, :]
-        deltaU = doubleDiff(reshape(U_ω, (D, D)))
+        @. U_ω[:] = U[ω, :] 
+        deltaU = doubleDiff(reshape(U_ω, (D, D))[:,:].* Aod[:,:])
 
         for o = 2:D
 
@@ -32,7 +30,8 @@ function newGravityMoment!(G, PMM, τ, D, W, γ, U, GravityMomentFirstApproach)
             end
         end
         sumGrav /= (D - 1)^2
-        G[ω, end-GravityMomentFirstApproach] = 1000.0 * sumGrav - PMM[end-GravityMomentFirstApproach]
+
+        G[ω, end-GravityMomentFirstApproach] = sumGrav - PMM[end-GravityMomentFirstApproach]
     end
 
 end

@@ -1,13 +1,13 @@
 
-function drawU(ImportanceSamplingWeight, params)
-    @unpack W, D, importanceSampling, stratifiedSampling, importanceSamplingFactor = params 
+function drawU(SamplingWeight, params)
+    @unpack W, D, importanceSampling, importanceSamplingFactor = params 
 
     U = zeros(W, D * D)
 
     if importanceSampling == 1
-        genExpRandsImportanceSampling!(U, importanceSamplingFactor, ImportanceSamplingWeight)
-    elseif stratifiedSampling == 1
-        genExpRandsStratified!(U)
+        genExpRandsImportanceSampling!(U, importanceSamplingFactor, SamplingWeight)
+    elseif importanceSampling == 2
+        genExpRandsStratified!(U, SamplingWeight)
     else
         genExpRands!(U)
     end    

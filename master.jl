@@ -6,7 +6,7 @@ include("moments/include_moments.jl")
 include("cc_algo/include_cc_algo.jl")
 include("misc/include_misc.jl")
 
-using Distributions, Statistics, Plots
+using Distributions, Statistics, Plots, .CounterfactualSensitivity
 
 function main(globalParams)
 
@@ -16,7 +16,10 @@ function main(globalParams)
  
     # add D to the parameters list 
     useParams = globalParams
-    useParams = (; useParams..., D = setup_output.D)    
+    useParams = (; useParams..., D = setup_output.D) 
+    
+    # check parameters are compatible
+    checkParams(useParams)
 
     # run prestep 
     # nb: general distribution prestep not set up, only implements Frechet 
@@ -39,7 +42,9 @@ function main(globalParams)
 
     @show Dates.format(now(), "HH:MM") # print time     
 
-    δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(θ_initial, θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex, useIndependentCFDs,IndMomentOrder, counterType, useParallel, file_name) # run the outer loop 
+    Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(prep_output, globalParams, moments!) # run the outer loop 
+
+    @unpack δ_grid, file_name, θ_initial = prep_output
     writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
 
     # store the parameters
@@ -57,19 +62,18 @@ function main(globalParams)
     Θ_upper[:,1] = readdlm("Theta_upper_1_Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg0_NoSc1_ind0_order5_baseOrder50useCDF_1ForceFrechet_0stratify_0IndCDF_0IndMO_5ISampling_0ISF_2_Frechet_4-3-14.csv", ',')
     Θ_lower[:,1] = readdlm("Theta_lower_1_Counter_1_countries_4_baseI2_sGrav0_lGrav0_Marg0_NoSc1_ind0_order5_baseOrder50useCDF_1ForceFrechet_0stratify_0IndCDF_0IndMO_5ISampling_0ISF_2_Frechet_4-3-14.csv", ',')
     =#
-    calculateLFD = true
-    if calculateLFD
+
+    if globalParams.calculateLFD == 1
         LFD_upper = zeros(W, length(δ_grid))
         LFD_lower = zeros(W, length(δ_grid))
         for i = 1:length(δ_grid)
-            LFD_upper[:, i] = LFD(Θ_upper[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder, momentOrderForBaseIndex,useIndependentCFDs,IndMomentOrder, counterType)
-            LFD_lower[:, i] = LFD(Θ_lower[:, i], U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, NoScalingforSameMartingale, independenceMoment, momentOrder,momentOrderForBaseIndex,useIndependentCFDs,IndMomentOrder, counterType)
+            LFD_upper[:, i] = LFD(Θ_upper[:, i], prep_output, globalParams)
+            LFD_lower[:, i] = LFD(Θ_lower[:, i], prep_output, globalParams)
         end
         writedlm(string("LFD_up_", file_name), LFD_upper, ',')
         writedlm(string("LFD_low_", file_name), LFD_lower, ',')
     end
 
-    @show Θ_upper[:, 1]
     @show Dates.format(now(), "HH:MM") # print time    
 
 end 
@@ -78,8 +82,8 @@ end
 params = (
 
     # setup parameters 
-    server=0, # 1 if using server, 0 otherwise (uses server file path if 1)
-    user = 2, # 1 = Habib, 2 = Ed 
+    server=1, # 1 if using server, 0 otherwise (uses server file path if 1)
+    user = 1, # 1 = Habib, 2 = Ed 
     fakeData=1, # 1 to generate data, 0 to use from files
     DFake=4, # if using fake data, number of countries to gen data
     seedFakeData = 9389, # seed for fake data generation 
@@ -94,32 +98,24 @@ params = (
 
     # prepare CC parameters 
     seedU = 888,
-    stratifiedSampling = 0, # 1 = generates half simulations with low price realizations
-    importanceSampling = 0,
+    importanceSampling = 0, # 1 : Importance sampling with an exponential weight, 2: Half the realizations of U are smaller than 0.1
     importanceSamplingFactor = 2, 
-    useIndependentCFDs = 0,
     IndMomentOrder = 5,
     θConstant=0, # put 1 if theta and sigma never vary, will precalculate U^((1-sigma)/theta)
     gravMoment=0, # = 1 impose gravity identification for Frechet, 0 = do not
     localGravityMoment=0, # = 1 impose model implied trade elasticity mtaches θHat, 0 = do not 
-    localGravityCrossMoment=0, # = 1 impose model implied trade cross elasticity is zero, 0 = do not 
     GravityMomentFirstApproach=0, # = 1 imposes mean independence between lnU and ln tau , 0 = do not
-    sameMarginalsMoment=1, # =1 imposes all od pairs have the same U distribution
-    NoScalingforSameMartingale=1,# =1 imposes a strict same marginal condition, without allowing for a multiplicative dergree of freedom   
+    sameMarginalsMoment=0, # =1 imposes all od pairs have the same U distribution
     independenceMoment=0, # =1 imposes correlation[Uod, Uo'd] = 0 
     momentOrder=5, # number of moment conditions to approximate same marginal condition 
     momentOrderForBaseIndex = 50, # number of moment conditions to approximate same marginal condition for U_baseIndex,baseIndex
-    useCDFforMarginalMatching=0, # 1= impose same marginal condition using CDF, 0= using moments 
     ForceFrechetMarginal = 0, # 1= maintains Frechet marginal and leaves dependency to change
+    OuterScaling = 1, # 1= Aod model, 0 = Aod fixed
     useParallel=0, # 1 = parallelise the deltas in outer loop; 0 = do not 
-    InitDistributionType=1, # 0 = Frechet, 1 = lognormal, 2= t-dist, 3 = flexible (see genRands. uses corr and Param), 4 = LN productivity correlated with trade costs
-    InitDistributionCorr=0.0, #correlation between countries
-    InitDistributionParam=1, #parameter of the distribution (Not used for Frechet & LN)
-    StarDistributionType=0, # 0 = Frechet, 1 = lognormal, 2= t-dist, 3 = flexible (see genRands. uses corr and Param), 4 = LN productivity correlated with trade costs
-    StarDistributionCorr=0.0, #correlation between countries
-    StarDistributionParam=1, #parameter of the distribution (Not used for Frechet & LN)
-    usePMM=0 # not really implemented anymore should be removed maybe)        
-
+    usePMM=0, # not really implemented anymore should be removed maybe)
+    δGridType = 0, # 0: {1}, else: {0.01, 0.1, 0.5, 1, 2}
+    calculateLFD =1,
+    refIndex1 = 1,
 )
 
 main(params)

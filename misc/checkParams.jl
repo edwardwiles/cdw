@@ -1,8 +1,9 @@
 function checkParams(globParams)
-    @unpack θHat, σHat, W, baseIndex, server, fakeData, DFake, seed,
-    counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, useParallel, InitDistributionType, InitDistributionCorr, InitDistributionParam, usePMM = globParams
+    @unpack counterType, sameMarginalsMoment, independenceMoment, usePMM, importanceSampling = globParams
 
-    if GravityMomentFirstApproach + sameMarginalsMoment + independenceMoment > 1
-        error("parameters are not compatible")
+    if sameMarginalsMoment == 0  && independenceMoment == 1
+        error("sameMarginalsMoment must be =1 with independenceMoment = 1")
+    elseif usePMM != 0 || counterType != 1 || importanceSampling != 0
+        error("Option not yet handled correctly")
     end
 end

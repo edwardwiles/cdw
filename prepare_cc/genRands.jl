@@ -7,7 +7,7 @@ function genExpRands!(U)
     end
 end
 
-function genExpRandsStratified!(U)
+function genExpRandsStratified!(U, StratifiedSamplingWeight)
     # draw from exp(1)
     D2 = size(U, 2)
     W = size(U, 1)
@@ -18,6 +18,9 @@ function genExpRandsStratified!(U)
     rand!(U)
 
     # We stratify U on two intervals [0, 0.1] & [0.1, 1]. We therefore have to weight the realizations by w_1 = 0.1/0.5 and w_2 = 0.9/0.5 when calculating expectations
+
+    @. StratifiedSamplingWeight[1:strata_size] = 0.1./0.5
+    @. StratifiedSamplingWeight[strata_size+1:end] = 0.9./0.5
 
     strata_index = 0
     for od = 1:D2
@@ -31,14 +34,12 @@ function genExpRandsStratified!(U)
     end
 
 
-    #we can do this for a vector of cutoff points instead of 
-
 end
 
 function genExpRandsImportanceSampling!(U, λ, ImportanceSampleingWeight)
     # draw from exp(1)
     rand!(U)
-    #λ >>1 -> Increase the number of realizations where U is small as this is the part that is determinant for 
+    #λ >>1 -> Increase the number of realizations where U is small
     for i in 1:length(U)
         U[i] = -log(1 - U[i])/λ
     end
@@ -48,15 +49,6 @@ function genExpRandsImportanceSampling!(U, λ, ImportanceSampleingWeight)
     ImportanceSampleingWeight = ones(W)
     for od = 1:D2
        @. ImportanceSampleingWeight[:] = ImportanceSampleingWeight[:] .* exp.((λ-1) .* U[:,od]) ./ λ
-    end
-
-    for od = 1:D2
-        @show sum(exp.((λ-1) .* U[:,od]) .* U[:,od])/(W*λ)
-        @show sum(exp.((λ-1) .* U[:,od]))/(W*λ)
-    end
-
-    for od = 1:D2
-        @show sum(ImportanceSampleingWeight[:] .* U[:,od])/W
     end
 end
 

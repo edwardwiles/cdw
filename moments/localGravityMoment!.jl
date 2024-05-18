@@ -1,4 +1,4 @@
-function localGravityMoment!(G, PMM, D, ω, prices, ξ, σ, μ, d, max_price, gravMoment, GravityMomentFirstApproach)
+function localGravityMoment!(G, PMM, D, ω, prices, ξ, σ, μ, d, max_price, offset)
     tuner = -100.0
     β = 0.01
     pricesInd_without_o = copy(prices)
@@ -17,7 +17,7 @@ function localGravityMoment!(G, PMM, D, ω, prices, ξ, σ, μ, d, max_price, gr
 
             moment_idx = (D - 1) * (d - 1) + counter
 
-            G[ω, end-GravityMomentFirstApproach-gravMoment-moment_idx] = σ - 1 + A / ξ[o] + B / ξ[d] - 1 / μ - PMM[end-GravityMomentFirstApproach-gravMoment-moment_idx]
+            G[ω, end-offset-moment_idx] = σ - 1 + A / ξ[o] + B / ξ[d] - 1 / μ - PMM[end-offset-moment_idx]
         end
     end
 
