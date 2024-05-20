@@ -1,12 +1,20 @@
-    function mCDF(x, o, d, i, up_down)
-        o1 = o + (d - 1) * D
-        mcdf = zeros(length(x))
-        nornamization_factor = 0
-        for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i]))*StrataWeight[ω] / W
-            for j = 1:length(x)
-                mcdf[j] += Ū[ω, o1, 1] < x[j] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W : 0
-            end
-        end
-        return mcdf / nornamization_factor
-    end
+function UCDF(x, o, d, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size)
+	o1 = o + (d - 1) * D
+	ucdf = zeros(length(x), δ_grid_size, 3) # x, δ, lower/initial/upper
+	RN = ones(δ_grid_size, 3)
+	CDF_Size = length(x)
+	for ω ∈ 1:W
+
+		RN[:, 1] = LFD_lower[ω, :] .* (SamplingWeights[ω] / W)
+		RN[:, 2] = SamplingWeights[ω] ./ W
+		RN[:, 3] = LFD_upper[ω, :] .* (SamplingWeights[ω] / W)
+
+
+		smallest_X = searchsortedfirst(x, U[ω, o1])
+		for j ∈ smallest_X:CDF_Size
+			@. ucdf[j, :, :] += RN[:, :]
+		end
+
+	end
+	return ucdf
+end

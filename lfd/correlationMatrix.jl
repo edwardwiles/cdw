@@ -1,61 +1,39 @@
-   function correlationMatrix(i, up_down)
+function correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size)
 
-        U_Means = zeros(D^2)
-        U_Vars = zeros(D^2)
-        corrMatrix = zeros(D^2, D^2)
-        nornamization_factor = 0
-        for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W
-        end
+	U_Means = zeros(D^2, 3, δ_grid_size)
+	U_Vars = zeros(D^2, 3, δ_grid_size)
+	corrMatrix = zeros(D^2, D^2, 3, δ_grid_size)  # D^2, D^2, lower/Initial/upper, δ
+	RN = zeros(W, 3, δ_grid_size)
+
+	for δ ∈ 1:δ_grid_size
+		@. RN[:, 1, δ] = LFD_lower[:, δ] .* (SamplingWeights[:] / W)
+		@. RN[:, 2, δ] = SamplingWeights[:] ./ W
+		@. RN[:, 3, δ] = LFD_upper[:, δ] .* (SamplingWeights[:] / W)
+	end
+
+	for δ ∈ 1:δ_grid_size
+		for i ∈ 1:3
+			for o1 ∈ 1:D^2
+				@. U_Means[o1, i, δ] += mean(U[:, o1] .* RN[:, i, δ])
+				@. U_Vars[o1, i, δ] += mean(U[:, o1] .* U[:, o1] .* RN[:, i, δ])
+			end
+		end
+	end
 
 
-        for d = 1:D
-            for o = 1:D
-                o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
-                for ω = 1:W
+	@. U_Vars[:, :, :] = U_Vars[:, :, :] .- U_Means[:, :, :] .* U_Means[:, :, :]
 
-                    U_Means[o1] += Ū[ω, o1, 1] * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * nornamization_factor)
-                    U_Vars[o1] += Ū[ω, o1, 1] * Ū[ω, o1, 1] * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * nornamization_factor)
-                end
-            end
-        end
 
-        for d = 1:D
-            for o = 1:D
-                o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
-                U_Vars[o1] = U_Vars[o1] - U_Means[o1] * U_Means[o1]
-
-            end
-        end
-
-        for d = 1:D
-            for o = 1:D
-                o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o               
-                for c = 1:D
-                    for f = 1:D
-                        c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
-                        if o1 > c1
-                            for ω = 1:W
-                                corrMatrix[o1, c1] += (Ū[ω, o1, 1]) .* (Ū[ω, c1, 1]) * (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * nornamization_factor) - U_Means[o1] * U_Means[c1]*StrataWeight[ω]/ W
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        for d = 1:D
-            for o = 1:D
-                o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o               
-                for c = 1:D
-                    for f = 1:D
-                        c1 = c + (f - 1) * D # uncomment to to U_{od} rather than U_o
-                        if o1 > c1
-                            corrMatrix[o1, c1] = corrMatrix[o1, c1] / sqrt(U_Vars[o1] * U_Vars[c1])
-                        end
-                    end
-                end
-            end
-        end
-        return corrMatrix
-    end
+	for o1 ∈ 1:D^2
+		for c1 ∈ 1:D^2
+			if o1 > c1
+				for δ ∈ 1:δ_grid_size
+					for i ∈ 1:3
+						corrMatrix[o1, c1, i, δ] = mean(U[:, o1] .* U[:, c1] .* RN[:, i, δ]) / sqrt(U_Vars[o1, i, δ] * U_Vars[c1, i, δ])
+					end
+				end
+			end
+		end
+	end
+	return corrMatrix
+end

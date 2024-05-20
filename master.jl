@@ -81,8 +81,11 @@ params = (
     useParallel=0, # 1 = parallelise the deltas in outer loop; 0 = do not 
     usePMM=0, # not really implemented anymore should be removed maybe)
     δGridType = 0, # 0: {1}, else: {0.01, 0.1, 0.5, 1, 2}
-    calculateLFD =1,
     refIndex1 = 1,
+
+    # Post CC Optimization tests
+    calculateLFD =1,
+    runLFD = 1,
 )
 
 main(params)

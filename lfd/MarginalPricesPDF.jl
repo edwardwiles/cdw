@@ -1,18 +1,29 @@
-  function MarginalPricesPDF(x, d, i, up_down)
-        o1 = 1 + (d - 1) * D
-        o2 = D + (d - 1) * D
-        ppdf = zeros(length(x) - 1, 3)
-        nornamization_factor = 0
-        for ω = 1:W
-            nornamization_factor += (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ W
-            for j = 1:length(x)-1
-                x_ω = Ū[ω, o1:o2, 1]
-                price_baseIndex = x_ω[d] / λData[d, d]
-                price_rw = minimum(x_ω[Not(d)] ./ λData[Not(d), d])
-                ppdf[j, 1] += price_baseIndex >= x[j] && price_baseIndex <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * (x[j+1] - x[j])) : 0
-                ppdf[j, 2] += price_rw >= x[j] && price_rw <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i])) *StrataWeight[ω]/ (W * (x[j+1] - x[j])) : 0
-                ppdf[j, 3] += price_baseIndex / price_rw >= x[j] && price_baseIndex / price_rw <= x[j+1] ? (up_down == 0 ? 1 : (up_down == 1 ? LFD_upper[ω, i] : LFD_lower[ω, i]))*StrataWeight[ω] / (W * (x[j+1] - x[j])) : 0
-            end
-        end
-        return ppdf / nornamization_factor
-    end
+function MarginalPricesPDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData)
+	#CDF price to the power 1/μ 
+	o1 = 1 + (d - 1) * D
+	o2 = D + (d - 1) * D
+	ppdf = zeros(length(x), δ_grid_size, 3, 3) #x, δ, bound=lower/initial/upper, domestic/rw/ratio 
+
+	IndRN = ones(3, 3)
+	Ind = zeros(3)
+
+	for ω ∈ 1:W
+
+		for j ∈ 1:length(x)-1
+			x_ω = U[ω, o1:o2] .* Aod[:, d]
+			price_domestic = x_ω[d] / λData[d, d]
+			price_rw = minimum(x_ω[Not(d)] ./ λData[Not(d), d])
+			Ind[1] = price_domestic >= x[j] && price_domestic <= x[j+1] ? 1 : 0
+			Ind[2] = price_rw >= x[j] && price_rw <= x[j+1] ? 1 : 0
+			Ind[3] = price_domestic / price_rw >= x[j] && price_domestic / price_rw <= x[j+1] ? 1 : 0
+			for δ ∈ 1:δ_grid_size
+				@. IndRN[1, :] = Ind[:] .* (LFD_lower[ω, δ] * SamplingWeights[ω] / W)
+				@. IndRN[2, :] = Ind[:] .* (SamplingWeights[ω] / W)
+				@. IndRN[3, :] = Ind[:] .* (LFD_upper[ω, δ] * SamplingWeights[ω] / W)
+
+				@. ppdf[j, δ, :, :] += IndRN_ω[:]
+			end
+		end
+	end
+	return ppdf
+end

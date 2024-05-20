@@ -2,13 +2,11 @@ function master_cc_algo(prep_output, params)
 
 	@unpack δ_grid, file_name, θ_initial = prep_output
 
-   
-
 	Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(prep_output, params) # run the outer loop 
 	writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
 
 	# store the parameters
-	writedlm(string("Theta_initial_Frechet", "_", file_name), θ_initial, ',')
+	writedlm(string("Theta_initial", "_", file_name), θ_initial, ',')
 
 	for i ∈ 1:length(δ_grid)
 		writedlm(string("Theta_upper_", δ_grid[i], "_", file_name), Θ_upper[:, i], ',')
@@ -32,6 +30,10 @@ function master_cc_algo(prep_output, params)
 		end
 		writedlm(string("LFD_up_", file_name), LFD_upper, ',')
 		writedlm(string("LFD_low_", file_name), LFD_lower, ',')
+	end
+
+	if params.runLFD == 1			
+		runLFD(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prep_output, params)
 	end
 	   
 end
