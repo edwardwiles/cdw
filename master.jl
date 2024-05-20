@@ -40,8 +40,9 @@ function main(globalParams)
 
     @show sum(G,dims=1)./globalParams.W
     =#
+    @show Dates.format(now(), "HH:MM") # print time  
     master_cc_algo(prep_output, useParams)
-
+	@show Dates.format(now(), "HH:MM") # print time 
 end 
 
 ## Define global parameters
