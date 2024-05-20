@@ -12,7 +12,8 @@ function buildObjectsForMoments(
 	IndCDF_Cells = Vector{Vector{Int}}(undef, 1),
 	SamplingWeights = ones(1))
 	# constructs object containing fixed parameters (L, tau, data, etc) to feed into moment functions
-	@unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, refIndex1, OuterScaling = globParams
+	@unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, refIndex1, OuterScaling =
+		globParams
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
 	@unpack λData, LData, τData = data
 
@@ -29,37 +30,35 @@ function buildObjectsForMoments(
 		momentOrder = momentOrder,
 		momentOrderForBaseIndex = momentOrderForBaseIndex,
 		IndMomentOrder = IndMomentOrder,
-        OuterScaling = OuterScaling)
+		OuterScaling = OuterScaling)
 
 	# remove the entry of w' that is the wage we are normalising to 1
 	# as no point in optimising over this (will add it back inside the moment function)
 	splice!(wPrimeHat, baseIndex)
 
 
-	if counterType != 1# TO DO: Implement correctly
+	if counterType != 1
 
-		θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
+		θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, wPrimeHat)
 
 
-		if GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
-			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2 - 1))
-		end
+		if OuterScaling == 1 # Aod Model
+			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2))
 
-		if sameMarginalsMoment == 1 && NoScalingforSameMartingale == 0
-			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2 - 1))
-		end
-
-		if sameMarginalsMoment == 1 && NoScalingforSameMartingale == 1
+			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, ones(D^2), range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 # We will need to calculate E[ln ̄U]
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2), zeros(D^2))
+			end
+		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
-		end
-
-		if independenceMoment == 1
-			if NoScalingforSameMartingale == 0
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2))
-			elseif useIndependentCFDs == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder - 1))
-			else
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1)
+			if independenceMoment == 1
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+			end
+		else # sameMarginalsMoment == 0 && OuterScaling == 0
+			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
+			if GravityMomentFirstApproach == 1
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, zeros(D^2))
 			end
 		end
 
@@ -72,6 +71,7 @@ function buildObjectsForMoments(
 			PMM = PMM,
 			baseIndex = baseIndex,
 			indicators = indicators,
+			wPrimeHat = wPrimeHat,
 			Uσ = Uσ,
 			Ū = Ū,
 			μHat = μHat,
@@ -81,9 +81,8 @@ function buildObjectsForMoments(
 			cHat = cHat,
 			IndCDF_Cells = IndCDF_Cells,
 			SamplingWeights = SamplingWeights,
-            refIndex1 = refIndex1
+			refIndex1 = refIndex1,
 		)
-
 		return γ, θ_initial
 
 	else
@@ -92,21 +91,21 @@ function buildObjectsForMoments(
 		if OuterScaling == 1 # Aod Model
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2))
 
-            if independenceMoment == 1 # this also means sameMarginalsMoment == 1
+			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, ones(D^2), range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
-            elseif GravityMomentFirstApproach == 1  && sameMarginalsMoment == 0 # We will need to calculate E[ln ̄U]
-                θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2), zeros(D^2))
-            end
+			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 # We will need to calculate E[ln ̄U]
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2), zeros(D^2))
+			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
 			if independenceMoment == 1
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
 			end
-        else # sameMarginalsMoment == 0 && OuterScaling == 0
-            θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
-            if GravityMomentFirstApproach == 1
-                θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], zeros(D^2))
-            end
+		else # sameMarginalsMoment == 0 && OuterScaling == 0
+			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
+			if GravityMomentFirstApproach == 1
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], zeros(D^2))
+			end
 
 		end
 
@@ -130,7 +129,7 @@ function buildObjectsForMoments(
 			cHat = cHat,
 			IndCDF_Cells = IndCDF_Cells,
 			SamplingWeights = SamplingWeights,
-            refIndex1 = refIndex1,
+			refIndex1 = refIndex1,
 		)
 
 		return γ, θ_initial

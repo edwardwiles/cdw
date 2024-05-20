@@ -1,4 +1,4 @@
-function moments!(K, G, θ, U, obj)
+function EK_moments!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 
 	# unpack the gamma (auxiliary parameters) vector

@@ -1,7 +1,7 @@
 
-function ccOuter(prep_output, globalParams)
+function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
-	@unpack  GravityMomentFirstApproach, counterType, useParallel = globalParams
+	@unpack  GravityMomentFirstApproach, counterType, useParallel, EK_moments! = params
 	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
 	D = length(γ.L)
 
@@ -30,7 +30,7 @@ function ccOuter(prep_output, globalParams)
 				δ = 1,
 				find_smallest = true,
 				γ = γ,
-				(moments!) = moments!,
+				(moments!) = EK_moments!,
 				#moments_jacobian! = rust_moments_jacobian!,
 				d = numMoments,
 				outer_constr_index = outer_constr_index,
