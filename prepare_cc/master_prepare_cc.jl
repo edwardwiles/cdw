@@ -61,7 +61,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     # index where outer loop moments start
     outer_constr_index = numMoments + 1 - GravityMomentFirstApproach
 
-    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_NoSc", NoScalingforSameMartingale, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "useCDF_", useCDFforMarginalMatching, "ForceFrechet_", ForceFrechetMarginal, "stratify_", stratifiedSampling, "IndCDF_",useIndependentCFDs, "IndMO_", IndMomentOrder, "ISampling_", importanceSampling,"ISF_", importanceSamplingFactor,  "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "ForceFrechet_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "ISampling_", importanceSampling,"ISF_", importanceSamplingFactor,  "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
 
 
     PMM = zeros(numMoments)

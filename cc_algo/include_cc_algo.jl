@@ -25,7 +25,8 @@ export outer_loop,
        KLObjectiveBundleConditionalDelta,
        PsiObjectiveBundleConditionalExplicit,
        PsiObjectiveBundleConditionalImplicit,
-       PsiObjectiveBundleConditionalDelta
+       PsiObjectiveBundleConditionalDelta,
+       master_cc_algo
 
 include("Psi.jl")
 include("ObjectiveBundle.jl")
@@ -38,6 +39,6 @@ include("outer_loop_functions.jl")
 include("local_sensitivity.jl")
 include("ccOuter.jl")
 include("ccInner.jl")
-
+include("master_cc_algo.jl")
 
 end

@@ -2,7 +2,7 @@ function master_cc_algo(prep_output, params)
 
 	@unpack δ_grid, file_name, θ_initial = prep_output
 
-	@show Dates.format(now(), "HH:MM") # print time     
+   
 
 	Θ_upper, κ_upper, Θ_lower, κ_lower = ccOuter(prep_output, params) # run the outer loop 
 	writedlm(file_name, [δ_grid κ_lower κ_upper], ',')
@@ -33,6 +33,5 @@ function master_cc_algo(prep_output, params)
 		writedlm(string("LFD_up_", file_name), LFD_upper, ',')
 		writedlm(string("LFD_low_", file_name), LFD_lower, ',')
 	end
-
-	@show Dates.format(now(), "HH:MM") # print time    
+	   
 end
