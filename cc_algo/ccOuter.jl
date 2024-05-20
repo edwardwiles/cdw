@@ -46,7 +46,7 @@ function ccOuter(prep_output, params)
 				δ = 1,
 				find_smallest = true,
 				γ = γ,
-				(moments!) = moments!,
+				(moments!) = EK_moments!,
 				#moments_jacobian! = rust_moments_jacobian!,
 				d = numMoments,
 				outer_constr_index = outer_constr_index,
@@ -96,7 +96,7 @@ function ccOuter(prep_output, params)
 					δ = δ,
 					find_smallest = true,
 					γ = γ,
-					(moments!) = moments!,
+					(moments!) = EK_moments!,
 					#moments_jacobian! = rust_moments_jacobian!,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
@@ -115,7 +115,7 @@ function ccOuter(prep_output, params)
 					δ = δ,
 					find_smallest = true,
 					γ = γ,
-					(moments!) = moments!,
+					(moments!) = EK_moments!,
 					#moments_jacobian! = rust_moments_jacobian!,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
@@ -146,7 +146,7 @@ function ccOuter(prep_output, params)
 					δ = δ,
 					find_smallest = false,
 					γ = γ,
-					(moments!) = moments!,
+					(moments!) = EK_moments!,
 					#moments_jacobian! = rust_moments_jacobian!,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
@@ -165,7 +165,7 @@ function ccOuter(prep_output, params)
 					δ = δ,
 					find_smallest = false,
 					γ = γ,
-					(moments!) = moments!,
+					(moments!) = EK_moments!,
 					#moments_jacobian! = rust_moments_jacobian!,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
@@ -191,5 +191,5 @@ function ccOuter(prep_output, params)
 	print(κ_lower)
 	print(κ_upper)
 
-	return (δ_grid, Θ_upper, κ_upper, Θ_lower, κ_lower)
+	return (Θ_upper, κ_upper, Θ_lower, κ_lower)
 end
