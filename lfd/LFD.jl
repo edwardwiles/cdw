@@ -1,12 +1,13 @@
-function LFD(θ, prep_output, params)
+function LFD(Θ_upper, Θ_lower, prep_output, params)
 	# function that generate the LFD for a particular θ, by running the innerloop
-	@unpack numMoments, U, γ, outer_constr_index = prep_output
+
+	@unpack δ_grid, file_name, θ_initial, numMoments, U, γ, outer_constr_index = prep_output
+
 	D = length(γ.L)
 	W = size(U, 1)
 
-
-	G = zeros(W, numMoments)
-	K = zeros(W, 1)
+	LFD_upper = zeros(W, length(δ_grid))
+	LFD_lower = zeros(W, length(δ_grid))
 
 	obj = PsiObjectiveBundleDelta(
 		#δ = 1,
@@ -17,28 +18,49 @@ function LFD(θ, prep_output, params)
 		d = numMoments,
 		outer_constr_index = outer_constr_index,
 		inequality_index = Int64[],
-		l = size(θ, 1),
+		l = size(θ_initial, 1),
 		U = U,
 		N = 100,
 		outer_loop_opt = "ek_outer_loop_options.opt",
 		inner_loop_opt = "ek_inner_loop_options.opt",
 		lower_limit = -50)
 
-	val, x, nStatus = inner_loop(obj, θ) # Represents the lagrangian of the inner optimizer.
+	for i ∈ 1:length(δ_grid)
+		# upper LFD
+		G = zeros(W, numMoments)
+		K = zeros(W, 1)
+		arg0 = zeros(W, 1)
+		LFD = zeros(W, 1)
 
-	moments!(K, G, θ, U, obj)
+		val, x, nStatus = inner_loop(obj, Θ_upper[i, :]) # Represents the lagrangian of the inner optimizer.
+		moments!(K, G, Θ_upper[i, :], U, obj)
+		## Works only when κ does not depend on U [e.g. Grains from Trade]
+		# Equation (25) from CC, page 279 
+		# TO DO: make it work for all counterfactuals
+		for ω ∈ 1:W
+			arg0[ω] = -x[1] - dot(G[ω, 1:outer_constr_index-1], x[2:length(x)])
+		end
+		dPsi!(LFD, arg0)
+		@. LFD_upper[i, :] = LFD[:]
 
-	arg0 = zeros(W, 1)
-	LFD = zeros(W, 1)
+		# Lower LFD
+		G = zeros(W, numMoments)
+		K = zeros(W, 1)
+		arg0 = zeros(W, 1)
+		LFD = zeros(W, 1)
 
-	## Works only when κ does not depend on U [e.g. Grains from Trade]
-    # Equation (25) from CC, page 279 
-    # TO DO: make it work for all counterfactuals
-	for ω ∈ 1:W
-		arg0[ω] = -x[1] - dot(G[ω, 1:outer_constr_index-1], x[2:length(x)])
+		val, x, nStatus = inner_loop(obj, Θ_lower[i, :]) # Represents the lagrangian of the inner optimizer.
+		moments!(K, G, Θ_lower[i, :], U, obj)
+		## Works only when κ does not depend on U [e.g. Grains from Trade]
+		# Equation (25) from CC, page 279 
+		# TO DO: make it work for all counterfactuals
+		for ω ∈ 1:W
+			arg0[ω] = -x[1] - dot(G[ω, 1:outer_constr_index-1], x[2:length(x)])
+		end
+		dPsi!(LFD, arg0)
+		@. LFD_lower[i, :] = LFD[:]
 	end
 
-	dPsi!(LFD, arg0)
-
-	return LFD
+	return (LFD_upper = LFD_upper,
+		LFD_lower = LFD_lower)
 end

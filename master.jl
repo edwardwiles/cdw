@@ -84,8 +84,8 @@ params = (
     refIndex1 = 1,
 
     # Post CC Optimization tests
-    calculateLFD =1,
     runLFD = 1,
+    runLFDCounterFactual = 1
 )
 
 main(params)

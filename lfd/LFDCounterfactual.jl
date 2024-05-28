@@ -277,9 +277,9 @@ function LFDCounterFactual(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prestep_out
 	G = zeros(W, numMoments)
 	K = zeros(W, 1)
 
-	moments_EK!(K, G, θ_initial, U, obj)
-	moments_EK!(K_control, G_control, θ_initial_control, U_control, obj_control)
-	moments_EK!(K_exact, G_exact, θ_initial_exact, U_exact, obj_exact)
+	EK_moments!(K, G, θ_initial, U, obj)
+	EK_moments!(K_control, G_control, θ_initial_control, U_control, obj_control)
+	EK_moments!(K_exact, G_exact, θ_initial_exact, U_exact, obj_exact)
 
 
 
@@ -455,17 +455,17 @@ function LFDCounterFactual(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prestep_out
 
 
 		# calculate moments using the Frechet U and weight by the LFD
-		moments_EK!(K_upper, G_upper, Θ_upper[δ, :], U, obj)
+		EK_moments!(K_upper, G_upper, Θ_upper[δ, :], U, obj)
 		@. G_upper[:, :] = G_upper[:, :] .* LFD_upper[:, δ]
 		@. K_upper[:] = K_upper[:] .* LFD_upper[:, δ]
 
-		moments_EK!(K_lower, G_lower, Θ_lower[δ, :], U, obj)
+		EK_moments!(K_lower, G_lower, Θ_lower[δ, :], U, obj)
 		@. G_lower[:, :] = G_lower[:, :] .* LFD_lower[:, δ]
 		@. K_lower[:] = K_lower[:] .* LFD_lower[:, δ]
 
 		#calculate moments using the new U = U_LFD and no weights
-		moments_EK!(K_upper_LFD, G_upper_LFD, Θ_upper[δ, :], U_LFD_up, obj_upper)
-		moments_EK!(K_lower_LFD, G_lower_LFD, Θ_upper[δ, :], U_LFD_down, obj_lower)
+		EK_moments!(K_upper_LFD, G_upper_LFD, Θ_upper[δ, :], U_LFD_up, obj_upper)
+		EK_moments!(K_lower_LFD, G_lower_LFD, Θ_upper[δ, :], U_LFD_down, obj_lower)
 
 		# check all moments are zero! 
 
