@@ -1,7 +1,6 @@
 
 # smoothing functions to make outer loop amenable to auto diff 
 include("smoothMinIndNew!.jl") # smooth version of min function 
-include("softmax.jl") # smooth version of max function 
 include("SmoothDirac.jl") #smooth version of dirac delta function 
 
 include("indicative.jl") # calculates the indicative function 

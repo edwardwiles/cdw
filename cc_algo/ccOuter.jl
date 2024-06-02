@@ -1,9 +1,10 @@
 
 function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
-	@unpack  GravityMomentFirstApproach, counterType, useParallel, EK_moments! = params
+	@unpack  GravityMomentFirstApproach, counterType, useParallel, EK_moments!, θConstant = params
 	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
 	D = length(γ.L)
+	δ_grid_size = length(δ_grid)
 
 	θ_lower = (θ_initial.*0.5)[:] # lower bound for parameters in outer loop optimisation 
 	θ_upper = (θ_initial.*1.5)[:] # upper bound for parameters in outer loop optimisation 
@@ -12,9 +13,11 @@ function ccOuter(prep_output, params)
 	θ_lower[2] = θ_initial[2] # fix sigma (second param) as not identified anyway
 	θ_upper[2] = θ_initial[2]
 
-	# for Frechet, there is a single mu parameter that matches the moments.
-	θ_lower[1] = θ_initial[1]
-	θ_upper[1] = θ_initial[1]
+	# if fixed μ
+	if θConstant == 1
+		θ_lower[1] = θ_initial[1]
+		θ_upper[1] = θ_initial[1]
+	end
 
 
 	κ_lower = zeros(length(δ_grid))
@@ -88,12 +91,12 @@ function ccOuter(prep_output, params)
 
 		θ_1 = copy(θ_initial)
 
-		Threads.@threads for (i, δ) in enumerate(δ_grid)
+		Threads.@threads for i in 1:δ_grid_size
 
 			if counterType == 1
 
 				obj = PsiObjectiveBundleImplicit(
-					δ = δ,
+					δ = δ_grid[i],
 					find_smallest = true,
 					γ = γ,
 					(moments!) = EK_moments!,
@@ -112,7 +115,7 @@ function ccOuter(prep_output, params)
 			else
 
 				obj = PsiObjectiveBundleExplicit(
-					δ = δ,
+					δ = δ_grid[i],
 					find_smallest = true,
 					γ = γ,
 					(moments!) = EK_moments!,
@@ -138,12 +141,12 @@ function ccOuter(prep_output, params)
 		obj.find_smallest = false
 		θ_1 = copy(θ_initial)
 
-		Threads.@threads for (i, δ) in enumerate(δ_grid)
+		Threads.@threads for i in 1:δ_grid_size
 
 			if counterType == 1
 
 				obj = PsiObjectiveBundleImplicit(
-					δ = δ,
+					δ = δ_grid[i],
 					find_smallest = false,
 					γ = γ,
 					(moments!) = EK_moments!,
@@ -162,7 +165,7 @@ function ccOuter(prep_output, params)
 			else
 
 				obj = PsiObjectiveBundleExplicit(
-					δ = δ,
+					δ = δ_grid[i],
 					find_smallest = false,
 					γ = γ,
 					(moments!) = EK_moments!,

@@ -11,20 +11,13 @@ using Distributions, Statistics, Plots, .CounterfactualSensitivity, JLD2
 
 function main_post_cc(PostCCParams)
 	@unpack cc_run_file_name, runLFD, runLFDCounterFactual = PostCCParams
-	# load cc outputs 
-	cc_outputs = load_object(cc_run_file_name)
+	# load cc run outputs 
+	cc_lfd_outputs = load_object(cc_run_file_name)
 
-	@unpack prep_output, params, Θ_upper, κ_upper, Θ_lower, κ_lower, LFD_upper, LFD_lower = cc_outputs
-
+	@unpack prestep_output, prep_output, params, cc_output, lfd_output = cc_lfd_outputs
 
 	@show Dates.format(now(), "HH:MM") # print time  
-	if runLFD == 1
-		runLFD(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prep_output, params)
-	end
-
-	if runLFDCounterFactual == 1
-		LFDCounterFactual(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prestep_output, prep_output, params)
-	end
+	master_post_cc_lfd(params, prestep_output, prep_output, cc_output, lfd_output)
 	@show Dates.format(now(), "HH:MM") # print time 
 end
 

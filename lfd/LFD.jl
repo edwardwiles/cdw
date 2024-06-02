@@ -1,7 +1,8 @@
-function LFD(Θ_upper, Θ_lower, prep_output, params)
+function LFD(cc_output, prep_output, params)
 	# function that generate the LFD for a particular θ, by running the innerloop
 
 	@unpack δ_grid, file_name, θ_initial, numMoments, U, γ, outer_constr_index = prep_output
+	@unpack Θ_upper, Θ_lower = cc_output
 
 	D = length(γ.L)
 	W = size(U, 1)
@@ -61,6 +62,8 @@ function LFD(Θ_upper, Θ_lower, prep_output, params)
 		@. LFD_lower[i, :] = LFD[:]
 	end
 
-	return (LFD_upper = LFD_upper,
+	lfd_output = (LFD_upper = LFD_upper,
 		LFD_lower = LFD_lower)
+
+	return lfd_output
 end

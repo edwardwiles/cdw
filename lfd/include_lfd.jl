@@ -8,3 +8,6 @@ include("mCDF.jl")
 include("PricesCorrelation.jl")
 include("runLFD.jl")
 include("LFDCounterfactual.jl")
+
+
+include("master_lfd.jl")

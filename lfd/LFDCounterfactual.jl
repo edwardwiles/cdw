@@ -1,4 +1,4 @@
-function LFDCounterFactual(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prestep_output, prep_output, params)
+function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_output, prep_output, params)
     # function that simulates IID Us for all countries from the (same) LFD marginal of refIndex.
     # the function then calculates the moments and the counterfactuals with this new U
     # This is to test:
@@ -9,6 +9,9 @@ function LFDCounterFactual(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prestep_out
 	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
 	@unpack W, baseIndex, refIndex1 = params
+	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
+	@unpack LFD_upper, LFD_lower = lfd_output
+
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 
@@ -187,11 +190,9 @@ function LFDCounterFactual(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prestep_out
 
 
 	if sameMarginalsMoment == 1
-		CDFs_control = precalcCDFs(Ū_control, params)
-		CDF_Moments_control = CDFs_control.params
+		CDF_Moments_control = precalcCDFs(Ū_control, params, prestep_output)
 
-		CDFs_exact = precalcCDFs(Ū_exact, params)
-		CDF_Moments_exact = CDFs_exact.CDF_Moments
+		CDF_Moments_exact = precalcCDFs(Ū_exact, params, prestep_output)
 	end
 
 	if independenceMoment == 1
@@ -407,11 +408,9 @@ function LFDCounterFactual(Θ_upper, Θ_lower, LFD_upper, LFD_lower, prestep_out
 
 
 		if sameMarginalsMoment == 1
-			CDFs_up = precalcCDFs(Ū_LFD_up, params)
-			CDF_Moments_up = CDFs_up.CDF_Moments
+			CDF_Moments_up = precalcCDFs(Ū_LFD_up, params, prestep_output)
 
-			CDFs_down = precalcCDFs(Ū_LFD_down, params)
-			CDF_Moments_down = CDFs_down.CDF_Moments
+			CDF_Moments_down = precalcCDFs(Ū_LFD_down, params, prestep_output)
 		end
 
 		if independenceMoment == 1

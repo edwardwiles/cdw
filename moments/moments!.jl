@@ -2,7 +2,7 @@ function EK_moments!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū = obj.γ
 	@unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, OuterScaling = indicators
 
 	W = size(U, 1)
@@ -113,7 +113,7 @@ function EK_moments!(K, G, θ, U, obj)
 
 	if independenceMoment == 1
 		ηk = θ[counterType_θ_offset+3+D+1:counterType_θ_offset+3+D+1]
-		ν_probas = θ[end-(IndMomentOrder-1)+1:end]
+		ν_probas = θ[end-IndMomentOrder+1:end]
 		offset = gravMoment + localGravityMoment * ((D - 1) * D + D * (D - 1) * (D - 2)) + GravityMomentFirstApproach + sameMarginalsMoment * (2 * momentOrder * D^2 + 2 * momentOrderForBaseIndex * D + 2 * D^2)
 		IndependenceMoment!(Ū, G, D, ηk, Ind_Moments, IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1)
 	end

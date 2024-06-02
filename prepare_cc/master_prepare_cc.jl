@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType = globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData = globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -20,8 +20,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     CDF_Moments = zeros(1,1)
    
     if sameMarginalsMoment == 1
-        CDFs = precalcCDFs(Ū, useParams)
-        CDF_Moments = CDFs.CDF_Moments
+        CDF_Moments = precalcCDFs(Ū, useParams, prestep_output)
     end 
 
     Ind_Moments = zeros(1, 1)
@@ -61,7 +60,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     # index where outer loop moments start
     outer_constr_index = numMoments + 1 - GravityMomentFirstApproach
 
-    file_name = string("Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "ForceFrechet_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "ISampling_", importanceSampling,"ISF_", importanceSamplingFactor,  "_Frechet", "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("Fake_",fakeData,"_Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "ForceFrechet_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "ISampling_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "_", Dates.format(now(), "y-m-d"), ".csv")
 
 
     PMM = zeros(numMoments)

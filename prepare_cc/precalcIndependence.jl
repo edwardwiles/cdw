@@ -40,6 +40,7 @@ function precalcIndependence(Ū, params)
 
 	# Joint CDF
 	IndCDF_Cells = collect(with_replacement_combinations(IndCDF_K, D))
+	cell_size = size(IndCDF_Cells, 1)
 	offset = offset + IndMomentOrder 
 	for ω ∈ 1:W
 		idx_corss_moment = 0

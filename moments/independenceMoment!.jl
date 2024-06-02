@@ -1,12 +1,12 @@
-function IndependenceMoment!(Ū, G, D, ηk, Ind_Moments, IndMomentOrder, IndCDF_Cells, ν, offset, refIndex1)
+function IndependenceMoment!(Ū, G, D, η, Ind_Moments, IndMomentOrder, IndCDF_Cells, ν, offset, refIndex1)
 	# imposes zero coreelation between Uods, implementation used cached realizations
-	# E[U(ref,ref)^k/k!] = ηk
-	@. G[:, end-offset] += Ū[:, refIndex1, 1] .- ηk
+	# E[U(ref,ref)] = η
+	@. G[:, end-offset] += Ū[:, refIndex1] .- η
 
 	K_ = size(Ind_Moments, 2)
 	cell_size = size(IndCDF_Cells, 1)
 	number_of_correlation_pairs = D * floor(Int, D * (D - 1) / 2)
-	square_mean = ηk^2
+	square_mean = η[1]^2
 	# copy all moments
 	@. G[:, end-offset-1-K_+1:end-offset-1] += Ind_Moments[:, :]
 	# substract square mean for the correlation moments

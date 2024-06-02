@@ -1,8 +1,11 @@
-function runLFD(θ_upper, θ_lower, LFD_upper, LFD_lower, prep_output, data, params)
+function runLFD(lfd_output, cc_output, prep_output, data, params)
 	# this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
 	# U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
 	@unpack θ_initial, γ, δ_grid = prep_output
 	@unpack W, baseIndex = params
+	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
+	@unpack LFD_upper, LFD_lower = lfd_output
+	
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 

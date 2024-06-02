@@ -1,8 +1,8 @@
 
-function precalcCDFs(Ū, params)
+function precalcCDFs(Ū, params, prestep_output)
 
-    @unpack W, D, momentOrder, momentOrderForBaseIndex, SamplingWeight, NoScalingforSameMartingale, ForceFrechetMarginal, refIndex1 = params
-
+    @unpack W, D, momentOrder, momentOrderForBaseIndex, SamplingWeight, ForceFrechetMarginal, refIndex1, σHat, baseIndex  = params
+	@unpack μHat = prestep_output
     
     # pre-calculate the quantiles for marginal matching with CDF methodology
     CDF_X = quantile(Ū[:, 1] .* SamplingWeight[:], range(1 / (momentOrder), (momentOrder - 1) / (momentOrder), length=momentOrder))
@@ -103,6 +103,6 @@ function precalcCDFs(Ū, params)
 
     @. CDF_Moments[:, offset_for_base_index_moments+1:end] += CDF_Moments_for_base[:, :]
 
-    return CDFs(CDF_Moments=CDF_Moments)
+    return CDF_Moments
 
 end

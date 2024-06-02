@@ -29,19 +29,9 @@ function main(globalParams)
     # prepares all of the objects necessary to run the CC algorithm 
     prep_output = master_prepare_cc(data, counters, prestep_output, useParams)
 
-    #=
-    ## test the moment function 
-    K = zeros(globalParams.W)
-    G = Array{Float64,2}(undef,globalParams.W,prep_output.numMoments)
-
-    obj = (γ = prep_output.γ, a = 5, d = prep_output.numMoments)
-
-    moments!(K,G,prep_output.θ_initial,prep_output.γ.Ū[:,:,1],obj)
-
-    @show sum(G,dims=1)./globalParams.W
-    =#
     @show Dates.format(now(), "HH:MM") # print time  
-    master_cc_algo(prep_output, useParams)
+    cc_output = master_cc_algo(prep_output, useParams)
+    master_lfd(useParams, prestep_output, prep_output, cc_output)
 	@show Dates.format(now(), "HH:MM") # print time 
 end 
 
