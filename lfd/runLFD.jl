@@ -1,9 +1,9 @@
 function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output, params)
 	# this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
 	# U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
-	@unpack W, baseIndex = params
+	@unpack W, baseIndex, OuterScaling, counterType, independenceMoment, sameMarginalsMoment, GravityMomentFirstApproach = params
 	@unpack data = setup_output
-	@unpack θ_initial, γ, δ_grid = prep_output
+	@unpack θ_initial, γ, δ_grid, file_name = prep_output
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
 	@unpack LFD_upper, LFD_lower = lfd_output
 	
@@ -45,25 +45,25 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 	#x, domestic/rw/ratio, δ, bound=lower/initial/upper
 
-	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData)
+	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D)
 	#marg_pdf = MarginalPricesPDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData)
 
 
 	for i ∈ 1:length(δ_grid)
 
-		savefig(plot(xlabel = "Price", ylabel = "CDF", u, [marg_cdf[:, 1, i, 2] marg_cdf[:, 1, i, 3] marg_cdf[:, 1, i, 1]], label = ["P" "P+" "P-"], title = string("δ=", δ_grid[i])), string("marginalCDF_", "delta", δ_grid[i], "_", sourcefilename, "_.png"))
+		savefig(plot(xlabel = "Price", ylabel = "CDF", u, [marg_cdf[:, 1, i, 2] marg_cdf[:, 1, i, 3] marg_cdf[:, 1, i, 1]], label = ["P" "P+" "P-"], title = string("δ=", δ_grid[i])), string("marginalCDF_", "delta", δ_grid[i], "_", file_name, "_.png"))
 		savefig(
 			plot(xlabel = "Price", ylabel = "CDF", u, [marg_cdf[:, 2, i, 2] marg_cdf[:, 2, i, 3] marg_cdf[:, 2, i, 1]], label = ["PRW" "PRW+" "PRW-"], title = string("δ=", δ_grid[i])),
-			string("marginalCDFRW", "delta", δ_grid[i], "_", sourcefilename, "_.png"),
+			string("marginalCDFRW", "delta", δ_grid[i], "_", file_name, "_.png"),
 		)
 		savefig(
 			plot(xlabel = "Price Ratio", ylabel = "CDF", u, [marg_cdf[:, 3, i, 2] marg_cdf[:, 3, i, 3] marg_cdf[:, 3, i, 1]], label = ["P/PRW" "P+/PRW+" "P-/PRW-"], title = string("δ=", δ_grid[i])),
-			string("marginalCDFPratio", "delta", δ_grid[i], "_", sourcefilename, "_.png"),
+			string("marginalCDFPratio", "delta", δ_grid[i], "_", file_name, "_.png"),
 		)
 		#=
-		savefig(plot(xlabel="Price", ylabel="PDF", u[1:end-1], [marg_pdf[:,i, 2, 1] marg_pdf[:,i, 3, 1] marg_pdf[:,i, 1, 1]], label=["P" "P+" "P-"], title=string("δ=", δ_grid[i])), string("marginalPDF", "delta", δ_grid[i], "_", sourcefilename, "_.png"))
-		savefig(plot(xlabel="Price", ylabel="PDF", u[1:end-1], [marg_pdf[:,i, 2, 2] marg_pdf[:,i, 3, 2] marg_pdf[:,i, 1, 2]], label=["PRW" "PRW+" "PRW-"], title=string("δ=", δ_grid[i])), string("marginalPDFRW", "delta", δ_grid[i], "_", sourcefilename, "_.png"))
-		savefig(plot(xlabel="Price Ratio", ylabel="PDF", u[1:end-1], [marg_pdf[:,i, 2, 3] marg_pdf[:,i, 3, 3] marg_pdf[:,i, 1, 3]], label=["P/PRW" "P+/PRW+" "P-/PRW-"], title=string("δ=", δ_grid[i])), string("marginalPDFPratio", "delta", δ_grid[i], "_", sourcefilename, "_.png"))
+		savefig(plot(xlabel="Price", ylabel="PDF", u[1:end-1], [marg_pdf[:,i, 2, 1] marg_pdf[:,i, 3, 1] marg_pdf[:,i, 1, 1]], label=["P" "P+" "P-"], title=string("δ=", δ_grid[i])), string("marginalPDF", "delta", δ_grid[i], "_", file_name, "_.png"))
+		savefig(plot(xlabel="Price", ylabel="PDF", u[1:end-1], [marg_pdf[:,i, 2, 2] marg_pdf[:,i, 3, 2] marg_pdf[:,i, 1, 2]], label=["PRW" "PRW+" "PRW-"], title=string("δ=", δ_grid[i])), string("marginalPDFRW", "delta", δ_grid[i], "_", file_name, "_.png"))
+		savefig(plot(xlabel="Price Ratio", ylabel="PDF", u[1:end-1], [marg_pdf[:,i, 2, 3] marg_pdf[:,i, 3, 3] marg_pdf[:,i, 1, 3]], label=["P/PRW" "P+/PRW+" "P-/PRW-"], title=string("δ=", δ_grid[i])), string("marginalPDFPratio", "delta", δ_grid[i], "_", file_name, "_.png"))
 		=#
 	end
 
@@ -87,7 +87,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 				label = ["U_base,base" "U1base-" "U2base-" "U3base-" "U4base-" "U11-"],
 				title = string("Marginals for lower bound δ = ", δ_grid[i], "base = ", baseIndex),
 			),
-			string("lower_marginals_delta_", δ_grid[i], "_", sourcefilename, "_.png"),
+			string("lower_marginals_delta_", δ_grid[i], "_", file_name, "_.png"),
 		)
 		savefig(
 			plot(
@@ -98,11 +98,11 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 				label = ["U_base,base" "U1base+" "U2base+" "U3base+" "U4base+" "U11+"],
 				title = string("Marginals for upper bound δ = ", δ_grid[i], "base = ", baseIndex),
 			),
-			string("upper_marginals_delta_", δ_grid[i], "_", sourcefilename, "_.png"),
+			string("upper_marginals_delta_", δ_grid[i], "_", file_name, "_.png"),
 		)
 		savefig(
 			plot(xlabel = "Unscaled U", ylabel = "CDF", u, [ybb[:, i, 1] ybb[:, i, 2] ybb[:, i, 3]], label = ["U_base,base-" "U_base,base" "U_base,base+"], title = string("Marginals for base country δ = ", δ_grid[i], "base = ", baseIndex)),
-			string("marginals_delta_", δ_grid[i], "_", sourcefilename, "_.png"),
+			string("marginals_delta_", δ_grid[i], "_", file_name, "_.png"),
 		)
 	end
 
@@ -113,17 +113,17 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	for i ∈ 1:δ_grid_size
 
 		savefig(heatmap(M[:, :, 1, i], fc = cgrad([:white, :dodgerblue4])),
-			string("lower_bound_correlation_delta_", δ_grid[i], "_", sourcefilename, ".png"))
-		writedlm(string("correlation_matrix_lower_bound_delta_", δ_grid[i], "_", sourcefilename, ".csv"), M[:, :, 1, i], ',')
+			string("lower_bound_correlation_delta_", δ_grid[i], "_", file_name, ".png"))
+		writedlm(string("correlation_matrix_lower_bound_delta_", δ_grid[i], "_", file_name, ".csv"), M[:, :, 1, i], ',')
 
 
 		savefig(heatmap(M[:, :, 2, i], fc = cgrad([:white, :dodgerblue4])),
-			string("central_correlation_delta_", δ_grid[i], "_", sourcefilename, ".png"))
-		writedlm(string("correlation_matrix_central_delta_", δ_grid[i], "_", sourcefilename, ".csv"), M[:, :, 2, i], ',')
+			string("central_correlation_delta_", δ_grid[i], "_", file_name, ".png"))
+		writedlm(string("correlation_matrix_central_delta_", δ_grid[i], "_", file_name, ".csv"), M[:, :, 2, i], ',')
 
 		savefig(heatmap(M[:, :, 3, i], fc = cgrad([:white, :dodgerblue4])),
-			string("upper_bound_correlation_delta_", δ_grid[i], "_", sourcefilename, ".png"))
-		writedlm(string("correlation_matrix_upper_bound_delta_", δ_grid[i], "_", sourcefilename, ".csv"), M[:, :, 3, i], ',')
+			string("upper_bound_correlation_delta_", δ_grid[i], "_", file_name, ".png"))
+		writedlm(string("correlation_matrix_upper_bound_delta_", δ_grid[i], "_", file_name, ".csv"), M[:, :, 3, i], ',')
 	end
 
 
