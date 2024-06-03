@@ -1,19 +1,20 @@
-function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_output, prep_output, params)
-    # function that simulates IID Us for all countries from the (same) LFD marginal of refIndex.
-    # the function then calculates the moments and the counterfactuals with this new U
-    # This is to test:
-    # 1- that all moments are matched under the simulated U
-    #    For example we were worried that gamma might not be matced because of the small prices issue.
-    # 2- In particular, we check also whether the od CFDs match with a Kolmogorov Smirnov test
-    # 3- Finally, we compare the counterfactuals 
-	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
+function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, params)
+	# function that simulates IID Us for all countries from the (same) LFD marginal of refIndex.
+	# the function then calculates the moments and the counterfactuals with this new U
+	# This is to test:
+	# 1- that all moments are matched under the simulated U
+	#    For example we were worried that gamma might not be matced because of the small prices issue.
+	# 2- In particular, we check also whether the od CFDs match with a Kolmogorov Smirnov test
+	# 3- Finally, we compare the counterfactuals 
+	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index, file_name = prep_output
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
-	@unpack W, baseIndex, refIndex1 = params
+	@unpack W, baseIndex, refIndex1, θConstant, σHat, sameMarginalsMoment, independenceMoment = params
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
 	@unpack LFD_upper, LFD_lower = lfd_output
 
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
+	Ū = γ.Ū
 
 	V = zeros(W, D * D)
 	rand!(V)
@@ -55,18 +56,26 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 		end
 	end
 
-    
-    #calculate the K-S test 
 
-    KS_Test = zeros(D^2, δ_grid_size, 2)
-    for od ∈ 1:D^2
-        for δ =1:δ_grid_size
-        KS_Test[od, δ, 1] = maximum(abs.(U_CDF_up[:, od, δ] .- U_CDF_up[:, refIndex1, δ]))
-        KS_Test[od, δ, 2] = maximum(abs.(U_CDF_down[:, od, δ] .- U_CDF_down[:, refIndex1, δ]))
-        end
-    end
+	#calculate the K-S test 
 
-    writedlm(string("KSTest_", sourcefilename), [(KS_Test[:,:, 1])' (KS_Test[:,:, 2])'], ',')
+	KS_Test = zeros(D^2, δ_grid_size, 2)
+	for δ ∈ 1:δ_grid_size
+		for od ∈ 1:D^2
+			KS_Test[od, δ, 1] = maximum(abs.(U_CDF_up[:, od, δ] .- U_CDF_up[:, refIndex1, δ]))
+			KS_Test[od, δ, 2] = maximum(abs.(U_CDF_down[:, od, δ] .- U_CDF_down[:, refIndex1, δ]))
+		end
+
+		savefig(heatmap(reshape(KS_Test[:, δ, 1], (D, D)), fc = cgrad([:white, :dodgerblue4])),
+			string("upper_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
+
+		savefig(heatmap(reshape(KS_Test[:, δ, 2], (D, D)), fc = cgrad([:white, :dodgerblue4])),
+			string("lower_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
+	end
+
+	writedlm(string("KSTest_", file_name), [(KS_Test[:, :, 1])' (KS_Test[:, :, 2])'], ',')
+
+
 
 	for i ∈ 1:δ_grid_size
 		savefig(
@@ -74,11 +83,11 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 				xlabel = "exp(- ̄U)",
 				ylabel = "CDF",
 				CDF_X,
-				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, baseIndex+(1-baseIndex)*D, i] U_CDF_down[:, baseIndex+(1-baseIndex)*D, i]],
+				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, baseIndex+(baseIndex-1)*D, i] U_CDF_down[:, baseIndex+(baseIndex-1)*D, i]],
 				label = ["Upper CDFrefIndex" "Lower CDFrefIndex" "Upper CDFbaseIndex,baseIndex" "Lower CDFbaseIndex,baseIndex"],
 				title = string("Marginals for δ = ", δ_grid[i]),
 			),
-			string("marginals_delta_baseIndex,baseIndex_", δ_grid[i], "_", sourcefilename, ".png"),
+			string("marginals_delta_baseIndex,baseIndex_", δ_grid[i], "_", file_name, ".png"),
 		)
 
 		savefig(
@@ -86,11 +95,11 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 				xlabel = "exp(- ̄U)",
 				ylabel = "CDF",
 				CDF_X,
-				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, 1+(1-baseIndex)*D, i] U_CDF_down[:, 1+(1-baseIndex)*D, i]],
+				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, 1+(baseIndex-1)*D, i] U_CDF_down[:, 1+(baseIndex-1)*D, i]],
 				label = ["Upper CDFrefIndex" "Lower CDFrefIndex" "Upper CDF1,baseIndex,baseIndex" "Lower CDF1,baseIndex,baseIndex"],
 				title = string("Marginals for δ = ", δ_grid[i]),
 			),
-			string("marginals_delta_U1,baseIndex_", δ_grid[i], "_", sourcefilename, ".png"),
+			string("marginals_delta_U1,baseIndex_", δ_grid[i], "_", file_name, ".png"),
 		)
 	end
 
@@ -189,9 +198,16 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 	Uσ_exact = U_exact .^ (1 - σHat) # precalculate 
 
 
+	CDF_Moments_control= zeros(1)
+	CDF_Moments_exact= zeros(1)
+	Ind_Moments_control= zeros(1)
+	IndCDF_Cells_control= zeros(1)
+	Ind_Moments_exact= zeros(1)
+	IndCDF_Cells_exact= zeros(1)
+
+
 	if sameMarginalsMoment == 1
 		CDF_Moments_control = precalcCDFs(Ū_control, params, prestep_output)
-
 		CDF_Moments_exact = precalcCDFs(Ū_exact, params, prestep_output)
 	end
 
@@ -200,20 +216,50 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 		Ind_Moments_exact, IndCDF_Cells_exact = precalcIndependence(Ū_LFD_exact, params)
 	end
 
-
 	# update the fields that depend on ̄U
-	γ_control = copy(γ)
-	γ_control.Uσ = Uσ_control
-	γ_control.Ū = Ū_control
-	γ_control.CDF_Moments = CDF_Moments_control
-	γ_control.Ind_Moments = Ind_Moments_control
+
+	γ_control= (wHat = γ.wHat,
+	L = γ.L,
+	LPrime = γ.LPrime,
+	τ = γ.τ,
+	τPrime = γ.τPrime,
+	P = γ.P,
+	PMM = γ.PMM,
+	baseIndex = γ.baseIndex,
+	indicators = γ.indicators,
+	wPrimeHat = γ.wPrimeHat,
+	Uσ = Uσ_control,
+	Ū = Ū_control,
+	μHat = γ.μHat,
+	D = γ.D,
+	CDF_Moments = CDF_Moments_control,
+	Ind_Moments = Ind_Moments_control,
+	cHat = γ.cHat,
+	IndCDF_Cells = γ.IndCDF_Cells,
+	SamplingWeights = γ.SamplingWeights,
+	refIndex1 = γ.refIndex1)
 
 
-	γ_exact = copy(γ)
-	γ_exact.Uσ = Uσ_exact
-	γ_exact.Ū = Ū_exact
-	γ_exact.CDF_Moments = CDF_Moments_exact
-	γ_exact.Ind_Moments = Ind_Moments_exact
+	γ_exact= (wHat = γ.wHat,
+	L = γ.L,
+	LPrime = γ.LPrime,
+	τ = γ.τ,
+	τPrime = γ.τPrime,
+	P = γ.P,
+	PMM = γ.PMM,
+	baseIndex = γ.baseIndex,
+	indicators = γ.indicators,
+	wPrimeHat = γ.wPrimeHat,
+	Uσ = Uσ_exact,
+	Ū = Ū_exact,
+	μHat = γ.μHat,
+	D = γ.D,
+	CDF_Moments = CDF_Moments_exact,
+	Ind_Moments = Ind_Moments_exact,
+	cHat = γ.cHat,
+	IndCDF_Cells = γ.IndCDF_Cells,
+	SamplingWeights = γ.SamplingWeights,
+	refIndex1 = γ.refIndex1)
 
 
 	# check that indeed the moments are matched at the initial theta 
@@ -279,8 +325,8 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 	K = zeros(W, 1)
 
 	EK_moments!(K, G, θ_initial, U, obj)
-	EK_moments!(K_control, G_control, θ_initial_control, U_control, obj_control)
-	EK_moments!(K_exact, G_exact, θ_initial_exact, U_exact, obj_exact)
+	EK_moments!(K_control, G_control, θ_initial, U_control, obj_control)
+	EK_moments!(K_exact, G_exact, θ_initial, U_exact, obj_exact)
 
 
 
@@ -306,18 +352,18 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 
 	@. MomentsTest[:, 1] = MomentsMean[:]
 	@. MomentsTest[:, 2] = sqrt.(MomentsVar[:] ./ W)
-	@. MomentsTest[:, 3] = indicative.(abs.(MomentsMean[i]) - 2 .* sqrt.(MomentsVar[:] ./ W))
+	@. MomentsTest[:, 3] = indicative.(abs.(MomentsMean[:]) - 2 .* sqrt.(MomentsVar[:] ./ W))
 
 	@. MomentsTest[:, 4] = MomentsMean_exact[:]
 	@. MomentsTest[:, 5] = sqrt.(MomentsVar_exact[:] ./ W)
-	@. MomentsTest[:, 6] = indicative.(abs.(MomentsMean_exact[i]) - 2 .* sqrt.(MomentsVar_exact[:] ./ W))
+	@. MomentsTest[:, 6] = indicative.(abs.(MomentsMean_exact[:]) - 2 .* sqrt.(MomentsVar_exact[:] ./ W))
 
 
 	@. MomentsTest[:, 7] = MomentsMean_control[:]
 	@. MomentsTest[:, 8] = sqrt.(MomentsVar_control[:] ./ W)
-	@. MomentsTest[:, 9] = indicative.(abs.(MomentsMean_control[i]) - 2 .* sqrt.(MomentsVar_control[:] ./ W))
+	@. MomentsTest[:, 9] = indicative.(abs.(MomentsMean_control[:]) - 2 .* sqrt.(MomentsVar_control[:] ./ W))
 
-	writedlm(string("MomentsTest_", sourcefilename), MomentsTest, ',')
+	writedlm(string("MomentsTest_", file_name), MomentsTest, ',')
 
 
 
@@ -332,11 +378,11 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 	K_upper_LFD = zeros(W, 1)
 	K_lower_LFD = zeros(W, 1)
 
-    κ_upper = zeros(δ_grid_size)
-    κ_upper_LFD = zeros(δ_grid_size)
+	κ_upper = zeros(δ_grid_size)
+	κ_upper_LFD = zeros(δ_grid_size)
 
-    κ_lower = zeros(δ_grid_size)
-    κ_lower_LFD = zeros(δ_grid_size)
+	κ_lower = zeros(δ_grid_size)
+	κ_lower_LFD = zeros(δ_grid_size)
 
 	for δ ∈ 1:δ_grid_size
 
@@ -409,7 +455,6 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 
 		if sameMarginalsMoment == 1
 			CDF_Moments_up = precalcCDFs(Ū_LFD_up, params, prestep_output)
-
 			CDF_Moments_down = precalcCDFs(Ū_LFD_down, params, prestep_output)
 		end
 
@@ -419,6 +464,26 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 		end
 
 
+		γ_upper= (wHat = γ.wHat,
+		L = γ.L,
+		LPrime = γ.LPrime,
+		τ = γ.τ,
+		τPrime = γ.τPrime,
+		P = γ.P,
+		PMM = γ.PMM,
+		baseIndex = γ.baseIndex,
+		indicators = γ.indicators,
+		wPrimeHat = γ.wPrimeHat,
+		Uσ = Uσ_exact,
+		Ū = Ū_exact,
+		μHat = γ.μHat,
+		D = γ.D,
+		CDF_Moments = CDF_Moments_up,
+		Ind_Moments = Ind_Moments_up,
+		cHat = γ.cHat,
+		IndCDF_Cells = IndCDF_Cells_up,
+		SamplingWeights = γ.SamplingWeights,
+		refIndex1 = γ.refIndex1)
 
 		obj_upper = PsiObjectiveBundleDelta(
 			#δ = 1,
@@ -435,6 +500,27 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 			outer_loop_opt = "ek_outer_loop_options.opt",
 			inner_loop_opt = "ek_inner_loop_options.opt",
 			lower_limit = -50)
+
+		γ_lower= (wHat = γ.wHat,
+			L = γ.L,
+			LPrime = γ.LPrime,
+			τ = γ.τ,
+			τPrime = γ.τPrime,
+			P = γ.P,
+			PMM = γ.PMM,
+			baseIndex = γ.baseIndex,
+			indicators = γ.indicators,
+			wPrimeHat = γ.wPrimeHat,
+			Uσ = Uσ_exact,
+			Ū = Ū_exact,
+			μHat = γ.μHat,
+			D = γ.D,
+			CDF_Moments = CDF_Moments_down,
+			Ind_Moments = Ind_Moments_down,
+			cHat = γ.cHat,
+			IndCDF_Cells = IndCDF_Cells_down,
+			SamplingWeights = γ.SamplingWeights,
+			refIndex1 = γ.refIndex1)
 
 		obj_lower = PsiObjectiveBundleDelta(
 			#δ = 1,
@@ -499,16 +585,16 @@ function LFDCounterFactual(lfd_output, cc_output, LFD_upper, LFD_lower, prestep_
 			end
 		end
 
-		writedlm(string("MomentsTest_upper_", δ_grid[δ], "_", sourcefilename), MomentsTest_upper, ',')
-		writedlm(string("MomentsTest_lower_", δ_grid[δ], "_", sourcefilename), MomentsTest_lower, ',')
+		writedlm(string("MomentsTest_upper_", δ_grid[δ], "_", file_name), MomentsTest_upper, ',')
+		writedlm(string("MomentsTest_lower_", δ_grid[δ], "_", file_name), MomentsTest_lower, ',')
 
 		# check the counterfactual bounds did not change much
-		κ_upper[δ] = mean(K_upper, dims = 1)
-		κ_upper_LFD[δ] = mean(K_upper_LFD, dims = 1)
+		κ_upper[δ] = mean(K_upper[:,1])
+		κ_upper_LFD[δ] = mean(K_upper_LFD[:,1])
 
-		κ_lower[δ] = mean(K_lower, dims = 1)
-		κ_lower_LFD[δ] = mean(K_lower_LFD, dims = 1)
+		κ_lower[δ] = mean(K_lower[:,1])
+		κ_lower_LFD[δ] = mean(K_lower_LFD[:,1])
 
 	end
-	writedlm(string("LFDCounterFactual_", sourcefilename), [δ_grid κ_lower κ_upper_LFD κ_upper κ_upper_LFD], ',')
+	writedlm(string("LFDCounterFactual_", file_name), [δ_grid κ_lower κ_lower_LFD κ_upper κ_upper_LFD], ',')
 end

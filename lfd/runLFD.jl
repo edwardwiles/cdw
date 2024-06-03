@@ -68,12 +68,12 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	end
 
 	# x, δ, lower/initial/upper
-	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size)
-	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size)
+	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
+	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
 
-	yb = zeros(4, length(x), δ_grid_size, 3) # o=1:4, x, δ, lower/initial/upper
+	yb = zeros(4, length(u), δ_grid_size, 3) # o=1:4, x, δ, lower/initial/upper
 	for i ∈ 1:4
-		yb[i, :] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size)
+		yb[i,:,:,:] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
 	end
 
 
@@ -108,7 +108,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 
 	# D^2, D^2, lower/Initial/upper, δ
-	M = correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size)
+	M = correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
 
 	for i ∈ 1:δ_grid_size
 
