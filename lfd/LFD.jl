@@ -33,8 +33,8 @@ function LFD(cc_output, prep_output, params)
 		arg0 = zeros(W, 1)
 		LFD = zeros(W, 1)
 
-		val, x, nStatus = inner_loop(obj, Θ_upper[i, :]) # Represents the lagrangian of the inner optimizer.
-		moments!(K, G, Θ_upper[i, :], U, obj)
+		val, x, nStatus = inner_loop(obj, Θ_upper[:, i]) # Represents the lagrangian of the inner optimizer.
+		EK_moments!(K, G, Θ_upper[:, i], U, obj)
 		## Works only when κ does not depend on U [e.g. Grains from Trade]
 		# Equation (25) from CC, page 279 
 		# TO DO: make it work for all counterfactuals
@@ -42,7 +42,7 @@ function LFD(cc_output, prep_output, params)
 			arg0[ω] = -x[1] - dot(G[ω, 1:outer_constr_index-1], x[2:length(x)])
 		end
 		dPsi!(LFD, arg0)
-		@. LFD_upper[i, :] = LFD[:]
+		@. LFD_upper[:, i] = LFD[:]
 
 		# Lower LFD
 		G = zeros(W, numMoments)
@@ -50,8 +50,8 @@ function LFD(cc_output, prep_output, params)
 		arg0 = zeros(W, 1)
 		LFD = zeros(W, 1)
 
-		val, x, nStatus = inner_loop(obj, Θ_lower[i, :]) # Represents the lagrangian of the inner optimizer.
-		moments!(K, G, Θ_lower[i, :], U, obj)
+		val, x, nStatus = inner_loop(obj, Θ_lower[:, i]) # Represents the lagrangian of the inner optimizer.
+		EK_moments!(K, G, Θ_lower[:, i], U, obj)
 		## Works only when κ does not depend on U [e.g. Grains from Trade]
 		# Equation (25) from CC, page 279 
 		# TO DO: make it work for all counterfactuals
@@ -59,7 +59,7 @@ function LFD(cc_output, prep_output, params)
 			arg0[ω] = -x[1] - dot(G[ω, 1:outer_constr_index-1], x[2:length(x)])
 		end
 		dPsi!(LFD, arg0)
-		@. LFD_lower[i, :] = LFD[:]
+		@. LFD_lower[:, i] = LFD[:]
 	end
 
 	lfd_output = (LFD_upper = LFD_upper,

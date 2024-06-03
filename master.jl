@@ -7,7 +7,7 @@ include("cc_algo/include_cc_algo.jl")
 include("lfd/include_lfd.jl")
 include("misc/include_misc.jl")
 
-using Distributions, Statistics, Plots, .CounterfactualSensitivity
+using Distributions, Statistics, Plots, .CounterfactualSensitivity, JLD2
 
 function main(globalParams)
 
@@ -31,7 +31,7 @@ function main(globalParams)
 
     @show Dates.format(now(), "HH:MM") # print time  
     cc_output = master_cc_algo(prep_output, useParams)
-    master_lfd(useParams, prestep_output, prep_output, cc_output)
+    master_lfd(useParams, setup_output, prestep_output, prep_output, cc_output)
 	@show Dates.format(now(), "HH:MM") # print time 
 end 
 

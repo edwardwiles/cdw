@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData = globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant = globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -60,7 +60,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     # index where outer loop moments start
     outer_constr_index = numMoments + 1 - GravityMomentFirstApproach
 
-    file_name = string("Fake_",fakeData,"_Counter_", counterType, "_countries_", D, "_baseI", baseIndex, "_sGrav", GravityMomentFirstApproach, "_lGrav", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_order", momentOrder, "_baseOrder",momentOrderForBaseIndex, "ForceFrechet_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "ISampling_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("FD_",fakeData,"_Count_", counterType, "_NC_", D, "_bI", baseIndex, "_sG", GravityMomentFirstApproach, "_lG", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_O", momentOrder, "_bO",momentOrderForBaseIndex, "FF_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "IS_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "Fmu_", θConstant, "_", Dates.format(now(), "y-m-d"), ".csv")
 
 
     PMM = zeros(numMoments)

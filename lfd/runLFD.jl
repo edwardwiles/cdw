@@ -1,8 +1,9 @@
-function runLFD(lfd_output, cc_output, prep_output, data, params)
+function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output, params)
 	# this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
 	# U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
-	@unpack θ_initial, γ, δ_grid = prep_output
 	@unpack W, baseIndex = params
+	@unpack data = setup_output
+	@unpack θ_initial, γ, δ_grid = prep_output
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
 	@unpack LFD_upper, LFD_lower = lfd_output
 	
@@ -28,9 +29,9 @@ function runLFD(lfd_output, cc_output, prep_output, data, params)
 			Aod_offset += D^2
 		end
 		for i ∈ 1:length(δ_grid)
-			@.Aod[1, i, :, :] = reshape(vcat(θ_lower[i, Aod_offset+1:Aod_offset+D^2]), (D, D))
+			@.Aod[1, i, :, :] = reshape(vcat(θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
 			@.Aod[2, i, :, :] = reshape(vcat(θ_initial[Aod_offset+1:Aod_offset+D^2]), (D, D))
-			@.Aod[3, i, :, :] = reshape(vcat(θ_upper[i, Aod_offset+1:Aod_offset+D^2]), (D, D))
+			@.Aod[3, i, :, :] = reshape(vcat(θ_upper[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
 		end
 	end
 

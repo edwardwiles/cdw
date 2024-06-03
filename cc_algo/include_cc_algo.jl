@@ -28,7 +28,8 @@ export outer_loop,
        PsiObjectiveBundleConditionalExplicit,
        PsiObjectiveBundleConditionalImplicit,
        PsiObjectiveBundleConditionalDelta,
-       master_cc_algo
+       master_cc_algo,
+       dPsi!,
 
 include("Psi.jl")
 include("ObjectiveBundle.jl")

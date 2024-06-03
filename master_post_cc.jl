@@ -14,10 +14,10 @@ function main_post_cc(PostCCParams)
 	# load cc run outputs 
 	cc_lfd_outputs = load_object(cc_run_file_name)
 
-	@unpack prestep_output, prep_output, params, cc_output, lfd_output = cc_lfd_outputs
+	@unpack setup_output, prestep_output, prep_output, params, cc_output, lfd_output = cc_lfd_outputs
 
 	@show Dates.format(now(), "HH:MM") # print time  
-	master_post_cc_lfd(params, prestep_output, prep_output, cc_output, lfd_output)
+	master_post_cc_lfd(params, setup_output, prestep_output, prep_output, cc_output, lfd_output)
 	@show Dates.format(now(), "HH:MM") # print time 
 end
 

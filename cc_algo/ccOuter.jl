@@ -13,12 +13,17 @@ function ccOuter(prep_output, params)
 	θ_lower[2] = θ_initial[2] # fix sigma (second param) as not identified anyway
 	θ_upper[2] = θ_initial[2]
 
+	# for μ have the largest bounds such that prices are defined under Frechet
+	θ_upper[1] = 1/(θ_initial[2]-1)
+	θ_lower[1] = 0
+
 	# if fixed μ
 	if θConstant == 1
 		θ_lower[1] = θ_initial[1]
 		θ_upper[1] = θ_initial[1]
 	end
 
+	θ_upper[1] = min(θ_initial[1], 1/(θ_initial[2]-1))
 
 	κ_lower = zeros(length(δ_grid))
 	κ_upper = zeros(length(δ_grid))
