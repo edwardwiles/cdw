@@ -29,9 +29,9 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 			Aod_offset += D^2
 		end
 		for i ∈ 1:length(δ_grid)
-			@.Aod[1, i, :, :] = reshape(vcat(θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
+			@.Aod[1, i, :, :] = reshape(vcat(Θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
 			@.Aod[2, i, :, :] = reshape(vcat(θ_initial[Aod_offset+1:Aod_offset+D^2]), (D, D))
-			@.Aod[3, i, :, :] = reshape(vcat(θ_upper[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
+			@.Aod[3, i, :, :] = reshape(vcat(Θ_upper[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
 		end
 	end
 
