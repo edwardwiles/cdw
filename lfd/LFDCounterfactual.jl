@@ -1,13 +1,15 @@
-function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, params)
+function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, globalParams)
 	# function that simulates IID Us for all countries from the (same) LFD marginal of refIndex.
 	# the function then calculates the moments and the counterfactuals with this new U
 	# This is to test:
 	# 1- that all moments are matched under the simulated U
 	#    For example we were worried that gamma might not be matced because of the small prices issue.
 	# 2- In particular, we check also whether the od CFDs match with a Kolmogorov Smirnov test
-	# 3- Finally, we compare the counterfactuals 
+	# 3- Finally, we compare the counterfactuals by looking for the parameters that make moments match
 	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index, file_name = prep_output
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
+	params = globalParams
+	params = (; params..., SamplingWeight = γ.SamplingWeights)
 	@unpack W, baseIndex, refIndex1, θConstant, σHat, sameMarginalsMoment, independenceMoment = params
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
 	@unpack LFD_upper, LFD_lower = lfd_output
@@ -198,12 +200,12 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 	Uσ_exact = U_exact .^ (1 - σHat) # precalculate 
 
 
-	CDF_Moments_control= zeros(1)
-	CDF_Moments_exact= zeros(1)
-	Ind_Moments_control= zeros(1)
-	IndCDF_Cells_control= zeros(1)
-	Ind_Moments_exact= zeros(1)
-	IndCDF_Cells_exact= zeros(1)
+	CDF_Moments_control = zeros(1)
+	CDF_Moments_exact = zeros(1)
+	Ind_Moments_control = zeros(1)
+	IndCDF_Cells_control = zeros(1)
+	Ind_Moments_exact = zeros(1)
+	IndCDF_Cells_exact = zeros(1)
 
 
 	if sameMarginalsMoment == 1
@@ -212,54 +214,54 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 	end
 
 	if independenceMoment == 1
-		Ind_Moments_control, IndCDF_Cells_control = precalcIndependence(Ū_LFD_control, params)
-		Ind_Moments_exact, IndCDF_Cells_exact = precalcIndependence(Ū_LFD_exact, params)
+		Ind_Moments_control, IndCDF_Cells_control = precalcIndependence(Ū_control, params)
+		Ind_Moments_exact, IndCDF_Cells_exact = precalcIndependence(Ū_exact, params)
 	end
 
 	# update the fields that depend on ̄U
 
-	γ_control= (wHat = γ.wHat,
-	L = γ.L,
-	LPrime = γ.LPrime,
-	τ = γ.τ,
-	τPrime = γ.τPrime,
-	P = γ.P,
-	PMM = γ.PMM,
-	baseIndex = γ.baseIndex,
-	indicators = γ.indicators,
-	wPrimeHat = γ.wPrimeHat,
-	Uσ = Uσ_control,
-	Ū = Ū_control,
-	μHat = γ.μHat,
-	D = γ.D,
-	CDF_Moments = CDF_Moments_control,
-	Ind_Moments = Ind_Moments_control,
-	cHat = γ.cHat,
-	IndCDF_Cells = γ.IndCDF_Cells,
-	SamplingWeights = γ.SamplingWeights,
-	refIndex1 = γ.refIndex1)
+	γ_control = (wHat = γ.wHat,
+		L = γ.L,
+		LPrime = γ.LPrime,
+		τ = γ.τ,
+		τPrime = γ.τPrime,
+		P = γ.P,
+		PMM = γ.PMM,
+		baseIndex = γ.baseIndex,
+		indicators = γ.indicators,
+		wPrimeHat = γ.wPrimeHat,
+		Uσ = Uσ_control,
+		Ū = Ū_control,
+		μHat = γ.μHat,
+		D = γ.D,
+		CDF_Moments = CDF_Moments_control,
+		Ind_Moments = Ind_Moments_control,
+		cHat = γ.cHat,
+		IndCDF_Cells = γ.IndCDF_Cells,
+		SamplingWeights = γ.SamplingWeights,
+		refIndex1 = γ.refIndex1)
 
 
-	γ_exact= (wHat = γ.wHat,
-	L = γ.L,
-	LPrime = γ.LPrime,
-	τ = γ.τ,
-	τPrime = γ.τPrime,
-	P = γ.P,
-	PMM = γ.PMM,
-	baseIndex = γ.baseIndex,
-	indicators = γ.indicators,
-	wPrimeHat = γ.wPrimeHat,
-	Uσ = Uσ_exact,
-	Ū = Ū_exact,
-	μHat = γ.μHat,
-	D = γ.D,
-	CDF_Moments = CDF_Moments_exact,
-	Ind_Moments = Ind_Moments_exact,
-	cHat = γ.cHat,
-	IndCDF_Cells = γ.IndCDF_Cells,
-	SamplingWeights = γ.SamplingWeights,
-	refIndex1 = γ.refIndex1)
+	γ_exact = (wHat = γ.wHat,
+		L = γ.L,
+		LPrime = γ.LPrime,
+		τ = γ.τ,
+		τPrime = γ.τPrime,
+		P = γ.P,
+		PMM = γ.PMM,
+		baseIndex = γ.baseIndex,
+		indicators = γ.indicators,
+		wPrimeHat = γ.wPrimeHat,
+		Uσ = Uσ_exact,
+		Ū = Ū_exact,
+		μHat = γ.μHat,
+		D = γ.D,
+		CDF_Moments = CDF_Moments_exact,
+		Ind_Moments = Ind_Moments_exact,
+		cHat = γ.cHat,
+		IndCDF_Cells = γ.IndCDF_Cells,
+		SamplingWeights = γ.SamplingWeights,
+		refIndex1 = γ.refIndex1)
 
 
 	# check that indeed the moments are matched at the initial theta 
@@ -378,11 +380,19 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 	K_upper_LFD = zeros(W, 1)
 	K_lower_LFD = zeros(W, 1)
 
+	G_upper_LFD_solv = zeros(W, numMoments)
+	G_lower_LFD_solv = zeros(W, numMoments)
+	K_upper_LFD_solv = zeros(W, 1)
+	K_lower_LFD_solv = zeros(W, 1)
+
+
 	κ_upper = zeros(δ_grid_size)
 	κ_upper_LFD = zeros(δ_grid_size)
+	κ_upper_LFD_solv = zeros(δ_grid_size)
 
 	κ_lower = zeros(δ_grid_size)
 	κ_lower_LFD = zeros(δ_grid_size)
+	κ_lower_LFD_solv = zeros(δ_grid_size)
 
 	for δ ∈ 1:δ_grid_size
 
@@ -464,26 +474,28 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 		end
 
 
-		γ_upper= (wHat = γ.wHat,
-		L = γ.L,
-		LPrime = γ.LPrime,
-		τ = γ.τ,
-		τPrime = γ.τPrime,
-		P = γ.P,
-		PMM = γ.PMM,
-		baseIndex = γ.baseIndex,
-		indicators = γ.indicators,
-		wPrimeHat = γ.wPrimeHat,
-		Uσ = Uσ_exact,
-		Ū = Ū_exact,
-		μHat = γ.μHat,
-		D = γ.D,
-		CDF_Moments = CDF_Moments_up,
-		Ind_Moments = Ind_Moments_up,
-		cHat = γ.cHat,
-		IndCDF_Cells = IndCDF_Cells_up,
-		SamplingWeights = γ.SamplingWeights,
-		refIndex1 = γ.refIndex1)
+		γ_upper = (wHat = γ.wHat,
+			L = γ.L,
+			LPrime = γ.LPrime,
+			τ = γ.τ,
+			τPrime = γ.τPrime,
+			P = γ.P,
+			PMM = γ.PMM,
+			baseIndex = γ.baseIndex,
+			indicators = γ.indicators,
+			wPrimeHat = γ.wPrimeHat,
+			Uσ = Uσ_exact,
+			Ū = Ū_exact,
+			μHat = γ.μHat,
+			D = γ.D,
+			CDF_Moments = CDF_Moments_up,
+			Ind_Moments = Ind_Moments_up,
+			cHat = γ.cHat,
+			IndCDF_Cells = IndCDF_Cells_up,
+			SamplingWeights = γ.SamplingWeights,
+			refIndex1 = γ.refIndex1)
+
+
 
 		obj_upper = PsiObjectiveBundleDelta(
 			#δ = 1,
@@ -501,7 +513,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 			inner_loop_opt = "ek_inner_loop_options.opt",
 			lower_limit = -50)
 
-		γ_lower= (wHat = γ.wHat,
+		γ_lower = (wHat = γ.wHat,
 			L = γ.L,
 			LPrime = γ.LPrime,
 			τ = γ.τ,
@@ -552,13 +564,17 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 		EK_moments!(K_upper_LFD, G_upper_LFD, Θ_upper[:, δ], U_LFD_up, obj_upper)
 		EK_moments!(K_lower_LFD, G_lower_LFD, Θ_lower[:, δ], U_LFD_down, obj_lower)
 
-		# check all moments are zero! 
+		# search for the Θ that matches the moments, for that we will only change the parameters that do not change ̄U.
+		x_upper, K_upper_LFD_solv, G_upper_LFD_solv = matchTradeMoments(G_upper_LFD, Θ_upper[:, δ], U_LFD_up, obj_upper)
+		@show x_upper
+		x_lower, K_lower_LFD_solv, G_lower_LFD_solv = matchTradeMoments(G_lower_LFD, Θ_lower[:, δ], U_LFD_down, obj_lower)
+		@show x_lower
 
-		MomentsMean_upper = zeros(numMoments, 2)
-		MomentsMean_lower = zeros(numMoments, 2)
+		MomentsMean_upper = zeros(numMoments, 3)
+		MomentsMean_lower = zeros(numMoments, 3)
 
-		MomentsVar_upper = zeros(numMoments, 2)
-		MomentsVar_lower = zeros(numMoments, 2)
+		MomentsVar_upper = zeros(numMoments, 3)
+		MomentsVar_lower = zeros(numMoments, 3)
 
 		MomentsMean_upper[:, 1] = mean(G_upper, dims = 1)
 		MomentsVar_upper[:, 1] = var(G_upper, dims = 1)
@@ -570,11 +586,18 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 		MomentsMean_lower[:, 2] = mean(G_lower_LFD, dims = 1)
 		MomentsVar_lower[:, 2] = var(G_lower_LFD, dims = 1)
 
-		MomentsTest_upper = zeros(numMoments, 6)
-		MomentsTest_lower = zeros(numMoments, 6)
+
+		MomentsMean_upper[:, 3] = mean(G_upper_LFD_solv, dims = 1)
+		MomentsVar_upper[:, 3] = var(G_upper_LFD_solv, dims = 1)
+		MomentsMean_lower[:, 3] = mean(G_lower_LFD_solv, dims = 1)
+		MomentsVar_lower[:, 3] = var(G_lower_LFD_solv, dims = 1)
+
+
+		MomentsTest_upper = zeros(numMoments, 9)
+		MomentsTest_lower = zeros(numMoments, 9)
 
 		for i ∈ 1:numMoments
-			for j ∈ 1:2
+			for j ∈ 1:3
 				MomentsTest_upper[i, 1+(j-1)*3] = MomentsMean_upper[i, j]
 				MomentsTest_upper[i, 2+(j-1)*3] = sqrt(MomentsVar_upper[i, j] / W)
 				MomentsTest_upper[i, 3+(j-1)*3] = abs(MomentsMean_upper[i, j]) <= 2 * sqrt(MomentsVar_upper[i, j] / W) ? 1 : 0
@@ -589,12 +612,139 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, p
 		writedlm(string("MomentsTest_lower_", δ_grid[δ], "_", file_name), MomentsTest_lower, ',')
 
 		# check the counterfactual bounds did not change much
-		κ_upper[δ] = mean(K_upper[:,1])
-		κ_upper_LFD[δ] = mean(K_upper_LFD[:,1])
+		κ_upper[δ] = mean(K_upper[:, 1])
+		κ_upper_LFD[δ] = mean(K_upper_LFD[:, 1])
+		κ_upper_LFD_solv[δ] = mean(K_upper_LFD_solv[:, 1])
 
-		κ_lower[δ] = mean(K_lower[:,1])
-		κ_lower_LFD[δ] = mean(K_lower_LFD[:,1])
-
+		κ_lower[δ] = mean(K_lower[:, 1])
+		κ_lower_LFD[δ] = mean(K_lower_LFD[:, 1])
+		κ_lower_LFD_solv[δ] = mean(K_lower_LFD_solv[:, 1])
 	end
-	writedlm(string("LFDCounterFactual_", file_name), [δ_grid κ_lower κ_lower_LFD κ_upper κ_upper_LFD], ',')
+	writedlm(string("LFDCounterFactual_", file_name), [δ_grid κ_lower κ_lower_LFD κ_lower_LFD_solv κ_upper κ_upper_LFD κ_upper_LFD_solv], ',')
+
+end
+
+function matchTradeMoments(G_start, θ_start, U, obj)
+
+	θ_upper_bound = θ_start[:]
+	θ_lower_bound = θ_start[:]
+	D = obj.γ.D
+	W = size(U, 1)
+
+	numMoments = size(G_start, 2)
+	θConstant = obj.γ.indicators.θConstant
+	counterType = obj.γ.indicators.counterType
+	IndMomentOrder= obj.γ.indicators.IndMomentOrder
+	OuterScaling = obj.γ.indicators.OuterScaling
+	baseIndex = obj.γ.baseIndex
+	# trade share moments + gamma + gammaPrime 
+	numMoments_for_solver = D^2 + 2 * D
+	# plus wagesPrime
+	if counterType != 1
+		numMoments_for_solver += (D - 1)
+	end
+
+	solver_x_size = D + 1 #gammas + mu
+
+	if counterType == 1
+		solver_x_size += 1 #gammaPrime[baseIndex]
+	else
+		solver_x_size += D + D - 1 #gammaPrimes + wagesPrime
+	end
+
+	if OuterScaling == 1
+		solver_x_size += D^2 
+	end
+
+	# create x_initial for the solver
+	x_initial = zeros(solver_x_size)
+	x_initial[1+1:1+D] = θ_start[3:3+D-1]
+	if θConstant != 1
+		x_initial[1] = θ_start[1]
+	end
+
+	if counterType != 1
+		x_initial[1+D+1:1+2*D] = θ_start[3+D:3+2*D-1]
+	else
+		x_initial[1+D+1] = θ_start[3+D]
+	end
+
+	if counterType != 1 # needs to be adjusted
+		x_initial[1+2*D+1:1+2*D+1+D-1] = θ_start[3+2*D:3+2*D+(D-1)-1]
+	end
+	
+	if OuterScaling == 1
+		x_initial[end-D^2+1:end] = θ_start[end-IndMomentOrder-D^2+1:end-IndMomentOrder]
+	end
+
+	function update_θ_from_x(x_input_)
+		x_input = abs.(x_input_)
+		θ_output = zeros(size(θ_start))
+		@. θ_output[:] = θ_start[:]
+
+		θ_output[3:3+D-1] = x_input[1+1:1+D]
+
+		if θConstant != 1
+			θ_output[1] = x_input[1]
+
+			θ_output[1] = min(θ_output[1], 1 / (θ_output[2] - 1))
+
+		end
+
+		if counterType != 1
+			θ_output[3+D:3+2*D-1] = x_input[1+D+1:1+2*D]
+		else
+			θ_output[3+D] = x_input[1+D+1] # we are not interested in the other gamma_primes
+		end
+
+		if counterType != 1 # needs to be adjusted
+			θ_output[3+2*D:3+2*D+(D-1)-1] = x_input[1+2*D+1:1+2*D+1+D-1]
+		end
+		
+		if OuterScaling == 1
+			θ_output[end-IndMomentOrder-D^2+1:end-IndMomentOrder] = x_input[end-D^2+1:end]
+		end
+
+		return θ_output
+	end
+
+
+	trade_share_moments = zeros(numMoments_for_solver)
+	trade_share_moments_var = zeros(numMoments_for_solver)
+	trade_share_moments_test = zeros(numMoments_for_solver)
+	G_x = zeros(W, numMoments)
+	K_x = zeros(W, 1)
+
+	function objective_function_trade_share!(x)
+		@. G_x[:, :] = 0
+		@. K_x[:, :] = 0
+		θ_x = update_θ_from_x(x)
+		EK_moments!(K_x, G_x, θ_x, U, obj)
+		trade_share_moments = mean(G_x[:, 1:numMoments_for_solver], dims = 1)
+		trade_share_moments_var = sqrt.(var(G_x[:, 1:numMoments_for_solver], dims = 1) ./ W)
+		trade_share_moments_test = abs.(trade_share_moments[:]) ./ trade_share_moments_var[:]
+		
+
+		for i in 1:numMoments_for_solver
+			t_stat = (trade_share_moments_var[i] == 0 && trade_share_moments[i] == 0) ? 0 : trade_share_moments_test[i]
+			trade_share_moments_test[i] = t_stat * (t_stat <= 2 ? 0 : 1)
+		end
+		@show vcat(trade_share_moments_test[1:D^2], trade_share_moments_test[D^2+baseIndex])
+
+		#objective_function_value = mean(trade_share_moments_test, dims = 1)
+		#@show objective_function_value
+		# because of this, the function works only for gains from trade and Aod model. so that the number of moments match the number of parameters. 
+		return vcat(trade_share_moments_test[1:D^2], trade_share_moments_test[D^2+baseIndex])
+	end
+
+	x_output = nlsolve(objective_function_trade_share!, x_initial, iterations = 50) #, autodiff = :forward
+
+	@show x_output
+
+	G_output = zeros(W, numMoments)
+	K_output = zeros(W, 1)
+	θ_output = update_θ_from_x(x_output.zero)
+	EK_moments!(K_output, G_output, θ_output, U, obj)
+
+	return (θ_output, K_output, G_output)
 end

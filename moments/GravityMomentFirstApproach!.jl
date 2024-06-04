@@ -1,7 +1,6 @@
 function GravityMomentFirstApproach!(G, PMM, τ, ν, Aod, cHat, D, Ū, offset)
 
     # constructs the moment that ΔΔ E[ln U] = ΔΔ ln Aod + ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
-    # this is NOT the strong gravitymoment in the notes 
 
     
     if sameMarginalsMoment == 0 # calculate the first moments of U
