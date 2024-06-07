@@ -23,7 +23,7 @@ function ccOuter(prep_output, params)
 		θ_upper[1] = θ_initial[1]
 	end
 
-	θ_upper[1] = min(θ_initial[1], 1 / (θ_initial[2] - 1))
+	θ_upper[1] = min(θ_upper[1], 1 / (θ_initial[2] - 1))
 
 	κ_lower = zeros(length(δ_grid))
 	κ_upper = zeros(length(δ_grid))
