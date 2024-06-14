@@ -227,6 +227,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		τPrime = γ.τPrime,
 		P = γ.P,
 		PMM = γ.PMM,
+		σ_Moments = γ.σ_Moments,
 		baseIndex = γ.baseIndex,
 		indicators = γ.indicators,
 		wPrimeHat = γ.wPrimeHat,
@@ -249,6 +250,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		τPrime = γ.τPrime,
 		P = γ.P,
 		PMM = γ.PMM,
+		σ_Moments = γ.σ_Moments,
 		baseIndex = γ.baseIndex,
 		indicators = γ.indicators,
 		wPrimeHat = γ.wPrimeHat,
@@ -481,6 +483,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			τPrime = γ.τPrime,
 			P = γ.P,
 			PMM = γ.PMM,
+			σ_Moments = γ.σ_Moments,
 			baseIndex = γ.baseIndex,
 			indicators = γ.indicators,
 			wPrimeHat = γ.wPrimeHat,
@@ -520,6 +523,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			τPrime = γ.τPrime,
 			P = γ.P,
 			PMM = γ.PMM,
+			σ_Moments = γ.σ_Moments,
 			baseIndex = γ.baseIndex,
 			indicators = γ.indicators,
 			wPrimeHat = γ.wPrimeHat,
@@ -600,11 +604,12 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			for j ∈ 1:3
 				MomentsTest_upper[i, 1+(j-1)*3] = MomentsMean_upper[i, j]
 				MomentsTest_upper[i, 2+(j-1)*3] = sqrt(MomentsVar_upper[i, j] / W)
-				MomentsTest_upper[i, 3+(j-1)*3] = abs(MomentsMean_upper[i, j]) <= 2 * sqrt(MomentsVar_upper[i, j] / W) ? 1 : 0
+				indicative.(abs.(MomentsMean[:]) - 2 .* sqrt.(MomentsVar[:] ./ W))
+				MomentsTest_upper[i, 3+(j-1)*3] = indicative(abs(MomentsMean_upper[i, j]) - 2 * sqrt(MomentsVar_upper[i, j] / W))
 
 				MomentsTest_lower[i, 1+(j-1)*3] = MomentsMean_lower[i, j]
 				MomentsTest_lower[i, 2+(j-1)*3] = sqrt(MomentsVar_lower[i, j] / W)
-				MomentsTest_lower[i, 3+(j-1)*3] = abs(MomentsMean_lower[i, j]) <= 2 * sqrt(MomentsVar_lower[i, j] / W) ? 1 : 0
+				MomentsTest_lower[i, 3+(j-1)*3] = indicative(abs(MomentsMean_lower[i, j]) - 2 * sqrt(MomentsVar_lower[i, j] / W))
 			end
 		end
 

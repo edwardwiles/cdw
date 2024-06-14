@@ -1,28 +1,23 @@
-function ccInner(θ_initial, U, γ, gravMoment, localGravityMoment, localGravityCrossMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex,useIndependentCFDs, IndMomentOrder, counterType)
-    # function that runs the CC outer loop 
-    D = length(γ.L)
-
-    numMoments = D^2 + 2 * D + gravMoment + localGravityMoment * (D - 1) * D + localGravityCrossMoment * D * (D - 1) * (D - 2) + GravityMomentFirstApproach * (1 + (1-sameMarginalsMoment)*D^2) + sameMarginalsMoment * ((2 * momentOrder + 1) * D^2 + momentOrderForBaseIndex) + independenceMoment * (1+ D * (D^2 - floor(Int, D * (1 + D) / 2))+ (1-useIndependentCFDs)*(D-1)* 2 * momentOrder + useIndependentCFDs*((IndMomentOrder-1) + (IndMomentOrder-1)^D))
-
-    if counterType != 1
-        numMoments += (D - 1)
-    end
+function ccInner(prep_output, params)
+    #runs the CC Inner loop 
+    @unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, θConstant = params
+	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
 
     obj = PsiObjectiveBundleDelta(
         #δ = 1,
         #find_smallest = true,
         γ=γ,
-        (moments!)=moments!,
+        (moments!)=EK_moments!,
         #moments_jacobian! = rust_moments_jacobian!,
         d=numMoments,
-        outer_constr_index=numMoments + 1 - GravityMomentFirstApproach,
+        outer_constr_index=outer_constr_index,
         inequality_index=Int64[],
         l=size(θ_initial, 1),
         U=U,
-        N=100,
+        #N=1000,
         outer_loop_opt="ek_outer_loop_options.opt",
         inner_loop_opt="ek_inner_loop_options.opt",
-        lower_limit=-50)
+        lower_limit=-5000000)
 
     val, x, nStatus = inner_loop(obj, θ_initial)
 

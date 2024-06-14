@@ -50,9 +50,10 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
+					#lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
-					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					inner_loop_opt = "ek_inner_loop_options.opt"
+					)
 			else
 				obj = PsiObjectiveBundleExplicit(
 					δ = δ,
@@ -66,9 +67,10 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
+					#lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					)
 			end
 			κ_upper[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_upper[:, i] .= θ_1
@@ -93,9 +95,10 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
+					#lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
-					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					inner_loop_opt = "ek_inner_loop_options.opt"
+					)
 			else
 				obj = PsiObjectiveBundleExplicit(
 					δ = δ,
@@ -109,9 +112,10 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
+					#lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
-					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					inner_loop_opt = "ek_inner_loop_options.opt"
+					)
 			end
 			κ_lower[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_lower[:, i] .= θ_1
@@ -138,10 +142,11 @@ function ccOuter(prep_output, params)
 					#l=size(θ_initial, 1),
 					l = length(θ_initial),
 					U = U,
-					N = 20000,
+					#N = 20000,
+					#lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
-					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					inner_loop_opt = "ek_inner_loop_options.opt"
+					)
 
 			else
 
@@ -157,10 +162,10 @@ function ccOuter(prep_output, params)
 					#l=size(θ_initial, 1),
 					l = length(θ_initial),
 					U = U,
-					N = 20000,
+					#N = 20000,
+					#lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
-					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					inner_loop_opt = "ek_inner_loop_options.opt")
 
 			end
 
@@ -189,9 +194,9 @@ function ccOuter(prep_output, params)
 					l = length(θ_initial),
 					U = U,
 					#N=20000,
+					#lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
-					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					inner_loop_opt = "ek_inner_loop_options.opt")
 
 			else
 
@@ -208,9 +213,10 @@ function ccOuter(prep_output, params)
 					l = length(θ_initial),
 					U = U,
 					#N=20000,
+					#lower_limit = -50
 					outer_loop_opt = "ek_outer_loop_options.opt",
-					inner_loop_opt = "ek_inner_loop_options.opt",
-					lower_limit = -50)
+					inner_loop_opt = "ek_inner_loop_options.opt"
+					)
 
 			end
 

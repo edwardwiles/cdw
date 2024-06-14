@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant = globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM = globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -64,8 +64,12 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 
 
     PMM = zeros(numMoments)
+    σ_Moments = ones(numMoments)
 
-    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output, data, counters.LPrime, counters.τPrime, Uσ, Ū, PMM, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
+    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output, data, counters.LPrime, counters.τPrime, Uσ, Ū, PMM, σ_Moments, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
+
+    γ_PMM = γPMM(θ_initial, γ, U, numMoments, outer_constr_index)
+
 
     if δGridType == 0
         δ_grid =   vcat(1)
@@ -75,7 +79,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 
     prep_output = (
         U = U,
-        γ = γ,
+        γ = usePMM ==1 ? γ_PMM : γ,
         θ_initial = θ_initial,
         numMoments = numMoments,
         file_name = file_name,

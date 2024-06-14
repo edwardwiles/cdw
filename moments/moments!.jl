@@ -2,8 +2,8 @@ function EK_moments!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū = obj.γ
-	@unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, OuterScaling = indicators
+	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū = obj.γ
+	@unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, OuterScaling, usePMM = indicators
 
 	W = size(U, 1)
 	D = size(τ, 1)
@@ -50,8 +50,8 @@ function EK_moments!(K, G, θ, U, obj)
 		Aod_offset = counterType_θ_offset + 3 + D
 		if independenceMoment == 1
 			Aod_offset += 1
-        elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment ==0
-            Aod_offset += D^2
+		elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
+			Aod_offset += D^2
 		end
 		Aod = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
 
@@ -72,22 +72,22 @@ function EK_moments!(K, G, θ, U, obj)
 			UσPow[i] = Uσ[i]^(-μ)
 		end
 
-		hFunction!(G, UPow, UσPow, wHat, τ, σ, γ, AodPow, L, P, PMM, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat) # fill in G with baseline moments 
-		hFunctionCounter!(K, G, UPow, UσPow, wPrime, τPrime, σ, γ_prime, AodPow, LPrime, PMM, counterType, baseIndex) # fill in G with counterfactual moments, fill in K 
+		hFunction!(G, UPow, UσPow, wHat, τ, σ, γ, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat) # fill in G with baseline moments 
+		hFunctionCounter!(K, G, UPow, UσPow, wPrime, τPrime, σ, γ_prime, AodPow, LPrime,  counterType, baseIndex) # fill in G with counterfactual moments, fill in K 
 	else
-		hFunction!(G, U, Uσ, wHat, τ, σ, γ, AodPow, L, P, PMM, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat)
-		hFunctionCounter!(K, G, U, Uσ, wPrime, τPrime, σ, γ_prime, AodPow, LPrime, PMM, counterType, baseIndex)
+		hFunction!(G, U, Uσ, wHat, τ, σ, γ, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat)
+		hFunctionCounter!(K, G, U, Uσ, wPrime, τPrime, σ, γ_prime, AodPow, LPrime,  counterType, baseIndex)
 	end
 
 	if gravMoment == 1
-		newGravityMoment!(G, PMM, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach) # add gravity moment if using 
+		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach) # add gravity moment if using 
 	end
 
 	if GravityMomentFirstApproach == 1
 		ν = zeros(D, D) # E[ln ̄U]
-        offset = 0
+		offset = 0
 
-		if sameMarginalsMoment == 0 
+		if sameMarginalsMoment == 0
 			ν_offset = counterType_θ_offset + 3 + D
 			if OuterScaling == 1
 				ν_offset += D^2
@@ -96,13 +96,13 @@ function EK_moments!(K, G, θ, U, obj)
 				end
 			end
 			ν = reshape(vcat(θ[ν_offset+1:ν_offset+D^2]), (D, D))
-           
-            offset = D^2 + 2 * D 
-            if counterType != 1
-                offset += (D - 1)
-            end   
+
+			offset = D^2 + 2 * D
+			if counterType != 1
+				offset += (D - 1)
+			end
 		end
-		GravityMomentFirstApproach!(G, PMM, τ, ν, Aod, cHat, D, Ū, offset)
+		GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset)
 	end
 
 	if sameMarginalsMoment == 1
@@ -123,4 +123,13 @@ function EK_moments!(K, G, θ, U, obj)
 		@. G[:, im] *= SamplingWeights[:]
 	end
 	@. K[:] *= SamplingWeights[:]
+
+	# normalize the moments so we do not require useless precision 
+	if usePMM == 1
+		KNITRO_tol = 10^(-6)
+		for im ∈ 1:obj.d
+			@. G[:, im] -= PMM[im]
+			@. G[:, im] *= σ_Moments[im]>KNITRO_tol^2 ? KNITRO_tol ./ σ_Moments[im] : 1
+		end
+	end
 end

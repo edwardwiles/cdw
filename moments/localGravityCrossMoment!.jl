@@ -1,4 +1,4 @@
-function localGravityCrossMoment!(G, PMM, D, ω, prices, ξ, σ, d, max_price, offset)
+function localGravityCrossMoment!(G, D, ω, prices, ξ, σ, d, max_price, offset)
     tuner = -100.0
     β = 0.01
     pricesInd_without_c = copy(prices)
@@ -16,7 +16,7 @@ function localGravityCrossMoment!(G, PMM, D, ω, prices, ξ, σ, d, max_price, o
                     A = prices[o]^(1 - σ) * pricesInd_without_c[o]SmoothDirac(β, log(prices[c] / prices[o]))
                     B = prices[d]^(1 - σ) * pricesInd_without_c[d] * SmoothDirac(β, log(prices[c] / prices[d]))
                     moment_idx =  (D - 1) * (D - 2) * (d - 1) + counter
-                    G[ω, end-offset-moment_idx] = A / ξ[o] - B / ξ[d] - PMM[end-offset-moment_idx]
+                    G[ω, end-offset-moment_idx] = A / ξ[o] - B / ξ[d] 
                 end
             end
         end

@@ -1,4 +1,4 @@
-function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, PMM, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat)
+function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat)
 	# main function to fill in the moment matrix G for the baseline moments 
 
 	D = size(τ, 1) # num countries 
@@ -68,9 +68,9 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, PMM, counterType, gr
 			if localGravityMoment == 1
 				max_price, max_idx = findmax(pricesTemp[:])
 				offset = gravMoment + GravityMomentFirstApproach
-				localGravityMoment!(G, PMM, D, ω, pricesTemp, ξ[:, d], σ, μHat, d, max_price, offset)
+				localGravityMoment!(G, D, ω, pricesTemp, ξ[:, d], σ, μHat, d, max_price, offset)
 				offset += D * (D - 1)
-				localGravityCrossMoment!(G, PMM, D, ω, pricesTemp, ξ[:, d], σ, d, max_price, offset)
+				localGravityCrossMoment!(G, D, ω, pricesTemp, ξ[:, d], σ, d, max_price, offset)
 			end
 
 			indSum = 0
@@ -79,10 +79,10 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, PMM, counterType, gr
 			for o ∈ 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data 
 				d1 = d + (o - 1) * D
 				pricesTemp[o] = pricesTempσ[o] * pricesInd[o]
-				G[ω, d1] = pricesTemp[o] / denom[d] - P[d1] - PMM[d1]
+				G[ω, d1] = pricesTemp[o] / denom[d] - P[d1]
 				indSum += pricesTemp[o]
 			end
-			G[ω, cInd+d] = indSum - denom[d] - PMM[cInd+d] # fill in part of G for price index moments (identifies MU parameter)
+			G[ω, cInd+d] = indSum - denom[d]  # fill in part of G for price index moments (identifies MU parameter)
 		end
 
 	end
@@ -90,7 +90,7 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, PMM, counterType, gr
 
 end
 
-function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, PMM, counterType, baseIndex)
+function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, baseIndex)
 	# same as hFunction, except fills in counterfactual parts of G and fills in K 
 
 	D = size(τ, 1)
@@ -163,7 +163,7 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, PMM, counterT
 
 				end
 
-				G[ω, dInd+d] = indSum - denom[d] - PMM[dInd+d]# fill in G with counterfactual price index moments 
+				G[ω, dInd+d] = indSum - denom[d] # fill in G with counterfactual price index moments 
 
 			end
 
@@ -177,7 +177,7 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, PMM, counterT
 					tempSum += pricesCounterVec[d1]
 				end
 
-				G[ω, bInd+o-1] = tempSum - gdp[o] - PMM[bInd+o-1] # fill in G with counterfactual wage moments 
+				G[ω, bInd+o-1] = tempSum - gdp[o] # fill in G with counterfactual wage moments 
 
 			end
 
@@ -189,7 +189,7 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, PMM, counterT
 				if d == baseIndex
 					o1 = d + (d - 1) * D # uncomment for A_{od}
 					#o1 = d
-					G[ω, dInd+d] = constConsσ[d, d] / Uσ[ω, o1] - denom[d] - PMM[dInd+d] # all countries go into autarky. Price index is domestic price.
+					G[ω, dInd+d] = constConsσ[d, d] / Uσ[ω, o1] - denom[d] # all countries go into autarky. Price index is domestic price.
 				end
 			end
 		end

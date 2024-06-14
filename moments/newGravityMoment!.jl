@@ -1,4 +1,4 @@
-function newGravityMoment!(G, PMM, τ, D, W, γ, Aod, U, GravityMomentFirstApproach)
+function newGravityMoment!(G, τ, D, W, γ, Aod, U, GravityMomentFirstApproach)
     # constructs gravity moment, second approach [without additional parameters] (see theory note)
 
     deltaτ = doubleDiff(τ)
@@ -31,7 +31,7 @@ function newGravityMoment!(G, PMM, τ, D, W, γ, Aod, U, GravityMomentFirstAppro
         end
         sumGrav /= (D - 1)^2
 
-        G[ω, end-GravityMomentFirstApproach] = sumGrav - PMM[end-GravityMomentFirstApproach]
+        G[ω, end-GravityMomentFirstApproach] = sumGrav
     end
 
 end

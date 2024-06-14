@@ -1,4 +1,4 @@
-function GravityMomentFirstApproach!(G, PMM, τ, ν, Aod, cHat, D, Ū, offset)
+function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset)
 
     # constructs the moment that ΔΔ E[ln U] = ΔΔ ln Aod + ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
 
@@ -8,7 +8,7 @@ function GravityMomentFirstApproach!(G, PMM, τ, ν, Aod, cHat, D, Ū, offset)
         for o = 1:D
             for d = 1:D
                 o1 = o + (d - 1) * D
-                @. G[:, offset+o1] =  log(Ū[:, o1]) .- ν[o,d] .- PMM[dInd+o1]
+                @. G[:, offset+o1] =  log(Ū[:, o1]) .- ν[o,d] 
             end
         end
     end
@@ -38,6 +38,6 @@ function GravityMomentFirstApproach!(G, PMM, τ, ν, Aod, cHat, D, Ū, offset)
     end
     sumGrav /= (D - 1)^2
 
-    @. G[:, end] = sumGrav - PMM[end] # this condition is added last because it is a condition on parameters only, so it goes into the outerloop
+    @. G[:, end] = sumGrav# this condition is added last because it is a condition on parameters only, so it goes into the outerloop
 
 end

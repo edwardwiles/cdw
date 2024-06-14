@@ -1,7 +1,7 @@
 function IndependenceMoment!(Ū, G, D, η, Ind_Moments, IndMomentOrder, IndCDF_Cells, ν, offset, refIndex1)
 	# imposes zero coreelation between Uods, implementation used cached realizations
 	# E[U(ref,ref)] = η
-	@. G[:, end-offset] += Ū[:, refIndex1] .- η
+	@. G[:, end-offset] += Ū[:, refIndex1] .- η[1]
 
 	K_ = size(Ind_Moments, 2)
 	cell_size = size(IndCDF_Cells, 1)

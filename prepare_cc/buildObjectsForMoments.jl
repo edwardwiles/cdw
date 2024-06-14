@@ -7,12 +7,13 @@ function buildObjectsForMoments(
 	Uσ,
 	Ū,
 	PMM = zeros(1),
+	σ_Moments = ones(1),
 	CDF_Moments = zeros(1),
 	Ind_Moments = zeros(1),
 	IndCDF_Cells = Vector{Vector{Int}}(undef, 1),
 	SamplingWeights = ones(1))
 	# constructs object containing fixed parameters (L, tau, data, etc) to feed into moment functions
-	@unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, refIndex1, OuterScaling =
+	@unpack σHat, baseIndex, counterType, counterExplicit, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, refIndex1, OuterScaling, usePMM =
 		globParams
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
 	@unpack λData, LData, τData = data
@@ -30,7 +31,8 @@ function buildObjectsForMoments(
 		momentOrder = momentOrder,
 		momentOrderForBaseIndex = momentOrderForBaseIndex,
 		IndMomentOrder = IndMomentOrder,
-		OuterScaling = OuterScaling)
+		OuterScaling = OuterScaling,
+		usePMM = usePMM)
 
 	# remove the entry of w' that is the wage we are normalising to 1
 	# as no point in optimising over this (will add it back inside the moment function)
@@ -117,6 +119,7 @@ function buildObjectsForMoments(
 			τPrime = τPrime,
 			P = reshape(λData', (1, D^2)),
 			PMM = PMM,
+			σ_Moments = σ_Moments,
 			baseIndex = baseIndex,
 			indicators = indicators,
 			wPrimeHat = wPrimeHat,

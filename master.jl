@@ -31,7 +31,9 @@ function main(globalParams)
 
     @show Dates.format(now(), "HH:MM") # print time  
     cc_output = master_cc_algo(prep_output, useParams)
-    master_lfd(useParams, setup_output, prestep_output, prep_output, cc_output)
+    if useParams.OuterLoop ==0
+        master_lfd(useParams, setup_output, prestep_output, prep_output, cc_output)
+    end
 	@show Dates.format(now(), "HH:MM") # print time 
 end 
 
@@ -69,9 +71,10 @@ params = (
     ForceFrechetMarginal = 0, # 1= maintains Frechet marginal and leaves dependency to change
     OuterScaling = 1, # 1= Aod model, 0 = Aod fixed
     useParallel=0, # 1 = parallelise the deltas in outer loop; 0 = do not 
-    usePMM=0, # not really implemented anymore should be removed maybe)
+    usePMM=0, # =1 adjust moments so they are exactly zero for F*, =0 do not.
     δGridType = 0, # 0: {1}, else: {0.01, 0.1, 0.5, 1, 2}
     refIndex1 = 1,
+    OuterLoop =0,
 
     # Post CC Optimization tests
     runLFD = 1,
