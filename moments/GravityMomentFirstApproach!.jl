@@ -1,9 +1,9 @@
-function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset)
+function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoModel)
 
     # constructs the moment that ΔΔ E[ln U] = ΔΔ ln Aod + ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
 
     
-    if sameMarginalsMoment == 0 # calculate the first moments of U
+    if sameMarginalsMoment == 0  && UoModel == 0# calculate the first moments of U
         #E[ln Ū] = ν[o,d]
         for o = 1:D
             for d = 1:D
@@ -12,7 +12,7 @@ function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset)
             end
         end
     end
-    # if sameMarginalsMoment == 1, we know that ΔΔ E[ln Ū] = 0
+    # if sameMarginalsMoment == 1 or UoModel ==1, we know that ΔΔ E[ln Ū] = 0
 
     ΔΔν = doubleDiffLinear(ν)
     ΔΔlncHat = doubleDiff(cHat)

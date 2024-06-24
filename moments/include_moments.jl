@@ -7,8 +7,12 @@ include("localGravityCrossMoment!.jl") # local cross-derivative = 0 moments to f
 
 
 # independence 
-include("independenceMoment!.jl") # independence of CDFs  
+include("independenceMoment!.jl") # independence of CDFs 
+include("pairewiseIndependenceMoment!.jl") # paorewise independence of CDFs  
 
 # overall 
 include("hFunction.jl") # function to compute EK object such that E[h(U,theta)] = lambda 
 include("moments!.jl") # master function that calls all of the above to fill in all of the moments 
+include("moments_Jacobian!.jl") # master function that calculates the jacobian[for now it works only for fixed A, sigma, mu and Counterfactual = GT]
+include("hFunction_jacobian.jl") # function to compute EK object such that E[h(U,theta)] = lambda 
+

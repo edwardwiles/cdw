@@ -12,10 +12,11 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index)
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U,
-		N = 100,
+		#N = 100,
+		#lower_limit = -50
 		outer_loop_opt = "ek_outer_loop_options.opt",
-		inner_loop_opt = "ek_inner_loop_options.opt",
-		lower_limit = -50)
+		inner_loop_opt = "ek_inner_loop_options.opt"
+		)
 
 	G = zeros(W, numMoments)
 	K = zeros(W, 1)

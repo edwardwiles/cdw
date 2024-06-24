@@ -1,4 +1,4 @@
-function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat)
+function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, UoModel)
 	# main function to fill in the moment matrix G for the baseline moments 
 
 	D = size(τ, 1) # num countries 
@@ -56,8 +56,11 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 		for d ∈ 1:D # loop through all destination countries 
 
 			for o ∈ 1:D # for each origin, construct p_{od}
-
 				o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
+				if UoModel == 1
+					o1 = o
+				end
+
 				pricesTemp[o] = constCons[o, d] / UPow[ω, o1]
 				pricesTempσ[o] = constConsσ[o, d] / Uσ[ω, o1]
 			end
@@ -79,7 +82,7 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 			for o ∈ 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data 
 				d1 = d + (o - 1) * D
 				pricesTemp[o] = pricesTempσ[o] * pricesInd[o]
-				G[ω, d1] = pricesTemp[o] / denom[d] - P[d1]
+				G[ω, d1] = pricesTemp[o] - P[d1]*denom[d]
 				indSum += pricesTemp[o]
 			end
 			G[ω, cInd+d] = indSum - denom[d]  # fill in part of G for price index moments (identifies MU parameter)
@@ -90,7 +93,7 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 
 end
 
-function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, baseIndex)
+function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, baseIndex, UoModel)
 	# same as hFunction, except fills in counterfactual parts of G and fills in K 
 
 	D = size(τ, 1)
@@ -137,10 +140,10 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, 
 			for d ∈ 1:D
 
 				for o ∈ 1:D
-
-					o1 = o + (d - 1) * D # uncomment for A_{od}
-					#o1 = o
-
+					o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
+					if UoModel == 1
+						o1 = o
+					end
 					pricesTemp[o] = constCons[o, d] / UPow[ω, o1]
 					pricesTempσ[o] = constConsσ[o, d] / Uσ[ω, o1]
 
@@ -187,8 +190,10 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, 
 			# we need only baseIndex, so we do not need to identify the price index for other countries
 			for d ∈ 1:D
 				if d == baseIndex
-					o1 = d + (d - 1) * D # uncomment for A_{od}
-					#o1 = d
+					o1 = d + (d - 1) * D # uncomment to to U_{od} rather than U_o 
+					if UoModel == 1
+						o1 = d
+					end
 					G[ω, dInd+d] = constConsσ[d, d] / Uσ[ω, o1] - denom[d] # all countries go into autarky. Price index is domestic price.
 				end
 			end

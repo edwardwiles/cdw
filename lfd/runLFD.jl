@@ -1,7 +1,7 @@
 function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output, params)
 	# this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
 	# U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
-	@unpack W, baseIndex, OuterScaling, counterType, independenceMoment, sameMarginalsMoment, GravityMomentFirstApproach = params
+	@unpack W, baseIndex, OuterScaling, counterType, independenceMoment, sameMarginalsMoment, GravityMomentFirstApproach, UoModel = params
 	@unpack data = setup_output
 	@unpack θ_initial, γ, δ_grid, file_name = prep_output
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
@@ -11,6 +11,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	δ_grid_size = length(δ_grid)
 
 	U = γ.Ū # unscaled U
+	cHat = γ.cHat
 	λData = data.λData
 
 	# Aod
@@ -29,8 +30,8 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 			Aod_offset += D^2
 		end
 		for i ∈ 1:length(δ_grid)
-			Aod[1, i, :, :] = reshape(vcat(Θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
-			Aod[2, i, :, :] = reshape(vcat(θ_initial[Aod_offset+1:Aod_offset+D^2]), (D, D))
+			Aod[1, i, :, :] = reshape(vcat(Θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D)) 
+			Aod[2, i, :, :] = reshape(vcat(θ_initial[Aod_offset+1:Aod_offset+D^2]), (D, D)) 
 			Aod[3, i, :, :] = reshape(vcat(Θ_upper[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
 		end
 	end
@@ -45,7 +46,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 	#x, domestic/rw/ratio, δ, bound=lower/initial/upper
 
-	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D)
+	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D,UoModel)
 	#marg_pdf = MarginalPricesPDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData)
 
 
@@ -68,12 +69,12 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	end
 
 	# x, δ, lower/initial/upper
-	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
-	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
+	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D ,UoModel)
+	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D,UoModel)
 
 	yb = zeros(4, length(u), δ_grid_size, 3) # o=1:4, x, δ, lower/initial/upper
 	for i ∈ 1:4
-		yb[i,:,:,:] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
+		yb[i,:,:,:] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D,UoModel)
 	end
 
 
@@ -108,7 +109,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 
 	# D^2, D^2, lower/Initial/upper, δ
-	M = correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
+	M = correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
 
 	for i ∈ 1:δ_grid_size
 

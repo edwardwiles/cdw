@@ -178,15 +178,12 @@ function (Q::KLObjectiveBundleImplicit)(x, g = Float64[], θ = Float64[]; h = Fl
 			@views BLAS.gemv!('T', exp(-lse), H[:, 1+outer_constr_index:1+d], arg1, 0.0, constr[2:d - outer_constr_index + 2])
 		end
 	end
-
 	# gradient w.r.t. λ
 	if length(g) > 0 && length(θ) == 0
-
 		@views BLAS.gemv!('T', -1.0 * exp(-lse), H[:, 2:outer_constr_index], arg1, 0.0, g)
 
 	# gradient (and, if necessary, Jacobian of constraints) w.r.t. θ
 	elseif length(g) > 0 && length(θ) > 0
-
 		@unpack find_smallest, jac_h, H_copy, H_mean, H_temp, N, l, ∂x_∂θ, ∂c_∂θ = Q
 
 		# gradient of objective is simply derivative of K wrt θ

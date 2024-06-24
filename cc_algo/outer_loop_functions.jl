@@ -5,7 +5,6 @@ function callbackEval_and_ConsF_outer!(kc, cb, evalRequest, evalResult, userPara
     θ = evalRequest.x
 
     objSol, x, nStatus = inner_loop_internal(obj, θ)
-
     
     evalResult.obj[1] = -objSol
 
@@ -213,7 +212,6 @@ function calculate_jac_θ!(obj::ObjectiveBundle, θ)
     else
         obj.moments_jacobian!(@view(obj.jac_h[1:obj.N, 1, :]), select_jac_g_from_jac_h(obj, obj.jac_h), θ, @view(obj.U[1:obj.N, :]), obj)
     end
-
 end
 
 function calculate_jac_θ_autodiff!(obj::ObjectiveBundle, θ)
@@ -243,7 +241,6 @@ function calculate_grad_k!(g, obj::ObjectiveBundle, θ)
         obj.moments_jacobian!(jac_kk, select_jac_g_from_jac_h(obj, jac_HH), θ, @view(obj.U[1:2, :]), obj)
         g .= jac_kk[1, :]
     end
-
 end
 
 function calculate_grad_k_autodiff!(g, obj::ObjectiveBundle, θ)

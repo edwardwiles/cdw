@@ -31,10 +31,11 @@ function LFD(cc_output, prep_output, params)
 			inequality_index = Int64[],
 			l = size(θ_initial, 1),
 			U = U,
-			N = 100,
+			#N = 100,
+			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
-			inner_loop_opt = "ek_inner_loop_options.opt",
-			lower_limit = -50)
+			inner_loop_opt = "ek_inner_loop_options.opt"
+		)
 
 		val, x, nStatus = inner_loop(obj, Θ_lower[:, i]) # Represents the lagrangian of the inner optimizer.
 		EK_moments!(K, G, Θ_lower[:, i], U, obj)
@@ -65,10 +66,11 @@ function LFD(cc_output, prep_output, params)
 			inequality_index = Int64[],
 			l = size(θ_initial, 1),
 			U = U,
-			N = 100,
+			#N = 100,
+			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
-			inner_loop_opt = "ek_inner_loop_options.opt",
-			lower_limit = -50)
+			inner_loop_opt = "ek_inner_loop_options.opt"
+			)
 
 		val, x, nStatus = inner_loop(obj, Θ_upper[:, i]) # Represents the lagrangian of the inner optimizer.
 		EK_moments!(K, G, Θ_upper[:, i], U, obj)

@@ -17,7 +17,7 @@ function main(globalParams)
  
     # add D to the parameters list 
     useParams = globalParams
-    useParams = (; useParams..., D = setup_output.D, EK_moments! = EK_moments!) 
+    useParams = (; useParams..., D = setup_output.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!) 
     
     # check parameters are compatible
     checkParams(useParams)
@@ -75,6 +75,8 @@ params = (
     δGridType = 0, # 0: {1}, else: {0.01, 0.1, 0.5, 1, 2}
     refIndex1 = 1,
     OuterLoop =0,
+    UoModel = 1,
+    use_Jacobian = 1,
 
     # Post CC Optimization tests
     runLFD = 1,

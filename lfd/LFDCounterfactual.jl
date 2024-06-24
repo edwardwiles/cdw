@@ -10,15 +10,15 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
 	params = globalParams
 	params = (; params..., SamplingWeight = γ.SamplingWeights)
-	@unpack W, baseIndex, refIndex1, θConstant, σHat, sameMarginalsMoment, independenceMoment = params
+	@unpack W, baseIndex, refIndex1, θConstant, σHat, sameMarginalsMoment, independenceMoment, UoModel = params
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
 	@unpack LFD_upper, LFD_lower = lfd_output
 
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 	Ū = γ.Ū
-
-	V = zeros(W, D * D)
+	U_Size = UoModel==1 ? D : D^2
+	V = zeros(W, U_Size)
 	rand!(V)
 
 	# for each delta, we caluculate the CDF of U_refIndex1 for the upper and lower LFD  
@@ -27,28 +27,28 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 	CDF_X = zeros(CDF_Size) # the y-axis of the empirical CDF : CDF(X)
 
 
-	U_CDF_control = zeros(CDF_Size, D^2) # for control, to see if the numerical procedure restitutes the U CDF
-	U_CDF_exact = zeros(CDF_Size, D^2)
+	U_CDF_control = zeros(CDF_Size, U_Size) # for control, to see if the numerical procedure restitutes the U CDF
+	U_CDF_exact = zeros(CDF_Size, U_Size)
 
-	U_CDF_up = zeros(CDF_Size, D^2, δ_grid_size)
-	U_CDF_down = zeros(CDF_Size, D^2, δ_grid_size)
+	U_CDF_up = zeros(CDF_Size, U_Size, δ_grid_size)
+	U_CDF_down = zeros(CDF_Size, U_Size, δ_grid_size)
 
 	# Transfrom f(U) to the be uniform [0.1], this will help with the extrapolation
-	X_for_CDF = zeros(W, D^2) # 
-	for od ∈ 1:D^2
+	X_for_CDF = zeros(W, U_Size) # 
+	for od ∈ 1:U_Size
 		@. X_for_CDF[:, od] = exp.(-1 .* Ū[:, od])
 	end
 	# CDF(X)
 	CDF_X = quantile(exp.(-1 .* Ū[:, refIndex1]), range(1 / (CDF_Size), (CDF_Size - 1) / (CDF_Size), length = CDF_Size))
 
 
-	for od ∈ 1:D^2
+	for od ∈ 1:U_Size
 		@. U_CDF_exact[:, od] = CDF_X[:]
 	end
 
 
 	for ω ∈ 1:W
-		for od ∈ 1:D^2
+		for od ∈ 1:U_Size
 			smallest_X = searchsortedfirst(CDF_X, X_for_CDF[ω, od])
 
 			@. U_CDF_control[smallest_X:CDF_Size, od] += 1 / W
@@ -61,17 +61,18 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 
 	#calculate the K-S test 
 
-	KS_Test = zeros(D^2, δ_grid_size, 2)
+	KS_Test = zeros(U_Size, δ_grid_size, 2)
 	for δ ∈ 1:δ_grid_size
-		for od ∈ 1:D^2
+		for od ∈ 1:U_Size
 			KS_Test[od, δ, 1] = maximum(abs.(U_CDF_up[:, od, δ] .- U_CDF_up[:, refIndex1, δ]))
 			KS_Test[od, δ, 2] = maximum(abs.(U_CDF_down[:, od, δ] .- U_CDF_down[:, refIndex1, δ]))
 		end
 
-		savefig(heatmap(reshape(KS_Test[:, δ, 1], (D, D)), fc = cgrad([:white, :dodgerblue4])),
+
+		savefig(heatmap( UoModel==1 ? KS_Test[:, δ, 1] : reshape(KS_Test[:, δ, 1], (D, D)), fc = cgrad([:white, :dodgerblue4])),
 			string("upper_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
 
-		savefig(heatmap(reshape(KS_Test[:, δ, 2], (D, D)), fc = cgrad([:white, :dodgerblue4])),
+		savefig(heatmap(UoModel==1 ? KS_Test[:, δ, 2] : reshape(KS_Test[:, δ, 2], (D, D)), fc = cgrad([:white, :dodgerblue4])),
 			string("lower_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
 	end
 
@@ -85,7 +86,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 				xlabel = "exp(- ̄U)",
 				ylabel = "CDF",
 				CDF_X,
-				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, baseIndex+(baseIndex-1)*D, i] U_CDF_down[:, baseIndex+(baseIndex-1)*D, i]],
+				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, baseIndex+(UoModel==1 ? 0 : (baseIndex-1)*D), i] U_CDF_down[:, baseIndex+(UoModel==1 ? 0 : (baseIndex-1)*D), i]],
 				label = ["Upper CDFrefIndex" "Lower CDFrefIndex" "Upper CDFbaseIndex,baseIndex" "Lower CDFbaseIndex,baseIndex"],
 				title = string("Marginals for δ = ", δ_grid[i]),
 			),
@@ -97,7 +98,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 				xlabel = "exp(- ̄U)",
 				ylabel = "CDF",
 				CDF_X,
-				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, 1+(baseIndex-1)*D, i] U_CDF_down[:, 1+(baseIndex-1)*D, i]],
+				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, 1+(UoModel==1 ? 0 : (baseIndex-1)*D), i] U_CDF_down[:, 1+(UoModel==1 ? 0 : (baseIndex-1)*D), i]],
 				label = ["Upper CDFrefIndex" "Lower CDFrefIndex" "Upper CDF1,baseIndex,baseIndex" "Lower CDF1,baseIndex,baseIndex"],
 				title = string("Marginals for δ = ", δ_grid[i]),
 			),
@@ -108,17 +109,17 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 
 
 
-	U_exact = zeros(W, D * D)
-	Ū_exact = zeros(W, D * D)
+	U_exact = zeros(W, U_Size)
+	Ū_exact = zeros(W, U_Size)
 
-	U_control = zeros(W, D * D)
-	Ū_control = zeros(W, D * D)
+	U_control = zeros(W, U_Size)
+	Ū_control = zeros(W, U_Size)
 
-	U_LFD_up = zeros(W, D * D)
-	Ū_LFD_up = zeros(W, D * D)
+	U_LFD_up = zeros(W, U_Size)
+	Ū_LFD_up = zeros(W, U_Size)
 
-	U_LFD_down = zeros(W, D * D)
-	Ū_LFD_down = zeros(W, D * D)
+	U_LFD_down = zeros(W, U_Size)
+	Ū_LFD_down = zeros(W, U_Size)
 
 	Inverse_CDF_up = 0
 	Inverse_CDF_down = 0
@@ -140,7 +141,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 	#simulate Ū_exact & Ū_control
 
 	for ω ∈ 1:W
-		for od ∈ 1:D^2
+		for od ∈ 1:U_Size
 			Inverse_CDF_idx = searchsortedfirst(U_CDF_exact[:, refIndex1], V[ω, od])
 			if Inverse_CDF_idx == 1
 				Inverse_CDF_exact = V[ω, od] * CDF_X[1] / U_CDF_exact[1, refIndex1]
@@ -168,13 +169,14 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			Ū_control[ω, od] = -log(Inverse_CDF_control)
 		end
 	end
-
+#=
 	for d ∈ 1:D
 		for o ∈ 1:D
 			o1 = o + (d - 1) * D
 			@. U_control[:, o1] = Ū_control[:, o1] .* cHat[o, d]
 		end
 	end
+=#
 
 	if θConstant == 1
 		@. U_control[:] = U_control[:] .^ (-μHat) # if theta doesn't vary, then much faster to precalculate this matrix 
@@ -184,14 +186,14 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 	Uσ_control = U_control .^ (1 - σHat) # precalculate 
 
 
-
+#=
 	for d ∈ 1:D
 		for o ∈ 1:D
 			o1 = o + (d - 1) * D
 			@. U_exact[:, o1] = Ū_exact[:, o1] .* cHat[o, d]
 		end
 	end
-
+=#
 	if θConstant == 1
 		@. U_exact[:] = U_exact[:] .^ (-μHat) # if theta doesn't vary, then much faster to precalculate this matrix 
 		# reduction in computation time due to non-integer exponent substantially dominates higher memory usage
@@ -279,10 +281,11 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U,
-		N = 100,
+		#N = 100,
+		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
-		inner_loop_opt = "ek_inner_loop_options.opt",
-		lower_limit = -50)
+		inner_loop_opt = "ek_inner_loop_options.opt"
+		)
 
 
 	obj_control = PsiObjectiveBundleDelta(
@@ -296,10 +299,11 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U_control,
-		N = 100,
+		#N = 100,
+		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
-		inner_loop_opt = "ek_inner_loop_options.opt",
-		lower_limit = -50)
+		inner_loop_opt = "ek_inner_loop_options.opt"
+		)
 
 
 	obj_exact = PsiObjectiveBundleDelta(
@@ -313,10 +317,11 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U_exact,
-		N = 100,
+		#N = 100,
+		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
-		inner_loop_opt = "ek_inner_loop_options.opt",
-		lower_limit = -50)
+		inner_loop_opt = "ek_inner_loop_options.opt"
+		)
 
 
 	G_exact = zeros(W, numMoments)
@@ -400,7 +405,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 
 		# Simulate the LFD Us for all ods, using the CDF of refIndex1
 		for ω ∈ 1:W
-			for od ∈ 1:D^2
+			for od ∈ 1:U_Size
 				Inverse_CDF_idx = searchsortedfirst(U_CDF_up[:, refIndex1, δ], V[ω, od])
 				if Inverse_CDF_idx == 1
 					Inverse_CDF_up = V[ω, od] * CDF_X[1] / U_CDF_up[1, refIndex1, δ]
@@ -432,14 +437,14 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			end
 
 		end
-
+#=
 		for d ∈ 1:D
 			for o ∈ 1:D
 				o1 = o + (d - 1) * D
 				@. U_LFD_down[:, o1] = Ū_LFD_down[:, o1] .* cHat[o, d]
 			end
 		end
-
+=#
 		if θConstant == 1
 			@. U_LFD_down[:] = U_LFD_down[:] .^ (-μHat) # if theta doesn't vary, then much faster to precalculate this matrix 
 			# reduction in computation time due to non-integer exponent substantially dominates higher memory usage
@@ -447,14 +452,14 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 
 		Uσ_LFD_down = U_LFD_down .^ (1 - σHat) # precalculate 
 
-
+#=
 		for d ∈ 1:D
 			for o ∈ 1:D
 				o1 = o + (d - 1) * D
 				@. U_LFD_up[:, o1] = Ū_LFD_up[:, o1] .* cHat[o, d]
 			end
 		end
-
+=#
 		if θConstant == 1
 			@. U_LFD_up[:] = U_LFD_up[:] .^ (-μHat) # if theta doesn't vary, then much faster to precalculate this matrix 
 			# reduction in computation time due to non-integer exponent substantially dominates higher memory usage
@@ -511,10 +516,11 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			inequality_index = Int64[],
 			l = size(θ_initial, 1),
 			U = U_LFD_up,
-			N = 100,
+		#	N = 100,
+			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
-			inner_loop_opt = "ek_inner_loop_options.opt",
-			lower_limit = -50)
+			inner_loop_opt = "ek_inner_loop_options.opt"
+		)
 
 		γ_lower = (wHat = γ.wHat,
 			L = γ.L,
@@ -549,10 +555,11 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			inequality_index = Int64[],
 			l = size(θ_initial, 1),
 			U = U_LFD_down,
-			N = 100,
+		#	N = 100,
+			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
-			inner_loop_opt = "ek_inner_loop_options.opt",
-			lower_limit = -50)
+			inner_loop_opt = "ek_inner_loop_options.opt"
+	)
 
 
 		# calculate moments using the Frechet U and weight by the LFD

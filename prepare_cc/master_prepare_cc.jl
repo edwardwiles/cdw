@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM = globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel= globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -49,12 +49,25 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
         numMoments += (D-1) * D + D * (D - 1) * (D - 2)
     end 
 
-    if sameMarginalsMoment == 1 
-        numMoments += 2 * momentOrder * D^2 + 2 * momentOrderForBaseIndex * D + 2 * D^2
+    if sameMarginalsMoment == 1         
+        if UoModel == 1
+            numMoments += 2 * D + 2 * momentOrderForBaseIndex * D
+        else
+            numMoments += 2 * momentOrder * D^2 + 2 * D^2 + 2 * momentOrderForBaseIndex * D
+        end
     end 
 
     if independenceMoment == 1 
-        numMoments += (1+ D * (D^2 - floor(Int, D * (1 + D) / 2)) + IndMomentOrder + IndMomentOrder^D)
+        numMoments += IndMomentOrder + (D^2 - floor(Int, D * (1 + D) / 2)) * (IndMomentOrder^2)
+	
+        if UoModel == 0
+            numMoments += D * (D^2 - floor(Int, D * (1 + D) / 2)) 
+        else
+            numMoments += (D^2 - floor(Int, D * (1 + D) / 2)) 
+        end
+        #numMoments += (1+ D * (D^2 - floor(Int, D * (1 + D) / 2)) + IndMomentOrder + IndMomentOrder^D)
+        #numMoments += (1+ D * (D^2 - floor(Int, D * (1 + D) / 2)) + IndMomentOrder + (D^2- floor(Int, D * (1 + D) / 2))*(IndMomentOrder^2))
+        
     end 
     
     # index where outer loop moments start

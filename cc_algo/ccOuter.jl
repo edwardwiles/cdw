@@ -1,7 +1,7 @@
 
 function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
-	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, θConstant = params
+	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian = params
 	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
@@ -31,8 +31,6 @@ function ccOuter(prep_output, params)
 	Θ_upper = zeros(length(θ_initial), length(δ_grid))
 
 	if useParallel == 0 # if parallelisation is off, do deltas one at a time 
-
-		obj.find_smallest = false
 		θ_1 = copy(θ_initial)
 
 		# run outer loop for upper bound 
@@ -40,34 +38,34 @@ function ccOuter(prep_output, params)
 			if counterType == 1 # if GT counterfactual, k does not depend on U directly (so create Implicit object)
 				obj = PsiObjectiveBundleImplicit(
 					δ = δ,
-					find_smallest = true,
+					find_smallest = false,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! =use_Jacobian==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
-					#lower_limit = -50,
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
 			else
 				obj = PsiObjectiveBundleExplicit(
 					δ = δ,
-					find_smallest = true,
+					find_smallest = false,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! = use_Jacobian==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
-					#lower_limit = -50,
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt",
 					)
@@ -77,7 +75,6 @@ function ccOuter(prep_output, params)
 			print(κ_upper[i])
 		end
 
-		obj.find_smallest = true
 		θ_1 = copy(θ_initial)
 
 		# run outer loop for lower bound 
@@ -88,14 +85,14 @@ function ccOuter(prep_output, params)
 					find_smallest = true,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! = use_Jacobian==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
-					#lower_limit = -50,
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
@@ -105,14 +102,14 @@ function ccOuter(prep_output, params)
 					find_smallest = true,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! = use_Jacobian ==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
 					#N=25000,
-					#lower_limit = -50,
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
@@ -135,7 +132,7 @@ function ccOuter(prep_output, params)
 					find_smallest = true,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! = use_Jacobian ==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
@@ -143,7 +140,7 @@ function ccOuter(prep_output, params)
 					l = length(θ_initial),
 					U = U,
 					#N = 20000,
-					#lower_limit = -50,
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
@@ -155,7 +152,7 @@ function ccOuter(prep_output, params)
 					find_smallest = true,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! = use_Jacobian ==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
@@ -163,7 +160,7 @@ function ccOuter(prep_output, params)
 					l = length(θ_initial),
 					U = U,
 					#N = 20000,
-					#lower_limit = -50,
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt")
 
@@ -186,7 +183,7 @@ function ccOuter(prep_output, params)
 					find_smallest = false,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! = use_Jacobian ==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
@@ -194,7 +191,7 @@ function ccOuter(prep_output, params)
 					l = length(θ_initial),
 					U = U,
 					#N=20000,
-					#lower_limit = -50,
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt")
 
@@ -205,7 +202,7 @@ function ccOuter(prep_output, params)
 					find_smallest = false,
 					γ = γ,
 					(moments!) = EK_moments!,
-					#moments_jacobian! = rust_moments_jacobian!,
+					moments_jacobian! =use_Jacobian ==1 ? params.EK_moments_Jacobian! : error,
 					d = numMoments,
 					outer_constr_index = outer_constr_index,
 					inequality_index = Int64[],
@@ -213,7 +210,7 @@ function ccOuter(prep_output, params)
 					l = length(θ_initial),
 					U = U,
 					#N=20000,
-					#lower_limit = -50
+					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
