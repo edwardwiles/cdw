@@ -73,14 +73,14 @@ function precalcIndependence(Ū, params)
 	for ω ∈ 1:W
 		idx_corss_moment = 0
 		@inbounds for i ∈ 1:cell_size
-			this_cdf = 1
+
 			for o_1 ∈ 1:D
 				if UoModel == 0
 					o1 = o_1 + (baseIndex - 1) * D
 				else
 					o1 = o_1
 				end
-				this_cdf *= Ū[ω, o1] < IndCDF_X[floor(Int, PairWiseIndCDF_Cells[i][1])] ? 1 : 0
+				this_cdf_o1 = Ū[ω, o1] < IndCDF_X[floor(Int, PairWiseIndCDF_Cells[i][1])] ? 1 : 0
 				for o_2 ∈ 1:D
 					if o_2 > o_1
 						if UoModel == 0
@@ -88,7 +88,8 @@ function precalcIndependence(Ū, params)
 						else
 							o2 = o_2
 						end
-						this_cdf *= (Ū[ω, o2] < IndCDF_X[floor(Int, PairWiseIndCDF_Cells[i][2])]) ? 1 : 0
+						this_cdf_o2 = (Ū[ω, o2] < IndCDF_X[floor(Int, PairWiseIndCDF_Cells[i][2])]) ? 1 : 0
+						this_cdf = this_cdf_o1*this_cdf_o2
 						idx_corss_moment += 1
 						Ind_Moments[ω, offset+idx_corss_moment] = this_cdf
 					end
