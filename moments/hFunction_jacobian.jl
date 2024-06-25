@@ -2,8 +2,8 @@ function hFunction_jacobian_copy_only!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, Aod
 	D = size(τ, 1) # num countries 
 	W = size(UPow, 1) # num draws (or goods)
 
-	
-    gdp = (w .* L)
+
+	gdp = (w .* L)
 
 	for d in 1:D
 		∂PriceIndex∂γ = σ * γ[d]^(σ - 1) * L[d] * w[d]
@@ -17,9 +17,9 @@ end
 function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
 	D = size(τ, 1) # num countries 
 	W = size(UPow, 1) # num draws (or goods)
-    β = 0.01
-	
-    gdp = (w .* L)
+	β = 0.01
+
+	gdp = (w .* L)
 
 	if OuterScaling == 1
 		# initialise important vectors 
@@ -85,23 +85,24 @@ function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, A
 				indSum = 0
 				# pricesTemp[o] = pricesTempσ[o] * pricesInd[o]
 
-				for c in 1:D
-					jac_index = Aod_offset + c + (d - 1) * D
-
-					for o ∈ 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data 
-						d1 = d + (o - 1) * D
-						Min_X_oc = minimum(pricesTemp[Not([o, c])])
-						Min_X_o = o != c ? Min_X_oc : minimum(pricesTemp[Not([o])])
-						∂ξ∂Acd = 0
-						if o == c
-							∂ξ∂Acd = (1 - σ) * pricesInd[o] * pricesTempσ[o] / pricesTemp[o] - pricesInd[o] * pricesTempσ[o] * SmoothDirac(β, pricesTemp[o] - Min_X_o)
-						else
-							∂ξ∂Acd = pricesTempσ[o] * indicative(Min_X_oc - pricesTemp[o]) * SmoothDirac(β, pricesTemp[o] - pricesTemp[c])
+				for o ∈ 1:D 
+                    if pricesInd[o] == 1
+						for c in 1:D
+							jac_index = Aod_offset + c + (d - 1) * D
+							d1 = d + (o - 1) * D
+							Min_X_oc = minimum(pricesTemp[Not([o, c])])
+							Min_X_o = o != c ? Min_X_oc : minimum(pricesTemp[Not([o])])
+							∂ξ∂Acd = 0
+							if o == c
+								∂ξ∂Acd = (1 - σ) * pricesInd[o] * pricesTempσ[o] / pricesTemp[o] - pricesInd[o] * pricesTempσ[o] * SmoothDirac(β, pricesTemp[o] - Min_X_o)
+							else
+								∂ξ∂Acd = pricesTempσ[o] * indicative(Min_X_oc - pricesTemp[o]) * SmoothDirac(β, pricesTemp[o] - pricesTemp[c])
+							end
+							#∂P∂A
+							∂ξ∂Acd *= -μ * pricesTemp[c] / Aod[c, d]
+							jac_G[ω, d1, jac_index] = ∂ξ∂Acd
+							jac_G[ω, cInd+d, jac_index] = ∂ξ∂Acd
 						end
-						#∂P∂A
-						∂ξ∂Acd *= -μ * pricesTemp[c] / Aod[c, d]
-						jac_G[ω, d1, jac_index] += ∂ξ∂Acd
-						jac_G[ω, cInd+d, jac_index] += ∂ξ∂Acd
 					end
 				end
 			end
@@ -120,7 +121,7 @@ function hFunctionCounter_jacobian!(jac_K, jac_G, UPow, Uσ, w, τ, σ, γ, Aod,
 	tuner = -100
 	l = D^2
 
-    if counterType != 1
+	if counterType != 1
 		bInd = D^2
 		cInd = D^2 + D - 1
 		dInd = D^2 + 2 * D - 1

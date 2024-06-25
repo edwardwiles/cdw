@@ -243,7 +243,7 @@ derivcheck_type central
 # Enable evaluating gradients with functions in one callback.
 #   no         = 0
 #   yes        = 1
-eval_fcga         no
+eval_fcga         yes
 
 # Specifies the final relative stopping tolerance for the feasibility
 # error. Smaller values of feastol result in a higher degree of accuracy
@@ -276,7 +276,7 @@ ftol_iters   5
 #   central      = 3 = gradients computed by internal central finite differences
 #   user_forward = 4 = gradients computed by user-provided forward finite differences
 #   user_central = 5 = gradients computed by user-provided central finite differences
-gradopt      forward
+gradopt      exact
 
 # Whether to allow computing the Hessian of the Lagrangian without objective component.
 #   forbid       = 0 = not allowed
