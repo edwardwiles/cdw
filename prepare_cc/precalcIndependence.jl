@@ -55,7 +55,7 @@ function precalcIndependence(Ū, params)
 	IndCDF_X = quantile(Ū[:, 1] .* SamplingWeight[:], range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
 
 	# CDF U11
-	offset = D * (D^2 - floor(Int, D * (1 + D) / 2))
+	offset = UoModel == 0 ? D * (D^2 - floor(Int, D * (1 + D) / 2)) : (D^2 - floor(Int, D * (1 + D) / 2))
 	cell_size = size(IndCDF_X, 1)
 	for ω ∈ 1:W
 		@inbounds for i ∈ 1:cell_size
@@ -64,7 +64,7 @@ function precalcIndependence(Ū, params)
 	end
 
 	#Pairewise CFDs
-
+	offset += cell_size
 	PairWiseIndCDF_Cells = collect(with_replacement_combinations(IndCDF_K, 2))
 	cell_size = size(PairWiseIndCDF_Cells, 1)
 
