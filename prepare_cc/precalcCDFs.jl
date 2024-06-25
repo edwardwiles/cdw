@@ -64,13 +64,13 @@ function precalcCDFs(Ū, params, prestep_output)
 
 	# for d = baseIndex, cach the CDF realizations for momentOrderForBaseIndex points
 	for o ∈ 1:D
-		o1_base = o + UoModel == 1 ? 0 : (baseIndex - 1) * D
+		o1_base = o + (UoModel == 1 ? 0 : (baseIndex - 1) * D)
 		for i ∈ 1:momentOrderForBaseIndex
 			@. CDF_Moments_for_base[:, o+(i-1)*D] += -CDF_11_X_for_base[:, i]
 			@. CDF_Moments_for_base[:, momentOrderForBaseIndex+o+(i-1)*D] = -Truncated_moment_11_for_base[:, i]
 		end
 		for ω ∈ 1:W
-			smallest_X = searchsortedfirst(CDF_X_for_base, Ū[ω, o1_base, 1])
+			smallest_X = searchsortedfirst(CDF_X_for_base, Ū[ω, o1_base])
 			for i ∈ smallest_X:momentOrderForBaseIndex
 				CDF_Moments_for_base[ω, o+(i-1)*D] += 1
 				CDF_Moments_for_base[ω, momentOrderForBaseIndex+o+(i-1)*D] += Ū[ω, o1_base]^(μHat * (1 - σHat))
