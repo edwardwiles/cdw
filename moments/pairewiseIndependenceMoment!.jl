@@ -24,7 +24,7 @@ function pairewiseIndependenceMoment!(Ū, G, D, η, Ind_Moments, IndMomentOrder
 	end
 end
 
-function pairewiseIndependenceMoment_jac!(Ū, jac_G, D, η, Ind_Moments, IndCDF_Cells, ν, offset, refIndex1, η_index)
+function pairewiseIndependenceMoment_jac!(Ū, jac_G, D, η, Ind_Moments, IndCDF_Cells, ν, offset, refIndex1, η_index, UoModel)
 	# imposes zero coreelation between Uods, implementation used cached realizations
 	# E[U(ref,ref)] = η
 	@. jac_G[:, end-offset, η_index] = -1

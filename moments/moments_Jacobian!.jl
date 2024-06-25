@@ -116,7 +116,7 @@ function EK_moments_Jacobian!(jac_K, jac_G, θ, U, obj)
 			offset += sameMarginalsMoment * (2 * momentOrderForBaseIndex * D + 2 * D)
 		end
 
-		pairewiseIndependenceMoment_jac!(Ū, jac_G, D, ηk, IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, η_index)
+		pairewiseIndependenceMoment_jac!(Ū, jac_G, D, ηk, IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, η_index, UoModel)
 		#=
 		T = Threads.nthreads()
 		Threads.@threads for t = 1:T
