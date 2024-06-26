@@ -17,7 +17,7 @@ function main_post_cc(PostCCParams)
 	@unpack setup_output, prestep_output, prep_output, params, cc_output, lfd_output = cc_lfd_outputs
 
 	@show Dates.format(now(), "HH:MM") # print time  
-	master_post_cc_lfd(params, setup_output, prestep_output, prep_output, cc_output, lfd_output)
+	master_post_cc_lfd(PostCCParams, params, setup_output, prestep_output, prep_output, cc_output, lfd_output)
 	@show Dates.format(now(), "HH:MM") # print time 
 end
 
