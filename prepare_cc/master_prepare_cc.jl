@@ -89,6 +89,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 
     δ_grid_filtered = filter(x -> x >= δ_star_initial, δ_grid)
 
+    @show δ_star_initial
     @show δ_grid
     @show δ_grid_filtered
 

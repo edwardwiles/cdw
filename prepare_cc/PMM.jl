@@ -13,7 +13,7 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_i
 		l = size(θ_initial, 1),
 		U = U,
 		N = 100,# not used because we do not calculate jacobians
-		lower_limit = -50
+		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
 		inner_loop_opt = "ek_inner_loop_options.opt"
 		)
@@ -26,7 +26,7 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_i
 	δ_star_initial = 0
 	if calc_δ_star_initial == 1
 		val, x, nStatus = inner_loop(obj, θ_initial)
-		
+
 		if nStatus ∈ [0, -100, -101, -103]
 			δ_star_initial = -val
 		else

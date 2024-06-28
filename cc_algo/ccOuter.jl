@@ -2,7 +2,7 @@
 function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
 	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian, Jac_W = params
-	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
+	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index, file_name = prep_output
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 
@@ -73,6 +73,10 @@ function ccOuter(prep_output, params)
 			κ_upper[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_upper[:, i] .= θ_1
 			print(κ_upper[i])
+
+			save_object(string("cc_output_upper_",i,"_", file_name, ".jld2"),
+			(κ_upper[i], θ_1))
+
 		end
 
 		θ_1 = copy(θ_initial)
@@ -117,6 +121,8 @@ function ccOuter(prep_output, params)
 			κ_lower[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_lower[:, i] .= θ_1
 			print(κ_lower[i])
+			save_object(string("cc_output_upper_",i,"_", file_name, ".jld2"),
+			(κ_lower[i], θ_1))
 		end
 
 	elseif useParallel == 1
@@ -169,6 +175,8 @@ function ccOuter(prep_output, params)
 			κ_lower[i], θ_2 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_lower[:, i] .= θ_2
 			print(κ_lower[i])
+			save_object(string("cc_output_upper_",i,"_", file_name, ".jld2"),
+			(κ_lower[i], θ_2))
 		end
 
 		obj.find_smallest = false
@@ -220,6 +228,8 @@ function ccOuter(prep_output, params)
 			κ_upper[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_upper[:, i] .= θ_1
 			print(κ_upper[i])
+			save_object(string("cc_output_upper_",i,"_", file_name, ".jld2"),
+			(κ_upper[i], θ_1))
 		end
 
 	end
