@@ -14,14 +14,14 @@ function hFunction_jacobian_copy_only!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, Aod
 		@. jac_G[:, D^2+d, 2+d] = -∂PriceIndex∂γ #price index moment
 	end
 end
-function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
+function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset, θConstant)
 	D = size(τ, 1) # num countries 
 	W = size(UPow, 1) # num draws (or goods)
 	β = 0.01
 
 	gdp = (w .* L)
 
-	if OuterScaling == 1
+	if OuterScaling == 1 || θConstant != 1
 		# initialise important vectors 
 		pricesTemp = zeros(eltype(γ), D)
 		pricesTempσ = copy(pricesTemp)
@@ -85,8 +85,8 @@ function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, A
 				indSum = 0
 				# pricesTemp[o] = pricesTempσ[o] * pricesInd[o]
 
-				for o ∈ 1:D 
-                    if pricesInd[o] == 1
+				for o ∈ 1:D
+					if pricesInd[o] == 1 && OuterScaling == 1
 						for c in 1:D
 							jac_index = Aod_offset + c + (d - 1) * D
 							d1 = d + (o - 1) * D
@@ -103,6 +103,11 @@ function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, A
 							jac_G[ω, d1, jac_index] = ∂ξ∂Acd
 							jac_G[ω, cInd+d, jac_index] = ∂ξ∂Acd
 						end
+					elseif pricesInd[o] == 1 && θConstant != 1
+						d1 = d + (o - 1) * D
+						∂ξ∂μ = ln(pricesTempσ[o]) * pricesTempσ[o] / μ
+						jac_G[ω, d1, 1] = ∂ξ∂μ
+						jac_G[ω, cInd+d, 1] = ∂ξ∂μ
 					end
 				end
 			end
@@ -113,7 +118,7 @@ function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, A
 
 end
 
-function hFunctionCounter_jacobian!(jac_K, jac_G, UPow, Uσ, w, τ, σ, γ, Aod, AodPow, L, counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset)
+function hFunctionCounter_jacobian!(jac_K, jac_G, UPow, Uσ, w, τ, σ, γ, Aod, AodPow, L, counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset, θConstant)
 	# same as hFunction, except fills in counterfactual parts of G and fills in K 
 
 	D = size(τ, 1)
@@ -166,6 +171,8 @@ function hFunctionCounter_jacobian!(jac_K, jac_G, UPow, Uσ, w, τ, σ, γ, Aod,
 				jac_index_Add = Aod_offset + d + (d - 1) * D
 				# -(1-sigma)*mu*p_od^(1-sigma)/A
 				@. jac_G[:, cInd+d, jac_index_Add] = (-μ * (1 - σ) * constConsσ[d, d] / Aod[d, d]) ./ Uσ[1:W, o1]
+			elseif θConstant != 1
+				@. jac_G[:, cInd+d, 1] = (1/μ) .* log.((constConsσ[d, d] / Aod[d, d])./ Uσ[1:W, o1]) .* (constConsσ[d, d] / Aod[d, d]) ./ Uσ[1:W, o1]
 			end
 			∂PriceIndexPrime∂γPrime = σ * γ[baseIndex]^(σ - 1) * L[d] * w[d] #
 			@. jac_G[:, cInd+d, 2+D+1] = -∂PriceIndexPrime∂γPrime #price index moment

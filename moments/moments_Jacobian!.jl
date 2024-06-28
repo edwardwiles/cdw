@@ -78,21 +78,21 @@ function EK_moments_Jacobian!(jac_K, jac_G, θ, U, obj)
 			@. UPow[ix0:ix1, :] = U[ix0:ix1, :].^(-μ)
 			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :].^(-μ)
 		
-			hFunction_jacobian_calculation!(@view(jac_G[ix0:ix1, :, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
-			hFunctionCounter_jacobian!(@view(jac_K[ix0:ix1, :]), @view(jac_G[ix0:ix1, :, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime,  counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset) # fill in G with counterfactual moments, fill in K 
+			hFunction_jacobian_calculation!(@view(jac_G[ix0:ix1, :, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset, θConstant)
+			hFunctionCounter_jacobian!(@view(jac_K[ix0:ix1, :]), @view(jac_G[ix0:ix1, :, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime,  counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset, θConstant) # fill in G with counterfactual moments, fill in K 
 		end
 	else
 
 		
 		hFunction_jacobian_copy_only!(jac_G, U,  Uσ, wHat, τ, σ, γ, Aod, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
-		hFunctionCounter_jacobian!(jac_K, jac_G, U, Uσ, wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime,  counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset)
+		hFunctionCounter_jacobian!(jac_K, jac_G, U, Uσ, wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime,  counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset, θConstant)
 		
 		
 		T = Threads.nthreads()
 		Threads.@threads for t = 1:T
 			ix0 = round(Int, (t - 1) / T * W) + 1
 			ix1 = round(Int, t / T * W)
-			hFunction_jacobian_calculation!(@view(jac_G[ix0:ix1, :, :]), @view(U[ix0:ix1, :]),  @view(Uσ[ix0:ix1, :]), wHat, τ, σ, γ, Aod, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
+			hFunction_jacobian_calculation!(@view(jac_G[ix0:ix1, :, :]), @view(U[ix0:ix1, :]),  @view(Uσ[ix0:ix1, :]), wHat, τ, σ, γ, Aod, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset, θConstant)
 		end
 	
 	end
