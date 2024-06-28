@@ -68,12 +68,13 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			KS_Test[od, δ, 2] = maximum(abs.(U_CDF_down[:, od, δ] .- U_CDF_down[:, refIndex1, δ]))
 		end
 
-
+		if UoModel==0
 		savefig(heatmap( UoModel==1 ? KS_Test[:, δ, 1] : reshape(KS_Test[:, δ, 1], (D, D)), fc = cgrad([:white, :dodgerblue4])),
 			string("upper_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
 
 		savefig(heatmap(UoModel==1 ? KS_Test[:, δ, 2] : reshape(KS_Test[:, δ, 2], (D, D)), fc = cgrad([:white, :dodgerblue4])),
 			string("lower_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
+		end
 	end
 
 	writedlm(string("KSTest_", file_name), [(KS_Test[:, :, 1])' (KS_Test[:, :, 2])'], ',')
@@ -281,7 +282,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U,
-		#N = 100,
+		N = 100,
 		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
 		inner_loop_opt = "ek_inner_loop_options.opt"
@@ -299,7 +300,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U_control,
-		#N = 100,
+		N = 100,
 		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
 		inner_loop_opt = "ek_inner_loop_options.opt"
@@ -317,7 +318,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U_exact,
-		#N = 100,
+		N = 100,
 		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
 		inner_loop_opt = "ek_inner_loop_options.opt"
@@ -516,7 +517,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			inequality_index = Int64[],
 			l = size(θ_initial, 1),
 			U = U_LFD_up,
-		#	N = 100,
+			N = 100,
 			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
 			inner_loop_opt = "ek_inner_loop_options.opt"
@@ -555,7 +556,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			inequality_index = Int64[],
 			l = size(θ_initial, 1),
 			U = U_LFD_down,
-		#	N = 100,
+			N = 100,
 			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
 			inner_loop_opt = "ek_inner_loop_options.opt"

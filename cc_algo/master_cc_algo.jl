@@ -12,6 +12,9 @@ function master_cc_algo(prep_output, params)
 			κ_upper = κ_upper,
 			κ_lower = κ_lower,
 		)
+		save_object(string("cc_output_", file_name, ".jld2"),
+		cc_output)
+
 		return cc_output
 	else
 		master_cc_inner_algo(prep_output, params)

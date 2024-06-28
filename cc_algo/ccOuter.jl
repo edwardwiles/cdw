@@ -1,7 +1,7 @@
 
 function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
-	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian = params
+	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian, Jac_W = params
 	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index = prep_output
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
@@ -47,7 +47,7 @@ function ccOuter(prep_output, params)
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
-					#N=25000,
+					N=Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
@@ -64,7 +64,7 @@ function ccOuter(prep_output, params)
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
-					#N=25000,
+					N=Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt",
@@ -91,7 +91,7 @@ function ccOuter(prep_output, params)
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
-					#N=25000,
+					N=Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
@@ -108,7 +108,7 @@ function ccOuter(prep_output, params)
 					inequality_index = Int64[],
 					l = size(θ_initial, 1),
 					U = U,
-					#N=25000,
+					N=Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
@@ -139,7 +139,7 @@ function ccOuter(prep_output, params)
 					#l=size(θ_initial, 1),
 					l = length(θ_initial),
 					U = U,
-					#N = 20000,
+					N = Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
@@ -159,7 +159,7 @@ function ccOuter(prep_output, params)
 					#l=size(θ_initial, 1),
 					l = length(θ_initial),
 					U = U,
-					#N = 20000,
+					N = Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt")
@@ -190,7 +190,7 @@ function ccOuter(prep_output, params)
 					#l=size(θ_initial, 1),
 					l = length(θ_initial),
 					U = U,
-					#N=20000,
+					N=Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt")
@@ -209,7 +209,7 @@ function ccOuter(prep_output, params)
 					#l=size(θ_initial, 1),
 					l = length(θ_initial),
 					U = U,
-					#N=20000,
+					N=Jac_W,
 					lower_limit = -50,
 					outer_loop_opt = "ek_outer_loop_options.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"

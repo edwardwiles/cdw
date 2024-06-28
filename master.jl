@@ -77,6 +77,9 @@ params = (
     OuterLoop =0,
     UoModel = 1,
     use_Jacobian = 1,
+    calc_δ_star_initial = 1,
+    Jac_W = 25000,
+    δ_ref = 4,
 
     # Post CC Optimization tests
     runLFD = 1,

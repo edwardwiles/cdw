@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel= globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel, calc_δ_star_initial, Jac_W, δ_ref= globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -64,16 +64,13 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
             numMoments += D * (D^2 - floor(Int, D * (1 + D) / 2)) 
         else
             numMoments += (D^2 - floor(Int, D * (1 + D) / 2)) 
-        end
-        #numMoments += (1+ D * (D^2 - floor(Int, D * (1 + D) / 2)) + IndMomentOrder + IndMomentOrder^D)
-        #numMoments += (1+ D * (D^2 - floor(Int, D * (1 + D) / 2)) + IndMomentOrder + (D^2- floor(Int, D * (1 + D) / 2))*(IndMomentOrder^2))
-        
+        end        
     end 
     
     # index where outer loop moments start
     outer_constr_index = numMoments + 1 - GravityMomentFirstApproach
 
-    file_name = string("FD_",fakeData,"_Count_", counterType, "_NC_", D, "_bI", baseIndex, "_sG", GravityMomentFirstApproach, "_lG", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_O", momentOrder, "_bO",momentOrderForBaseIndex, "FF_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "IS_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "Fmu_", θConstant, "_", Dates.format(now(), "y-m-d"), ".csv")
+    file_name = string("FD_",fakeData,"_Count_", counterType, "_NC_", D, "_bI", baseIndex, "_sG", GravityMomentFirstApproach, "_lG", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_O", momentOrder, "_bO",momentOrderForBaseIndex, "FF_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "IS_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "Fmu_", θConstant, "Uo_", UoModel, "_", Dates.format(now(), "y-m-d"), ".csv")
 
 
     PMM = zeros(numMoments)
@@ -81,22 +78,27 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 
     γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output, data, counters.LPrime, counters.τPrime, Uσ, Ū, PMM, σ_Moments, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
 
-    γ_PMM = γPMM(θ_initial, γ, U, numMoments, outer_constr_index)
+    γ_PMM, δ_star_initial = γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_initial)
 
 
     if δGridType == 0
-        δ_grid =   vcat(1)
+        δ_grid =   vcat(δ_ref)
     else
-        δ_grid =   vcat(0.01, 0.1, 0.5, 1, 2)
+        δ_grid =   vcat(0.01, 0.1, 0.5, 1, 2) .* δ_ref
     end 
+
+    δ_grid_filtered = filter(x -> x >= δ_star_initial, δ_grid)
+
+    @show δ_grid
+    @show δ_grid_filtered
 
     prep_output = (
         U = U,
-        γ = usePMM ==1 ? γ_PMM : γ,
+        γ = usePMM ==1 ? γ_PMM : γ, 
         θ_initial = θ_initial,
         numMoments = numMoments,
         file_name = file_name,
-        δ_grid = δ_grid,
+        δ_grid = δ_grid_filtered,
         outer_constr_index = outer_constr_index
     )
 

@@ -1,4 +1,4 @@
-function γPMM(θ_initial, γ, U, numMoments, outer_constr_index)
+function γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_initial)
 
 	W = size(U, 1)
 	obj = PsiObjectiveBundleDelta(
@@ -12,8 +12,8 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index)
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U,
-		#N = 100,
-		#lower_limit = -50
+		N = 100,# not used because we do not calculate jacobians
+		lower_limit = -50
 		outer_loop_opt = "ek_outer_loop_options.opt",
 		inner_loop_opt = "ek_inner_loop_options.opt"
 		)
@@ -22,6 +22,17 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index)
 	K = zeros(W, 1)
 
 	EK_moments!(K, G, θ_initial, U, obj)
+
+	δ_star_initial = 0
+	if calc_δ_star_initial == 1
+		val, x, nStatus = inner_loop(obj, θ_initial)
+		
+		if nStatus ∈ [0, -100, -101, -103]
+			δ_star_initial = -val
+		else
+			δ_star_initial = 1e+10
+		end
+	end
 
 	γ_PMM = (wHat = γ.wHat,
 		L = γ.L,
@@ -46,6 +57,6 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index)
 		refIndex1 = γ.refIndex1)
 
 
-	return γ_PMM
+	return γ_PMM, δ_star_initial
 
 end
