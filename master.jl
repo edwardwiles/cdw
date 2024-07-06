@@ -72,6 +72,7 @@ params = (
     OuterScaling = 1, # 1= Aod model, 0 = Aod fixed
     useParallel=0, # 1 = parallelise the deltas in outer loop; 0 = do not 
     usePMM=0, # =1 adjust moments so they are exactly zero for F*, =0 do not.
+    NormalizeMoments = 1, # =1 divide by moment std dev so all moments are on the same scale
     δGridType = 0, # 0: {1}, else: {0.01, 0.1, 0.5, 1, 2}
     refIndex1 = 1,
     OuterLoop =0,

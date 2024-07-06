@@ -3,7 +3,7 @@ function EK_moments!(K, G, θ, U, obj)
 
 	# unpack the gamma (auxiliary parameters) vector
 	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū = obj.γ
-	@unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, OuterScaling, usePMM, UoModel = indicators
+	@unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, OuterScaling, usePMM, UoModel, NormalizeMoments = indicators
 
 	W = size(U, 1)
 	D = size(τ, 1)
@@ -145,9 +145,14 @@ function EK_moments!(K, G, θ, U, obj)
 
 	# normalize the moments so we do not require useless precision 
 	if usePMM == 1
-		KNITRO_tol = 10^(-6)
 		for im ∈ 1:obj.d
 			@. G[:, im] -= PMM[im]
+		end
+	end
+
+	if NormalizeMoments == 1
+		KNITRO_tol = 10^(-6)
+		for im ∈ 1:obj.d
 			@. G[:, im] *= σ_Moments[im]>KNITRO_tol^2 ? KNITRO_tol ./ σ_Moments[im] : 1
 		end
 	end

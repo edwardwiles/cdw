@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel, calc_δ_star_initial, Jac_W, δ_ref= globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel, calc_δ_star_initial, Jac_W, δ_ref, NormalizeMoments= globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -95,7 +95,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 
     prep_output = (
         U = U,
-        γ = usePMM ==1 ? γ_PMM : γ, 
+        γ = (usePMM ==1 || NormalizeMoments == 1) ? γ_PMM : γ, 
         θ_initial = θ_initial,
         numMoments = numMoments,
         file_name = file_name,
