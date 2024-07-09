@@ -10,8 +10,8 @@ function buildObjectsForMoments(
 	upper_moment_start_index = 1,
 	PMM = zeros(1),
 	σ_Moments = ones(1),
-	CDF_Moments = zeros(1),
 	Moments_CS = zeros(1),
+	CDF_Moments = zeros(1),
 	Ind_Moments = zeros(1),
 	IndCDF_Cells = Vector{Vector{Int}}(undef, 1),
 	SamplingWeights = ones(1))

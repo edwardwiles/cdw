@@ -181,12 +181,11 @@ function EK_moments!(K, G, θ, U, obj)
 	if useConfidenceIntervals == 1
 		D = size(τ, 1)
 
+		cInd = D^2
+		dInd = D^2 + D
 		if counterType != 1
 			cInd = D^2 + D - 1
 			dInd = D^2 + 2 * D - 1
-		else
-			cInd = D^2
-			dInd = D^2 + D
 		end
 
 		for im in 1:upper_moment_start_index-1
