@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel, calc_δ_star_initial, Jac_W, δ_ref, NormalizeMoments= globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel, calc_δ_star_initial, Jac_W, δ_ref, NormalizeMoments, useConfidenceIntervals, ConfidenceLevel= globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -67,19 +67,43 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
         end        
     end 
     
-    # index where outer loop moments start
-    outer_constr_index = numMoments + 1 - GravityMomentFirstApproach
+    
+    nOuterLoopMoments = (GravityMomentFirstApproach == 1) ? 1 : 0
+    outer_constr_index = numMoments + 1 - nOuterLoopMoments
+    numMomentInnerSimple = numMoments - nOuterLoopMoments
+    outer_constr_index_simple = outer_constr_index
+    inner_loop_last_moment_index = numMoments - nOuterLoopMoments
+    nTotalMoments = numMoments
+    inequality_index = Int64[]
+    lower_inequality_index = Int64[]
+    upper_moment_start_index = 1
+    complement_index = [0 0]  
+    
 
-    file_name = string("FD_",fakeData,"_Count_", counterType, "_NC_", D, "_bI", baseIndex, "_sG", GravityMomentFirstApproach, "_lG", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_O", momentOrder, "_bO",momentOrderForBaseIndex, "FF_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "IS_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "Fmu_", θConstant, "Uo_", UoModel, "_", Dates.format(now(), "y-m-d"), ".csv")
+    if useConfidenceIntervals == 1
+        inequality_index = collect(1:2*inner_loop_last_moment_index) 
+        outer_constr_index = 2*inner_loop_last_moment_index + 1
+        upper_moment_start_index = inner_loop_last_moment_index + 1
+        inner_loop_last_moment_index = outer_constr_index - 1
+        nTotalMoments = 2*(numMoments - nOuterLoopMoments) + nOuterLoopMoments
+        complement_index = hcat(collect(1:inner_loop_last_moment_index) , collect(inner_loop_last_moment_index+1:2*inner_loop_last_moment_index))
+    end
+
+    file_name = string("FD_",fakeData,"_Count_", counterType, "_NC_", D, "_bI", baseIndex, "_sG", GravityMomentFirstApproach, "_lG", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_O", momentOrder, "_bO",momentOrderForBaseIndex, "FF_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "IS_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "Fmu_", θConstant, "Uo_", UoModel, "MN", NormalizeMoments, "P", usePMM,"CS",useConfidenceIntervals, "_", Dates.format(now(), "y-m-d"), ".csv")
 
 
     PMM = zeros(numMoments)
     σ_Moments = ones(numMoments)
+    Moments_CS = zeros(numMoments, 2)
 
-    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output, data, counters.LPrime, counters.τPrime, Uσ, Ū, PMM, σ_Moments, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
+    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output, data, counters.LPrime, counters.τPrime, Uσ, Ū, numMoments, upper_moment_start_index, PMM, σ_Moments, Moments_CS, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
 
-    γ_PMM, δ_star_initial = γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_initial)
+    @show numMoments
+    @show numMomentInnerSimple
+    @show inequality_index
 
+    γ_Hat, δ_star_initial =  γHat(θ_initial, γ, U, numMoments,numMomentInnerSimple, outer_constr_index, outer_constr_index_simple, nTotalMoments, inequality_index, calc_δ_star_initial, file_name, useConfidenceIntervals, ConfidenceLevel, NormalizeMoments, complement_index)
+ 
 
     if δGridType == 0
         δ_grid =   vcat(δ_ref)
@@ -95,12 +119,15 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 
     prep_output = (
         U = U,
-        γ = (usePMM ==1 || NormalizeMoments == 1) ? γ_PMM : γ, 
+        γ = (usePMM ==1 || NormalizeMoments == 1 || useConfidenceIntervals == 1) ? γ_Hat : γ, 
         θ_initial = θ_initial,
         numMoments = numMoments,
         file_name = file_name,
         δ_grid = δ_grid_filtered,
-        outer_constr_index = outer_constr_index
+        inequality_index = inequality_index,
+        outer_constr_index = outer_constr_index,
+        nTotalMoments = nTotalMoments,
+        complement_index = complement_index
     )
 
     return prep_output

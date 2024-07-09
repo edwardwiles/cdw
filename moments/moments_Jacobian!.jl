@@ -1,8 +1,22 @@
-function EK_moments_Jacobian!(jac_K, jac_G, θ, U, obj)
+function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū = obj.γ
-	@unpack counterExplicit, counterType, θConstant, gravMoment, localGravityMoment, GravityMomentFirstApproach, sameMarginalsMoment, independenceMoment, momentOrder, momentOrderForBaseIndex, IndMomentOrder, OuterScaling, usePMM, UoModel, NormalizeMoments = indicators
+	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū, numMomentsSimple = obj.γ
+	@unpack counterExplicit,
+	counterType,
+	θConstant,
+	gravMoment,
+	localGravityMoment,
+	GravityMomentFirstApproach,
+	sameMarginalsMoment,
+	independenceMoment,
+	momentOrder,
+	momentOrderForBaseIndex,
+	IndMomentOrder,
+	OuterScaling,
+	usePMM,
+	UoModel,
+	NormalizeMoments = indicators
 
 	β = 0.01
 
@@ -67,34 +81,98 @@ function EK_moments_Jacobian!(jac_K, jac_G, θ, U, obj)
 		# only do this if theta / sigma ever vary, otherwise we precalculate
 		#UPow = copy(U)
 
-		hFunction_jacobian_copy_only!(jac_G, UPow, UσPow, wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
 		
 		UPow = zeros(eltype(γ), size(U))
 		UσPow = zeros(eltype(γ), size(U))
 		T = Threads.nthreads()
-		Threads.@threads for t = 1:T
+		Threads.@threads for t ∈ 1:T
 			ix0 = round(Int, (t - 1) / T * W) + 1
 			ix1 = round(Int, t / T * W)
-			@. UPow[ix0:ix1, :] = U[ix0:ix1, :].^(-μ)
-			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :].^(-μ)
-		
-			hFunction_jacobian_calculation!(@view(jac_G[ix0:ix1, :, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset, θConstant)
-			hFunctionCounter_jacobian!(@view(jac_K[ix0:ix1, :]), @view(jac_G[ix0:ix1, :, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime,  counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset, θConstant) # fill in G with counterfactual moments, fill in K 
+			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] .^ (-μ)
+			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] .^ (-μ)
+
+			hFunction_jacobian_calculation!(
+				@view(jac_G[ix0:ix1, :, :]),
+				@view(UPow[ix0:ix1, :]),
+				@view(UσPow[ix0:ix1, :]),
+				wHat,
+				τ,
+				σ,
+				γ,
+				Aod,
+				AodPow,
+				L,
+				P,
+				counterType,
+				gravMoment,
+				localGravityMoment,
+				GravityMomentFirstApproach,
+				μHat,
+				μ,
+				UoModel,
+				OuterScaling,
+				Aod_offset,
+				θConstant,
+			)
+			hFunctionCounter_jacobian!(
+				@view(jac_K[ix0:ix1, :]),
+				@view(jac_G[ix0:ix1, :, :]),
+				@view(UPow[ix0:ix1, :]),
+				@view(UσPow[ix0:ix1, :]),
+				wPrime,
+				τPrime,
+				σ,
+				γ_prime,
+				Aod,
+				AodPow,
+				LPrime,
+				counterType,
+				baseIndex,
+				μ,
+				UoModel,
+				OuterScaling,
+				Aod_offset,
+				θConstant,
+			) # fill in G with counterfactual moments, fill in K 
 		end
+		hFunction_jacobian_copy_only!(jac_G, UPow, UσPow, wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
 	else
 
-		
-		hFunction_jacobian_copy_only!(jac_G, U,  Uσ, wHat, τ, σ, γ, Aod, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
-		hFunctionCounter_jacobian!(jac_K, jac_G, U, Uσ, wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime,  counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset, θConstant)
-		
-		
+
+		hFunction_jacobian_copy_only!(jac_G, U, Uσ, wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
+		hFunctionCounter_jacobian!(jac_K, jac_G, U, Uσ, wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime, counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset, θConstant)
+
+
 		T = Threads.nthreads()
-		Threads.@threads for t = 1:T
+		@show T
+		Threads.@threads for t ∈ 1:T
 			ix0 = round(Int, (t - 1) / T * W) + 1
 			ix1 = round(Int, t / T * W)
-			hFunction_jacobian_calculation!(@view(jac_G[ix0:ix1, :, :]), @view(U[ix0:ix1, :]),  @view(Uσ[ix0:ix1, :]), wHat, τ, σ, γ, Aod, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset, θConstant)
+			hFunction_jacobian_calculation!(
+				@view(jac_G[ix0:ix1, :, :]),
+				@view(U[ix0:ix1, :]),
+				@view(Uσ[ix0:ix1, :]),
+				wHat,
+				τ,
+				σ,
+				γ,
+				Aod,
+				AodPow,
+				L,
+				P,
+				counterType,
+				gravMoment,
+				localGravityMoment,
+				GravityMomentFirstApproach,
+				μHat,
+				μ,
+				UoModel,
+				OuterScaling,
+				Aod_offset,
+				θConstant,
+			)
 		end
-	
+
 	end
 	# actually don't need to do anything for the same marginal moments, they have, by design zero jacobian
 	#=if sameMarginalsMoment == 1
@@ -127,11 +205,29 @@ function EK_moments_Jacobian!(jac_K, jac_G, θ, U, obj)
 		=#
 	end
 
-	# normalize the moments so we do not require useless precision 
 	if NormalizeMoments == 1
 		KNITRO_tol = 10^(-6)
-		for im ∈ 1:obj.d
+		for im ∈ 1:numMomentsSimple
 			@. jac_G[:, im, :] *= σ_Moments[im] > KNITRO_tol^2 ? 1 ./ σ_Moments[im] : 1
 		end
 	end
+
+
 end
+
+function EK_moments_Jacobian!(jac_K, jac_G, θ, U, obj)
+	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
+	# unpack the gamma (auxiliary parameters) vector
+
+	@unpack upper_moment_start_index, PMM, σ_Moments, Moments_CS, indicators = obj.γ
+	@unpack useConfidenceIntervals, usePMM, NormalizeMoments = indicators
+
+	EK_moments_Jacobian_Simple!(jac_K, @view(jac_G[:, upper_moment_start_index:end, :]), θ, U, obj)
+
+	if useConfidenceIntervals == 1
+		for im in 1:upper_moment_start_index-1
+			@. jac_G[:, im, :] = .-jac_G[:, upper_moment_start_index-1+im, :]
+		end
+	end
+end
+

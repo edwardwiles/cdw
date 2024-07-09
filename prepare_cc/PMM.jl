@@ -1,38 +1,62 @@
-function γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_initial)
+function γHat(θ_initial, γ, U, numMoments, numInnerMoments, outer_constr_index, outer_constr_index_simple, nTotalMoments, inequality_index, calc_δ_star_initial, file_name, useConfidenceIntervals, ConfidenceLevel, NormalizeMoments, complement_index)
 
 	W = size(U, 1)
+	# use the simplest object to calc moments at F* and theta initial
 	obj = PsiObjectiveBundleDelta(
-		#δ = 1,
-		#find_smallest = true,
 		γ = γ,
-		(moments!) = EK_moments!,
-		#moments_jacobian! = rust_moments_jacobian!,
+		(moments!) = EK_moments_simple!,
 		d = numMoments,
-		outer_constr_index = outer_constr_index,
+		outer_constr_index = outer_constr_index_simple,
 		inequality_index = Int64[],
 		l = size(θ_initial, 1),
 		U = U,
 		N = 100,# not used because we do not calculate jacobians
 		lower_limit = -50,
 		outer_loop_opt = "ek_outer_loop_options.opt",
-		inner_loop_opt = "ek_inner_loop_options.opt"
-		)
+		inner_loop_opt = "ek_inner_loop_options.opt",
+	)
 
 	G = zeros(W, numMoments)
 	K = zeros(W, 1)
 
-	EK_moments!(K, G, θ_initial, U, obj)
+	EK_moments_simple!(K, G, θ_initial, U, obj)
 
-	δ_star_initial = 0
-	if calc_δ_star_initial == 1
-		val, x, nStatus = inner_loop(obj, θ_initial)
+	PMM = mean(G, dims = 1)
+	σ_Moments = sqrt.(var(G, dims = 1) ./ W)
 
-		if nStatus ∈ [0, -100, -101, -103]
-			δ_star_initial = -val
-		else
-			δ_star_initial = 1e+10
+	# calculate the confidence set assuming normality of moment estimator
+	
+	Moments_CS = zeros(numInnerMoments, 2)
+	MomentsCovar = zeros(numInnerMoments, numInnerMoments)
+	if useConfidenceIntervals == 1
+
+		MomentsCovar = cov(@view(G[:, 1:numInnerMoments]), dims = 1) ./W
+
+		if NormalizeMoments == 1
+			for im1 in 1:numInnerMoments
+				for im2 in 1:numInnerMoments
+					MomentsCovar[im1, im2] = σ_Moments[im1] * σ_Moments[im2] > 0 ? MomentsCovar[im1, im2] / (σ_Moments[im1] * σ_Moments[im2]) : MomentsCovar[im1, im2]
+				end
+			end
 		end
+
+
+		# Put a variance of 1 for moments with zero variance, 
+		# this will have no incidence on the confidence interval, but will allow to do cholesky
+		# a better solution is to not have moments with exactly zeros (unused colums in the G matrix), but will need quite some work.
+		for im in 1:numInnerMoments
+			MomentsCovar[im, im] = MomentsCovar[im, im] == 0 ? 1 : MomentsCovar[im, im]
+		end
+
+		(c, s) = rectangular_confidence_set(MomentsCovar, ConfidenceLevel)
+
+		Moments_CS[:, 1] .= -c * s #lower bound
+		Moments_CS[:, 2] .= +c * s #upper bound
+		save_object(string("momentsCS_", file_name, ".jld2"), Moments_CS)
+		writedlm(string("momentsCS_", file_name), [Moments_CS[:,1] Moments_CS[:,2] PMM[1:numInnerMoments]], ',')
 	end
+
+
 
 	γ_PMM = (wHat = γ.wHat,
 		L = γ.L,
@@ -40,8 +64,10 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_i
 		τ = γ.τ,
 		τPrime = γ.τPrime,
 		P = γ.P,
-		PMM = mean(G, dims = 1),
-		σ_Moments = sqrt.(var(G, dims = 1) ./ W),
+		numMomentsSimple = γ.numMomentsSimple, 
+		PMM = PMM,
+		σ_Moments = σ_Moments,
+		Moments_CS = Moments_CS,
 		baseIndex = γ.baseIndex,
 		indicators = γ.indicators,
 		wPrimeHat = γ.wPrimeHat,
@@ -54,9 +80,38 @@ function γPMM(θ_initial, γ, U, numMoments, outer_constr_index, calc_δ_star_i
 		cHat = γ.cHat,
 		IndCDF_Cells = γ.IndCDF_Cells,
 		SamplingWeights = γ.SamplingWeights,
-		refIndex1 = γ.refIndex1)
+		refIndex1 = γ.refIndex1,
+		upper_moment_start_index = γ.upper_moment_start_index)
 
+	δ_star_initial = 0
+	if calc_δ_star_initial == 1
+		obj2 =
+			useConfidenceIntervals == 1 ? obj :
+			PsiObjectiveBundleDelta(
+				γ = γ_PMM,
+				(moments!) = EK_moments!,
+				d = nTotalMoments,
+				outer_constr_index = outer_constr_index,
+				inequality_index = inequality_index,
+				complement_index = complement_index,
+				l = size(θ_initial, 1),
+				U = U,
+				N = 100,# not used because we do not calculate jacobians
+				lower_limit = -50,
+				outer_loop_opt = "ek_outer_loop_options.opt",
+				inner_loop_opt = "ek_inner_loop_options.opt",
+			)
+		val, x, nStatus = inner_loop(obj, θ_initial)
 
+		if nStatus ∈ [0, -100, -101, -103]
+			δ_star_initial = -val
+		else
+			δ_star_initial = 1e+10
+		end
+	end
+
+	@show δ_star_initial
+	
 	return γ_PMM, δ_star_initial
 
 end

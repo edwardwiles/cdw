@@ -73,15 +73,18 @@ params = (
     useParallel=0, # 1 = parallelise the deltas in outer loop; 0 = do not 
     usePMM=0, # =1 adjust moments so they are exactly zero for F*, =0 do not.
     NormalizeMoments = 1, # =1 divide by moment std dev so all moments are on the same scale
+    useConfidenceIntervals = 1, # forces moments to be within a confidence interval (around zero)
+    ConfidenceLevel = 0.05, # confidence level for the moments being within the CI
     δGridType = 0, # 0: {1}, else: {0.01, 0.1, 0.5, 1, 2}
-    refIndex1 = 1,
-    OuterLoop =0,
-    UoModel = 1,
-    use_Jacobian = 1,
-    calc_δ_star_initial = 1,
-    Jac_W = 25000,
-    δ_ref = 4,
-
+    δ_ref = 4, # Grid = δ_ref*{1} or  δ_ref*{0.01, 0.1, 0.5, 1, 2}
+    refIndex1 = 1, # refIndex used for CDF conditions
+    OuterLoop =0, # =0 CC Inner, =1 CC Outer
+    UoModel = 1, # =1 Uo, =0 Uod  
+    use_Jacobian = 1, # calculate Jacobian analytically for OuterLoop 
+    calc_δ_star_initial = 1, # calculate the starting delta
+    Jac_W = 25000, # number of simulations for the Jacobian
+    theta_init = 0, # initial parameters based on a theta that is different from thetaHat
+    
     # Post CC Optimization tests
     runLFD = 1,
     runLFDCounterFactual = 1

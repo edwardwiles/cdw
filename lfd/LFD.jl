@@ -1,7 +1,7 @@
 function LFD(cc_output, prep_output, params)
 	# function that generate the LFD for a particular θ, by running the innerloop
 
-	@unpack δ_grid, file_name, θ_initial, numMoments, U, γ, outer_constr_index = prep_output
+	@unpack δ_grid, file_name, θ_initial, numMoments, nTotalMoments, U, γ, outer_constr_index, inequality_index, complement_index = prep_output
 	@unpack Θ_upper, Θ_lower = cc_output
 
 	D = length(γ.L)
@@ -15,7 +15,7 @@ function LFD(cc_output, prep_output, params)
 	for i ∈ 1:length(δ_grid)
 
 		# Lower LFD
-		G = zeros(W, numMoments)
+		G = zeros(W, nTotalMoments)
 		K = zeros(W, 1)
 		arg0 = zeros(W, 1)
 		LFD = zeros(W, 1)
@@ -26,12 +26,13 @@ function LFD(cc_output, prep_output, params)
 			γ = γ,
 			(moments!) = EK_moments!,
 			#moments_jacobian! = rust_moments_jacobian!,
-			d = numMoments,
+			d = nTotalMoments,
 			outer_constr_index = outer_constr_index,
-			inequality_index = Int64[],
+			inequality_index = inequality_index,
+			complement_index= complement_index,
 			l = size(θ_initial, 1),
 			U = U,
-			#N = 100,
+			N = 2500,
 			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
 			inner_loop_opt = "ek_inner_loop_options.opt"
@@ -50,7 +51,7 @@ function LFD(cc_output, prep_output, params)
 		@. LFD_lower[:, i] = LFD[:]
 
 		# upper LFD
-		G = zeros(W, numMoments)
+		G = zeros(W, nTotalMoments)
 		K = zeros(W, 1)
 		arg0 = zeros(W, 1)
 		LFD = zeros(W, 1)
@@ -61,12 +62,13 @@ function LFD(cc_output, prep_output, params)
 			γ = γ,
 			(moments!) = EK_moments!,
 			#moments_jacobian! = rust_moments_jacobian!,
-			d = numMoments,
+			d = nTotalMoments,
 			outer_constr_index = outer_constr_index,
-			inequality_index = Int64[],
+			inequality_index = inequality_index,
+			complement_index= complement_index,
 			l = size(θ_initial, 1),
 			U = U,
-			#N = 100,
+			N = 2500,
 			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
 			inner_loop_opt = "ek_inner_loop_options.opt"

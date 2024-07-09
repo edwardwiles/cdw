@@ -3,9 +3,7 @@ function callbackEval_and_ConsF_outer!(kc, cb, evalRequest, evalResult, userPara
 
     obj = userParams
     θ = evalRequest.x
-
     objSol, x, nStatus = inner_loop_internal(obj, θ)
-    
     evalResult.obj[1] = -objSol
 
     obj(x, constr = evalResult.c)
@@ -39,7 +37,6 @@ function callbackEval_and_ConsFG_outer!(kc, cb, evalRequest, evalResult, userPar
     θ = evalRequest.x
     objSol, x, nStatus = inner_loop_internal(obj, θ)
     evalResult.obj[1] = -objSol
-    
 
     obj(x, evalResult.objGrad, θ, constr = evalResult.c, jac = evalResult.jac)
     evalResult.objGrad .*= - 1.0
@@ -53,7 +50,7 @@ function callbackEval_and_ConsFG_outer!(kc, cb, evalRequest, evalResult, userPar
 end
 
 # Solve outer program using KNITRO
-function outer_loop(obj::ObjectiveBundle, θ_lb, θ_ub, θ_init)
+function outer_loop(obj::ObjectiveBundle, θ_lb, θ_ub, θ_init; output = false)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -63,7 +60,12 @@ function outer_loop(obj::ObjectiveBundle, θ_lb, θ_ub, θ_init)
     KNITRO.KN_set_var_lobnds_all(kc, θ_lb) # changed to _all
     KNITRO.KN_set_var_upbnds_all(kc, θ_ub) #
     KNITRO.KN_set_var_primal_init_values_all(kc, θ_init) # changed to _all
-
+    
+    #=
+    KNITRO.KN_set_var_lobnds(kc, θ_lb)
+    KNITRO.KN_set_var_upbnds(kc, θ_ub)
+    KNITRO.KN_set_var_primal_init_values(kc, θ_init)
+``=#
     cIndices = outer_loop_constraints!(kc, obj)
 
     if KNITRO.KN_get_int_param(kc, "eval_fcga") == 1
@@ -75,9 +77,7 @@ function outer_loop(obj::ObjectiveBundle, θ_lb, θ_ub, θ_init)
 
         # KNITRO is configured to evaluate the objective function and gradient in seperate calls
         # This is better for finite differences gradient calculations
-        #original
         cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, callbackEval_and_ConsF_outer!)
-     
         KNITRO.KN_set_cb_grad(kc, cb, callbackEval_and_ConsG_outer!,
             jacIndexCons = repeat(cIndices, inner=length(xIndices)),
             jacIndexVars = repeat(xIndices, outer=length(cIndices)))
@@ -86,64 +86,105 @@ function outer_loop(obj::ObjectiveBundle, θ_lb, θ_ub, θ_init)
 
     KNITRO.KN_set_cb_user_params(kc, cb, obj)
 
-  
     KNITRO.KN_solve(kc)
 
-  
     nStatus, κ_min, θ_min, lambda_ = KNITRO.KN_get_solution(kc)
-    KNITRO.KN_free(kc)
 
     if !obj.find_smallest
         κ_min *= -1.0
     end
 
-    return (κ_min, θ_min, nStatus)
+    if output
+
+        runtime = KNITRO.KN_get_solve_time_real(kc)
+        feas_error = KNITRO.KN_get_abs_feas_error(kc)
+        opt_error = KNITRO.KN_get_abs_opt_error(kc)
+        KNITRO.KN_free(kc)
+        return (κ_min, θ_min, nStatus, runtime, feas_error, opt_error, lambda_)
+
+    else
+
+        KNITRO.KN_free(kc)
+        return (κ_min, θ_min, nStatus, lambda_)
+
+    end
 
 end
 
-function outer_loop(obj::ObjectiveBundleConditional, θ_lb, θ_ub, θ_init)
+# Solve outer program using KNITRO with multi start
+function outer_loop_multi(obj::ObjectiveBundle, θ_lb, θ_ub, θ_init, maxsolves, startptrange)
 
-    kc = KNITRO.KN_new()
-    KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
+    if maxsolves == 1
 
-    xIndices = KNITRO.KN_add_vars(kc, length(θ_init))
+        (κ_min, θ_min, nStatus, lambda_) = outer_loop(obj, θ_lb, θ_ub, θ_init)
+        return (κ_min, θ_min, nStatus, lambda_)
 
-    KNITRO.KN_set_var_lobnds(kc, θ_lb)
-    KNITRO.KN_set_var_upbnds(kc, θ_ub)
-    KNITRO.KN_set_var_primal_init_values(kc, θ_init)
+    else
 
-    cIndices, jacIndexCons, jacIndexVars = outer_loop_constraints!(kc, obj)
+        Θ = zeros(obj.l, maxsolves)
+        κ = zeros(maxsolves)
+        Λ = zeros(outer_loop_lambda_length(obj), maxsolves)
+        flag = zeros(Int, maxsolves)
 
-    cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, callbackEval_and_ConsF_outer!)
+        Random.seed!(1234)
+        for i in 1:maxsolves
+            obj.x .= NaN # Reset inner loop starting value so reproducible if using warm start
+            θ_init_rand = θ_init .+ (i > 1) .* (rand(obj.l) * 2.0 .- 1.0) .* startptrange
+            θ_init_rand = max.(min.(θ_init_rand, θ_ub), θ_lb)
+            (κ[i], Θ[:, i], flag[i], runtime, feas_error, opt_error, Λ[:, i]) = outer_loop(obj, θ_lb, θ_ub, θ_init_rand, output = true)
+            println("Iter:  ", i, "   Flag:  ", (flag[i] == 0 ? "   0" : flag[i]), "   Val:  ", round(κ[i], digits = 5), "   Time:  ", round(runtime, digits = 2) , "   Opt Err:  ", round(opt_error, sigdigits = 5), "   Feas Err:  ", round(feas_error, sigdigits = 5)); flush(stdout)
+        end
+        println(); flush(stdout)
 
-    KNITRO.KN_set_cb_grad(kc, cb, callbackEval_and_ConsG_outer!,
-        nV = length(xIndices),
-        objGradIndexVars = xIndices,
-        jacIndexCons = jacIndexCons,
-        jacIndexVars = jacIndexVars)
+        if !obj.find_smallest
+            κ .*= -1.0
+        end
 
-    KNITRO.KN_set_cb_user_params(kc, cb, obj)
+        # locally optimal solution
+        if sum(flag .== 0) > 0
+            ix = collect(1:maxsolves)[(κ .== minimum(κ[flag .== 0]))][1]
+            (κ_min, θ_min, nStatus, lambda_) = (κ[ix], Θ[:, ix], flag[ix], Λ[:, ix])
+        # feasible, near-optimal solution
+        elseif sum(in([-100, -101, -103]).(flag)) > 0
+            ix = collect(1:maxsolves)[(κ .== minimum(κ[in([-100, -101, -103]).(flag)]))][1]
+            (κ_min, θ_min, nStatus, lambda_) = (κ[ix], Θ[:, ix], flag[ix], Λ[:, ix])
+        # feasible, but reached iteration limit
+        elseif sum(in([-400, -401, -402]).(flag)) > 0
+            ix = collect(1:maxsolves)[(κ .== minimum(κ[in([-400, -401, -402]).(flag)]))][1]
+            (κ_min, θ_min, nStatus, lambda_) = (κ[ix], Θ[:, ix], flag[ix], Λ[:, ix])
+        # fail to find any feasible point
+        else
+            κ_min = 1e10
+            θ_min = θ_init
+            nStatus = 999
+            lambda_ = NaN * zeros(outer_loop_lambda_length(obj))
+        end
 
-    KNITRO.KN_solve(kc)
+        if !obj.find_smallest
+            κ_min *= -1.0
+        end
 
-    nStatus, κ_min, θ_min, lambda_ = KNITRO.KN_get_solution(kc)
-    KNITRO.KN_free(kc)
+        return (κ_min, θ_min, nStatus, lambda_)
 
-    if !obj.find_smallest
-        κ_min *= -1.0
     end
+end
 
-    return (κ_min, θ_min, nStatus)
+function outer_loop_lambda_length(obj::Union{PsiObjectiveBundleExplicit, PsiObjectiveBundleDelta, KLObjectiveBundleExplicit, KLObjectiveBundleDelta})
+    return obj.l + obj.d - obj.outer_constr_index + 1
+end
 
+function outer_loop_lambda_length(obj::Union{PsiObjectiveBundleImplicit, KLObjectiveBundleImplicit})
+    return obj.l + obj.d - obj.outer_constr_index + 2
 end
 
 # Set up constraints for outer optimization
 function outer_loop_constraints!(kc, obj::Union{PsiObjectiveBundleExplicit, PsiObjectiveBundleDelta, KLObjectiveBundleExplicit, KLObjectiveBundleDelta})
 
     cIndices = KNITRO.KN_add_cons(kc, obj.d - obj.outer_constr_index + 1)
-    #KNITRO.KN_set_con_eqbnds(kc, zeros(obj.d - obj.outer_constr_index + 1))
     #changed to fit 
     KNITRO.KN_set_con_eqbnds(kc, obj.d - obj.outer_constr_index +1,cIndices[1:obj.d - obj.outer_constr_index + 1], zeros(obj.d - obj.outer_constr_index + 1))
+ 
+    #KNITRO.KN_set_con_eqbnds(kc, zeros(obj.d - obj.outer_constr_index + 1))
     return cIndices
 
 end
@@ -151,54 +192,14 @@ end
 function outer_loop_constraints!(kc, obj::Union{PsiObjectiveBundleImplicit, KLObjectiveBundleImplicit})
 
     cIndices = KNITRO.KN_add_cons(kc, obj.d - obj.outer_constr_index + 2)
-    
     KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1e10 * obj.δ)
-    
-    #original
-    #KNITRO.KN_set_con_eqbnds(kc, cIndices[2:obj.d - obj.outer_constr_index + 2], zeros(obj.d - obj.outer_constr_index + 1))
     
     #changed to fit 
     KNITRO.KN_set_con_eqbnds(kc, obj.d - obj.outer_constr_index +1,cIndices[2:obj.d - obj.outer_constr_index + 2], zeros(obj.d - obj.outer_constr_index + 1))
     
+    
+    #KNITRO.KN_set_con_eqbnds(kc, cIndices[2:obj.d - obj.outer_constr_index + 2], zeros(obj.d - obj.outer_constr_index + 1))
     return cIndices
-
-end
-
-function outer_loop_constraints!(kc, obj::Union{PsiObjectiveBundleConditionalExplicit, PsiObjectiveBundleConditionalDelta, KLObjectiveBundleConditionalExplicit, KLObjectiveBundleConditionalDelta})
-
-    cIndices = KNITRO.KN_add_cons(kc, obj.d - obj.outer_constr_index + 1)
-    KNITRO.KN_set_con_eqbnds(kc, zeros(obj.d - obj.outer_constr_index + 1))
-
-    jacIndexCons = repeat(cIndices, inner = obj.dϑ)
-    jacIndexVars = Int64[]
-    for i in 1:obj.ncov
-        jacIndexVars = vcat(jacIndexVars, repeat(make_active_indices(obj, i), outer = obj.dc))
-    end
-    jacIndexVars .-= 1
-    jacIndexVars = convert(Array{Int32}, jacIndexVars)
-
-    return cIndices, jacIndexCons, jacIndexVars
-
-end
-
-function outer_loop_constraints!(kc, obj::Union{PsiObjectiveBundleConditionalImplicit, KLObjectiveBundleConditionalImplicit})
-
-    cIndices = KNITRO.KN_add_cons(kc, obj.d - obj.outer_constr_index + 1 + obj.ncov)
-    KNITRO.KN_set_con_upbnds(kc, cIndices[1:obj.ncov], 1e10 * obj.δ * ones(obj.ncov))
-    KNITRO.KN_set_con_eqbnds(kc, cIndices[obj.ncov+1:obj.d - obj.outer_constr_index + 1 + obj.ncov], zeros(obj.d - obj.outer_constr_index + 1))
-
-    jacIndexCons = repeat(cIndices, inner = obj.dϑ)
-    jacIndexVars = Int64[]
-    for i in 1:obj.ncov
-        jacIndexVars = vcat(jacIndexVars, make_active_indices(obj, i))
-    end
-    for i in 1:obj.ncov
-        jacIndexVars = vcat(jacIndexVars, repeat(make_active_indices(obj, i), outer = obj.dc))
-    end
-    jacIndexVars .-= 1
-    jacIndexVars = convert(Array{Int32}, jacIndexVars)
-
-    return cIndices, jacIndexCons, jacIndexVars
 
 end
 
@@ -212,6 +213,7 @@ function calculate_jac_θ!(obj::ObjectiveBundle, θ)
     else
         obj.moments_jacobian!(@view(obj.jac_h[1:obj.N, 1, :]), select_jac_g_from_jac_h(obj, obj.jac_h), θ, @view(obj.U[1:obj.N, :]), obj)
     end
+
 end
 
 function calculate_jac_θ_autodiff!(obj::ObjectiveBundle, θ)
@@ -241,6 +243,7 @@ function calculate_grad_k!(g, obj::ObjectiveBundle, θ)
         obj.moments_jacobian!(jac_kk, select_jac_g_from_jac_h(obj, jac_HH), θ, @view(obj.U[1:2, :]), obj)
         g .= jac_kk[1, :]
     end
+
 end
 
 function calculate_grad_k_autodiff!(g, obj::ObjectiveBundle, θ)
@@ -253,118 +256,5 @@ function calculate_grad_k_autodiff!(g, obj::ObjectiveBundle, θ)
    end
 
    ForwardDiff.gradient!(g, f, θ, ForwardDiff.GradientConfig(f, θ), Val{true}())
-
-end
-
-# Calculates the gradient of implicit-dependence counterfactual k with respect to θ
-function calculate_grad_k!(g, obj::ObjectiveBundleConditional, θ)
-
-    # default to autodiff if no analytical jacobian is passed
-    if obj.moments_jacobian! == error
-        calculate_grad_k_autodiff!(g, obj, θ)
-    else
-        @unpack ncov, dd, dϑ = obj
-        jac_kk = zeros(2, dϑ)
-        jac_GG = zeros(2, 1 + dd, dϑ)
-        for i in 1:ncov
-            active_indices = make_active_indices(obj, i)
-            obj.moments_jacobian!(jac_kk, jac_GG, θ, @view(obj.U[1:2, :]), obj, index = i)
-            g[active_indices] .= jac_kk[1, :]
-        end
-    end
-
-end
-
-function calculate_grad_k_autodiff!(g, obj::ObjectiveBundleConditional, θ)
-
-   f = θ -> begin
-       kk = zeros(eltype(θ), 2, obj.ncov)
-       HH = zeros(eltype(θ), 2, size(obj.H)[2])
-       obj.moments!(kk, select_G_from_H(obj, HH), θ, @view(obj.U[1:2, :]), obj)
-       return kk[1, 1]
-   end
-
-   ForwardDiff.gradient!(g, f, θ, ForwardDiff.GradientConfig(f, θ), Val{true}())
-
-end
-
-# Calculates the Jacobian of moments with respect to a subvector of θ indexed by
-# active_indices and a subset of moments indexed by moment_indices at first N draws
-function calculate_jac_θ_subvec!(obj::ObjectiveBundleConditional, θ, i, nonzero_moments)
-
-    # default to autodiff if no analytical jacobian is passed
-    if obj.moments_jacobian! == error
-        calculate_jac_θ_subvec_autodiff!(obj, θ, i, nonzero_moments)
-    else
-        obj.moments_jacobian!(@view(obj.jac_h[1:obj.N, 1, :]), @view(obj.jac_h[1:obj.N, 2:end, :]), θ, @view(obj.U[1:obj.N, :]), obj, index = i)
-        moment_indices, moment_indices_jac_h, slack_indices_jac_h = make_active_moments(obj, i, nonzero_moments)
-        @views obj.jac_h[:, slack_indices_jac_h, :] .= 0.0
-    end
-
-end
-
-function calculate_jac_θ_subvec_autodiff!(obj::ObjectiveBundleConditional, θ, i, nonzero_moments)
-
-    @unpack ncov, var_index, dm, dc, outer_constr_index = obj
-
-    active_indices = make_active_indices(obj, i)
-    moment_indices, moment_indices_jac_h, slack_indices_jac_h = make_active_moments(obj, i, nonzero_moments)
-
-    f = (h, ϑ) -> begin
-        θθ = zeros(eltype(ϑ), obj.l)
-        @views θθ[active_indices] .= ϑ
-        @views θθ[setdiff(1:obj.l, active_indices)] .= θ[setdiff(1:obj.l, active_indices)]
-        obj.moments!(@view(obj.HH[:, 1:obj.ncov]), select_G_from_H(obj, obj.HH), θθ, @view(obj.U[1:obj.N, :]), obj, index = i)
-        h .= @view(obj.HH[1:obj.N, moment_indices])
-    end
-
-    @views ForwardDiff.jacobian!(
-        reshape(obj.jac_h[:, moment_indices_jac_h, :], obj.N * length(moment_indices_jac_h), length(active_indices)),
-        f,
-        obj.H[1:obj.N, moment_indices],
-        θ[active_indices],
-        ForwardDiff.JacobianConfig(f, obj.H[1:obj.N, moment_indices], θ[active_indices]), Val{true}())
-
-    @views obj.jac_h[:, slack_indices_jac_h, :] .= 0.0
-
-end
-
-# Make active parameter indices for covariate value i
-function make_active_indices(obj::ObjectiveBundleConditional, i)
-
-    return vcat(findall(obj.var_index .== 0), findall(obj.var_index .== i))
-
-end
-
-# Make active H and jacobian indices for covariate value i
-function make_active_moments(obj::KLObjectiveBundleConditional, i, nonzero_moments)
-
-    @unpack ncov, d, dm, dc, outer_constr_index = obj
-
-    moment_indices = vcat(i, nonzero_moments .+ ((i-1) * dm + ncov))
-    if outer_constr_index <= d
-        moment_indices = vcat(moment_indices, ncov*(1+dm)+(i-1)*dc+1:ncov*(1+dm)+i*dc)
-    end
-
-    moment_indices_jac_h = vcat(1, nonzero_moments .+ 1, dm+2:dm+1+dc)
-    slack_indices_jac_h = setdiff(1:dm, nonzero_moments) .+ 1
-
-    return moment_indices, moment_indices_jac_h, slack_indices_jac_h
-
-end
-
-function make_active_moments(obj::PsiObjectiveBundleConditional, i, nonzero_moments)
-
-    @unpack ncov, d, dm, dc, outer_constr_index = obj
-
-    moment_indices = vcat(i, nonzero_moments .+ ((i-1) * (dm + 1) + ncov + 1))
-    if outer_constr_index <= d
-        moment_indices = vcat(moment_indices, ncov*(2+dm)+(i-1)*dc+1:ncov*(2+dm)+i*dc)
-    end
-
-    moment_indices_jac_h = vcat(1, nonzero_moments .+ 1, dm+2:dm+1+dc)
-    slack_indices_jac_h = setdiff(1:dm, nonzero_moments) .+ 1
-
-    return moment_indices, moment_indices_jac_h, slack_indices_jac_h
 
 end

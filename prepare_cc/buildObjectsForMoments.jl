@@ -6,9 +6,12 @@ function buildObjectsForMoments(
 	τPrime,
 	Uσ,
 	Ū,
+	numMomentsSimple,
+	upper_moment_start_index = 1,
 	PMM = zeros(1),
 	σ_Moments = ones(1),
 	CDF_Moments = zeros(1),
+	Moments_CS = zeros(1),
 	Ind_Moments = zeros(1),
 	IndCDF_Cells = Vector{Vector{Int}}(undef, 1),
 	SamplingWeights = ones(1))
@@ -30,13 +33,18 @@ function buildObjectsForMoments(
 	OuterScaling,
 	usePMM,
 	UoModel,
-	NormalizeMoments =
+	NormalizeMoments,
+	useConfidenceIntervals =
 		globParams
-	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
+	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat, Aod_initial = prestep_output
 	@unpack λData, LData, τData = data
+
+
 
 	D = length(LData)
 
+	@show reshape(Aod_initial, (D,D))
+	
 	indicators = (counterExplicit = counterExplicit,
 		counterType = counterType,
 		θConstant = θConstant,
@@ -51,7 +59,8 @@ function buildObjectsForMoments(
 		OuterScaling = OuterScaling,
 		usePMM = usePMM,
 		UoModel = UoModel,
-		NormalizeMoments = NormalizeMoments)
+		NormalizeMoments = NormalizeMoments,
+		useConfidenceIntervals = useConfidenceIntervals)
 
 	# remove the entry of w' that is the wage we are normalising to 1
 	# as no point in optimising over this (will add it back inside the moment function)
@@ -64,12 +73,12 @@ function buildObjectsForMoments(
 
 
 		if OuterScaling == 1 # Aod Model
-			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2))
+			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, Aod_initial)
 
 			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, ones(D^2), range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, Aod_initial, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
 			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 # We will need to calculate E[ln ̄U]
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, ones(D^2), zeros(D^2))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, Aod_initial, zeros(D^2))
 			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
@@ -103,6 +112,8 @@ function buildObjectsForMoments(
 			IndCDF_Cells = IndCDF_Cells,
 			SamplingWeights = SamplingWeights,
 			refIndex1 = refIndex1,
+			upper_moment_start_index = upper_moment_start_index,
+			numMomentsSimple = numMomentsSimple
 		)
 		return γ, θ_initial
 
@@ -110,12 +121,12 @@ function buildObjectsForMoments(
 		θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
 
 		if OuterScaling == 1 # Aod Model
-			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2))
+			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], Aod_initial)
 
 			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, ones(D^2), range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, Aod_initial, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
 			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 # We will need to calculate E[ln ̄U]
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2), zeros(D^2))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], Aod_initial, zeros(D^2))
 			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
@@ -139,6 +150,7 @@ function buildObjectsForMoments(
 			P = reshape(λData', (1, D^2)),
 			PMM = PMM,
 			σ_Moments = σ_Moments,
+			Moments_CS = Moments_CS,
 			baseIndex = baseIndex,
 			indicators = indicators,
 			wPrimeHat = wPrimeHat,
@@ -152,6 +164,8 @@ function buildObjectsForMoments(
 			IndCDF_Cells = IndCDF_Cells,
 			SamplingWeights = SamplingWeights,
 			refIndex1 = refIndex1,
+			upper_moment_start_index = upper_moment_start_index,
+			numMomentsSimple = numMomentsSimple
 		)
 
 		return γ, θ_initial

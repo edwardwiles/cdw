@@ -12,6 +12,7 @@ abstract type PsiObjectiveBundle <: ObjectiveBundle end
     d                   ::Int64                                                     # number of moments in g
     l                   ::Int64                                                     # number of elements in θ
     inequality_index    ::Array{Int64,1}                                            # indices of moments in g that are inequalities, not equalities. May be empty: `Int64[]`
+    complement_index    ::Array{Int64,2}   = [0 0]                                  # for projection inference, inidces of moments in g formed using [lower bounds, upper bounds] for CS for P_2
     U                   ::Array{Float64,2}                                          # random draws of U, each draw in one row
     M                   ::Int64            = size(U)[1]                             # number of random draws of U
 
@@ -20,8 +21,8 @@ abstract type PsiObjectiveBundle <: ObjectiveBundle end
     inner_loop_opt      ::String                                                    # path to the KNITRO options file
     outer_loop_opt      ::String                                                    # path to the KNITRO options file
     lower_limit         ::Float64          = -KNITRO.KN_INFINITY                    # lower limit for objective function, where applicable
-    use_cached_x        ::Bool             = true                                   # use cached (η, ζ, λ) values as starting value for the inner loop
-    η_min               ::Float64          = 1e-6                                   # truncate η away from zero to avoid numerical instabilities
+    use_cached_x        ::Bool             = false                                  # use cached (η, ζ, λ) values as starting value for the inner loop
+    η_min               ::Float64          = 1e-120                                 # truncate η away from zero to avoid numerical instabilities
 
     # gradient subsampling options
     N                   ::Int64            = M
@@ -133,6 +134,7 @@ end
     d                  	::Int64                                                     # number of moments in g
     l                   ::Int64                                                     # number of elements in θ
     inequality_index   	::Array{Int64,1}                                            # indices of moments in g that are inequalities, not equalities. May be empty: `Int64[]`
+    complement_index    ::Array{Int64,2}   = [0 0]                                  # for projection inference, inidces of moments in g formed using [lower bounds, upper bounds] for CS for P_2
     U                   ::Array{Float64,2}                                          # random draws of U, each draw in one row
     M                   ::Int64            = size(U)[1]                             # number of random draws of U
 
@@ -141,7 +143,7 @@ end
     inner_loop_opt      ::String                                                    # path to the KNITRO options file
     outer_loop_opt      ::String                                                    # path to the KNITRO options file
     lower_limit         ::Float64          = -KNITRO.KN_INFINITY                    # lower limit for objective function, where applicable
-    use_cached_x        ::Bool             = true                                   # use cached (ζ, λ) values as starting value for the inner loop
+    use_cached_x        ::Bool             = false                                  # use cached (ζ, λ) values as starting value for the inner loop
 
     # divergence
     Psi!                ::Function         = Psi!
@@ -259,6 +261,7 @@ end
     d                  	::Int64                                                     # number of moments in g
     l                   ::Int64                                                     # number of elements in θ
     inequality_index   	::Array{Int64,1}                                            # indices of moments in g that are inequalities, not equalities. May be empty: `Int64[]`
+    complement_index    ::Array{Int64,2}   = [0 0]                                  # for projection inference, inidces of moments in g formed using [lower bounds, upper bounds] for CS for P_2
     U                   ::Array{Float64,2}                                          # random draws of U, each draw in one row
     M                   ::Int64            = size(U)[1]                             # number of random draws of U
 
@@ -267,7 +270,7 @@ end
     inner_loop_opt      ::String                                                    # path to the KNITRO options file
     outer_loop_opt      ::String                                                    # path to the KNITRO options file
     lower_limit         ::Float64          = -KNITRO.KN_INFINITY                    # lower limit for objective function, where applicable
-    use_cached_x        ::Bool             = true                                   # use cached (ζ, λ) values as starting value for the inner loop
+    use_cached_x        ::Bool             = false                                  # use cached (ζ, λ) values as starting value for the inner loop
 
     # divergence
     Psi!                ::Function         = Psi!

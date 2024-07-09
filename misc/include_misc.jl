@@ -8,3 +8,5 @@ include("indicative.jl") # calculates the indicative function
 include("doubleDiff.jl") # double difference function for gravity regressions 
 
 include("checkParams.jl") # throws an error if trying to impose impossible combination of restrictions 
+
+include("rectangular_confidence_set.jl") # calculates the confidence sets assuming normality of moment estimators

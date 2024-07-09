@@ -23,21 +23,13 @@ export outer_loop,
        PsiObjectiveBundleExplicit,
        PsiObjectiveBundleImplicit,
        PsiObjectiveBundleDelta,
-       KLObjectiveBundleConditionalExplicit,
-       KLObjectiveBundleConditionalImplicit,
-       KLObjectiveBundleConditionalDelta,
-       PsiObjectiveBundleConditionalExplicit,
-       PsiObjectiveBundleConditionalImplicit,
-       PsiObjectiveBundleConditionalDelta,
        master_cc_algo,
-       dPsi!,
+       dPsi!
 
 include("Psi.jl")
 include("ObjectiveBundle.jl")
 include("KLObjectiveBundle.jl")
 include("PsiObjectiveBundle.jl")
-include("KLObjectiveBundleConditional.jl")
-include("PsiObjectiveBundleConditional.jl")
 include("inner_loop_functions.jl")
 include("outer_loop_functions.jl")
 include("local_sensitivity.jl")

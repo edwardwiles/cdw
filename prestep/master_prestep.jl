@@ -17,7 +17,7 @@ function master_prestep(data, counters, globalParams)
     D = globalParams.D
 
     # Step 1: Estimate thetaHat via gravity or prespecified
-    if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
+   if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
         deltaLambda = doubleDiff(lambda)
         deltaTau = doubleDiff(tau)
         thetaHat = -sum(deltaLambda .* deltaTau) ./ sum(deltaTau .* deltaTau)
@@ -45,17 +45,26 @@ function master_prestep(data, counters, globalParams)
         wPrimeHat[:] = wPrimeHat ./ wPrimeHat[baseIndex] # normalise 
     end
 
+    
+    # Step 5: compute the A_od (outerscaling), if we want to start from a decentered theta_init != thetaHat
+    additional_theta = globalParams.theta_init == 0 ?  thetaHat :  globalParams.theta_init
+    AHat_additional = (((wHat .* tau) ./ (wHat[1, 1] .* tau[1, :]')) .^ (additional_theta)) .* (lambda ./ lambda[1, :]')
+    cHat_additional = AHat_additional .^ (-1) # we define c as 1/A 
+    
+    Aod_initial = cHat ./ (cHat_additional) .^(thetaHat/additional_theta)
     # Step 5: Compute gammaHat and gammaPrimeHat
-    gammaHat = computeGamma(AHat, tau, wHat, thetaHat, sigma, L)
-    gammaPrimeHat = computeGamma(AHat, tauPrime, wPrimeHat, thetaHat, sigma, LPrime)
+    gammaHat = computeGamma(AHat, tau, wHat, additional_theta, sigma, L)
+    gammaPrimeHat = computeGamma(AHat, tauPrime, wPrimeHat, additional_theta, sigma, LPrime)
 
+    
     output = (μHat= 1 ./ thetaHat,
         wHat=wHat[:],
         cHat=cHat,
         λPrime=lambdaPrime,
         wPrimeHat=wPrimeHat[:],
         γHat=gammaHat[:],
-        γPrimeHat=gammaPrimeHat[:])
+        γPrimeHat=gammaPrimeHat[:],
+        Aod_initial = reshape(Aod_initial, D^2)[:])
 
     return output
 end
