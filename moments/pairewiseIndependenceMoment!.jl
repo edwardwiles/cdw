@@ -24,6 +24,14 @@ function pairewiseIndependenceMoment!(Ū, G, D, η, Ind_Moments, IndMomentOrder
 	end
 end
 
+function pairewiseIndependenceMoment_indices_to_remove_from_inequality(G, D, Ind_Moments, IndMomentOrder, offset, UoModel)
+	K_ = size(Ind_Moments, 2)
+	number_of_correlation_pairs = (UoModel== 1 ? 1 : D) * floor(Int, D * (D - 1) / 2)
+	end_index = size(G, 2)
+	# mean, CDF[i], we remove end-index
+	return vcat(end_index-offset, end_index-offset-1-K_+number_of_correlation_pairs+1:end_index-offset-1-K_+number_of_correlation_pairs+IndMomentOrder)
+end
+
 function pairewiseIndependenceMoment_jac!(Ū, jac_G, D, η, Ind_Moments, IndMomentOrder, IndCDF_Cells, ν, offset, refIndex1, η_index, UoModel)
 	# imposes zero coreelation between Uods, implementation used cached realizations
 	# E[U(ref,ref)] = η

@@ -1,7 +1,7 @@
 
 function precalcIndependence(Ū, params)
 
-	@unpack W, D, baseIndex, SamplingWeight, IndMomentOrder, UoModel = params
+	@unpack W, D, baseIndex, SamplingWeight, IndMomentOrder, UoModel, refIndex1 = params
 
 	Ind_Moments = zeros(1, 1)
 	IndCDF_Cells = Vector{Vector{Int}}(undef, 1)
@@ -52,14 +52,14 @@ function precalcIndependence(Ū, params)
 	# Joint CDF = Product of Marginal CFDs
 
 	IndCDF_K = range(1, IndMomentOrder, IndMomentOrder)
-	IndCDF_X = quantile(Ū[:, 1] .* SamplingWeight[:], range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+	IndCDF_X = quantile(@view(Ū[:, refIndex1]) .* SamplingWeight[:], range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
 
 	# CDF U11
 	offset = UoModel == 0 ? D * (D^2 - floor(Int, D * (1 + D) / 2)) : (D^2 - floor(Int, D * (1 + D) / 2))
 	cell_size = size(IndCDF_X, 1)
 	for ω ∈ 1:W
 		@inbounds for i ∈ 1:cell_size
-			Ind_Moments[ω, offset+i] = (Ū[ω, 1] < IndCDF_X[i]) ? 1 : 0
+			Ind_Moments[ω, offset+i] = (Ū[ω, refIndex1] < IndCDF_X[i]) ? 1 : 0
 		end
 	end
 

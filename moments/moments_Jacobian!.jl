@@ -139,7 +139,7 @@ function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 	else
 
 
-		hFunction_jacobian_copy_only!(jac_G, U, Uσ, wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
+		hFunction_jacobian_copy_only!(jac_G, U,Uσ, wHat, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset)
 		hFunctionCounter_jacobian!(jac_K, jac_G, U, Uσ, wPrime, τPrime, σ, γ_prime, Aod, AodPow, LPrime, counterType, baseIndex, μ, UoModel, OuterScaling, Aod_offset, θConstant)
 
 
@@ -194,7 +194,7 @@ function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 			offset += sameMarginalsMoment * (2 * momentOrderForBaseIndex * D + 2 * D)
 		end
 
-		pairewiseIndependenceMoment_jac!(Ū, jac_G, D, ηk, Ind_Moments, IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, η_index, UoModel)
+		pairewiseIndependenceMoment_jac!(Ū, jac_G, D, ηk, @view(Ind_Moments[1:W, :]), IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, η_index, UoModel)
 		#=
 		T = Threads.nthreads()
 		Threads.@threads for t = 1:T

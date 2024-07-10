@@ -133,7 +133,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	if sameMarginalsMoment == 1
 		offset = gravMoment + localGravityMoment * ((D - 1) * D + D * (D - 1) * (D - 2)) + GravityMomentFirstApproach
 		CDF_Moments_Size = size(CDF_Moments, 2)
-		@. G[:, end-offset-CDF_Moments_Size+1:end-offset] = CDF_Moments[1:W, :]
+		@. G[:, end-offset-CDF_Moments_Size+1:end-offset] =CDF_Moments[1:W, :]
 	end
 
 	if independenceMoment == 1
@@ -146,8 +146,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		else
 			offset += sameMarginalsMoment * (2 * momentOrderForBaseIndex * D + 2 * D)
 		end
-		pairewiseIndependenceMoment!(Ū, G, D, ηk, Ind_Moments, IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, UoModel, W)
-
+		pairewiseIndependenceMoment!(Ū, G, D, ηk, @view(Ind_Moments[1:W,:]), IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, UoModel, W)
 	end
 
 	# normalize the moments so we do not require useless precision 
@@ -173,8 +172,8 @@ end
 
 function EK_moments!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
-	@unpack upper_moment_start_index, τ,baseIndex, PMM, σ_Moments, Moments_CS, SamplingWeights, indicators = obj.γ
-	@unpack useConfidenceIntervals, usePMM, NormalizeMoments, counterType = indicators
+	@unpack upper_moment_start_index, τ, baseIndex, PMM, σ_Moments, Moments_CS, SamplingWeights, indicators, Ind_Moments = obj.γ
+	@unpack useConfidenceIntervals, usePMM, NormalizeMoments, counterType, independenceMoment = indicators
 
 	EK_moments_simple!(K, @view(G[:, upper_moment_start_index:end]), θ, U, obj)
 
@@ -187,11 +186,19 @@ function EK_moments!(K, G, θ, U, obj)
 			cInd = D^2 + D - 1
 			dInd = D^2 + 2 * D - 1
 		end
+		remove_moments = vcat(cInd+1:cInd+D, dInd+1:dInd+D)
+
+		if independenceMoment == 1
+			remove_ind_moments = pairewiseIndependenceMoment_indices_to_remove_from_inequality(@view(G[:, upper_moment_start_index:end]), D, Ind_Moments, IndMomentOrder, offset, UoModel)
+			remove_moments = vcat(remove_moments, remove_ind_moments)
+		end
 
 		for im in 1:upper_moment_start_index-1
-		 is_not_gamma_moment = (im ∉ cInd+1:cInd+D && im ∉ dInd+1:dInd+D) ? 1 : 0 #gamma is actually a gamma hat.
-		 @. G[:, upper_moment_start_index-1+im] += is_not_gamma_moment*(-1) .* Moments_CS[im, 2]
-		 @. G[:, im] = is_not_gamma_moment*( Moments_CS[im, 1] - Moments_CS[im, 2]) .- G[:, upper_moment_start_index-1+im]
+			keep_inequality_moment = im ∉ remove_moments ? 1 : 0
+			@. G[:, upper_moment_start_index-1+im] += keep_inequality_moment * (-1) .* Moments_CS[im, 2]
+			@. G[:, im] = keep_inequality_moment * (Moments_CS[im, 1] - Moments_CS[im, 2]) .- G[:, upper_moment_start_index-1+im]
 		end
+
+
 	end
 end
