@@ -1,4 +1,21 @@
-function γHat(θ_initial, γ, U, numMoments, numInnerMoments, outer_constr_index, outer_constr_index_simple, nTotalMoments, inequality_index, calc_δ_star_initial, file_name, useConfidenceIntervals, ConfidenceLevel, NormalizeMoments, complement_index)
+function γHat(
+	θ_initial,
+	γ,
+	U,
+	numMoments,
+	numInnerMoments,
+	outer_constr_index,
+	outer_constr_index_simple,
+	nTotalMoments,
+	inequality_index,
+	calc_δ_star_initial,
+	file_name,
+	useConfidenceIntervals,
+	ConfidenceLevel,
+	NormalizeMoments,
+	complement_index,
+	PMMGammaOnly
+)
 
 	W = size(U, 1)
 	# use the simplest object to calc moments at F* and theta initial
@@ -22,38 +39,57 @@ function γHat(θ_initial, γ, U, numMoments, numInnerMoments, outer_constr_inde
 	EK_moments_simple!(K, G, θ_initial, U, obj)
 
 	PMM = mean(G, dims = 1)
-	σ_Moments = sqrt.(var(G, dims = 1) ./ W)
+	σ_Moments = sqrt.(var(G, dims = 1))
+
+	moments_with_var = findall(>(0), σ_Moments[1:numInnerMoments])
+	moments_without_var = findall(==(0), σ_Moments[1:numInnerMoments])
+
+	@show moments_with_var
+	@show moments_without_var
+
+	if PMMGammaOnly == 1
+		D = size(γ.τ, 1)
+
+		cInd = D^2
+		dInd = D^2 + D
+		if γ.indicators.counterType != 1
+			cInd = D^2 + D - 1
+			dInd = D^2 + 2 * D - 1
+		end
+
+		for im in 1:numMoments
+			is_gamma_moment = (im ∉ cInd+1:cInd+D && im ∉ dInd+1:dInd+D) ? 0 : 1 #gamma is actually a gamma hat.
+			PMM[im] *= is_gamma_moment
+		end
+	end
+
+
 
 	# calculate the confidence set assuming normality of moment estimator
-	
+
 	Moments_CS = zeros(numInnerMoments, 2)
 	MomentsCovar = zeros(numInnerMoments, numInnerMoments)
 	if useConfidenceIntervals == 1
+		
+		MomentsCovar = cov(@view(G[:, moments_with_var]), dims = 1) 
 
-		MomentsCovar = cov(@view(G[:, 1:numInnerMoments]), dims = 1) ./W
-
+		
+		moments_with_var_size =size(MomentsCovar, 1) 
 		if NormalizeMoments == 1
-			for im1 in 1:numInnerMoments
-				for im2 in 1:numInnerMoments
-					MomentsCovar[im1, im2] = σ_Moments[im1] * σ_Moments[im2] > 0 ? MomentsCovar[im1, im2] / (σ_Moments[im1] * σ_Moments[im2]) : MomentsCovar[im1, im2]
+			for im1 in 1:moments_with_var_size
+				for im2 in 1:moments_with_var_size
+					MomentsCovar[im1, im2] = MomentsCovar[im1, im2] / (σ_Moments[moments_with_var[im1]] * σ_Moments[moments_with_var[im2]])
 				end
 			end
 		end
 
 
-		# Put a variance of 1 for moments with zero variance, 
-		# this will have no incidence on the confidence interval, but will allow to do cholesky
-		# a better solution is to not have moments with exactly zeros (unused colums in the G matrix), but will need quite some work.
-		for im in 1:numInnerMoments
-			MomentsCovar[im, im] = MomentsCovar[im, im] == 0 ? 1 : MomentsCovar[im, im]
-		end
-
 		(c, s) = rectangular_confidence_set(MomentsCovar, ConfidenceLevel)
 
-		Moments_CS[:, 1] .= -c * s #lower bound
-		Moments_CS[:, 2] .= +c * s #upper bound
+		Moments_CS[moments_with_var, 1] .= -c * s / sqrt(W) #lower bound
+		Moments_CS[moments_with_var, 2] .= +c * s / sqrt(W) #upper bound
 		save_object(string("momentsCS_", file_name, ".jld2"), Moments_CS)
-		writedlm(string("momentsCS_", file_name), [Moments_CS[:,1] Moments_CS[:,2] PMM[1:numInnerMoments]], ',')
+		writedlm(string("momentsCS_", file_name), [Moments_CS[:, 1] Moments_CS[:, 2] PMM[1:numInnerMoments]], ',')
 	end
 
 
@@ -64,7 +100,7 @@ function γHat(θ_initial, γ, U, numMoments, numInnerMoments, outer_constr_inde
 		τ = γ.τ,
 		τPrime = γ.τPrime,
 		P = γ.P,
-		numMomentsSimple = γ.numMomentsSimple, 
+		numMomentsSimple = γ.numMomentsSimple,
 		PMM = PMM,
 		σ_Moments = σ_Moments,
 		Moments_CS = Moments_CS,
@@ -81,7 +117,8 @@ function γHat(θ_initial, γ, U, numMoments, numInnerMoments, outer_constr_inde
 		IndCDF_Cells = γ.IndCDF_Cells,
 		SamplingWeights = γ.SamplingWeights,
 		refIndex1 = γ.refIndex1,
-		upper_moment_start_index = γ.upper_moment_start_index)
+		upper_moment_start_index = γ.upper_moment_start_index,
+		moments_without_var = moments_without_var)
 
 	δ_star_initial = 0
 	if calc_δ_star_initial == 1
@@ -111,7 +148,7 @@ function γHat(θ_initial, γ, U, numMoments, numInnerMoments, outer_constr_inde
 	end
 
 	@show δ_star_initial
-	
+
 	return γ_PMM, δ_star_initial
 
 end

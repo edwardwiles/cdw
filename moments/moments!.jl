@@ -2,7 +2,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var = obj.γ
 	@unpack counterExplicit,
 	counterType,
 	θConstant,
@@ -157,9 +157,10 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	end
 
 	if NormalizeMoments == 1
-		KNITRO_tol = 10^(-6)
 		for im ∈ 1:numMomentsSimple
-			@. G[:, im] *= σ_Moments[im] > KNITRO_tol^2 ? KNITRO_tol ./ σ_Moments[im] : 1
+			if im ∉ moments_without_var
+				@. G[:, im] *= 1 ./ σ_Moments[im]
+			end
 		end
 	end
 	#Multiply by ISW which are defaulted to 1 if the methodology is not used
@@ -172,7 +173,7 @@ end
 
 function EK_moments!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
-	@unpack upper_moment_start_index, τ, baseIndex, PMM, σ_Moments, Moments_CS, SamplingWeights, indicators, Ind_Moments = obj.γ
+	@unpack upper_moment_start_index, τ, baseIndex, PMM, σ_Moments, Moments_CS, SamplingWeights, indicators, Ind_Moments, moments_without_var = obj.γ
 	@unpack gravMoment, localGravityMoment, GravityMomentFirstApproach, useConfidenceIntervals, usePMM, NormalizeMoments, counterType, independenceMoment, UoModel, IndMomentOrder = indicators
 
 	EK_moments_simple!(K, @view(G[:, upper_moment_start_index:end]), θ, U, obj)
@@ -186,7 +187,7 @@ function EK_moments!(K, G, θ, U, obj)
 			cInd = D^2 + D - 1
 			dInd = D^2 + 2 * D - 1
 		end
-		remove_moments = vcat(cInd+1:cInd+D, dInd+1:dInd+D)
+		remove_moments = vcat(cInd+1:cInd+D, dInd+1:dInd+D, moments_without_var)
 
 		if independenceMoment == 1
 			offset = gravMoment + localGravityMoment * ((D - 1) * D + D * (D - 1) * (D - 2)) + GravityMomentFirstApproach

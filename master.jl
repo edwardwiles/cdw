@@ -72,6 +72,7 @@ params = (
     OuterScaling = 1, # 1= Aod model, 0 = Aod fixed
     useParallel=0, # 1 = parallelise the deltas in outer loop; 0 = do not 
     usePMM=0, # =1 adjust moments so they are exactly zero for F*, =0 do not.
+    PMMGammaOnly = 0,
     NormalizeMoments = 1, # =1 divide by moment std dev so all moments are on the same scale
     useConfidenceIntervals = 1, # forces moments to be within a confidence interval (around zero)
     ConfidenceLevel = 0.05, # confidence level for the moments being within the CI

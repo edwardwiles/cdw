@@ -1,7 +1,7 @@
 function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū, numMomentsSimple = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, PMM, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, SamplingWeights, Ū, numMomentsSimple, moments_without_var = obj.γ
 	@unpack counterExplicit,
 	counterType,
 	θConstant,
@@ -206,9 +206,10 @@ function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 	end
 
 	if NormalizeMoments == 1
-		KNITRO_tol = 10^(-6)
 		for im ∈ 1:numMomentsSimple
-			@. jac_G[:, im, :] *= σ_Moments[im] > KNITRO_tol^2 ? 1 ./ σ_Moments[im] : 1
+			if  im ∉ moments_without_var
+				@. jac_G[:, im, :] *=  1 ./ σ_Moments[im]
+			end
 		end
 	end
 

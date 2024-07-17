@@ -81,6 +81,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     lower_inequality_index = Int64[]
     upper_moment_start_index = 1
     complement_index = [0 0]  
+    moments_without_var = Int64[]
     
 
     if useConfidenceIntervals == 1
@@ -99,7 +100,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     σ_Moments = ones(numMoments)
     Moments_CS = zeros(numMoments, 2)
     
-    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output_effective, data, counters.LPrime, counters.τPrime, Uσ, Ū, numMoments, upper_moment_start_index, PMM, σ_Moments, Moments_CS, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
+    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output_effective, data, counters.LPrime, counters.τPrime, Uσ, Ū, numMoments, upper_moment_start_index, PMM, σ_Moments, Moments_CS, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight, moments_without_var)
 
     @show numMoments
     @show numMomentInnerSimple

@@ -14,7 +14,8 @@ function buildObjectsForMoments(
 	CDF_Moments = zeros(1),
 	Ind_Moments = zeros(1),
 	IndCDF_Cells = Vector{Vector{Int}}(undef, 1),
-	SamplingWeights = ones(1))
+	SamplingWeights = ones(1),
+	moments_without_var = int64[])
 	# constructs object containing fixed parameters (L, tau, data, etc) to feed into moment functions
 	@unpack σHat,
 	baseIndex,
@@ -113,7 +114,8 @@ function buildObjectsForMoments(
 			SamplingWeights = SamplingWeights,
 			refIndex1 = refIndex1,
 			upper_moment_start_index = upper_moment_start_index,
-			numMomentsSimple = numMomentsSimple
+			numMomentsSimple = numMomentsSimple,
+			moments_without_var = moments_without_var
 		)
 		return γ, θ_initial
 
@@ -165,7 +167,8 @@ function buildObjectsForMoments(
 			SamplingWeights = SamplingWeights,
 			refIndex1 = refIndex1,
 			upper_moment_start_index = upper_moment_start_index,
-			numMomentsSimple = numMomentsSimple
+			numMomentsSimple = numMomentsSimple,
+			moments_without_var = moments_without_var
 		)
 
 		return γ, θ_initial
