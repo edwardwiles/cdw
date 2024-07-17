@@ -1,3 +1,4 @@
+#=
 function preStepGeneralDistribution(L, LPrime, tau, tauPrime, lambda, thetaIn, sigma, baseIndex, counterType, distributionType, corr, vol, autocorr=0)
 
     D = size(lambda, 1)
@@ -10,12 +11,27 @@ function preStepGeneralDistribution(L, LPrime, tau, tauPrime, lambda, thetaIn, s
     return preStepGeneralDistribution(L, LPrime, tau, tauPrime, lambda, thetaIn, sigma, baseIndex, counterType, U_init)
 
 end
+=#
 
-function preStepGeneralDistribution(L, LPrime, tau, tauPrime, lambda, thetaIn, sigma, baseIndex, counterType, U_init)
+function preStepGeneralDistribution(data, counters, globalParams, U_init)
     # does the full pre-step to get the initial guess of parameters (psi^*) that corresponds with a specific distribution
     # the same function as above. But without the need to re-simulate the Us for the calibration.  
+  # unpack data 
+  lambda = data.λData 
+  L = data.LData 
+  tau = data.τData 
+  
+  # unpack counterfactual info 
+  tauPrime = counters.τPrime 
+  LPrime = counters.LPrime 
 
-    D = size(lambda, 1)
+  # unpack parameter info
+  thetaIn = globalParams.θHat 
+  sigma = globalParams.σHat 
+  baseIndex = globalParams.baseIndex 
+  counterType = globalParams.counterType 
+  D = globalParams.D
+
     W = size(U_init, 1)
 
     # Step 1: Estimate thetaHat via gravity or prespecified
@@ -67,16 +83,13 @@ function preStepGeneralDistribution(L, LPrime, tau, tauPrime, lambda, thetaIn, s
         end
     end
     GC.gc()
-    # @show cHat
-    # @show lambda
-    # @show (gFunction!(sigma, tau, UPow_init, wHat, cHat, lambda)).expenditure_ratio_residual
-    # @show (gFunction!(sigma, tau, UPow_init, wHat, cHat, lambda)).trade_share_residual
-    # @show (gFunction!(sigma, tau, UPow_init, wHat, cHat, lambda)).expenditure
+
 
     # Step 4: Estimate wPrimeHat
     #lambdaPrime = Array{Float64,2}(undef, D, D)  # initialise
     lambdaPrime = zeros(D, D)
     wPrimeHat = ones(D)
+
 
     if counterType != 1 # only solve if not autarky, as w undetermined in autarky 
         function wPrimeHat_solver_func!(wHatPrime_x)
@@ -120,18 +133,153 @@ function preStepGeneralDistribution(L, LPrime, tau, tauPrime, lambda, thetaIn, s
     # we were using above cHat^(1/theta), for numerical efficiency. We adjust the power before returning the values.
     @. cHat[:] = cHat[:] .^ (thetaHat)
 
-    # we scale so that cHat represents E[U_od]
-    meanU = mean(U_init)
-    #@. cHat[:] = cHat[:] .* meanU
-
-
     output = (μHat=1 ./ thetaHat,
         wHat=wHat[:],
         cHat=cHat,
         λPrime=lambdaPrime,
         wPrimeHat=wPrimeHat[:],
         γHat=gammaHat[:],
-        γPrimeHat=gammaPrimeHat[:])
+        γPrimeHat=gammaPrimeHat[:],
+        Aod_initial = ones(D^2))
 
     return output
+end
+
+function gFunction!(σ, τ, UPow_init, w_, cPow_, lambda)
+    # encountered issues as solver was trying negative values so used abs. maybe there is a better solution
+    w = abs.(w_)
+    cPow = abs.(cPow_)
+
+    D = size(τ, 1) # num countries 
+    W = size(UPow_init, 1) # num draws (or goods)
+    bilateral_prices_pow = zeros(eltype(cPow), D)
+    prices_pow = 0.0
+    expenditure = zeros(eltype(cPow), D, D)
+    expenditure_ratio_residual = zeros(eltype(cPow), D, D)
+    expenditure_ratio = zeros(eltype(cPow), D, D)
+    trade_share_residual = zeros(eltype(cPow), D, D)
+    price_index = zeros(eltype(cPow), D)
+    exporter_idx = 0.0
+
+    for d = 1:D
+        for ω = 1:W
+            for o = 1:D
+                o1 = o + (d - 1) * D
+                bilateral_prices_pow[o] = ((w[o] * τ[o, d] * cPow[o, d]) / (UPow_init[ω, o1]))^(1 - σ)
+            end
+
+            prices_pow, exporter_idx = findmax(bilateral_prices_pow[:]) # this assumes σ >1
+            expenditure[exporter_idx, d] += prices_pow
+            price_index[d] += prices_pow
+
+        end
+
+        for o = 1:D
+            expenditure_ratio_residual[o, d] = lambda[o, d] / lambda[1, d] - expenditure[o, d] / expenditure[1, d] # we could have some cases where expenditure on country 1 goods is zero...
+            expenditure_ratio[o, d] = expenditure[o, d] / price_index[d]
+            trade_share_residual[o, d] = expenditure_ratio[o, d] - lambda[o, d]
+        end
+    end
+
+    #@show expenditure
+
+    return (expenditure_ratio_residual=expenditure_ratio_residual, price_index=price_index ./ W, expenditure_ratio=expenditure_ratio, trade_share_residual=trade_share_residual, expenditure=expenditure / W)
+
+end
+function gFunction_d!(σ, τ, UPow_init, w_, cPow_, lambda, d)
+    # encountered issues as solver was trying negative values so used abs. maybe there is a better solution
+    w = abs.(w_)
+    cPow = abs.(cPow_)
+
+    D = size(τ, 1) # num countries 
+    W = size(UPow_init, 1) # num draws (or goods)
+    bilateral_prices_pow = zeros(eltype(cPow), D)
+    bilateral_prices = zeros(eltype(cPow), D)
+    prices_pow = 0.0
+    expenditure = zeros(eltype(cPow), D)
+    expenditure_ratio_residual = zeros(eltype(cPow), D - 1)
+
+    price_index = 0.0
+    exporter_idx = 0.0
+    DiscreteImplementation = true
+    pricesIdx = zeros(eltype(cPow), D)
+
+    for ω = 1:W
+
+        for o = 1:D
+            o1 = o + (d - 1) * D
+            bilateral_prices_pow[o] = ((w[o] * τ[o, d] * cPow[o]) / (UPow_init[ω, o1]))^(1 - σ)
+            bilateral_prices[o] = ((w[o] * τ[o, d] * cPow[o]) / (UPow_init[ω, o1]))
+        end
+
+        if DiscreteImplementation
+            prices_pow, exporter_idx = findmax(bilateral_prices_pow[:]) # this assumes σ >1
+            expenditure[exporter_idx] += prices_pow
+            price_index += prices_pow
+        else
+            smoothMinIndNew!(pricesIdx, bilateral_prices, D, -100.0)
+
+            for o = 1:D
+                prices_pow = pricesIdx[o] * bilateral_prices_pow[o]
+                expenditure[o] += prices_pow
+                price_index += prices_pow
+            end
+        end
+
+    end
+
+    for o = 2:D
+        relative_error = lambda[o, d] / lambda[1, d] - expenditure[o] / expenditure[1]
+        absolute_error = lambda[o, d] - expenditure[o] / price_index
+        #expenditure_ratio_residual[o-1] = lambda[o,d] / lambda[1,d] - expenditure[o] / expenditure[1] # we could have some cases where expenditure on country 1 goods is zero...
+        expenditure_ratio_residual[o-1] = absolute_error # this version works as well, sum of lambdas = 1, probably better as this is the moment condition in the algo
+    end
+    return expenditure_ratio_residual
+
+end
+function gFunction_d2!(σ, τ, UPow_init, w_, cPow_, lambda, d)
+    # encountered issues as solver was trying negative values so used abs. maybe there is a better solution
+    w = abs.(w_)
+    cPow = abs.(cPow_)
+
+    D = size(τ, 1) # num countries 
+    W = size(UPow_init, 1) # num draws (or goods)
+    bilateral_prices_pow = zeros(eltype(cPow), D)
+    prices_pow = 0.0
+    expenditure = zeros(eltype(cPow), D)
+    expenditure_ratio_residual = zeros(eltype(cPow), D)
+    pricesIdx = zeros(eltype(cPow), D)
+    price_index = 0.0
+    exporter_idx = 0.0
+    DiscreteImplementation = true
+
+    for ω = 1:W
+
+        for o = 1:D
+            o1 = o + (d - 1) * D
+            bilateral_prices_pow[o] = ((w[o] * τ[o, d] * cPow[o]) / (UPow_init[ω, o1]))^(1 - σ)
+        end
+
+
+        if DiscreteImplementation
+            prices_pow, exporter_idx = findmax(bilateral_prices_pow[:]) # this assumes σ >1
+            expenditure[exporter_idx] += prices_pow
+            price_index += prices_pow
+        else
+            smoothMinIndNew!(pricesIdx, bilateral_prices_pow, D, 100.0) # we are looking for the max, so the positive tuner sign is correct.
+
+            for o = 1:D
+                prices_pow = pricesIdx[o] * bilateral_prices_pow[o]
+                expenditure[o] += prices_pow
+                price_index += prices_pow
+            end
+        end
+    end
+
+    for o = 1:D
+        #expenditure_ratio_residual[o-1] = lambda[o,d] / lambda[1,d] - expenditure[o] / expenditure[1] # we could have some cases where expenditure on country 1 goods is zero...
+        expenditure_ratio_residual[o] = lambda[o, d] - expenditure[o] / price_index # this version works as well
+    end
+    return expenditure_ratio_residual
+
 end

@@ -1,7 +1,7 @@
 
 function master_prepare_cc(data, counters, prestep_output, globalParams)
 
-    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel, calc_δ_star_initial, Jac_W, δ_ref, NormalizeMoments, useConfidenceIntervals, ConfidenceLevel= globalParams
+    @unpack seedU, W, D, counterType, importanceSampling, importanceSamplingFactor, sameMarginalsMoment, independenceMoment, GravityMomentFirstApproach, gravMoment, localGravityMoment, momentOrder, momentOrderForBaseIndex, baseIndex, ForceFrechetMarginal, IndMomentOrder, δGridType, OuterScaling, fakeData, θConstant, usePMM , UoModel, calc_δ_star_initial, Jac_W, δ_ref, NormalizeMoments, useConfidenceIntervals, ConfidenceLevel, useFiniteSamplePrestep, PMMGammaOnly= globalParams
 
     # set seed
     Random.seed!(seedU)
@@ -15,12 +15,15 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     useParams = globalParams
     useParams = (; useParams..., SamplingWeight= SamplingWeight) 
 
+ 
+    prestep_output_effective = useFiniteSamplePrestep == 0 ? prestep_output : preStepGeneralDistribution(data, counters, globalParams, Ū)
+
     # if using common marginals with moments methodology, calculate the K moments and put them in Ubar 
 
     CDF_Moments = zeros(1,1)
    
     if sameMarginalsMoment == 1
-        CDF_Moments = precalcCDFs(Ū, useParams, prestep_output)
+        CDF_Moments = precalcCDFs(Ū, useParams, prestep_output_effective)
     end 
 
     Ind_Moments = zeros(1, 1)
@@ -95,14 +98,14 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     PMM = zeros(numMoments)
     σ_Moments = ones(numMoments)
     Moments_CS = zeros(numMoments, 2)
-
-    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output, data, counters.LPrime, counters.τPrime, Uσ, Ū, numMoments, upper_moment_start_index, PMM, σ_Moments, Moments_CS, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
+    
+    γ, θ_initial = buildObjectsForMoments(globalParams, prestep_output_effective, data, counters.LPrime, counters.τPrime, Uσ, Ū, numMoments, upper_moment_start_index, PMM, σ_Moments, Moments_CS, CDF_Moments, Ind_Moments, IndCDF_Cells, SamplingWeight)
 
     @show numMoments
     @show numMomentInnerSimple
     @show inequality_index
 
-    γ_Hat, δ_star_initial =  γHat(θ_initial, γ, U, numMoments,numMomentInnerSimple, outer_constr_index, outer_constr_index_simple, nTotalMoments, inequality_index, calc_δ_star_initial, file_name, useConfidenceIntervals, ConfidenceLevel, NormalizeMoments, complement_index)
+    γ_Hat, δ_star_initial =  γHat(θ_initial, γ, U, numMoments,numMomentInnerSimple, outer_constr_index, outer_constr_index_simple, nTotalMoments, inequality_index, calc_δ_star_initial, file_name, useConfidenceIntervals, ConfidenceLevel, NormalizeMoments, complement_index, PMMGammaOnly)
  
 
     if δGridType == 0
@@ -119,7 +122,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 
     prep_output = (
         U = U,
-        γ = (usePMM ==1 || NormalizeMoments == 1 || useConfidenceIntervals == 1) ? γ_Hat : γ, 
+        γ = (PMMGammaOnly == 1||usePMM ==1 || NormalizeMoments == 1 || useConfidenceIntervals == 1) ? γ_Hat : γ, 
         θ_initial = θ_initial,
         numMoments = numMoments,
         file_name = file_name,

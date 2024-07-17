@@ -84,6 +84,7 @@ params = (
     calc_δ_star_initial = 1, # calculate the starting delta
     Jac_W = 25000, # number of simulations for the Jacobian
     theta_init = 0, # initial parameters based on a theta that is different from thetaHat
+    useFiniteSamplePrestep = 1 # =1 : calibrate Θ_initial so that trade shares match in finite sample (W), 0 = use the EK closed form calibration 
     
     # Post CC Optimization tests
     runLFD = 1,
