@@ -52,20 +52,21 @@ function precalcIndependence(Ū, params)
 	# Joint CDF = Product of Marginal CFDs
 
 	IndCDF_K = range(1, IndMomentOrder, IndMomentOrder)
-	IndCDF_X = quantile(@view(Ū[:, refIndex1]) .* SamplingWeight[:], range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+	IndCDF_X = quantile(@view(Ū[:, refIndex1]) .* SamplingWeight[:], range(1 / (IndMomentOrder+1), IndMomentOrder / (IndMomentOrder+1), length = IndMomentOrder))
 
 	# CDF U11
 	offset = UoModel == 0 ? D * (D^2 - floor(Int, D * (1 + D) / 2)) : (D^2 - floor(Int, D * (1 + D) / 2))
 	cell_size = size(IndCDF_X, 1)
 	for ω ∈ 1:W
 		@inbounds for i ∈ 1:cell_size
-			Ind_Moments[ω, offset+i] = (Ū[ω, refIndex1] < IndCDF_X[i]) ? 1 : 0
+			Ind_Moments[ω, offset+i] = (Ū[ω, refIndex1] <= IndCDF_X[i]) ? 1 : 0
 		end
 	end
 
 	#Pairewise CFDs
 	offset += cell_size
-	PairWiseIndCDF_Cells = collect(with_replacement_combinations(IndCDF_K, 2))
+	PairWiseIndCDF_Cells =vec(collect(Base.Iterators.product(Base.Iterators.repeated(IndCDF_K, 2)...)))
+	@show PairWiseIndCDF_Cells
 	cell_size = size(PairWiseIndCDF_Cells, 1)
 
 	# D^2 x IndMomentOrder^2
@@ -118,5 +119,8 @@ function precalcIndependence(Ū, params)
 		end
 	end
 	=#
+
+	@show IndCDF_X
+	@show IndCDF_K
 	return (Ind_Moments, PairWiseIndCDF_Cells)
 end

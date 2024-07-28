@@ -1,13 +1,16 @@
 
 function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
-	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian, Jac_W = params
+	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian, Jac_W, independenceMoment, IndMomentOrder, OuterScaling , UoModel, sameMarginalsMoment= params
 	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index, inequality_index, nTotalMoments, file_name, complement_index = prep_output
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 
-	θ_lower = (θ_initial.*0.5)[:] # lower bound for parameters in outer loop optimisation 
-	θ_upper = (θ_initial.*1.5)[:] # upper bound for parameters in outer loop optimisation 
+	#θ_lower = (θ_initial.*0.5)[:] # lower bound for parameters in outer loop optimisation 
+	#θ_upper = (θ_initial.*1.5)[:] # upper bound for parameters in outer loop optimisation 
+
+	θ_lower = (θ_initial.*0.0001)[:] # lower bound for parameters in outer loop optimisation 
+	θ_upper = (θ_initial.*100000)[:] # upper bound for parameters in outer loop optimisation 
 
 
 	θ_lower[2] = θ_initial[2] # fix sigma (second param) as not identified anyway
@@ -21,9 +24,35 @@ function ccOuter(prep_output, params)
 	if θConstant == 1
 		θ_lower[1] = θ_initial[1]
 		θ_upper[1] = θ_initial[1]
+	else
+		θ_upper[1] = min(θ_upper[1], 1 / (θ_initial[2] - 1))
 	end
 
-	θ_upper[1] = min(θ_upper[1], 1 / (θ_initial[2] - 1))
+
+	# Cap CDF probas to one
+	if independenceMoment == 1
+		@. θ_upper[end-IndMomentOrder+1:end] = 1
+		@. θ_lower[end-IndMomentOrder+1:end] = 0
+	end
+
+
+	Aod_offset = 0
+	if counterType != 1
+		Aod_offset = 2 * (D - 1) # D-1 wagesPrime and D-1 gamma_primes 
+	end
+	if OuterScaling == 1 # Aod model
+		Aod_offset +=  3 + D
+		if independenceMoment == 1
+			Aod_offset += 1
+		elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
+			Aod_offset += D^2
+		end
+		for i in 1:D
+			θ_upper[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)] = θ_initial[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)]
+			θ_lower[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)] = θ_initial[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)]
+		end
+	end
+
 
 	κ_lower = zeros(length(δ_grid))
 	κ_upper = zeros(length(δ_grid))
@@ -50,7 +79,7 @@ function ccOuter(prep_output, params)
 					U = U,
 					N=Jac_W,
 					lower_limit = -50,
-					outer_loop_opt = "ek_outer_loop_options.opt",
+					outer_loop_opt = "csw_outer_loop_settings_cluster.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
 			else
@@ -100,7 +129,7 @@ function ccOuter(prep_output, params)
 					U = U,
 					N=Jac_W,
 					lower_limit = -50,
-					outer_loop_opt = "ek_outer_loop_options.opt",
+					outer_loop_opt = "csw_outer_loop_settings_cluster.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
 			else
@@ -125,7 +154,7 @@ function ccOuter(prep_output, params)
 			κ_lower[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_lower[:, i] .= θ_1
 			print(κ_lower[i])
-			save_object(string("cc_output_upper_",i,"_", file_name, ".jld2"),
+			save_object(string("cc_output_lower_",i,"_", file_name, ".jld2"),
 			(κ_lower[i], θ_1))
 		end
 
@@ -181,7 +210,7 @@ function ccOuter(prep_output, params)
 			κ_lower[i], θ_2 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
 			Θ_lower[:, i] .= θ_2
 			print(κ_lower[i])
-			save_object(string("cc_output_upper_",i,"_", file_name, ".jld2"),
+			save_object(string("cc_output_lower_",i,"_", file_name, ".jld2"),
 			(κ_lower[i], θ_2))
 		end
 

@@ -3,6 +3,7 @@ function LFD(cc_output, prep_output, params)
 
 	@unpack δ_grid, file_name, θ_initial, numMoments, nTotalMoments, U, γ, outer_constr_index, inequality_index, complement_index = prep_output
 	@unpack Θ_upper, Θ_lower = cc_output
+	@unpack Jac_W = params
 
 	D = length(γ.L)
 	W = size(U, 1)
@@ -32,7 +33,7 @@ function LFD(cc_output, prep_output, params)
 			complement_index= complement_index,
 			l = size(θ_initial, 1),
 			U = U,
-			N = 2500,
+			N = Jac_W,
 			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
 			inner_loop_opt = "ek_inner_loop_options.opt"
@@ -68,7 +69,7 @@ function LFD(cc_output, prep_output, params)
 			complement_index= complement_index,
 			l = size(θ_initial, 1),
 			U = U,
-			N = 2500,
+			N = Jac_W,
 			lower_limit = -50,
 			outer_loop_opt = "ek_outer_loop_options.opt",
 			inner_loop_opt = "ek_inner_loop_options.opt"

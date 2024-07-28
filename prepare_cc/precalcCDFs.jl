@@ -5,8 +5,8 @@ function precalcCDFs(Ū, params, prestep_output)
 	@unpack μHat = prestep_output
 
 	# pre-calculate the quantiles for marginal matching with CDF methodology
-	CDF_X = quantile(Ū[:, 1] .* SamplingWeight[:], range(1 / (momentOrder), (momentOrder - 1) / (momentOrder), length = momentOrder))
-	CDF_X_for_base = quantile(Ū[:, 1] .* SamplingWeight[:], range(1 / (momentOrderForBaseIndex), (momentOrderForBaseIndex - 1) / (momentOrderForBaseIndex), length = momentOrderForBaseIndex))
+	CDF_X = quantile(Ū[:, refIndex1] .* SamplingWeight[:], range(1 / (momentOrder), (momentOrder - 1) / (momentOrder), length = momentOrder))
+	CDF_X_for_base = quantile(Ū[:, refIndex1] .* SamplingWeight[:], range(1 / (momentOrderForBaseIndex), (momentOrderForBaseIndex - 1) / (momentOrderForBaseIndex), length = momentOrderForBaseIndex))
 
 	CDF_Moments_Size = 2 * momentOrderForBaseIndex * D
 	if UoModel == 1
@@ -67,13 +67,13 @@ function precalcCDFs(Ū, params, prestep_output)
 		o1_base = o + (UoModel == 1 ? 0 : (baseIndex - 1) * D)
 		for i ∈ 1:momentOrderForBaseIndex
 			@. CDF_Moments_for_base[:, o+(i-1)*D] += -CDF_11_X_for_base[:, i]
-			@. CDF_Moments_for_base[:, momentOrderForBaseIndex+o+(i-1)*D] = -Truncated_moment_11_for_base[:, i]
+			@. CDF_Moments_for_base[:, momentOrderForBaseIndex*D+o+(i-1)*D] = -Truncated_moment_11_for_base[:, i]
 		end
 		for ω ∈ 1:W
 			smallest_X = searchsortedfirst(CDF_X_for_base, Ū[ω, o1_base])
 			for i ∈ smallest_X:momentOrderForBaseIndex
 				CDF_Moments_for_base[ω, o+(i-1)*D] += 1
-				CDF_Moments_for_base[ω, momentOrderForBaseIndex+o+(i-1)*D] += Ū[ω, o1_base]^(μHat * (1 - σHat))
+				CDF_Moments_for_base[ω, momentOrderForBaseIndex*D+o+(i-1)*D] += Ū[ω, o1_base]^(μHat * (1 - σHat))
 			end
 		end
 	end

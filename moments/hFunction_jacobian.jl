@@ -103,7 +103,8 @@ function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, A
 							jac_G[ω, d1, jac_index] = ∂ξ∂Acd
 							jac_G[ω, cInd+d, jac_index] = ∂ξ∂Acd
 						end
-					elseif pricesInd[o] == 1 && θConstant != 1
+					end
+					if pricesInd[o] == 1 && θConstant != 1
 						d1 = d + (o - 1) * D
 						∂ξ∂μ = ln(pricesTempσ[o]) * pricesTempσ[o] / μ
 						jac_G[ω, d1, 1] = ∂ξ∂μ

@@ -77,14 +77,14 @@ function buildObjectsForMoments(
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, Aod_initial)
 
 			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, Aod_initial, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, Aod_initial, range(1 / (IndMomentOrder+1), IndMomentOrder/ (IndMomentOrder+1), length = IndMomentOrder))
 			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 # We will need to calculate E[ln ̄U]
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, Aod_initial, zeros(D^2))
 			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
 			if independenceMoment == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, range(1 / (IndMomentOrder+1), IndMomentOrder/ (IndMomentOrder+1), length = IndMomentOrder))
 			end
 		else # sameMarginalsMoment == 0 && OuterScaling == 0
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
@@ -126,14 +126,14 @@ function buildObjectsForMoments(
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], Aod_initial)
 
 			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, Aod_initial, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, Aod_initial, range(1 / (IndMomentOrder+1), IndMomentOrder/ (IndMomentOrder+1), length = IndMomentOrder))
 			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 # We will need to calculate E[ln ̄U]
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], Aod_initial, zeros(D^2))
 			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
 			if independenceMoment == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, range(1 / IndMomentOrder, (IndMomentOrder - 1) / IndMomentOrder, length = IndMomentOrder))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, range(1 / (IndMomentOrder+1), IndMomentOrder/ (IndMomentOrder+1), length = IndMomentOrder))
 			end
 		else # sameMarginalsMoment == 0 && OuterScaling == 0
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])

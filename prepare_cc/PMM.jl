@@ -7,6 +7,7 @@ function γHat(
 	outer_constr_index,
 	outer_constr_index_simple,
 	nTotalMoments,
+	inner_loop_last_moment_index,
 	inequality_index,
 	calc_δ_star_initial,
 	file_name,
@@ -14,7 +15,7 @@ function γHat(
 	ConfidenceLevel,
 	NormalizeMoments,
 	complement_index,
-	PMMGammaOnly
+	PMMGammaOnly,
 )
 
 	W = size(U, 1)
@@ -70,11 +71,11 @@ function γHat(
 	Moments_CS = zeros(numInnerMoments, 2)
 	MomentsCovar = zeros(numInnerMoments, numInnerMoments)
 	if useConfidenceIntervals == 1
-		
-		MomentsCovar = cov(@view(G[:, moments_with_var]), dims = 1) 
 
-		
-		moments_with_var_size =size(MomentsCovar, 1) 
+		MomentsCovar = cov(@view(G[:, moments_with_var]), dims = 1)
+
+
+		moments_with_var_size = size(MomentsCovar, 1)
 		if NormalizeMoments == 1
 			for im1 in 1:moments_with_var_size
 				for im2 in 1:moments_with_var_size
@@ -83,13 +84,17 @@ function γHat(
 			end
 		end
 
-
-		(c, s) = rectangular_confidence_set(MomentsCovar, ConfidenceLevel)
-
-		Moments_CS[moments_with_var, 1] .= -c * s / sqrt(W) #lower bound
-		Moments_CS[moments_with_var, 2] .= +c * s / sqrt(W) #upper bound
+		c = 2
+		s = NormalizeMoments == 1 ? ones(moments_with_var_size) : σ_Moments[moments_with_var]
+		if false
+			(c, s) = rectangular_confidence_set(MomentsCovar, ConfidenceLevel)
+		end
+		Moments_CS[moments_with_var, 1] .= -c * s ./ sqrt(W) #lower bound
+		Moments_CS[moments_with_var, 2] .= +c * s ./ sqrt(W) #upper bound
+		PMMCS = zeros(numMoments)
+		@. PMMCS[moments_with_var] = PMM[moments_with_var] .* s[:] ./ σ_Moments[moments_with_var]
 		save_object(string("momentsCS_", file_name, ".jld2"), Moments_CS)
-		writedlm(string("momentsCS_", file_name), [Moments_CS[:, 1] Moments_CS[:, 2] PMM[1:numInnerMoments]], ',')
+		writedlm(string("momentsCS_", file_name), [Moments_CS[:, 1] Moments_CS[:, 2] PMMCS[:]], ',')
 	end
 
 
@@ -131,6 +136,7 @@ function γHat(
 				outer_constr_index = outer_constr_index,
 				inequality_index = inequality_index,
 				complement_index = complement_index,
+				#complement_index = filter!(e->e ∉ moments_without_var && e-inner_loop_last_moment_index ∉ moments_without_var, complement_index) ,
 				l = size(θ_initial, 1),
 				U = U,
 				N = 100,# not used because we do not calculate jacobians

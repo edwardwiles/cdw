@@ -61,9 +61,12 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     end 
 
     if independenceMoment == 1 
-        numMoments += IndMomentOrder + (D^2 - floor(Int, D * (1 + D) / 2)) * (IndMomentOrder^2)
+        numMoments += 1 # E[U[refIndex1]]
+        numMoments += IndMomentOrder # CDF
+        numMoments += (D^2 - floor(Int, D * (1 + D) / 2)) * (IndMomentOrder^2) # CDF[i,j]=CDF[i]*CDF[j]
 	
-        if UoModel == 0
+        # corr[i,j]=0
+        if UoModel == 0 
             numMoments += D * (D^2 - floor(Int, D * (1 + D) / 2)) 
         else
             numMoments += (D^2 - floor(Int, D * (1 + D) / 2)) 
@@ -90,7 +93,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
         upper_moment_start_index = inner_loop_last_moment_index + 1
         inner_loop_last_moment_index = outer_constr_index - 1
         nTotalMoments = 2*(numMoments - nOuterLoopMoments) + nOuterLoopMoments
-        complement_index = hcat(collect(1:inner_loop_last_moment_index) , collect(inner_loop_last_moment_index+1:2*inner_loop_last_moment_index))
+        #complement_index = hcat(collect(1:inner_loop_last_moment_index) , collect(inner_loop_last_moment_index+1:2*inner_loop_last_moment_index))
     end
 
     file_name = string("FD_",fakeData,"_Count_", counterType, "_NC_", D, "_bI", baseIndex, "_sG", GravityMomentFirstApproach, "_lG", localGravityMoment, "_Marg", sameMarginalsMoment, "_ind", independenceMoment, "_O", momentOrder, "_bO",momentOrderForBaseIndex, "FF_", ForceFrechetMarginal, "IndMO_", IndMomentOrder, "IS_", importanceSampling,"ISF_", importanceSamplingFactor, "Aod_",OuterScaling, "Fmu_", θConstant, "Uo_", UoModel, "MN", NormalizeMoments, "P", usePMM,"CS",useConfidenceIntervals, "_", Dates.format(now(), "y-m-d"), ".csv")
@@ -106,8 +109,9 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
     @show numMomentInnerSimple
     @show inequality_index
 
-    γ_Hat, δ_star_initial =  γHat(θ_initial, γ, U, numMoments,numMomentInnerSimple, outer_constr_index, outer_constr_index_simple, nTotalMoments, inequality_index, calc_δ_star_initial, file_name, useConfidenceIntervals, ConfidenceLevel, NormalizeMoments, complement_index, PMMGammaOnly)
- 
+    γ_Hat, δ_star_initial =  γHat(θ_initial, γ, U, numMoments,numMomentInnerSimple, outer_constr_index, outer_constr_index_simple, nTotalMoments, inner_loop_last_moment_index, inequality_index, calc_δ_star_initial, file_name, useConfidenceIntervals, ConfidenceLevel, NormalizeMoments, complement_index, PMMGammaOnly)
+    moments_without_var = γ_Hat.moments_without_var
+    #complement_index =  filter!(e-> ( e ∉ moments_without_var  && (e-inner_loop_last_moment_index) ∉ moments_without_var ), complement_index) 
 
     if δGridType == 0
         δ_grid =   vcat(δ_ref)
