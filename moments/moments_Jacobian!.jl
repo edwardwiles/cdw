@@ -205,6 +205,28 @@ function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 		=#
 	end
 
+	if GravityMomentFirstApproach == 1
+		ν = zeros(D, D) # E[ln ̄U]
+		offset = 0
+
+		if sameMarginalsMoment == 0 && UoModel == 0
+			ν_offset = counterType_θ_offset + 3 + D
+			if OuterScaling == 1
+				ν_offset += D^2
+				if independenceMoment == 1 # not necessary because sameMarginalsMoment ==0
+					ν_offset += 1
+				end
+			end
+			ν = reshape(vcat(θ[ν_offset+1:ν_offset+D^2]), (D, D))
+
+			offset = D^2 + 2 * D
+			if counterType != 1
+				offset += (D - 1)
+			end
+		end
+		GravityMomentFirstApproach_Jacobian!(jac_G, τ, ν, Aod, cHat, D, Ū, offset, UoModel, sameMarginalsMoment, Aod_offset, ν_offset)
+	end
+
 	if NormalizeMoments == 1
 		for im ∈ 1:numMomentsSimple
 			if  im ∉ moments_without_var

@@ -127,7 +127,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 				offset += (D - 1)
 			end
 		end
-		GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoModel)
+		GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoModel, sameMarginalsMoment)
 	end
 
 	if sameMarginalsMoment == 1

@@ -47,7 +47,7 @@ function ccOuter(prep_output, params)
 		elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
 			Aod_offset += D^2
 		end
-		for i in 1:D
+		for i in 1:D #A[1,d] = 1
 			θ_upper[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)] = θ_initial[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)]
 			θ_lower[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)] = θ_initial[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)]
 		end

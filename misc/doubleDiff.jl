@@ -15,3 +15,39 @@ function doubleDiffLinear(z)
     deltaZ = (z[:, :] .- z[1, :]) .- (z[:, 2] .- z[1, 2])
     return deltaZ
 end
+
+function doubleDiff_grad(z)
+    # computes Delta Delta of variable z, see theory note 
+    deltaZ = (log.(z[:, :]) .- log.(z[1, :])) .- (log.(z[:, 2]) .- log.(z[1, 2]))
+    D = size(deltaZ,1)
+    deltaZ_grad = zeros(D,D,D,D)
+
+    @.deltaZ_grad[:,:,1,2] += 1/z[1,2] 
+    for o =1:D
+        @. deltaZ_grad[o,:,o,2] += -1/z[o,2] 
+        @. deltaZ_grad[:,o,1,o] += -1/z[1,o] #deltaZ_grad[:,d,1,d] += -1/z[1,d] 
+        for d=1:D
+            #deltaZ_grad[o,d,1,d] += -1/z[1,d] 
+            deltaZ_grad[o,d,o,d] += 1/z[o,d] 
+        end
+    end
+    return deltaZ_grad
+end
+
+function doubleDiffLinear_grad(z)
+    # computes Delta Delta of variable z, see theory note 
+    deltaZ = (z[:, :] .- z[1, :]) .- (z[:, 2] .- z[1, 2])
+    D = size(deltaZ,1)
+    deltaZ_grad = zeros(D,D,D,D)
+    
+    @.deltaZ_grad[:,:,1,2] += 1
+    for o =1:D
+        @. deltaZ_grad[o,:,o,2] += -1
+        @. deltaZ_grad[:,o,1,o] += -1 #deltaZ_grad[:,d,1,d] += -1
+        for d=1:D
+            #deltaZ_grad[o,d,1,d] += -1
+            deltaZ_grad[o,d,o,d] += 1
+        end
+    end
+    return deltaZ_grad
+end
