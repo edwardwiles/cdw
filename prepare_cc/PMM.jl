@@ -45,6 +45,7 @@ function γHat(
 	moments_with_var = findall(>(0), σ_Moments[1:numInnerMoments])
 	moments_without_var = findall(==(0), σ_Moments[1:numInnerMoments])
 
+	@show PMM
 	@show moments_with_var
 	@show moments_without_var
 

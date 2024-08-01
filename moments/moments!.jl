@@ -64,11 +64,10 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		Aod_offset = counterType_θ_offset + 3 + D
 		if independenceMoment == 1
 			Aod_offset += 1
-		elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
-			Aod_offset += D^2
+		#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
+		#	Aod_offset += D^2
 		end
 		Aod = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
-
 	end
 
 	@. AodPow[:, :] = (Aod[:, :] ./ cHat[:, :]) .^ (-μ)
@@ -108,6 +107,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel) # add gravity moment if using 
 	end
 
+	
 	if GravityMomentFirstApproach == 1
 		ν = zeros(D, D) # E[ln ̄U]
 		offset = 0
@@ -157,12 +157,13 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	end
 
 	if NormalizeMoments == 1
-		for im ∈ 1:numMomentsSimple
+		for im ∈ 1:numMomentsSimple-GravityMomentFirstApproach
 			if im ∉ moments_without_var
 				@. G[:, im] *= 1 ./ σ_Moments[im]
 			end
 		end
 	end
+
 	#Multiply by ISW which are defaulted to 1 if the methodology is not used
 	for im ∈ 1:numMomentsSimple
 		@. G[:, im] *= SamplingWeights[:]

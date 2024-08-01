@@ -40,8 +40,12 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
         numMoments += (D - 1)
     end   
 
-    if GravityMomentFirstApproach == 1 
-        numMoments += (1 + (1-sameMarginalsMoment)*D^2)
+    if GravityMomentFirstApproach == 1
+        numMoments += 1
+        
+        if UoModel == 0 && sameMarginalsMoment == 0
+            numMoments += D^2
+        end
     end 
 
     if gravMoment == 1 

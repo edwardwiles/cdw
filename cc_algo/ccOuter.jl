@@ -10,7 +10,7 @@ function ccOuter(prep_output, params)
 	#θ_upper = (θ_initial.*1.5)[:] # upper bound for parameters in outer loop optimisation 
 
 	θ_lower = (θ_initial.*0.0001)[:] # lower bound for parameters in outer loop optimisation 
-	θ_upper = (θ_initial.*100000)[:] # upper bound for parameters in outer loop optimisation 
+	θ_upper = (θ_initial.*10000)[:] # upper bound for parameters in outer loop optimisation 
 
 
 	θ_lower[2] = θ_initial[2] # fix sigma (second param) as not identified anyway
@@ -44,8 +44,8 @@ function ccOuter(prep_output, params)
 		Aod_offset +=  3 + D
 		if independenceMoment == 1
 			Aod_offset += 1
-		elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
-			Aod_offset += D^2
+		#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
+		#	Aod_offset += D^2
 		end
 		for i in 1:D #A[1,d] = 1
 			θ_upper[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)] = θ_initial[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)]

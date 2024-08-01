@@ -26,8 +26,8 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 		Aod_offset = counterType_θ_offset + 3 + D
 		if independenceMoment == 1
 			Aod_offset += 1
-		elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0
-			Aod_offset += D^2
+		#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
+		#	Aod_offset += D^2
 		end
 		for i ∈ 1:length(δ_grid)
 			Aod[1, i, :, :] = reshape(vcat(Θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D)) 

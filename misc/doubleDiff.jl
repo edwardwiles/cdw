@@ -25,9 +25,8 @@ function doubleDiff_grad(z)
     @.deltaZ_grad[:,:,1,2] += 1/z[1,2] 
     for o =1:D
         @. deltaZ_grad[o,:,o,2] += -1/z[o,2] 
-        @. deltaZ_grad[:,o,1,o] += -1/z[1,o] #deltaZ_grad[:,d,1,d] += -1/z[1,d] 
+        @. deltaZ_grad[:,o,1,o] += -1/z[1,o] #deltaZ_grad[:,d,1,d] += -1/z[1,d]
         for d=1:D
-            #deltaZ_grad[o,d,1,d] += -1/z[1,d] 
             deltaZ_grad[o,d,o,d] += 1/z[o,d] 
         end
     end

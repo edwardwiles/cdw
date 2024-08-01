@@ -19,7 +19,6 @@ function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoMod
 	ΔΔlnAod = doubleDiff(Aod)
 	deltaτ = doubleDiff(τ)
 
-
 	meanτ = 0
 	for o ∈ 2:D
 		meanτ += deltaτ[o, 1]
@@ -32,9 +31,9 @@ function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoMod
 	sumGrav = 0
 	for o ∈ 2:D
 		sumGrav += (deltaτ[o, 1] - meanτ) * (ΔΔν[o, 1] + ΔΔlncHat[o, 1] + ΔΔlnAod[o, 1])
-		for d ∈ 3:D
-			sumGrav += (deltaτ[o, d] - meanτ) * (ΔΔν[o, d] + ΔΔlncHat[o, d] + ΔΔlnAod[o, d])
-		end
+        for d ∈ 3:D
+		sumGrav += (deltaτ[o, d] - meanτ) * (ΔΔν[o, d] + ΔΔlncHat[o, d] + ΔΔlnAod[o, d])
+        end
 	end
 	sumGrav /= (D - 1)^2
 
@@ -75,7 +74,7 @@ function GravityMomentFirstApproach_Jacobian!(Jack_G, τ, ν, Aod, cHat, D, Ū,
 
 		@. Jack_G[:, end, Aod_offset+1+D*(2-1)] += (deltaτ[o, 1] - meanτ) * ΔΔlnAod_grad[o, 1, 1, 2]
 		@. Jack_G[:, end, Aod_offset+o+D*(2-1)] += (deltaτ[o, 1] - meanτ) * ΔΔlnAod_grad[o, 1, o, 2]
-		@. Jack_G[:, end, Aod_offset+1+D*(d-1)] += (deltaτ[o, 1] - meanτ) * ΔΔlnAod_grad[o, 1, 1, d]
+		@. Jack_G[:, end, Aod_offset+1+D*(1-1)] += (deltaτ[o, 1] - meanτ) * ΔΔlnAod_grad[o, 1, 1, 1]
 
 		for d ∈ 3:D
 			@. Jack_G[:, end, Aod_offset+o+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, o, d]
@@ -86,6 +85,7 @@ function GravityMomentFirstApproach_Jacobian!(Jack_G, τ, ν, Aod, cHat, D, Ū,
 
 		end
 	end
+    
 
 	if sameMarginalsMoment == 0 && UoModel == 0
 		ΔΔν_grad = doubleDiffLinear_grad(ν)
