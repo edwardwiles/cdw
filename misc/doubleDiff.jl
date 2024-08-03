@@ -1,6 +1,12 @@
 function doubleDiff(z)
     # computes Delta Delta of variable z, see theory note 
-    deltaZ = (log.(z[:, :]) .- log.(z[1, :])) .- (log.(z[:, 2]) .- log.(z[1, 2]))
+    #deltaZ = (log.(z[:, :]) .- log.(z[1, :])) .- (log.(z[:, 2]) .- log.(z[1, 2]))
+    D = size(z,1)
+    deltaZ = zeros(D,D)
+    for o=1:D
+        @.deltaZ[o,:] = (log.(z[o, :]) .- log.(z[1, :])) .- (log.(z[o, 2]) .- log.(z[1, 2]))  
+    end
+
     return deltaZ
 end
 
@@ -12,14 +18,20 @@ end
 
 function doubleDiffLinear(z)
     # computes Delta Delta of variable z, see theory note 
-    deltaZ = (z[:, :] .- z[1, :]) .- (z[:, 2] .- z[1, 2])
+    #deltaZ = (z[:, :] .- z[1, :]) .- (z[:, 2] .- z[1, 2])
+    
+    D = size(z,1)
+    deltaZ = zeros(D,D)
+    for o=1:D
+        @.deltaZ[o,:] = (z[o, :] .- z[1, :]) .- (z[o, 2] .- z[1, 2])  
+    end
+
     return deltaZ
 end
 
 function doubleDiff_grad(z)
     # computes Delta Delta of variable z, see theory note 
-    deltaZ = (log.(z[:, :]) .- log.(z[1, :])) .- (log.(z[:, 2]) .- log.(z[1, 2]))
-    D = size(deltaZ,1)
+    D = size(z,1)
     deltaZ_grad = zeros(D,D,D,D)
 
     @.deltaZ_grad[:,:,1,2] += 1/z[1,2] 
@@ -35,8 +47,7 @@ end
 
 function doubleDiffLinear_grad(z)
     # computes Delta Delta of variable z, see theory note 
-    deltaZ = (z[:, :] .- z[1, :]) .- (z[:, 2] .- z[1, 2])
-    D = size(deltaZ,1)
+    D = size(z,1)
     deltaZ_grad = zeros(D,D,D,D)
     
     @.deltaZ_grad[:,:,1,2] += 1

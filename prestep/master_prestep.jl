@@ -20,8 +20,8 @@ function master_prestep(data, counters, globalParams)
    if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
         deltaLambda = doubleDiff(lambda)
         deltaTau = doubleDiff(tau)
-        thetaHat = -sum(deltaLambda .* deltaTau) ./ sum(deltaTau .* deltaTau)
-
+        meanTau = mean(deltaTau)
+        thetaHat = -sum(deltaLambda .* (deltaTau .-meanTau)) / sum(deltaTau .* deltaTau .- meanTau^2)
     elseif thetaIn > 0
         thetaHat = thetaIn
     end
@@ -56,7 +56,6 @@ function master_prestep(data, counters, globalParams)
     gammaHat = computeGamma(AHat, tau, wHat, additional_theta, sigma, L)
     gammaPrimeHat = computeGamma(AHat, tauPrime, wPrimeHat, additional_theta, sigma, LPrime)
 
-    
     output = (μHat= 1 ./ thetaHat,
         wHat=wHat[:],
         cHat=cHat,

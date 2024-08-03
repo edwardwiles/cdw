@@ -40,9 +40,10 @@ function preStepGeneralDistribution(data, counters, globalParams, U_init)
 	# Step 1: Estimate thetaHat via gravity or prespecified
 	if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
 		deltaLambda = doubleDiff(lambda)
-		deltaTau = doubleDiff(tau)
-		thetaHat = -sum(deltaLambda .* deltaTau) ./ sum(deltaTau .* deltaTau)
-	elseif thetaIn > 0
+        deltaTau = doubleDiff(tau)
+        meanTau = mean(deltaTau)
+        thetaHat = -sum(deltaLambda .* (deltaTau .-meanTau)) / sum(deltaTau .* deltaTau .- meanTau^2)
+    elseif thetaIn > 0
 		thetaHat = thetaIn
 	end
 
