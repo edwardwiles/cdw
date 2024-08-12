@@ -66,7 +66,7 @@ function buildObjectsForMoments(
 	# remove the entry of w' that is the wage we are normalising to 1
 	# as no point in optimising over this (will add it back inside the moment function)
 	splice!(wPrimeHat, baseIndex)
-
+	euler_gamma = -0.577216
 
 	if counterType != 1
 
@@ -128,7 +128,7 @@ function buildObjectsForMoments(
 			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, Aod_initial, range(1 / (IndMomentOrder+1), IndMomentOrder/ (IndMomentOrder+1), length = IndMomentOrder))
 			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0# We will need to calculate E[ln ̄U]
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], Aod_initial, zeros(D^2))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], Aod_initial, ones(D^2) .* euler_gamma)
 			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
@@ -138,7 +138,7 @@ function buildObjectsForMoments(
 		else # sameMarginalsMoment == 0 && OuterScaling == 0
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
 			if GravityMomentFirstApproach == 1
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], zeros(D^2))
+				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2) .* euler_gamma)
 			end
 
 		end

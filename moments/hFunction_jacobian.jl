@@ -172,7 +172,8 @@ function hFunctionCounter_jacobian!(jac_K, jac_G, UPow, Uσ, w, τ, σ, γ, Aod,
 				jac_index_Add = Aod_offset + d + (d - 1) * D
 				# -(1-sigma)*mu*p_od^(1-sigma)/A
 				@. jac_G[:, cInd+d, jac_index_Add] = (-μ * (1 - σ) * constConsσ[d, d] / Aod[d, d]) ./ Uσ[1:W, o1]
-			elseif θConstant != 1
+			end
+			if θConstant != 1
 				@. jac_G[:, cInd+d, 1] = (1/μ) .* log.((constConsσ[d, d] / Aod[d, d])./ Uσ[1:W, o1]) .* (constConsσ[d, d] / Aod[d, d]) ./ Uσ[1:W, o1]
 			end
 			∂PriceIndexPrime∂γPrime = σ * γ[baseIndex]^(σ - 1) * L[d] * w[d] #

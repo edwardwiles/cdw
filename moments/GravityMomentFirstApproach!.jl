@@ -36,7 +36,7 @@ function GravityMomentFirstApproach_Jacobian!(Jack_G, τ, ν, Aod, cHat, D, Ū,
 		for o ∈ 1:D
 			for d ∈ 1:D
 				o1 = o + (d - 1) * D
-				@. jac_G[:, offset+o1, ν_offset+o1] = -1
+				@. Jac_G[:, offset+o1, ν_offset+o1] = -1
 			end
 		end
 	end
@@ -49,11 +49,11 @@ function GravityMomentFirstApproach_Jacobian!(Jack_G, τ, ν, Aod, cHat, D, Ū,
 	ΔΔlnAod_grad = doubleDiff_grad(Aod)
 	for o ∈ 1:D
 		for d ∈ 1:D
-			@. Jack_G[:, end, Aod_offset+o+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, o, d]
+			@. Jac_G[:, end, Aod_offset+o+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, o, d]
 
-			@. Jack_G[:, end, Aod_offset+1+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, 1, 2]
-			@. Jack_G[:, end, Aod_offset+o+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, o, 2]
-			@. Jack_G[:, end, Aod_offset+1+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, 1, d]
+			@. Jac_G[:, end, Aod_offset+1+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, 1, 2]
+			@. Jac_G[:, end, Aod_offset+o+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, o, 2]
+			@. Jac_G[:, end, Aod_offset+1+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔlnAod_grad[o, d, 1, d]
 		end
 	end
 	
@@ -63,14 +63,14 @@ function GravityMomentFirstApproach_Jacobian!(Jack_G, τ, ν, Aod, cHat, D, Ū,
 
 		for o ∈ 1:D
 			for d ∈ 1:D
-				@. Jack_G[:, end, ν_offset+o+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, o, d]
+				@. Jac_G[:, end, ν_offset+o+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, o, d]
 
-				@. Jack_G[:, end, ν_offset+1+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, 1, 2]
-				@. Jack_G[:, end, ν_offset+o+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, o, 2]
-				@. Jack_G[:, end, ν_offset+1+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, 1, d]			end
+				@. Jac_G[:, end, ν_offset+1+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, 1, 2]
+				@. Jac_G[:, end, ν_offset+o+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, o, 2]
+				@. Jac_G[:, end, ν_offset+1+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, 1, d]			end
 		end
 	end
 
-	@. Jack_G[:, end, :] /= D^2
+	@. Jac_G[:, end, :] /= D^2
 
 end

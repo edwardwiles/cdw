@@ -53,6 +53,14 @@ function ccOuter(prep_output, params)
 		end
 	end
 
+	Θ_lenght = size(θ_initial, 1)
+
+	for i in 1:Θ_lenght
+		if θ_initial[i] < 0
+			θ_upper[i] = -10000 * θ_initial[i]
+			θ_lower[i] = 10000 * θ_initial[i]
+		end
+	end
 
 	κ_lower = zeros(length(δ_grid))
 	κ_upper = zeros(length(δ_grid))

@@ -45,16 +45,20 @@ function master_prestep(data, counters, globalParams)
         wPrimeHat[:] = wPrimeHat ./ wPrimeHat[baseIndex] # normalise 
     end
 
-    
     # Step 5: compute the A_od (outerscaling), if we want to start from a decentered theta_init != thetaHat
     additional_theta = globalParams.theta_init == 0 ?  thetaHat :  globalParams.theta_init
     AHat_additional = (((wHat .* tau) ./ (wHat[1, 1] .* tau[1, :]')) .^ (additional_theta)) .* (lambda ./ lambda[1, :]')
     cHat_additional = AHat_additional .^ (-1) # we define c as 1/A 
     
-    Aod_initial = cHat ./ (cHat_additional) .^(thetaHat/additional_theta)
+    Aod_initial = cHat ./ ((cHat_additional) .^(thetaHat/additional_theta))
+
+
+
     # Step 5: Compute gammaHat and gammaPrimeHat
-    gammaHat = computeGamma(AHat, tau, wHat, additional_theta, sigma, L)
-    gammaPrimeHat = computeGamma(AHat, tauPrime, wPrimeHat, additional_theta, sigma, LPrime)
+    gammaHat = computeGamma(AHat_additional, tau, wHat, additional_theta, sigma, L)
+    gammaPrimeHat = computeGamma(AHat_additional, tauPrime, wPrimeHat, additional_theta, sigma, LPrime)
+
+
 
     output = (μHat= 1 ./ thetaHat,
         wHat=wHat[:],
