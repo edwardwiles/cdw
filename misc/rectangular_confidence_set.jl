@@ -31,7 +31,7 @@ function rectangular_confidence_set(V, α)
     z = zeros(l, B)
 
     Random.seed!(1234567)
-
+    
     for b in 1:B
 
         z[:, b] = S * randn(l)

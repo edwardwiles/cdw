@@ -1,5 +1,7 @@
 function γHat(
 	θ_initial,
+	θ_initial_low,
+	θ_initial_up,
 	γ,
 	U,
 	numMoments,
@@ -16,6 +18,7 @@ function γHat(
 	NormalizeMoments,
 	complement_index,
 	PMMGammaOnly,
+	useFrechetCopulaStartingPoint,
 )
 
 	W = size(U, 1)
@@ -29,7 +32,7 @@ function γHat(
 		l = size(θ_initial, 1),
 		U = U,
 		N = 100,# not used because we do not calculate jacobians
-		lower_limit = -50,
+		lower_limit = -5000,
 		outer_loop_opt = "ek_outer_loop_options.opt",
 		inner_loop_opt = "ek_inner_loop_options.opt",
 	)
@@ -85,15 +88,15 @@ function γHat(
 			end
 		end
 
-		c = 2
-		s = NormalizeMoments == 1 ? ones(moments_with_var_size) : σ_Moments[moments_with_var]
-		if false
-			(c, s) = rectangular_confidence_set(MomentsCovar, ConfidenceLevel)
+		#c = 2
+		#s = NormalizeMoments == 1 ? ones(moments_with_var_size) : σ_Moments[moments_with_var]
+		if true
+			(c, s) = rectangular_confidence_set(MomentsCovar ./ W, ConfidenceLevel)
 		end
-		Moments_CS[moments_with_var, 1] .= -c * s ./ sqrt(W) #lower bound
-		Moments_CS[moments_with_var, 2] .= +c * s ./ sqrt(W) #upper bound
+		Moments_CS[moments_with_var, 1] .= -c * s  #lower bound
+		Moments_CS[moments_with_var, 2] .= +c * s  #upper bound
 		PMMCS = zeros(numMoments)
-		@. PMMCS[moments_with_var] = PMM[moments_with_var] .* s[:] ./ σ_Moments[moments_with_var]
+		@. PMMCS[moments_with_var] = PMM[moments_with_var] .* s[:].*sqrt(W) ./ σ_Moments[moments_with_var]
 		save_object(string("momentsCS_", file_name, ".jld2"), Moments_CS)
 		writedlm(string("momentsCS_", file_name), [Moments_CS[:, 1] Moments_CS[:, 2] PMMCS[:]], ',')
 	end
@@ -129,7 +132,7 @@ function γHat(
 	δ_star_initial = 0
 	if calc_δ_star_initial == 1
 		obj2 =
-			useConfidenceIntervals == 1 ? obj :
+			useConfidenceIntervals == 0 ? obj :
 			PsiObjectiveBundleDelta(
 				γ = γ_PMM,
 				(moments!) = EK_moments!,
@@ -141,17 +144,42 @@ function γHat(
 				l = size(θ_initial, 1),
 				U = U,
 				N = 100,# not used because we do not calculate jacobians
-				lower_limit = -50,
+				lower_limit = -5000,
 				outer_loop_opt = "ek_outer_loop_options.opt",
-				inner_loop_opt = "ek_inner_loop_options.opt",
-			)
-		val, x, nStatus = inner_loop(obj, θ_initial)
+				inner_loop_opt = "ek_inner_loop_options.opt")
+		val, x, nStatus = inner_loop(obj2, θ_initial)
 
 		if nStatus ∈ [0, -100, -101, -103]
 			δ_star_initial = -val
 		else
 			δ_star_initial = 1e+10
 		end
+
+
+		@show δ_star_initial
+		if useFrechetCopulaStartingPoint != 0
+
+			val, x, nStatus = inner_loop(obj2, θ_initial_low)
+			@show val
+
+			if nStatus ∈ [0, -100, -101, -103]
+				δ_star_initial_low = -val
+			else
+				δ_star_initial_low = 1e+10
+			end
+			@show δ_star_initial_low
+
+
+			val, x, nStatus = inner_loop(obj2, θ_initial_up)
+			@show val
+			if nStatus ∈ [0, -100, -101, -103]
+				δ_star_initial_up = -val
+			else
+				δ_star_initial_up = 1e+10
+			end
+			@show δ_star_initial_up
+		end
+
 	end
 
 	@show δ_star_initial

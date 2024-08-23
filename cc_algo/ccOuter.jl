@@ -2,7 +2,7 @@
 function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
 	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian, Jac_W, independenceMoment, IndMomentOrder, OuterScaling , UoModel, sameMarginalsMoment= params
-	@unpack θ_initial, U, γ, numMoments, δ_grid, outer_constr_index, inequality_index, nTotalMoments, file_name, complement_index = prep_output
+	@unpack θ_initial, θ_initial_low, θ_initial_up, U, γ, numMoments, δ_grid, outer_constr_index, inequality_index, nTotalMoments, file_name, complement_index = prep_output
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 
@@ -86,7 +86,7 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					N=Jac_W,
-					lower_limit = -50,
+					lower_limit = -5000,
 					outer_loop_opt = "csw_outer_loop_settings_cluster.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
@@ -109,7 +109,7 @@ function ccOuter(prep_output, params)
 					inner_loop_opt = "ek_inner_loop_options.opt",
 					)
 			end
-			κ_upper[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
+			κ_upper[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial_up)
 			Θ_upper[:, i] .= θ_1
 			print(κ_upper[i])
 
@@ -136,7 +136,7 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					N=Jac_W,
-					lower_limit = -50,
+					lower_limit = -5000,
 					outer_loop_opt = "csw_outer_loop_settings_cluster.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
@@ -159,7 +159,7 @@ function ccOuter(prep_output, params)
 					inner_loop_opt = "ek_inner_loop_options.opt"
 					)
 			end
-			κ_lower[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial)
+			κ_lower[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial_low)
 			Θ_lower[:, i] .= θ_1
 			print(κ_lower[i])
 			save_object(string("cc_output_lower_",i,"_", file_name, ".jld2"),

@@ -243,7 +243,7 @@ derivcheck_type central
 # Enable evaluating gradients with functions in one callback.
 #   no         = 0
 #   yes        = 1
-eval_fcga         yes
+eval_fcga         no
 
 # Specifies the final relative stopping tolerance for the feasibility
 # error. Smaller values of feastol result in a higher degree of accuracy

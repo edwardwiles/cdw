@@ -13,10 +13,51 @@ function preStepGeneralDistribution(L, LPrime, tau, tauPrime, lambda, thetaIn, s
 end
 =#
 
+function preStepGeneralDistribution(data, counters, globalParams)
+
+	#A function that  does the full pre-step to get the initial guess of parameters (theta_upper and theta_lower ) that corresponds with the useFrechetCopulaStartingPoint parameters 
+	#it provides also the Frechet Theta_init 
+
+	Random.seed!(1234567890123)
+	upper = 1
+	U_init = drawUCopulaForStartingPoint(globalParams, data, upper)
+	output_upper = preStepGeneralDistribution(data, counters, globalParams, U_init)
+
+	upper = 0
+	U_init = drawUCopulaForStartingPoint(globalParams, data, upper)
+	output_lower = preStepGeneralDistribution(data, counters, globalParams, U_init)
+
+	output = (μHat = output_upper.μHat,
+		wHat = output_upper.wHat[:],
+		cHat = output_upper.cHat,
+		λPrime = output_upper.λPrime, #this is not used anywhere downstream, we calculate it just to get wagePrime
+		wPrimeHat = output_upper.wPrimeHat[:],
+		γHat = output_upper.γHat[:],
+		γPrimeHat = output_upper.γPrimeHat[:],
+		Aod_initial = output_upper.Aod_initial[:],
+		wPrimeHat_upper = output_upper.wPrimeHat_upper[:],
+		γHat_upper = output_upper.γHat_upper[:],
+		γPrimeHat_upper = output_upper.γPrimeHat_upper[:],
+		Aod_initial_upper = output_upper.Aod_initial_upper[:],
+		wPrimeHat_lower = output_lower.wPrimeHat_lower[:],
+		γHat_lower = output_lower.γHat_lower[:],
+		γPrimeHat_lower = output_lower.γPrimeHat_lower[:],
+		Aod_initial_lower = output_lower.Aod_initial_lower[:])
+
+		# Gain from trade for each distribution
+		κ = (output.γHat[globalParams.baseIndex]/output.γPrimeHat[globalParams.baseIndex])^(globalParams.σHat/(globalParams.σHat-1))-1
+		κ_upper = (output.γHat_upper[globalParams.baseIndex]/output.γPrimeHat_upper[globalParams.baseIndex])^(globalParams.σHat/(globalParams.σHat-1))-1
+		κ_lower = (output.γHat_lower[globalParams.baseIndex]/output.γPrimeHat_lower[globalParams.baseIndex])^(globalParams.σHat/(globalParams.σHat-1))-1
+		
+		println("Gains from Trade" : println(string("Frechet = ", κ)))
+		println("Gains from Trade" : println(string("Lower Copula = ", κ_lower)))
+		println("Gains from Trade" : println(string("Upper Copula = ", κ_upper)))		
+	return output
+end
+
 function preStepGeneralDistribution(data, counters, globalParams, U_init)
-	# does the full pre-step to get the initial guess of parameters (psi^*) that corresponds with a specific distribution
-	# the same function as above. But without the need to re-simulate the Us for the calibration.  
-	# unpack data 
+	#A function that   does the full pre-step to get the initial guess of parameters (theta_upper and theta_lower are equal in this case) that corresponds with the supplied U_init
+	#it provides also the Frechet Theta_init 
 	lambda = data.λData
 	L = data.LData
 	tau = data.τData
@@ -40,10 +81,10 @@ function preStepGeneralDistribution(data, counters, globalParams, U_init)
 	# Step 1: Estimate thetaHat via gravity or prespecified
 	if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
 		deltaLambda = doubleDiff(lambda)
-        deltaTau = doubleDiff(tau)
-        meanTau = mean(deltaTau)
-        thetaHat = -sum(deltaLambda .* (deltaTau .-meanTau)) / sum(deltaTau .* deltaTau .- meanTau^2)
-    elseif thetaIn > 0
+		deltaTau = doubleDiff(tau)
+		meanTau = mean(deltaTau)
+		thetaHat = -sum(deltaLambda .* (deltaTau .- meanTau)) / sum(deltaTau .* deltaTau .- meanTau^2)
+	elseif thetaIn > 0
 		thetaHat = thetaIn
 	end
 
@@ -131,20 +172,52 @@ function preStepGeneralDistribution(data, counters, globalParams, U_init)
 	gammaHat = ones(D)
 	gammaPrimeHat = ones(D)
 
-	gammaHat[:] = (price_index[:] ./ (wHat[:] .* L[:])) .^ (1.0 / sigma)
-	gammaPrimeHat[:] = (price_index_Prime[:] ./ (wPrimeHat[:] .* LPrime[:])) .^ (1.0 / sigma)
+	gammaHat = (price_index ./ (wHat .* L)) .^ (1 / sigma)
+	gammaPrimeHat = (price_index_Prime ./ (wPrimeHat .* LPrime)) .^ (1 / sigma)
+
+#	gammaHat[:] = (price_index[:] ./ (wHat[:] .* L[:])) .^ (1.0 / sigma)
+#	gammaPrimeHat[:] = (price_index_Prime[:] ./ (wPrimeHat[:] .* LPrime[:])) .^ (1.0 / sigma)
+
 
 	# we were using above cHat^(1/theta), for numerical efficiency. We adjust the power before returning the values.
 	@. cHat[:] = cHat[:] .^ (thetaHat)
+	
+	lambdaPrimeFrechet = Array{Float64, 2}(undef, D, D)  # initialise
+	wPrimeHatFrechet = ones(D)
+
+	if counterType != 1 # only solve if not autarky, as w undetermined in autarky 
+		iterWagesTheory!(wPrimeHatFrechet, LPrime, AHat_Frechet, tauPrime, thetaHat, lambdaPrimeFrechet)
+		wPrimeHatFrechet[:] = wPrimeHatFrechet ./ wPrimeHatFrechet[baseIndex] # normalise 
+	end
+
+	gammaHatFrechet = computeGamma(AHat_Frechet, tau, wHat, thetaHat, sigma, L)
+	gammaPrimeHatFrechet = computeGamma(AHat_Frechet, tauPrime, wPrimeHatFrechet, thetaHat, sigma, LPrime)
+
+	additional_theta = globalParams.theta_init == 0 ? thetaHat : globalParams.theta_init
+	AHat_additional = (((wHat .* tau) ./ (wHat[1, 1] .* tau[1, :]')) .^ (additional_theta)) .* (lambda ./ lambda[1, :]')
+	cHat_additional = AHat_additional .^ (-1) # we define c as 1/A 
+
+	Aod_initial = cHat_Frechet ./ cHat
+
 
 	output = (μHat = 1 ./ thetaHat,
 		wHat = wHat[:],
-		cHat = cHat,
+		cHat = cHat_Frechet,
 		λPrime = lambdaPrime,
 		wPrimeHat = wPrimeHat[:],
-		γHat = gammaHat[:],
-		γPrimeHat = gammaPrimeHat[:],
-		Aod_initial = ones(D^2))
+		γHat = gammaHatFrechet[:],
+		γPrimeHat = gammaPrimeHatFrechet[:],
+		Aod_initial = ones(D^2),
+		wPrimeHat_upper = copy(wPrimeHat[:]),
+		γHat_upper = copy(gammaHat[:]),
+		γPrimeHat_upper = copy(gammaPrimeHat[:]),
+		Aod_initial_upper = reshape(Aod_initial, D^2)[:],
+		wPrimeHat_lower = copy(wPrimeHat[:]),
+		γHat_lower = copy(gammaHat[:]),
+		γPrimeHat_lower = copy(gammaPrimeHat[:]),
+		Aod_initial_lower = reshape(Aod_initial, D^2)[:]
+		)
+
 
 	return output
 end
