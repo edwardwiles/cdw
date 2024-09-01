@@ -2,7 +2,11 @@ function master_lfd(params, setup_output, prestep_output, prep_output, cc_output
 
 	lfd_output = LFD(cc_output, prep_output, params)
 
-	# save the cc data 
+
+
+	master_post_cc_lfd(params, params, setup_output, prestep_output, prep_output, cc_output, lfd_output)
+
+		# save the cc data 
 	save_object(string("cc_input_", file_name, ".jld2"),
 		(params = params,
 			setup_output = setup_output,
@@ -11,9 +15,6 @@ function master_lfd(params, setup_output, prestep_output, prep_output, cc_output
 			cc_output = cc_output,
 			lfd_output = lfd_output,
 		))
-
-	master_post_cc_lfd(params, params, setup_output, prestep_output, prep_output, cc_output, lfd_output)
-
 end
 
 function master_post_cc_lfd(postCCParams, params, setup_output, prestep_output, prep_output, cc_output, lfd_output)

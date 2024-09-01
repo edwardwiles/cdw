@@ -23,5 +23,12 @@ function ccInner(prep_output, params)
 
     val, x, nStatus = inner_loop(obj, θ_initial)
 
-    return (val, x, nStatus)
+    G = zeros(W, nTotalMoments)
+	K = zeros(W, 1)
+
+	EK_moments!(K, G, θ_initial, U, obj)
+
+	κ = mean(K, dims = 1)
+	Θ = copy(θ_initial)
+    return (Θ, κ, val, x, nStatus)
 end

@@ -5,7 +5,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	@unpack data = setup_output
 	@unpack θ_initial, γ, δ_grid, file_name = prep_output
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
-	@unpack LFD_upper, LFD_lower, δ_upper, δ_lower	 = lfd_output
+	@unpack LFD_upper, LFD_lower, δ_LFD_upper, δ_LFD_lower	 = lfd_output
 	
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
@@ -58,8 +58,8 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	savefig(p1, string("counterfactuals_", file_name, "_.png")) 
 
 
-	p2= plot(δ_grid, δ_upper, lw = 4, color = colors[1], label = "Upper Bound")
-    plot!(p2, δ_grid, δ_lower, lw = 4, color = colors[1], label = "Lower Bound")
+	p2= plot(δ_grid, δ_LFD_upper, lw = 4, color = colors[1], label = "Upper Bound")
+    plot!(p2, δ_grid, δ_LFD_lower, lw = 4, color = colors[1], label = "Lower Bound")
 	xlabel!(p2, "δ Budget", xlabelfontsize = 14)
 	ylabel!(p2, "δ at LFD", ylabelfontsize = 14)
 	savefig(p2, string("counterfactual_deltas_", file_name, "_.png")) 

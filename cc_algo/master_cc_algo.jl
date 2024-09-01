@@ -17,16 +17,25 @@ function master_cc_algo(prep_output, params)
 
 		return cc_output
 	else
-		master_cc_inner_algo(prep_output, params)
-		return 0
+		Θ, κ, δ_star, nStatus = master_cc_inner_algo(prep_output, params)
+
+		cc_output = (
+			Θ_upper = Θ,
+			Θ_lower = Θ,
+			κ_upper = κ,
+			κ_lower = κ,
+		)
+		save_object(string("cc_output_", file_name, ".jld2"),
+		cc_output)
+
+		return cc_output
 	end
 
 end
 
 function master_cc_inner_algo(prep_output, params)
 
-	val, x, nStatus = ccInner(prep_output, params) # run the outer loop 
-	@show val
-	@show x
-	@show nStatus
+	Θ, κ, val, x, nStatus = ccInner(prep_output, params) # run the outer loop 
+	δ_star = -val 
+	return (Θ, κ, δ_star, nStatus)
 end

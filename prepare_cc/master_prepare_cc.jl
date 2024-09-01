@@ -31,7 +31,9 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	ConfidenceLevel,
 	useFiniteSamplePrestep,
 	PMMGammaOnly,
-	useFrechetCopulaStartingPoint = globalParams
+	useFrechetCopulaStartingPoint, 
+	useRNStartingPoint,
+	UseUnput_Θ = globalParams
 
 	# set seed
 	Random.seed!(seedU)
@@ -46,7 +48,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	useParams = (; useParams..., SamplingWeight = SamplingWeight)
 
 	prestep_output_effective =
-		useFiniteSamplePrestep == 0 && useFrechetCopulaStartingPoint == 0 ? prestep_output : (useFrechetCopulaStartingPoint != 0 ? preStepGeneralDistribution(data, counters, globalParams) : preStepGeneralDistribution(data, counters, globalParams, Ū))
+		(useFiniteSamplePrestep == 0 && useFrechetCopulaStartingPoint == 0 && useRNStartingPoint ==0) || UseUnput_Θ == 1 ? prestep_output : (useFrechetCopulaStartingPoint != 0 ? preStepGeneralDistribution(data, counters, globalParams) : useRNStartingPoint == 0 ? preStepGeneralDistribution(data, counters, globalParams, Ū) : preStepGeneralDistributionRN(data, counters, globalParams, Ū))
 
 	# if using common marginals with moments methodology, calculate the K moments and put them in Ubar 
 
@@ -207,7 +209,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	@show numMomentInnerSimple
 	@show inequality_index
 
-	γ_Hat, δ_star_initial = γHat(
+	γ_Hat, δ_star_initial, δ_star_initial_low, δ_star_initial_up = γHat(
 		θ_initial,
 		θ_initial_low,
 		θ_initial_up,
@@ -228,7 +230,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		complement_index,
 		PMMGammaOnly,
 		useFrechetCopulaStartingPoint,
-	)
+		useRNStartingPoint)
 	moments_without_var = γ_Hat.moments_without_var
 	#complement_index =  filter!(e-> ( e ∉ moments_without_var  && (e-inner_loop_last_moment_index) ∉ moments_without_var ), complement_index) 
 
@@ -238,9 +240,8 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		δ_grid = vcat(0.01, 0.1, 0.5, 1, 2) .* δ_ref
 	end
 
-	δ_grid_filtered = filter(x -> x >= δ_star_initial, δ_grid)
+	δ_grid_filtered = filter(x -> x >= δ_star_initial  && x >= δ_star_initial_low  && x >= δ_star_initial_up  , δ_grid)
 
-	@show δ_star_initial
 	@show δ_grid
 	@show δ_grid_filtered
 

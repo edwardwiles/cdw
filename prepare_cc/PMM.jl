@@ -19,6 +19,7 @@ function γHat(
 	complement_index,
 	PMMGammaOnly,
 	useFrechetCopulaStartingPoint,
+	useRNStartingPoint
 )
 
 	W = size(U, 1)
@@ -130,6 +131,8 @@ function γHat(
 		moments_without_var = moments_without_var)
 
 	δ_star_initial = 0
+	δ_star_initial_low = 0
+	δ_star_initial_up = 0
 	if calc_δ_star_initial == 1
 		obj2 =
 			useConfidenceIntervals == 0 ? obj :
@@ -157,7 +160,7 @@ function γHat(
 
 
 		@show δ_star_initial
-		if useFrechetCopulaStartingPoint != 0
+		if useFrechetCopulaStartingPoint != 0 || useRNStartingPoint != 0
 
 			val, x, nStatus = inner_loop(obj2, θ_initial_low)
 			@show val
@@ -184,6 +187,6 @@ function γHat(
 
 	@show δ_star_initial
 
-	return γ_PMM, δ_star_initial
+	return γ_PMM, δ_star_initial, δ_star_initial_low, δ_star_initial_up
 
 end
