@@ -1,7 +1,7 @@
 function ccInner(prep_output, params)
     #runs the CC Inner loop 
-    @unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, θConstant = params
-    @unpack θ_initial, U, γ, numMoments, outer_constr_index, inequality_index, nTotalMoments, complement_index = prep_output
+    @unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, θConstant, W = params
+    @unpack θ_initial,θ_initial_low, θ_initial_up, U, γ, numMoments, outer_constr_index, inequality_index, nTotalMoments, complement_index = prep_output
 
 
     obj = PsiObjectiveBundleDelta(
@@ -21,14 +21,31 @@ function ccInner(prep_output, params)
         inner_loop_opt="ek_inner_loop_options.opt",
         lower_limit=-50)
 
+        G = zeros(W, nTotalMoments)
+        K = zeros(W, 1)
+        
+        EK_moments!(K, G, θ_initial_up, U, obj)
+
+        κ = mean(K, dims = 1)
+        @show κ
+
     val, x, nStatus = inner_loop(obj, θ_initial)
 
-    G = zeros(W, nTotalMoments)
-	K = zeros(W, 1)
+  
+
+    EK_moments!(K, G, θ_initial_low, U, obj)
+
+	κ = mean(K, dims = 1)
+    @show κ
+
+
+
 
 	EK_moments!(K, G, θ_initial, U, obj)
 
 	κ = mean(K, dims = 1)
 	Θ = copy(θ_initial)
+
+
     return (Θ, κ, val, x, nStatus)
 end

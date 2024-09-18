@@ -1,4 +1,4 @@
-function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, UoModel)
+function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach,independenceMoment, μHat, UoModel)
 	# main function to fill in the moment matrix G for the baseline moments 
 
 	D = size(τ, 1) # num countries 
@@ -70,7 +70,7 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 
 			if localGravityMoment == 1
 				max_price, max_idx = findmax(pricesTemp[:])
-				offset = gravMoment + GravityMomentFirstApproach
+				offset = gravMoment + GravityMomentFirstApproach+independenceMoment
 				localGravityMoment!(G, D, ω, pricesTemp, ξ[:, d], σ, μHat, d, max_price, offset)
 				offset += D * (D - 1)
 				localGravityCrossMoment!(G, D, ω, pricesTemp, ξ[:, d], σ, d, max_price, offset)
@@ -186,6 +186,14 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, 
 
 		end
 	else
+		# we need only baseIndex, so we do not need to identify the price index for other countries
+		o1 = baseIndex + (baseIndex - 1) * D # uncomment to to U_{od} rather than U_o 
+		if UoModel == 1
+			o1 = baseIndex
+		end
+
+		@. G[:, dInd+baseIndex] = constConsσ[baseIndex, baseIndex] ./ Uσ[:, o1] .- denom[baseIndex]
+		#=
 		@inbounds for ω ∈ 1:W
 			# we need only baseIndex, so we do not need to identify the price index for other countries
 			for d ∈ 1:D
@@ -198,6 +206,7 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, 
 				end
 			end
 		end
+		=#
 	end
 
 end

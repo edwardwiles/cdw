@@ -34,3 +34,14 @@ function MinInd!(xInd, x, D)
         xInd[i] = (x[i] > xMin) ? 0 : 1
     end
 end
+
+function MinInd2!(xInd, x, D)
+    # function takes a GxD matrix and calculates another GxD matrix
+    # with a smooth approximation of indicator functions for row-wise min
+    # i.e., it computes the min of each row and indicates if x_{ij} is that min
+    xMin = minimum(x)
+    for i = 1:D
+        xInd[i] = (x[i] > xMin) ? 0 : 1
+    end
+    return xMin
+end

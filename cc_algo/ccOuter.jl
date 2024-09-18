@@ -17,8 +17,8 @@ function ccOuter(prep_output, params)
 	θ_upper[2] = θ_initial[2]
 
 	# for μ have the largest bounds such that prices are defined under Frechet
-	θ_upper[1] = 1 / (θ_initial[2] - 1)
-	θ_lower[1] = 0
+	θ_upper[1] = 1 / (θ_initial[2] - 1)-0.001
+	θ_lower[1] = 0+0.001
 
 	# if fixed μ
 	if θConstant == 1
@@ -28,12 +28,23 @@ function ccOuter(prep_output, params)
 		θ_upper[1] = min(θ_upper[1], 1 / (θ_initial[2] - 1))
 	end
 
-
 	# Cap CDF probas to one
 	if independenceMoment == 1
-		@. θ_upper[end-IndMomentOrder+1:end] = 1
-		@. θ_lower[end-IndMomentOrder+1:end] = 0
+
+		@. θ_lower[end-IndMomentOrder+1:end] = (θ_initial.*0.5)[end-IndMomentOrder+1:end] # lower bound for parameters in outer loop optimisation 
+		@. θ_upper[end-IndMomentOrder+1:end] = (θ_initial.*1.5)[end-IndMomentOrder+1:end] # upper bound for parameters in outer loop optimisation 
+
+		@. θ_upper[end-IndMomentOrder+1:end] = min.(θ_upper[end-IndMomentOrder+1:end], 1-0.001)
+		@. θ_lower[end-IndMomentOrder+1:end] = max.(θ_lower[end-IndMomentOrder+1:end], 0+0.001)
 	end
+
+		# test to remove later 
+		if false
+			θ_lower[3:4+D] =  θ_initial[3:4+D]
+			θ_upper[3:4+D] =  θ_initial[3:4+D]
+			θ_lower[end-IndMomentOrder+1:end] = θ_initial[end-IndMomentOrder+1:end]
+			θ_upper[end-IndMomentOrder+1:end] = θ_initial[end-IndMomentOrder+1:end]
+		end
 
 
 	Aod_offset = 0
@@ -52,8 +63,8 @@ function ccOuter(prep_output, params)
 			θ_lower[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)] = θ_initial[Aod_offset+1+D*(i-1):Aod_offset+1+D*(i-1)]
 		end
 
-		if ForceFrechetMarginal == 1 # make only A[baesIndex,d] variable. This is an extra restriction that I want to test to see if it gives better bounds
-
+		#if ForceFrechetMarginal == 1 # make only A[baesIndex,d] variable. This is an extra restriction that I want to test to see if it gives better bounds
+		if false
 			for d in 1:D
 				for i in 1:D #A[1,d] = 1
 					if i != baseIndex
@@ -64,6 +75,7 @@ function ccOuter(prep_output, params)
 			end
 		end
 	end
+
 
 	Θ_lenght = size(θ_initial, 1)
 
@@ -82,8 +94,9 @@ function ccOuter(prep_output, params)
 	if useParallel == 0 # if parallelisation is off, do deltas one at a time 
 		θ_1 = copy(θ_initial)
 
-		# run outer loop for upper bound 
+	# run outer loop for upper bound 
 		for (i, δ) in enumerate(δ_grid)
+				
 			if counterType == 1 # if GT counterfactual, k does not depend on U directly (so create Implicit object)
 				obj = PsiObjectiveBundleImplicit(
 					δ = δ,
@@ -98,7 +111,7 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					N = Jac_W,
-					lower_limit = -5000,
+					lower_limit = -50,
 					outer_loop_opt = "csw_outer_loop_settings_cluster.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt",
 				)
@@ -122,6 +135,7 @@ function ccOuter(prep_output, params)
 				)
 			end
 			κ_upper[i], θ_1 = outer_loop(obj, θ_lower, θ_upper, θ_initial_up)
+			
 			Θ_upper[:, i] .= θ_1
 			print(κ_upper[i])
 
@@ -148,7 +162,7 @@ function ccOuter(prep_output, params)
 					l = size(θ_initial, 1),
 					U = U,
 					N = Jac_W,
-					lower_limit = -5000,
+					lower_limit = -50,
 					outer_loop_opt = "csw_outer_loop_settings_cluster.opt",
 					inner_loop_opt = "ek_inner_loop_options.opt",
 				)

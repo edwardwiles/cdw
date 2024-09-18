@@ -177,7 +177,7 @@ function get_θ_initial(globParams, μHat, wPrimeHat, γHat, γPrimeHat, Aod_ini
 			end
 		else # sameMarginalsMoment == 0 && OuterScaling == 0
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
-			if GravityMomentFirstApproach == 1
+			if GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2) .* euler_gamma)
 			end
 

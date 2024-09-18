@@ -72,6 +72,9 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		numMoments += (D - 1)
 	end
 
+	# we add the condition that E[Ubar] =1
+	#numMoments += UoModel == 0 ? D : D^2
+
 	if GravityMomentFirstApproach == 1
 		numMoments += 1
 
@@ -100,6 +103,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		numMoments += 1 # E[U[refIndex1]]
 		numMoments += IndMomentOrder # CDF
 		numMoments += (D^2 - floor(Int, D * (1 + D) / 2)) * (IndMomentOrder^2) # CDF[i,j]=CDF[i]*CDF[j]
+		numMoments += 1 # CDF[i]<CDF[i+1]
 
 		# corr[i,j]=0
 		if UoModel == 0
@@ -110,7 +114,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	end
 
 
-	nOuterLoopMoments = (GravityMomentFirstApproach == 1) ? 1 : 0
+	nOuterLoopMoments = ((GravityMomentFirstApproach == 1) ? 1 : 0 ) + ( (independenceMoment == 1) ? 1 : 0 )
 	outer_constr_index = numMoments + 1 - nOuterLoopMoments
 	numMomentInnerSimple = numMoments - nOuterLoopMoments
 	outer_constr_index_simple = outer_constr_index
@@ -133,7 +137,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	end
 
 	file_name = string(
-		"FD_",
+		"NoJacob_FD_",
 		fakeData,
 		"_Count_",
 		counterType,
@@ -175,6 +179,10 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		useConfidenceIntervals,
 		"Cor",
 		useFrechetCopulaStartingPoint,
+		"RNSP",
+		useRNStartingPoint,
+		"DR_",
+		δ_ref,
 		"_",
 		Dates.format(now(), "y-m-d"),
 		".csv",
@@ -238,6 +246,8 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		δ_grid = vcat(δ_ref)
 	else
 		δ_grid = vcat(0.01, 0.1, 0.5, 1, 2) .* δ_ref
+		#δ_grid = vcat(1, 2) .* δ_ref
+
 	end
 
 	δ_grid_filtered = filter(x -> x >= δ_star_initial  && x >= δ_star_initial_low  && x >= δ_star_initial_up  , δ_grid)

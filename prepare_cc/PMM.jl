@@ -96,7 +96,7 @@ function γHat(
 		end
 		Moments_CS[moments_with_var, 1] .= -c * s  #lower bound
 		Moments_CS[moments_with_var, 2] .= +c * s  #upper bound
-		PMMCS = zeros(numMoments)
+		PMMCS = zeros(numInnerMoments)
 		@. PMMCS[moments_with_var] = PMM[moments_with_var] .* s[:].*sqrt(W) ./ σ_Moments[moments_with_var]
 		save_object(string("momentsCS_", file_name, ".jld2"), Moments_CS)
 		writedlm(string("momentsCS_", file_name), [Moments_CS[:, 1] Moments_CS[:, 2] PMMCS[:]], ',')
@@ -160,8 +160,8 @@ function γHat(
 
 
 		@show δ_star_initial
-		if useFrechetCopulaStartingPoint != 0 || useRNStartingPoint != 0
-
+		#if useFrechetCopulaStartingPoint != 0 || useRNStartingPoint != 0
+		if true
 			val, x, nStatus = inner_loop(obj2, θ_initial_low)
 			@show val
 

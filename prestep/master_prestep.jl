@@ -46,17 +46,49 @@ function master_prestep(data, counters, globalParams)
 	end
 
 	# Step 5: compute the A_od (outerscaling), if we want to start from a decentered theta_init != thetaHat
-	additional_theta = globalParams.theta_init == 0 ? thetaHat : globalParams.theta_init
-	AHat_additional = (((wHat .* tau) ./ (wHat[1, 1] .* tau[1, :]')) .^ (additional_theta)) .* (lambda ./ lambda[1, :]')
-	cHat_additional = AHat_additional .^ (-1) # we define c as 1/A 
+	additional_theta_low = 0
+	additional_theta_up = 0
 
-	Aod_initial = cHat ./ ((cHat_additional) .^ (thetaHat / additional_theta))
+	if globalParams.theta_init == -1
+		additional_theta_low = get_theta_from_delta(globalParams.δ_ref, globalParams.UoModel == 1 ? D : D^2, -1) * thetaHat
+		additional_theta_up = get_theta_from_delta(globalParams.δ_ref, globalParams.UoModel == 1 ? D : D^2, 1) * thetaHat
+	elseif globalParams.theta_init == 0
+		additional_theta_low = thetaHat
+		additional_theta_up = thetaHat
+	else
+		additional_theta_low = globalParams.theta_init
+		additional_theta_up = globalParams.theta_init
+	end
+
+	additional_theta_low = max(additional_theta_low, sigma - 1 + 1)
+	additional_theta_up = max(additional_theta_up, sigma - 1 + 1)
+
+	AHat_additional_low = (((wHat .* tau) ./ (wHat[1, 1] .* tau[1, :]')) .^ (additional_theta_low)) .* (lambda ./ lambda[1, :]')
+	cHat_additional_low = AHat_additional_low .^ (-1) # we define c as 1/A 
+
+	Aod_initial_low = cHat ./ ((cHat_additional_low) .^ (thetaHat / additional_theta_low))
 
 
 
 	# Step 5: Compute gammaHat and gammaPrimeHat
-	gammaHat = computeGamma(AHat_additional, tau, wHat, additional_theta, sigma, L)
-	gammaPrimeHat = computeGamma(AHat_additional, tauPrime, wPrimeHat, additional_theta, sigma, LPrime)
+	gammaHat_low = computeGamma(AHat_additional_low, tau, wHat, additional_theta_low, sigma, L)
+	gammaPrimeHat_low = computeGamma(AHat_additional_low, tauPrime, wPrimeHat, additional_theta_low, sigma, LPrime)
+
+
+	AHat_additional_up = (((wHat .* tau) ./ (wHat[1, 1] .* tau[1, :]')) .^ (additional_theta_up)) .* (lambda ./ lambda[1, :]')
+	cHat_additional_up = AHat_additional_up .^ (-1) # we define c as 1/A 
+
+	Aod_initial_up = cHat ./ ((cHat_additional_up) .^ (thetaHat / additional_theta_up))
+
+
+
+	# Step 5: Compute gammaHat and gammaPrimeHat
+	gammaHat_up = computeGamma(AHat_additional_up, tau, wHat, additional_theta_up, sigma, L)
+	gammaPrimeHat_up = computeGamma(AHat_additional_up, tauPrime, wPrimeHat, additional_theta_up, sigma, LPrime)
+
+
+	gammaHat = computeGamma(AHat, tau, wHat, thetaHat, sigma, L)
+	gammaPrimeHat = computeGamma(AHat, tauPrime, wPrimeHat, thetaHat, sigma, LPrime)
 
 
 
@@ -67,16 +99,73 @@ function master_prestep(data, counters, globalParams)
 		wPrimeHat = wPrimeHat[:],
 		γHat = gammaHat[:],
 		γPrimeHat = gammaPrimeHat[:],
-		Aod_initial = reshape(Aod_initial, D^2)[:],
+		Aod_initial = ones(D^2),
 		wPrimeHat_upper = copy(wPrimeHat[:]),
-		γHat_upper = copy(gammaHat[:]),
-		γPrimeHat_upper = copy(gammaPrimeHat[:]),
-		Aod_initial_upper = reshape(Aod_initial, D^2)[:],
+		γHat_upper = copy(gammaHat_up[:]),
+		γPrimeHat_upper = copy(gammaPrimeHat_up[:]),
+		Aod_initial_upper = reshape(Aod_initial_up, D^2)[:],
 		wPrimeHat_lower = copy(wPrimeHat[:]),
-		γHat_lower = copy(gammaHat[:]),
-		γPrimeHat_lower = copy(gammaPrimeHat[:]),
-		Aod_initial_lower = reshape(Aod_initial, D^2)[:])
+		γHat_lower = copy(gammaHat_low[:]),
+		γPrimeHat_lower = copy(gammaPrimeHat_low[:]),
+		Aod_initial_lower = reshape(Aod_initial_low, D^2)[:])
 
+	κ = (output.γHat[globalParams.baseIndex] / output.γPrimeHat[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1)) - 1
+	κ_upper = (output.γHat_upper[globalParams.baseIndex] / output.γPrimeHat_upper[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1)) - 1
+	κ_lower = (output.γHat_lower[globalParams.baseIndex] / output.γPrimeHat_lower[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1)) - 1
+
+	@show κ
+	@show κ_upper
+	@show κ_lower
 
 	return output
 end
+#=
+function get_delta_from_theta(theta)
+@show theta
+	if theta < exp(-1) && theta > 0.0001
+		return exp(-1 - theta / (-1 + theta)) * theta^(-1 - theta / (-1 + theta)) *
+			   (
+				   -2 * exp(2) * theta + 6 * exp(2) * theta^2 - 6 * exp(2) * theta^3 + 2 * exp(2) * theta^4 - exp(theta / (-1 + theta)) * theta^(theta / (-1 + theta)) + 2 * exp(3 + 1 / (-1 + theta)) * theta^(1 + theta / (-1 + theta)) -
+				   4 * exp(1 + theta / (-1 + theta)) * theta^(1 + theta / (-1 + theta)) - exp(3 + 1 / (-1 + theta)) * theta^(2 + theta / (-1 + theta)) + 2 * exp(1 + theta / (-1 + theta)) * theta^(2 + theta / (-1 + theta))
+			   ) / (2 * (-2 + theta))
+	elseif theta <= 1+0.001 && theta >= exp(-1)
+		return -1 + theta - log(theta)
+	elseif theta < 2-0.0000001 && theta > 1+0.001
+		return exp(-(theta / (-1 + theta))) * theta^(-(theta / (-1 + theta))) *
+			   (
+				   exp(1) - 3 * exp(1) * theta + 3 * exp(1) * theta^2 - exp(1) * theta^3 + 2 * exp(1)^(theta / (-1 + theta)) * theta^(theta / (-1 + theta)) - 3 * exp(theta / (-1 + theta)) * theta^(1 + theta / (-1 + theta)) +
+				   exp(theta / (-1 + theta)) * theta^(2 + theta / (-1 + theta)) + 2 * exp(theta / (-1 + theta)) * theta^(theta / (-1 + theta)) * log(theta) - exp(theta / (-1 + theta)) * theta^(1 + theta / (-1 + theta)) * log(theta)
+			   ) / (-2 + theta)
+	else
+		return 10000000
+	end
+end
+=#
+
+function get_delta_from_theta(theta, U_dim, up_low)
+	if (1-theta) * up_low < 0 || theta == 0
+		return 0
+	else
+		return 1 - (theta^(U_dim - 1)) * ((U_dim + 1) - U_dim * theta + log(theta))
+	end
+end
+
+function get_theta_from_delta(delta, U_dim, up_low)
+
+
+
+	function theta_solver_func!(x)
+		delta_x = get_delta_from_theta(abs(x[1]), U_dim, up_low) - delta
+		#delta_x = get_delta_from_theta(abs(x[1])) - delta
+		@show x
+		@show delta_x
+		return delta_x^2
+	end
+
+	theta_solver_results = nlsolve(theta_solver_func!, ones(1).- up_low .* 0.0001)
+	@show theta_solver_results.residual_norm
+	@show theta_solver_results.zero
+	theta = abs((theta_solver_results.zero)[1])
+	return theta
+end
+
