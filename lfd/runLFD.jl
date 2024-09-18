@@ -5,8 +5,8 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	@unpack data = setup_output
 	@unpack θ_initial, γ, δ_grid, file_name = prep_output
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
-	@unpack LFD_upper, LFD_lower, δ_LFD_upper, δ_LFD_lower	 = lfd_output
-	
+	@unpack LFD_upper, LFD_lower, δ_LFD_upper, δ_LFD_lower = lfd_output
+
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 
@@ -14,7 +14,8 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	U = γ.Ū # unscaled U
 	cHat = γ.cHat
 	λData = data.λData
-
+	wHat = γ.wHat
+	τ = γ.τ
 	# Aod
 	Aod = ones(3, δ_grid_size, D, D) # up/initial/low, δ, o, d
 
@@ -27,14 +28,21 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 		Aod_offset = counterType_θ_offset + 3 + D
 		if independenceMoment == 1
 			Aod_offset += 1
-		#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
-		#	Aod_offset += D^2
+			#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
+			#	Aod_offset += D^2
 		end
 		for i ∈ 1:length(δ_grid)
-			Aod[1, i, :, :] = reshape(vcat(Θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D)) 
-			Aod[2, i, :, :] = reshape(vcat(θ_initial[Aod_offset+1:Aod_offset+D^2]), (D, D)) 
+			Aod[1, i, :, :] = reshape(vcat(Θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
+			Aod[2, i, :, :] = reshape(vcat(θ_initial[Aod_offset+1:Aod_offset+D^2]), (D, D))
 			Aod[3, i, :, :] = reshape(vcat(Θ_upper[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
 		end
+	end
+
+
+	for i ∈ 1:length(δ_grid)
+		@. Aod[1, i, :, :] = Aod[1, i, :, :] * (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1 / Θ_lower[1])) .* (λData ./ λData[1, :]')
+		@. Aod[2, i, :, :] = Aod[2, i, :, :] * (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1 / θ_initial[1])) .* (λData ./ λData[1, :]')
+		@. Aod[3, i, :, :] = Aod[3, i, :, :] * (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1 / Θ_upper[1])) .* (λData ./ λData[1, :]')
 	end
 
 	SamplingWeights = γ.SamplingWeights
@@ -47,22 +55,22 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 	#x, domestic/rw/ratio, δ, bound=lower/initial/upper
 
-	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D,UoModel)
+	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D, UoModel, θ_initial[1], Θ_upper[1], Θ_lower[1], wHat, τ)
 	#marg_pdf = MarginalPricesPDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData)
 
 
 	p1 = plot(δ_grid, κ_upper, lw = 4, color = colors[1], label = "Upper Bound")
-    plot!(p1, δ_grid, κ_lower, lw = 4, color = colors[1], label = "Lower Bound")
+	plot!(p1, δ_grid, κ_lower, lw = 4, color = colors[1], label = "Lower Bound")
 	xlabel!(p1, "δ", xlabelfontsize = 14)
 	ylabel!(p1, "Counterfactual", ylabelfontsize = 14)
-	savefig(p1, string("counterfactuals_", file_name, "_.png")) 
+	savefig(p1, string("counterfactuals_", file_name, "_.png"))
 
 
-	p2= plot(δ_grid, δ_LFD_upper, lw = 4, color = colors[1], label = "Upper Bound")
-    plot!(p2, δ_grid, δ_LFD_lower, lw = 4, color = colors[1], label = "Lower Bound")
+	p2 = plot(δ_grid, δ_LFD_upper, lw = 4, color = colors[1], label = "Upper Bound")
+	plot!(p2, δ_grid, δ_LFD_lower, lw = 4, color = colors[1], label = "Lower Bound")
 	xlabel!(p2, "δ Budget", xlabelfontsize = 14)
 	ylabel!(p2, "δ at LFD", ylabelfontsize = 14)
-	savefig(p2, string("counterfactual_deltas_", file_name, "_.png")) 
+	savefig(p2, string("counterfactual_deltas_", file_name, "_.png"))
 
 
 
@@ -85,12 +93,12 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	end
 
 	# x, δ, lower/initial/upper
-	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D ,UoModel)
-	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D,UoModel)
+	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
+	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
 
 	yb = zeros(4, length(u), δ_grid_size, 3) # o=1:4, x, δ, lower/initial/upper
 	for i ∈ 1:4
-		yb[i,:,:,:] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D,UoModel)
+		yb[i, :, :, :] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
 	end
 
 

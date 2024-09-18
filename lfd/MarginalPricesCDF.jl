@@ -1,4 +1,4 @@
-function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D, UoModel)
+function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D, UoModel, μ_init, μ_up, μ_low, wHat, τ)
 	#CDF price to the power 1/μ 
 	o1 = 1 + (d - 1) * D
 	o2 = D + (d - 1) * D
@@ -15,6 +15,7 @@ function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, 
 	CDF_Size = length(x)
 	W = length(SamplingWeights)
 	Ud = ones(D)
+	μ = [μ_low, μ_init, μ_up]
 
 	for ω ∈ 1:W
 
@@ -24,7 +25,7 @@ function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, 
 		@. Ud[:] = U[ω, o1:o2]
 		for δ ∈ 1:δ_grid_size
 			for up_down ∈ 1:3
-				@. x_ω[:] = Ud[:] .* Aod[up_down, δ, :, d] ./ λData[:, d]
+				@. x_ω[:] = wHat[:] .* τ[:, d] .* (Ud[:] ./ Aod[up_down, δ, :, d]) .^ μ[up_down]
 				price_domestic = x_ω[d]
 				price_rw = minimum(x_ω[Not(d)])
 				price_ratio = price_domestic / price_rw
@@ -41,10 +42,10 @@ function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, 
 				@. pcdf[smallest_X_ratio:CDF_Size, 3, δ, up_down] += RN[δ, up_down]
 
 				if up_down == 2
-					ppdf[min(smallest_X_d,CDF_Size), 1] += RN[δ, up_down]
-					ppdf[min(smallest_X_rw,CDF_Size), 2] += RN[δ, up_down]
+					ppdf[min(smallest_X_d, CDF_Size), 1] += RN[δ, up_down]
+					ppdf[min(smallest_X_rw, CDF_Size), 2] += RN[δ, up_down]
 				end
-				lfd_functional[min(smallest_X_d,CDF_Size), min(smallest_X_rw,CDF_Size), δ, up_down] += RN[δ, up_down]
+				lfd_functional[min(smallest_X_d, CDF_Size), min(smallest_X_rw, CDF_Size), δ, up_down] += RN[δ, up_down]
 
 			end
 		end
@@ -54,7 +55,7 @@ function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, 
 	for δ ∈ 1:δ_grid_size
 		for up_down ∈ 1:3
 			for i in 1:length(x)
-				@. lfd_functional[: , i, δ, up_down] /= ppdf[:,1]*ppdf[i,2]
+				@. lfd_functional[:, i, δ, up_down] /= ppdf[:, 1] * ppdf[i, 2]
 			end
 		end
 	end
