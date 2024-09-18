@@ -42,19 +42,6 @@ function GravityMomentFirstApproach_Jacobian!(Jac_G, τ, ν, Aod, cHat, D, Ū, 
 	end
 	# if sameMarginalsMoment == 1 or UoModel ==1, we know that ΔΔ E[ln Ū] = 0
 
-	∂Acd∂Acdθ = ones(D,D)
-	∂γd∂Acd =  ones(D,D)
-	∂Acd∂μ = zeros(D,D)
-	for d in 1:D
-		for o in 1:D
-			o1 = d + (o - 1) * D
-			∂γd∂Acd[o,d] = (P[o1]*(σ-1)*μ/σ)*γ[d]/Aod[o,d]
-			∂Acd∂Acdθ[o,d] = (w[o]*τ[o,d]/(w[1]*τ[1,d]))^(1/μ - 1/μHat)
-			∂Acd∂μ[o,d] = (θConstant != 1) ? (-1/μ^2)*log(w[o]*τ[o,d]/(w[1]*τ[1,d]))*Aod[o,d] : 0
-		end
-	end
-
-
 
 	deltaτ = doubleDiff(τ)
 	meanτ = mean(deltaτ)
