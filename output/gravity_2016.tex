@@ -1,0 +1,17 @@
+{
+\def\sym#1{\ifmmode^{#1}\else\(^{#1}\)\fi}
+\begin{tabular}{l*{2}{c}}
+\toprule
+            &\multicolumn{1}{c}{All nodes}&\multicolumn{1}{c}{Excl. ROW}\\
+\midrule
+ln(1+t)     &      -8.901\sym{**} &      -8.994\sym{**} \\
+            &     (4.468)         &     (4.551)         \\
+\midrule
+Includes ROW&           Y         &           N         \\
+R-squared   &       0.385         &       0.301         \\
+\(N\)       &         400         &         361         \\
+\bottomrule
+\multicolumn{3}{l}{\footnotesize ln(pi) on ln(tau), exporter & importer FE; robust SE.}\\
+\multicolumn{3}{l}{\footnotesize \sym{*} \(p<0.10\), \sym{**} \(p<0.05\), \sym{***} \(p<0.01\)}\\
+\end{tabular}
+}
