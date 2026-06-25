@@ -1,17 +1,17 @@
 {
 \def\sym#1{\ifmmode^{#1}\else\(^{#1}\)\fi}
-\begin{tabular}{l*{2}{c}}
+\begin{tabular}{l*{6}{c}}
 \toprule
-            &\multicolumn{1}{c}{All nodes}&\multicolumn{1}{c}{Excl. ROW}\\
+            &\multicolumn{3}{c}{Standard tariff}                              &\multicolumn{3}{c}{Tariff \(\times\) goods share}                \\\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+            &\multicolumn{1}{c}{OLS}&\multicolumn{1}{c}{OLS}&\multicolumn{1}{c}{2SLS}&\multicolumn{1}{c}{OLS}&\multicolumn{1}{c}{OLS}&\multicolumn{1}{c}{2SLS}\\
 \midrule
-ln(1+t)     &      -8.901\sym{**} &      -8.994\sym{**} \\
-            &     (4.468)         &     (4.551)         \\
+$-\theta$   &      -2.755\sym{**} &      -2.754\sym{*}  &       3.669         &      -2.026\sym{*}  &      -2.045\sym{*}  &      -0.582         \\
+            &     (1.382)         &     (1.407)         &     (24.41)         &     (1.147)         &     (1.181)         &     (3.119)         \\
 \midrule
-Includes ROW&           Y         &           N         \\
-R-squared   &       0.385         &       0.301         \\
-\(N\)       &         400         &         361         \\
+Sample      &         All         &    Excl ROW         &     FRA imp         &         All         &    Excl ROW         &     FRA imp         \\
+\(N\)       &         380         &         342         &          19         &         380         &         342         &          19         \\
 \bottomrule
-\multicolumn{3}{l}{\footnotesize ln(pi) on ln(tau), exporter and importer FE; robust SE.}\\
-\multicolumn{3}{l}{\footnotesize \sym{*} \(p<0.10\), \sym{**} \(p<0.05\), \sym{***} \(p<0.01\)}\\
+\multicolumn{7}{l}{\footnotesize OLS columns: exporter and importer fixed effects. 2SLS: French imports; ln(w(1+t)) instrumented by ln(1+t). Robust SE.}\\
+\multicolumn{7}{l}{\footnotesize \sym{*} \(p<0.10\), \sym{**} \(p<0.05\), \sym{***} \(p<0.01\)}\\
 \end{tabular}
 }
