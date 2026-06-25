@@ -33,7 +33,7 @@ esttab m_all m_norow using "$OUT/gravity_`y'.tex", replace ///
     keep(ln_tau) coeflabels(ln_tau "ln(1+t)") ///
     scalars("IncludesROW Includes ROW" "r2 R-squared") ///
     mtitles("All nodes" "Excl. ROW") nonumbers obslast ///
-    note("ln(pi) on ln(tau), exporter & importer FE; robust SE.")
+    note("ln(pi) on ln(tau), exporter and importer FE; robust SE.")
 esttab m_all m_norow, keep(ln_tau) se mtitles("All" "ExclROW")
 
 * tidy csv of the headline coefficients
