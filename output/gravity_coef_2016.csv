@@ -1,7 +1,9 @@
-year,tariff,estimator,sample,beta,se,n
-2016,standard,OLS,all,-2.7552738,1.3818915,380
-2016,standard,OLS,excl_row,-2.7544103,1.406619,342
-2016,standard,2SLS,fra,3.6688123,24.409124,19
-2016,goods_adj,OLS,all,-2.0258155,1.1467681,380
-2016,goods_adj,OLS,excl_row,-2.0453334,1.1812781,342
-2016,goods_adj,2SLS,fra,-.58188969,3.1185439,19
+year,tariff,estimator,incl_row,beta,se,n
+2016,standard,OLS,Y,-8.9009638,4.4676757,400
+2016,standard,OLS,N,-8.9935312,4.551187,361
+2016,standard,2SLS,Y,5.677351,18.882576,20
+2016,standard,2SLS,N,3.5765808,8.9075832,19
+2016,goods_adj,OLS,Y,-9.5690651,5.1428723,400
+2016,goods_adj,OLS,N,-9.6298637,5.210072,361
+2016,goods_adj,2SLS,Y,1.2494297,3.4291701,20
+2016,goods_adj,2SLS,N,.79932696,2.7336557,19
