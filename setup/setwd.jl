@@ -6,9 +6,11 @@ function setwd(server, user)
             global folderData = "/bbkinghome/mhansari/Robustness"
         end 
         if user == 2
-            cd(raw"/bbkinghome/edav/gravity")
-            global folderData = "/bbkinghome/edav/gravity"
-        end 
+            # Ed's modular working copy — run from here so the .opt files (loaded by
+            # bare filename at runtime) and output CSVs resolve to this repo root.
+            cd(raw"/bbkinghome/edav/gravity_robustness/trade_robustness_modular")
+            global folderData = "/bbkinghome/edav/gravity_robustness/trade_robustness_modular"
+        end
     elseif server == 0 # if working on laptop 
         if user == 1
             cd(raw"C:/2. MIT/Model Robustness")

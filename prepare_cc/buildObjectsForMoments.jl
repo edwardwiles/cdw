@@ -35,8 +35,7 @@ function buildObjectsForMoments(
 	usePMM,
 	UoModel,
 	NormalizeMoments,
-	useConfidenceIntervals,
-	UseUnput_Θ =
+	useConfidenceIntervals =
 		globParams
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat, Aod_initial, wPrimeHat_upper, γHat_upper, γPrimeHat_upper, Aod_initial_upper, wPrimeHat_lower, γHat_lower, γPrimeHat_lower, Aod_initial_lower = prestep_output
 	@unpack λData, LData, τData = data
@@ -64,13 +63,6 @@ function buildObjectsForMoments(
 	θ_initial = get_θ_initial(globParams, μHat, wPrimeHat, γHat, γPrimeHat, Aod_initial)
 	θ_initial_upper = get_θ_initial(globParams, μHat, wPrimeHat_upper, γHat_upper, γPrimeHat_upper, Aod_initial_upper)
 	θ_initial_lower = get_θ_initial(globParams, μHat, wPrimeHat_lower, γHat_lower, γPrimeHat_lower, Aod_initial_lower)
-
-	if UseUnput_Θ == 1
-		cc_outputs = load_object(globParams.θ_file_name)
-		@unpack θ_initial = cc_outputs
-		θ_initial_upper = copy(θ_initial)
-		θ_initial_lower = copy(θ_initial)
-	end
 
 @show θ_initial
 @show θ_initial_upper

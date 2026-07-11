@@ -29,11 +29,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	NormalizeMoments,
 	useConfidenceIntervals,
 	ConfidenceLevel,
-	useFiniteSamplePrestep,
-	PMMGammaOnly,
-	useFrechetCopulaStartingPoint, 
-	useRNStartingPoint,
-	UseUnput_Θ = globalParams
+	PMMGammaOnly = globalParams
 
 	# set seed
 	Random.seed!(seedU)
@@ -47,8 +43,8 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	useParams = globalParams
 	useParams = (; useParams..., SamplingWeight = SamplingWeight)
 
-	prestep_output_effective =
-		(useFiniteSamplePrestep == 0 && useFrechetCopulaStartingPoint == 0 && useRNStartingPoint ==0) || UseUnput_Θ == 1 ? prestep_output : (useFrechetCopulaStartingPoint != 0 ? preStepGeneralDistribution(data, counters, globalParams) : useRNStartingPoint == 0 ? preStepGeneralDistribution(data, counters, globalParams, Ū) : preStepGeneralDistributionRN(data, counters, globalParams, Ū))
+	# closed-form Frechet prestep (the CDW method); alternative starting points removed
+	prestep_output_effective = prestep_output
 
 	# if using common marginals with moments methodology, calculate the K moments and put them in Ubar 
 
@@ -177,10 +173,6 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		usePMM,
 		"CS",
 		useConfidenceIntervals,
-		"Cor",
-		useFrechetCopulaStartingPoint,
-		"RNSP",
-		useRNStartingPoint,
 		"DR_",
 		δ_ref,
 		"_",
@@ -236,9 +228,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		ConfidenceLevel,
 		NormalizeMoments,
 		complement_index,
-		PMMGammaOnly,
-		useFrechetCopulaStartingPoint,
-		useRNStartingPoint)
+		PMMGammaOnly)
 	moments_without_var = γ_Hat.moments_without_var
 	#complement_index =  filter!(e-> ( e ∉ moments_without_var  && (e-inner_loop_last_moment_index) ∉ moments_without_var ), complement_index) 
 

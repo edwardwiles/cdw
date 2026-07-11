@@ -397,7 +397,9 @@ maxfevals    -1
 # Maximum number of iterations to allow
 # (if 0 then Knitro determines the best value).
 # Default values are 10000 for NLP and 3000 for MIP.
-maxit        0
+# NOTE: capped at 25 so the 4-country example returns bounds in a few minutes.
+# Set back to 0 (unlimited) for fully-converged production runs.
+maxit        25
 
 # Maximum allowable CPU time in seconds for one algorithm solve.
 # If multistart, multi algorithm or MIP is active, this limits time spent

@@ -26,6 +26,7 @@ export outer_loop,
        master_cc_algo,
        dPsi!
 
+include("knitro_compat.jl")   # restore KNITRO.jl 0.13/0.14 convenience wrappers on v1.2.1
 include("Psi.jl")
 include("ObjectiveBundle.jl")
 include("KLObjectiveBundle.jl")

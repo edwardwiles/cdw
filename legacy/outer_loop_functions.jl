@@ -1,14 +1,15 @@
 # KNITRO callback to evaluate objective and constraints
 function callbackEval_and_ConsF_outer!(kc, cb, evalRequest, evalResult, userParams)
-
+  try
     obj = userParams
     θ = evalRequest.x
 
     objSol, x, nStatus = inner_loop_internal(obj, θ)
 
-    
+
     evalResult.obj[1] = -objSol
 
+    @info "DIAG ConsF" length(evalResult.c) length(evalResult.obj) obj.d obj.outer_constr_index
     obj(x, constr = evalResult.c)
 
     if abs(objSol) == 1e+10
@@ -16,32 +17,41 @@ function callbackEval_and_ConsF_outer!(kc, cb, evalRequest, evalResult, userPara
     end
 
     return 0
-
+  catch e
+    println(stderr, "=== DIAG: exception in callbackEval_and_ConsF_outer! ===")
+    showerror(stderr, e, catch_backtrace()); println(stderr)
+    rethrow(e)
+  end
 end
 
 # KNITRO callback to evaluate gradient of objective and Jacobian of constraints
 function callbackEval_and_ConsG_outer!(kc, cb, evalRequest, evalResult, userParams)
-
+  try
     obj = userParams
     θ = evalRequest.x
     objSol, x, nStatus = inner_loop_internal(obj, θ)
 
+    @info "DIAG ConsG" length(evalResult.objGrad) length(evalResult.jac) length(θ) length(x) obj.d obj.outer_constr_index obj.l
     obj(x, evalResult.objGrad, θ, jac = evalResult.jac)
     evalResult.objGrad .*= -1.0
 
     return 0
-
+  catch e
+    println(stderr, "=== DIAG: exception in callbackEval_and_ConsG_outer! ===")
+    showerror(stderr, e, catch_backtrace()); println(stderr)
+    rethrow(e)
+  end
 end
 
 # KNITRO callback to evaluate objective, gradient of objective, and Jacobian of constraints
 function callbackEval_and_ConsFG_outer!(kc, cb, evalRequest, evalResult, userParams)
-
+  try
     obj = userParams
     θ = evalRequest.x
     objSol, x, nStatus = inner_loop_internal(obj, θ)
     evalResult.obj[1] = -objSol
-    
 
+    @info "DIAG ConsFG" length(evalResult.c) length(evalResult.objGrad) length(evalResult.jac) obj.d obj.outer_constr_index
     obj(x, evalResult.objGrad, θ, constr = evalResult.c, jac = evalResult.jac)
     evalResult.objGrad .*= - 1.0
 
@@ -50,7 +60,11 @@ function callbackEval_and_ConsFG_outer!(kc, cb, evalRequest, evalResult, userPar
     end
 
     return 0
-
+  catch e
+    println(stderr, "=== DIAG: exception in callbackEval_and_ConsFG_outer! ===")
+    showerror(stderr, e, catch_backtrace()); println(stderr)
+    rethrow(e)
+  end
 end
 
 # Solve outer program using KNITRO
