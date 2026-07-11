@@ -64,6 +64,7 @@ focal_u(θ) = begin
     (σ - 1) .* (log.(1 ./ AodPow) .- logw .- logτ[:, focal])
 end
 
+# returns (p, ok): ok=false if the inner solve failed / produced non-finite LFD weights
 function recover_lfd(θ, moments_fn, d)
     oci = d + 1
     obj = PsiObjectiveBundleDelta(γ = γ, (moments!) = moments_fn, moments_jacobian! = error,
@@ -71,16 +72,24 @@ function recover_lfd(θ, moments_fn, d)
         l = length(θ), U = U, N = JacW, lower_limit = -5000,
         outer_loop_opt = "ek_outer_loop_options.opt", inner_loop_opt = "ek_inner_loop_options.opt")
     val, x, nStatus = inner_loop(obj, θ)
+    all(isfinite, x) || return fill(1.0 / W, W), false
     G = zeros(W, d); K = zeros(W); moments_fn(K, G, θ, U, (γ = γ,))
     arg0 = zeros(W)
     @inbounds for ω in 1:W; arg0[ω] = -x[1] - dot(view(G, ω, 1:oci-1), view(x, 2:length(x))); end
     LFD = zeros(W); dPsi!(LFD, arg0)
-    return LFD ./ sum(LFD)
+    s = sum(LFD)
+    (isfinite(s) && s > 0 && all(isfinite, LFD) && all(≥(0), LFD)) || return fill(1.0 / W, W), false
+    return LFD ./ s, true
 end
 
-# inner sequential loop at fixed θ → converged gravity column (ψ̄ + R), exact residual, and umat
-function seq_gravcol(θ; maxit = 4, tol = 5e-4, warm = nothing)
-    μ = θ[1]; log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
+# inner sequential loop at fixed θ.  Returns (col, R, umat, ok) where ok=true ONLY if the loop
+# genuinely drove the exact residual to |R|≤tol (gravity is satisfiable at this θ). If the LFD /
+# inversion is non-finite, or the loop cannot reach |R|≤tol, ok=false ⇒ θ is gravity-infeasible.
+function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing)
+    μ = θ[1]
+    (isfinite(μ) && μ > 0) || return zeros(W), Inf, nothing, false
+    log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
+    (all(isfinite, uf) && all(isfinite, log_x)) || return zeros(W), Inf, nothing, false
     invert_omitted(p; warm = nothing) = begin
         um = zeros(D, D); um[:, focal] .= uf
         for d in omitted
@@ -90,8 +99,16 @@ function seq_gravcol(θ; maxit = 4, tol = 5e-4, warm = nothing)
         end
         um
     end
-    p = recover_lfd(θ, EK_moments_focal!, D + 1)
-    umat = invert_omitted(p; warm = warm); R = gravity_residual(umat, logτ, logw, σ).R_beta
+    p, ok = recover_lfd(θ, EK_moments_focal!, D + 1)
+    ok || return zeros(W), Inf, nothing, false
+    local umat, R
+    try
+        umat = invert_omitted(p; warm = warm)
+        R = gravity_residual(umat, logτ, logw, σ).R_beta
+    catch
+        return zeros(W), Inf, nothing, false
+    end
+    isfinite(R) || return zeros(W), Inf, nothing, false
     col = zeros(W)
     for k in 1:maxit
         infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_beta)
@@ -100,17 +117,23 @@ function seq_gravcol(θ; maxit = 4, tol = 5e-4, warm = nothing)
         moments_aug! = (K, G, θθ, Uarg, obj) -> begin
             EK_moments_focal!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj); @. G[:, D+2] = infl.ψ_bar + infl.R_beta
         end
-        p_cand = recover_lfd(θ, moments_aug!, D + 2)
+        p_cand, okc = recover_lfd(θ, moments_aug!, D + 2)
+        okc || break
         α = 1.0; acc = false
         for _ in 1:12
             p_try = (1 - α) .* p .+ α .* p_cand
-            um_try = invert_omitted(p_try; warm = umat); R_try = gravity_residual(um_try, logτ, logw, σ).R_beta
-            if abs(R_try) < abs(R); p = p_try; umat = um_try; R = R_try; acc = true; break; end
+            local um_try, R_try
+            try
+                um_try = invert_omitted(p_try; warm = umat); R_try = gravity_residual(um_try, logτ, logw, σ).R_beta
+            catch
+                α *= 0.5; continue
+            end
+            if isfinite(R_try) && abs(R_try) < abs(R); p = p_try; umat = um_try; R = R_try; acc = true; break; end
             α *= 0.5
         end
         acc || break
     end
-    return col, R, umat
+    return col, R, umat, abs(R) <= tol
 end
 
 # reduced θ bounds
@@ -127,26 +150,34 @@ end
 # constrains ≤ δ — is recomputed exactly at every θ (not frozen). The gradient path (Dual θ) reuses
 # the just-computed column as constant data, giving the exact constraint VALUE at every θ with an
 # analytic focal gradient + a θ-independent gravity term (exact-value / approximate-gradient).
+# A strictly-positive, non-constant column: E_F[INFCOL]=0 is IMPOSSIBLE for any distribution (the
+# mean of positive numbers is positive), so appending it as an inner moment makes the CC min-div
+# problem infeasible ⇒ the outer optimizer rejects that θ. Used when gravity can't be enforced.
+const INFCOL = 1.0 .+ 0.1 .* sin.(1:W)
+
 function make_stateful_moments()
     lastθ = Ref(fill(NaN, length(θr0)))
     gcol  = Ref(zeros(W))
     lastR = Ref(NaN)
-    neval = Ref(0)
+    lastok = Ref(true)
+    neval = Ref(0); nfeas = Ref(0)
     warm  = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
     function m!(K, G, θ, Uarg, obj)
         if !(eltype(θ) <: ForwardDiff.Dual)          # value path: (re)linearize gravity at this θ
             θf = Float64.(θ)
             if θf != lastθ[]
                 t0 = time()
-                try
-                    c, Rθ, um = seq_gravcol(θf; warm = warm[])
-                    gcol[] = c; lastR[] = Rθ; warm[] = um
-                catch err
-                    @warn "seq_gravcol failed at θ; reusing last column" err
+                c, Rθ, um, ok = seq_gravcol(θf; warm = warm[])
+                lastR[] = Rθ; lastok[] = ok
+                if ok
+                    gcol[] = c; warm[] = um; nfeas[] += 1
+                else
+                    gcol[] = INFCOL                    # gravity-infeasible θ ⇒ reject
                 end
                 neval[] += 1
                 if neval[] % 10 == 0
-                    @printf("    [θ-eval %d] seqR=%.2e  seq_time=%.2fs\n", neval[], lastR[], time()-t0); flush(stdout)
+                    @printf("    [θ-eval %d, gravity-feasible %d] seqR=%.2e ok=%s seq_time=%.2fs\n",
+                            neval[], nfeas[], lastR[], ok, time()-t0); flush(stdout)
                 end
                 lastθ[] = copy(θf)
             end
@@ -179,10 +210,10 @@ for (name, fs) in ((:upper, false), (:lower, true))
     @printf("\n----- %s bound (sequential loop recomputed at every θ) -----\n", name); flush(stdout)
     t0 = time()
     κ, θstar, st = outer_solve_nested(fs, θr0)
-    _, Rθ, _ = seq_gravcol(θstar)      # exact residual at the bound-achieving θ*
-    @printf("  κ_%s = %.6f  (status %d)  exact R_beta(θ*) = %.3e  wall %.1fs\n",
-            name, κ, st, Rθ, time() - t0)
-    results[name] = (κ = κ, R = Rθ)
+    _, Rθ, _, okθ = seq_gravcol(θstar)      # exact residual at the bound-achieving θ*
+    @printf("  κ_%s = %.6f  (status %d)  exact R_beta(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
+            name, κ, st, Rθ, okθ, time() - t0)
+    results[name] = (κ = κ, R = Rθ, ok = okθ)
 end
 
 @printf("\n=== PROFILED FULL-GRAVITY BOUNDS (δ=%g) ===\n", δ)
