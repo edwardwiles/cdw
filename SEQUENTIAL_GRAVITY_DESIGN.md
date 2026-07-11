@@ -198,6 +198,38 @@ declared only against the **exact nonlinear** `R` after re-inverting.
 
 ---
 
+## 5b. Phase-2c outer integration (§18) — how it actually works, and its known limits
+
+`run_profiled_bounds.jl` runs the sequential loop **inside every outer θ-evaluation** (the nested
+structure §18 specifies): a stateful moment closure, on the Float64 value pass, calls `seq_gravcol(θ)`
+to (re)linearize gravity at θ and fills the augmented moments; the min-div CC solve then returns
+`Δ_sequential(θ)` which the outer constrains ≤ δ.
+
+Three things make it correct/robust:
+1. **Gravity-infeasible θ ⇒ reject.** `seq_gravcol` returns `ok=true` only if it drove the *exact*
+   `|R|≤tol`. When gravity is unachievable at θ (its focal A column is incompatible with
+   ΔΔlnA⟂ΔΔlnτ, so no LFD fixes it — the residual stalls, e.g. at −1.4), or the LFD/inversion is
+   non-finite, `ok=false` and the closure feeds the outer an **unsatisfiable** moment column
+   (`INFCOL`: strictly positive ⇒ `E_F[·]=0` impossible for any F) ⇒ the min-div is infeasible ⇒
+   the outer rejects θ. *Do NOT* reuse the last column on failure — that silently drops gravity and
+   lets the search escape to gravity-violating θ (the bug that produced R≈0.99 "bounds").
+2. **Inversion divergence guard.** At extreme θ (e.g. μ→0, origins near-tied) the inversion Newton
+   iterates run off; `invert_destination` bails when `‖u‖>1e8` so a pathological θ is rejected fast
+   instead of grinding to the iteration cap (~8 s).
+3. **The linearized moment is only a valid gravity surrogate near R≈0** (it is a *first-order*
+   stand-in for the nonlinear constraint). Hence only a *converged* loop yields a trustworthy column.
+
+**Known limit — approximate outer gradient.** The gravity column depends on θ (via the focal A
+column and μ, through the inversions), but on the autodiff *gradient* pass it is held constant
+(recomputed only on the Float64 value pass). So the outer gradient does **not** see that changing
+`A_{·,focal}`/μ changes the gravity moment. This is because the loop calls **KNITRO** (black-box; not
+autodiff-able) and nested Newton inversions — the exact `∂Δ_sequential/∂θ` needs the implicit
+function theorem chained through each CC solve (`ift!`) with the validated influence derivative
+`∂u/∂F` (§11), a real derivation, not a free autodiff pass. Feasibility is checked *exactly* (exact R
++ INFCOL reject), so the **bounds are trustworthy**; the approximate gradient only slows the search
+(contributes to hitting the outer iteration cap). Improving it (exact IFT gradient) is the main
+open performance item, alongside parallelizing the D−1 inversions for D=19.
+
 ## 6. File plan
 
 - `sequential_gravity/profiled_gravity.jl` — Phase-1 core (this note §3), dependency-light

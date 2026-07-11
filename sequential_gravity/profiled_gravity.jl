@@ -348,6 +348,12 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
         end
         for (k, o) in enumerate(fi); u[o] = u[o] + αstar * step[k]; end
         u[ref] = 0.0
+        # divergence guard: at pathological (extreme-θ) inputs the Newton iterates can run off to
+        # huge u (all origins near-tied ⇒ shares insensitive). Bail early instead of grinding to
+        # maxit; the caller treats a non-converged inversion as infeasible.
+        if !all(isfinite, u) || maximum(abs, u) > 1e8
+            break
+        end
         st = dest_stats(log_x, logp, u; ρ = ρ)
     end
     share = st.share
