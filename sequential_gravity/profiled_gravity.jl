@@ -28,7 +28,7 @@ using LinearAlgebra
 using ForwardDiff
 
 export build_log_x, build_log_x_fromU, invert_destination, DestInversion,
-       dest_stats, potential_free, share_jacobian_closed, share_jacobian_smoothed,
+       dest_stats, dest_share, potential_free, share_jacobian_closed, share_jacobian_smoothed,
        share_jacobian_ad, free_hessian, two_way_demean, gravity_residual, GravityResidual,
        draw_level_objects, influence_function, InfluenceResult, logsumexp, free_idx
 
@@ -100,6 +100,50 @@ function dest_stats(log_x::AbstractMatrix, logp::AbstractVector, u::AbstractVect
         share[o] += rweight[s] * W[s, o]
     end
     return (V = V, logdenom = logdenom, rweight = rweight, share = share, W = W)
+end
+
+"""
+    dest_share(log_x, logp, u; ρ=0.0)
+
+Non-allocating model shares + logdenom (φ) for the inversion line search — same values as
+`dest_stats` but without materializing the S×D assignment-weight matrix (two O(S·D) passes).
+"""
+function dest_share(log_x::AbstractMatrix, logp::AbstractVector, u::AbstractVector; ρ::Real = 0.0)
+    S, D = size(log_x)
+    T = promote_type(eltype(log_x), eltype(u), typeof(float(ρ)))
+    a = Vector{T}(undef, S)
+    @inbounds for s in 1:S
+        m = T(-Inf)
+        for o in 1:D
+            v = u[o] + log_x[s, o]; v > m && (m = v)
+        end
+        if ρ <= 0
+            a[s] = logp[s] + m
+        else
+            se = zero(T)
+            for o in 1:D; se += exp((u[o] + log_x[s, o] - m) / ρ); end
+            a[s] = logp[s] + m + ρ * log(se)
+        end
+    end
+    logdenom = logsumexp(a)
+    share = zeros(T, D)
+    @inbounds for s in 1:S
+        rw = exp(a[s] - logdenom)
+        m = T(-Inf)
+        for o in 1:D
+            v = u[o] + log_x[s, o]; v > m && (m = v)
+        end
+        if ρ <= 0
+            for o in 1:D
+                if u[o] + log_x[s, o] == m; share[o] += rw; break; end
+            end
+        else
+            se = zero(T)
+            for o in 1:D; se += exp((u[o] + log_x[s, o] - m) / ρ); end
+            for o in 1:D; share[o] += rw * exp((u[o] + log_x[s, o] - m) / ρ) / se; end
+        end
+    end
+    return share, logdenom
 end
 
 @inline function _insert_ref(u_free::AbstractVector{T}, ref::Int, D::Int) where {T}
@@ -231,6 +275,7 @@ kinks instead of chattering).  ρ>0 smooths the model so this converges to machi
 """
 function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::AbstractVector;
                             ref::Int = 1, ρ::Real = 0.0, tol::Real = 1e-10, maxit::Int = 100,
+                            ls_iters::Int = 80,
                             u_init::Union{Nothing,AbstractVector} = nothing, verbose::Bool = false)
     S, D = size(log_x)
     @assert length(p) == S && length(λ̂) == D
@@ -257,27 +302,49 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
         catch
             -((H + 1e-12 * I) \ grad_free)
         end
-        # exact line search: bracket sign change of directional derivative, then bisect
         unew = copy(u)
-        dprime = function (α)
-            for (k, o) in enumerate(fi); unew[o] = u[o] + α * step[k]; end
-            unew[ref] = 0.0
-            s = dest_stats(log_x, logp, unew; ρ = ρ).share
-            acc = zero(T)
-            for (k, o) in enumerate(fi); acc += step[k] * (s[o] - λ̂[o]); end
-            return acc
-        end
-        αlo = 0.0; αhi = 1.0; dhi = dprime(αhi); nexp = 0
-        while dhi < 0 && αhi < 1e8 && nexp < 60
-            αlo = αhi; αhi *= 2.0; dhi = dprime(αhi); nexp += 1
-        end
-        αstar = αhi
-        if dhi > 0
-            for _ in 1:80
-                αm = 0.5 * (αlo + αhi)
-                dprime(αm) > 0 ? (αhi = αm) : (αlo = αm)
+        if ρ > 0
+            # SMOOTH regime (ρ>0): φ−λ̂·u is C² convex ⇒ Newton + cheap Armijo backtrack converges
+            # quadratically (~1–3 evals/step). The exact line search below is only needed to fight
+            # the hard-max winner-switch kinks; unnecessary (and ~ls_iters× slower) when ρ>0.
+            # Accept the full Newton step on monotone decrease with a tiny slack (NOT Armijo
+            # sufficient-decrease: near the flat minimum the sufficient-decrease target sinks below
+            # float noise in the objective and backtracking would stall short of machine precision).
+            # Near the solution α=1 always passes ⇒ Newton drives the gradient to ~1e-13; far away a
+            # genuine overshoot still increases the objective and is backtracked.
+            obj_u = st.logdenom - dot(λ̂, u)
+            slack = 1e-12 * (1 + abs(obj_u))
+            αstar = 1.0
+            for _ in 1:40
+                for (k, o) in enumerate(fi); unew[o] = u[o] + αstar * step[k]; end
+                unew[ref] = 0.0
+                _, ld = dest_share(log_x, logp, unew; ρ = ρ)
+                (ld - dot(λ̂, unew) <= obj_u + slack) && break
+                αstar *= 0.5
             end
-            αstar = 0.5 * (αlo + αhi)
+        else
+            # HARD-MAX regime (ρ=0): exact line search — bracket the sign change of the directional
+            # derivative g'(α)=⟨step, share−λ̂⟩ and bisect (share is only C⁰; kinks are dense).
+            dprime = function (α)
+                for (k, o) in enumerate(fi); unew[o] = u[o] + α * step[k]; end
+                unew[ref] = 0.0
+                s, _ = dest_share(log_x, logp, unew; ρ = ρ)
+                acc = zero(T)
+                for (k, o) in enumerate(fi); acc += step[k] * (s[o] - λ̂[o]); end
+                return acc
+            end
+            αlo = 0.0; αhi = 1.0; dhi = dprime(αhi); nexp = 0
+            while dhi < 0 && αhi < 1e8 && nexp < 60
+                αlo = αhi; αhi *= 2.0; dhi = dprime(αhi); nexp += 1
+            end
+            αstar = αhi
+            if dhi > 0
+                for _ in 1:ls_iters
+                    αm = 0.5 * (αlo + αhi)
+                    dprime(αm) > 0 ? (αhi = αm) : (αlo = αm)
+                end
+                αstar = 0.5 * (αlo + αhi)
+            end
         end
         for (k, o) in enumerate(fi); u[o] = u[o] + αstar * step[k]; end
         u[ref] = 0.0
