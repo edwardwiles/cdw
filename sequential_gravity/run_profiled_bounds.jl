@@ -85,7 +85,7 @@ end
 # inner sequential loop at fixed θ.  Returns (col, R, umat, p, ok) where ok=true ONLY if the loop
 # genuinely drove the exact residual to |R|≤tol (gravity is satisfiable at this θ). If the LFD /
 # inversion is non-finite, or the loop cannot reach |R|≤tol, ok=false ⇒ θ is gravity-infeasible.
-function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing)
+function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing, verbose = false)
     μ = θ[1]
     (isfinite(μ) && μ > 0) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
@@ -94,54 +94,71 @@ function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing)
         um = zeros(D, D); um[:, focal] .= uf
         for d in omitted
             ui = warm === nothing ? nothing : warm[:, d]
-            um[:, d] .= invert_destination(log_x, p, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
-                                           maxit = 150, ls_iters = 50, u_init = ui).u_full
+            inv = invert_destination(log_x, p, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
+                                     maxit = 150, ls_iters = 50, u_init = ui)
+            um[:, d] .= inv.u_full
+            if verbose && !inv.converged
+                @printf("      dest %d NOT converged: iters=%d share_err=%.2e ‖u‖=%.2e\n",
+                        d, inv.iterations, inv.max_abs_share_error, maximum(abs, inv.u_full))
+            end
         end
         um
     end
     p, ok = recover_lfd(θ, EK_moments_focal!, D + 1)
-    ok || return zeros(W), Inf, nothing, fill(1.0/W, W), false
+    if !ok
+        verbose && println("    [seq] initial recover_lfd (focal-only) FAILED")
+        return zeros(W), Inf, nothing, fill(1.0/W, W), false
+    end
     local umat, R
     try
         umat = invert_omitted(p; warm = warm)
-        R = gravity_residual(umat, logτ, logw, σ).R_beta
-    catch
+        R = gravity_residual(umat, logτ, logw, σ).R_mean
+    catch e
+        verbose && println("    [seq] initial invert_omitted threw: ", e)
         return zeros(W), Inf, nothing, fill(1.0/W, W), false
     end
     isfinite(R) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
+    verbose && @printf("    [seq] init: R0=%.4e\n", R)
     col = zeros(W)
     for k in 1:maxit
-        infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_beta)
-        col = infl.ψ_bar .+ infl.R_beta                      # E_F[col]=0 ⟺ E_F[ψ̄]=-R
+        infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_mean)
+        col = infl.ψ_bar .+ infl.R_mean                      # E_F[col]=0 ⟺ E_F[ψ̄]=-R
         abs(R) <= tol && break
         moments_aug! = (K, G, θθ, Uarg, obj) -> begin
-            EK_moments_focal!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj); @. G[:, D+2] = infl.ψ_bar + infl.R_beta
+            EK_moments_focal!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj); @. G[:, D+2] = infl.ψ_bar + infl.R_mean
         end
         p_cand, okc = recover_lfd(θ, moments_aug!, D + 2)
-        okc || break
+        if !okc
+            verbose && println("    [seq] iter $k: augmented recover_lfd FAILED (linearized moment likely unmatchable)")
+            break
+        end
         α = 1.0; acc = false
         for _ in 1:12
             p_try = (1 - α) .* p .+ α .* p_cand
             local um_try, R_try
             try
-                um_try = invert_omitted(p_try; warm = umat); R_try = gravity_residual(um_try, logτ, logw, σ).R_beta
+                um_try = invert_omitted(p_try; warm = umat); R_try = gravity_residual(um_try, logτ, logw, σ).R_mean
             catch
                 α *= 0.5; continue
             end
             if isfinite(R_try) && abs(R_try) < abs(R); p = p_try; umat = um_try; R = R_try; acc = true; break; end
             α *= 0.5
         end
+        verbose && @printf("    [seq] iter %d: R -> %.4e  accepted=%s  α=%.4f\n", k, R, acc, acc ? α : 0.0)
         acc || break
     end
+    verbose && @printf("    [seq] FINAL: R=%.4e  |R|<=tol? %s  (maxit=%d)\n", R, abs(R) <= tol, maxit)
     return col, R, umat, p, abs(R) <= tol
 end
 
 # ------------------------------------------------------------------------------------------------
-# EXACT gradient of R w.r.t. θ, holding F (the LFD p) fixed — the envelope-theorem piece the frozen
-# column was dropping. No autodiff through KNITRO or through the inversion's Newton loop:
+# EXACT gradient of R_mean w.r.t. θ, holding F (the LFD p) fixed — the envelope-theorem piece the
+# frozen column was dropping. No autodiff through KNITRO or through the inversion's Newton loop:
 #   • ∂R_sum/∂u[o,d] = Q̃[o,d]/(σ-1) for every (o,d) (closed form: R_sum = S_Q + (1/(σ-1))ΣQ̃·u,
 #     since two_way_demean is a linear, idempotent, self-adjoint projection and Q̃ is already
-#     demeaned — so no chain rule through the demean is needed).
+#     demeaned — so no chain rule through the demean is needed); ∂R_mean/∂u = (∂R_sum/∂u)/D², the
+#     literal sample-moment average E[ΔΔlogA·ΔΔlogτ]=0 with NO variance normalization (per review:
+#     this is the correct scaling for the GMM moment condition itself, not a regression coefficient).
 #   • the focal column u_focal(θ) is an explicit function of θ ⇒ ∂u_focal/∂θ via ForwardDiff.jacobian
 #     on that plain function (cheap: D×l).
 #   • each omitted column's ∂u_d/∂μ via the implicit function theorem on the inversion's fixed point
@@ -153,7 +170,7 @@ function grad_R_theta(θ, umat, p)
     gr = gravity_residual(umat, logτ, logw, σ)
     fi = free_idx(ref, D)
     Jfocal = ForwardDiff.jacobian(focal_u, θ)            # D × l
-    c_focal = gr.Qt[:, focal] ./ (σ - 1) ./ gr.S_Q
+    c_focal = gr.Qt[:, focal] ./ (σ - 1) ./ D^2
     dRdθ .+= Jfocal' * c_focal
     logp = log.(p); μ0 = θ[1]
     for d in omitted
@@ -161,7 +178,7 @@ function grad_R_theta(θ, umat, p)
         Hd = free_hessian(st, ρ; ref = ref)
         dsh = ForwardDiff.derivative(μ -> dest_share(build_log_x(Uσ, μ), logp, umat[:, d]; ρ = ρ)[1][fi], μ0)
         dud_dmu = -(Hd \ dsh)
-        c_d = gr.Qt[fi, d] ./ (σ - 1) ./ gr.S_Q
+        c_d = gr.Qt[fi, d] ./ (σ - 1) ./ D^2
         dRdθ[1] += dot(c_d, dud_dmu)
     end
     return dRdθ
@@ -256,13 +273,13 @@ for (name, fs) in ((:upper, false), (:lower, true))
     t0 = time()
     κ, θstar, st = outer_solve_nested(fs, θr0; use_exact_grad = USE_EXACT_GRAD)
     _, Rθ, _, _, okθ = seq_gravcol(θstar)      # exact residual at the bound-achieving θ*
-    @printf("  κ_%s = %.6f  (status %d)  exact R_beta(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
+    @printf("  κ_%s = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
             name, κ, st, Rθ, okθ, time() - t0)
     results[name] = (κ = κ, R = Rθ, ok = okθ)
 end
 
 @printf("\n=== PROFILED FULL-GRAVITY BOUNDS (δ=%g) ===\n", δ)
-@printf("  κ_lower = %.6f   (exact R_beta %.2e)\n", results[:lower].κ, results[:lower].R)
+@printf("  κ_lower = %.6f   (exact R_mean %.2e)\n", results[:lower].κ, results[:lower].R)
 @printf("  point   = %.6f\n", Kchk[1])
-@printf("  κ_upper = %.6f   (exact R_beta %.2e)\n", results[:upper].κ, results[:upper].R)
+@printf("  κ_upper = %.6f   (exact R_mean %.2e)\n", results[:upper].κ, results[:upper].R)
 @printf("\nreference: focal-only (no gravity) [0.00055, 0.2326];  legacy all-A gravity [0.0102, 0.1595]\n")

@@ -449,6 +449,7 @@ struct InfluenceResult{T}
     ψ_R::Vector{T}
     ψ_bar::Vector{T}
     R_sum::T
+    R_mean::T
     R_beta::T
     Eψ::T
     per_dest::Vector{NamedTuple}
@@ -456,22 +457,27 @@ end
 
 """
     influence_function(log_x, p, u_mat, λ̂_mat, omitted, logτ, logw, σ;
-                       ref=1, ρ=0.0, scale=:R_beta, ridge=0.0)
+                       ref=1, ρ=0.0, scale=:R_mean, ridge=0.0)
 
 Centered gravity influence function ψ̄ (spec §13) for the profiled residual, summing over the
-`omitted` destinations. For each omitted d: c_d=Q̃[·,d]/(σ-1) (÷S_Q if scale=:R_beta); solve
-H_d a_d = c_d; ψ_R[s] += −⟨a_d, ξ_free[s,·,d]⟩/M_d. Returns ψ_R, ψ̄, the exact residual, E_F[ψ_R],
-and per-destination diagnostics (M_d, cond(H_d), σ_min, adjoint residual, share error).
+`omitted` destinations. `scale` selects which SCALING of the (mathematically equivalent-at-zero)
+gravity residual the linearization targets — see `gravity_residual`'s docstring for the
+R_sum/R_mean/R_beta distinction. Default `:R_mean` = the literal sample-moment average
+`R_sum/D²` (the direct finite-sample analogue of the identification condition
+`E[ΔΔlogA·ΔΔlogτ]=0` — no additional variance normalization). `:R_beta` (÷ΣQ̃²) and raw `R_sum`
+(scale_div=1) remain available. For each omitted d: c_d=Q̃[·,d]/(σ-1)/scale_div; solve H_d a_d = c_d;
+ψ_R[s] += −⟨a_d, ξ_free[s,·,d]⟩/M_d. Returns ψ_R, ψ̄, the exact residual (all three scalings),
+E_F[ψ_R], and per-destination diagnostics (M_d, cond(H_d), σ_min, adjoint residual, share error).
 """
 function influence_function(log_x::AbstractMatrix, p::AbstractVector, u_mat::AbstractMatrix,
                             λ̂_mat::AbstractMatrix, omitted::AbstractVector{<:Integer},
                             logτ::AbstractMatrix, logw::AbstractVector, σ::Real;
-                            ref::Int = 1, ρ::Real = 0.0, scale::Symbol = :R_beta, ridge::Real = 0.0)
+                            ref::Int = 1, ρ::Real = 0.0, scale::Symbol = :R_mean, ridge::Real = 0.0)
     S, D = size(log_x)
     gr = gravity_residual(u_mat, logτ, logw, σ)
     ψ_R = zeros(float(eltype(log_x)), S)
     per_dest = NamedTuple[]
-    scale_div = scale == :R_beta ? gr.S_Q : one(gr.S_Q)
+    scale_div = scale == :R_beta ? gr.S_Q : (scale == :R_mean ? float(D^2) : one(gr.S_Q))
     for d in omitted
         dlo = draw_level_objects(log_x, p, view(u_mat, :, d), view(λ̂_mat, :, d); ref = ref, ρ = ρ)
         fi = dlo.fi
@@ -494,7 +500,7 @@ function influence_function(log_x::AbstractMatrix, p::AbstractVector, u_mat::Abs
                          max_share_err = maximum(abs.(dlo.share .- λ̂_mat[:, d]))))
     end
     eψ = dot(p, ψ_R)
-    return InfluenceResult(ψ_R, ψ_R .- eψ, gr.R_sum, gr.R_beta, eψ, per_dest)
+    return InfluenceResult(ψ_R, ψ_R .- eψ, gr.R_sum, gr.R_mean, gr.R_beta, eψ, per_dest)
 end
 
 end # module
