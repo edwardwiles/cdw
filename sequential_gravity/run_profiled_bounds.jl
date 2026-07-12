@@ -82,14 +82,29 @@ function recover_lfd(θ, moments_fn, d)
     return LFD ./ s, true
 end
 
-# inner sequential loop at fixed θ.  Returns (col, R, umat, p, ok) where ok=true ONLY if the loop
-# genuinely drove the exact residual to |R|≤tol (gravity is satisfiable at this θ). If the LFD /
-# inversion is non-finite, or the loop cannot reach |R|≤tol, ok=false ⇒ θ is gravity-infeasible.
+# S_Q = Σ Q̃² depends ONLY on the tariff data (two_way_demean(logτ)), never on θ/F/A — a true global
+# constant. So R_beta = R_sum/S_Q and R_mean = R_sum/D² are related by the FIXED, θ-independent
+# positive constant D²/S_Q: R_beta ≡ (D²/S_Q) · R_mean, exactly, always (not an approximation). We
+# use this to separate two different jobs cleanly:
+#   • the IDENTIFICATION CONDITION / convergence check (|R_mean|≤tol, per review — the literal GMM
+#     sample-moment average, no variance normalization) — unaffected by anything below;
+#   • the NUMERICAL SCALE of the moment/gradient handed to the CC/KNITRO solvers, which we keep at
+#     R_beta's scale (empirically well-conditioned; R_mean's ~34× smaller magnitude in this example
+#     made KNITRO's outer search take oversized steps into extreme-θ territory it couldn't recover
+#     from — diagnosed via the θ-eval trace of a maxit-100 run). Since accept/reject comparisons
+#     (`abs(R_try)<abs(R)`) are invariant to a common positive rescaling, using R_mean throughout for
+#     THOSE and R_beta's scale only for the col/gradient content is exact, not a compromise.
+
+# inner sequential loop at fixed θ. Returns (col, R_mean, R_col, umat, p, ok) where `col` and `R_col`
+# are R_beta-scaled (solver-facing) and `R_mean` is the UNSCALED identification-condition value used
+# for the |R|≤tol / gravity-feasibility decision. ok=true ONLY if the loop genuinely drove
+# |R_mean|≤tol (gravity is satisfiable at this θ). If the LFD/inversion is non-finite, or the loop
+# cannot reach tol, ok=false ⇒ θ is gravity-infeasible.
 function seq_gravcol(θ; maxit = 20, tol = 5e-4, warm = nothing, verbose = false)
     μ = θ[1]
-    (isfinite(μ) && μ > 0) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
+    (isfinite(μ) && μ > 0) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
-    (all(isfinite, uf) && all(isfinite, log_x)) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
+    (all(isfinite, uf) && all(isfinite, log_x)) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     invert_omitted(p; warm = nothing) = begin
         um = zeros(D, D); um[:, focal] .= uf
         for d in omitted
@@ -107,7 +122,7 @@ function seq_gravcol(θ; maxit = 20, tol = 5e-4, warm = nothing, verbose = false
     p, ok = recover_lfd(θ, EK_moments_focal!, D + 1)
     if !ok
         verbose && println("    [seq] initial recover_lfd (focal-only) FAILED")
-        return zeros(W), Inf, nothing, fill(1.0/W, W), false
+        return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     end
     local umat, R
     try
@@ -115,17 +130,18 @@ function seq_gravcol(θ; maxit = 20, tol = 5e-4, warm = nothing, verbose = false
         R = gravity_residual(umat, logτ, logw, σ).R_mean
     catch e
         verbose && println("    [seq] initial invert_omitted threw: ", e)
-        return zeros(W), Inf, nothing, fill(1.0/W, W), false
+        return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     end
-    isfinite(R) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
+    isfinite(R) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     verbose && @printf("    [seq] init: R0=%.4e\n", R)
-    col = zeros(W)
+    col = zeros(W); Rcol = 0.0
     for k in 1:maxit
-        infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_mean)
-        col = infl.ψ_bar .+ infl.R_mean                      # E_F[col]=0 ⟺ E_F[ψ̄]=-R
+        infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_beta)
+        col = infl.ψ_bar .+ infl.R_beta                      # solver-facing (R_beta scale)
+        Rcol = infl.R_beta
         abs(R) <= tol && break
         moments_aug! = (K, G, θθ, Uarg, obj) -> begin
-            EK_moments_focal!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj); @. G[:, D+2] = infl.ψ_bar + infl.R_mean
+            EK_moments_focal!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj); @. G[:, D+2] = infl.ψ_bar + infl.R_beta
         end
         p_cand, okc = recover_lfd(θ, moments_aug!, D + 2)
         if !okc
@@ -144,21 +160,22 @@ function seq_gravcol(θ; maxit = 20, tol = 5e-4, warm = nothing, verbose = false
             if isfinite(R_try) && abs(R_try) < abs(R); p = p_try; umat = um_try; R = R_try; acc = true; break; end
             α *= 0.5
         end
-        verbose && @printf("    [seq] iter %d: R -> %.4e  accepted=%s  α=%.4f\n", k, R, acc, acc ? α : 0.0)
+        verbose && @printf("    [seq] iter %d: R_mean -> %.4e  accepted=%s  α=%.4f\n", k, R, acc, acc ? α : 0.0)
         acc || break
     end
-    verbose && @printf("    [seq] FINAL: R=%.4e  |R|<=tol? %s  (maxit=%d)\n", R, abs(R) <= tol, maxit)
-    return col, R, umat, p, abs(R) <= tol
+    verbose && @printf("    [seq] FINAL: R_mean=%.4e  |R|<=tol? %s  (maxit=%d)\n", R, abs(R) <= tol, maxit)
+    return col, R, Rcol, umat, p, abs(R) <= tol
 end
 
 # ------------------------------------------------------------------------------------------------
-# EXACT gradient of R_mean w.r.t. θ, holding F (the LFD p) fixed — the envelope-theorem piece the
-# frozen column was dropping. No autodiff through KNITRO or through the inversion's Newton loop:
+# EXACT gradient of R_beta w.r.t. θ, holding F (the LFD p) fixed — the envelope-theorem piece the
+# frozen column was dropping, computed at R_beta's numerical scale to match `col`/`Rcol` (see the
+# note above `seq_gravcol`: R_beta ≡ (D²/S_Q)·R_mean exactly, so this is the SAME gradient as
+# R_mean's up to that fixed constant — only the solver-facing SCALE differs, not the underlying
+# derivative). No autodiff through KNITRO or through the inversion's Newton loop:
 #   • ∂R_sum/∂u[o,d] = Q̃[o,d]/(σ-1) for every (o,d) (closed form: R_sum = S_Q + (1/(σ-1))ΣQ̃·u,
 #     since two_way_demean is a linear, idempotent, self-adjoint projection and Q̃ is already
-#     demeaned — so no chain rule through the demean is needed); ∂R_mean/∂u = (∂R_sum/∂u)/D², the
-#     literal sample-moment average E[ΔΔlogA·ΔΔlogτ]=0 with NO variance normalization (per review:
-#     this is the correct scaling for the GMM moment condition itself, not a regression coefficient).
+#     demeaned — so no chain rule through the demean is needed); ∂R_beta/∂u = (∂R_sum/∂u)/S_Q.
 #   • the focal column u_focal(θ) is an explicit function of θ ⇒ ∂u_focal/∂θ via ForwardDiff.jacobian
 #     on that plain function (cheap: D×l).
 #   • each omitted column's ∂u_d/∂μ via the implicit function theorem on the inversion's fixed point
@@ -170,7 +187,7 @@ function grad_R_theta(θ, umat, p)
     gr = gravity_residual(umat, logτ, logw, σ)
     fi = free_idx(ref, D)
     Jfocal = ForwardDiff.jacobian(focal_u, θ)            # D × l
-    c_focal = gr.Qt[:, focal] ./ (σ - 1) ./ D^2
+    c_focal = gr.Qt[:, focal] ./ (σ - 1) ./ gr.S_Q
     dRdθ .+= Jfocal' * c_focal
     logp = log.(p); μ0 = θ[1]
     for d in omitted
@@ -178,7 +195,7 @@ function grad_R_theta(θ, umat, p)
         Hd = free_hessian(st, ρ; ref = ref)
         dsh = ForwardDiff.derivative(μ -> dest_share(build_log_x(Uσ, μ), logp, umat[:, d]; ρ = ρ)[1][fi], μ0)
         dud_dmu = -(Hd \ dsh)
-        c_d = gr.Qt[fi, d] ./ (σ - 1) ./ D^2
+        c_d = gr.Qt[fi, d] ./ (σ - 1) ./ gr.S_Q
         dRdθ[1] += dot(c_d, dud_dmu)
     end
     return dRdθ
@@ -206,7 +223,8 @@ const INFCOL = 1.0 .+ 0.1 .* sin.(1:W)
 function make_stateful_moments(; use_exact_grad::Bool = true)
     lastθ = Ref(fill(NaN, length(θr0)))
     gcol  = Ref(zeros(W))
-    lastR = Ref(NaN)
+    lastRmean = Ref(NaN)     # UNSCALED identification-condition value (reporting/logging only)
+    lastRcol  = Ref(NaN)     # R_beta-scaled value actually baked into gcol[] (affine-reconstruction math)
     lastok = Ref(true)
     dRdθ  = Ref(zeros(length(θr0)))
     neval = Ref(0); nfeas = Ref(0)
@@ -216,8 +234,8 @@ function make_stateful_moments(; use_exact_grad::Bool = true)
             θf = Float64.(θ)
             if θf != lastθ[]
                 t0 = time()
-                c, Rθ, um, p, ok = seq_gravcol(θf; warm = warm[])
-                lastR[] = Rθ; lastok[] = ok
+                c, Rmean, Rcol, um, p, ok = seq_gravcol(θf; warm = warm[])
+                lastRmean[] = Rmean; lastRcol[] = Rcol; lastok[] = ok
                 if ok
                     gcol[] = c; warm[] = um; nfeas[] += 1
                     dRdθ[] = use_exact_grad ? grad_R_theta(θf, um, p) : zeros(length(θf))
@@ -227,8 +245,8 @@ function make_stateful_moments(; use_exact_grad::Bool = true)
                 end
                 neval[] += 1
                 if neval[] % 10 == 0
-                    @printf("    [θ-eval %d, gravity-feasible %d] seqR=%.2e ok=%s seq_time=%.2fs\n",
-                            neval[], nfeas[], lastR[], ok, time()-t0); flush(stdout)
+                    @printf("    [θ-eval %d, gravity-feasible %d] seqR_mean=%.2e ok=%s seq_time=%.2fs\n",
+                            neval[], nfeas[], lastRmean[], ok, time()-t0); flush(stdout)
                 end
                 lastθ[] = copy(θf)
             end
@@ -236,21 +254,23 @@ function make_stateful_moments(; use_exact_grad::Bool = true)
         EK_moments_focal!(K, @view(G[:, 1:D+1]), θ, Uarg, obj)
         nrow = size(G, 1)
         if eltype(θ) <: ForwardDiff.Dual && lastok[]
-            # affine reconstruction col(θ) ≈ ψ̄_frozen[s] + (R0 + dRdθ·(θ-θ0)): correct value at θ0
-            # (matches the Float64 pass) with the EXACT envelope-theorem gradient of R attached, so
-            # the outer KNITRO gradient sees how A_focal/μ trade off against gravity satisfaction.
-            Rlin = lastR[] + dot(dRdθ[], θ .- lastθ[])
-            @inbounds @views @. G[:, D+2] = (gcol[][1:nrow] - lastR[]) + Rlin
+            # affine reconstruction col(θ) ≈ ψ̄_frozen[s] + (R_beta,0 + dRdθ·(θ-θ0)): correct value at
+            # θ0 (matches the Float64 pass, R_beta scale) with the EXACT envelope-theorem gradient of
+            # R_beta attached, so the outer KNITRO gradient sees how A_focal/μ trade off against
+            # gravity satisfaction, at a numerical scale that's empirically well-conditioned for the
+            # solver (unlike R_mean's ~34× smaller magnitude — see the note above seq_gravcol).
+            Rlin = lastRcol[] + dot(dRdθ[], θ .- lastθ[])
+            @inbounds @views @. G[:, D+2] = (gcol[][1:nrow] - lastRcol[]) + Rlin
         else
             @inbounds @views @. G[:, D+2] = gcol[][1:nrow]
         end
     end
-    return m!, gcol, lastR
+    return m!, gcol, lastRmean
 end
 
 function outer_solve_nested(find_smallest, θinit; use_exact_grad::Bool = true)
     d = D + 2; oci = d + 1
-    m!, gcol, lastR = make_stateful_moments(; use_exact_grad = use_exact_grad)
+    m!, gcol, lastRmean = make_stateful_moments(; use_exact_grad = use_exact_grad)
     obj = PsiObjectiveBundleImplicit(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = m!, moments_jacobian! = error, d = d, outer_constr_index = oci,
         inequality_index = Int64[], complement_index = [0 0], l = length(θinit), U = U, N = JacW,
@@ -272,7 +292,7 @@ for (name, fs) in ((:upper, false), (:lower, true))
     @printf("\n----- %s bound (sequential loop recomputed at every θ) -----\n", name); flush(stdout)
     t0 = time()
     κ, θstar, st = outer_solve_nested(fs, θr0; use_exact_grad = USE_EXACT_GRAD)
-    _, Rθ, _, _, okθ = seq_gravcol(θstar)      # exact residual at the bound-achieving θ*
+    _, Rθ, _, _, _, okθ = seq_gravcol(θstar)      # exact residual (R_mean) at the bound-achieving θ*
     @printf("  κ_%s = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
             name, κ, st, Rθ, okθ, time() - t0)
     results[name] = (κ = κ, R = Rθ, ok = okθ)
