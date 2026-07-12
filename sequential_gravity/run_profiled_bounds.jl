@@ -85,7 +85,7 @@ end
 # inner sequential loop at fixed θ.  Returns (col, R, umat, p, ok) where ok=true ONLY if the loop
 # genuinely drove the exact residual to |R|≤tol (gravity is satisfiable at this θ). If the LFD /
 # inversion is non-finite, or the loop cannot reach |R|≤tol, ok=false ⇒ θ is gravity-infeasible.
-function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing, verbose = false)
+function seq_gravcol(θ; maxit = 20, tol = 5e-4, warm = nothing, verbose = false)
     μ = θ[1]
     (isfinite(μ) && μ > 0) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
