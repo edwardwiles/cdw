@@ -202,9 +202,13 @@ function grad_R_theta(θ, umat, p)
 end
 
 # reduced θ bounds
+FREEZE_MU = get(ENV, "FREEZE_MU", "0") == "1"
 function focal_bounds(θr)
     lo = θr .* 1e-4; hi = θr .* 1e4
     lo[2] = θr[2]; hi[2] = θr[2]; lo[1] = 0.001; hi[1] = 1/(σ-1) - 0.001; lo[5] = θr[5]; hi[5] = θr[5]
+    if FREEZE_MU
+        lo[1] = θr[1]; hi[1] = θr[1]
+    end
     lo, hi
 end
 θ_lo, θ_hi = focal_bounds(θr0)
@@ -220,7 +224,7 @@ end
 # problem infeasible ⇒ the outer optimizer rejects that θ. Used when gravity can't be enforced.
 const INFCOL = 1.0 .+ 0.1 .* sin.(1:W)
 
-function make_stateful_moments(; use_exact_grad::Bool = true)
+function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Bool = false)
     lastθ = Ref(fill(NaN, length(θr0)))
     gcol  = Ref(zeros(W))
     lastRmean = Ref(NaN)     # UNSCALED identification-condition value (reporting/logging only)
@@ -229,6 +233,16 @@ function make_stateful_moments(; use_exact_grad::Bool = true)
     dRdθ  = Ref(zeros(length(θr0)))
     neval = Ref(0); nfeas = Ref(0)
     warm  = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    # best-feasible-θ tracker: independent of what KNITRO's own terminal iterate ends up being, the
+    # BEST (extremal κ, subject to gravity-feasible |R_mean|≤tol) θ seen during the ENTIRE search.
+    # Also snapshot the umat that ACHIEVED that feasibility: the sequential loop is warm-start
+    # dependent (it's a nested iterative procedure, not a pure function of θ alone), so re-verifying
+    # this θ later with a COLD start can genuinely fail even though it was truly feasible via the
+    # warm-started trajectory reached during the search — re-verify warm, not cold.
+    best_θ = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    best_κ = Ref(find_smallest ? Inf : -Inf)
+    best_warm = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    Ktmp = zeros(1); Gtmp = zeros(1, D + 1)
     function m!(K, G, θ, Uarg, obj)
         if !(eltype(θ) <: ForwardDiff.Dual)          # value path: (re)linearize gravity at this θ
             θf = Float64.(θ)
@@ -239,6 +253,11 @@ function make_stateful_moments(; use_exact_grad::Bool = true)
                 if ok
                     gcol[] = c; warm[] = um; nfeas[] += 1
                     dRdθ[] = use_exact_grad ? grad_R_theta(θf, um, p) : zeros(length(θf))
+                    EK_moments_focal!(Ktmp, Gtmp, θf, view(U, 1:1, :), (γ = γ,))
+                    κθ = Ktmp[1]
+                    if (find_smallest && κθ < best_κ[]) || (!find_smallest && κθ > best_κ[])
+                        best_κ[] = κθ; best_θ[] = copy(θf); best_warm[] = copy(um)
+                    end
                 else
                     gcol[] = INFCOL                    # gravity-infeasible θ ⇒ reject
                     dRdθ[] = zeros(length(θf))
@@ -265,19 +284,19 @@ function make_stateful_moments(; use_exact_grad::Bool = true)
             @inbounds @views @. G[:, D+2] = gcol[][1:nrow]
         end
     end
-    return m!, gcol, lastRmean
+    return m!, gcol, lastRmean, best_θ, best_κ, best_warm
 end
 
 function outer_solve_nested(find_smallest, θinit; use_exact_grad::Bool = true)
     d = D + 2; oci = d + 1
-    m!, gcol, lastRmean = make_stateful_moments(; use_exact_grad = use_exact_grad)
+    m!, gcol, lastRmean, best_θ, best_κ, best_warm = make_stateful_moments(; use_exact_grad = use_exact_grad, find_smallest = find_smallest)
     obj = PsiObjectiveBundleImplicit(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = m!, moments_jacobian! = error, d = d, outer_constr_index = oci,
         inequality_index = Int64[], complement_index = [0 0], l = length(θinit), U = U, N = JacW,
         lower_limit = -50, use_cached_x = false,   # gravity column changes per θ ⇒ stale warm-start invalid
         outer_loop_opt = "csw_outer_loop_settings_cluster.opt", inner_loop_opt = "ek_inner_loop_options.opt")
     κ, θstar, st, _ = outer_loop(obj, θ_lo, θ_hi, copy(θinit))
-    κ, θstar, st
+    κ, θstar, st, best_θ[], best_κ[], best_warm[]
 end
 
 USE_EXACT_GRAD = get(ENV, "PROF_EXACT_GRAD", "1") == "1"
@@ -291,15 +310,25 @@ results = Dict{Symbol,Any}()
 for (name, fs) in ((:upper, false), (:lower, true))
     @printf("\n----- %s bound (sequential loop recomputed at every θ) -----\n", name); flush(stdout)
     t0 = time()
-    κ, θstar, st = outer_solve_nested(fs, θr0; use_exact_grad = USE_EXACT_GRAD)
-    _, Rθ, _, _, _, okθ = seq_gravcol(θstar)      # exact residual (R_mean) at the bound-achieving θ*
-    @printf("  κ_%s = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
+    κ, θstar, st, bθ, bκ, bwarm = outer_solve_nested(fs, θr0; use_exact_grad = USE_EXACT_GRAD)
+    _, Rθ, _, _, _, okθ = seq_gravcol(θstar)      # exact residual (R_mean) at KNITRO's own θ*
+    @printf("  KNITRO:        κ_%s = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
             name, κ, st, Rθ, okθ, time() - t0)
-    results[name] = (κ = κ, R = Rθ, ok = okθ)
+    if bθ === nothing
+        @printf("  best-feasible: NONE FOUND (no gravity-feasible θ visited during the search)\n")
+    else
+        # re-verify WARM (from the umat that achieved feasibility during the search) — the sequential
+        # loop is warm-start dependent, so a cold re-check at the same θ can spuriously fail.
+        _, Rb, _, _, _, okb = seq_gravcol(bθ; warm = bwarm)
+        @printf("  best-feasible: κ_%s = %.6f  exact R_mean = %.3e  gravity-feasible=%s\n", name, bκ, Rb, okb)
+    end
+    results[name] = (κ = κ, R = Rθ, ok = okθ, best_κ = bκ, best_θ = bθ)
 end
 
 @printf("\n=== PROFILED FULL-GRAVITY BOUNDS (δ=%g) ===\n", δ)
-@printf("  κ_lower = %.6f   (exact R_mean %.2e)\n", results[:lower].κ, results[:lower].R)
+@printf("  κ_lower : KNITRO=%.6f (R_mean %.2e, feasible=%s)   best-feasible=%.6f\n",
+        results[:lower].κ, results[:lower].R, results[:lower].ok, results[:lower].best_κ)
 @printf("  point   = %.6f\n", Kchk[1])
-@printf("  κ_upper = %.6f   (exact R_mean %.2e)\n", results[:upper].κ, results[:upper].R)
+@printf("  κ_upper : KNITRO=%.6f (R_mean %.2e, feasible=%s)   best-feasible=%.6f\n",
+        results[:upper].κ, results[:upper].R, results[:upper].ok, results[:upper].best_κ)
 @printf("\nreference: focal-only (no gravity) [0.00055, 0.2326];  legacy all-A gravity [0.0102, 0.1595]\n")
