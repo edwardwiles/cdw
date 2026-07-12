@@ -82,6 +82,32 @@ function recover_lfd(θ, moments_fn, d)
     return LFD ./ s, true
 end
 
+# Primal CDW/CC hybrid-divergence functional φ — the Legendre dual of Psi (cc_algo/Psi.jl) — applied
+# DIRECTLY to an explicit candidate distribution p (no optimization). Needed because the accepted
+# `p` inside the sequential loop can be a DAMPED convex combination (1-α)p_k + α·p_candidate, which
+# is a valid distributional iterate but is NOT itself the argmin of any single min-divergence
+# problem (spec §15) — so its divergence from F* must be evaluated directly, not read off a solver's
+# internal `val`. Derivation: Psi(a) = exp(a)-1 for a≤1, 0.5·e·(a²+1)-1 for a>1; Psi'=dPsi (matches
+# dPsi! exactly); by Legendre duality with m=Psi'(a) ⟺ a=φ'(m), φ(m)=am-Psi(a) at that a:
+#   φ(m) = m·log(m) - m + 1        for 0 < m ≤ e   (a=log m ≤ 1)
+#   φ(m) = m²/(2e) - e/2 + 1        for m > e        (a=m/e > 1)
+# divergence(p) = E_F*[φ(dF/dF*)] = (1/W) Σ_s φ(p[s]·W), since F* is uniform (π*[s]=1/W).
+# Sanity check: divergence_of(fill(1/W,W)) = 0 (p=F* exactly ⇒ m≡1 ⇒ φ(1)=0).
+function divergence_of(p::AbstractVector)
+    e = exp(1); acc = 0.0
+    @inbounds for s in eachindex(p)
+        m = p[s] * W
+        if !(m > 0) || !isfinite(m)
+            return Inf
+        elseif m <= e
+            acc += m * log(m) - m + 1
+        else
+            acc += m^2 / (2e) - e / 2 + 1
+        end
+    end
+    return acc / W
+end
+
 # S_Q = Σ Q̃² depends ONLY on the tariff data (two_way_demean(logτ)), never on θ/F/A — a true global
 # constant. So R_beta = R_sum/S_Q and R_mean = R_sum/D² are related by the FIXED, θ-independent
 # positive constant D²/S_Q: R_beta ≡ (D²/S_Q) · R_mean, exactly, always (not an approximation). We
@@ -97,10 +123,15 @@ end
 
 # inner sequential loop at fixed θ. Returns (col, R_mean, R_col, umat, p, ok) where `col` and `R_col`
 # are R_beta-scaled (solver-facing) and `R_mean` is the UNSCALED identification-condition value used
-# for the |R|≤tol / gravity-feasibility decision. ok=true ONLY if the loop genuinely drove
-# |R_mean|≤tol (gravity is satisfiable at this θ). If the LFD/inversion is non-finite, or the loop
-# cannot reach tol, ok=false ⇒ θ is gravity-infeasible.
-function seq_gravcol(θ; maxit = 20, tol = 5e-4, warm = nothing, verbose = false)
+# for the |R|≤tol / gravity-feasibility decision. ok=true ONLY if BOTH (a) the loop genuinely drove
+# |R_mean|≤tol (gravity is satisfiable) AND (b) the recovered distribution p's actual divergence from
+# F* is ≤ δ (checked via divergence_of, the exact primal CDW/CC functional — NOT assumed just because
+# a solver converged). (b) was a real gap: gravity-feasibility alone does not imply the δ-neighborhood
+# budget is respected, and this previously let the best-feasible-θ tracker report economically
+# impossible points (negative GT, which is provably ≥0 — see the paper draft) that were gravity-
+# consistent but corresponded to a distribution far outside the stated δ. If the LFD/inversion is
+# non-finite, or the loop cannot reach tol, or divergence_of(p)>δ, ok=false ⇒ θ is infeasible.
+function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, verbose = false)
     μ = θ[1]
     (isfinite(μ) && μ > 0) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
@@ -163,8 +194,14 @@ function seq_gravcol(θ; maxit = 20, tol = 5e-4, warm = nothing, verbose = false
         verbose && @printf("    [seq] iter %d: R_mean -> %.4e  accepted=%s  α=%.4f\n", k, R, acc, acc ? α : 0.0)
         acc || break
     end
-    verbose && @printf("    [seq] FINAL: R_mean=%.4e  |R|<=tol? %s  (maxit=%d)\n", R, abs(R) <= tol, maxit)
-    return col, R, Rcol, umat, p, abs(R) <= tol
+    div_p = divergence_of(p)
+    gravity_ok = abs(R) <= tol
+    δ_ok = div_p <= δ * (1 + 1e-6) + 1e-10   # tiny numerical slack on the boundary
+    if verbose
+        @printf("    [seq] FINAL: R_mean=%.4e gravity_ok=%s  divergence(p)=%.4e (budget δ=%.4g) δ_ok=%s\n",
+                R, gravity_ok, div_p, δ, δ_ok)
+    end
+    return col, R, Rcol, umat, p, gravity_ok && δ_ok
 end
 
 # ------------------------------------------------------------------------------------------------
@@ -224,7 +261,7 @@ end
 # problem infeasible ⇒ the outer optimizer rejects that θ. Used when gravity can't be enforced.
 const INFCOL = 1.0 .+ 0.1 .* sin.(1:W)
 
-function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Bool = false)
+function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Bool = false, δ::Real = δ)
     lastθ = Ref(fill(NaN, length(θr0)))
     gcol  = Ref(zeros(W))
     lastRmean = Ref(NaN)     # UNSCALED identification-condition value (reporting/logging only)
@@ -248,7 +285,7 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
             θf = Float64.(θ)
             if θf != lastθ[]
                 t0 = time()
-                c, Rmean, Rcol, um, p, ok = seq_gravcol(θf; warm = warm[])
+                c, Rmean, Rcol, um, p, ok = seq_gravcol(θf; δ = δ, warm = warm[])
                 lastRmean[] = Rmean; lastRcol[] = Rcol; lastok[] = ok
                 if ok
                     gcol[] = c; warm[] = um; nfeas[] += 1
@@ -287,9 +324,9 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
     return m!, gcol, lastRmean, best_θ, best_κ, best_warm
 end
 
-function outer_solve_nested(find_smallest, θinit; use_exact_grad::Bool = true)
+function outer_solve_nested(find_smallest, θinit; use_exact_grad::Bool = true, δ::Real = δ)
     d = D + 2; oci = d + 1
-    m!, gcol, lastRmean, best_θ, best_κ, best_warm = make_stateful_moments(; use_exact_grad = use_exact_grad, find_smallest = find_smallest)
+    m!, gcol, lastRmean, best_θ, best_κ, best_warm = make_stateful_moments(; use_exact_grad = use_exact_grad, find_smallest = find_smallest, δ = δ)
     obj = PsiObjectiveBundleImplicit(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = m!, moments_jacobian! = error, d = d, outer_constr_index = oci,
         inequality_index = Int64[], complement_index = [0 0], l = length(θinit), U = U, N = JacW,
@@ -302,33 +339,55 @@ end
 USE_EXACT_GRAD = get(ENV, "PROF_EXACT_GRAD", "1") == "1"
 
 Kchk = zeros(W); Gchk = zeros(W, D + 1); EK_moments_focal!(Kchk, Gchk, θr0, U, (γ = γ,))
-@printf("\n=== profiled full-gravity bounds (§18 nested, exact_grad=%s), D=%d W=%d δ=%g ρ=%g ===\n",
-        USE_EXACT_GRAD, D, W, δ, ρ)
-@printf("point estimate κ(F*) = %.6f\n", Kchk[1])
+POINT_EST = Kchk[1]
 
-results = Dict{Symbol,Any}()
-for (name, fs) in ((:upper, false), (:lower, true))
-    @printf("\n----- %s bound (sequential loop recomputed at every θ) -----\n", name); flush(stdout)
-    t0 = time()
-    κ, θstar, st, bθ, bκ, bwarm = outer_solve_nested(fs, θr0; use_exact_grad = USE_EXACT_GRAD)
-    _, Rθ, _, _, _, okθ = seq_gravcol(θstar)      # exact residual (R_mean) at KNITRO's own θ*
-    @printf("  KNITRO:        κ_%s = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
-            name, κ, st, Rθ, okθ, time() - t0)
-    if bθ === nothing
-        @printf("  best-feasible: NONE FOUND (no gravity-feasible θ visited during the search)\n")
-    else
-        # re-verify WARM (from the umat that achieved feasibility during the search) — the sequential
-        # loop is warm-start dependent, so a cold re-check at the same θ can spuriously fail.
-        _, Rb, _, _, _, okb = seq_gravcol(bθ; warm = bwarm)
-        @printf("  best-feasible: κ_%s = %.6f  exact R_mean = %.3e  gravity-feasible=%s\n", name, bκ, Rb, okb)
+function run_at_delta(δval::Real)
+    @printf("\n=== profiled full-gravity bounds (§18 nested, exact_grad=%s), D=%d W=%d δ=%g ρ=%g ===\n",
+            USE_EXACT_GRAD, D, W, δval, ρ)
+    @printf("point estimate κ(F*) = %.6f\n", POINT_EST)
+
+    results = Dict{Symbol,Any}()
+    for (name, fs) in ((:upper, false), (:lower, true))
+        @printf("\n----- %s bound (sequential loop recomputed at every θ), δ=%g -----\n", name, δval); flush(stdout)
+        t0 = time()
+        κ, θstar, st, bθ, bκ, bwarm = outer_solve_nested(fs, θr0; use_exact_grad = USE_EXACT_GRAD, δ = δval)
+        _, Rθ, _, _, _, okθ = seq_gravcol(θstar; δ = δval)      # exact residual (R_mean) at KNITRO's own θ*
+        @printf("  KNITRO:        κ_%s = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
+                name, κ, st, Rθ, okθ, time() - t0)
+        if bθ === nothing
+            @printf("  best-feasible: NONE FOUND (no gravity-feasible θ visited during the search)\n")
+            results[name] = (κ = κ, R = Rθ, ok = okθ, best_κ = NaN, best_θ = nothing, best_ok = false)
+        else
+            # re-verify WARM (from the umat that achieved feasibility during the search) — the sequential
+            # loop is warm-start dependent, so a cold re-check at the same θ can spuriously fail.
+            _, Rb, _, _, _, okb = seq_gravcol(bθ; δ = δval, warm = bwarm)
+            @printf("  best-feasible: κ_%s = %.6f  exact R_mean = %.3e  gravity-feasible=%s\n", name, bκ, Rb, okb)
+            results[name] = (κ = κ, R = Rθ, ok = okθ, best_κ = bκ, best_θ = bθ, best_ok = okb)
+        end
     end
-    results[name] = (κ = κ, R = Rθ, ok = okθ, best_κ = bκ, best_θ = bθ)
+
+    @printf("\n=== PROFILED FULL-GRAVITY BOUNDS (δ=%g) ===\n", δval)
+    @printf("  κ_lower : KNITRO=%.6f (R_mean %.2e, feasible=%s)   best-feasible=%.6f (feasible=%s)\n",
+            results[:lower].κ, results[:lower].R, results[:lower].ok, results[:lower].best_κ, results[:lower].best_ok)
+    @printf("  point   = %.6f\n", POINT_EST)
+    @printf("  κ_upper : KNITRO=%.6f (R_mean %.2e, feasible=%s)   best-feasible=%.6f (feasible=%s)\n",
+            results[:upper].κ, results[:upper].R, results[:upper].ok, results[:upper].best_κ, results[:upper].best_ok)
+    return results
 end
 
-@printf("\n=== PROFILED FULL-GRAVITY BOUNDS (δ=%g) ===\n", δ)
-@printf("  κ_lower : KNITRO=%.6f (R_mean %.2e, feasible=%s)   best-feasible=%.6f\n",
-        results[:lower].κ, results[:lower].R, results[:lower].ok, results[:lower].best_κ)
-@printf("  point   = %.6f\n", Kchk[1])
-@printf("  κ_upper : KNITRO=%.6f (R_mean %.2e, feasible=%s)   best-feasible=%.6f\n",
-        results[:upper].κ, results[:upper].R, results[:upper].ok, results[:upper].best_κ)
-@printf("\nreference: focal-only (no gravity) [0.00055, 0.2326];  legacy all-A gravity [0.0102, 0.1595]\n")
+DELTA_GRID = let s = get(ENV, "DELTA_GRID", "")
+    isempty(s) ? [δ] : parse.(Float64, split(s, ","))
+end
+
+all_results = Dict{Float64,Any}()
+for δval in DELTA_GRID
+    all_results[δval] = run_at_delta(δval)
+end
+
+@printf("\n\n=== SUMMARY ACROSS δ (point estimate κ = %.6f) ===\n", POINT_EST)
+@printf("%8s | %22s | %22s\n", "δ", "κ_lower (KNITRO/best)", "κ_upper (KNITRO/best)")
+for δval in DELTA_GRID
+    r = all_results[δval]
+    @printf("%8.4g | %10.6f / %10.6f | %10.6f / %10.6f\n",
+            δval, r[:lower].κ, r[:lower].best_κ, r[:upper].κ, r[:upper].best_κ)
+end

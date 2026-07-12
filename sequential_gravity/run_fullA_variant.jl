@@ -59,7 +59,6 @@ prep = master_prepare_cc(data, counters, prestep_output, useParams)
         inequality_index, nTotalMoments, complement_index = prep
 focal = params.baseIndex
 JacW = params.Jac_W
-δ = δ_grid[1]
 
 # ---- replicate ccOuter.jl's bound-setting exactly (counterType=1, OuterScaling=1, independenceMoment=0) ----
 θ_lower = (θ_initial .* 0.0001)[:]
@@ -92,14 +91,13 @@ for i in 1:length(θ_initial)
     end
 end
 
-@printf("\n=== full-A variant: FREEZE_MU=%s FREEZE_NONFOCAL_A=%s (D=%d, W=%d, δ=%g) ===\n",
-        FREEZE_MU, FREEZE_NONFOCAL_A, D, params.W, δ)
 n_free = count(i -> θ_lower[i] != θ_upper[i], eachindex(θ_lower))
-@printf("free outer parameters: %d / %d\n", n_free, length(θ_initial))
+@printf("\n=== full-A variant: FREEZE_MU=%s FREEZE_NONFOCAL_A=%s (D=%d, W=%d), free outer params=%d/%d ===\n",
+        FREEZE_MU, FREEZE_NONFOCAL_A, D, params.W, n_free, length(θ_initial))
 
-function build_obj(find_smallest)
+function build_obj(find_smallest, δval)
     PsiObjectiveBundleImplicit(
-        δ = δ, find_smallest = find_smallest, γ = γ, (moments!) = EK_moments!,
+        δ = δval, find_smallest = find_smallest, γ = γ, (moments!) = EK_moments!,
         moments_jacobian! = error, d = nTotalMoments, outer_constr_index = outer_constr_index,
         inequality_index = inequality_index, complement_index = complement_index,
         l = size(θ_initial, 1), U = U, N = JacW, lower_limit = -50, use_cached_x = true,
@@ -107,16 +105,36 @@ function build_obj(find_smallest)
     )
 end
 
-results = Dict{Symbol,Any}()
-for (name, fs, θinit) in ((:upper, false, θ_initial_up), (:lower, true, θ_initial_low))
-    @printf("\n----- %s bound -----\n", name); flush(stdout)
-    t0 = time()
-    obj = build_obj(fs)
-    κ, θ1, nStatus, _ = outer_loop(obj, θ_lower, θ_upper, θinit)
-    @printf("  κ_%s = %.6f  (status %d)  wall %.1fs\n", name, κ, nStatus, time() - t0)
-    results[name] = κ
+function run_at_delta(δval::Real)
+    @printf("\n=== full-A variant at δ=%g ===\n", δval)
+    results = Dict{Symbol,Any}()
+    for (name, fs, θinit) in ((:upper, false, θ_initial_up), (:lower, true, θ_initial_low))
+        @printf("\n----- %s bound, δ=%g -----\n", name, δval); flush(stdout)
+        t0 = time()
+        obj = build_obj(fs, δval)
+        κ, θ1, nStatus, _ = outer_loop(obj, θ_lower, θ_upper, θinit)
+        @printf("  κ_%s = %.6f  (status %d)  wall %.1fs\n", name, κ, nStatus, time() - t0)
+        results[name] = κ
+    end
+    @printf("\n=== FULL-A VARIANT RESULTS (FREEZE_MU=%s FREEZE_NONFOCAL_A=%s, δ=%g) ===\n",
+            FREEZE_MU, FREEZE_NONFOCAL_A, δval)
+    @printf("  κ_lower = %.6f\n", results[:lower])
+    @printf("  κ_upper = %.6f\n", results[:upper])
+    return results
 end
 
-@printf("\n=== FULL-A VARIANT RESULTS (FREEZE_MU=%s FREEZE_NONFOCAL_A=%s) ===\n", FREEZE_MU, FREEZE_NONFOCAL_A)
-@printf("  κ_lower = %.6f\n", results[:lower])
-@printf("  κ_upper = %.6f\n", results[:upper])
+DELTA_GRID = let s = get(ENV, "DELTA_GRID", "")
+    isempty(s) ? [δ_grid[1]] : parse.(Float64, split(s, ","))
+end
+
+all_results = Dict{Float64,Any}()
+for δval in DELTA_GRID
+    all_results[δval] = run_at_delta(δval)
+end
+
+@printf("\n\n=== SUMMARY ACROSS δ (FREEZE_MU=%s FREEZE_NONFOCAL_A=%s) ===\n", FREEZE_MU, FREEZE_NONFOCAL_A)
+@printf("%8s | %12s | %12s\n", "δ", "κ_lower", "κ_upper")
+for δval in DELTA_GRID
+    r = all_results[δval]
+    @printf("%8.4g | %12.6f | %12.6f\n", δval, r[:lower], r[:upper])
+end
