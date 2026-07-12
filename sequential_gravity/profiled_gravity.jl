@@ -378,6 +378,7 @@ end
 
 struct GravityResidual{T}
     R_sum::T
+    R_mean::T
     R_beta::T
     S_Q::T
     Qt::Matrix{T}
@@ -389,7 +390,19 @@ end
     gravity_residual(u_mat, logτ, logw, σ)
 
 `u_mat[o,d]` = full D×D competitiveness matrix. logA[o,d]=logw_o+logτ_od+u/(σ-1); two-way demean
-Q=logτ and logA; R_sum=ΣQ̃·logÃ, R_beta=R_sum/ΣQ̃². Identity: logÃ=Q̃+ũ/(σ-1) (logw is an origin FE).
+Q=logτ and logA; `R_sum=ΣQ̃·logÃ` (raw sum over all D² pairs, diagonal included — matches the
+existing `newGravityMoment!`/`master_prestep` convention). Three equivalent-at-zero but
+differently-SCALED reports of the same identifying restriction E[ΔΔlogA·ΔΔlogτ]=0:
+  `R_mean  = R_sum/D²`   — the literal finite-sample moment average (E[εX]=0 in sample form)
+  `R_beta  = R_sum/ΣQ̃²`  — a regression-coefficient/elasticity normalization (Cov/Var), matching
+                            exactly how θ̂ itself is estimated in `master_prestep.jl`
+                            (`thetaHat = -sum(Wλ.*Wτ)/sum(Wτ.*Wτ)`) — this is the quantity a fixed
+                            numerical tolerance should be checked against, since dividing by ΣQ̃²
+                            (not just the pair count D²) automatically corrects for how much τ
+                            varies in the data, unlike R_mean. R_sum=0 ⟺ R_mean=0 ⟺ R_beta=0 (all
+                            three vanish together — same identifying condition, only the finite-
+                            tolerance check differs by scale.
+Identity: logÃ=Q̃+ũ/(σ-1) (logw is an origin FE, absorbed by demeaning).
 """
 function gravity_residual(u_mat::AbstractMatrix, logτ::AbstractMatrix, logw::AbstractVector, σ::Real)
     D = size(u_mat, 1)
@@ -403,7 +416,7 @@ function gravity_residual(u_mat::AbstractMatrix, logτ::AbstractMatrix, logw::Ab
     ut = two_way_demean(u_mat)
     R_sum = sum(Qt .* logAt)
     S_Q = sum(Qt .* Qt)
-    return GravityResidual(R_sum, R_sum / S_Q, S_Q, Matrix{Tt}(Qt), Matrix{Tt}(logAt), Matrix{Tt}(ut))
+    return GravityResidual(R_sum, R_sum / D^2, R_sum / S_Q, S_Q, Matrix{Tt}(Qt), Matrix{Tt}(logAt), Matrix{Tt}(ut))
 end
 
 # ----------------------------------------------------------------------------------------------
