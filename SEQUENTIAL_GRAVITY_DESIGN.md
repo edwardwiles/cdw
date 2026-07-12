@@ -249,6 +249,34 @@ function theorem chained through each CC solve (`ift!`) with the validated influ
 (contributes to hitting the outer iteration cap). Improving it (exact IFT gradient) is the main
 open performance item, alongside parallelizing the D−1 inversions for D=19.
 
+## 5c. Feasibility requires BOTH gravity AND the δ-divergence budget — a bug that produced negative GT
+
+**"Gravity-feasible" (§5b's `INFCOL` reject) is not the same condition as "δ-feasible," and confusing
+them is a real bug, not a subtlety.** An earlier version of `seq_gravcol` (`run_profiled_bounds.jl`)
+gated its `ok` flag on `|R_mean|≤tol` alone. This let the best-feasible-θ tracker (SEQUENTIAL_GRAVITY_
+PROGRESS.md §4) report θ whose gravity-consistent distribution `p` required divergence from F\* far
+outside the stated δ — i.e., not actually admissible under the robustness budget at all. Symptom:
+negative reported GT, which the paper draft proves is impossible (GT∈[0,κ_max], §6 below). Fix: an
+explicit primal-divergence check, `divergence_of(p) ≤ δ`, using the exact CDW/CC functional φ (the
+Legendre dual of `Psi!` in `cc_algo/Psi.jl`), applied directly to the candidate `p` — necessary because
+damped convex-combination iterates (§4's spec-§15 damping) are not themselves argmins of any min-
+divergence problem, so their divergence can't be read off a solver's internal value. See
+SEQUENTIAL_GRAVITY_PROGRESS.md §5 for the derivation, the fix, and the "if you're extending this"
+warning: any new way of constructing a candidate `p` needs this same check before being trusted.
+
+## 5d. Bounding κ structurally: the γ_focal≡1 reparameterization
+
+A second, complementary line of defense (rather than only catching infeasibility after the fact):
+`focal_moments.jl::EK_moments_focal_norm!` forces `γ_focal≡1` and bounds `γ'_focal` (which enters
+directly, not via a raw multiplier) to the theoretically exact range implied by the paper's proof that
+`κ=GT∈[0, 1-λ_dd^{1/(σ-1)}]`. Derived from `computeGamma.jl`'s own autarky formula (not asserted):
+`γ'_focal/γ_focal = λ_dd^{μ(σ-1)/σ}` exactly, so `κ=1-λ_dd^μ`, monotone in μ over its existing bound
+`(0,1/(σ-1)]`. `γ_focal≡1` **replaces** (does not add to) the `A[1,focal]=1` normalization — they are
+gauge-fixes for the *same* redundancy (a common multiplicative scale across all of `Acol` is exactly
+redundant with `γ_focal`'s level); double-pinning both shifts the moment-matching point away from F\*.
+Full derivation, the double-pinning bug found via numerical cross-check, and the verification results
+are in SEQUENTIAL_GRAVITY_PROGRESS.md §6. Implementation: `run_profiled_bounds_norm.jl`.
+
 ## 6. File plan
 
 - `sequential_gravity/profiled_gravity.jl` — Phase-1 core (this note §3), dependency-light
