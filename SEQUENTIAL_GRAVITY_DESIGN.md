@@ -198,6 +198,25 @@ declared only against the **exact nonlinear** `R` after re-inverting.
 
 ---
 
+## 5a. Which scaling for R? (R_sum vs R_mean vs R_beta) — and does the diagonal (o=d) count?
+
+**Diagonal:** the gravity sum runs over the **full D² grid, including o=d** (confirmed: keep it —
+not restricted to international o≠d pairs), matching the existing `newGravityMoment!`/
+`master_prestep.jl` convention and `gravity_check.jl`'s validation against a two-way-FE OLS
+regression over the full grid. (On the fake-data DGP `τ[o,o]=1` always — self-distance is 0 — so
+the diagonal is a constant, not noise, but two-way demeaning does not trivially annihilate it.)
+
+**Scaling:** the population identification condition is `E[ΔΔlogA·ΔΔlogτ]=0`; its literal
+finite-sample form is the **average** `R_mean = R_sum/D²`, not the raw sum. But `R_sum=0 ⟺
+R_mean=0 ⟺ R_beta=0` (`R_beta=R_sum/ΣQ̃²`) — all three are `R_sum` scaled by different *positive*
+constants, so they are the same identifying condition; they only differ once you check a finite
+numerical **tolerance** against them. We use **R_beta** for that check (matching the spec's
+explicit preference), because dividing by `ΣQ̃²` (the variance of the τ-regressor) — not just the
+pair count `D²` — makes the tolerance portable across datasets with different tariff variance,
+and it is *exactly* the same regression-coefficient normalization already used to estimate θ̂
+(`master_prestep.jl`: `thetaHat = -sum(Wλ.*Wτ)/sum(Wτ.*Wτ)`). `GravityResidual` now reports
+`R_sum`, `R_mean`, and `R_beta` together for transparency (spec §21).
+
 ## 5b. Phase-2c outer integration (§18) — how it actually works, and its known limits
 
 `run_profiled_bounds.jl` runs the sequential loop **inside every outer θ-evaluation** (the nested
