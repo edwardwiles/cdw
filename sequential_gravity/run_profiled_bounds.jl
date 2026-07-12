@@ -82,14 +82,14 @@ function recover_lfd(θ, moments_fn, d)
     return LFD ./ s, true
 end
 
-# inner sequential loop at fixed θ.  Returns (col, R, umat, ok) where ok=true ONLY if the loop
+# inner sequential loop at fixed θ.  Returns (col, R, umat, p, ok) where ok=true ONLY if the loop
 # genuinely drove the exact residual to |R|≤tol (gravity is satisfiable at this θ). If the LFD /
 # inversion is non-finite, or the loop cannot reach |R|≤tol, ok=false ⇒ θ is gravity-infeasible.
 function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing)
     μ = θ[1]
-    (isfinite(μ) && μ > 0) || return zeros(W), Inf, nothing, false
+    (isfinite(μ) && μ > 0) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
-    (all(isfinite, uf) && all(isfinite, log_x)) || return zeros(W), Inf, nothing, false
+    (all(isfinite, uf) && all(isfinite, log_x)) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
     invert_omitted(p; warm = nothing) = begin
         um = zeros(D, D); um[:, focal] .= uf
         for d in omitted
@@ -100,15 +100,15 @@ function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing)
         um
     end
     p, ok = recover_lfd(θ, EK_moments_focal!, D + 1)
-    ok || return zeros(W), Inf, nothing, false
+    ok || return zeros(W), Inf, nothing, fill(1.0/W, W), false
     local umat, R
     try
         umat = invert_omitted(p; warm = warm)
         R = gravity_residual(umat, logτ, logw, σ).R_beta
     catch
-        return zeros(W), Inf, nothing, false
+        return zeros(W), Inf, nothing, fill(1.0/W, W), false
     end
-    isfinite(R) || return zeros(W), Inf, nothing, false
+    isfinite(R) || return zeros(W), Inf, nothing, fill(1.0/W, W), false
     col = zeros(W)
     for k in 1:maxit
         infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_beta)
@@ -133,7 +133,38 @@ function seq_gravcol(θ; maxit = 6, tol = 5e-4, warm = nothing)
         end
         acc || break
     end
-    return col, R, umat, abs(R) <= tol
+    return col, R, umat, p, abs(R) <= tol
+end
+
+# ------------------------------------------------------------------------------------------------
+# EXACT gradient of R w.r.t. θ, holding F (the LFD p) fixed — the envelope-theorem piece the frozen
+# column was dropping. No autodiff through KNITRO or through the inversion's Newton loop:
+#   • ∂R_sum/∂u[o,d] = Q̃[o,d]/(σ-1) for every (o,d) (closed form: R_sum = S_Q + (1/(σ-1))ΣQ̃·u,
+#     since two_way_demean is a linear, idempotent, self-adjoint projection and Q̃ is already
+#     demeaned — so no chain rule through the demean is needed).
+#   • the focal column u_focal(θ) is an explicit function of θ ⇒ ∂u_focal/∂θ via ForwardDiff.jacobian
+#     on that plain function (cheap: D×l).
+#   • each omitted column's ∂u_d/∂μ via the implicit function theorem on the inversion's fixed point
+#     share_d(μ,u_d(μ))≡λ̂_d: ∂share_d/∂μ|_u + H_d·∂u_d/∂μ = 0 ⇒ ∂u_d/∂μ = -H_d⁻¹·∂share_d/∂μ|_u.
+#     ∂share_d/∂μ|_u is ONE ForwardDiff.derivative of dest_share w.r.t. μ (u, p fixed) — an O(S)
+#     functional pass, not a Newton solve. Only μ (θ[1]) enters via the omitted columns.
+function grad_R_theta(θ, umat, p)
+    l = length(θ); dRdθ = zeros(l)
+    gr = gravity_residual(umat, logτ, logw, σ)
+    fi = free_idx(ref, D)
+    Jfocal = ForwardDiff.jacobian(focal_u, θ)            # D × l
+    c_focal = gr.Qt[:, focal] ./ (σ - 1) ./ gr.S_Q
+    dRdθ .+= Jfocal' * c_focal
+    logp = log.(p); μ0 = θ[1]
+    for d in omitted
+        st = dest_stats(build_log_x(Uσ, μ0), logp, umat[:, d]; ρ = ρ)
+        Hd = free_hessian(st, ρ; ref = ref)
+        dsh = ForwardDiff.derivative(μ -> dest_share(build_log_x(Uσ, μ), logp, umat[:, d]; ρ = ρ)[1][fi], μ0)
+        dud_dmu = -(Hd \ dsh)
+        c_d = gr.Qt[fi, d] ./ (σ - 1) ./ gr.S_Q
+        dRdθ[1] += dot(c_d, dud_dmu)
+    end
+    return dRdθ
 end
 
 # reduced θ bounds
@@ -155,11 +186,12 @@ end
 # problem infeasible ⇒ the outer optimizer rejects that θ. Used when gravity can't be enforced.
 const INFCOL = 1.0 .+ 0.1 .* sin.(1:W)
 
-function make_stateful_moments()
+function make_stateful_moments(; use_exact_grad::Bool = true)
     lastθ = Ref(fill(NaN, length(θr0)))
     gcol  = Ref(zeros(W))
     lastR = Ref(NaN)
     lastok = Ref(true)
+    dRdθ  = Ref(zeros(length(θr0)))
     neval = Ref(0); nfeas = Ref(0)
     warm  = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
     function m!(K, G, θ, Uarg, obj)
@@ -167,12 +199,14 @@ function make_stateful_moments()
             θf = Float64.(θ)
             if θf != lastθ[]
                 t0 = time()
-                c, Rθ, um, ok = seq_gravcol(θf; warm = warm[])
+                c, Rθ, um, p, ok = seq_gravcol(θf; warm = warm[])
                 lastR[] = Rθ; lastok[] = ok
                 if ok
                     gcol[] = c; warm[] = um; nfeas[] += 1
+                    dRdθ[] = use_exact_grad ? grad_R_theta(θf, um, p) : zeros(length(θf))
                 else
                     gcol[] = INFCOL                    # gravity-infeasible θ ⇒ reject
+                    dRdθ[] = zeros(length(θf))
                 end
                 neval[] += 1
                 if neval[] % 10 == 0
@@ -184,14 +218,22 @@ function make_stateful_moments()
         end
         EK_moments_focal!(K, @view(G[:, 1:D+1]), θ, Uarg, obj)
         nrow = size(G, 1)
-        @inbounds @views @. G[:, D+2] = gcol[][1:nrow]
+        if eltype(θ) <: ForwardDiff.Dual && lastok[]
+            # affine reconstruction col(θ) ≈ ψ̄_frozen[s] + (R0 + dRdθ·(θ-θ0)): correct value at θ0
+            # (matches the Float64 pass) with the EXACT envelope-theorem gradient of R attached, so
+            # the outer KNITRO gradient sees how A_focal/μ trade off against gravity satisfaction.
+            Rlin = lastR[] + dot(dRdθ[], θ .- lastθ[])
+            @inbounds @views @. G[:, D+2] = (gcol[][1:nrow] - lastR[]) + Rlin
+        else
+            @inbounds @views @. G[:, D+2] = gcol[][1:nrow]
+        end
     end
     return m!, gcol, lastR
 end
 
-function outer_solve_nested(find_smallest, θinit)
+function outer_solve_nested(find_smallest, θinit; use_exact_grad::Bool = true)
     d = D + 2; oci = d + 1
-    m!, gcol, lastR = make_stateful_moments()
+    m!, gcol, lastR = make_stateful_moments(; use_exact_grad = use_exact_grad)
     obj = PsiObjectiveBundleImplicit(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = m!, moments_jacobian! = error, d = d, outer_constr_index = oci,
         inequality_index = Int64[], complement_index = [0 0], l = length(θinit), U = U, N = JacW,
@@ -201,16 +243,19 @@ function outer_solve_nested(find_smallest, θinit)
     κ, θstar, st
 end
 
+USE_EXACT_GRAD = get(ENV, "PROF_EXACT_GRAD", "1") == "1"
+
 Kchk = zeros(W); Gchk = zeros(W, D + 1); EK_moments_focal!(Kchk, Gchk, θr0, U, (γ = γ,))
-@printf("\n=== profiled full-gravity bounds (§18 nested), D=%d W=%d δ=%g ρ=%g ===\n", D, W, δ, ρ)
+@printf("\n=== profiled full-gravity bounds (§18 nested, exact_grad=%s), D=%d W=%d δ=%g ρ=%g ===\n",
+        USE_EXACT_GRAD, D, W, δ, ρ)
 @printf("point estimate κ(F*) = %.6f\n", Kchk[1])
 
 results = Dict{Symbol,Any}()
 for (name, fs) in ((:upper, false), (:lower, true))
     @printf("\n----- %s bound (sequential loop recomputed at every θ) -----\n", name); flush(stdout)
     t0 = time()
-    κ, θstar, st = outer_solve_nested(fs, θr0)
-    _, Rθ, _, okθ = seq_gravcol(θstar)      # exact residual at the bound-achieving θ*
+    κ, θstar, st = outer_solve_nested(fs, θr0; use_exact_grad = USE_EXACT_GRAD)
+    _, Rθ, _, _, okθ = seq_gravcol(θstar)      # exact residual at the bound-achieving θ*
     @printf("  κ_%s = %.6f  (status %d)  exact R_beta(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
             name, κ, st, Rθ, okθ, time() - t0)
     results[name] = (κ = κ, R = Rθ, ok = okθ)
