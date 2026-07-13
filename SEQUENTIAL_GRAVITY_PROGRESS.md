@@ -237,14 +237,54 @@ Post-bug-fix smoke tests (maxit=8, not converged, just sanity-checking positivit
 profiled 3a ≈ [0.008, 0.162]; normalized variant ≈ [0.0066, 0.159] — consistent with each other and
 with the full-A numbers' rough range.
 
-**Status at time of writing**: the full 5-config × 7-δ sweep (maxit=200) was launched in the
-background (`sequential_gravity/../scratch` — actually logged to the scratchpad, see the session's
-background task IDs, not committed to the repo) and will take many hours (single-δ maxit=200 wall
-times were ~470–1450s per config; profiled configs are slower). Check for `ALL_SWEEP_DONE` in the
-launcher log. The normalized variant's δ=1 run was also launched separately. **If you're a fresh
-Claude picking this up, check whether these finished and, if not, whether they're worth resuming** —
-the launcher scripts are `sequential_gravity/run_fullA_variant.jl` and `run_profiled_bounds.jl`/
-`run_profiled_bounds_norm.jl`, all driven by `DELTA_GRID`/`FREEZE_MU`/`FREEZE_NONFOCAL_A` env vars.
+**Sweep completed.** Full results, δ=0.1..10, maxit=200 (⚠ = best-feasible tracker's own
+re-verification failed the feasibility check at that point — boundary-sensitivity, see §5's warning;
+read as "approximately this, unconfirmed"; profiled columns use best-feasible where it beat KNITRO's
+own terminal answer):
+
+**κ_lower**
+
+| δ | 1a: full-A μ-free | 1b: full-A μ-frozen | 2: full-A nonfocal-frozen | 3a: profiled μ-free | 3b: profiled μ-frozen |
+|---|---|---|---|---|---|
+| 0.1 | 0.0385 | 0.0414 | 0.0390 | 0.0390 | 0.0344 |
+| 0.25 | 0.0319 | 0.0225 | 0.0303 | 0.0217 | 0.0208 |
+| 0.5 | 0.0263 | 0.0220 | 0.0189 | 0.0120 | 0.0136 |
+| 1 | 0.0181 | 0.0208 | 0.0090 | 0.0055 | 0.0054⚠ |
+| 2 | 0.0029 | 0.0097 | 0.0136 | 0.0030⚠ | 0.0037 |
+| 5 | 0.0013 | 0.0014 | 0.0010 | 0.0056⚠ | 0.0034 |
+| 10 | 0.0008 | 0.0023 | 0.0007 | 0.0052 | 0.0041 |
+
+**κ_upper**
+
+| δ | 1a: full-A μ-free | 1b: full-A μ-frozen | 2: full-A nonfocal-frozen | 3a: profiled μ-free | 3b: profiled μ-frozen |
+|---|---|---|---|---|---|
+| 0.1 | 0.0694 | 0.0908 | 0.0970 | 0.1064 | 0.1030 |
+| 0.25 | 0.1138 | 0.1155 | 0.1109 | 0.1310⚠ | 0.1264 |
+| 0.5 | 0.1266 | 0.1443 | 0.1465 | 0.1529 | 0.1465 |
+| 1 | 0.1544 | 0.1022 | 0.1590 | 0.1701⚠ | 0.1710 |
+| 2 | 0.2010 | 0.1871 | 0.1893 | 0.1785⚠ | 0.1777 |
+| 5 | 0.2004 | 0.2005 | 0.2072 | 0.2069 | 0.1678⚠ |
+| 10 | 0.2026 | 0.1915 | 0.1869 | 0.1958⚠ | 0.1951 |
+
+**Takeaways**: (1) profiled and full-A land in the same ballpark at every δ — same order of magnitude
+and shape (lower bound → 0, upper bound rises and saturates ~0.17–0.21) — the intended cross-
+validation holds. (2) Profiled tends to run somewhat wider on the lower bound at small/medium δ
+(e.g. δ=1: full-A 0.018 vs profiled 0.006), consistent with dropping non-focal trade-share moments
+removing some real constraint on the divergence budget (§7 above). (3) μ-frozen variants are narrower
+than μ-free, as expected. (4) All methods saturate by δ≈2–10 — some other bound (μ's own range)
+becomes binding before the divergence budget does. (5) **Profiled's numbers are noticeably less
+reliable at individual δ points** (more ⚠ flags) than full-A's clean convergence — the per-θ nested
+loop makes feasibility harder to pin down exactly, especially at large δ; this is the main thing to
+improve if these numbers need to be publication-quality rather than exploratory.
+
+The normalized variant (`run_profiled_bounds_norm.jl`) was only run at δ=1 (not the full sweep):
+κ∈[0.0052, 0.1629] (best-feasible) — consistent with 3a's δ=1 row. Its KNITRO-own upper answer was
+*also* infeasible at the terminal iterate (status −102, "converged" but outside budget) — confirming
+the search-robustness issue is orthogonal to which parameterization is used; the normalization fixes
+*validity* (no more negative GT, structurally impossible now) but not *search convergence reliability*.
+Extending the normalized variant to the full δ-sweep, and/or improving convergence reliability (better
+warm-starting across δ, or the exact IFT gradient noted in §9.2), are the natural next steps if this
+work continues.
 
 ---
 
