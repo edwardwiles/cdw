@@ -141,7 +141,7 @@ function load_if_done(path)
 end
 
 results = Dict{Tuple{Symbol,Float64},Any}()
-for (name, fs) in ((:lower, true), (:upper, false))
+for (name, fs) in ((:lower, false), (:upper, true))   # kappa DECREASING in gamma'_focal: lower<->maximize(fs=false), upper<->minimize(fs=true) -- matches sequential driver's and run_fullA_D10_methodB.jl's convention; was backwards here, causing a lower>upper ordering bug (found via the section-16 bound-ordering check on the first real batch run)
     BOUND_ARG in ("both", String(name)) || continue
     θcur = copy(θ0_up)   # warm-start chain: each delta starts from the PREVIOUS delta's solution
                           # within this SAME bound direction; never crosses lower<->upper (spec section 11)
