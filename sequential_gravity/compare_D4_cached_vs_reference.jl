@@ -1,20 +1,16 @@
 # ============================================================================
-# Sequential-profiled production driver: exact-point cache + free-only
-# ForwardDiff envelope gradient (mu, sigma genuinely REMOVED from the
-# differentiated/optimized vector via FreeParamMap, not just bounds-pinned).
+# URGENT correctness check: my new cached/free-only sequential-profiled D=4
+# result (kappa_lower=0.005085, kappa_upper=0.077861, delta=1) is suspiciously
+# NARROW compared to every historical D=4/D=10 result in this repo (which
+# cluster kappa_upper ~0.15-0.39 at delta=1). Run the ORIGINAL (uncached,
+# full-theta-differentiated) outer_solve_nested -- literally
+# run_profiled_D10_methodB.jl's own reference pattern, PsiObjectiveBundleImplicitMethodB
+# + plain outer_loop, MU_FIXED=true -- at the SAME D=4, delta=1, data, seed,
+# starting point as my new driver, side by side in one process so there is no
+# question of data/seed mismatch.
 #
-# Identical sequential-loop/inversion/warm-start machinery to
-# sequential_gravity/run_profiled_D10_methodB.jl (seq_gravcol, grad_R_theta,
-# make_stateful_moments -- copied verbatim, byte-identical logic; the ONLY
-# change is HOW the outer KNITRO problem is wired: outer_loop_cached +
-# FreeParamMap instead of plain outer_loop over the full theta vector).
-# D is a parameter (env DVAL, default 4 for a quick validation run before
-# scaling to D=10).
-#
-#   julia --project=. sequential_gravity/run_profiled_production.jl
-#   DVAL=10 DELTA_GRID=0.1,1.0,10.0 julia --project=. sequential_gravity/run_profiled_production.jl
+# Run: julia --project=. sequential_gravity/compare_D4_cached_vs_reference.jl
 # ============================================================================
-
 using Parameters, Base.Threads, Random, Dates, DelimitedFiles
 using Distributions, Statistics, SpecialFunctions, InvertedIndices
 using NLsolve, ForwardDiff, Calculus, LinearAlgebra, JLD2, Printf
@@ -34,7 +30,7 @@ include(joinpath(@__DIR__, "profiled_gravity.jl"))
 using .ProfiledGravity
 CS.include(joinpath(@__DIR__, "PsiObjectiveBundleImplicitMethodB.jl"))
 
-const DVAL = parse(Int, get(ENV, "DVAL", "4"))
+const DVAL = 4
 const OUTER_OPT_FILE = get(ENV, "OUTER_OPT_FILE", joinpath(@__DIR__, "..", "full_aod_diag", "csw_outer_25.opt"))
 const INNER_OPT_FILE = joinpath(@__DIR__, "..", "full_aod_diag", "ek_inner.opt")
 
@@ -54,7 +50,6 @@ params = (
 setup_output = master_setup(params)
 @unpack data, counters = setup_output
 D = setup_output.D
-@assert D == DVAL
 useParams = (; params..., D = D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
 prestep_output = master_prestep(data, counters, useParams)
 prep = master_prepare_cc(data, counters, prestep_output, useParams)
@@ -64,6 +59,7 @@ prep = master_prepare_cc(data, counters, prestep_output, useParams)
 Uσ = γ.Uσ; λData = Matrix(reshape(γ.P, (D, D))'); wHat = γ.wHat; τ = γ.τ
 omitted = [d for d in 1:D if d != focal]; ref = 1
 logτ = log.(τ); logw = log.(wHat)
+println(">>> delta = ", δ, "  D=", D)
 
 θr0_orig = build_focal_theta(prep.θ_initial, D, focal)
 let γf0 = θr0_orig[3], μ0 = θr0_orig[1]
@@ -121,16 +117,11 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
             inv = invert_destination(log_x, p, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
                                      maxit = 150, ls_iters = 50, u_init = ui)
             um[:, d] .= inv.u_full
-            if verbose && !inv.converged
-                @printf("      dest %d NOT converged: iters=%d share_err=%.2e ‖u‖=%.2e\n",
-                        d, inv.iterations, inv.max_abs_share_error, maximum(abs, inv.u_full))
-            end
         end
         um
     end
     p, ok = recover_lfd(θ, EK_moments_focal_norm_directgp!, D + 1)
     if !ok
-        verbose && println("    [seq] initial recover_lfd (focal-only) FAILED")
         return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     end
     local umat, R
@@ -138,11 +129,9 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
         umat = invert_omitted(p; warm = warm)
         R = gravity_residual(umat, logτ, logw, σ).R_mean
     catch e
-        verbose && println("    [seq] initial invert_omitted threw: ", e)
         return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     end
     isfinite(R) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
-    verbose && @printf("    [seq] init: R0=%.4e\n", R)
     col = zeros(W); Rcol = 0.0
     for k in 1:maxit
         infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_beta)
@@ -154,7 +143,6 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
         end
         p_cand, okc = recover_lfd(θ, moments_aug!, D + 2)
         if !okc
-            verbose && println("    [seq] iter $k: augmented recover_lfd FAILED (linearized moment likely unmatchable)")
             break
         end
         α = 1.0; acc = false
@@ -169,16 +157,11 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
             if isfinite(R_try) && abs(R_try) < abs(R); p = p_try; umat = um_try; R = R_try; acc = true; break; end
             α *= 0.5
         end
-        verbose && @printf("    [seq] iter %d: R_mean -> %.4e  accepted=%s  α=%.4f\n", k, R, acc, acc ? α : 0.0)
         acc || break
     end
     div_p = divergence_of(p)
     gravity_ok = abs(R) <= tol
     δ_ok = div_p <= δ * (1 + 1e-6) + 1e-10
-    if verbose
-        @printf("    [seq] FINAL: R_mean=%.4e gravity_ok=%s  divergence(p)=%.4e (budget δ=%.4g) δ_ok=%s\n",
-                R, gravity_ok, div_p, δ, δ_ok)
-    end
     return col, R, Rcol, umat, p, gravity_ok && δ_ok
 end
 
@@ -201,8 +184,6 @@ function grad_R_theta(θ, umat, p)
     return dRdθ
 end
 
-# mu FIXED per spec section 1 (removed from the differentiated/optimized vector below, not just
-# bounds-pinned -- FreeParamMap excludes index 1 entirely from x_free)
 const FREEZE_MU = true
 function focal_bounds(θr)
     lo = θr .* 1e-4; hi = θr .* 1e4
@@ -215,15 +196,12 @@ function focal_bounds(θr)
     lo, hi
 end
 θ_lo, θ_hi = focal_bounds(θr0)
-
 const INFCOL = 1.0 .+ 0.1 .* sin.(1:W)
 
 function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Bool = false, δ::Real = δ)
     lastθ = Ref(fill(NaN, length(θr0)))
     gcol  = Ref(zeros(W))
-    lastRmean = Ref(NaN)
-    lastRcol  = Ref(NaN)
-    lastok = Ref(true)
+    lastRmean = Ref(NaN); lastRcol = Ref(NaN); lastok = Ref(true)
     dRdθ  = Ref(zeros(length(θr0)))
     neval = Ref(0); nfeas = Ref(0)
     warm  = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
@@ -235,7 +213,6 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
         if !(eltype(θ) <: ForwardDiff.Dual)
             θf = Float64.(θ)
             if θf != lastθ[]
-                t0 = time()
                 c, Rmean, Rcol, um, p, ok = seq_gravcol(θf; δ = δ, warm = warm[])
                 lastRmean[] = Rmean; lastRcol[] = Rcol; lastok[] = ok
                 if ok
@@ -247,14 +224,9 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
                         best_κ[] = κθ; best_θ[] = copy(θf); best_warm[] = copy(um)
                     end
                 else
-                    gcol[] = INFCOL
-                    dRdθ[] = zeros(length(θf))
+                    gcol[] = INFCOL; dRdθ[] = zeros(length(θf))
                 end
                 neval[] += 1
-                if neval[] % 10 == 0
-                    @printf("    [θ-eval %d, gravity-feasible %d] seqR_mean=%.2e ok=%s seq_time=%.2fs\n",
-                            neval[], nfeas[], lastRmean[], ok, time()-t0); flush(stdout)
-                end
                 lastθ[] = copy(θf)
             end
         end
@@ -267,138 +239,42 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
             @inbounds @views @. G[:, D+2] = gcol[][1:nrow]
         end
     end
-    return m!, gcol, lastRmean, best_θ, best_κ, best_warm
+    return m!, gcol, lastRmean, best_θ, best_κ, best_warm, neval
 end
 
-# ---- NEW: cached, free-only outer solve (replaces plain `outer_loop` over the full theta) ----
-function make_seq_div_grad_fn!(obj, fpmap)
-    d = obj.d; oci = obj.outer_constr_index
-    cfg_cache = Ref{Any}(nothing)
-    return function (g_free, x_free, θ_full, inner_x)
-        obj(inner_x, Float64[], Float64[]; constr = zeros(1))   # trigger dPsi!, populate obj.arg1
-        λ = collect(@view inner_x[2:end])
-        Usub = obj.U[1:obj.N, :]
-        f = x -> CS._methodB_envelope_scalar(reconstruct_full(x, fpmap), obj.moments!, obj.γ, Usub, λ, obj.arg1, d, oci)
-        if cfg_cache[] === nothing
-            cfg_cache[] = ForwardDiff.GradientConfig(f, x_free)
-        end
-        ForwardDiff.gradient!(g_free, f, x_free, cfg_cache[])
-        return g_free
-    end
-end
-
-function outer_solve_nested_cached(find_smallest, θinit; use_exact_grad::Bool = true, δ::Real = δ)
+# ---- REFERENCE: original outer_solve_nested (plain outer_loop, full-theta AD, NO cache) ----
+function outer_solve_nested_reference(find_smallest, θinit; δ::Real = δ)
     d = D + 2; oci = d + 1
     CS.check_methodB_valid(d, oci)
-    m!, gcol, lastRmean, best_θ, best_κ, best_warm = make_stateful_moments(; use_exact_grad = use_exact_grad, find_smallest = find_smallest, δ = δ)
+    m!, gcol, lastRmean, best_θ, best_κ, best_warm, neval = make_stateful_moments(; find_smallest = find_smallest, δ = δ)
     obj = CS.PsiObjectiveBundleImplicitMethodB(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = m!, moments_jacobian! = error, d = d, outer_constr_index = oci,
         inequality_index = Int64[], complement_index = [0 0], l = length(θinit), U = U, N = JacW,
         lower_limit = -50, use_cached_x = false,
         outer_loop_opt = OUTER_OPT_FILE, inner_loop_opt = INNER_OPT_FILE)
-
-    l_full = length(θinit)
-    free_idx = vcat(3, collect(4:3+D))    # gamma'_focal + A[.,focal]
-    fixed_idx = [1, 2]                     # mu, sigma
-    fixed_vals = θinit[fixed_idx]
-    fpmap = CS.FreeParamMap(l_full, free_idx, fixed_idx, fixed_vals)
-    @assert CS.n_free(fpmap) == D + 1
-
-    div_grad_fn! = make_seq_div_grad_fn!(obj, fpmap)
-    function obj_grad_fn!(g_free, x_free)
-        fill!(g_free, 0.0)
-        g_free[1] = (-1.0)^find_smallest   # K = gamma'_focal = x_free[1] directly
-    end
-
-    r = CS.outer_loop_cached(obj, fpmap, θ_lo, θ_hi, θinit;
-        obj_grad_fn! = obj_grad_fn!, div_grad_fn! = div_grad_fn!,
-        has_gravity = false, use_cache = true, outer_loop_opt = OUTER_OPT_FILE)
-
-    gp = r.θ_min_full[3]
-    gp, r.θ_min_full, r.nStatus, best_θ[], best_κ[], best_warm[], r.cache
+    κ, θstar, st, _ = outer_loop(obj, θ_lo, θ_hi, copy(θinit))
+    return κ, θstar, st, best_θ[], best_κ[], best_warm[], neval[]
 end
-
-Kchk = zeros(W); Gchk = zeros(W, D + 1); EK_moments_focal_norm_directgp!(Kchk, Gchk, θr0, U, (γ = γ,))
-GP_POINT_EST = Kchk[1]
-KAPPA_POINT_EST = 1 - GP_POINT_EST^(σ/(σ-1))
-@printf("point estimate γ'_focal(F*) = %.6f  ->  kappa point estimate = %.6f\n", GP_POINT_EST, KAPPA_POINT_EST)
 
 gp2kappa(gp) = 1 - gp^(σ/(σ-1))
 
-function run_one_bound(name::Symbol, fs::Bool, δval::Real, θinit)
-    @printf("\n----- %s bound: gamma'_focal %s, delta=%g (warm-started) -----\n", name, fs ? "MINIMIZED" : "MAXIMIZED", δval); flush(stdout)
-    t0 = time()
-    gp, θstar, st, bθ, b_gp, bwarm, cache = outer_solve_nested_cached(fs, θinit; use_exact_grad = true, δ = δval)
-    κ = gp2kappa(gp)
-    _, Rθ, _, _, _, okθ = seq_gravcol(θstar; δ = δval)
-    CS.summarize(cache; label = "$name bound cache stats")
-    wall = time() - t0
-    @printf("  KNITRO:        gamma'_%s = %.6f -> kappa = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
-            name, gp, κ, st, Rθ, okθ, wall)
-    if bθ === nothing
-        @printf("  best-feasible: NONE FOUND\n")
-        return (κ = κ, gp = gp, R = Rθ, ok = okθ, best_κ = NaN, best_gp = NaN, best_θ = nothing, best_ok = false,
-                θstar = θstar, cache = cache, nStatus = st, wall = wall)
-    else
-        _, Rb, _, _, _, okb = seq_gravcol(bθ; δ = δval, warm = bwarm)
-        bκ = gp2kappa(b_gp)
-        @printf("  best-feasible: gamma'_%s = %.6f -> kappa = %.6f  exact R_mean = %.3e  gravity-feasible=%s\n", name, b_gp, bκ, Rb, okb)
-        return (κ = κ, gp = gp, R = Rθ, ok = okθ, best_κ = bκ, best_gp = b_gp, best_θ = bθ, best_ok = okb,
-                θstar = θstar, cache = cache, nStatus = st, wall = wall)
-    end
-end
-
-DELTA_GRID = sort(let s = get(ENV, "DELTA_GRID", "")
-    isempty(s) ? [δ] : parse.(Float64, split(s, ","))
-end)   # ascending: warm-start chain runs small-delta-first, per spec section 11
-const BOUND_ARG = get(ENV, "BOUND", "both")
-const OUT_DIR = get(ENV, "OUT_DIR", joinpath(@__DIR__, "batch_out"))
-isdir(OUT_DIR) || mkpath(OUT_DIR)
-
-result_path(bound_name, δval) = joinpath(OUT_DIR, "seq_$(bound_name)_delta$(δval).jld2")
-
-function load_if_done(path)
-    isfile(path) || return nothing
-    d = try
-        JLD2.load(path)
-    catch
-        return nothing
-    end
-    get(d, "done", false) === true ? d : nothing
-end
-
-@printf("\n=== [PRODUCTION: profiled/sequential, cached, free-only ForwardDiff] D=%d W=%d ρ=%g MU_FIXED(removed)=%s DELTA_GRID=%s ===\n",
-        D, W, ρ, FREEZE_MU, DELTA_GRID)
-@printf("point estimate kappa = %.6f\n", KAPPA_POINT_EST)
+Kchk = zeros(W); Gchk = zeros(W, D + 1); EK_moments_focal_norm_directgp!(Kchk, Gchk, θr0, U, (γ = γ,))
+KAPPA_POINT_EST = 1 - Kchk[1]^(σ/(σ-1))
+@printf("point estimate kappa = %.6f\n\n", KAPPA_POINT_EST)
 
 for (name, fs) in ((:lower, false), (:upper, true))
-    BOUND_ARG in ("both", String(name)) || continue
-    θcur = copy(θr0)   # warm-start chain within this bound direction only
-    for δval in DELTA_GRID
-        path = result_path(name, δval)
-        existing = load_if_done(path)
-        if existing !== nothing
-            @printf("\n----- %s bound, delta=%g -- ALREADY DONE, skipping (resume) -----\n", name, δval)
-            θcur = existing["theta_star"]
-            flush(stdout)
-            continue
-        end
-        r = run_one_bound(name, fs, δval, θcur)
-        JLD2.save(path, Dict(
-            "method" => "sequential_profiled", "bound" => String(name), "delta" => δval, "D" => D,
-            "theta_star" => r.θstar, "gamma_p" => r.gp, "kappa" => r.κ, "nStatus" => r.nStatus,
-            "R_mean_at_solution" => r.R, "gravity_feasible" => r.ok,
-            "best_feasible_kappa" => r.best_κ, "best_feasible_gp" => r.best_gp,
-            "best_feasible_theta" => r.best_θ, "best_feasible_gravity_ok" => r.best_ok,
-            "wall" => r.wall,
-            "unique_free_x" => length(Set(rr.x_hash for rr in r.cache.trace)),
-            "inner_solves" => r.cache.n_inner_solve, "grad_computations" => r.cache.n_grad_compute,
-            "warm_started_inner" => r.cache.n_warm_started, "cold_inner" => r.cache.n_cold,
-            "t_inner" => r.cache.t_inner, "t_grad" => r.cache.t_grad,
-            "starting_point_source" => δval == DELTA_GRID[1] ? "theta_r0 (initial)" : "warm-started from prior delta",
-            "kappa_point_estimate" => KAPPA_POINT_EST,
-            "done" => true))
-        θcur = r.θstar
+    @printf("----- REFERENCE (uncached, full-theta AD, plain outer_loop) %s bound -----\n", name)
+    t0 = time()
+    gp, θstar, st, bθ, b_gp, bwarm, neval = outer_solve_nested_reference(fs, θr0; δ = δ)
+    κ = gp2kappa(gp)
+    _, Rθ, _, _, _, okθ = seq_gravcol(θstar; δ = δ)
+    @printf("  KNITRO: gamma'_%s=%.6f -> kappa=%.6f (status %d) R_mean(theta*)=%.3e feasible=%s neval=%d wall=%.1fs\n",
+            name, gp, κ, st, Rθ, okθ, neval, time()-t0)
+    if bθ !== nothing
+        _, Rb, _, _, _, okb = seq_gravcol(bθ; δ = δ, warm = bwarm)
+        bκ = gp2kappa(b_gp)
+        @printf("  best-feasible: gamma'_%s=%.6f -> kappa=%.6f R_mean=%.3e feasible=%s\n", name, b_gp, bκ, Rb, okb)
     end
+    flush(stdout)
 end
-println("PRODUCTION_RUN DONE  D=$D")
+println("REFERENCE_COMPARISON DONE")
