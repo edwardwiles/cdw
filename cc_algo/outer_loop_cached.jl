@@ -5,7 +5,13 @@
 # coordinates) and OuterEvalCache (solve the inner CC problem at most once per
 # unique free-outer point) around the EXISTING, unmodified `inner_loop_internal`
 # and `(Q::PsiObjectiveBundleImplicit)` callable's constraint-VALUE path (cheap,
-# reused as-is — only the GRADIENT/Jacobian path is replaced).
+# reused as-is — only the GRADIENT/Jacobian path is replaced). Constraint-value
+# semantics are copy-exact from `cc_algo/outer_loop_functions.jl`'s own
+# `outer_loop_constraints!` for `PsiObjectiveBundleImplicit`: constraint row 1
+# (`-f*1e10 <= 1e10*δ`, i.e. Delta(theta)<=delta) is an INEQUALITY, and every
+# subsequent row (gravity, if present) is an EQUALITY at 0 — both rows come
+# from ONE call to `obj(inner_x, constr=buf)` (it already fills both; there is
+# no separate gravity-value computation needed).
 #
 # Gradients are supplied by the CALLER as free-only closures, because the two
 # formulations need genuinely different gradient logic:
@@ -25,32 +31,44 @@
 """
     outer_loop_cached(obj, m::FreeParamMap, θ_lb_full, θ_ub_full, θ_init_full;
                        obj_grad_fn!, div_grad_fn!, gravity_grad_fn!=nothing,
-                       gravity_value_fn=nothing, use_cache=true, outer_loop_opt)
+                       has_gravity=false, use_cache=true, outer_loop_opt)
 
 - `obj`            : a PsiObjectiveBundleImplicit-shaped bundle whose
                       `moments!` computes K/G from the FULL θ vector (unchanged
-                      from today's `inner_loop_internal` contract).
+                      from today's `inner_loop_internal` contract), with
+                      `obj.outer_constr_index == obj.d` when `has_gravity` (one
+                      extra outer-loop moment = gravity, matching how
+                      `master_prepare_cc.jl` wires `nOuterLoopMoments`).
 - `m`               : FreeParamMap for this method's θ layout.
 - `obj_grad_fn!(g_free, x_free)`      : fills the free-only OBJECTIVE gradient.
 - `div_grad_fn!(g_free, x_free, θ_full, inner_x)` : fills the free-only
                       divergence-BUDGET-constraint gradient (envelope theorem;
                       may use obj's just-solved inner state).
-- `gravity_value_fn(θ_full)::Float64` / `gravity_grad_fn!(g_free, x_free)`
-                      : OPTIONAL second outer equality constraint (full-A's
-                      exact gravity condition). Leave both `nothing` for the
-                      sequential method (gravity enforced inside the inner
-                      solve; no separate outer constraint — per spec §8).
+- `gravity_grad_fn!(g_free, x_free)`  : REQUIRED iff `has_gravity`. Analytic
+                      free-only gradient of the TARGET gravity function
+                      (e.g. section 9's `g_gravity=(1/N_obs)Σq_tilde·logA`).
+                      `nothing`/unused for the sequential method (gravity
+                      enforced inside the inner solve; no separate outer
+                      constraint — per spec §8).
+- `gravity_value_scale` : `obj`'s own gravity column (from `obj.moments!`, via
+                      `newGravityMoment!`) may be a DIFFERENT (but
+                      proportional) quantity than whatever `gravity_grad_fn!`
+                      is the gradient of (e.g. production's raw, unnormalized
+                      `sumGrav` vs. section 9's `-sumGrav/N_obs`). Set this to
+                      the constant that converts one into the other so the
+                      constraint VALUE and GRADIENT KNITRO sees are for the
+                      exact same function — a mismatch here reads to KNITRO as
+                      genuine infeasibility, not merely slow convergence.
 
-Returns (κ_min_or_objective, θ_min_full, x_min_free, nStatus, cache, wall,
+Returns a NamedTuple (objective, θ_min_full, x_min_free, nStatus, cache, wall,
 opt_err, outer_iters, outer_fc).
 """
 function outer_loop_cached(obj, m::FreeParamMap, θ_lb_full::AbstractVector, θ_ub_full::AbstractVector,
         θ_init_full::AbstractVector; obj_grad_fn!, div_grad_fn!,
-        gravity_value_fn = nothing, gravity_grad_fn! = nothing,
+        gravity_grad_fn! = nothing, has_gravity::Bool = false, gravity_value_scale::Float64 = 1.0,
         use_cache::Bool = true, outer_loop_opt::AbstractString)
 
-    has_gravity = gravity_value_fn !== nothing
-    (has_gravity == (gravity_grad_fn! !== nothing)) || error("outer_loop_cached: gravity_value_fn and gravity_grad_fn! must both be provided or both be nothing")
+    !has_gravity || gravity_grad_fn! !== nothing || error("outer_loop_cached: has_gravity=true requires gravity_grad_fn!")
 
     x_lo, x_hi = pack_bounds_free(θ_lb_full, θ_ub_full, m)
     x_init = pack_free(θ_init_full, m)
@@ -66,25 +84,28 @@ function outer_loop_cached(obj, m::FreeParamMap, θ_lb_full::AbstractVector, θ_
 
     ncon = 1 + (has_gravity ? 1 : 0)
     cIndices = KNITRO.KN_add_cons(kc, ncon)
-    KNITRO.KN_set_con_eqbnds(kc, 1, [cIndices[1]], [0.0])
+    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1e10 * obj.δ)         # Delta(theta) <= delta (production's exact scaling)
     if has_gravity
-        KNITRO.KN_set_con_eqbnds(kc, 1, [cIndices[2]], [0.0])
+        KNITRO.KN_set_con_eqbnds(kc, 1, [cIndices[2]], [0.0])       # gravity == 0
     end
 
     cache = OuterEvalCache(nf, ncon; use_cache = use_cache)
-
     theta_buf = Vector{Float64}(undef, m.l_full)
-
-    div_g = zeros(nf)
     grav_g = has_gravity ? zeros(nf) : Float64[]
 
     function compute_constr_values(x_free)
         reconstruct_full!(theta_buf, x_free, m)
         _, inner_x, nStatus, solved, hit, warm = ensure_inner!(cache, obj, x_free, theta_buf)
         cbuf = zeros(ncon)
-        obj(inner_x, constr = @view(cbuf[1:1]))
+        obj(inner_x, constr = @view(cbuf[1:ncon]))     # fills BOTH rows in one call; no separate gravity-value fn needed
         if has_gravity
-            cbuf[2] = gravity_value_fn(theta_buf)
+            # `obj`'s own gravity column is whatever raw quantity `obj.moments!` computed (e.g.
+            # production's un-normalized, unflipped sumGrav) -- rescale it to match whatever
+            # function `gravity_grad_fn!` is the gradient OF, so constraint VALUE and GRADIENT
+            # are for the exact same target (both ==0 either way, but KNITRO needs them
+            # consistent, not just individually zero-seeking -- a value/gradient mismatch here
+            # reads as genuine infeasibility to KNITRO, not just slow convergence).
+            cbuf[2] *= gravity_value_scale
         end
         return cache.objSol, cbuf, nStatus, solved, hit, warm, inner_x
     end
@@ -166,6 +187,9 @@ function outer_loop_cached(obj, m::FreeParamMap, θ_lb_full::AbstractVector, θ_
     opt_err = begin
         v = Ref{Cdouble}(0.0); KNITRO.KN_get_abs_opt_error(kc, v); Float64(v[])
     end
+    feas_err = begin
+        v = Ref{Cdouble}(0.0); KNITRO.KN_get_abs_feas_error(kc, v); Float64(v[])
+    end
     outer_iters = begin
         n = Ref{Cint}(0); KNITRO.KN_get_number_iters(kc, n); Int(n[])
     end
@@ -175,5 +199,6 @@ function outer_loop_cached(obj, m::FreeParamMap, θ_lb_full::AbstractVector, θ_
     KNITRO.KN_free(kc)
 
     return (objective = objv, θ_min_full = θ_min_full, x_min_free = x_min, nStatus = nStatus,
-            cache = cache, wall = wall, opt_err = opt_err, outer_iters = outer_iters, outer_fc = outer_fc)
+            cache = cache, wall = wall, opt_err = opt_err, feas_err = feas_err,
+            outer_iters = outer_iters, outer_fc = outer_fc)
 end
