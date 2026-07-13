@@ -30,7 +30,20 @@ using ForwardDiff
 export build_log_x, build_log_x_fromU, invert_destination, DestInversion,
        dest_stats, dest_share, potential_free, share_jacobian_closed, share_jacobian_smoothed,
        share_jacobian_ad, free_hessian, two_way_demean, gravity_residual, GravityResidual,
-       draw_level_objects, influence_function, InfluenceResult, logsumexp, free_idx
+       draw_level_objects, influence_function, InfluenceResult, logsumexp, free_idx,
+       EVAL_COUNTERS, reset_eval_counters!
+
+# ----------------------------------------------------------------------------------------------
+# diagnostics-only eval counters (additive, zero behavior change): count calls to the two
+# O(S·D) draw-level kernels so profiling can separate "many Newton iterations" from "many
+# objective evaluations per Newton step" (line search / Armijo backtracking). One Atomic
+# increment per call; no branch, no allocation, no effect on any returned value.
+const EVAL_COUNTERS = (dest_share = Threads.Atomic{Int}(0), dest_stats = Threads.Atomic{Int}(0))
+function reset_eval_counters!()
+    EVAL_COUNTERS.dest_share[] = 0
+    EVAL_COUNTERS.dest_stats[] = 0
+    return nothing
+end
 
 # ----------------------------------------------------------------------------------------------
 # draw objects
@@ -67,6 +80,7 @@ For one destination with full competitiveness vector `u` (length D, incl. ref) a
 0/1 winner indicator for ρ=0; softmax at temperature ρ for ρ>0).
 """
 function dest_stats(log_x::AbstractMatrix, logp::AbstractVector, u::AbstractVector; ρ::Real = 0.0)
+    Threads.atomic_add!(EVAL_COUNTERS.dest_stats, 1)
     S, D = size(log_x)
     T = promote_type(eltype(log_x), eltype(u), typeof(float(ρ)))
     V = Vector{T}(undef, S)
@@ -109,6 +123,7 @@ Non-allocating model shares + logdenom (φ) for the inversion line search — sa
 `dest_stats` but without materializing the S×D assignment-weight matrix (two O(S·D) passes).
 """
 function dest_share(log_x::AbstractMatrix, logp::AbstractVector, u::AbstractVector; ρ::Real = 0.0)
+    Threads.atomic_add!(EVAL_COUNTERS.dest_share, 1)
     S, D = size(log_x)
     T = promote_type(eltype(log_x), eltype(u), typeof(float(ρ)))
     a = Vector{T}(undef, S)
@@ -263,6 +278,108 @@ struct DestInversion{T}
     ρ::T
 end
 
+# ----------------------------------------------------------------------------------------------
+# Diagnostics finding (full_aod_diag/sequential_inversion_performance/kernel_benchmarks.{md,csv}):
+# dest_stats/dest_share allocate a fresh S×D W-matrix / length-S vectors on EVERY call; a single
+# invert_destination call invokes them ~(iterations) + ~(line-search trials) times. Steady-state
+# per-call CPU time is unaffected (kernel is O(S·D) compute-bound, not allocation-bound: ~1-3%
+# median speedup measured) but eliminating the repeated allocation removes GC-pause risk that
+# compounds over a full outer KNITRO solve (thousands of destination inversions). `_dest_stats!`/
+# `_dest_share!` below are BYTE-IDENTICAL arithmetic to `dest_stats`/`dest_share` (same loop order,
+# same operations) writing into a workspace allocated ONCE per invert_destination call, instead of
+# fresh arrays per Newton/line-search evaluation. `dest_stats`/`dest_share` themselves, and every
+# other caller (draw_level_objects, grad_R_theta, influence_function), are UNCHANGED.
+struct _InvWorkspace{T}
+    a::Vector{T}
+    share::Vector{T}
+    V::Vector{T}
+    W::Matrix{T}
+    unew::Vector{T}
+    rweight::Vector{T}
+end
+_InvWorkspace(::Type{T}, S::Int, D::Int) where {T} =
+    _InvWorkspace{T}(Vector{T}(undef, S), zeros(T, D), Vector{T}(undef, S), Matrix{T}(undef, S, D), Vector{T}(undef, D), Vector{T}(undef, S))
+
+"In-place, allocation-free twin of `dest_stats` (identical arithmetic/order); writes into `ws`."
+function _dest_stats!(ws::_InvWorkspace{T}, log_x::AbstractMatrix, logp::AbstractVector, u::AbstractVector; ρ::Real = 0.0) where {T}
+    Threads.atomic_add!(EVAL_COUNTERS.dest_stats, 1)
+    S, D = size(log_x)
+    V = ws.V; W = ws.W
+    @inbounds for s in 1:S
+        m = T(-Inf)
+        for o in 1:D
+            v = u[o] + log_x[s, o]
+            if v > m; m = v; end
+        end
+        if ρ <= 0
+            for o in 1:D
+                W[s, o] = (u[o] + log_x[s, o] == m) ? one(T) : zero(T)
+            end
+            V[s] = m
+        else
+            se = zero(T)
+            for o in 1:D
+                e = exp((u[o] + log_x[s, o] - m) / ρ)
+                W[s, o] = e; se += e
+            end
+            for o in 1:D; W[s, o] /= se; end
+            V[s] = m + ρ * log(se)
+        end
+    end
+    a = ws.a
+    @inbounds for s in 1:S; a[s] = logp[s] + V[s]; end
+    logdenom = logsumexp(a)
+    rweight = ws.rweight
+    share = ws.share; fill!(share, zero(T))
+    @inbounds for s in 1:S
+        rw = exp(a[s] - logdenom)
+        rweight[s] = rw
+        for o in 1:D
+            share[o] += rw * W[s, o]
+        end
+    end
+    return (V = V, logdenom = logdenom, rweight = rweight, share = share, W = W)
+end
+
+"In-place, allocation-free twin of `dest_share` (identical arithmetic/order); writes into `ws`."
+function _dest_share!(ws::_InvWorkspace{T}, log_x::AbstractMatrix, logp::AbstractVector, u::AbstractVector; ρ::Real = 0.0) where {T}
+    Threads.atomic_add!(EVAL_COUNTERS.dest_share, 1)
+    S, D = size(log_x)
+    a = ws.a
+    @inbounds for s in 1:S
+        m = T(-Inf)
+        for o in 1:D
+            v = u[o] + log_x[s, o]; v > m && (m = v)
+        end
+        if ρ <= 0
+            a[s] = logp[s] + m
+        else
+            se = zero(T)
+            for o in 1:D; se += exp((u[o] + log_x[s, o] - m) / ρ); end
+            a[s] = logp[s] + m + ρ * log(se)
+        end
+    end
+    logdenom = logsumexp(a)
+    share = ws.share; fill!(share, zero(T))
+    @inbounds for s in 1:S
+        rw = exp(a[s] - logdenom)
+        m = T(-Inf)
+        for o in 1:D
+            v = u[o] + log_x[s, o]; v > m && (m = v)
+        end
+        if ρ <= 0
+            for o in 1:D
+                if u[o] + log_x[s, o] == m; share[o] += rw; break; end
+            end
+        else
+            se = zero(T)
+            for o in 1:D; se += exp((u[o] + log_x[s, o] - m) / ρ); end
+            for o in 1:D; share[o] += rw * exp((u[o] + log_x[s, o] - m) / ρ) / se; end
+        end
+    end
+    return share, logdenom
+end
+
 """
     invert_destination(log_x, p, λ̂; ref=1, ρ=0.0, tol=1e-10, maxit=100, u_init=nothing)
 
@@ -284,7 +401,8 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
     T = float(promote_type(eltype(log_x), eltype(p)))
     u = u_init === nothing ? zeros(T, D) : T.(collect(u_init))
     u[ref] = 0.0
-    st = dest_stats(log_x, logp, u; ρ = ρ)
+    ws = _InvWorkspace(T, S, D)
+    st = _dest_stats!(ws, log_x, logp, u; ρ = ρ)
     local iter = 0
     converged = false
     for it in 1:maxit
@@ -302,7 +420,7 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
         catch
             -((H + 1e-12 * I) \ grad_free)
         end
-        unew = copy(u)
+        unew = ws.unew; copyto!(unew, u)
         if ρ > 0
             # SMOOTH regime (ρ>0): φ−λ̂·u is C² convex ⇒ Newton + cheap Armijo backtrack converges
             # quadratically (~1–3 evals/step). The exact line search below is only needed to fight
@@ -318,7 +436,7 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
             for _ in 1:40
                 for (k, o) in enumerate(fi); unew[o] = u[o] + αstar * step[k]; end
                 unew[ref] = 0.0
-                _, ld = dest_share(log_x, logp, unew; ρ = ρ)
+                _, ld = _dest_share!(ws, log_x, logp, unew; ρ = ρ)
                 (ld - dot(λ̂, unew) <= obj_u + slack) && break
                 αstar *= 0.5
             end
@@ -328,7 +446,7 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
             dprime = function (α)
                 for (k, o) in enumerate(fi); unew[o] = u[o] + α * step[k]; end
                 unew[ref] = 0.0
-                s, _ = dest_share(log_x, logp, unew; ρ = ρ)
+                s, _ = _dest_share!(ws, log_x, logp, unew; ρ = ρ)
                 acc = zero(T)
                 for (k, o) in enumerate(fi); acc += step[k] * (s[o] - λ̂[o]); end
                 return acc
@@ -354,9 +472,9 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
         if !all(isfinite, u) || maximum(abs, u) > 1e8
             break
         end
-        st = dest_stats(log_x, logp, u; ρ = ρ)
+        st = _dest_stats!(ws, log_x, logp, u; ρ = ρ)
     end
-    share = st.share
+    share = copy(st.share)
     gerr = maximum(abs.(share .- λ̂))
     gnorm = norm([share[o] - λ̂[o] for o in fi])
     fval = st.logdenom - dot(λ̂, u)
