@@ -1,0 +1,13 @@
+import KNITRO
+include("/bbkinghome/edav/gravity_robustness/trade_robustness_modular/cc_algo/knitro_compat.jl")
+kc = KNITRO.KN_new()
+KNITRO.KN_add_vars(kc, 1)
+KNITRO.KN_set_var_lobnds_all(kc, [-10.0]); KNITRO.KN_set_var_upbnds_all(kc, [10.0])
+KNITRO.KN_set_var_primal_init_values_all(kc, [3.0])
+cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], (kc,cb,er,eres,up)->(eres.obj[1]=(er.x[1]-1.0)^2; 0))
+KNITRO.KN_solve(kc)
+ni=Ref{Cint}(0); KNITRO.KN_get_number_iters(kc, ni)
+nf=Ref{Cint}(0); KNITRO.KN_get_number_FC_evals(kc, nf)
+tt=Ref{Cdouble}(0.0); KNITRO.KN_get_solve_time_real(kc, tt)
+println("GETTERS_OK iters=", ni[], " fc=", nf[], " time=", tt[])
+KNITRO.KN_free(kc)

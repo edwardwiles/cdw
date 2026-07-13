@@ -1,0 +1,68 @@
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06861364605331755
+κ_upper = 0.06861364605331755
+κ_lower = 0.06861364605331755
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 24
+numMomentInnerSimple = 24
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 -0.0034339469604037906 0.0020199519240515413 -0.0006225196436665879 0.001028514606568682 0.0 0.0016486937273406607 0.0 0.0]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22]
+moments_without_var = [21, 23, 24]
+δ_star_initial = -0.0010029941762690331
+val = 0.0010029941762690331
+δ_star_initial_low = -0.0010029941762690331
+val = 0.0010029941762690331
+δ_star_initial_up = -0.0010029941762690331
+δ_star_initial = -0.0010029941762690331
+δ_grid = [1]
+δ_grid_filtered = [1]
+XX l (θ dim) = 23   nTotalMoments d = 24   N = 8000
+XX
+XX === A1/A2: grad_k (dk/dtheta) analytic vs autodiff ===
+XX A1 Dual smoke test: PASSED (moments! ran under ForwardDiff)
+XX time analytic grad_k = 0.626 ms   autodiff = 0.465 ms
+XX max abs diff grad_k  = 0.01891079989181737
+XX analytic grad_k = [0.425493, 0.0, 0.0, 1.98214152, 0.0, 0.0, -2.06265735, 0.0, 0.0, 0.0, 0.0, 0.02272441, -0.05849842, 0.02116147, 0.01461254, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+XX autodiff grad_k = [0.425493, -0.0189108, 0.0, 1.98214152, 0.0, 0.0, -2.06265735, 0.0, 0.0, 0.0, 0.0, 0.02272441, -0.05849842, 0.02116147, 0.01461254, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+XX
+XX === A2: full moment Jacobian jac_h analytic vs autodiff ===
+XX time analytic jac = 514.313 ms   autodiff jac = 802.287 ms
+XX overall max abs diff jac_h   = 192.52469933061636
+XX   col1 (dk/dtheta) max diff   = 0.01891079989181737
+XX   cols3:end (dg/dtheta) maxdif= 192.52469933061636
+XX   per g-moment max diff (>1e-8):
+XX     g-moment 1 : max diff = 115.498   (mean|ana|=0.1597)
+XX     g-moment 2 : max diff = 87.4646   (mean|ana|=0.07251)
+XX     g-moment 3 : max diff = 62.3232   (mean|ana|=0.1112)
+XX     g-moment 4 : max diff = 165.289   (mean|ana|=0.01905)
+XX     g-moment 5 : max diff = 69.8401   (mean|ana|=0.06428)
+XX     g-moment 6 : max diff = 101.301   (mean|ana|=0.2559)
+XX     g-moment 7 : max diff = 75.0418   (mean|ana|=0.06237)
+XX     g-moment 8 : max diff = 134.137   (mean|ana|=0.06629)
+XX     g-moment 9 : max diff = 102.487   (mean|ana|=0.1144)
+XX     g-moment 10 : max diff = 104.715   (mean|ana|=0.06581)
+XX     g-moment 11 : max diff = 118.901   (mean|ana|=0.1969)
+XX     g-moment 12 : max diff = 160.523   (mean|ana|=0.03737)
+XX     g-moment 13 : max diff = 124.741   (mean|ana|=0.01932)
+XX     g-moment 14 : max diff = 102.011   (mean|ana|=0.04753)
+XX     g-moment 15 : max diff = 126.527   (mean|ana|=0.02143)
+XX     g-moment 16 : max diff = 192.525   (mean|ana|=0.3138)
+XX     g-moment 17 : max diff = 124.741   (mean|ana|=0.3284)
+XX     g-moment 18 : max diff = 104.715   (mean|ana|=0.3657)
+XX     g-moment 19 : max diff = 126.527   (mean|ana|=0.3408)
+XX     g-moment 20 : max diff = 192.525   (mean|ana|=0.3677)
+XX     g-moment 22 : max diff = 2.09487   (mean|ana|=0.2397)
+XX   per theta-col max diff (>1e-8): [(1, 192.5), (2, 4.263), (8, 10.43), (9, 9.915), (10, 10.44), (11, 8.089), (12, 9.102), (13, 10.22), (14, 10.16), (15, 8.71), (16, 9.748), (17, 8.873), (18, 9.745), (19, 8.69), (20, 8.883), (21, 9.01), (22, 8.233), (23, 8.995)]
+XX mean abs analytic jac_h = 0.13345   mean abs autodiff = 0.11221
+XX DONE.
+EXIT 0

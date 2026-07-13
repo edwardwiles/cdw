@@ -1,3 +1,27 @@
+# ---- lightweight instrumentation counters (reset by outer_loop) ----
+# EXP: count inner solves and how many return infeasible per outer solve (Task B2).
+const INNER_SOLVE_COUNT  = Ref(0)
+const INNER_INFEAS_COUNT = Ref(0)
+const INNER_ITERS_TOTAL  = Ref(0)
+
+# EXP: KNITRO.jl v1.2.1 exposes only the low-level (kc, out_ptr)->status getters for these;
+# wrap them to return the value directly.
+function _kn_num_iters(kc)
+    n = Ref{Cint}(0); KNITRO.KN_get_number_iters(kc, n); return Int(n[])
+end
+function _kn_num_fc(kc)
+    n = Ref{Cint}(0); KNITRO.KN_get_number_FC_evals(kc, n); return Int(n[])
+end
+function _kn_solve_time(kc)
+    t = Ref{Cdouble}(0.0); KNITRO.KN_get_solve_time_real(kc, t); return Float64(t[])
+end
+function _kn_feas_err(kc)
+    v = Ref{Cdouble}(0.0); KNITRO.KN_get_abs_feas_error(kc, v); return Float64(v[])
+end
+function _kn_opt_err(kc)
+    v = Ref{Cdouble}(0.0); KNITRO.KN_get_abs_opt_error(kc, v); return Float64(v[])
+end
+
 # KNITRO callback to evaluate objective and gradient
 function callbackEvalFG_inner!(kc, cb, evalRequest, evalResult, userParams)
 
@@ -63,6 +87,7 @@ function inner_loop_KNITRO(obj)
     # run
     KNITRO.KN_solve(kc)
     nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
+    INNER_ITERS_TOTAL[] += _kn_num_iters(kc)   # EXP instrumentation
     KNITRO.KN_free(kc)
 
     return nSTatus, objSol, x, lambda_
@@ -176,9 +201,13 @@ function inner_loop_internal(obj::PsiObjectiveBundleImplicit, θ)
     obj.H_save = obj.H[1,1] * (-1.0)^obj.find_smallest
 
     nStatus, objSol, x, lambda_ = inner_loop_KNITRO(obj)
-    
-    @show nStatus
-    @show objSol
+
+    # EXP instrumentation: count inner solves and infeasible/failed returns (Task B2).
+    # (Replaces the per-solve `@show nStatus/objSol` debug prints, which were pure I/O drag.)
+    INNER_SOLVE_COUNT[] += 1
+    if nStatus ∉ [0, -100, -101, -103]
+        INNER_INFEAS_COUNT[] += 1
+    end
 
     if nStatus ∈ [0, -100, -101, -103]
         obj.x .= x

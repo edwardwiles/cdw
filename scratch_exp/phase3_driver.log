@@ -1,0 +1,57 @@
+=== EXP rec_ad_prodfd_m25: use_jac=0 outer_algo=auto outer_hess=4 outer_maxit=25 inner_algo=0 ===
+csw settings:
+12:algorithm    auto
+258:eval_fcga         yes
+263:feastol      1e-06
+268:feastol_abs  0.001
+309:hessopt      4
+402:maxit        25
+682:opttol       1e-06
+687:opttol_abs   0.001
+inner settings:
+12:algorithm    0
+292:hessopt      exact
+378:maxit        100
+EXP_BETA=0.01
+TAG=rec_ad_prodfd_m25 exit=0 wall_s=269
+bounds(δ,κlo,κhi)=1.0,0.0077776605353718775,0.3000817375748035
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:26:18
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=187 feas_err=0.0 opt_err=0.128 knitro_time_s=106.01 wall_s=106.01 inner_solves=187 inner_infeas=125 inner_iters_total=2160 obj=-0.300082
+0.3000817375748035>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=185 feas_err=0.0 opt_err=0.351 knitro_time_s=70.72 wall_s=70.72 inner_solves=185 inner_infeas=91 inner_iters_total=1354 obj=0.007778
+0.0077776605353718775[1][0.0077776605353718775][0.3000817375748035]>>> OUTER_SOLVE_END   00:29:23  elapsed_s=185.14
+>>> EXP_USE_JAC=0
+>>> OUTER_SOLVE_START 00:26:18
+0.0077776605353718775[1][0.0077776605353718775][0.3000817375748035]>>> OUTER_SOLVE_END   00:29:23  elapsed_s=185.14
+======================================================================
+=== EXP rec_ad_prodfd_m100: use_jac=0 outer_algo=auto outer_hess=4 outer_maxit=100 inner_algo=0 ===
+csw settings:
+12:algorithm    auto
+258:eval_fcga         yes
+263:feastol      1e-06
+268:feastol_abs  0.001
+309:hessopt      4
+402:maxit        100
+682:opttol       1e-06
+687:opttol_abs   0.001
+inner settings:
+12:algorithm    0
+292:hessopt      exact
+378:maxit        100
+EXP_BETA=0.01
+TAG=rec_ad_prodfd_m100 exit=0 wall_s=755
+bounds(δ,κlo,κhi)=1.0,0.004305888096648669,0.3018519354635021
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:30:56
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=100 outer_FCevals=794 feas_err=0.0 opt_err=0.489 knitro_time_s=368.32 wall_s=368.33 inner_solves=794 inner_infeas=521 inner_iters_total=15648 obj=-0.301852
+0.3018519354635021>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=100 outer_FCevals=754 feas_err=0.0 opt_err=1.77 knitro_time_s=285.45 wall_s=285.45 inner_solves=754 inner_infeas=254 inner_iters_total=5870 obj=0.004306
+0.004305888096648669[1][0.004305888096648669][0.3018519354635021]>>> OUTER_SOLVE_END   00:41:57  elapsed_s=661.28
+>>> EXP_USE_JAC=0
+>>> OUTER_SOLVE_START 00:30:56
+0.004305888096648669[1][0.004305888096648669][0.3018519354635021]>>> OUTER_SOLVE_END   00:41:57  elapsed_s=661.28
+======================================================================
+=== B1 profile_inner.jl ===
+profile exit 1
+=== A2 test_exact_hessian.jl ===
+exact_hessian exit 0
+PHASE3_DONE_00:54:09

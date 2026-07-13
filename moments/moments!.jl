@@ -2,7 +2,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch = obj.γ
 	@unpack counterExplicit,
 	counterType,
 	θConstant,
@@ -51,10 +51,12 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 
 
-	Aod = ones(D, D)
-	AodPow = ones(D, D)
+	# NB: element type follows θ so the moment map accepts ForwardDiff Duals
+	# (use_Jacobian=0 autodiff path). For Float64 θ this is identical to ones(D,D).
+	Aod = ones(eltype(θ), D, D)
+	AodPow = ones(eltype(θ), D, D)
 
-	Aod_θ = ones(D, D)
+	Aod_θ = ones(eltype(θ), D, D)
 	Aod_offset = counterType_θ_offset + 3 + D
 	if OuterScaling == 1 # Aod model
 		if independenceMoment == 1
@@ -105,7 +107,10 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 	if counterExplicit == 0
 		# insert relevant k function if counterfactual does not depend on U
-		counterVal = (γ[baseIndex] / γ_prime[baseIndex])^(σ / (σ - 1)) - 1
+		# GT defined baseline -> autarky: 1 - (γ'/γ)^{σ/(σ-1)}.  NB the code's γ satisfies
+		# γ^σ·gdp = E[min_o p_od^{1-σ}] = P^{1-σ}, i.e. γ = P^{(1-σ)/σ} (extra σ vs γ=P^{1-σ}),
+		# so real income W ∝ 1/P ∝ γ^{σ/(σ-1)} and the exponent here is σ/(σ-1), not 1/(σ-1).
+		counterVal = 1 - (γ_prime[baseIndex] / γ[baseIndex])^(σ / (σ - 1))
 		@. K[:] = counterVal
 	end
 
@@ -123,8 +128,14 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 
 		#UPow = copy(U)
-		UPow = zeros(eltype(γ), size(U))
-		UσPow = zeros(eltype(γ), size(U))
+		# reuse preallocated Float64 scratch on the Float64 path; allocate Duals under ForwardDiff
+		if eltype(γ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
+			UPow = UPow_scratch
+			UσPow = UσPow_scratch
+		else
+			UPow = zeros(eltype(γ), size(U))
+			UσPow = zeros(eltype(γ), size(U))
+		end
 		T = Threads.nthreads()
 		Threads.@threads for t ∈ 1:T
 			ix0 = round(Int, (t - 1) / T * W) + 1
@@ -148,7 +159,11 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	end
 
 	if gravMoment == 1
-		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel) # add gravity moment if using 
+		# The price is p_od = w_o·AodPow·τ_od·U^μ with productivity z_o = U^{-μ}, i.e.
+		# MC_od = w_o·τ_od/(A_od·z_o) with the raw structural A_od = 1/AodPow. Hence
+		# ΔΔ ln(AodPow) = -ΔΔ ln(A_od), and Σ(ΔΔlnτ)·ΔΔ ln(AodPow)=0 is exactly the gravity
+		# consistency condition Σ ΔΔlnτ·ΔΔlnA_od = 0. So pass AodPow (= 1/A_od).
+		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel) # add gravity moment if using
 	end
 
 	
@@ -194,7 +209,10 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 	#To change for other counterfactuals
 	if θConstant != 1
-	@. G[:, 1:D^2+2*D] /= gamma(μ*(1-σ)+1)
+	# EK simple moments to normalize by the gamma factor: full D^2+2D layout, or the reduced
+	# D^2+1 (trade shares + 1 counterfactual) under autarky's trimmed moment set.
+	simple_end = counterType == 1 ? D^2 + 1 : D^2 + 2*D
+	@. G[:, 1:simple_end] /= gamma(μ*(1-σ)+1)
 	end
 
 	# normalize the moments so we do not require useless precision 

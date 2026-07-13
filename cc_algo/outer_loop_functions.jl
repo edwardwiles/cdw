@@ -86,9 +86,33 @@ function outer_loop(obj::ObjectiveBundle, θ_lb, θ_ub, θ_init; output = false)
 
     KNITRO.KN_set_cb_user_params(kc, cb, obj)
 
+    # EXP instrumentation: reset inner-solve counters for this outer solve (Task A4/B2)
+    INNER_SOLVE_COUNT[] = 0; INNER_INFEAS_COUNT[] = 0; INNER_ITERS_TOTAL[] = 0
+    _t_outer = time()
+
     KNITRO.KN_solve(kc)
 
     nStatus, κ_min, θ_min, lambda_ = KNITRO.KN_get_solution(kc)
+
+    # EXP instrumentation: one-line summary of this outer solve
+    let oiters = _kn_num_iters(kc),
+        ofc    = _kn_num_fc(kc),
+        otime  = _kn_solve_time(kc),
+        feas   = _kn_feas_err(kc),
+        opt    = _kn_opt_err(kc)
+        println(">>> OUTER_SOLVE find_smallest=", obj.find_smallest,
+                " status=", nStatus,
+                " outer_iters=", oiters,
+                " outer_FCevals=", ofc,
+                " feas_err=", round(feas; sigdigits=3),
+                " opt_err=", round(opt; sigdigits=3),
+                " knitro_time_s=", round(otime; digits=2),
+                " wall_s=", round(time()-_t_outer; digits=2),
+                " inner_solves=", INNER_SOLVE_COUNT[],
+                " inner_infeas=", INNER_INFEAS_COUNT[],
+                " inner_iters_total=", INNER_ITERS_TOTAL[],
+                " obj=", round(κ_min; digits=6)); flush(stdout)
+    end
 
     if !obj.find_smallest
         κ_min *= -1.0

@@ -79,13 +79,17 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 			indSum = 0
 
 
-			for o ∈ 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data 
+			for o ∈ 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data
 				d1 = d + (o - 1) * D
 				pricesTemp[o] = pricesTempσ[o] * pricesInd[o]
 				G[ω, d1] = pricesTemp[o] - P[d1]*denom[d]
 				indSum += pricesTemp[o]
 			end
-			G[ω, cInd+d] = indSum - denom[d]  # fill in part of G for price index moments (identifies MU parameter)
+			# baseline price-index moment (= sum of this d's trade-share moments). Redundant under
+			# autarky's reduced moment set, so only written when the price-index columns exist.
+			if counterType != 1
+				G[ω, cInd+d] = indSum - denom[d]  # fill in part of G for price index moments (identifies MU parameter)
+			end
 		end
 
 	end
@@ -192,7 +196,9 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, 
 			o1 = baseIndex
 		end
 
-		@. G[:, dInd+baseIndex] = constConsσ[baseIndex, baseIndex] ./ Uσ[:, o1] .- denom[baseIndex]
+		# reduced autarky layout: single counterfactual price-index moment sits right after the
+		# D^2 trade-share moments (baseline price-index moments dropped as redundant).
+		@. G[:, D^2+1] = constConsσ[baseIndex, baseIndex] ./ Uσ[:, o1] .- denom[baseIndex]
 		#=
 		@inbounds for ω ∈ 1:W
 			# we need only baseIndex, so we do not need to identify the price index for other countries

@@ -306,7 +306,7 @@ hessian_no_f forbid
 #   product_findiff = 4 = Knitro computes Hessian-vector products by finite differences
 #   product         = 5 = user supplies exact Hessian-vector products
 #   lbfgs           = 6 = Knitro computes a limited-memory quasi-Newton BFGS Hessian
-hessopt      auto
+hessopt      4
 
 # Whether to enforce satisfaction of simple bounds at all iterations.
 #   auto    = -1 = setting determined automatically by Knitro
@@ -399,7 +399,7 @@ maxfevals    -1
 # Default values are 10000 for NLP and 3000 for MIP.
 # NOTE: capped at 25 so the 4-country example returns bounds in a few minutes.
 # Set back to 0 (unlimited) for fully-converged production runs.
-maxit        25
+maxit 200
 
 # Maximum allowable CPU time in seconds for one algorithm solve.
 # If multistart, multi algorithm or MIP is active, this limits time spent

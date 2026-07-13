@@ -81,7 +81,7 @@ params = (
     stratifiedSampling = 0, # stratified Exp(1) draws
     IndMomentOrder = 5,
     θConstant=0, # 1 if theta and sigma never vary (precalculate U^((1-σ)/θ))
-    gravMoment=0, # =1 impose gravity identification for Frechet
+    gravMoment=1, # =1 impose gravity identification: ΔΔ ln A ⟂ ΔΔ ln τ (F-independent, OUTER constraint)
     localGravityMoment=0, # =1 impose model-implied trade elasticity matches θHat
     localGravityCrossMoment=0, # =1 impose local cross-elasticity = 0 (ACR R3)
     GravityMomentFirstApproach=0, # =1 impose mean independence between lnU and lnτ
@@ -104,7 +104,11 @@ params = (
     refIndex1 = 1, # refIndex used for CDF conditions
     OuterLoop = 1, # =1 CC Outer (compute the min/max κ bounds); =0 CC Inner (single δ* at θ_initial)
     UoModel = 1, # =1 Uo, =0 Uod
-    use_Jacobian = 1, # =1 analytic outer Jacobian (required: moments! uses Float64 caches incompatible with ForwardDiff)
+    use_Jacobian = 0, # =0 ForwardDiff autodiff of the exact indicator (recommended; see EXPERIMENTS_FINDINGS.md A1/A3).
+    #                   The old analytic Jacobian (=1) carries a smoothed-Dirac term that biases the search and
+    #                   understates the bounds. Autodiff now works after the eltype fix in moments!.jl.
+    #                   NB: validated for the UNRESTRICTED example; enabling restriction moments may need the
+    #                   same eltype(θ) treatment in their moment code before autodiff works there.
     calc_δ_star_initial = 1, # calculate the starting (minimum feasible) delta
     Jac_W = 8000, # number of simulations for the analytic Jacobian (MUST be <= W)
     theta_init = 0, # initialise from a theta different from thetaHat

@@ -1,4 +1,8 @@
-
+# EXP: smoothing width of the SmoothDirac term used to differentiate through the
+# argmin-selection indicator in the analytic Jacobian. Overridable via ENV for the
+# A3 β-sweep; defaults to the committed value 0.01. (β→∞ ⇒ Dirac term vanishes,
+# matching the ForwardDiff a.e. derivative that omits the indicator's boundary term.)
+const EXP_BETA = parse(Float64, get(ENV, "EXP_BETA", "0.01"))
 
 function hFunction_jacobian_copy_only!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset, θConstant, ∂γ∂γθ, ∂γ∂μ, ∂γ∂Aθ)
 	D = size(τ, 1) # num countries 
@@ -32,9 +36,9 @@ function hFunction_jacobian_copy_only!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, Aod
 end
 
 function hFunction_jacobian_calculation!(jac_G, UPow, Uσ, w, τ, σ, γ, Aod, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat, μ, UoModel, OuterScaling, Aod_offset, θConstant, ∂A∂Aθ, ∂A∂μ, CHat)
-	D = size(τ, 1) # num countries 
+	D = size(τ, 1) # num countries
 	W = size(UPow, 1) # num draws (or goods)
-	β = 0.01
+	β = EXP_BETA   # EXP: was hard-coded 0.01; now ENV-overridable for the A3 sweep
 
 	gdp = (w .* L)
 

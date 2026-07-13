@@ -16,12 +16,15 @@ function master_prestep(data, counters, globalParams)
 	counterType = globalParams.counterType
 	D = globalParams.D
 
-	# Step 1: Estimate thetaHat via gravity or prespecified
+	# Step 1: Estimate thetaHat via gravity or prespecified.
+	# Gravity = OLS of ln λ on ln τ with origin + destination fixed effects; by FWL this is the
+	# two-way "within" transform (matches the gravity-moment constraint used in the outer loop).
+	# (The previous version used a cell-referenced double-difference, which does NOT equal the
+	#  two-way-FE coefficient — see gravity_check.jl.)
 	if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
-		deltaLambda = doubleDiff(lambda)
-		deltaTau = doubleDiff(tau)
-		meanTau = mean(deltaTau)
-		thetaHat = -sum(deltaLambda .* (deltaTau .- meanTau)) / sum(deltaTau .* deltaTau .- meanTau^2)
+		Wlambda = withinTransform(lambda)
+		Wtau = withinTransform(tau)
+		thetaHat = -sum(Wlambda .* Wtau) / sum(Wtau .* Wtau)
 	elseif thetaIn > 0
 		thetaHat = thetaIn
 	end
@@ -109,9 +112,10 @@ function master_prestep(data, counters, globalParams)
 		γPrimeHat_lower = copy(gammaPrimeHat_low[:]),
 		Aod_initial_lower = reshape(Aod_initial_low, D^2)[:])
 
-	κ = (output.γHat[globalParams.baseIndex] / output.γPrimeHat[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1)) - 1
-	κ_upper = (output.γHat_upper[globalParams.baseIndex] / output.γPrimeHat_upper[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1)) - 1
-	κ_lower = (output.γHat_lower[globalParams.baseIndex] / output.γPrimeHat_lower[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1)) - 1
+	# GT defined baseline -> autarky: 1 - (γ'/γ)^{σ/(σ-1)} (matches counterVal in moments!.jl)
+	κ = 1 - (output.γPrimeHat[globalParams.baseIndex] / output.γHat[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1))
+	κ_upper = 1 - (output.γPrimeHat_upper[globalParams.baseIndex] / output.γHat_upper[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1))
+	κ_lower = 1 - (output.γPrimeHat_lower[globalParams.baseIndex] / output.γHat_lower[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1))
 
 	@show κ
 	@show κ_upper

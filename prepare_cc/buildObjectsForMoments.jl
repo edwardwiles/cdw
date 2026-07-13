@@ -81,6 +81,10 @@ function buildObjectsForMoments(
 		indicators = indicators,
 		wPrimeHat = wPrimeHat,
 		Uσ = Uσ,
+		# preallocated Float64 scratch for U^{-μ} / Uσ^{-μ} (reused on the Float64 moment path;
+		# the ForwardDiff/Dual path still allocates per call since a Float64 buffer can't hold Duals)
+		UPow_scratch = zeros(size(Uσ)),
+		UσPow_scratch = zeros(size(Uσ)),
 		Ū = Ū,
 		μHat = μHat,
 		D = D,

@@ -1,0 +1,235 @@
+TAG=x_ana_m25 exit=0 wall_s=274
+bounds(δ,κlo,κhi)=1.0,0.007437231677710265,0.21954913988547364
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 22:44:03
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=188 feas_err=0.0 opt_err=1.03 knitro_time_s=99.75 wall_s=99.75 inner_solves=188 inner_infeas=89 inner_iters_total=1280 obj=-0.219549
+0.21954913988547364>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=192 feas_err=0.0 opt_err=1.41 knitro_time_s=76.74 wall_s=76.74 inner_solves=192 inner_infeas=120 inner_iters_total=1171 obj=0.007437
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   22:47:08  elapsed_s=184.55
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 22:44:03
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   22:47:08  elapsed_s=184.55
+======================================================================
+TAG=x_autodiff_m25 exit=0 wall_s=237
+bounds(δ,κlo,κhi)=1.0,0.0012403380273409148,0.30270144021087986
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 22:48:27
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=154 feas_err=0.0 opt_err=1.6 knitro_time_s=88.78 wall_s=88.78 inner_solves=154 inner_infeas=108 inner_iters_total=1656 obj=-0.302701
+0.30270144021087986>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=173 feas_err=0.0 opt_err=0.117 knitro_time_s=61.38 wall_s=61.38 inner_solves=173 inner_infeas=84 inner_iters_total=1725 obj=0.00124
+0.0012403380273409148[1][0.0012403380273409148][0.30270144021087986]>>> OUTER_SOLVE_END   22:51:04  elapsed_s=157.08
+>>> EXP_USE_JAC=0
+>>> OUTER_SOLVE_START 22:48:27
+0.0012403380273409148[1][0.0012403380273409148][0.30270144021087986]>>> OUTER_SOLVE_END   22:51:04  elapsed_s=157.08
+======================================================================
+TAG=x_ana_m100 exit=0 wall_s=745
+bounds(δ,κlo,κhi)=1.0,0.0058044948576476685,0.2678723625501316
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 22:52:28
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=100 outer_FCevals=870 feas_err=0.0 opt_err=0.503 knitro_time_s=383.15 wall_s=383.15 inner_solves=870 inner_infeas=290 inner_iters_total=7165 obj=-0.267872
+0.2678723625501316>>> OUTER_SOLVE find_smallest=true status=-101 outer_iters=94 outer_FCevals=679 feas_err=0.0 opt_err=1.48 knitro_time_s=270.42 wall_s=270.42 inner_solves=679 inner_infeas=304 inner_iters_total=5289 obj=0.005804
+0.0058044948576476685[1][0.0058044948576476685][0.2678723625501316]>>> OUTER_SOLVE_END   23:03:29  elapsed_s=660.69
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 22:52:28
+0.0058044948576476685[1][0.0058044948576476685][0.2678723625501316]>>> OUTER_SOLVE_END   23:03:29  elapsed_s=660.69
+======================================================================
+TAG=x_autodiff_m100 exit=0 wall_s=645
+bounds(δ,κlo,κhi)=1.0,0.0010512640503732573,0.30317427077600456
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:04:52
+>>> OUTER_SOLVE find_smallest=false status=-102 outer_iters=89 outer_FCevals=711 feas_err=0.0 opt_err=1.67 knitro_time_s=311.62 wall_s=311.62 inner_solves=711 inner_infeas=550 inner_iters_total=14544 obj=-0.303174
+0.30317427077600456>>> OUTER_SOLVE find_smallest=true status=-102 outer_iters=67 outer_FCevals=652 feas_err=0.0 opt_err=0.0211 knitro_time_s=242.43 wall_s=242.43 inner_solves=652 inner_infeas=266 inner_iters_total=7071 obj=0.001051
+0.0010512640503732573[1][0.0010512640503732573][0.30317427077600456]>>> OUTER_SOLVE_END   23:14:15  elapsed_s=562.51
+>>> EXP_USE_JAC=0
+>>> OUTER_SOLVE_START 23:04:52
+0.0010512640503732573[1][0.0010512640503732573][0.30317427077600456]>>> OUTER_SOLVE_END   23:14:15  elapsed_s=562.51
+======================================================================
+TAG=a3_beta_1em3 exit=0 wall_s=280
+bounds(δ,κlo,κhi)=1.0,0.008392629681892805,0.23081285155997455
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:15:31
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=208 feas_err=0.0 opt_err=2.31 knitro_time_s=105.0 wall_s=105.0 inner_solves=208 inner_infeas=105 inner_iters_total=1396 obj=-0.230813
+0.23081285155997455>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=245 feas_err=0.0 opt_err=1.45 knitro_time_s=92.67 wall_s=92.67 inner_solves=245 inner_infeas=114 inner_iters_total=1875 obj=0.008393
+0.008392629681892805[1][0.008392629681892805][0.23081285155997455]>>> OUTER_SOLVE_END   23:18:55  elapsed_s=203.97
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:15:31
+0.008392629681892805[1][0.008392629681892805][0.23081285155997455]>>> OUTER_SOLVE_END   23:18:55  elapsed_s=203.97
+======================================================================
+TAG=a3_beta_1em1 exit=0 wall_s=293
+bounds(δ,κlo,κhi)=1.0,0.007039070389504021,-1.0e10
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:20:17
+>>> OUTER_SOLVE find_smallest=false status=-101 outer_iters=12 outer_FCevals=138 feas_err=0.0 opt_err=2.85 knitro_time_s=82.86 wall_s=82.86 inner_solves=138 inner_infeas=122 inner_iters_total=955 obj=1.0e10
+-1.0e10>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=292 feas_err=0.0 opt_err=0.683 knitro_time_s=121.01 wall_s=121.01 inner_solves=292 inner_infeas=157 inner_iters_total=2205 obj=0.007039
+0.007039070389504021[1][0.007039070389504021][-1.0e10]>>> OUTER_SOLVE_END   23:23:49  elapsed_s=212.05
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:20:17
+0.007039070389504021[1][0.007039070389504021][-1.0e10]>>> OUTER_SOLVE_END   23:23:49  elapsed_s=212.05
+======================================================================
+TAG=a3_beta_1e0 exit=0 wall_s=314
+bounds(δ,κlo,κhi)=1.0,0.0032447630914103076,0.24292885261445663
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:25:12
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=216 feas_err=0.0 opt_err=1.99 knitro_time_s=115.23 wall_s=115.23 inner_solves=216 inner_infeas=101 inner_iters_total=1606 obj=-0.242929
+0.24292885261445663>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=271 feas_err=0.0 opt_err=0.849 knitro_time_s=108.66 wall_s=108.66 inner_solves=271 inner_infeas=157 inner_iters_total=1963 obj=0.003245
+0.0032447630914103076[1][0.0032447630914103076][0.24292885261445663]>>> OUTER_SOLVE_END   23:29:04  elapsed_s=231.69
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:25:12
+0.0032447630914103076[1][0.0032447630914103076][0.24292885261445663]>>> OUTER_SOLVE_END   23:29:04  elapsed_s=231.69
+======================================================================
+TAG=a3_beta_1e2 exit=0 wall_s=237
+bounds(δ,κlo,κhi)=1.0,0.004452796036142459,-1.0e10
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:30:25
+>>> OUTER_SOLVE find_smallest=false status=-102 outer_iters=11 outer_FCevals=108 feas_err=0.0 opt_err=8.13 knitro_time_s=67.08 wall_s=67.08 inner_solves=108 inner_infeas=93 inner_iters_total=352 obj=1.0e10
+-1.0e10>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=214 feas_err=0.0 opt_err=0.546 knitro_time_s=81.39 wall_s=81.39 inner_solves=214 inner_infeas=104 inner_iters_total=1700 obj=0.004453
+0.004452796036142459[1][0.004452796036142459][-1.0e10]>>> OUTER_SOLVE_END   23:33:01  elapsed_s=156.28
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:30:25
+0.004452796036142459[1][0.004452796036142459][-1.0e10]>>> OUTER_SOLVE_END   23:33:01  elapsed_s=156.28
+======================================================================
+TAG=a2_hess_prodfd exit=0 wall_s=268
+bounds(δ,κlo,κhi)=1.0,0.005712737398245515,0.23725642178216977
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:34:26
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=198 feas_err=0.0 opt_err=0.394 knitro_time_s=105.5 wall_s=105.5 inner_solves=198 inner_infeas=90 inner_iters_total=1454 obj=-0.237256
+0.23725642178216977>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=181 feas_err=0.0 opt_err=2.04 knitro_time_s=70.43 wall_s=70.43 inner_solves=181 inner_infeas=125 inner_iters_total=1033 obj=0.005713
+0.005712737398245515[1][0.005712737398245515][0.23725642178216977]>>> OUTER_SOLVE_END   23:37:30  elapsed_s=183.21
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:34:26
+0.005712737398245515[1][0.005712737398245515][0.23725642178216977]>>> OUTER_SOLVE_END   23:37:30  elapsed_s=183.21
+======================================================================
+TAG=a2_hess_sr1 exit=0 wall_s=236
+bounds(δ,κlo,κhi)=1.0,0.02877986220221418,0.2419053319238229
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:38:57
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=165 feas_err=0.0 opt_err=0.163 knitro_time_s=102.74 wall_s=102.74 inner_solves=165 inner_infeas=36 inner_iters_total=1312 obj=-0.241905
+0.2419053319238229>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=92 feas_err=0.0 opt_err=0.309 knitro_time_s=38.15 wall_s=38.15 inner_solves=92 inner_infeas=40 inner_iters_total=623 obj=0.02878
+0.02877986220221418[1][0.02877986220221418][0.2419053319238229]>>> OUTER_SOLVE_END   23:41:25  elapsed_s=148.24
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:38:57
+0.02877986220221418[1][0.02877986220221418][0.2419053319238229]>>> OUTER_SOLVE_END   23:41:25  elapsed_s=148.24
+======================================================================
+TAG=a2_hess_lbfgs exit=0 wall_s=253
+bounds(δ,κlo,κhi)=1.0,0.005712737398245515,0.23725642178216977
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:42:44
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=198 feas_err=0.0 opt_err=0.394 knitro_time_s=98.14 wall_s=98.14 inner_solves=198 inner_infeas=90 inner_iters_total=1454 obj=-0.237256
+0.23725642178216977>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=181 feas_err=0.0 opt_err=2.04 knitro_time_s=69.87 wall_s=69.87 inner_solves=181 inner_infeas=125 inner_iters_total=1033 obj=0.005713
+0.005712737398245515[1][0.005712737398245515][0.23725642178216977]>>> OUTER_SOLVE_END   23:45:39  elapsed_s=175.29
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:42:44
+0.005712737398245515[1][0.005712737398245515][0.23725642178216977]>>> OUTER_SOLVE_END   23:45:39  elapsed_s=175.29
+======================================================================
+TAG=a2_hess_bfgs exit=0 wall_s=276
+bounds(δ,κlo,κhi)=1.0,0.007437231677710265,0.21954913988547364
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:47:06
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=188 feas_err=0.0 opt_err=1.03 knitro_time_s=103.76 wall_s=103.76 inner_solves=188 inner_infeas=89 inner_iters_total=1280 obj=-0.219549
+0.21954913988547364>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=192 feas_err=0.0 opt_err=1.41 knitro_time_s=78.15 wall_s=78.15 inner_solves=192 inner_infeas=120 inner_iters_total=1171 obj=0.007437
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   23:50:16  elapsed_s=189.82
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:47:06
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   23:50:16  elapsed_s=189.82
+======================================================================
+TAG=a4_o_direct exit=0 wall_s=284
+bounds(δ,κlo,κhi)=1.0,0.007437231677710265,0.21954913988547364
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:51:46
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=188 feas_err=0.0 opt_err=1.03 knitro_time_s=108.43 wall_s=108.43 inner_solves=188 inner_infeas=89 inner_iters_total=1280 obj=-0.219549
+0.21954913988547364>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=192 feas_err=0.0 opt_err=1.41 knitro_time_s=76.84 wall_s=76.84 inner_solves=192 inner_infeas=120 inner_iters_total=1171 obj=0.007437
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   23:54:59  elapsed_s=193.71
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:51:46
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   23:54:59  elapsed_s=193.71
+======================================================================
+TAG=a4_o_cg exit=0 wall_s=192
+bounds(δ,κlo,κhi)=1.0,0.011002711340543314,0.18490704230859478
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:56:16
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=115 feas_err=0.0 opt_err=0.448 knitro_time_s=69.21 wall_s=69.21 inner_solves=115 inner_infeas=17 inner_iters_total=935 obj=-0.184907
+0.18490704230859478>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=104 feas_err=0.0 opt_err=0.588 knitro_time_s=39.78 wall_s=39.78 inner_solves=104 inner_infeas=55 inner_iters_total=760 obj=0.011003
+0.011002711340543314[1][0.011002711340543314][0.18490704230859478]>>> OUTER_SOLVE_END   23:58:12  elapsed_s=115.62
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:56:16
+0.011002711340543314[1][0.011002711340543314][0.18490704230859478]>>> OUTER_SOLVE_END   23:58:12  elapsed_s=115.62
+======================================================================
+TAG=a4_o_active exit=0 wall_s=188
+bounds(δ,κlo,κhi)=1.0,0.005778823972457436,0.2426735179993973
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 23:59:28
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=118 feas_err=0.0 opt_err=0.116 knitro_time_s=69.82 wall_s=69.82 inner_solves=118 inner_infeas=25 inner_iters_total=1005 obj=-0.242674
+0.2426735179993973>>> OUTER_SOLVE find_smallest=true status=-410 outer_iters=25 outer_FCevals=86 feas_err=5.92e8 opt_err=1.43 knitro_time_s=34.74 wall_s=34.74 inner_solves=86 inner_infeas=25 inner_iters_total=841 obj=0.005779
+0.005778823972457436[1][0.005778823972457436][0.2426735179993973]>>> OUTER_SOLVE_END   00:01:19  elapsed_s=111.18
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 23:59:28
+0.005778823972457436[1][0.005778823972457436][0.2426735179993973]>>> OUTER_SOLVE_END   00:01:19  elapsed_s=111.18
+======================================================================
+TAG=a4_o_sqp exit=0 wall_s=281
+bounds(δ,κlo,κhi)=1.0,0.0028737841840302814,0.18426760905953188
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:02:47
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=199 feas_err=0.0 opt_err=1.34 knitro_time_s=107.24 wall_s=107.24 inner_solves=199 inner_infeas=63 inner_iters_total=1333 obj=-0.184268
+0.18426760905953188>>> OUTER_SOLVE find_smallest=true status=-410 outer_iters=25 outer_FCevals=197 feas_err=6.83e9 opt_err=1.89 knitro_time_s=78.06 wall_s=78.06 inner_solves=197 inner_infeas=65 inner_iters_total=1951 obj=0.002874
+0.0028737841840302814[1][0.0028737841840302814][0.18426760905953188]>>> OUTER_SOLVE_END   00:06:00  elapsed_s=192.85
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 00:02:47
+0.0028737841840302814[1][0.0028737841840302814][0.18426760905953188]>>> OUTER_SOLVE_END   00:06:00  elapsed_s=192.85
+======================================================================
+TAG=a4_i_direct exit=0 wall_s=270
+bounds(δ,κlo,κhi)=1.0,0.007437231677710265,0.21954913988547364
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:07:25
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=188 feas_err=0.0 opt_err=1.03 knitro_time_s=104.39 wall_s=104.39 inner_solves=188 inner_infeas=89 inner_iters_total=1280 obj=-0.219549
+0.21954913988547364>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=192 feas_err=0.0 opt_err=1.41 knitro_time_s=73.97 wall_s=73.97 inner_solves=192 inner_infeas=120 inner_iters_total=1171 obj=0.007437
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   00:10:31  elapsed_s=186.45
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 00:07:25
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   00:10:31  elapsed_s=186.45
+======================================================================
+TAG=a4_i_active exit=0 wall_s=256
+bounds(δ,κlo,κhi)=1.0,0.007430087066721436,0.21954914268535064
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:11:45
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=188 feas_err=0.0 opt_err=1.03 knitro_time_s=95.46 wall_s=95.46 inner_solves=188 inner_infeas=89 inner_iters_total=1931 obj=-0.219549
+0.21954914268535064>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=194 feas_err=0.0 opt_err=1.42 knitro_time_s=79.0 wall_s=79.0 inner_solves=194 inner_infeas=120 inner_iters_total=1632 obj=0.00743
+0.007430087066721436[1][0.007430087066721436][0.21954914268535064]>>> OUTER_SOLVE_END   00:14:46  elapsed_s=181.14
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 00:11:45
+0.007430087066721436[1][0.007430087066721436][0.21954914268535064]>>> OUTER_SOLVE_END   00:14:46  elapsed_s=181.14
+======================================================================
+TAG=conv_prodfd_m100 exit=0 wall_s=509
+bounds(δ,κlo,κhi)=1.0,0.005379965125029917,0.26153721187855017
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:16:16
+>>> OUTER_SOLVE find_smallest=false status=-102 outer_iters=86 outer_FCevals=673 feas_err=0.0 opt_err=2.62 knitro_time_s=305.51 wall_s=305.51 inner_solves=673 inner_infeas=303 inner_iters_total=8558 obj=-0.261537
+0.26153721187855017>>> OUTER_SOLVE find_smallest=true status=-102 outer_iters=32 outer_FCevals=262 feas_err=0.0 opt_err=1.86 knitro_time_s=105.66 wall_s=105.66 inner_solves=262 inner_infeas=163 inner_iters_total=1666 obj=0.00538
+0.005379965125029917[1][0.005379965125029917][0.26153721187855017]>>> OUTER_SOLVE_END   00:23:15  elapsed_s=419.3
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 00:16:16
+0.005379965125029917[1][0.005379965125029917][0.26153721187855017]>>> OUTER_SOLVE_END   00:23:15  elapsed_s=419.3
+======================================================================
+TAG=rec_ad_prodfd_m25 exit=0 wall_s=269
+bounds(δ,κlo,κhi)=1.0,0.0077776605353718775,0.3000817375748035
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:26:18
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=187 feas_err=0.0 opt_err=0.128 knitro_time_s=106.01 wall_s=106.01 inner_solves=187 inner_infeas=125 inner_iters_total=2160 obj=-0.300082
+0.3000817375748035>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=185 feas_err=0.0 opt_err=0.351 knitro_time_s=70.72 wall_s=70.72 inner_solves=185 inner_infeas=91 inner_iters_total=1354 obj=0.007778
+0.0077776605353718775[1][0.0077776605353718775][0.3000817375748035]>>> OUTER_SOLVE_END   00:29:23  elapsed_s=185.14
+>>> EXP_USE_JAC=0
+>>> OUTER_SOLVE_START 00:26:18
+0.0077776605353718775[1][0.0077776605353718775][0.3000817375748035]>>> OUTER_SOLVE_END   00:29:23  elapsed_s=185.14
+======================================================================
+TAG=rec_ad_prodfd_m100 exit=0 wall_s=755
+bounds(δ,κlo,κhi)=1.0,0.004305888096648669,0.3018519354635021
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 00:30:56
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=100 outer_FCevals=794 feas_err=0.0 opt_err=0.489 knitro_time_s=368.32 wall_s=368.33 inner_solves=794 inner_infeas=521 inner_iters_total=15648 obj=-0.301852
+0.3018519354635021>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=100 outer_FCevals=754 feas_err=0.0 opt_err=1.77 knitro_time_s=285.45 wall_s=285.45 inner_solves=754 inner_infeas=254 inner_iters_total=5870 obj=0.004306
+0.004305888096648669[1][0.004305888096648669][0.3018519354635021]>>> OUTER_SOLVE_END   00:41:57  elapsed_s=661.28
+>>> EXP_USE_JAC=0
+>>> OUTER_SOLVE_START 00:30:56
+0.004305888096648669[1][0.004305888096648669][0.3018519354635021]>>> OUTER_SOLVE_END   00:41:57  elapsed_s=661.28
+======================================================================
+TAG=a4_o_multi exit=139 wall_s=123
+bounds(δ,κlo,κhi)=1.0,0.004305888096648669,0.3018519354635021
+--- OUTER_SOLVE lines ---
+======================================================================

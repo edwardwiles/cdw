@@ -1,0 +1,31 @@
+TAG=base_ana_bfgs exit=1 wall_s=87
+bounds(δ,κlo,κhi)=1.0,0.007437231677710265,0.21954913988547364
+--- OUTER_SOLVE lines ---
+>>> EXP_USE_JAC=1
+======================================================================
+TAG=autodiff_bfgs exit=137 wall_s=83
+bounds(δ,κlo,κhi)=1.0,0.007437231677710265,0.21954913988547364
+--- OUTER_SOLVE lines ---
+======================================================================
+TAG=base_ana_bfgs exit=0 wall_s=254
+bounds(δ,κlo,κhi)=1.0,0.007437231677710265,0.21954913988547364
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 22:33:28
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=188 knitro_time_s=97.28 wall_s=97.28 inner_solves=188 inner_infeas=89 inner_iters_total=1280 obj=-0.219549
+0.21954913988547364>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=192 knitro_time_s=74.46 wall_s=74.46 inner_solves=192 inner_infeas=120 inner_iters_total=1171 obj=0.007437
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   22:36:26  elapsed_s=178.63
+>>> EXP_USE_JAC=1
+>>> OUTER_SOLVE_START 22:33:28
+0.007437231677710265[1][0.007437231677710265][0.21954913988547364]>>> OUTER_SOLVE_END   22:36:26  elapsed_s=178.63
+======================================================================
+TAG=autodiff_bfgs exit=0 wall_s=237
+bounds(δ,κlo,κhi)=1.0,0.0012403380273409148,0.30270144021087986
+--- OUTER_SOLVE lines ---
+>>> OUTER_SOLVE_START 22:37:46
+>>> OUTER_SOLVE find_smallest=false status=-400 outer_iters=25 outer_FCevals=154 knitro_time_s=82.44 wall_s=82.44 inner_solves=154 inner_infeas=108 inner_iters_total=1656 obj=-0.302701
+0.30270144021087986>>> OUTER_SOLVE find_smallest=true status=-400 outer_iters=25 outer_FCevals=173 knitro_time_s=67.72 wall_s=67.72 inner_solves=173 inner_infeas=84 inner_iters_total=1725 obj=0.00124
+0.0012403380273409148[1][0.0012403380273409148][0.30270144021087986]>>> OUTER_SOLVE_END   22:40:23  elapsed_s=157.56
+>>> EXP_USE_JAC=0
+>>> OUTER_SOLVE_START 22:37:46
+0.0012403380273409148[1][0.0012403380273409148][0.30270144021087986]>>> OUTER_SOLVE_END   22:40:23  elapsed_s=157.56
+======================================================================

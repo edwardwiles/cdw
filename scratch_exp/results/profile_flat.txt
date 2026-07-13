@@ -1,0 +1,383 @@
+ Count  Overhead File                    Line Function
+ =====  ======== ====                    ==== ========
+     8         0 @Base/special/exp.jl    236 exp_impl
+     8         0 @Base/multidimensional.jl  791 index_shape
+     8         0 @InvertedIndices/…rc/InvertedIndices.jl  102 size
+     8         0 @Base/subarray.jl       398 setindex!
+     8         8 @Base/set.jl              ? unique!(itr::Vector{Int64})
+     8         0 @Base/int.jl           1015 +
+     8         0 @Base/range.jl            5 Colon
+     8         0 @Base/range.jl          415 UnitRange
+     8         4 @Base/range.jl          426 unitrange_last
+     8         6 @InvertedIndices/…rc/InvertedIndices.jl    ? iterate
+     8         0 @Base/special/log.jl    271 _log
+     8         0 …c/smoothMinIndNew!.jl   44 MinInd2!(xInd::Vector{Float64}, x…
+     9         9 @Base/float.jl            ? Int64
+     9         9 @Base/essentials.jl     799 ifelse
+     9         0 @Base/abstractarray.jl 3088 offsetin
+     9         0 …/moments/hFunction.jl   76 hFunction!(G::SubArray{Float64, 2…
+     9         0 @Base/abstractarray.jl 1390 _to_subscript_indices
+     9         0 @Base/abstractarray.jl 1412 _unsafe_ind2sub
+     9         0 @Base/abstractarray.jl 3054 _ind2sub
+     9         0 @Base/abstractarray.jl 3092 _ind2sub
+     9         0 @Base/abstractarray.jl 3105 _ind2sub_recurse
+     9         0 @Base/abstractarray.jl 3112 _div
+     9         9 @Base/int.jl            301 div
+     9         0 @Base/special/exp.jl    258 exp_impl
+     9         9 @Base/essentials.jl     919 getindex
+     9         0 …r/moments/moments!.jl  221 EK_moments_simple!(K::SubArray{Fl…
+     9         0 …hFunction_jacobian.jl   24 hFunction_jacobian_copy_only!(jac…
+     9         9 @Base/array.jl          194 size
+    10         0 @LinearAlgebra/src/adjtrans.jl  343 getindex
+    10        10 @Base/boot.jl           593 memoryref
+    10         3 …r/moments/moments!.jl  137 macro expansion
+    10         0 …r/moments/moments!.jl  128 EK_moments_simple!(K::SubArray{Fl…
+    10        10 @Base/float.jl          420 unsafe_trunc
+    10        10 @Base/math.jl             ? ^(x::Float64, y::Float64)
+    11         0 @Base/array.jl          322 copyto!
+    11        11 @Base/essentials.jl      11 length
+    11         0 …hFunction_jacobian.jl   17 hFunction_jacobian_copy_only!(jac…
+    11         0 @Base/array.jl          937 getindex
+    11        11 …hFunction_jacobian.jl    ? hFunction_jacobian_calculation!(j…
+    11         0 @InvertedIndices/…rc/InvertedIndices.jl  105 iterate
+    12        12 @Base/set.jl            470 unique!(itr::Vector{Int64})
+    12         0 @Base/special/log.jl    164 log_proc1
+    12        12 @Base/float.jl            ? _polygamma(m::Int64, z::Float64)
+    12         0 @Base/math.jl            56 two_mul
+    12         0 @Base/math.jl           627 sqrt
+    12         0 @Base/math.jl            57 two_mul
+    12         0 …/moments/hFunction.jl   84 hFunction!(G::SubArray{Float64, 2…
+    13         0 @Base/array.jl          596 zeros
+    13         0 @Base/array.jl          329 fill!
+    13         0 @Base/array.jl          333 _fill!
+    13         0 @Base/promotion.jl      404 promote
+    13         0 @Base/promotion.jl      379 _promote
+    13         0 @Base/array.jl          595 zeros
+    13         0 …hFunction_jacobian.jl  221 hFunctionCounter_jacobian!(jac_K:…
+    13         0 @SpecialFunctions/src/gamma.jl   42 _digamma(z::Float64)
+    13         0 @Base/number.jl         255 inv
+    13         0 …hFunction_jacobian.jl  133 hFunction_jacobian_calculation!(j…
+    13        13 @Base/special/log.jl    559 _log_ext(xu::UInt64)
+    13         0 @Base/special/log.jl    582 _log_ext(xu::UInt64)
+    13         0 @Base/math.jl          1147 ^(x::Float64, y::Float64)
+    14         0 @Base/special/log.jl    163 log_proc1
+    14        14 @Base/float.jl          623 <
+    14         0 @Base/special/log.jl    547 log_tab_unpack
+    14         0 @Base/special/exp.jl    241 exp_impl
+    14         0 @Base/special/log.jl    179 log_proc1
+    15        15 @Base/int.jl            533 >>
+    15         0 @Base/boot.jl           661 Array
+    15         0 @Base/boot.jl           651 Array
+    15         0 @Base/reshapedarray.jl  309 _unsafe_getindex
+    15         0 @Base/abstractarray.jl 3064 _sub2ind
+    15         0 …/moments/hFunction.jl   88 hFunction!(G::SubArray{Float64, 2…
+    15        14 …/moments/hFunction.jl   66 hFunction!(G::SubArray{Float64, 2…
+    15        15 …/moments/hFunction.jl    ? hFunction!(G::SubArray{Float64, 2…
+    15        15 @Base/partr.jl          172 multiq_deletemin()
+    15         0 @Base/array.jl          985 setindex!
+    16         0 …hFunction_jacobian.jl  134 hFunction_jacobian_calculation!(j…
+    16        16 @Base/int.jl            353 &
+    16         0 @Base/operators.jl      946 widen
+    16         0 @Base/boot.jl           958 Int128
+    16        16 @Base/boot.jl           888 toInt128
+    16         0 @Base/indices.jl        401 iterate
+    16         0 @Base/int.jl            542 <<
+    16        16 @Base/int.jl            535 <<
+    16         0 …PsiObjectiveBundle.jl  217 (::PsiObjectiveBundleImplicit{@Na…
+    16         0 @Base/special/exp.jl    182 table_unpack
+    16         0 …c/smoothMinIndNew!.jl   34 MinInd!(xInd::Vector{Float64}, x:…
+    16         0 @Base/float.jl          661 ==
+    16         0 @Base/partr.jl          183 multiq_deletemin()
+    16        16 @Base/gcutils.jl        264 safepoint
+    17         0 @Base/special/exp.jl    218 exp_impl
+    17         0 @Base/rounding.jl       475 floor
+    17         0 @Base/rounding.jl       479 round
+    17         0 @Base/rounding.jl       480 _round_convert
+    17         0 …/moments/hFunction.jl   65 hFunction!(G::SubArray{Float64, 2…
+    17         0 @Base/abstractarray.jl   98 axes
+    17        17 @SpecialFunctions/src/gamma.jl  342 _polygamma(m::Int64, z::Float64)
+    17         0 @Base/abstractarray.jl 1371 _getindex
+    17        17 @Base/special/exp.jl    180 table_unpack
+    18         0 @Base/math.jl          1172 pow_body(x::Float64, y::Float64)
+    18         0 …/moments_Jacobian!.jl  140 EK_moments_Jacobian_Simple!(jac_K…
+    18         0 …/moments/hFunction.jl   64 hFunction!(G::SubArray{Float64, 2…
+    19         0 @Base/int.jl            540 >>
+    19         2 …odular/cc_algo/Psi.jl   31 ddPsi!(arg1::Vector{Float64}, arg…
+    19         0 @Base/multidimensional.jl  956 _getindex(::IndexLinear, ::Matrix…
+    19        19 @Base/math.jl           628 sqrt
+    19         0 @Base/reduce.jl         429 _mapreduce
+    20         0 …hFunction_jacobian.jl   23 hFunction_jacobian_copy_only!(jac…
+    20         0 @Base/special/log.jl    580 _log_ext(xu::UInt64)
+    20        12 @Base/multidimensional.jl  967 _unsafe_getindex(::IndexLinear, A…
+    20         0 @Base/special/log.jl    570 _log_ext(xu::UInt64)
+    20         0 @Base/abstractarray.jl 1091 copyto_unaliased!(deststyle::Inde…
+    20         0 @Base/indices.jl        572 iterate
+    20         0 …ner_loop_functions.jl   49 inner_loop_KNITRO(obj::PsiObjecti…
+    20         0 @KNITRO/src/C_wrapper.jl  102 KN_new
+    20        20 @KNITRO/src/libknitro.jl   27 KN_new
+    20         0 @Base/multinverses.jl   159 div
+    20        20 @Base/int.jl           1000 *
+    20         0 @SpecialFunctions/src/gamma.jl   47 _digamma(z::Float64)
+    21         0 @Base/special/exp.jl    244 exp_impl
+    21         0 @Base/twiceprecision.jl   50 canonicalize2
+    21         0 @SpecialFunctions/src/gamma.jl   38 _digamma(z::Float64)
+    21         3 …odular/cc_algo/Psi.jl   20 dPsi!(arg1::Vector{Float64}, arg0…
+    22        22 @Base/float.jl          699 abs
+    22         0 …PsiObjectiveBundle.jl  458 hessian!(h::Vector{Float64}, obj:…
+    22         1 …PsiObjectiveBundle.jl  186 (::PsiObjectiveBundleImplicit{@Na…
+    22         0 @Base/multinverses.jl   173 divrem
+    22         0 …hFunction_jacobian.jl  100 hFunction_jacobian_calculation!(j…
+    23        23 @Base/multidimensional.jl  965 _unsafe_getindex(::IndexLinear, A…
+    23         0 …hFunction_jacobian.jl   28 hFunction_jacobian_copy_only!(jac…
+    23         0 @SpecialFunctions/src/gamma.jl   49 _digamma(z::Float64)
+    24         0 …c/smoothMinIndNew!.jl   42 MinInd2!(xInd::Vector{Float64}, x…
+    24         0 …PsiObjectiveBundle.jl  201 (::PsiObjectiveBundleImplicit{@Na…
+    24         1 …/moments_Jacobian!.jl  221 macro expansion
+    24         0 @Base/cartesian.jl       62 macro expansion
+    24         0 @Base/int.jl           1015 *
+    25        25 @Base/int.jl             86 -
+    25         0 @Base/sort.jl           800 _sort!
+    25         0 …/moments_Jacobian!.jl  157 EK_moments_Jacobian_Simple!(jac_K…
+    26        26 @Base/array.jl         1478 resize!(a::Vector{Int64}, nl_::In…
+    26         0 …hFunction_jacobian.jl  126 hFunction_jacobian_calculation!(j…
+    26         0 @Base/array.jl          901 iterate
+    27         0 @Base/set.jl            433 _groupedunique!
+    27        27 @Base/promotion.jl      637 ==
+    27         0 @Base/sort.jl          1740 #sort!#23
+    27         0 @Base/sort.jl          1594 _sort!
+    27         0 @Base/sort.jl           561 _sort!
+    27         0 @Base/sort.jl           686 _sort!
+    27         0 @Base/sort.jl           747 _sort!
+    28         1 @Base/sort.jl          1733 sort!
+    28         0 @Base/abstractarray.jl 1383 _getindex
+    29        29 @Base/float.jl          493 -
+    29         0 @Base/operators.jl      425 >
+    29         0 @Base/special/exp.jl    215 exp_impl
+    30         0 …hFunction_jacobian.jl  130 hFunction_jacobian_calculation!(j…
+    31        31 @Base/float.jl          245 Float64
+    31         0 @Base/special/log.jl    186 log_proc1
+    33         0 @Base/multinverses.jl   160 div
+    34         0 @Base/array.jl          939 getindex
+    34        34 @Base/floatfuncs.jl     358 fma
+    34         1 @Base/operators.jl      642 *
+    35         2 …hFunction_jacobian.jl  144 hFunction_jacobian_calculation!(j…
+    36         0 @Base/multinverses.jl   158 div
+    36         0 @Base/multinverses.jl   139 _mul_high
+    37         0 …hFunction_jacobian.jl  121 hFunction_jacobian_calculation!(j…
+    37         0 @Base/promotion.jl      433 +
+    37         1 …odular/cc_algo/Psi.jl    7 Psi!(arg1::Vector{Float64}, arg0:…
+    39         0 @Base/set.jl            473 unique!(itr::Vector{Int64})
+    39         0 @Base/special/exp.jl    242 exp_impl
+    40         0 …ter_loop_functions.jl  267 calculate_grad_k!(g::Vector{Float…
+    40         0 …PsiObjectiveBundle.jl  179 (::PsiObjectiveBundleImplicit{@Na…
+    41        41 @Base/reduce.jl         430 _mapreduce
+    41         0 …PsiObjectiveBundle.jl  209 (::PsiObjectiveBundleImplicit{@Na…
+    42         0 @Base/special/exp.jl    216 exp_impl
+    43         5 …hFunction_jacobian.jl  105 hFunction_jacobian_calculation!(j…
+    43         6 @Base/cartesian.jl       66 macro expansion
+    43        43 @Base/essentials.jl     733 reinterpret
+    44        44 @Base/cmem.jl            28 memmove
+    45         0 @Base/array.jl          299 copyto!
+    45         0 @Base/array.jl          308 _copyto_impl!
+    45         0 @Base/genericmemory.jl  125 unsafe_copyto!
+    46         0 @Base/abstractarray.jl 1466 _setindex!
+    47         0 @Base/reshapedarray.jl  310 _unsafe_getindex
+    47         0 …c/smoothMinIndNew!.jl   32 MinInd!(xInd::Vector{Float64}, x:…
+    48         6 @SpecialFunctions/src/gamma.jl   41 _digamma(z::Float64)
+    48         0 …ner_loop_functions.jl   75 inner_loop_KNITRO(obj::PsiObjecti…
+    48        48 @KNITRO/src/libknitro.jl   51 KN_load_param_file
+    52         0 @Base/abstractarray.jl 1090 copyto_unaliased!(deststyle::Inde…
+    52         0 @Base/math.jl            94 evalpoly
+    52         0 @Base/math.jl            95 macro expansion
+    53         0 …PsiObjectiveBundle.jl  178 (::PsiObjectiveBundleImplicit{@Na…
+    54        54 @Base/task.jl          1194 trypoptask(W::Base.IntrusiveLinke…
+    55         0 @Base/reduce.jl         432 _mapreduce
+    56         0 …/moments_Jacobian!.jl  191 macro expansion
+    56         0 @Base/reshapedarray.jl  311 _unsafe_getindex
+    56         0 @Base/reshapedarray.jl  314 _unsafe_getindex_rs
+    57         0 @Base/multidimensional.jl  968 _unsafe_getindex
+    58         0 @Base/special/exp.jl     78 expm1b_kernel
+    61         0 …/moments_Jacobian!.jl  190 macro expansion
+    65         0 @Base/number.jl           7 convert
+    66         0 …hFunction_jacobian.jl   31 hFunction_jacobian_copy_only!(jac…
+    68        68 @Base/partr.jl          230 multiq_check_empty()
+    69         0 @SpecialFunctions/src/gamma.jl   40 _digamma(z::Float64)
+    72         0 …/moments/hFunction.jl   85 hFunction!(G::SubArray{Float64, 2…
+    72         0 @Base/abstractarray.jl 1070 copyto!(dest::SubArray{Float64, 2…
+    73        73 @Base/math.jl             ? _broadcast_getindex
+    73         0 …PsiObjectiveBundle.jl  460 hessian!(h::Vector{Float64}, obj:…
+    73         0 @Base/broadcast.jl      988 copyto!
+    73        73 @Base/float.jl          500 muladd
+    74        74 @Base/math.jl           835 min
+    74         3 …/moments/hFunction.jl   69 hFunction!(G::SubArray{Float64, 2…
+    83         0 @Base/special/log.jl    289 _log
+    83        83 @Base/int.jl             87 +
+    84         0 @Base/reshapedarray.jl  272 _ind2sub_rs
+    85        67 @Base/range.jl          921 iterate
+    86         0 @Base/float.jl          709 isnan
+    86        86 @Base/float.jl          622 !=
+    88         0 …hFunction_jacobian.jl  123 hFunction_jacobian_calculation!(j…
+    89         0 @Base/multinverses.jl   172 divrem
+    89         0 @KNITRO/src/C_wrapper.jl  314 (::KNITRO.var"#_eval_fc_wrapper##…
+    89         0 …ner_loop_functions.jl   30 callbackEvalFG_inner!(kc::Ptr{Not…
+    90         0 @Base/array.jl          372 similar
+    91         1 @KNITRO/src/C_wrapper.jl  308 _eval_fc_wrapper(ptr_model::Ptr{N…
+    93         0 …PsiObjectiveBundle.jl  461 hessian!(h::Vector{Float64}, obj:…
+    94         0 @Base/abstractarray.jl 3065 _sub2ind
+    98         0 @Base/subarray.jl       392 setindex!
+   100         4 …r/misc/SmoothDirac.jl    2 SmoothDirac
+   100         0 @Base/abstractarray.jl 1377 _to_linear_index
+   100         0 @Base/abstractarray.jl 3049 _sub2ind
+   101         0 @Base/abstractarray.jl 1201 copymutable
+   101         0 @Base/array.jl          161 vect
+   101         0 @Base/math.jl          1169 pow_body(x::Float64, y::Float64)
+   103       103 @Base/int.jl             88 *
+   109         0 @Base/abstractarray.jl 3081 _sub2ind_recurse
+   111         0 @Base/reshapedarray.jl  271 _ind2sub_rs
+   111         0 …r/moments/moments!.jl  135 macro expansion
+   112         8 @SpecialFunctions/src/gamma.jl   46 _digamma(z::Float64)
+   112         0 @Base/reshapedarray.jl  268 ind2sub_rs
+   119         0 @Base/threadingconstructs.jl  246 #EK_moments_Jacobian_Simple!##0
+   119         0 @Base/threadingconstructs.jl  279 (::var"#EK_moments_Jacobian_Simpl…
+   119         0 @Base/multidimensional.jl  970 _unsafe_getindex
+   120       120 @Base/float.jl          496 -
+   122         0 @Base/reshapedarray.jl  299 getindex
+   123         0 …r/moments/moments!.jl  134 macro expansion
+   124         0 @Base/reshapedarray.jl  324 setindex!
+   124         0 @Base/reshapedarray.jl  335 _unsafe_setindex!
+   127         0 @Base/reducedim.jl      979 minimum
+   127         0 @Base/reducedim.jl      979 #minimum#747
+   127         0 @Base/reducedim.jl      983 _minimum
+   127         0 @Base/reducedim.jl      983 #_minimum#749
+   127         0 @Base/reducedim.jl      984 _minimum
+   127         0 @Base/reducedim.jl      984 #_minimum#750
+   128         0 @Base/reducedim.jl      326 mapreduce
+   128         0 @Base/reducedim.jl      326 #mapreduce#728
+   128         0 @Base/reducedim.jl      334 _mapreduce_dim
+   129       119 @Base/boot.jl           648 Array
+   133        17 @Base/special/exp.jl    329 exp(x::Float64)
+   134        17 @Base/special/log.jl    261 log(x::Float64)
+   135         0 …/moments_Jacobian!.jl  184 EK_moments_Jacobian_Simple!(jac_K…
+   142         0 …/moments_Jacobian!.jl  187 EK_moments_Jacobian_Simple!(jac_K…
+   147        13 @Base/math.jl          1173 pow_body(x::Float64, y::Float64)
+   156       156 @Base/float.jl          495 +
+   160        31 @Base/sort.jl          1769 #sort#24
+   162         0 …hFunction_jacobian.jl  129 hFunction_jacobian_calculation!(j…
+   165        83 @Base/math.jl           404 nan_dom_err
+   167         0 @Base/operators.jl     1100 call_composed
+   167         8 @Base/sort.jl          1769 sort
+   168         3 @Base/simdloop.jl        75 macro expansion
+   168       168 @Base/float.jl          497 *
+   180         0 @Base/subarray.jl       316 getindex
+   187         0 …PsiObjectiveBundle.jl  462 hessian!(h::Vector{Float64}, obj:…
+   187       187 @LinearAlgebra/src/blas.jl 1642 gemm!(transA::Char, transB::Char,…
+   191         0 @Base/multidimensional.jl  743 getindex
+   195       195 @Base/int.jl             83 <
+   212         0 @Base/boot.jl           660 Array
+   215         0 …r/moments/moments!.jl  219 EK_moments_simple!(K::SubArray{Fl…
+   231         0 @Base/operators.jl     1096 ComposedFunction
+   231         0 @Base/operators.jl     1096 #_#54
+   231         2 @Base/operators.jl     1099 call_composed
+   232         0 @InvertedIndices/…rc/InvertedIndices.jl  174 uniquesort
+   233         0 @InvertedIndices/…rc/InvertedIndices.jl  182 to_indices
+   234         0 …PsiObjectiveBundle.jl  219 (::PsiObjectiveBundleImplicit{@Na…
+   235         0 @Base/broadcast.jl      665 _broadcast_getindex
+   235         0 @Base/indices.jl        360 to_indices
+   256         0 @Base/multidimensional.jl  979 _unsafe_getindex!
+   263         2 …r/moments/moments!.jl  136 macro expansion
+   269         0 @Base/boot.jl           647 Array
+   277         0 @Base/math.jl          1159 ^(x::Float64, y::Float64)
+   317       317 @LinearAlgebra/src/blas.jl  668 gemv!(trans::Char, alpha::Float64…
+   330         0 @Base/broadcast.jl      902 materialize!(dest::SubArray{Float…
+   350         0 …/moments_Jacobian!.jl  139 EK_moments_Jacobian_Simple!(jac_K…
+   357        11 @SpecialFunctions/src/gamma.jl   20 digamma
+   358         1 @SpecialFunctions/src/gamma.jl  343 _polygamma(m::Int64, z::Float64)
+   375         0 …PsiObjectiveBundle.jl  243 (::PsiObjectiveBundleImplicit{@Na…
+   385         0 @Base/broadcast.jl      955 copyto!
+   385         0 @Base/multidimensional.jl 1185 fill!
+   387         5 @SpecialFunctions/src/gamma.jl  340 polygamma
+   401       401 @Base/essentials.jl     920 getindex
+   405         0 @Base/array.jl          929 getindex
+   416         0 @KNITRO/src/C_wrapper.jl  308 _eval_hess_wrapper(ptr_model::Ptr…
+   416         0 @KNITRO/src/C_wrapper.jl  314 (::KNITRO.var"#_eval_hess_wrapper…
+   416         0 …ner_loop_functions.jl   40 callbackEvalH_inner!(kc::Ptr{Noth…
+   493         0 @Base/boot.jl           662 Array
+   493         0 @Base/boot.jl           654 Array
+   505         0 …PsiObjectiveBundle.jl  172 PsiObjectiveBundleImplicit
+   506         0 @KNITRO/src/C_wrapper.jl  280 _try_catch_handler(f::KNITRO.var"…
+   508         0 @Base/boot.jl           604 new_as_memoryref
+   508         0 @Base/threadingconstructs.jl  246 #EK_moments_simple!##0
+   508         0 @Base/threadingconstructs.jl  279 (::var"#EK_moments_simple!##0#EK_…
+   536         0 …r/moments/moments!.jl  131 EK_moments_simple!(K::SubArray{Fl…
+   554         0 @Base/subarray.jl        67 similar
+   566         0 …ner_loop_functions.jl   88 inner_loop_KNITRO(obj::PsiObjecti…
+   566         0 @KNITRO/src/C_wrapper.jl  186 KN_solve
+   566        59 @KNITRO/src/libknitro.jl 1957 KN_solve
+   593         0 @Base/abstractarray.jl 1473 _setindex!
+   637         0 @Base/multidimensional.jl  968 _unsafe_getindex(::IndexCartesian…
+   639         0 @Base/abstractarray.jl 1443 setindex!
+   642         1 …ner_loop_functions.jl  203 inner_loop_internal(obj::PsiObjec…
+   647         0 …hFunction_jacobian.jl  117 hFunction_jacobian_calculation!(j…
+   705         0 @Base/abstractarray.jl  822 similar
+   705         0 @Base/array.jl          377 similar
+   777       777 @Base/boot.jl           588 GenericMemory
+   779         8 …r/moments/moments!.jl  230 EK_moments!(K::SubArray{Float64, …
+   780         1 …ner_loop_functions.jl  199 inner_loop_internal(obj::PsiObjec…
+   822         0 @Base/array.jl          997 setindex!
+   822       811 @Base/array.jl         1003 _setindex!
+   894         0 @Base/subarray.jl       386 setindex!
+   947       947 @Base/float.jl          498 /
+   949         0 …/moments_Jacobian!.jl  150 EK_moments_Jacobian_Simple!(jac_K…
+  1011         0 …r/moments/moments!.jl  199 EK_moments_simple!(K::SubArray{Fl…
+  1023         1 …/moments_Jacobian!.jl  145 EK_moments_Jacobian_Simple!(jac_K…
+  1181         7 …/moments_Jacobian!.jl  196 macro expansion
+  1207         0 @Base/threadingconstructs.jl  279 (::var"#EK_moments_Jacobian_Simpl…
+  1208         1 @Base/threadingconstructs.jl  246 #EK_moments_Jacobian_Simple!##4
+  1231         0 …/moments_Jacobian!.jl  193 EK_moments_Jacobian_Simple!(jac_K…
+  1238         0 @Base/multidimensional.jl  989 _unsafe_getindex!
+  1238         0 @Base/multidimensional.jl  979 macro expansion
+  1363      1363 @Base/array.jl          991 _setindex!
+  1364         0 @Base/array.jl          986 setindex!
+  1375         0 @Base/multidimensional.jl  970 _unsafe_getindex(::IndexCartesian…
+  1421         0 @Base/multidimensional.jl  981 macro expansion
+  1423         0 …tness_modular/diag.jl   86 outer_eval_once(obj::PsiObjective…
+  1426         0 @Base/cartesian.jl       64 macro expansion
+  1835         0 @Base/threadingconstructs.jl  178 (::Base.Threads.var"#threading_ru…
+  1899         0 @Base/task.jl           312 _wait(t::Task)
+  1899         0 @Base/condition.jl      136 wait
+  1899         0 @Base/condition.jl      141 wait(c::Base.GenericCondition{Spi…
+  1900         0 @Base/threadingconstructs.jl  192 threading_run(fun::var"#EK_moment…
+  1906         1 @Base/threadingconstructs.jl  216 macro expansion
+  2231         8 @Base/multidimensional.jl  956 _getindex
+  2532         1 @Base/abstractarray.jl 1342 getindex
+ 10751         0 @SpecialFunctions/src/gamma.jl  592 gamma
+ 10751     10586 @SpecialFunctions/src/gamma.jl  602 _gamma
+ 11190         0 @Base/broadcast.jl      696 _getindex
+ 11416         0 @Base/broadcast.jl      671 _broadcast_getindex
+ 11416         0 @Base/broadcast.jl      695 _getindex
+ 12468         0 @Base/broadcast.jl      672 _broadcast_getindex
+ 12468         2 @Base/broadcast.jl      699 _broadcast_getindex_evalf
+ 12482         0 …/moments_Jacobian!.jl  333 EK_moments_Jacobian_Simple!(jac_K…
+ 12776         0 @Base/broadcast.jl      616 getindex
+ 12776         0 @Base/broadcast.jl      620 _getindex
+ 13099         0 @Base/simdloop.jl        77 macro expansion
+ 13099         6 @Base/broadcast.jl      995 macro expansion
+ 13270         0 @Base/broadcast.jl      994 copyto!
+ 13343         0 @Base/broadcast.jl      947 copyto!
+ 13397         0 @Base/broadcast.jl      902 materialize!
+ 13727         0 @Base/broadcast.jl      905 materialize!
+ 16186         0 @Base/task.jl           868 task_done_hook(t::Task)
+ 16579         0 …PsiObjectiveBundle.jl  214 (::PsiObjectiveBundleImplicit{@Na…
+ 16579         0 …ter_loop_functions.jl  238 calculate_jac_θ!(obj::PsiObjectiv…
+ 16619       230 …/moments_Jacobian!.jl  347 EK_moments_Jacobian!(jac_K::SubAr…
+ 16887         0 …PsiObjectiveBundle.jl  172 kwcall(::@NamedTuple{constr::Vect…
+ 16888         1 …tness_modular/diag.jl   89 outer_eval_once(obj::PsiObjective…
+ 18082     18076 @Base/task.jl          1216 poptask(W::Base.IntrusiveLinkedLi…
+ 18083         0 @Base/task.jl          1228 wait()
+ 18327         0 @Base/client.jl         550 _start()
+ 18327         0 @Base/client.jl         317 exec_options(opts::Base.JLOptions)
+ 18327         0 @Base/Base.jl           306 include(mod::Module, _path::Strin…
+ 18327         0 @Base/loading.jl       2934 _include(mapexpr::Function, mod::…
+ 18327         0 @Base/loading.jl       2874 include_string(mapexpr::typeof(id…
+ 18327        14 @Base/boot.jl           489 eval(m::Module, e::Any)
+Total snapshots: 36672. Utilization: 51% across all threads and tasks. Use the `groupby` kwarg to break down by thread and/or task.

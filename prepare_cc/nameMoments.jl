@@ -27,22 +27,20 @@ function nameMoments(numMoments, K_, params)
 
     ##### Naming the Moments
     for d = 1:D
-        for o = 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data 
+        for o = 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data
             d1 = d + (o - 1) * D
             MomentNames[d1] = "lambda [$o ,$d]"
         end
-        MomentNames[cInd+d] = "gamma [$d]"
         if counterType != 1
+            MomentNames[cInd+d] = "gamma [$d]"
             MomentNames[dInd+d] = "gammaPrime [$d]"
-        else
-            if d == baseIndex
-                MomentNames[dInd+d] = "gammaPrime [$d]"
-            end
-        end
-
-        if counterType != 1
             MomentNames[bInd+d-1] = "WagePrime [$d] "
         end
+    end
+    if counterType == 1
+        # reduced autarky layout: only the single counterfactual moment at col D^2+1
+        # (baseline price-index moments dropped as redundant).
+        MomentNames[D^2+1] = "gammaPrime [$baseIndex]"
     end
 
     if GravityMomentFirstApproach == 1

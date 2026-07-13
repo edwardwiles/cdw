@@ -61,11 +61,17 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		Ind_Moments, IndCDF_Cells = precalcIndependence(Ū, useParams)
 	end
 
-	# trade share moments + gamma + gammaPrime 
+	# trade share moments + gamma + gammaPrime
 	numMoments = D^2 + 2 * D
 
 	if counterType != 1
 		numMoments += (D - 1)
+	else
+		# autarky: drop the D baseline price-index moments (each is the exact sum of that
+		# destination's D trade-share moments, since shares sum to 1) and the D-1 unused
+		# counterfactual placeholders (only baseIndex has a counterfactual under autarky).
+		# Keep D^2 trade shares + 1 counterfactual price-index moment.
+		numMoments = D^2 + 1
 	end
 
 	# we add the condition that E[Ubar] =1
@@ -110,7 +116,9 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	end
 
 
-	nOuterLoopMoments = ((GravityMomentFirstApproach == 1) ? 1 : 0 ) + ( (independenceMoment == 1) ? 1 : 0 )
+	# gravMoment (double-diff ln A ⟂ double-diff ln τ) is F-independent for UoModel=1, so it is an
+	# OUTER constraint on θ (the A's) rather than an inner-loop moment matched over F.
+	nOuterLoopMoments = ((GravityMomentFirstApproach == 1) ? 1 : 0 ) + ( (independenceMoment == 1) ? 1 : 0 ) + ( (gravMoment == 1) ? 1 : 0 )
 	outer_constr_index = numMoments + 1 - nOuterLoopMoments
 	numMomentInnerSimple = numMoments - nOuterLoopMoments
 	outer_constr_index_simple = outer_constr_index

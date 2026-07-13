@@ -1,0 +1,21 @@
+=== EXP a4_o_multi: use_jac=1 outer_algo=5 outer_hess=auto outer_maxit=25 inner_algo=0 ===
+csw settings:
+12:algorithm    5
+258:eval_fcga         yes
+263:feastol      1e-06
+268:feastol_abs  0.001
+309:hessopt      auto
+402:maxit        25
+682:opttol       1e-06
+687:opttol_abs   0.001
+inner settings:
+12:algorithm    0
+292:hessopt      exact
+378:maxit        100
+EXP_BETA=0.01
+scratch_exp/run_experiment.sh: line 35: 2439879 Segmentation fault      timeout 1500 env EXP_USE_JAC="${USE_JAC}" EXP_BETA="${BETA}" julia --project=. run_master.jl > "$LOG" 2>&1
+TAG=a4_o_multi exit=139 wall_s=123
+bounds(δ,κlo,κhi)=1.0,0.004305888096648669,0.3018519354635021
+--- OUTER_SOLVE lines ---
+======================================================================
+PHASE4_DONE

@@ -1,10 +1,22 @@
+function withinTransform(z)
+    # Two-way (origin=row, destination=col) fixed-effects "within" residual of log(z):
+    #   z̃_od = ln z_od - mean_o(ln z) - mean_d(ln z) + grand_mean(ln z)
+    # (subtract both margins, ADD BACK the grand mean). By Frisch–Waugh–Lovell, the moment
+    #   Σ_od (within lnτ)·(within lnA) = 0  reproduces EXACTLY the coefficient of an OLS gravity
+    # regression with origin + destination fixed effects — verified numerically (gravity_check.jl).
+    # eltype-generic so it passes ForwardDiff Duals.
+    lz = log.(z)
+    D = size(z, 1)
+    return lz .- (sum(lz, dims = 2) ./ D) .- (sum(lz, dims = 1) ./ D) .+ (sum(lz) / D^2)
+end
+
 function doubleDiff(z)
-    # computes Delta Delta of variable z, see theory note 
+    # computes Delta Delta of variable z, see theory note
     #deltaZ = (log.(z[:, :]) .- log.(z[1, :])) .- (log.(z[:, 2]) .- log.(z[1, 2]))
     D = size(z,1)
-    deltaZ = zeros(D,D)
+    deltaZ = zeros(eltype(z), D, D)   # eltype(z) so ForwardDiff Duals pass through (autodiff path)
     for o=1:D
-        @.deltaZ[o,:] = (log.(z[o, :]) .- log.(z[1, :])) .- (log.(z[o, 2]) .- log.(z[1, 2]))  
+        @.deltaZ[o,:] = (log.(z[o, :]) .- log.(z[1, :])) .- (log.(z[o, 2]) .- log.(z[1, 2]))
     end
 
     return deltaZ
