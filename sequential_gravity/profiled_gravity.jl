@@ -276,6 +276,7 @@ struct DestInversion{T}
     converged::Bool
     ref::Int
     ρ::T
+    stats::NamedTuple
 end
 
 # ----------------------------------------------------------------------------------------------
@@ -478,7 +479,11 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
     gerr = maximum(abs.(share .- λ̂))
     gnorm = norm([share[o] - λ̂[o] for o in fi])
     fval = st.logdenom - dot(λ̂, u)
-    return DestInversion(u, share, gerr, fval, gnorm, iter, converged && gerr < tol, ref, T(ρ))
+    # `st` (V, logdenom, rweight, share, W) is the converged dest_stats result at `u` -- returned
+    # so callers (e.g. influence_function via seq_gravcol) can reuse it instead of recomputing an
+    # identical O(S·D) pass. Safe to return by reference: `ws` is allocated fresh per call and
+    # never touched again after this function returns (see _InvWorkspace above).
+    return DestInversion(u, share, gerr, fval, gnorm, iter, converged && gerr < tol, ref, T(ρ), st)
 end
 
 # ----------------------------------------------------------------------------------------------
@@ -549,10 +554,13 @@ perturbation `ξ_free[s,k]=Vexp[s]·(W[s,o]−λ̂[o])` (k indexes free origins 
 converged inversion.
 """
 function draw_level_objects(log_x::AbstractMatrix, p::AbstractVector, u::AbstractVector,
-                            λ̂::AbstractVector; ref::Int = 1, ρ::Real = 0.0)
+                            λ̂::AbstractVector; ref::Int = 1, ρ::Real = 0.0,
+                            precomputed_st::Union{Nothing,NamedTuple} = nothing)
     S, D = size(log_x)
-    logp = log.(p)
-    st = dest_stats(log_x, logp, u; ρ = ρ)
+    # If the caller already has the converged dest_stats at this exact `u` (e.g. from
+    # invert_destination's own return value), reuse it instead of recomputing an identical
+    # O(S·D) pass. Default (nothing) reproduces the original behavior exactly.
+    st = precomputed_st === nothing ? dest_stats(log_x, log.(p), u; ρ = ρ) : precomputed_st
     Vexp = exp.(st.V)
     M_d = dot(p, Vexp)
     fi = free_idx(ref, D)
@@ -590,14 +598,17 @@ E_F[ψ_R], and per-destination diagnostics (M_d, cond(H_d), σ_min, adjoint resi
 function influence_function(log_x::AbstractMatrix, p::AbstractVector, u_mat::AbstractMatrix,
                             λ̂_mat::AbstractMatrix, omitted::AbstractVector{<:Integer},
                             logτ::AbstractMatrix, logw::AbstractVector, σ::Real;
-                            ref::Int = 1, ρ::Real = 0.0, scale::Symbol = :R_mean, ridge::Real = 0.0)
+                            ref::Int = 1, ρ::Real = 0.0, scale::Symbol = :R_mean, ridge::Real = 0.0,
+                            precomputed_stats = nothing)
     S, D = size(log_x)
     gr = gravity_residual(u_mat, logτ, logw, σ)
     ψ_R = zeros(float(eltype(log_x)), S)
     per_dest = NamedTuple[]
     scale_div = scale == :R_beta ? gr.S_Q : (scale == :R_mean ? float(D^2) : one(gr.S_Q))
     for d in omitted
-        dlo = draw_level_objects(log_x, p, view(u_mat, :, d), view(λ̂_mat, :, d); ref = ref, ρ = ρ)
+        st_d = precomputed_stats === nothing ? nothing : precomputed_stats[d]
+        dlo = draw_level_objects(log_x, p, view(u_mat, :, d), view(λ̂_mat, :, d); ref = ref, ρ = ρ,
+                                 precomputed_st = st_d)
         fi = dlo.fi
         H = free_hessian(dlo.st, ρ; ref = ref)
         Hr = ridge > 0 ? H + ridge * I : H

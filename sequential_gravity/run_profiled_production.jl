@@ -38,6 +38,19 @@ const DVAL = parse(Int, get(ENV, "DVAL", "4"))
 const OUTER_OPT_FILE = get(ENV, "OUTER_OPT_FILE", joinpath(@__DIR__, "..", "full_aod_diag", "csw_outer_25.opt"))
 const INNER_OPT_FILE = joinpath(@__DIR__, "..", "full_aod_diag", "ek_inner.opt")
 
+# Destination-level parallelism for the D-1 omitted-destination inversions (see
+# full_aod_diag/sequential_inversion_performance/parallelism_report.md: destinations are exactly
+# independent given (log_x, p); validated bit-for-bit identical to serial, ~4.2x on 9 threads).
+# Opt-in: set PARALLEL_INVERSION=true AND launch julia with -t N (N >= D-1) for this to do
+# anything -- with the default 1 julia thread, Threads.@threads degrades to an ordinary serial
+# loop. Off by default so behavior/perf is unchanged unless explicitly requested.
+const PARALLEL_INVERSION = lowercase(get(ENV, "PARALLEL_INVERSION", "false")) in ("1", "true", "yes")
+if PARALLEL_INVERSION
+    BLAS.set_num_threads(1)   # avoid oversubscription vs the outer Threads.@threads over destinations
+    @printf("[PARALLEL_INVERSION=true] julia threads=%d, BLAS threads set to 1\n", Threads.nthreads())
+    Threads.nthreads() == 1 && @warn "PARALLEL_INVERSION=true but Julia was launched with only 1 thread (-t 1); this will run serially. Relaunch with `julia -t N` (N >= D-1) to get any speedup."
+end
+
 params = (
     server=1, user=2, fakeData=1, DFake=DVAL, seedFakeData=889, counterType=1, counterExplicit=0,
     θHat=0, σHat=2.5, baseIndex=2, W=8000, seedU=888,
@@ -114,28 +127,45 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
     (isfinite(μ) && μ > 0) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
     (all(isfinite, uf) && all(isfinite, log_x)) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
-    invert_omitted(p; warm = nothing) = begin
+    # invert_all: shared serial/parallel driver for one full pass over the omitted destinations.
+    # u_init_fn(d) supplies each destination's Newton warm start (nothing = cold). Also returns
+    # `stats`, a length-D Vector{Any} (only `omitted` entries populated) holding each destination's
+    # converged dest_stats result (DestInversion.stats), reused directly by influence_function
+    # below instead of recomputing an identical O(S·D) pass at the same u.
+    function invert_all(p_arg, u_init_fn::Function)
         um = zeros(D, D); um[:, focal] .= uf
-        for d in omitted
-            ui = warm === nothing ? nothing : warm[:, d]
-            inv = invert_destination(log_x, p, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
-                                     maxit = 150, ls_iters = 50, u_init = ui)
-            um[:, d] .= inv.u_full
-            if verbose && !inv.converged
-                @printf("      dest %d NOT converged: iters=%d share_err=%.2e ‖u‖=%.2e\n",
-                        d, inv.iterations, inv.max_abs_share_error, maximum(abs, inv.u_full))
+        stats = Vector{Any}(undef, D)
+        if PARALLEL_INVERSION
+            Threads.@threads for i in eachindex(omitted)
+                d = omitted[i]
+                inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
+                                         maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
+                um[:, d] .= inv.u_full
+                stats[d] = inv.stats
+            end
+        else
+            for d in omitted
+                inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
+                                         maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
+                um[:, d] .= inv.u_full
+                stats[d] = inv.stats
+                if verbose && !inv.converged
+                    @printf("      dest %d NOT converged: iters=%d share_err=%.2e ‖u‖=%.2e\n",
+                            d, inv.iterations, inv.max_abs_share_error, maximum(abs, inv.u_full))
+                end
             end
         end
-        um
+        um, stats
     end
+    invert_omitted(p_arg; warm = nothing) = invert_all(p_arg, d -> warm === nothing ? nothing : warm[:, d])
     p, ok = recover_lfd(θ, EK_moments_focal_norm_directgp!, D + 1)
     if !ok
         verbose && println("    [seq] initial recover_lfd (focal-only) FAILED")
         return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     end
-    local umat, R
+    local umat, R, stats_cur
     try
-        umat = invert_omitted(p; warm = warm)
+        umat, stats_cur = invert_omitted(p; warm = warm)
         R = gravity_residual(umat, logτ, logw, σ).R_mean
     catch e
         verbose && println("    [seq] initial invert_omitted threw: ", e)
@@ -145,7 +175,8 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
     verbose && @printf("    [seq] init: R0=%.4e\n", R)
     col = zeros(W); Rcol = 0.0
     for k in 1:maxit
-        infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_beta)
+        infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ,
+                                  scale = :R_beta, precomputed_stats = stats_cur)
         col = infl.ψ_bar .+ infl.R_beta
         Rcol = infl.R_beta
         abs(R) <= tol && break
@@ -158,15 +189,34 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
             break
         end
         α = 1.0; acc = false
+        # Damping/line-search warm start: the α=1 trial (tried first, as before) is warm-started
+        # from `umat` (the pre-iteration endpoint) exactly as before, and its own result is cached
+        # as the "endpoint-1" solution. Subsequent (smaller) trial alphas warm-start each
+        # destination by INTERPOLATING between the two known endpoint solutions instead of always
+        # restarting from `umat` -- validated ~1.7x fewer total Newton iterations, bit-exact same
+        # accepted trajectory vs always-restart (full_aod_diag/sequential_inversion_performance/
+        # warm_start_report.md). Every trial is still solved to the same tol=1e-8 exact optimum
+        # regardless of warm start, so this only changes solver speed, never the accepted result.
+        um_endpoint1 = nothing; stats_endpoint1 = nothing
         for _ in 1:12
             p_try = (1 - α) .* p .+ α .* p_cand
-            local um_try, R_try
+            local um_try, R_try, stats_try
             try
-                um_try = invert_omitted(p_try; warm = umat); R_try = gravity_residual(um_try, logτ, logw, σ).R_mean
+                if α == 1.0 || um_endpoint1 === nothing
+                    um_try, stats_try = invert_all(p_try, d -> umat[:, d])
+                    if um_endpoint1 === nothing
+                        um_endpoint1 = um_try; stats_endpoint1 = stats_try
+                    end
+                else
+                    um_try, stats_try = invert_all(p_try, d -> (1 - α) .* umat[:, d] .+ α .* um_endpoint1[:, d])
+                end
+                R_try = gravity_residual(um_try, logτ, logw, σ).R_mean
             catch
                 α *= 0.5; continue
             end
-            if isfinite(R_try) && abs(R_try) < abs(R); p = p_try; umat = um_try; R = R_try; acc = true; break; end
+            if isfinite(R_try) && abs(R_try) < abs(R)
+                p = p_try; umat = um_try; R = R_try; stats_cur = stats_try; acc = true; break
+            end
             α *= 0.5
         end
         verbose && @printf("    [seq] iter %d: R_mean -> %.4e  accepted=%s  α=%.4f\n", k, R, acc, acc ? α : 0.0)
