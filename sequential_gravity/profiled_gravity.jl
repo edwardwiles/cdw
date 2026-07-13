@@ -406,6 +406,20 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
     st = _dest_stats!(ws, log_x, logp, u; ρ = ρ)
     local iter = 0
     converged = false
+    # Levenberg-Marquardt damping level for the ρ>0 branch, persisted ACROSS Newton iterations
+    # (standard LM design: grows on a rejected trial, shrinks back towards 0 -- pure Newton -- on
+    # an accepted one, so a well-conditioned solve still gets full quadratic convergence).
+    λ_damp = zero(T)
+    # Diagnostics finding (full_aod_diag/gravity_seeded_initial_solve/): at delta=10, some
+    # destination's target share becomes numerically unreachable under a highly-concentrated LFD
+    # distribution p (cond(H) observed up to 4.7e20). The OLD fixed-direction/backtrack-only line
+    # search let a single ill-conditioned Newton step jump u to ~1e11-1e140 in ONE shot (the
+    # backtrack only shrinks the step LENGTH along that same bad direction, and even the α=1
+    # magnitude check can itself be computed at a numerically-corrupted point once u is that
+    # large, letting the bad step slip through the monotone-decrease check). U_TRIAL_MAX rejects
+    # any trial step BEFORE it's ever evaluated at such a magnitude; the LM damping picks a
+    # different, shorter, safer direction instead of just rescaling the same runaway one.
+    U_TRIAL_MAX = T(1e6)
     for it in 1:maxit
         iter = it
         share = st.share
@@ -416,34 +430,50 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
         end
         grad_free = [share[o] - λ̂[o] for o in fi]
         H = free_hessian(st, ρ; ref = ref)
-        step = try
-            -(H \ grad_free)
-        catch
-            -((H + 1e-12 * I) \ grad_free)
-        end
-        unew = ws.unew; copyto!(unew, u)
+        unew = ws.unew
         if ρ > 0
-            # SMOOTH regime (ρ>0): φ−λ̂·u is C² convex ⇒ Newton + cheap Armijo backtrack converges
-            # quadratically (~1–3 evals/step). The exact line search below is only needed to fight
-            # the hard-max winner-switch kinks; unnecessary (and ~ls_iters× slower) when ρ>0.
-            # Accept the full Newton step on monotone decrease with a tiny slack (NOT Armijo
-            # sufficient-decrease: near the flat minimum the sufficient-decrease target sinks below
-            # float noise in the objective and backtracking would stall short of machine precision).
-            # Near the solution α=1 always passes ⇒ Newton drives the gradient to ~1e-13; far away a
-            # genuine overshoot still increases the objective and is backtracked.
+            # SMOOTH regime (ρ>0): Levenberg-Marquardt damped Newton. Solve (H+λI)·step=-grad for
+            # the current damping λ; accept on the same monotone-decrease-with-slack criterion as
+            # before (near the flat minimum, Armijo sufficient-decrease sinks below float noise),
+            # but ONLY if the trial point's magnitude is safely within U_TRIAL_MAX -- rejecting an
+            # over-large trial BEFORE evaluating the (potentially numerically-corrupted) objective
+            # there. Escalate λ (shrink the effective step) on rejection; relax λ back towards 0
+            # (full Newton) on acceptance, so well-conditioned solves keep quadratic convergence.
             obj_u = st.logdenom - dot(λ̂, u)
             slack = 1e-12 * (1 + abs(obj_u))
-            αstar = 1.0
-            for _ in 1:40
-                for (k, o) in enumerate(fi); unew[o] = u[o] + αstar * step[k]; end
+            accepted = false
+            for _try in 1:30
+                step = try
+                    -((H + λ_damp * I) \ grad_free)
+                catch
+                    λ_damp = max(λ_damp, T(1e-8)) * 10; continue
+                end
+                for (k, o) in enumerate(fi); unew[o] = u[o] + step[k]; end
                 unew[ref] = 0.0
+                if !all(isfinite, unew) || maximum(abs, unew) > U_TRIAL_MAX
+                    λ_damp = max(λ_damp, T(1e-8)) * 10; continue
+                end
                 _, ld = _dest_share!(ws, log_x, logp, unew; ρ = ρ)
-                (ld - dot(λ̂, unew) <= obj_u + slack) && break
-                αstar *= 0.5
+                if isfinite(ld) && (ld - dot(λ̂, unew) <= obj_u + slack)
+                    accepted = true
+                    λ_damp = λ_damp / 3
+                    λ_damp < 1e-12 && (λ_damp = zero(T))
+                    break
+                end
+                λ_damp = max(λ_damp, T(1e-8)) * 10
             end
+            accepted || break   # no safe improving step at ANY damping level: stop, non-converged
+            for (k, o) in enumerate(fi); u[o] = unew[o]; end
+            u[ref] = 0.0
         else
             # HARD-MAX regime (ρ=0): exact line search — bracket the sign change of the directional
             # derivative g'(α)=⟨step, share−λ̂⟩ and bisect (share is only C⁰; kinks are dense).
+            step = try
+                -(H \ grad_free)
+            catch
+                -((H + 1e-12 * I) \ grad_free)
+            end
+            copyto!(unew, u)
             dprime = function (α)
                 for (k, o) in enumerate(fi); unew[o] = u[o] + α * step[k]; end
                 unew[ref] = 0.0
@@ -464,12 +494,14 @@ function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::Abst
                 end
                 αstar = 0.5 * (αlo + αhi)
             end
+            for (k, o) in enumerate(fi); u[o] = u[o] + αstar * step[k]; end
+            u[ref] = 0.0
         end
-        for (k, o) in enumerate(fi); u[o] = u[o] + αstar * step[k]; end
-        u[ref] = 0.0
         # divergence guard: at pathological (extreme-θ) inputs the Newton iterates can run off to
         # huge u (all origins near-tied ⇒ shares insensitive). Bail early instead of grinding to
-        # maxit; the caller treats a non-converged inversion as infeasible.
+        # maxit; the caller treats a non-converged inversion as infeasible. (For rho>0 this is now
+        # a redundant safety net -- accepted LM steps are already bounded by U_TRIAL_MAX --
+        # kept for the rho=0 branch, which is unchanged.)
         if !all(isfinite, u) || maximum(abs, u) > 1e8
             break
         end

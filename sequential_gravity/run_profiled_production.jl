@@ -131,10 +131,24 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
     # u_init_fn(d) supplies each destination's Newton warm start (nothing = cold). Also returns
     # `stats`, a length-D Vector{Any} (only `omitted` entries populated) holding each destination's
     # converged dest_stats result (DestInversion.stats), reused directly by influence_function
-    # below instead of recomputing an identical O(S·D) pass at the same u.
+    # below instead of recomputing an identical O(S·D) pass at the same u; and `all_converged`, a
+    # Bool that is false if ANY destination failed to converge.
+    #
+    # Diagnostics finding (full_aod_diag/gravity_seeded_initial_solve/): at large divergence
+    # budgets, a destination's target share can become numerically unreachable under the current
+    # LFD weights (ill-conditioned Hessian). invert_destination correctly reports
+    # `converged=false` in that case, but historically NOTHING checked it here -- the (possibly
+    # garbage) u_full was written into `um` regardless, silently corrupting gravity_residual and
+    # producing nonsensical R_mean values (observed up to ~1e272). The Levenberg-Marquardt damped
+    # Newton step in profiled_gravity.jl now prevents the numeric blow-up itself in every case
+    # tested, but this explicit check is kept as a second, independent line of defense: if ANY
+    # destination fails to converge for ANY reason, the caller treats the whole evaluation as
+    # infeasible rather than relying on the resulting R_mean happening to be large enough to fail
+    # its own tolerance check.
     function invert_all(p_arg, u_init_fn::Function)
         um = zeros(D, D); um[:, focal] .= uf
         stats = Vector{Any}(undef, D)
+        all_converged = Threads.Atomic{Bool}(true)
         if PARALLEL_INVERSION
             Threads.@threads for i in eachindex(omitted)
                 d = omitted[i]
@@ -142,6 +156,7 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
                                          maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
                 um[:, d] .= inv.u_full
                 stats[d] = inv.stats
+                inv.converged || (all_converged[] = false)
             end
         else
             for d in omitted
@@ -149,13 +164,14 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
                                          maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
                 um[:, d] .= inv.u_full
                 stats[d] = inv.stats
-                if verbose && !inv.converged
-                    @printf("      dest %d NOT converged: iters=%d share_err=%.2e ‖u‖=%.2e\n",
+                if !inv.converged
+                    all_converged[] = false
+                    verbose && @printf("      dest %d NOT converged: iters=%d share_err=%.2e ‖u‖=%.2e\n",
                             d, inv.iterations, inv.max_abs_share_error, maximum(abs, inv.u_full))
                 end
             end
         end
-        um, stats
+        um, stats, all_converged[]
     end
     invert_omitted(p_arg; warm = nothing) = invert_all(p_arg, d -> warm === nothing ? nothing : warm[:, d])
     p, ok = recover_lfd(θ, EK_moments_focal_norm_directgp!, D + 1)
@@ -165,7 +181,11 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
     end
     local umat, R, stats_cur
     try
-        umat, stats_cur = invert_omitted(p; warm = warm)
+        umat, stats_cur, all_ok_init = invert_omitted(p; warm = warm)
+        if !all_ok_init
+            verbose && println("    [seq] initial invert_omitted: at least one destination did NOT converge -- treating as infeasible")
+            return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
+        end
         R = gravity_residual(umat, logτ, logw, σ).R_mean
     catch e
         verbose && println("    [seq] initial invert_omitted threw: ", e)
@@ -200,21 +220,24 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
         um_endpoint1 = nothing; stats_endpoint1 = nothing
         for _ in 1:12
             p_try = (1 - α) .* p .+ α .* p_cand
-            local um_try, R_try, stats_try
+            local um_try, R_try, stats_try, all_ok_try
             try
                 if α == 1.0 || um_endpoint1 === nothing
-                    um_try, stats_try = invert_all(p_try, d -> umat[:, d])
+                    um_try, stats_try, all_ok_try = invert_all(p_try, d -> umat[:, d])
                     if um_endpoint1 === nothing
                         um_endpoint1 = um_try; stats_endpoint1 = stats_try
                     end
                 else
-                    um_try, stats_try = invert_all(p_try, d -> (1 - α) .* umat[:, d] .+ α .* um_endpoint1[:, d])
+                    um_try, stats_try, all_ok_try = invert_all(p_try, d -> (1 - α) .* umat[:, d] .+ α .* um_endpoint1[:, d])
                 end
                 R_try = gravity_residual(um_try, logτ, logw, σ).R_mean
             catch
                 α *= 0.5; continue
             end
-            if isfinite(R_try) && abs(R_try) < abs(R)
+            # require BOTH an improving R and every destination having actually converged --
+            # a non-converged destination's u_full is not trustworthy even if the resulting
+            # R_try happens to look like an improvement (see invert_all's docstring above).
+            if all_ok_try && isfinite(R_try) && abs(R_try) < abs(R)
                 p = p_try; umat = um_try; R = R_try; stats_cur = stats_try; acc = true; break
             end
             α *= 0.5
