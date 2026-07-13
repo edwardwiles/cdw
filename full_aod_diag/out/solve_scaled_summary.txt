@@ -1,0 +1,4 @@
+variant=full+sensitivity-scaling  D=4
+kappa_lower = 0.055807  (status=-400)   [unscaled full stalled at 0.018113]
+kappa_upper = 0.155832  (status=-400)   [unscaled full 0.154415]
+width       = 0.100025

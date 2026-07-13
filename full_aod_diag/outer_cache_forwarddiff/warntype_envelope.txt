@@ -1,0 +1,120 @@
+MethodInstance for envelope_scalar_div_ctx(::Vector{Float64}, ::@NamedTuple{U::Matrix{Float64}, γobj::@NamedTuple{wHat::Vector{Float64}, L::Matrix{Float64}, LPrime::Matrix{Float64}, τ::Matrix{Float64}, τPrime::Matrix{Float64}, P::Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, PMM::Vector{Float64}, σ_Moments::Vector{Float64}, Moments_CS::Matrix{Float64}, baseIndex::Int64, indicators::@NamedTuple{counterExplicit::Int64, counterType::Int64, θConstant::Int64, gravMoment::Int64, localGravityMoment::Int64, GravityMomentFirstApproach::Int64, sameMarginalsMoment::Int64, independenceMoment::Int64, momentOrder::Int64, momentOrderForBaseIndex::Int64, IndMomentOrder::Int64, OuterScaling::Int64, usePMM::Int64, UoModel::Int64, NormalizeMoments::Int64, useConfidenceIntervals::Int64}, wPrimeHat::Vector{Float64}, Uσ::Matrix{Float64}, UPow_scratch::Matrix{Float64}, UσPow_scratch::Matrix{Float64}, Ū::Matrix{Float64}, μHat::Float64, D::Int64, CDF_Moments::Matrix{Float64}, Ind_Moments::Matrix{Float64}, cHat::Matrix{Float64}, IndCDF_Cells::Vector{Vector{Int64}}, SamplingWeights::Vector{Float64}, refIndex1::Int64, upper_moment_start_index::Int64, numMomentsSimple::Int64, moments_without_var::Vector{Int64}}, λ::Vector{Float64}, arg1::Vector{Float64}, d::Int64, outer_constr_index::Int64})
+  from envelope_scalar_div_ctx(θ::AbstractVector, ctx) @ Main ~/gravity_robustness/trade_robustness_modular/full_aod_diag/ad_benchmark/derivative_core.jl:50
+Arguments
+  #self#::Core.Const(Main.envelope_scalar_div_ctx)
+  θ::Vector{Float64}
+  ctx::@NamedTuple{U::Matrix{Float64}, γobj::@NamedTuple{wHat::Vector{Float64}, L::Matrix{Float64}, LPrime::Matrix{Float64}, τ::Matrix{Float64}, τPrime::Matrix{Float64}, P::Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, PMM::Vector{Float64}, σ_Moments::Vector{Float64}, Moments_CS::Matrix{Float64}, baseIndex::Int64, indicators::@NamedTuple{counterExplicit::Int64, counterType::Int64, θConstant::Int64, gravMoment::Int64, localGravityMoment::Int64, GravityMomentFirstApproach::Int64, sameMarginalsMoment::Int64, independenceMoment::Int64, momentOrder::Int64, momentOrderForBaseIndex::Int64, IndMomentOrder::Int64, OuterScaling::Int64, usePMM::Int64, UoModel::Int64, NormalizeMoments::Int64, useConfidenceIntervals::Int64}, wPrimeHat::Vector{Float64}, Uσ::Matrix{Float64}, UPow_scratch::Matrix{Float64}, UσPow_scratch::Matrix{Float64}, Ū::Matrix{Float64}, μHat::Float64, D::Int64, CDF_Moments::Matrix{Float64}, Ind_Moments::Matrix{Float64}, cHat::Matrix{Float64}, IndCDF_Cells::Vector{Vector{Int64}}, SamplingWeights::Vector{Float64}, refIndex1::Int64, upper_moment_start_index::Int64, numMomentsSimple::Int64, moments_without_var::Vector{Int64}}, λ::Vector{Float64}, arg1::Vector{Float64}, d::Int64, outer_constr_index::Int64}
+Locals
+  @_4::UNION{NOTHING, TUPLE{INT64, INT64}}
+  val::Nothing
+  s::Float64
+  Gj::SubArray{Float64, 2, Matrix{Float64}, Tuple{Base.Slice{Base.OneTo{Int64}}, UnitRange{Int64}}, true}
+  H::Matrix{Float64}
+  T::Type{Float64}
+  N::Int64
+  @_11::UNION{NOTHING, TUPLE{INT64, INT64}}
+  draw::Int64
+  acc::Float64
+  j::Int64
+Body::Float64
+1 ─       Core.NewvarNode(:(val))
+│   %2  = Main.size::Core.Const(size)
+│   %3  = Base.getproperty(ctx, :U)::Matrix{Float64}
+│         (N = (%2)(%3, 1))
+│   %5  = Main.eltype::Core.Const(eltype)
+│         (T = (%5)(θ))
+│   %7  = Main.zeros::Core.Const(zeros)
+│   %8  = T::Core.Const(Float64)
+│   %9  = N::Int64
+│   %10 = Main.:+::Core.Const(+)
+│   %11 = Base.getproperty(ctx, :d)::Int64
+│   %12 = (%10)(%11, 2)::Int64
+│         (H = (%7)(%8, %9, %12))
+│   %14 = Main.moment_map!::Core.Const(Main.moment_map!)
+│   %15 = H::Matrix{Float64}
+│   %16 = Base.getproperty(ctx, :U)::Matrix{Float64}
+│   %17 = Base.getproperty(ctx, :γobj)::@NamedTuple{wHat::Vector{Float64}, L::Matrix{Float64}, LPrime::Matrix{Float64}, τ::Matrix{Float64}, τPrime::Matrix{Float64}, P::Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, PMM::Vector{Float64}, σ_Moments::Vector{Float64}, Moments_CS::Matrix{Float64}, baseIndex::Int64, indicators::@NamedTuple{counterExplicit::Int64, counterType::Int64, θConstant::Int64, gravMoment::Int64, localGravityMoment::Int64, GravityMomentFirstApproach::Int64, sameMarginalsMoment::Int64, independenceMoment::Int64, momentOrder::Int64, momentOrderForBaseIndex::Int64, IndMomentOrder::Int64, OuterScaling::Int64, usePMM::Int64, UoModel::Int64, NormalizeMoments::Int64, useConfidenceIntervals::Int64}, wPrimeHat::Vector{Float64}, Uσ::Matrix{Float64}, UPow_scratch::Matrix{Float64}, UσPow_scratch::Matrix{Float64}, Ū::Matrix{Float64}, μHat::Float64, D::Int64, CDF_Moments::Matrix{Float64}, Ind_Moments::Matrix{Float64}, cHat::Matrix{Float64}, IndCDF_Cells::Vector{Vector{Int64}}, SamplingWeights::Vector{Float64}, refIndex1::Int64, upper_moment_start_index::Int64, numMomentsSimple::Int64, moments_without_var::Vector{Int64}}
+│         (%14)(%15, θ, %16, %17)
+│   %19 = H::Matrix{Float64}
+│   %20 = Main.:(:)::Core.Const(Colon())
+│   %21 = Main.:(:)::Core.Const(Colon())
+│   %22 = Main.:+::Core.Const(+)
+│   %23 = Base.getproperty(ctx, :outer_constr_index)::Int64
+│   %24 = (%22)(1, %23)::Int64
+│   %25 = (%21)(3, %24)::Core.PartialStruct(UnitRange{Int64}, Any[Core.Const(3), Int64])
+│         (Gj = (view)(%19, %20, %25))
+│   %27 = Main.zero::Core.Const(zero)
+│   %28 = T::Core.Const(Float64)
+│         (s = (%27)(%28))
+│         nothing
+│   %31 = Main.:(:)::Core.Const(Colon())
+│   %32 = N::Int64
+│   %33 = (%31)(1, %32)::Core.PartialStruct(UnitRange{Int64}, Any[Core.Const(1), Int64])
+│         (@_4 = Base.iterate(%33))
+│   %35 = @_4::UNION{NOTHING, TUPLE{INT64, INT64}}
+│   %36 = (%35 === nothing)::Bool
+│   %37 = Base.not_int(%36)::Bool
+└──       goto #7 if not %37
+2 ┄ %39 = @_4::Tuple{Int64, Int64}
+│         (draw = Core.getfield(%39, 1))
+│   %41 = Core.getfield(%39, 2)::Int64
+│   %42 = Main.zero::Core.Const(zero)
+│   %43 = T::Core.Const(Float64)
+│         (acc = (%42)(%43))
+│   %45 = Main.:(:)::Core.Const(Colon())
+│   %46 = Main.:-::Core.Const(-)
+│   %47 = Base.getproperty(ctx, :outer_constr_index)::Int64
+│   %48 = (%46)(%47, 1)::Int64
+│   %49 = (%45)(1, %48)::Core.PartialStruct(UnitRange{Int64}, Any[Core.Const(1), Int64])
+│         (@_11 = Base.iterate(%49))
+│   %51 = @_11::UNION{NOTHING, TUPLE{INT64, INT64}}
+│   %52 = (%51 === nothing)::Bool
+│   %53 = Base.not_int(%52)::Bool
+└──       goto #5 if not %53
+3 ┄ %55 = @_11::Tuple{Int64, Int64}
+│         (j = Core.getfield(%55, 1))
+│   %57 = Core.getfield(%55, 2)::Int64
+│   %58 = Main.:+::Core.Const(+)
+│   %59 = acc::Float64
+│   %60 = Main.:*::Core.Const(*)
+│   %61 = Base.getproperty(ctx, :λ)::Vector{Float64}
+│   %62 = j::Int64
+│   %63 = Base.getindex(%61, %62)::Float64
+│   %64 = Gj::Core.PartialStruct(SubArray{Float64, 2, Matrix{Float64}, Tuple{Base.Slice{Base.OneTo{Int64}}, UnitRange{Int64}}, true}, Any[Matrix{Float64}, Core.PartialStruct(Tuple{Base.Slice{Base.OneTo{Int64}}, UnitRange{Int64}}, Any[Base.Slice{Base.OneTo{Int64}}, Core.PartialStruct(UnitRange{Int64}, Any[Core.Const(3), Int64])]), Int64, Core.Const(1)])
+│   %65 = draw::Int64
+│   %66 = j::Int64
+│   %67 = Base.getindex(%64, %65, %66)::Float64
+│   %68 = (%60)(%63, %67)::Float64
+│         (acc = (%58)(%59, %68))
+│         (@_11 = Base.iterate(%49, %57))
+│   %71 = @_11::UNION{NOTHING, TUPLE{INT64, INT64}}
+│   %72 = (%71 === nothing)::Bool
+│   %73 = Base.not_int(%72)::Bool
+└──       goto #5 if not %73
+4 ─       goto #3
+5 ┄ %76 = Main.:+::Core.Const(+)
+│   %77 = s::Float64
+│   %78 = Main.:*::Core.Const(*)
+│   %79 = Base.getproperty(ctx, :arg1)::Vector{Float64}
+│   %80 = draw::Int64
+│   %81 = Base.getindex(%79, %80)::Float64
+│   %82 = acc::Float64
+│   %83 = (%78)(%81, %82)::Float64
+│         (s = (%76)(%77, %83))
+│         (@_4 = Base.iterate(%33, %41))
+│   %86 = @_4::UNION{NOTHING, TUPLE{INT64, INT64}}
+│   %87 = (%86 === nothing)::Bool
+│   %88 = Base.not_int(%87)::Bool
+└──       goto #7 if not %88
+6 ─       goto #2
+7 ┄       (val = nothing)
+│         nothing
+│         val
+│   %94 = Main.:*::Core.Const(*)
+│   %95 = Main.:/::Core.Const(/)
+│   %96 = N::Int64
+│   %97 = (%95)(1.0e10, %96)::Float64
+│   %98 = s::Float64
+│   %99 = (%94)(%97, %98)::Float64
+└──       return %99
+

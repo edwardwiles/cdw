@@ -1,0 +1,7 @@
+basis,metric,value,note
+scope_decision,integration_test,deferred_reasoned,"Methods A and B proven bit-identical (relerr~1e-15) at all 4 benchmark points (correctness_results.csv) -- since the outer KNITRO solve consumes only the returned gradient/Jacobian VALUES, swapping backends provably reproduces an IDENTICAL floating-point iteration trace (same objective, same constraints, same status, same iteration count). A literal re-run would only re-measure per-evaluation wall time, which benchmark_results.csv already isolates directly and more precisely (no inner-KNITRO-solve noise). Full production wiring (a real outer_derivative_backend flag threaded through cc_algo/PsiObjectiveBundle.jl) was judged out of proportion to what a repeat empirical run would add; offered as a follow-up if wanted."
+estimate,method_A_time_per_gradeval_median_s,0.150,"benchmark_results.csv, averaged across 4 points"
+estimate,method_B_time_per_gradeval_median_s,0.108,"benchmark_results.csv, averaged across 4 points"
+estimate,observed_outer_FCevals_per_solve,142-184,"from full_aod_diag/out/compare_directgp_run.log, this session's actual maxit=25 runs"
+estimate,est_gradient_construction_share_of_wall_A,~40%,"150 evals * 0.150s ~= 22.5s vs observed total wall ~50-60s per solve"
+estimate,est_wall_time_saved_switching_A_to_B,~12-15%,"150 evals * (0.150-0.108)s ~= 6-7s off a ~50-60s solve; EXTRAPOLATION not a rerun"

@@ -1,0 +1,65 @@
+==============================================================================
+CONDITIONING DIAGNOSTIC  variant=reduced   D=4  baseIndex=2  σ=2.5
+l=23 total params, 9 FREE  (3 of them A_od)
+nTotalMoments d = 18   outer_constr_index = 18
+free indices: [1, 3, 4, 5, 6, 7, 13, 14, 15]
+==============================================================================
+
+-- moment values E_{F*}[g] (should be ~0 for matched moments) --
+  max|E[g]| over the 18 moments = 0.0147
+
+-- parameter & gradient SCALING by group (Section 4e) --
+  group=struct  n=6
+     |θ|      min/med/max = (0.167, 0.883, 0.97)
+     |∂κ/∂θ|  min/med/max = (0.0, 0.186, 1.81)
+     ‖J col‖  min/med/max = (1.77, 2.43, 2.91)
+  group=A  n=3
+     |θ|      min/med/max = (1.0, 1.0, 1.0)
+     |∂κ/∂θ|  min/med/max = (0.0128, 0.0185, 0.0512)
+     ‖J col‖  min/med/max = (0.028, 0.0403, 0.0787)
+
+-- SVD of free moment Jacobian  J_free  (18×9)  [Section 4a,c] --
+  rank(tol=σmax·1e-8) = 9  of 9 free params
+  σmax = 2.912   σmin = 0.01684
+  cond(J_free) = σmax/σmin = 172.9
+  #singular values < σmax·1e-6 (near-null dim) = 0
+  full singular spectrum (log10):
+     σ[1] = 2.9116e+00   log10=0.464
+     σ[2] = 2.8460e+00   log10=0.454
+     σ[3] = 2.6997e+00   log10=0.431
+     σ[4] = 2.1567e+00   log10=0.334
+     σ[5] = 1.9266e+00   log10=0.285
+     σ[6] = 1.7708e+00   log10=0.248
+     σ[7] = 5.6916e-02   log10=-1.245
+     σ[8] = 2.7595e-02   log10=-1.559
+     σ[9] = 1.6838e-02   log10=-1.774
+
+-- near-null direction structure (Section 4a: FE flats in ln A_od?) --
+  (energy fractions of each near-null dir, in dlnA coords, on the free-A support)
+  rank | σ_k       | A-energy frac | originFE | destFE | doubleDemean | struct-energy
+     9 | 1.684e-02 |    1.0      | 0.324   | 0.0    | 0.0         | 0.001
+     8 | 2.759e-02 |    1.0      | 0.961   | 0.0    | 0.0         | 0.004
+     7 | 5.692e-02 |    1.0      | 0.986   | 0.0    | 0.0         | 0.028
+     6 | 1.771e+00 |    0.0      | 0.991   | 0.0    | 0.0         | 1.0
+     5 | 1.927e+00 |    0.0      | 0.991   | 0.0    | 0.0         | 1.0
+     4 | 2.157e+00 |    0.025    | 0.978   | 0.0    | 0.0         | 1.0
+     3 | 2.700e+00 |    0.0      | 0.99    | 0.0    | 0.0         | 1.0
+
+-- κ-objective sensitivity along the near-null directions (Section 4b) --
+  ‖∇κ (free)‖ = 2.533
+   |∇κ · v_9| = 4.223e-06   (σ_9=1.68e-02)
+   |∇κ · v_8| = 1.523e-03   (σ_8=2.76e-02)
+   |∇κ · v_7| = 1.744e-02   (σ_7=5.69e-02)
+   |∇κ · v_6| = 5.220e-03   (σ_6=1.77e+00)
+   |∇κ · v_5| = 3.554e-03   (σ_5=1.93e+00)
+   |∇κ · v_4| = 1.744e+00   (σ_4=2.16e+00)
+   |∇κ · v_3| = 4.813e-03   (σ_3=2.70e+00)
+
+-- Section 5 preview: reparametrize free-A block to double-demeaned coords --
+  free-A count = 3;  rank of double-demean projector = 0  (=(D-1)^2=9 for a full block)
+  reparam Jacobian σmin(all)=0.000e+00   σmin(nonzero)=1.771e+00   cond(nonzero)=1.644
+  (compare raw-A cond(J_free) above; if the near-null was FE flats, the demeaned
+   block drops the 3 FE directions and the remaining spectrum is well-conditioned.)
+
+Saved: /bbkinghome/edav/gravity_robustness/trade_robustness_modular/full_aod_diag/out/cond_reduced.jld2
+DONE (reduced)

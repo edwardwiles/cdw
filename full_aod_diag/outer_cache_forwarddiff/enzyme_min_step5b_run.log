@@ -1,0 +1,3 @@
+>>> ForwardDiff: [5.693953814219382]
+>>> Enzyme with set_runtime_activity(Reverse): [0.0]  finite=true  nan_count=0
+>>> matches ForwardDiff: false

@@ -1,0 +1,5 @@
+variant=gammad_norm  D=4  baseIndex=2  free=18  freeA=16  maxit=25
+kappa_lower = 0.006534   (status=-400)
+kappa_upper = 0.162269   (status=-400)
+width       = 0.155735
+total wall  = 102.0s

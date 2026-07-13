@@ -1,0 +1,6 @@
+GKS: cannot open display - headless operation mode active
+wrote /bbkinghome/edav/gravity_robustness/trade_robustness_modular/full_aod_diag/out/convergence.png
+full  upper: iters=100  κ=0.15441  opt=0.111  feas=1e-17
+full  lower: iters=79  κ=-0.01811  opt=0.117  feas=4.2e-17
+reduced  upper: iters=100  κ=0.15904  opt=0.171  feas=1.4e-17
+reduced  lower: iters=99  κ=-0.00896  opt=0.0399  feas=3.1e-17

@@ -1,0 +1,3 @@
+config,unique_theta,total_callbacks,inner_solves,grad_computations,cache_hits,wall_time_s,outer_iters,outer_fc,opt_err,kappa,status
+A_current_nocache,5,9,9,4,0,1.229,3,5,0.005627205959304589,0.912028119649117,0
+B_exact_point_cache,5,9,5,4,4,2.193,3,5,0.005627205959304589,0.912028119649117,0

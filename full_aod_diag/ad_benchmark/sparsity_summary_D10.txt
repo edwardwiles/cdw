@@ -1,0 +1,7 @@
+D=10  l=113  d=102  nnz=406/11752  density=0.0345
+trade-share row nnz: min=3 max=3
+counterfactual-price row nnz: 4
+gravity row nnz: 101 / 113
+colors used: 102 / 113  (compression 9.7%)
+dense vs sparse correctness: max abs err = 0.0
+FULL N=8000: dense=6.157s  sparse(steady)=4.535s  sparse_prep=21.434s

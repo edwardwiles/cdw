@@ -1,0 +1,5 @@
+variant=full  D=4  baseIndex=2   (feas/opt/time in the >>> OUTER_SOLVE lines above)
+kappa_lower = 0.034133   (status=-410)
+kappa_upper = 0.120901   (status=-400)
+width       = 0.086767
+total wall  = 28.5s

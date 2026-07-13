@@ -1,0 +1,71 @@
+>>> ForwardDiff: [5.693953814219382]  finite=true
+>>> Enzyme (implicit capture) FAILED: EnzymeRuntimeActivityError: Detected potential need for runtime activity.
+
+Constant memory is stored (or returned) to a differentiable variable and correctness cannot be guaranteed with static activity analysis.
+This might be due to the use of a constant variable as temporary storage for active memo
+>>> Enzyme (Const ctx) FAILED to compile/run: EnzymeRuntimeActivityError: Detected potential need for runtime activity.
+
+Constant memory is stored (or returned) to a differentiable variable and correctness cannot be guaranteed with static activity analysis.
+This might be due to the use of a constant variable as temporary storage for active memory (https://enzyme.mit.edu/julia/stable/faq/#faq-runtime-activity).
+If Enzyme should be able to prove this use non-differentable, open an issue!
+
+To work around this issue, either:
+   a) rewrite this variable to not be conditionally active (fastest performance, slower to setup), or
+   b) set the Enzyme mode to turn on runtime activity (e.g. autodiff(set_runtime_activity(Reverse), ...) ). This will maintain correctness, but may slightly reduce performance.
+
+Failure within method:
+
+f_scratch(::Vector{Float64}, ::ScratchCtx)
+     @ Main ~/gravity_robustness/trade_robustness_modular/full_aod_diag/outer_cache_forwarddiff/minimal_enzyme_nan_step5_scratch.jl:67
+
+Hint: catch this exception as `err` and call `code_typed(err)` to inspect the surrounding code.
+
+Mismatched activity for:   %nodecayed..pre-phi = phi ptr addrspace(10) [ %"new::Array246", %L300.L339_crit_edge ], [ %"new::Array246", %retval238 ], [ %"ctx::ScratchCtx.scratch", %L234 ], !dbg !202 const val:   %"ctx::ScratchCtx.scratch" = load atomic ptr addrspace(10), ptr addrspace(11) %"ctx::ScratchCtx.scratch_ptr" unordered, align 8, !dbg !140, !tbaa !144, !alias.scope !67, !noalias !68, !nonnull !0, !dereferenceable !147, !align !61, !enzyme_type !148, !enzymejl_byref_MUT_REF !0, !enzymejl_source_type_Matrix\7BFloat64\7D !0
+ Julia value causing error:  Unknown object of type Matrix{Float64}
+ LLVM view of erring value:     %"ctx::ScratchCtx.scratch" = load atomic ptr addrspace(10), ptr addrspace(11) %"ctx::ScratchCtx.scratch_ptr" unordered, align 8, !dbg !140, !tbaa !144, !alias.scope !67, !noalias !68, !nonnull !0, !dereferenceable !147, !align !61, !enzyme_type !148, !enzymejl_byref_MUT_REF !0, !enzymejl_source_type_Matrix\7BFloat64\7D !0
+
+Stacktrace:
+ [1] size
+   @ ./array.jl:194
+ [2] axes
+   @ ./abstractarray.jl:98
+ [3] materialize!
+   @ ./broadcast.jl:905
+ [4] materialize!
+   @ ./broadcast.jl:902
+ [5] f_scratch
+   @ ~/gravity_robustness/trade_robustness_modular/full_aod_diag/outer_cache_forwarddiff/minimal_enzyme_nan_step5_scratch.jl:75
+
+>>> STALE-SCRATCH TEST FAILED: EnzymeRuntimeActivityError: Detected potential need for runtime activity.
+
+Constant memory is stored (or returned) to a differentiable variable and correctness cannot be guaranteed with static activity analysis.
+This might be due to the use of a constant variable as temporary storage for active memory (https://enzyme.mit.edu/julia/stable/faq/#faq-runtime-activity).
+If Enzyme should be able to prove this use non-differentable, open an issue!
+
+To work around this issue, either:
+   a) rewrite this variable to not be conditionally active (fastest performance, slower to setup), or
+   b) set the Enzyme mode to turn on runtime activity (e.g. autodiff(set_runtime_activity(Reverse), ...) ). This will maintain correctness, but may slightly reduce performance.
+
+Failure within method:
+
+f_scratch(::Vector{Float64}, ::ScratchCtx)
+     @ Main ~/gravity_robustness/trade_robustness_modular/full_aod_diag/outer_cache_forwarddiff/minimal_enzyme_nan_step5_scratch.jl:67
+
+Hint: catch this exception as `err` and call `code_typed(err)` to inspect the surrounding code.
+
+Mismatched activity for:   %nodecayed..pre-phi = phi ptr addrspace(10) [ %"new::Array246", %L300.L339_crit_edge ], [ %"new::Array246", %retval238 ], [ %"ctx::ScratchCtx.scratch", %L234 ], !dbg !202 const val:   %"ctx::ScratchCtx.scratch" = load atomic ptr addrspace(10), ptr addrspace(11) %"ctx::ScratchCtx.scratch_ptr" unordered, align 8, !dbg !140, !tbaa !144, !alias.scope !67, !noalias !68, !nonnull !0, !dereferenceable !147, !align !61, !enzyme_type !148, !enzymejl_byref_MUT_REF !0, !enzymejl_source_type_Matrix\7BFloat64\7D !0
+ Julia value causing error:  Unknown object of type Matrix{Float64}
+ LLVM view of erring value:     %"ctx::ScratchCtx.scratch" = load atomic ptr addrspace(10), ptr addrspace(11) %"ctx::ScratchCtx.scratch_ptr" unordered, align 8, !dbg !140, !tbaa !144, !alias.scope !67, !noalias !68, !nonnull !0, !dereferenceable !147, !align !61, !enzyme_type !148, !enzymejl_byref_MUT_REF !0, !enzymejl_source_type_Matrix\7BFloat64\7D !0
+
+Stacktrace:
+ [1] size
+   @ ./array.jl:194
+ [2] axes
+   @ ./abstractarray.jl:98
+ [3] materialize!
+   @ ./broadcast.jl:905
+ [4] materialize!
+   @ ./broadcast.jl:902
+ [5] f_scratch
+   @ ~/gravity_robustness/trade_robustness_modular/full_aod_diag/outer_cache_forwarddiff/minimal_enzyme_nan_step5_scratch.jl:75
+

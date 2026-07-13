@@ -1,0 +1,5 @@
+variant=full_autoscale  D=4  baseIndex=2   (feas/opt/time in the >>> OUTER_SOLVE lines above)
+kappa_lower = 0.018113   (status=-101)
+kappa_upper = 0.154415   (status=-400)
+width       = 0.136302
+total wall  = 218.3s

@@ -1,0 +1,5 @@
+variant=A1d_norm  D=4  baseIndex=2  free=18  freeA=12  maxit=25
+kappa_lower = 0.010230   (status=-400)
+kappa_upper = 0.159515   (status=-410)
+width       = 0.149285
+total wall  = 111.1s

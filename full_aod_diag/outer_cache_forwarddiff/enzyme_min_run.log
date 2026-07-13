@@ -1,0 +1,25 @@
+>>> primal grav_scalar = 0.5748708142045764  (finite: true)
+>>> ForwardDiff gradient: [-0.3245881581228922, -0.02107276340515393, 0.3133413876291989, -0.282251279489202, 0.07983666496953869, 0.1795803175162258, -0.6982813216724937, 0.28222784140430723, 0.3471823775282443, 0.5640862704579979, -0.49046361216054996, -0.17279335591079753, -0.30614612846217104, -0.646173625833381, 0.2719713214420667, 0.3049469377967958]
+>>> ForwardDiff finite everywhere: true
+
+>>> STEP 1: withinTransform alone, output=sum(W)
+    ForwardDiff: [-2.7755575615628914e-17, -2.7755575615628914e-17, 0.0, 0.0, 1.3877787807814457e-17, -4.163336342344337e-17, 1.3877787807814457e-17, 0.0, 5.551115123125783e-17, -8.326672684688674e-17, 2.7755575615628914e-17, 0.0, 1.1102230246251565e-16, 0.0, 5.551115123125783e-17, 0.0]  finite=true
+    Enzyme:      [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  finite=true  nan_count=0
+
+>>> STEP 2: grav_scalar (withinTransform(τ Const) .* withinTransform(Aod Active), summed)
+    ForwardDiff: [-0.3245881581228922, -0.02107276340515393, 0.3133413876291989, -0.282251279489202, 0.07983666496953869, 0.1795803175162258, -0.6982813216724937, 0.28222784140430723, 0.3471823775282443, 0.5640862704579979, -0.49046361216054996, -0.17279335591079753, -0.30614612846217104, -0.646173625833381, 0.2719713214420667, 0.3049469377967958]  finite=true
+    Enzyme:      [-0.3245881581228923, -0.021072763405153922, 0.3133413876291989, -0.282251279489202, 0.0798366649695387, 0.17958031751622577, -0.6982813216724936, 0.28222784140430723, 0.3471823775282442, 0.564086270457998, -0.49046361216055, -0.17279335591079753, -0.30614612846217104, -0.6461736258333809, 0.2719713214420668, 0.3049469377967957]  finite=true  nan_count=0
+    relerr vs ForwardDiff (Inf/NaN if any mismatch): 1.9922843583162254e-16
+
+>>> STEP 3: bare sum(;dims=k) reductions only, no log/broadcast-subtract
+    ForwardDiff: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]  finite=true
+    Enzyme:      [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]  finite=true  nan_count=0
+
+================ CONCLUSION ================
+If STEP 3 (bare sum(;dims=k)) already NaNs while step-3-equivalent scalar `sum(A)` alone
+would not, the culprit is Enzyme's reverse rule for `sum(A; dims=k)` on a Matrix -- a
+documented historical weak spot, not anything specific to this project's economics.
+If STEP 1 (withinTransform alone) NaNs but STEP 3 (bare dims-sums) does not, the culprit
+is the COMBINATION (broadcast subtraction of a dims-reduced array back against the
+original, i.e. `lz .- (sum(lz,dims=2)./D)`) -- an implicit broadcast/aliasing interaction,
+not the reduction primitive alone.

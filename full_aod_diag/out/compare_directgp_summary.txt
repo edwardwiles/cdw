@@ -1,0 +1,5 @@
+variant=directgp  D=4  baseIndex=2  free=18  maxit=25
+gamma_p_max = 0.996012  (status=-400) -> kappa_lower = 0.006637
+gamma_p_min = 0.897643  (status=-410) -> kappa_upper = 0.164706
+width       = 0.158069
+total wall  = 107.1s

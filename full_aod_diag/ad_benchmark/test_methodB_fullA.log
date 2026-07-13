@@ -1,0 +1,60 @@
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+ERROR: LoadError: UndefVarError: `withinTransform` not defined in `Main.CounterfactualSensitivity`
+Suggestion: check for spelling errors or missing imports.
+Stacktrace:
+  [1] (::Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64})(θθ::Vector{ForwardDiff.Dual{ForwardDiff.Tag{Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, Float64}, Float64, 12}})
+    @ Main.CounterfactualSensitivity ~/gravity_robustness/trade_robustness_modular/full_aod_diag/PsiObjectiveBundleImplicitMethodB_fullA.jl:216
+  [2] chunk_mode_gradient(f::Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, x::Vector{Float64}, cfg::ForwardDiff.GradientConfig{ForwardDiff.Tag{Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, Float64}, Float64, 12, Vector{ForwardDiff.Dual{ForwardDiff.Tag{Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, Float64}, Float64, 12}}})
+    @ ForwardDiff ~/.julia/packages/ForwardDiff/4J2wz/src/gradient.jl:134
+  [3] gradient
+    @ ~/.julia/packages/ForwardDiff/4J2wz/src/gradient.jl:22 [inlined]
+  [4] gradient(f::Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, x::Vector{Float64}, cfg::ForwardDiff.GradientConfig{ForwardDiff.Tag{Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, Float64}, Float64, 12, Vector{ForwardDiff.Dual{ForwardDiff.Tag{Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, Float64}, Float64, 12}}})
+    @ ForwardDiff ~/.julia/packages/ForwardDiff/4J2wz/src/gradient.jl:17
+  [5] gradient(f::Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}, x::Vector{Float64})
+    @ ForwardDiff ~/.julia/packages/ForwardDiff/4J2wz/src/gradient.jl:17
+  [6] (::Main.CounterfactualSensitivity.var"#make_gravity_grad##2#make_gravity_grad##3"{Main.CounterfactualSensitivity.var"#make_gravity_grad##0#make_gravity_grad##1"{Int64, Adjoint{Float64, Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}}, Vector{Float64}, Matrix{Float64}, Matrix{Float64}, Int64}})(θθ::Vector{Float64})
+    @ Main.CounterfactualSensitivity ~/gravity_robustness/trade_robustness_modular/full_aod_diag/PsiObjectiveBundleImplicitMethodB_fullA.jl:224
+  [7] (::Main.CounterfactualSensitivity.PsiObjectiveBundleImplicitMethodBFullA{@NamedTuple{wHat::Vector{Float64}, L::Matrix{Float64}, LPrime::Matrix{Float64}, τ::Matrix{Float64}, τPrime::Matrix{Float64}, P::Base.ReshapedArray{Float64, 2, Adjoint{Float64, Matrix{Float64}}, Tuple{Base.MultiplicativeInverses.SignedMultiplicativeInverse{Int64}}}, PMM::Vector{Float64}, σ_Moments::Vector{Float64}, Moments_CS::Matrix{Float64}, baseIndex::Int64, indicators::@NamedTuple{counterExplicit::Int64, counterType::Int64, θConstant::Int64, gravMoment::Int64, localGravityMoment::Int64, GravityMomentFirstApproach::Int64, sameMarginalsMoment::Int64, independenceMoment::Int64, momentOrder::Int64, momentOrderForBaseIndex::Int64, IndMomentOrder::Int64, OuterScaling::Int64, usePMM::Int64, UoModel::Int64, NormalizeMoments::Int64, useConfidenceIntervals::Int64}, wPrimeHat::Vector{Float64}, Uσ::Matrix{Float64}, UPow_scratch::Matrix{Float64}, UσPow_scratch::Matrix{Float64}, Ū::Matrix{Float64}, μHat::Float64, D::Int64, CDF_Moments::Matrix{Float64}, Ind_Moments::Matrix{Float64}, cHat::Matrix{Float64}, IndCDF_Cells::Vector{Vector{Int64}}, SamplingWeights::Vector{Float64}, refIndex1::Int64, upper_moment_start_index::Int64, numMomentsSimple::Int64, moments_without_var::Vector{Int64}}})(x::Vector{Float64}, g::Vector{Float64}, θ::Vector{Float64}; h::Vector{Float64}, constr::Vector{Float64}, jac::Vector{Float64})
+    @ Main.CounterfactualSensitivity ~/gravity_robustness/trade_robustness_modular/full_aod_diag/PsiObjectiveBundleImplicitMethodB_fullA.jl:131
+  [8] top-level scope
+    @ ~/gravity_robustness/trade_robustness_modular/full_aod_diag/ad_benchmark/test_methodB_fullA.jl:38
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /bbkinghome/edav/gravity_robustness/trade_robustness_modular/full_aod_diag/ad_benchmark/test_methodB_fullA.jl:38
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+inner solve: std status=0  B status=0  objSol match=true
+x match: true

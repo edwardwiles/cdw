@@ -1,0 +1,5 @@
+[RUN 3] full-A METHOD-B D=10  baseIndex=2  free=101  MU_FIXED=true  maxit=25
+gamma_p_max = 0.965763  (status=-400) -> kappa_lower = 0.056409
+gamma_p_min = 0.829838  (status=-400) -> kappa_upper = 0.267194
+width       = 0.210785
+total wall  = 2756.1s
