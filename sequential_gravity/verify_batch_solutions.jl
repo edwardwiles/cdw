@@ -120,7 +120,7 @@ function verify_one(θstar, δval, label)
     return (divp=divp, δ_ok=δ_ok, focal_resid=maximum(abs.(resid)), nonfocal_share_err=max_nonfocal_share_err, R=R, κ=κ)
 end
 
-BATCH_DIR = joinpath(@__DIR__, "batch_out")
+BATCH_DIR = get(ENV, "VERIFY_BATCH_DIR", joinpath(@__DIR__, "batch_out"))
 for f in sort(readdir(BATCH_DIR))
     endswith(f, ".jld2") || continue
     path = joinpath(BATCH_DIR, f)

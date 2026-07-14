@@ -35,8 +35,18 @@ using .ProfiledGravity
 CS.include(joinpath(@__DIR__, "PsiObjectiveBundleImplicitMethodB.jl"))
 
 const DVAL = parse(Int, get(ENV, "DVAL", "4"))
+const WVAL = parse(Int, get(ENV, "WVAL", "8000"))
 const OUTER_OPT_FILE = get(ENV, "OUTER_OPT_FILE", joinpath(@__DIR__, "..", "full_aod_diag", "csw_outer_25.opt"))
 const INNER_OPT_FILE = joinpath(@__DIR__, "..", "full_aod_diag", "ek_inner.opt")
+
+# Seed the first (currently gravity-blind, D+1-moment) CC solve at each theta with the linearized
+# gravity moment from the PREVIOUS theta's converged (p, umat) instead of solving blind. Ported
+# from full_aod_diag/gravity_seeded_initial_solve/run_real_outer_comparison.jl (evaluated there and
+# REJECTED as worse on every axis at delta=10/upper -- see
+# full_aod_diag/gravity_seeded_initial_solve/README.md -- kept here, env-gated and off by default,
+# purely so this task's full delta-grid/both-bound comparison can be produced without a second
+# ~400-line driver copy).
+const GRAVITY_SEED = lowercase(get(ENV, "GRAVITY_SEED", "false")) in ("1", "true", "yes")
 
 # Destination-level parallelism for the D-1 omitted-destination inversions (see
 # full_aod_diag/sequential_inversion_performance/parallelism_report.md: destinations are exactly
@@ -51,16 +61,39 @@ if PARALLEL_INVERSION
     Threads.nthreads() == 1 && @warn "PARALLEL_INVERSION=true but Julia was launched with only 1 thread (-t 1); this will run serially. Relaunch with `julia -t N` (N >= D-1) to get any speedup."
 end
 
+# Additive-only timing instrumentation (zero economic/control-flow change): the existing
+# r.cache.t_inner/t_grad (cc_algo/outer_eval_cache.jl) separate "inner CC solve" from "outer
+# gradient" but don't isolate destination-inversion time (the piece this whole perf effort has been
+# about) or influence_function/gravity_residual time as their own buckets. Threads.Atomic since
+# PARALLEL_INVERSION runs the destination loop via Threads.@threads -- plain Ref addition there
+# would be a data race.
+const SEQ_TIMING = (
+    dest_inv_s = Threads.Atomic{Float64}(0.0),
+    influence_s = Threads.Atomic{Float64}(0.0),
+    gravity_resid_s = Threads.Atomic{Float64}(0.0),
+    n_dest_inversions = Threads.Atomic{Int}(0),
+    n_dest_nonconverged = Threads.Atomic{Int}(0),
+)
+seq_timing_snapshot() = (dest_inv_s = SEQ_TIMING.dest_inv_s[], influence_s = SEQ_TIMING.influence_s[],
+                         gravity_resid_s = SEQ_TIMING.gravity_resid_s[],
+                         n_dest_inversions = SEQ_TIMING.n_dest_inversions[],
+                         n_dest_nonconverged = SEQ_TIMING.n_dest_nonconverged[])
+seq_timing_diff(after, before) = (dest_inv_s = after.dest_inv_s - before.dest_inv_s,
+                                  influence_s = after.influence_s - before.influence_s,
+                                  gravity_resid_s = after.gravity_resid_s - before.gravity_resid_s,
+                                  n_dest_inversions = after.n_dest_inversions - before.n_dest_inversions,
+                                  n_dest_nonconverged = after.n_dest_nonconverged - before.n_dest_nonconverged)
+
 params = (
     server=1, user=2, fakeData=1, DFake=DVAL, seedFakeData=889, counterType=1, counterExplicit=0,
-    θHat=0, σHat=2.5, baseIndex=2, W=8000, seedU=888,
+    θHat=0, σHat=2.5, baseIndex=2, W=WVAL, seedU=888,
     importanceSampling=0, importanceSamplingFactor=2, stratifiedSampling=0, IndMomentOrder=5,
     θConstant=0, gravMoment=1, localGravityMoment=0, localGravityCrossMoment=0,
     GravityMomentFirstApproach=0, sameMarginalsMoment=0, NoScalingforSameMartingale=1,
     useCDFforMarginalMatching=0, independenceMoment=0, momentOrder=5, momentOrderForBaseIndex=50,
     ForceFrechetMarginal=0, OuterScaling=1, useParallel=0, usePMM=0, PMMGammaOnly=0,
     NormalizeMoments=0, useConfidenceIntervals=0, ConfidenceLevel=0.05, δGridType=0, δ_ref=1,
-    refIndex1=1, OuterLoop=1, UoModel=1, use_Jacobian=0, calc_δ_star_initial=1, Jac_W=8000,
+    refIndex1=1, OuterLoop=1, UoModel=1, use_Jacobian=0, calc_δ_star_initial=1, Jac_W=WVAL,
     theta_init=0, runLFD=1, runLFDCounterFactual=1,
 )
 
@@ -122,7 +155,8 @@ function divergence_of(p::AbstractVector)
     return acc / W
 end
 
-function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, verbose = false)
+function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing,
+                     warm_p::Union{Nothing,AbstractVector} = nothing, verbose = false)
     μ = θ[1]
     (isfinite(μ) && μ > 0) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
@@ -152,19 +186,27 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
         if PARALLEL_INVERSION
             Threads.@threads for i in eachindex(omitted)
                 d = omitted[i]
+                t0 = time()
                 inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
                                          maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
+                Threads.atomic_add!(SEQ_TIMING.dest_inv_s, time() - t0)
+                Threads.atomic_add!(SEQ_TIMING.n_dest_inversions, 1)
+                inv.converged || Threads.atomic_add!(SEQ_TIMING.n_dest_nonconverged, 1)
                 um[:, d] .= inv.u_full
                 stats[d] = inv.stats
                 inv.converged || (all_converged[] = false)
             end
         else
             for d in omitted
+                t0 = time()
                 inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
                                          maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
+                Threads.atomic_add!(SEQ_TIMING.dest_inv_s, time() - t0)
+                Threads.atomic_add!(SEQ_TIMING.n_dest_inversions, 1)
                 um[:, d] .= inv.u_full
                 stats[d] = inv.stats
                 if !inv.converged
+                    Threads.atomic_add!(SEQ_TIMING.n_dest_nonconverged, 1)
                     all_converged[] = false
                     verbose && @printf("      dest %d NOT converged: iters=%d share_err=%.2e ‖u‖=%.2e\n",
                             d, inv.iterations, inv.max_abs_share_error, maximum(abs, inv.u_full))
@@ -174,7 +216,25 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
         um, stats, all_converged[]
     end
     invert_omitted(p_arg; warm = nothing) = invert_all(p_arg, d -> warm === nothing ? nothing : warm[:, d])
-    p, ok = recover_lfd(θ, EK_moments_focal_norm_directgp!, D + 1)
+    # GRAVITY_SEED (env-gated, off by default -- ported from
+    # full_aod_diag/gravity_seeded_initial_solve/run_real_outer_comparison.jl, evaluated there and
+    # REJECTED, see README.md in that dir): if a prior theta's converged (p, umat) is available,
+    # seed the first CC solve with the linearized gravity moment from that prior point instead of
+    # solving blind (D+1 moments). Falls back to the blind solve otherwise -- identical to baseline
+    # when GRAVITY_SEED=false or no prior point exists yet.
+    local p, ok
+    if GRAVITY_SEED && warm !== nothing && warm_p !== nothing
+        t0 = time()
+        infl_seed = influence_function(log_x, warm_p, warm, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ, scale = :R_beta)
+        Threads.atomic_add!(SEQ_TIMING.influence_s, time() - t0)
+        moments_aug_seed! = (K, G, θθ, Uarg, obj) -> begin
+            EK_moments_focal_norm_directgp!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj)
+            @. G[:, D+2] = infl_seed.ψ_bar + infl_seed.R_beta
+        end
+        p, ok = recover_lfd(θ, moments_aug_seed!, D + 2)
+    else
+        p, ok = recover_lfd(θ, EK_moments_focal_norm_directgp!, D + 1)
+    end
     if !ok
         verbose && println("    [seq] initial recover_lfd (focal-only) FAILED")
         return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
@@ -186,7 +246,9 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
             verbose && println("    [seq] initial invert_omitted: at least one destination did NOT converge -- treating as infeasible")
             return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
         end
+        t0 = time()
         R = gravity_residual(umat, logτ, logw, σ).R_mean
+        Threads.atomic_add!(SEQ_TIMING.gravity_resid_s, time() - t0)
     catch e
         verbose && println("    [seq] initial invert_omitted threw: ", e)
         return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
@@ -195,8 +257,10 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
     verbose && @printf("    [seq] init: R0=%.4e\n", R)
     col = zeros(W); Rcol = 0.0
     for k in 1:maxit
+        t0 = time()
         infl = influence_function(log_x, p, umat, λData, omitted, logτ, logw, σ; ref = ref, ρ = ρ,
                                   scale = :R_beta, precomputed_stats = stats_cur)
+        Threads.atomic_add!(SEQ_TIMING.influence_s, time() - t0)
         col = infl.ψ_bar .+ infl.R_beta
         Rcol = infl.R_beta
         abs(R) <= tol && break
@@ -230,7 +294,9 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing, 
                 else
                     um_try, stats_try, all_ok_try = invert_all(p_try, d -> (1 - α) .* umat[:, d] .+ α .* um_endpoint1[:, d])
                 end
+                t0 = time()
                 R_try = gravity_residual(um_try, logτ, logw, σ).R_mean
+                Threads.atomic_add!(SEQ_TIMING.gravity_resid_s, time() - t0)
             catch
                 α *= 0.5; continue
             end
@@ -257,7 +323,9 @@ end
 
 function grad_R_theta(θ, umat, p)
     l = length(θ); dRdθ = zeros(l)
+    t0 = time()
     gr = gravity_residual(umat, logτ, logw, σ)
+    Threads.atomic_add!(SEQ_TIMING.gravity_resid_s, time() - t0)
     fi = free_idx(ref, D)
     Jfocal = ForwardDiff.jacobian(focal_u, θ)
     c_focal = gr.Qt[:, focal] ./ (σ - 1) ./ gr.S_Q
@@ -300,6 +368,7 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
     dRdθ  = Ref(zeros(length(θr0)))
     neval = Ref(0); nfeas = Ref(0)
     warm  = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    warm_p = Ref{Union{Nothing,Vector{Float64}}}(nothing)
     best_θ = Ref{Union{Nothing,Vector{Float64}}}(nothing)
     best_κ = Ref(find_smallest ? Inf : -Inf)
     best_warm = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
@@ -309,10 +378,10 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
             θf = Float64.(θ)
             if θf != lastθ[]
                 t0 = time()
-                c, Rmean, Rcol, um, p, ok = seq_gravcol(θf; δ = δ, warm = warm[])
+                c, Rmean, Rcol, um, p, ok = seq_gravcol(θf; δ = δ, warm = warm[], warm_p = warm_p[])
                 lastRmean[] = Rmean; lastRcol[] = Rcol; lastok[] = ok
                 if ok
-                    gcol[] = c; warm[] = um; nfeas[] += 1
+                    gcol[] = c; warm[] = um; warm_p[] = p; nfeas[] += 1
                     dRdθ[] = use_exact_grad ? grad_R_theta(θf, um, p) : zeros(length(θf))
                     EK_moments_focal_norm_directgp!(Ktmp, Gtmp, θf, view(U, 1:1, :), (γ = γ,))
                     κθ = Ktmp[1]
@@ -401,23 +470,27 @@ gp2kappa(gp) = 1 - gp^(σ/(σ-1))
 function run_one_bound(name::Symbol, fs::Bool, δval::Real, θinit)
     @printf("\n----- %s bound: gamma'_focal %s, delta=%g (warm-started) -----\n", name, fs ? "MINIMIZED" : "MAXIMIZED", δval); flush(stdout)
     t0 = time()
+    timing_before = seq_timing_snapshot()
     gp, θstar, st, bθ, b_gp, bwarm, cache = outer_solve_nested_cached(fs, θinit; use_exact_grad = true, δ = δval)
     κ = gp2kappa(gp)
     _, Rθ, _, _, _, okθ = seq_gravcol(θstar; δ = δval)
     CS.summarize(cache; label = "$name bound cache stats")
+    seqt = seq_timing_diff(seq_timing_snapshot(), timing_before)
     wall = time() - t0
     @printf("  KNITRO:        gamma'_%s = %.6f -> kappa = %.6f  (status %d)  exact R_mean(θ*) = %.3e  gravity-feasible=%s  wall %.1fs\n",
             name, gp, κ, st, Rθ, okθ, wall)
+    @printf("  seq timing:    dest_inversion=%.2fs (n=%d, nonconverged=%d)  influence_fn=%.2fs  gravity_residual=%.2fs\n",
+            seqt.dest_inv_s, seqt.n_dest_inversions, seqt.n_dest_nonconverged, seqt.influence_s, seqt.gravity_resid_s)
     if bθ === nothing
         @printf("  best-feasible: NONE FOUND\n")
         return (κ = κ, gp = gp, R = Rθ, ok = okθ, best_κ = NaN, best_gp = NaN, best_θ = nothing, best_ok = false,
-                θstar = θstar, cache = cache, nStatus = st, wall = wall)
+                θstar = θstar, cache = cache, nStatus = st, wall = wall, seqt = seqt)
     else
         _, Rb, _, _, _, okb = seq_gravcol(bθ; δ = δval, warm = bwarm)
         bκ = gp2kappa(b_gp)
         @printf("  best-feasible: gamma'_%s = %.6f -> kappa = %.6f  exact R_mean = %.3e  gravity-feasible=%s\n", name, b_gp, bκ, Rb, okb)
         return (κ = κ, gp = gp, R = Rθ, ok = okθ, best_κ = bκ, best_gp = b_gp, best_θ = bθ, best_ok = okb,
-                θstar = θstar, cache = cache, nStatus = st, wall = wall)
+                θstar = θstar, cache = cache, nStatus = st, wall = wall, seqt = seqt)
     end
 end
 
@@ -440,8 +513,8 @@ function load_if_done(path)
     get(d, "done", false) === true ? d : nothing
 end
 
-@printf("\n=== [PRODUCTION: profiled/sequential, cached, free-only ForwardDiff] D=%d W=%d ρ=%g MU_FIXED(removed)=%s DELTA_GRID=%s ===\n",
-        D, W, ρ, FREEZE_MU, DELTA_GRID)
+@printf("\n=== [PRODUCTION: profiled/sequential, cached, free-only ForwardDiff] D=%d W=%d ρ=%g MU_FIXED(removed)=%s DELTA_GRID=%s GRAVITY_SEED=%s ===\n",
+        D, W, ρ, FREEZE_MU, DELTA_GRID, GRAVITY_SEED)
 @printf("point estimate kappa = %.6f\n", KAPPA_POINT_EST)
 
 for (name, fs) in ((:lower, false), (:upper, true))
@@ -468,10 +541,18 @@ for (name, fs) in ((:lower, false), (:upper, true))
             "inner_solves" => r.cache.n_inner_solve, "grad_computations" => r.cache.n_grad_compute,
             "warm_started_inner" => r.cache.n_warm_started, "cold_inner" => r.cache.n_cold,
             "t_inner" => r.cache.t_inner, "t_grad" => r.cache.t_grad,
+            "t_dest_inversion" => r.seqt.dest_inv_s, "t_influence_function" => r.seqt.influence_s,
+            "t_gravity_residual" => r.seqt.gravity_resid_s,
+            "n_dest_inversions" => r.seqt.n_dest_inversions, "n_dest_nonconverged" => r.seqt.n_dest_nonconverged,
             "starting_point_source" => δval == DELTA_GRID[1] ? "theta_r0 (initial)" : "warm-started from prior delta",
             "kappa_point_estimate" => KAPPA_POINT_EST,
+            "gravity_seed" => GRAVITY_SEED,
             "done" => true))
         θcur = r.θstar
     end
+end
+let gt = seq_timing_snapshot()
+    @printf("\n=== TOTAL across this process run: dest_inversion=%.1fs (n=%d, nonconverged=%d)  influence_fn=%.1fs  gravity_residual=%.1fs ===\n",
+            gt.dest_inv_s, gt.n_dest_inversions, gt.n_dest_nonconverged, gt.influence_s, gt.gravity_resid_s)
 end
 println("PRODUCTION_RUN DONE  D=$D")
