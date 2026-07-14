@@ -36,8 +36,18 @@ CS.include(joinpath(@__DIR__, "PsiObjectiveBundleImplicitMethodB.jl"))
 
 const DVAL = parse(Int, get(ENV, "DVAL", "4"))
 const WVAL = parse(Int, get(ENV, "WVAL", "8000"))
+# fakeData=1 (default, synthetic Frechet draws) unless overridden -- fakeData=3 is Noah's real
+# D=20 dataset (setup/importData.jl), REAL_DATA_DIR-overridable, default real_data/noah_D20.
+const FAKEDATA = parse(Int, get(ENV, "FAKEDATA", "1"))
 const OUTER_OPT_FILE = get(ENV, "OUTER_OPT_FILE", joinpath(@__DIR__, "..", "full_aod_diag", "csw_outer_25.opt"))
 const INNER_OPT_FILE = joinpath(@__DIR__, "..", "full_aod_diag", "ek_inner.opt")
+# Destination-inversion share-match tolerance. 1e-8 (the long-standing default, tuned against
+# synthetic data) turned out to be slightly too strict for real D=20 data: every "non-converged"
+# destination there stalls at a genuine numerical fixed point (confirmed by raising maxit 150->500
+# with zero change in the resulting share error) with share_err in [3.7e-8, 7.1e-8] -- an excellent
+# match (matches real trade shares to 1 part in ~15-30 million), just narrowly missing 1e-8. User
+# confirmed 1e-6 (or looser) is economically fine ("nobody cares about trade shares beyond 2dp").
+const DEST_INV_TOL = parse(Float64, get(ENV, "DEST_INV_TOL", "1e-6"))
 
 # Seed the first (currently gravity-blind, D+1-moment) CC solve at each theta with the linearized
 # gravity moment from the PREVIOUS theta's converged (p, umat) instead of solving blind. Ported
@@ -85,7 +95,7 @@ seq_timing_diff(after, before) = (dest_inv_s = after.dest_inv_s - before.dest_in
                                   n_dest_nonconverged = after.n_dest_nonconverged - before.n_dest_nonconverged)
 
 params = (
-    server=1, user=2, fakeData=1, DFake=DVAL, seedFakeData=889, counterType=1, counterExplicit=0,
+    server=1, user=2, fakeData=FAKEDATA, DFake=DVAL, seedFakeData=889, counterType=1, counterExplicit=0,
     θHat=0, σHat=2.5, baseIndex=2, W=WVAL, seedU=888,
     importanceSampling=0, importanceSamplingFactor=2, stratifiedSampling=0, IndMomentOrder=5,
     θConstant=0, gravMoment=1, localGravityMoment=0, localGravityCrossMoment=0,
@@ -187,7 +197,7 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing,
             Threads.@threads for i in eachindex(omitted)
                 d = omitted[i]
                 t0 = time()
-                inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
+                inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = DEST_INV_TOL,
                                          maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
                 Threads.atomic_add!(SEQ_TIMING.dest_inv_s, time() - t0)
                 Threads.atomic_add!(SEQ_TIMING.n_dest_inversions, 1)
@@ -199,7 +209,7 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing,
         else
             for d in omitted
                 t0 = time()
-                inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = 1e-8,
+                inv = invert_destination(log_x, p_arg, λData[:, d]; ref = ref, ρ = ρ, tol = DEST_INV_TOL,
                                          maxit = 150, ls_iters = 50, u_init = u_init_fn(d))
                 Threads.atomic_add!(SEQ_TIMING.dest_inv_s, time() - t0)
                 Threads.atomic_add!(SEQ_TIMING.n_dest_inversions, 1)
