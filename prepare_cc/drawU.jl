@@ -1,9 +1,8 @@
 
 function drawU(SamplingWeight, params)
-	@unpack W, D, importanceSampling, importanceSamplingFactor, UoModel = params
+	@unpack W, D, importanceSampling, importanceSamplingFactor = params
 
-	sizeU = UoModel == 1 ? D : D * D
-	U = zeros(W, sizeU)
+	U = zeros(W, D)
 
 	if importanceSampling == 1
 		genExpRandsImportanceSampling!(U, importanceSamplingFactor, SamplingWeight)

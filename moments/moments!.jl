@@ -1,8 +1,8 @@
 function EK_moments_simple!(K, G, θ, U, obj)
-	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
+	# main function that takes empty K and G, and the parameters, and fills in the moment matrices
 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch = obj.γ
 	@unpack counterExplicit,
 	counterType,
 	θConstant,
@@ -16,7 +16,6 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	IndMomentOrder,
 	OuterScaling,
 	usePMM,
-	UoModel,
 	NormalizeMoments = indicators
 
 	W = size(U, 1)
@@ -25,6 +24,9 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	# unpack the structural parameters vector
 	μ = θ[1]
 	σ = θ[2]
+	# θ[3:2+D] (old gamma_theta slots): baseline gamma is normalized to 1 for every destination
+	# (the A_od matrix absorbs all of the scale freedom), so these slots are only read below to
+	# size/seed gamma_prime_theta under autarky (their values do not otherwise enter the moments).
 	γ_θ = θ[3:3+D-1]
 
 	γ_prime_θ = copy(γ_θ)
@@ -46,7 +48,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 	counterType_θ_offset = 0
 	if counterType != 1
-		counterType_θ_offset = 2 * (D - 1) # D-1 wagesPrime and D-1 gamma_primes 
+		counterType_θ_offset = 2 * (D - 1) # D-1 wagesPrime and D-1 gamma_primes
 	end
 
 
@@ -61,17 +63,15 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	if OuterScaling == 1 # Aod model
 		if independenceMoment == 1
 			Aod_offset += 1
-		#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
-		#	Aod_offset += D^2
 		end
-		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
+		Aod_θ = reshape(θ[Aod_offset+1:Aod_offset+D^2], (D, D))
 	end
 
 	lambda = reshape(P, (D, D))'
 
 	if θConstant != 1
 		# adjust Aod such that if μ varies and Aod = 1, the model still matches trade shares for F= Frechet
-		
+
 		Aod = Aod_θ .* cHat .* (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1/μ)) .* (lambda ./ lambda[1, :]')
 	else
 		Aod = Aod_θ
@@ -82,24 +82,13 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 	@. AodPow[:, :] = (Aod[:, :] ./ cHat[:, :]) .^ (-μ)
 
-	# adjust the gamma_primes
+	# adjust the gamma_prime (the counterfactual gamma; baseline gamma is normalized to 1, see above)
 
-	γ = copy(γ_θ)
-	γ_prime = copy(γ_θ)
+	γ_prime = copy(γ_prime_θ)
 
 	for d=1:D
-		ΔγA_d = 1
-		for o=1:D
-			d1 = d + (o - 1) * D
-			ΔγA_d *= Aod_θ[o,d]^(P[d1]*μ*(σ-1)/σ)
-		end
-		Δγμ_d = ((gamma(μ*(1-σ)+1)/gamma(μHat*(1-σ)+1))^(1/σ))*lambda[1,d]^((1-σ)*(μ-μHat)/σ) 
-
 		ΔγA_d_prime = Aod_θ[d,d]^(μ*(σ-1)/σ)
-		#Δγμ_d_prime = (gamma(μ*(1-σ)+1)/gamma(μHat*(1-σ)+1))^(1/σ)
-		Δγμ_d_prime = ((gamma(μ*(1-σ)+1)/gamma(μHat*(1-σ)+1))^(1/σ))*(lambda[1,d]/lambda[d,d])^((1-σ)*(μ-μHat)/σ) 
-
-		γ[d] = γ_θ[d]*ΔγA_d*Δγμ_d
+		Δγμ_d_prime = ((gamma(μ*(1-σ)+1)/gamma(μHat*(1-σ)+1))^(1/σ))*(lambda[1,d]/lambda[d,d])^((1-σ)*(μ-μHat)/σ)
 
 		γ_prime[d] = γ_prime_θ[d]*ΔγA_d_prime*Δγμ_d_prime
 
@@ -107,15 +96,15 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 	if counterExplicit == 0
 		# insert relevant k function if counterfactual does not depend on U
-		# GT defined baseline -> autarky: 1 - (γ'/γ)^{σ/(σ-1)}.  NB the code's γ satisfies
-		# γ^σ·gdp = E[min_o p_od^{1-σ}] = P^{1-σ}, i.e. γ = P^{(1-σ)/σ} (extra σ vs γ=P^{1-σ}),
-		# so real income W ∝ 1/P ∝ γ^{σ/(σ-1)} and the exponent here is σ/(σ-1), not 1/(σ-1).
-		counterVal = 1 - (γ_prime[baseIndex] / γ[baseIndex])^(σ / (σ - 1))
+		# GT defined baseline -> autarky: 1 - (γ'/γ)^{σ/(σ-1)}, with γ[baseIndex]≡1.  NB the code's γ
+		# satisfies γ^σ·gdp = E[min_o p_od^{1-σ}] = P^{1-σ}, i.e. γ = P^{(1-σ)/σ} (extra σ vs
+		# γ=P^{1-σ}), so real income W ∝ 1/P ∝ γ^{σ/(σ-1)} and the exponent here is σ/(σ-1), not
+		# 1/(σ-1).
+		counterVal = 1 - γ_prime[baseIndex]^(σ / (σ - 1))
 		@. K[:] = counterVal
 	end
 
 	#@show μ
-	#@show γ[baseIndex]
 	#@show γ_prime[baseIndex]
 	#@show Aod
 	#@show K[1]
@@ -129,12 +118,12 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 		#UPow = copy(U)
 		# reuse preallocated Float64 scratch on the Float64 path; allocate Duals under ForwardDiff
-		if eltype(γ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
+		if eltype(θ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
 			UPow = UPow_scratch
 			UσPow = UσPow_scratch
 		else
-			UPow = zeros(eltype(γ), size(U))
-			UσPow = zeros(eltype(γ), size(U))
+			UPow = zeros(eltype(θ), size(U))
+			UσPow = zeros(eltype(θ), size(U))
 		end
 		T = Threads.nthreads()
 		Threads.@threads for t ∈ 1:T
@@ -142,19 +131,16 @@ function EK_moments_simple!(K, G, θ, U, obj)
 			ix1 = round(Int, t / T * W)
 			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] .^ (-μ)
 			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] .^ (-μ)
-			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, γ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat, UoModel) # fill in G with baseline moments 
-			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex, UoModel) # fill in G with counterfactual moments, fill in K 
+			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat) # fill in G with baseline moments
+			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex) # fill in G with counterfactual moments, fill in K
 		end
 	else
-		#hFunction!(G, U, Uσ, wHat, τ, σ, γ, AodPow, L, P,  counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, μHat)
-		# hFunctionCounter!(K, G, U, Uσ, wPrime, τPrime, σ, γ_prime, AodPow, LPrime,  counterType, baseIndex)
-
 		T = Threads.nthreads()
 		Threads.@threads for t ∈ 1:T
 			ix0 = round(Int, (t - 1) / T * W) + 1
 			ix1 = round(Int, t / T * W)
-			hFunction!(@view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wHat, τ, σ, γ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat, UoModel)
-			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex, UoModel)
+			hFunction!(@view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat)
+			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex)
 		end
 	end
 
@@ -163,29 +149,19 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		# MC_od = w_o·τ_od/(A_od·z_o) with the raw structural A_od = 1/AodPow. Hence
 		# ΔΔ ln(AodPow) = -ΔΔ ln(A_od), and Σ(ΔΔlnτ)·ΔΔ ln(AodPow)=0 is exactly the gravity
 		# consistency condition Σ ΔΔlnτ·ΔΔlnA_od = 0. So pass AodPow (= 1/A_od).
-		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel) # add gravity moment if using
+		newGravityMoment!(G, τ, D, AodPow, GravityMomentFirstApproach) # add gravity moment if using
 	end
 
-	
+
 	if GravityMomentFirstApproach == 1
-		ν = zeros(D, D) # E[ln ̄U]
-		
+		ν = zeros(D, D) # E[ln ̄U]; always zero since ΔΔ E[ln Ū] = 0 under UoModel=1
+
 		offset = D^2 + 2 * D
 		if counterType != 1
 			offset += (D - 1)
 		end
 
-		if sameMarginalsMoment == 0 && UoModel == 0
-			ν_offset = counterType_θ_offset + 3 + D
-			if OuterScaling == 1
-				ν_offset += D^2
-				if independenceMoment == 1 # not necessary because sameMarginalsMoment ==0
-					ν_offset += 1
-				end
-			end
-			ν = reshape(vcat(θ[ν_offset+1:ν_offset+D^2]), (D, D))
-		end
-		GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoModel, sameMarginalsMoment)
+		GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, offset)
 	end
 
 	if sameMarginalsMoment == 1
@@ -199,12 +175,8 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		ν_probas = θ[end-IndMomentOrder+1:end]
 
 		offset = gravMoment + localGravityMoment * ((D - 1) * D + D * (D - 1) * (D - 2)) + GravityMomentFirstApproach + independenceMoment
-		if UoModel == 0
-			offset += sameMarginalsMoment * (2 * momentOrder * D^2 + 2 * momentOrderForBaseIndex * D + 2 * D^2)
-		else
-			offset += sameMarginalsMoment * (2 * momentOrderForBaseIndex * D + 2 * D)
-		end
-		pairewiseIndependenceMoment!(Ū, G, D, ηk, @view(Ind_Moments[1:W,:]), IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, UoModel, W, GravityMomentFirstApproach)
+		offset += sameMarginalsMoment * (2 * momentOrderForBaseIndex * D + 2 * D)
+		pairewiseIndependenceMoment!(Ū, G, D, ηk, @view(Ind_Moments[1:W,:]), IndMomentOrder, IndCDF_Cells, ν_probas, offset, refIndex1, W, GravityMomentFirstApproach)
 	end
 
 	#To change for other counterfactuals
@@ -215,7 +187,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	@. G[:, 1:simple_end] /= gamma(μ*(1-σ)+1)
 	end
 
-	# normalize the moments so we do not require useless precision 
+	# normalize the moments so we do not require useless precision
 	if usePMM == 1
 		for im ∈ 1:numMomentsSimple
 			@. G[:, im] -= PMM[im]
@@ -239,9 +211,9 @@ function EK_moments_simple!(K, G, θ, U, obj)
 end
 
 function EK_moments!(K, G, θ, U, obj)
-	# main function that takes empty K and G, and the parameters, and fills in the moment matrices 
+	# main function that takes empty K and G, and the parameters, and fills in the moment matrices
 	@unpack upper_moment_start_index, τ, baseIndex, PMM, σ_Moments, Moments_CS, SamplingWeights, indicators, Ind_Moments, moments_without_var = obj.γ
-	@unpack gravMoment, localGravityMoment, GravityMomentFirstApproach, useConfidenceIntervals, usePMM, NormalizeMoments, counterType, independenceMoment, UoModel, IndMomentOrder = indicators
+	@unpack gravMoment, localGravityMoment, GravityMomentFirstApproach, useConfidenceIntervals, usePMM, NormalizeMoments, counterType, independenceMoment, IndMomentOrder = indicators
 
 	EK_moments_simple!(K, @view(G[:, upper_moment_start_index:end]), θ, U, obj)
 
@@ -258,7 +230,7 @@ function EK_moments!(K, G, θ, U, obj)
 
 		if independenceMoment == 1
 			offset = gravMoment + localGravityMoment * ((D - 1) * D + D * (D - 1) * (D - 2)) + GravityMomentFirstApproach
-			remove_ind_moments = pairewiseIndependenceMoment_indices_to_remove_from_inequality(@view(G[:, upper_moment_start_index:end]), D, Ind_Moments, IndMomentOrder, offset, UoModel)
+			remove_ind_moments = pairewiseIndependenceMoment_indices_to_remove_from_inequality(@view(G[:, upper_moment_start_index:end]), D, Ind_Moments, IndMomentOrder, offset)
 			remove_moments = vcat(remove_moments, remove_ind_moments)
 		end
 

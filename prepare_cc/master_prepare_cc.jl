@@ -22,7 +22,6 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	fakeData,
 	θConstant,
 	usePMM,
-	UoModel,
 	calc_δ_star_initial,
 	Jac_W,
 	δ_ref,
@@ -35,10 +34,10 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	Random.seed!(seedU)
 
 	SamplingWeight = ones(W)
-	# draw base U matrix from exp(1), using stratified or importance sampling as specified in parameters 
+	# draw base U matrix from exp(1), using stratified or importance sampling as specified in parameters
 	U = drawU(SamplingWeight, globalParams)
 
-	Ū, Uσ = createUDerivatives!(U, prestep_output, globalParams)
+	Ū, Uσ = createUDerivatives!(U, prestep_output, globalParams)
 
 	useParams = globalParams
 	useParams = (; useParams..., SamplingWeight = SamplingWeight)
@@ -46,19 +45,19 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	# closed-form Frechet prestep (the CDW method); alternative starting points removed
 	prestep_output_effective = prestep_output
 
-	# if using common marginals with moments methodology, calculate the K moments and put them in Ubar 
+	# if using common marginals with moments methodology, calculate the K moments and put them in Ubar
 
 	CDF_Moments = zeros(1, 1)
 
 	if sameMarginalsMoment == 1
-		CDF_Moments = precalcCDFs(Ū, useParams, prestep_output_effective)
+		CDF_Moments = precalcCDFs(Ū, useParams, prestep_output_effective)
 	end
 
 	Ind_Moments = zeros(1, 1)
 	IndCDF_Cells = Vector{Vector{Int}}(undef, 1)
 
 	if independenceMoment == 1
-		Ind_Moments, IndCDF_Cells = precalcIndependence(Ū, useParams)
+		Ind_Moments, IndCDF_Cells = precalcIndependence(Ū, useParams)
 	end
 
 	# trade share moments + gamma + gammaPrime
@@ -74,15 +73,8 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		numMoments = D^2 + 1
 	end
 
-	# we add the condition that E[Ubar] =1
-	#numMoments += UoModel == 0 ? D : D^2
-
 	if GravityMomentFirstApproach == 1
 		numMoments += 1
-
-		if UoModel == 0 && sameMarginalsMoment == 0
-			numMoments += D^2
-		end
 	end
 
 	if gravMoment == 1
@@ -94,11 +86,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	end
 
 	if sameMarginalsMoment == 1
-		if UoModel == 1
-			numMoments += 2 * D + 2 * momentOrderForBaseIndex * D
-		else
-			numMoments += 2 * momentOrder * D^2 + 2 * D^2 + 2 * momentOrderForBaseIndex * D
-		end
+		numMoments += 2 * D + 2 * momentOrderForBaseIndex * D
 	end
 
 	if independenceMoment == 1
@@ -108,11 +96,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		numMoments += 1 # CDF[i]<CDF[i+1]
 
 		# corr[i,j]=0
-		if UoModel == 0
-			numMoments += D * (D^2 - floor(Int, D * (1 + D) / 2))
-		else
-			numMoments += (D^2 - floor(Int, D * (1 + D) / 2))
-		end
+		numMoments += (D^2 - floor(Int, D * (1 + D) / 2))
 	end
 
 
@@ -173,8 +157,6 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		OuterScaling,
 		"Fmu_",
 		θConstant,
-		"Uo_",
-		UoModel,
 		"MN",
 		NormalizeMoments,
 		"P",
@@ -200,7 +182,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		counters.LPrime,
 		counters.τPrime,
 		Uσ,
-		Ū,
+		Ū,
 		numMoments,
 		upper_moment_start_index,
 		PMM,
@@ -238,7 +220,7 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		complement_index,
 		PMMGammaOnly)
 	moments_without_var = γ_Hat.moments_without_var
-	#complement_index =  filter!(e-> ( e ∉ moments_without_var  && (e-inner_loop_last_moment_index) ∉ moments_without_var ), complement_index) 
+	#complement_index =  filter!(e-> ( e ∉ moments_without_var  && (e-inner_loop_last_moment_index) ∉ moments_without_var ), complement_index)
 
 	if δGridType == 0
 		δ_grid = vcat(δ_ref)

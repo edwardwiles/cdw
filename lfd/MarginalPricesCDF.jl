@@ -1,14 +1,10 @@
-function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D, UoModel, μ_init, μ_up, μ_low, wHat, τ)
-	#CDF price to the power 1/μ 
-	o1 = 1 + (d - 1) * D
-	o2 = D + (d - 1) * D
+function MarginalPricesCDF(x, d, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D, μ_init, μ_up, μ_low, wHat, τ)
+	#CDF price to the power 1/μ
+	o1 = 1
+	o2 = D
 
-	if UoModel == 1
-		o1 = 1
-		o2 = D
-	end
-	pcdf = zeros(length(x), 3, δ_grid_size, 3) #x, domestic/rw/ratio/, δ, bound=lower/initial/upper 
-	ppdf = zeros(length(x), 2) #p_domestic/p_rw 
+	pcdf = zeros(length(x), 3, δ_grid_size, 3) #x, domestic/rw/ratio/, δ, bound=lower/initial/upper
+	ppdf = zeros(length(x), 2) #p_domestic/p_rw
 	lfd_functional = zeros(length(x), length(x), δ_grid_size, 3) #p_domestic, p_rw, δ, bound=lower/initial/upper
 	RN = ones(δ_grid_size, 3)
 	x_ω = ones(D)

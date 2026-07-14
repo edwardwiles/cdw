@@ -1,18 +1,17 @@
 # ============================================================================
 # γ_d ≡ 1 (all d) normalization for the FULL A_od-in-outer-loop model.
 #
-# Baseline code (moments/moments!.jl::EK_moments_simple!) treats γ_θ[1..D] as
-# free outer params and pins A[1,d]=1 for each destination d (the per-column
-# scale redundancy is absorbed by γ_θ[d]). This file implements the opposite
-# gauge choice: force γ_d ≡ 1 for EVERY destination (not just baseIndex, unlike
-# the pre-existing focal-only γ_focal≡1 in sequential_gravity/focal_moments.jl)
-# and leave the ENTIRE A_od matrix free (no A[1,d]=1 pins anywhere).
+# Baseline gamma is now normalized to 1 for EVERY destination d everywhere in
+# this codebase (moments/hFunction.jl hardcodes it; see that file), so this
+# file no longer needs its own gamma array at all — it just leaves the ENTIRE
+# A_od matrix free (no A[1,d]=1 pins anywhere), which is what actually made
+# this file's normalization distinct from the old A[1,d]=1 gauge.
 #
-# Why this is a genuine (not cosmetic) change: γ[d] enters `denom[d] =
-# γ[d]^σ*gdp[d]`, the normalizer for EVERY trade-share moment of destination d
-# (hFunction.jl:37,85), for ALL d — not just baseIndex. So this reparameterizes
-# the whole moment map, matching the user's intent: "the scale of A_od is no
-# longer arbitrary — the units are exactly such that γ_d happens to be 1."
+# Why this is a genuine (not cosmetic) change: γ[d] used to enter `denom[d] =
+# γ[d]^σ*gdp[d]`, the normalizer for EVERY trade-share moment of destination d,
+# for ALL d — not just baseIndex. So this reparameterizes the whole moment
+# map, matching the user's intent: "the scale of A_od is no longer arbitrary
+# — the units are exactly such that γ_d happens to be 1."
 #
 # Derivation of the γ'_focal bound (verify-before-trust; matches and
 # generalizes sequential_gravity/focal_moments.jl's already-validated
@@ -43,12 +42,11 @@
     EK_moments_gammanorm!(K, G, θ, U, obj)
 
 Same as `moments/moments!.jl::EK_moments_simple!`, autarky (`counterType==1`)
-only, EXCEPT: γ[d] is FORCED to 1 for every destination d (the D old γ_θ
-slots in θ are read but ignored), and γ'_focal enters θ DIRECTLY (bypasses the
-ΔγA_d_prime*Δγμ_d_prime adjustment the baseline code applies to γ_prime_θ).
-Everything else (Aod/AodPow construction, hFunction!/hFunctionCounter! calls,
-gravity moment, PMM/NormalizeMoments/SamplingWeights bookkeeping) is
-byte-identical to EK_moments_simple! — only the γ-derivation block differs.
+only, EXCEPT: γ'_focal enters θ DIRECTLY (bypasses the ΔγA_d_prime*Δγμ_d_prime
+adjustment the baseline code applies to γ_prime_θ). Everything else
+(Aod/AodPow construction, hFunction!/hFunctionCounter! calls, gravity moment,
+PMM/NormalizeMoments/SamplingWeights bookkeeping) is byte-identical to
+EK_moments_simple! — only the γ'-derivation block differs.
 """
 function EK_moments_gammanorm!(K, G, θ, U, obj)
 	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch = obj.γ
@@ -65,7 +63,6 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 	IndMomentOrder,
 	OuterScaling,
 	usePMM,
-	UoModel,
 	NormalizeMoments = indicators
 
 	counterType == 1 || error("EK_moments_gammanorm! only implements counterType==1 (autarky)")
@@ -76,7 +73,7 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 
 	μ = θ[1]
 	σ = θ[2]
-	# θ[3:2+D] (old γ_θ slots) intentionally NOT READ: γ is forced to 1 below.
+	# θ[3:2+D] (old γ_θ slots) intentionally NOT READ: baseline γ is normalized to 1 everywhere.
 
 	wPrime = copy(obj.γ.wPrimeHat)
 	insert!(wPrime, baseIndex, 1)
@@ -89,7 +86,7 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 		if independenceMoment == 1
 			Aod_offset += 1
 		end
-		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
+		Aod_θ = reshape(θ[Aod_offset+1:Aod_offset+D^2], (D, D))
 	end
 
 	lambda = reshape(P, (D, D))'
@@ -101,24 +98,23 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 	end
 	@. AodPow[:, :] = (Aod[:, :] ./ cHat[:, :]) .^ (-μ)
 
-	# ---- THE NORMALIZATION CHANGE: γ_d ≡ 1 for every d, γ'_focal DIRECT ----
-	γ = ones(T, D)
+	# ---- γ'_focal DIRECT (γ_d≡1 baseline handled inside hFunction!) ----
 	γ_prime = ones(T, D)
 	γ_prime[baseIndex] = θ[3+D]   # γ'_focal DIRECT (adjusted value; γ[baseIndex]≡1)
 	# --------------------------------------------------------------------
 
 	if counterExplicit == 0
-		counterVal = 1 - (γ_prime[baseIndex] / γ[baseIndex])^(σ / (σ - 1))
+		counterVal = 1 - γ_prime[baseIndex]^(σ / (σ - 1))
 		@. K[:] = counterVal
 	end
 
 	if θConstant != 1
-		if eltype(γ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
+		if eltype(θ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
 			UPow = UPow_scratch
 			UσPow = UσPow_scratch
 		else
-			UPow = zeros(eltype(γ), size(U))
-			UσPow = zeros(eltype(γ), size(U))
+			UPow = zeros(eltype(θ), size(U))
+			UσPow = zeros(eltype(θ), size(U))
 		end
 		Th = Threads.nthreads()
 		Threads.@threads for t ∈ 1:Th
@@ -126,21 +122,21 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 			ix1 = round(Int, t / Th * W)
 			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] .^ (-μ)
 			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] .^ (-μ)
-			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, γ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat, UoModel)
-			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex, UoModel)
+			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat)
+			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex)
 		end
 	else
 		Th = Threads.nthreads()
 		Threads.@threads for t ∈ 1:Th
 			ix0 = round(Int, (t - 1) / Th * W) + 1
 			ix1 = round(Int, t / Th * W)
-			hFunction!(@view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wHat, τ, σ, γ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat, UoModel)
-			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex, UoModel)
+			hFunction!(@view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat)
+			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex)
 		end
 	end
 
 	if gravMoment == 1
-		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel)
+		newGravityMoment!(G, τ, D, AodPow, GravityMomentFirstApproach)
 	end
 
 	GravityMomentFirstApproach == 0 || error("gammanorm variant: GravityMomentFirstApproach not implemented")
@@ -208,7 +204,6 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	IndMomentOrder,
 	OuterScaling,
 	usePMM,
-	UoModel,
 	NormalizeMoments = indicators
 
 	counterType == 1 || error("EK_moments_gammanorm_directgp! only implements counterType==1 (autarky)")
@@ -219,7 +214,7 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 
 	μ = θ[1]
 	σ = θ[2]
-	# θ[3:2+D] (old γ_θ slots) intentionally NOT READ: γ is forced to 1 below.
+	# θ[3:2+D] (old γ_θ slots) intentionally NOT READ: baseline γ is normalized to 1 everywhere.
 
 	wPrime = copy(obj.γ.wPrimeHat)
 	insert!(wPrime, baseIndex, 1)
@@ -232,7 +227,7 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 		if independenceMoment == 1
 			Aod_offset += 1
 		end
-		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
+		Aod_θ = reshape(θ[Aod_offset+1:Aod_offset+D^2], (D, D))
 	end
 
 	lambda = reshape(P, (D, D))'
@@ -244,7 +239,6 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	end
 	@. AodPow[:, :] = (Aod[:, :] ./ cHat[:, :]) .^ (-μ)
 
-	γ = ones(T, D)
 	γ_prime = ones(T, D)
 	γ_prime[baseIndex] = θ[3+D]
 
@@ -254,12 +248,12 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	end
 
 	if θConstant != 1
-		if eltype(γ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
+		if eltype(θ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
 			UPow = UPow_scratch
 			UσPow = UσPow_scratch
 		else
-			UPow = zeros(eltype(γ), size(U))
-			UσPow = zeros(eltype(γ), size(U))
+			UPow = zeros(eltype(θ), size(U))
+			UσPow = zeros(eltype(θ), size(U))
 		end
 		Th = Threads.nthreads()
 		Threads.@threads for t ∈ 1:Th
@@ -267,21 +261,21 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 			ix1 = round(Int, t / Th * W)
 			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] .^ (-μ)
 			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] .^ (-μ)
-			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, γ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat, UoModel)
-			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex, UoModel)
+			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat)
+			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex)
 		end
 	else
 		Th = Threads.nthreads()
 		Threads.@threads for t ∈ 1:Th
 			ix0 = round(Int, (t - 1) / Th * W) + 1
 			ix1 = round(Int, t / Th * W)
-			hFunction!(@view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wHat, τ, σ, γ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat, UoModel)
-			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex, UoModel)
+			hFunction!(@view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat)
+			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(U[ix0:ix1, :]), @view(Uσ[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex)
 		end
 	end
 
 	if gravMoment == 1
-		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel)
+		newGravityMoment!(G, τ, D, AodPow, GravityMomentFirstApproach)
 	end
 
 	GravityMomentFirstApproach == 0 || error("gammanorm variant: GravityMomentFirstApproach not implemented")

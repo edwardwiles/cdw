@@ -210,14 +210,17 @@ function make_gravity_grad(γobj, D::Int)
     sumGrav_scalar = θθ -> begin
         T = eltype(θθ)
         μ = θθ[1]
-        Aod_θ = reshape(vcat(θθ[Aod_offset+1:Aod_offset+D^2]), (D, D))
+        Aod_θ = reshape(θθ[Aod_offset+1:Aod_offset+D^2], (D, D))
         Aod = Aod_θ .* cHat .* (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
         AodPow = (Aod ./ cHat) .^ (-μ)
+        # Wτ is already within-transformed (orthogonal to row/col means), so Σ Wτ·within(x) = Σ Wτ·x
+        # for any x (verified numerically, scratch/check_fwl.jl) -- skip within-transforming AodPow,
+        # one fewer D×D log+demean pass and a shorter chain rule through this ForwardDiff.gradient.
         Wτ = Main.withinTransform(τ)
-        WA = Main.withinTransform(AodPow)
+        lnAod = log.(AodPow)
         s = zero(T)
         for o in 1:D, d in 1:D
-            s += Wτ[o, d] * WA[o, d]
+            s += Wτ[o, d] * lnAod[o, d]
         end
         return s
     end

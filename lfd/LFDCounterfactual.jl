@@ -10,14 +10,14 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 	@unpack μHat, wHat, λPrime, wPrimeHat, γHat, γPrimeHat, cHat = prestep_output
 	params = globalParams
 	params = (; params..., SamplingWeight = γ.SamplingWeights)
-	@unpack W, baseIndex, refIndex1, θConstant, σHat, sameMarginalsMoment, independenceMoment, UoModel = params
+	@unpack W, baseIndex, refIndex1, θConstant, σHat, sameMarginalsMoment, independenceMoment = params
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
 	@unpack LFD_upper, LFD_lower = lfd_output
 
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)
 	Ū = γ.Ū
-	U_Size = UoModel==1 ? D : D^2
+	U_Size = D
 	V = zeros(W, U_Size)
 	rand!(V)
 
@@ -68,13 +68,6 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 			KS_Test[od, δ, 2] = maximum(abs.(U_CDF_down[:, od, δ] .- U_CDF_down[:, refIndex1, δ]))
 		end
 
-		if UoModel==0
-		savefig(heatmap( UoModel==1 ? KS_Test[:, δ, 1] : reshape(KS_Test[:, δ, 1], (D, D)), fc = cgrad([:white, :dodgerblue4])),
-			string("upper_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
-
-		savefig(heatmap(UoModel==1 ? KS_Test[:, δ, 2] : reshape(KS_Test[:, δ, 2], (D, D)), fc = cgrad([:white, :dodgerblue4])),
-			string("lower_KS_delta_", δ_grid[δ], "_", file_name, ".png"))
-		end
 	end
 
 	writedlm(string("KSTest_", file_name), [(KS_Test[:, :, 1])' (KS_Test[:, :, 2])'], ',')
@@ -87,7 +80,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 				xlabel = "exp(- ̄U)",
 				ylabel = "CDF",
 				CDF_X,
-				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, baseIndex+(UoModel==1 ? 0 : (baseIndex-1)*D), i] U_CDF_down[:, baseIndex+(UoModel==1 ? 0 : (baseIndex-1)*D), i]],
+				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, baseIndex, i] U_CDF_down[:, baseIndex, i]],
 				label = ["Upper CDFrefIndex" "Lower CDFrefIndex" "Upper CDFbaseIndex,baseIndex" "Lower CDFbaseIndex,baseIndex"],
 				title = string("Marginals for δ = ", δ_grid[i]),
 			),
@@ -99,7 +92,7 @@ function LFDCounterFactual(lfd_output, cc_output, prestep_output, prep_output, g
 				xlabel = "exp(- ̄U)",
 				ylabel = "CDF",
 				CDF_X,
-				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, 1+(UoModel==1 ? 0 : (baseIndex-1)*D), i] U_CDF_down[:, 1+(UoModel==1 ? 0 : (baseIndex-1)*D), i]],
+				[U_CDF_up[:, refIndex1, i] U_CDF_down[:, refIndex1, i] U_CDF_up[:, 1, i] U_CDF_down[:, 1, i]],
 				label = ["Upper CDFrefIndex" "Lower CDFrefIndex" "Upper CDF1,baseIndex,baseIndex" "Lower CDF1,baseIndex,baseIndex"],
 				title = string("Marginals for δ = ", δ_grid[i]),
 			),

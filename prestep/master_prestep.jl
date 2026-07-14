@@ -53,8 +53,8 @@ function master_prestep(data, counters, globalParams)
 	additional_theta_up = 0
 
 	if globalParams.theta_init == -1
-		additional_theta_low = get_theta_from_delta(globalParams.δ_ref, globalParams.UoModel == 1 ? D : D^2, -1) * thetaHat
-		additional_theta_up = get_theta_from_delta(globalParams.δ_ref, globalParams.UoModel == 1 ? D : D^2, 1) * thetaHat
+		additional_theta_low = get_theta_from_delta(globalParams.δ_ref, D, -1) * thetaHat
+		additional_theta_up = get_theta_from_delta(globalParams.δ_ref, D, 1) * thetaHat
 	elseif globalParams.theta_init == 0
 		additional_theta_low = thetaHat
 		additional_theta_up = thetaHat

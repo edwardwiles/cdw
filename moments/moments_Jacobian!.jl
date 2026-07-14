@@ -64,7 +64,7 @@ function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 		#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
 		#	Aod_offset += D^2
 		end
-		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
+		Aod_θ = reshape(θ[Aod_offset+1:Aod_offset+D^2], (D, D))
 	end
 
 	lambda = reshape(P, (D, D))'
@@ -315,7 +315,7 @@ function EK_moments_Jacobian_Simple!(jac_K, jac_G, θ, U, obj)
 					ν_offset += 1
 				end
 			end
-			ν = reshape(vcat(θ[ν_offset+1:ν_offset+D^2]), (D, D))
+			ν = reshape(θ[ν_offset+1:ν_offset+D^2], (D, D))
 		end
 		GravityMomentFirstApproach_Jacobian!(jac_G, τ, ν, Aod, cHat, D, Ū, offset, UoModel, sameMarginalsMoment, Aod_offset, ν_offset, θConstant,cHat, ∂A∂Aθ, ∂A∂μ)
 	end

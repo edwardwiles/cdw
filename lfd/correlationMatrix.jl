@@ -1,6 +1,6 @@
-function correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
+function correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
 
-	Matrix_Size = UoModel==0 ? D^2 : D
+	Matrix_Size = D
 	U_Means = zeros(Matrix_Size, 3, δ_grid_size)
 	U_Vars = zeros(Matrix_Size, 3, δ_grid_size)
 	corrMatrix = zeros(Matrix_Size, Matrix_Size, 3, δ_grid_size)  # D^2, D^2, lower/Initial/upper, δ
@@ -9,7 +9,7 @@ function correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_siz
 
 	for δ ∈ 1:δ_grid_size
 		@. RN[:, 1, δ] = LFD_lower[:, δ] .* SamplingWeights[:]
-		@. RN[:, 2, δ] = SamplingWeights[:] 
+		@. RN[:, 2, δ] = SamplingWeights[:]
 		@. RN[:, 3, δ] = LFD_upper[:, δ] .* SamplingWeights[:]
 	end
 

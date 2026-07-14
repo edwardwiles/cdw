@@ -1,22 +1,21 @@
 
 function createUDerivatives!(U, prestep_output, params)
 
-    @unpack W, D, σHat, θConstant, UoModel = params 
-    @unpack μHat, cHat = prestep_output 
+    @unpack W, D, σHat, θConstant = params
+    @unpack μHat, cHat = prestep_output
 
     # we keep a copy of U without exponents or scaling by cHat
-    sizeU = UoModel == 1 ? D : D*D
-    Ū = zeros(W, sizeU) 
+    Ū = zeros(W, D)
 
-    Ū[:, :] = U[:, :]
+    Ū[:, :] = U[:, :]
 
     if θConstant == 1
-        @. U[:] = U[:] .^ (-μHat) # if theta doesn't vary, then much faster to precalculate this matrix 
+        @. U[:] = U[:] .^ (-μHat) # if theta doesn't vary, then much faster to precalculate this matrix
         # reduction in computation time due to non-integer exponent substantially dominates higher memory usage
     end
 
-    Uσ = U .^ (1 - σHat) # precalculate 
+    Uσ = U .^ (1 - σHat) # precalculate
 
-    return Ū, Uσ
+    return Ū, Uσ
 
-end 
+end

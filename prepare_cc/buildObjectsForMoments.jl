@@ -33,7 +33,6 @@ function buildObjectsForMoments(
 	refIndex1,
 	OuterScaling,
 	usePMM,
-	UoModel,
 	NormalizeMoments,
 	useConfidenceIntervals =
 		globParams
@@ -55,7 +54,6 @@ function buildObjectsForMoments(
 		IndMomentOrder = IndMomentOrder,
 		OuterScaling = OuterScaling,
 		usePMM = usePMM,
-		UoModel = UoModel,
 		NormalizeMoments = NormalizeMoments,
 		useConfidenceIntervals = useConfidenceIntervals)
 
@@ -119,7 +117,6 @@ function get_θ_initial(globParams, μHat, wPrimeHat, γHat, γPrimeHat, Aod_ini
 	refIndex1,
 	OuterScaling,
 	usePMM,
-	UoModel,
 	NormalizeMoments,
 	useConfidenceIntervals = globParams
 
@@ -138,8 +135,6 @@ function get_θ_initial(globParams, μHat, wPrimeHat, γHat, γPrimeHat, Aod_ini
 
 			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, 1, Aod_initial, range(1 / (IndMomentOrder + 1), IndMomentOrder / (IndMomentOrder + 1), length = IndMomentOrder))
-			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0 # We will need to calculate E[ln ̄U]
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat, Aod_initial, zeros(D^2))
 			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat, wPrimeHat)
@@ -163,8 +158,6 @@ function get_θ_initial(globParams, μHat, wPrimeHat, γHat, γPrimeHat, Aod_ini
 
 			if independenceMoment == 1 # this also means sameMarginalsMoment == 1
 				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], 1, Aod_initial, range(1 / (IndMomentOrder + 1), IndMomentOrder / (IndMomentOrder + 1), length = IndMomentOrder))
-			elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0# We will need to calculate E[ln ̄U]
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], Aod_initial, ones(D^2) .* euler_gamma)
 			end
 		elseif sameMarginalsMoment == 1 # Fix Aod and do not allow Ubar to match
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
@@ -173,10 +166,6 @@ function get_θ_initial(globParams, μHat, wPrimeHat, γHat, γPrimeHat, Aod_ini
 			end
 		else # sameMarginalsMoment == 0 && OuterScaling == 0
 			θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex])
-			if GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
-				θ_initial = vcat(μHat, σHat, γHat, γPrimeHat[baseIndex], ones(D^2) .* euler_gamma)
-			end
-
 		end
 		return θ_initial
 	end

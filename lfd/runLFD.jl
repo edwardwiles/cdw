@@ -1,7 +1,7 @@
 function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output, params)
 	# this function takes the LFD RN derivative and creates PDF/ CDF and correlation graphs
 	# U realizations are not saved, becuase they are potentially large files, so we re-generate them here assuming we are using the same seed etc.
-	@unpack W, baseIndex, OuterScaling, counterType, independenceMoment, sameMarginalsMoment, GravityMomentFirstApproach, UoModel = params
+	@unpack W, baseIndex, OuterScaling, counterType, independenceMoment, sameMarginalsMoment, GravityMomentFirstApproach = params
 	@unpack data = setup_output
 	@unpack θ_initial, γ, δ_grid, file_name = prep_output
 	@unpack Θ_upper, κ_upper, Θ_lower, κ_lower = cc_output
@@ -11,7 +11,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	δ_grid_size = length(δ_grid)
 
 
-	U = γ.Ū # unscaled U
+	U = γ.Ū # unscaled U
 	cHat = γ.cHat
 	λData = data.λData
 	wHat = γ.wHat
@@ -22,19 +22,17 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	if OuterScaling == 1 # Aod model
 		counterType_θ_offset = 0
 		if counterType != 1
-			counterType_θ_offset = 2 * (D - 1) # D-1 wagesPrime and D-1 gamma_primes 
+			counterType_θ_offset = 2 * (D - 1) # D-1 wagesPrime and D-1 gamma_primes
 		end
 
 		Aod_offset = counterType_θ_offset + 3 + D
 		if independenceMoment == 1
 			Aod_offset += 1
-			#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
-			#	Aod_offset += D^2
 		end
 		for i ∈ 1:length(δ_grid)
-			Aod[1, i, :, :] = reshape(vcat(Θ_lower[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
-			Aod[2, i, :, :] = reshape(vcat(θ_initial[Aod_offset+1:Aod_offset+D^2]), (D, D))
-			Aod[3, i, :, :] = reshape(vcat(Θ_upper[Aod_offset+1:Aod_offset+D^2, i]), (D, D))
+			Aod[1, i, :, :] = reshape(Θ_lower[Aod_offset+1:Aod_offset+D^2, i], (D, D))
+			Aod[2, i, :, :] = reshape(θ_initial[Aod_offset+1:Aod_offset+D^2], (D, D))
+			Aod[3, i, :, :] = reshape(Θ_upper[Aod_offset+1:Aod_offset+D^2, i], (D, D))
 		end
 	end
 
@@ -47,7 +45,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 	SamplingWeights = γ.SamplingWeights
 
-	@show Dates.format(now(), "HH:MM") # print time 
+	@show Dates.format(now(), "HH:MM") # print time
 
 
 	u = range(0, 2, length = 100)
@@ -55,7 +53,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 	#x, domestic/rw/ratio, δ, bound=lower/initial/upper
 
-	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D, UoModel, θ_initial[1], Θ_upper[1], Θ_lower[1], wHat, τ)
+	marg_cdf = MarginalPricesCDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData, D, θ_initial[1], Θ_upper[1], Θ_lower[1], wHat, τ)
 	#marg_pdf = MarginalPricesPDF(u, baseIndex, Aod, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, λData)
 
 
@@ -93,12 +91,12 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	end
 
 	# x, δ, lower/initial/upper
-	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
-	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
+	y11 = UCDF(u, 1, 1, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
+	ybb = UCDF(u, baseIndex, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
 
 	yb = zeros(4, length(u), δ_grid_size, 3) # o=1:4, x, δ, lower/initial/upper
 	for i ∈ 1:4
-		yb[i, :, :, :] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
+		yb[i, :, :, :] = UCDF(u, i, baseIndex, U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
 	end
 
 
@@ -133,7 +131,7 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 
 
 	# D^2, D^2, lower/Initial/upper, δ
-	M = correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D, UoModel)
+	M = correlationMatrix(U, SamplingWeights, LFD_upper, LFD_lower, δ_grid_size, D)
 
 	for i ∈ 1:δ_grid_size
 
@@ -152,6 +150,6 @@ function runLFD(lfd_output, cc_output, prep_output, prestep_output, setup_output
 	end
 
 
-	@show Dates.format(now(), "HH:MM") # print time 
+	@show Dates.format(now(), "HH:MM") # print time
 
 end

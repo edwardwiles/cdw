@@ -1,7 +1,7 @@
 
 function ccOuter(prep_output, params)
 	# function that runs the CC outer loop
-	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian, Jac_W, independenceMoment, IndMomentOrder, OuterScaling, UoModel, sameMarginalsMoment, ForceFrechetMarginal, baseIndex = params
+	@unpack GravityMomentFirstApproach, counterType, useParallel, EK_moments!, EK_moments_Jacobian!, θConstant, use_Jacobian, Jac_W, independenceMoment, IndMomentOrder, OuterScaling, sameMarginalsMoment, ForceFrechetMarginal, baseIndex = params
 	@unpack θ_initial, θ_initial_low, θ_initial_up, U, γ, numMoments, δ_grid, outer_constr_index, inequality_index, nTotalMoments, file_name, complement_index = prep_output
 	D = length(γ.L)
 	δ_grid_size = length(δ_grid)

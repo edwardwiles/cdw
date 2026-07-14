@@ -1,18 +1,8 @@
-function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoModel, sameMarginalsMoment)
+function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, offset)
 
-	# constructs the moment that ΔΔ E[ln U] = ΔΔ ln Aod + ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
+	# constructs the moment that ΔΔ E[ln U] = ΔΔ ln Aod + ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
 
-
-	if sameMarginalsMoment == 0 && UoModel == 0# calculate the first moments of U
-		#E[ln Ū] = ν[o,d]
-		for o ∈ 1:D
-			for d ∈ 1:D
-				o1 = o + (d - 1) * D
-				@. G[:, offset+o1] = log(Ū[:, o1]) .- ν[o, d]
-			end
-		end
-	end
-	# if sameMarginalsMoment == 1 or UoModel ==1, we know that ΔΔ E[ln Ū] = 0
+	# ΔΔ E[ln Ū] = 0 always holds under UoModel=1
 
 	ΔΔν = doubleDiffLinear(ν)
 	ΔΔlncHat = doubleDiff(cHat)
@@ -26,13 +16,13 @@ function GravityMomentFirstApproach!(G, τ, ν, Aod, cHat, D, Ū, offset, UoMod
 
 end
 
-function GravityMomentFirstApproach_Jacobian!(Jac_G, τ, ν, Aod, cHat, D, Ū, offset, UoModel, sameMarginalsMoment, Aod_offset, ν_offset, OuterScaling, θConstant,CHat, ∂A∂Aθ, ∂A∂μ)
+function GravityMomentFirstApproach_Jacobian!(Jac_G, τ, ν, Aod, cHat, D, Ū, offset, UoModel, sameMarginalsMoment, Aod_offset, ν_offset, OuterScaling, θConstant,CHat, ∂A∂Aθ, ∂A∂μ)
 
-	# constructs the moment that ΔΔ E[ln U] = ΔΔ ln Aod + ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
+	# constructs the moment that ΔΔ E[ln U] = ΔΔ ln Aod + ΔΔ ln cHat + ΔΔ E[ln Ū] is mean independent of ΔΔ lnτ
 
 
 	if sameMarginalsMoment == 0 && UoModel == 0# calculate the first moments of U
-		#E[ln Ū] = ν[o,d]
+		#E[ln Ū] = ν[o,d]
 		for o ∈ 1:D
 			for d ∈ 1:D
 				o1 = o + (d - 1) * D
@@ -40,13 +30,13 @@ function GravityMomentFirstApproach_Jacobian!(Jac_G, τ, ν, Aod, cHat, D, Ū, 
 			end
 		end
 	end
-	# if sameMarginalsMoment == 1 or UoModel ==1, we know that ΔΔ E[ln Ū] = 0
+	# if sameMarginalsMoment == 1 or UoModel ==1, we know that ΔΔ E[ln Ū] = 0
 
 
 	deltaτ = doubleDiff(τ)
 	meanτ = mean(deltaτ)
 
-	if OuterScaling == 1 
+	if OuterScaling == 1
 	ΔΔlnAod_grad = doubleDiff_grad(Aod)
 	for o ∈ 1:D
 		for d ∈ 1:D
@@ -66,7 +56,7 @@ function GravityMomentFirstApproach_Jacobian!(Jac_G, τ, ν, Aod, cHat, D, Ū, 
 		end
 	end
 	end
-	
+
 
 	if sameMarginalsMoment == 0 && UoModel == 0
 		ΔΔν_grad = doubleDiffLinear_grad(ν)
@@ -77,7 +67,7 @@ function GravityMomentFirstApproach_Jacobian!(Jac_G, τ, ν, Aod, cHat, D, Ū, 
 
 				@. Jac_G[:, end, ν_offset+1+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, 1, 2]
 				@. Jac_G[:, end, ν_offset+o+D*(2-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, o, 2]
-				@. Jac_G[:, end, ν_offset+1+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, 1, d]			
+				@. Jac_G[:, end, ν_offset+1+D*(d-1)] += (deltaτ[o, d] - meanτ) * ΔΔν_grad[o, d, 1, d]
 			end
 		end
 	end

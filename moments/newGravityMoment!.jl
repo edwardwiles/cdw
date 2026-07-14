@@ -1,55 +1,25 @@
-function newGravityMoment!(G, τ, D, W, γ, Aod, U, GravityMomentFirstApproach, UoModel)
-	# constructs gravity moment, second approach [without additional parameters] (see theory note)
+function newGravityMoment!(G, τ, D, Aod, GravityMomentFirstApproach)
+	# constructs gravity moment (see theory note)
 
-	deltaτ = doubleDiff(τ)
-
-	meanτ = 0
-	for o ∈ 2:D
-
-		meanτ += deltaτ[o, 1]
-
-		for d ∈ 3:D
-			meanτ += deltaτ[o, d]
+	# F-independent gravity/orthogonality moment as an origin+destination fixed-effects regression:
+	# Σ_od (within lnτ)·(within lnA) = 0, with A the raw structural term (A_od = 1/AodPow, so
+	# ln A = -ln AodPow; the sign is irrelevant for =0). The two-way within transform reproduces
+	# the OLS-two-way-FE coefficient exactly (FWL).
+	#
+	# FWL also means the within-transform on the A side is REDUNDANT: Wτ is already orthogonal to
+	# the row/column means (by construction of withinTransform), so Σ Wτ·within(x) = Σ Wτ·x for
+	# ANY x — verified numerically (scratch/check_fwl.jl, agreement to ~1e-15 across D=3..10, and
+	# again with x = ln(A^(-μ)) directly). So we dot Wτ against raw ln(Aod) instead of
+	# withinTransform(Aod): identical value, one fewer D×D log+demean pass, and a shorter autodiff
+	# chain (no need to differentiate the demeaning operation w.r.t. Aod_θ).
+	Wτ = withinTransform(τ)
+	lnAod = log.(Aod)   # `Aod` here is AodPow (passed from moments!); ln(AodPow) = -ln(A_od)
+	sumGrav = zero(eltype(lnAod))
+	for o ∈ 1:D
+		for d ∈ 1:D
+			sumGrav += Wτ[o, d] * lnAod[o, d]
 		end
 	end
-	meanτ /= (D - 1)^2
-
-	if UoModel == 1
-
-		# F-independent gravity/orthogonality moment as an origin+destination fixed-effects regression:
-		# Σ_od (within lnτ)·(within lnA) = 0, with A the raw structural term (A_od = 1/AodPow, so
-		# ln A = -ln AodPow; the sign is irrelevant for =0). The two-way within transform reproduces
-		# the OLS-two-way-FE coefficient exactly (FWL); the old cell double-difference did not.
-		Wτ = withinTransform(τ)
-		WA = withinTransform(Aod)   # `Aod` here is AodPow (passed from moments!); = -within(ln A_od)
-		sumGrav = zero(eltype(WA))
-		for o ∈ 1:D
-			for d ∈ 1:D
-				sumGrav += Wτ[o, d] * WA[o, d]
-			end
-		end
-		@. G[:, end-GravityMomentFirstApproach] = sumGrav
-	else
-
-		U_ω = zeros(eltype(γ), size(τ))
-
-		for ω ∈ 1:W
-			sumGrav = 0
-			@. U_ω[:] = U[ω, :]
-			deltaU = doubleDiff(reshape(U_ω, (D, D))[:, :] .* Aod[:, :])
-
-			for o ∈ 2:D
-
-				sumGrav += (deltaτ[o, 1] - meanτ) * deltaU[o, 1]
-
-				for d ∈ 3:D
-					sumGrav += (deltaτ[o, d] - meanτ) * deltaU[o, d]
-				end
-			end
-			sumGrav /= (D - 1)^2
-
-			G[ω, end-GravityMomentFirstApproach] = sumGrav
-		end
-	end
+	@. G[:, end-GravityMomentFirstApproach] = sumGrav
 
 end
