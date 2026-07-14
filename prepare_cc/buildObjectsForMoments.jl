@@ -79,10 +79,14 @@ function buildObjectsForMoments(
 		indicators = indicators,
 		wPrimeHat = wPrimeHat,
 		Uσ = Uσ,
-		# preallocated Float64 scratch for U^{-μ} / Uσ^{-μ} (reused on the Float64 moment path;
-		# the ForwardDiff/Dual path still allocates per call since a Float64 buffer can't hold Duals)
+		# preallocated Float64 scratch for U^{-μ} / Uσ^{-μ}, reused across calls whenever μ's
+		# actual value hasn't changed (μPow_cache holds the μ value the scratch currently
+		# corresponds to; NaN forces recompute on the first call). This is safe even when θ is
+		# ForwardDiff-Dual-typed overall (e.g. Aod_θ is being differentiated) AS LONG AS μ itself
+		# carries no nonzero partials for that call -- see moments!.jl for the check.
 		UPow_scratch = zeros(size(Uσ)),
 		UσPow_scratch = zeros(size(Uσ)),
+		μPow_cache = Ref(NaN),
 		Ū = Ū,
 		μHat = μHat,
 		D = D,

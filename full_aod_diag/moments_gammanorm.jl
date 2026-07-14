@@ -49,7 +49,7 @@ PMM/NormalizeMoments/SamplingWeights bookkeeping) is byte-identical to
 EK_moments_simple! — only the γ'-derivation block differs.
 """
 function EK_moments_gammanorm!(K, G, θ, U, obj)
-	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch, μPow_cache = obj.γ
 	@unpack counterExplicit,
 	counterType,
 	θConstant,
@@ -109,19 +109,15 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 	end
 
 	if θConstant != 1
-		if eltype(θ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
-			UPow = UPow_scratch
-			UσPow = UσPow_scratch
-		else
-			UPow = zeros(eltype(θ), size(U))
-			UσPow = zeros(eltype(θ), size(U))
-		end
+		# recomputes into the shared Float64 scratch only if μ's value actually changed since the
+		# last call (or falls back to a fresh per-call Dual array if μ itself is being
+		# differentiated this call) -- see moments/moments!.jl::ensure_UPow!'s docstring.
+		UPow, UσPow = ensure_UPow!(UPow_scratch, UσPow_scratch, μPow_cache, U, Uσ, μ)
+
 		Th = Threads.nthreads()
 		Threads.@threads for t ∈ 1:Th
 			ix0 = round(Int, (t - 1) / Th * W) + 1
 			ix1 = round(Int, t / Th * W)
-			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] .^ (-μ)
-			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] .^ (-μ)
 			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat)
 			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex)
 		end
@@ -190,7 +186,7 @@ LARGEST γ'_focal, i.e. callers must swap `find_smallest` relative to the
 as its (sign-corrected) extremal value.
 """
 function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
-	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch, μPow_cache = obj.γ
 	@unpack counterExplicit,
 	counterType,
 	θConstant,
@@ -248,19 +244,15 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	end
 
 	if θConstant != 1
-		if eltype(θ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
-			UPow = UPow_scratch
-			UσPow = UσPow_scratch
-		else
-			UPow = zeros(eltype(θ), size(U))
-			UσPow = zeros(eltype(θ), size(U))
-		end
+		# recomputes into the shared Float64 scratch only if μ's value actually changed since the
+		# last call (or falls back to a fresh per-call Dual array if μ itself is being
+		# differentiated this call) -- see moments/moments!.jl::ensure_UPow!'s docstring.
+		UPow, UσPow = ensure_UPow!(UPow_scratch, UσPow_scratch, μPow_cache, U, Uσ, μ)
+
 		Th = Threads.nthreads()
 		Threads.@threads for t ∈ 1:Th
 			ix0 = round(Int, (t - 1) / Th * W) + 1
 			ix1 = round(Int, t / Th * W)
-			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] .^ (-μ)
-			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] .^ (-μ)
 			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat)
 			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex)
 		end

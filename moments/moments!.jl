@@ -1,8 +1,52 @@
+"""
+    ensure_UPow!(UPow_scratch, UσPow_scratch, μPow_cache, U, Uσ, μ) -> (UPow, UσPow)
+
+Returns U^(-μ), Uσ^(-μ), recomputing into the shared Float64 scratch buffers only if μ's VALUE
+has changed since the last call (μPow_cache holds the μ value the scratch currently corresponds
+to; starts at NaN so the first call always recomputes). Safe even when θ overall is
+ForwardDiff-Dual-typed (e.g. Aod_θ is being differentiated) as long as μ itself carries no
+nonzero partials for this particular call -- in that case only Aod/AodPow (not U^(-μ)) actually
+needs to be Dual, and hFunction!/hFunctionCounter!'s promote_type-based scratch typing handles
+the resulting mixed Float64/Dual arithmetic correctly.
+
+If μ DOES carry nonzero partials (μ itself is being differentiated), the cache is bypassed
+entirely and a fresh Dual-typed array is computed every call, exactly as before -- reusing the
+cache here would silently drop μ's own derivative.
+"""
+function ensure_UPow!(UPow_scratch, UσPow_scratch, μPow_cache::Ref{Float64}, U, Uσ, μ)
+	W = size(U, 1)
+	T = Threads.nthreads()
+
+	if μ isa ForwardDiff.Dual && !iszero(ForwardDiff.partials(μ))
+		UPow = zeros(eltype(μ), size(U))
+		UσPow = zeros(eltype(μ), size(U))
+		Threads.@threads for t ∈ 1:T
+			ix0 = round(Int, (t - 1) / T * W) + 1
+			ix1 = round(Int, t / T * W)
+			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] ^ (-μ)
+			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] ^ (-μ)
+		end
+		return UPow, UσPow
+	end
+
+	μ_val = ForwardDiff.value(μ)
+	if μPow_cache[] !== μ_val
+		Threads.@threads for t ∈ 1:T
+			ix0 = round(Int, (t - 1) / T * W) + 1
+			ix1 = round(Int, t / T * W)
+			@. UPow_scratch[ix0:ix1, :] = U[ix0:ix1, :] ^ (-μ_val)
+			@. UσPow_scratch[ix0:ix1, :] = Uσ[ix0:ix1, :] ^ (-μ_val)
+		end
+		μPow_cache[] = μ_val
+	end
+	return UPow_scratch, UσPow_scratch
+end
+
 function EK_moments_simple!(K, G, θ, U, obj)
 	# main function that takes empty K and G, and the parameters, and fills in the moment matrices
 
 	# unpack the gamma (auxiliary parameters) vector
-	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch = obj.γ
+	@unpack wHat, L, LPrime, τ, τPrime, P, σ_Moments, baseIndex, refIndex1, indicators, Uσ, μHat, CDF_Moments, Ind_Moments, cHat, IndCDF_Cells, Ū, numMomentsSimple, SamplingWeights, PMM, moments_without_var, UPow_scratch, UσPow_scratch, μPow_cache = obj.γ
 	@unpack counterExplicit,
 	counterType,
 	θConstant,
@@ -115,22 +159,15 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		# nb: calculate here as don't want to do it in each hFunction call
 		# only do this if theta / sigma ever vary, otherwise we precalculate
 
+		# recomputes into the shared Float64 scratch only if μ's value actually changed since the
+		# last call (or falls back to a fresh per-call Dual array if μ itself is being
+		# differentiated this call) -- see ensure_UPow!'s docstring.
+		UPow, UσPow = ensure_UPow!(UPow_scratch, UσPow_scratch, μPow_cache, U, Uσ, μ)
 
-		#UPow = copy(U)
-		# reuse preallocated Float64 scratch on the Float64 path; allocate Duals under ForwardDiff
-		if eltype(θ) === Float64 && size(UPow_scratch, 1) == size(U, 1)
-			UPow = UPow_scratch
-			UσPow = UσPow_scratch
-		else
-			UPow = zeros(eltype(θ), size(U))
-			UσPow = zeros(eltype(θ), size(U))
-		end
 		T = Threads.nthreads()
 		Threads.@threads for t ∈ 1:T
 			ix0 = round(Int, (t - 1) / T * W) + 1
 			ix1 = round(Int, t / T * W)
-			@. UPow[ix0:ix1, :] = U[ix0:ix1, :] .^ (-μ)
-			@. UσPow[ix0:ix1, :] = Uσ[ix0:ix1, :] .^ (-μ)
 			hFunction!(@view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wHat, τ, σ, AodPow, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach, independenceMoment, μHat) # fill in G with baseline moments
 			hFunctionCounter!(@view(K[ix0:ix1, :]), @view(G[ix0:ix1, :]), @view(UPow[ix0:ix1, :]), @view(UσPow[ix0:ix1, :]), wPrime, τPrime, σ, γ_prime, AodPow, LPrime, counterType, baseIndex) # fill in G with counterfactual moments, fill in K
 		end
