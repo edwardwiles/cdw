@@ -32,7 +32,22 @@ include(joinpath(@__DIR__, "focal_moments.jl"))
 include(joinpath(@__DIR__, "focal_moments_directgp.jl"))
 include(joinpath(@__DIR__, "profiled_gravity.jl"))
 using .ProfiledGravity
+# Independent hard-max (rho=0) verification of a converged best-feasible point -- see
+# hardmax_verify.jl's own docstring and derivative_diagnostics/hardmax_inversion_report.md.
+# Wired into run_one_bound below (VERIFY_HARDMAX env var, default on).
+include(joinpath(@__DIR__, "hardmax_verify.jl"))
 CS.include(joinpath(@__DIR__, "PsiObjectiveBundleImplicitMethodB.jl"))
+# gradient_method support (Part 5 of the winner-boundary-derivative task): additive, no effect
+# unless outer_solve_nested_cached is called with gradient_method != :pointwise_ad (the default).
+include(joinpath(@__DIR__, "derivative_diagnostics", "fixed_dual_criterion.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "fixed_dual_fd.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "full_fixed_dual_criterion.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "full_profile_resolve.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "full_sample_exact_control.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "fixed_A_incumbent.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "boundary_derivative.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "gradient_method_wiring.jl"))
+include(joinpath(@__DIR__, "derivative_diagnostics", "full_gradient_method_wiring.jl"))
 
 const DVAL = parse(Int, get(ENV, "DVAL", "4"))
 const WVAL = parse(Int, get(ENV, "WVAL", "8000"))
@@ -69,6 +84,46 @@ if PARALLEL_INVERSION
     BLAS.set_num_threads(1)   # avoid oversubscription vs the outer Threads.@threads over destinations
     @printf("[PARALLEL_INVERSION=true] julia threads=%d, BLAS threads set to 1\n", Threads.nthreads())
     Threads.nthreads() == 1 && @warn "PARALLEL_INVERSION=true but Julia was launched with only 1 thread (-t 1); this will run serially. Relaunch with `julia -t N` (N >= D-1) to get any speedup."
+end
+
+# Warm-starting the inner CC dual solve (recover_lfd's KNITRO call). Investigated + validated
+# 2026-07-16 (head_to_head/experiment_dual_warmstart*.jl, HANDOFF_2026-07-16_recover_lfd_bug.md):
+# mechanically correct and never hurts (identical accepted results, iteration counts equal-or-lower
+# vs cold at every call in the controlled 3-point test), so :persist is the default. Three modes:
+#   :cold             -- never warm-start (old behavior, every recover_lfd call solves from zero)
+#   :reset_per_theta  -- warm-start ACROSS seq_gravcol's own within-theta k=1..maxit augmented
+#                        re-solves (re-solving because the linearized gravity moment shifts each
+#                        iteration), but reset to cold at the start of every NEW theta
+#   :persist          -- same within-theta warm start, PLUS never reset across theta either -- a new
+#                        theta's first (blind) recover_lfd call warm-starts from the previous
+#                        theta's last converged dual. Only ever cached on a converged solve (nStatus
+#                        acceptable) -- a failed solve never poisons the cache.
+# Global mutable cache (not threaded through function signatures, to avoid touching the ~50 files
+# across this repo that call recover_lfd/seq_gravcol with their existing signatures) -- safe ONLY
+# because recover_lfd/seq_gravcol are never called concurrently from multiple threads in this
+# codebase (BlackBoxOptim's own fitness evaluation is serial; PARALLEL_INVERSION's Threads.@threads
+# is one level BELOW recover_lfd, over destinations, and never re-enters it). If that ever changes
+# (e.g. parallel BBO population evaluation), this cache would need to become task-local.
+const DUAL_WARM_MODE = Ref{Symbol}(Symbol(get(ENV, "DUAL_WARM_MODE", "persist")))  # :cold | :reset_per_theta | :persist
+const _DUAL_CACHE = Dict{Symbol,Any}(:blind => nothing, :aug => nothing)
+@assert DUAL_WARM_MODE[] ∈ (:cold, :reset_per_theta, :persist) "DUAL_WARM_MODE must be :cold, :reset_per_theta, or :persist, got $(DUAL_WARM_MODE[])"
+
+# Handles the D+2 (blind, D+1 moments) <-> D+3 (augmented, D+2 moments once gravity is linearized
+# in) dimension mismatch: truncates a longer cached dual (drop the newest lambda) or zero-pads a
+# shorter one (cold-start only the genuinely-new coordinate), reusing the rest as-is.
+function _dual_warmstart_for(target_oci::Int)
+    DUAL_WARM_MODE[] === :cold && return nothing
+    xa = _DUAL_CACHE[:aug]
+    if xa !== nothing
+        length(xa) == target_oci && return copy(xa)
+        length(xa) >  target_oci && return xa[1:target_oci]
+    end
+    xb = _DUAL_CACHE[:blind]
+    if xb !== nothing
+        length(xb) == target_oci && return copy(xb)
+        length(xb) <  target_oci && return vcat(xb, zeros(target_oci - length(xb)))
+    end
+    return nothing
 end
 
 # Additive-only timing instrumentation (zero economic/control-flow change): the existing
@@ -135,11 +190,27 @@ end
 
 function recover_lfd(θ, moments_fn, d)
     oci = d + 1
+    x_init = _dual_warmstart_for(oci)
+    use_warm = x_init !== nothing
     obj = PsiObjectiveBundleDelta(γ = γ, (moments!) = moments_fn, moments_jacobian! = error,
         d = d, outer_constr_index = oci, inequality_index = Int64[], complement_index = [0 0],
-        l = length(θ), U = U, N = JacW, lower_limit = -5000,
+        l = length(θ), U = U, N = JacW, lower_limit = -5000, use_cached_x = use_warm,
         outer_loop_opt = "ek_outer_loop_options.opt", inner_loop_opt = "ek_inner_loop_options.opt")
+    use_warm && (obj.x .= x_init)
     val, x, nStatus = inner_loop(obj, θ)
+    # BUG FIX (2026-07-16): inner_loop_internal(obj::PsiObjectiveBundleDelta,...) already computes
+    # δ* and the dual multipliers x together in one KNITRO solve, and already classifies nStatus --
+    # but on a REJECTED status (e.g. -300 = KN_RC_UNBOUNDED, observed in practice at extreme
+    # far-from-A* candidates reached by the global/population methods) it only NaNs its own cache
+    # field `obj.x`, NOT the x it returns to this caller. Checking only `all(isfinite, x)` (as this
+    # function used to) therefore silently accepted the RAW, non-NaN'd garbage KNITRO left behind
+    # from a genuinely failed/unbounded solve, deriving a bogus LFD from it -- which then looked
+    # internally consistent (small gravity residual, in-budget divergence, computed FROM that same
+    # bogus p) while the underlying trade shares were violated by several percent. Confirmed via a
+    # direct re-run: nStatus was -300 with all(isfinite,x)==true. Reject explicitly on nStatus,
+    # matching the same acceptable-status convention already used elsewhere in this codebase (e.g.
+    # outer_solve_nested_cached's own probe-solve check).
+    nStatus ∈ (0, -100, -101, -103) || return fill(1.0 / W, W), false
     all(isfinite, x) || return fill(1.0 / W, W), false
     G = zeros(W, d); K = zeros(W); moments_fn(K, G, θ, U, (γ = γ,))
     arg0 = zeros(W)
@@ -147,6 +218,7 @@ function recover_lfd(θ, moments_fn, d)
     LFD = zeros(W); dPsi!(LFD, arg0)
     s = sum(LFD)
     (isfinite(s) && s > 0 && all(isfinite, LFD) && all(≥(0), LFD)) || return fill(1.0 / W, W), false
+    DUAL_WARM_MODE[] !== :cold && (_DUAL_CACHE[d == D + 1 ? :blind : :aug] = x)
     return LFD ./ s, true
 end
 
@@ -167,6 +239,10 @@ end
 
 function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing,
                      warm_p::Union{Nothing,AbstractVector} = nothing, verbose = false)
+    # Every top-level seq_gravcol call is, by construction, one genuinely new theta -- so this is
+    # the right place to reset the dual-warm-start cache for :reset_per_theta (see DUAL_WARM_MODE
+    # above). :persist never resets here; :cold never populates the cache in the first place.
+    DUAL_WARM_MODE[] === :reset_per_theta && (_DUAL_CACHE[:blind] = nothing; _DUAL_CACHE[:aug] = nothing)
     μ = θ[1]
     (isfinite(μ) && μ > 0) || return zeros(W), Inf, Inf, nothing, fill(1.0/W, W), false
     log_x = build_log_x(Uσ, μ); uf = focal_u(θ)
@@ -419,7 +495,13 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
             @inbounds @views @. G[:, D+2] = gcol[][1:nrow]
         end
     end
-    return m!, gcol, lastRmean, best_θ, best_κ, best_warm
+    # lastθ/lastRcol/dRdθ are additionally exposed (beyond the pre-existing gcol/lastRmean) so that
+    # an external caller (derivative_diagnostics/full_fixed_dual_criterion.jl) can reconstruct the
+    # IDENTICAL frozen affine gravity-moment surrogate this closure uses internally for Dual theta,
+    # evaluated at Float64 theta too (needed for finite differences, which perturb Float64, not
+    # Dual, theta) -- see full_fixed_dual_criterion.jl::make_frozen_gravity_moments. Purely additive:
+    # no change to any existing return value or behavior.
+    return m!, gcol, lastRmean, best_θ, best_κ, best_warm, lastθ, lastRcol, dRdθ, lastok
 end
 
 # ---- NEW: cached, free-only outer solve (replaces plain `outer_loop` over the full theta) ----
@@ -439,10 +521,39 @@ function make_seq_div_grad_fn!(obj, fpmap)
     end
 end
 
-function outer_solve_nested_cached(find_smallest, θinit; use_exact_grad::Bool = true, δ::Real = δ)
+"""
+    outer_solve_nested_cached(find_smallest, θinit; use_exact_grad=true, δ=δ, gradient_method=:pointwise_ad)
+
+`gradient_method` selects the divergence-budget outer-constraint gradient:
+  - `:pointwise_ad`      -- unchanged existing behavior (ForwardDiff through
+                            the hard argmin winner; provably misses the
+                            winner-boundary term, see derivative_methods_report.md).
+  - `:fixed_dual_fd_full`-- CORRECT: central finite differences of the exact
+                            FULL (D+2)-moment fixed-dual criterion (includes
+                            the gravity-linearized moment and its own dual
+                            multiplier lambda_R in the conjugate argument, not
+                            just the D+1 trade/price-index moments). Directly
+                            REPLACES the Acol block of g_free (no additive
+                            correction). See full_gradient_method_wiring.jl.
+  - `:boundary_full`     -- full-(D+2) conditional winner-boundary estimator
+                            (analogous correction to :fixed_dual_fd_full).
+  - `:fixed_dual_fd`, `:boundary` -- OLD, DEPRECATED (D+1)-reduced additive-
+                            correction methods (gradient_method_wiring.jl).
+                            These silently dropped lambda_R*G_R from the
+                            winner-boundary jump, which is not generally
+                            valid since Psi(arg0) is nonlinear in the full
+                            conjugate argument. Kept only for A/B regression
+                            comparison against the corrected methods -- do
+                            NOT use for production/paper results.
+For all methods, gamma'_focal's own gradient component (x_free[1]) is the
+existing full-(D+2) AD gradient, which is exact for that coordinate (no
+winner/argmax dependence on theta[3]).
+"""
+function outer_solve_nested_cached(find_smallest, θinit; use_exact_grad::Bool = true, δ::Real = δ,
+        gradient_method::Symbol = :pointwise_ad, use_var_scaling::Bool = false, scaling_power::Float64 = 1.0)
     d = D + 2; oci = d + 1
     CS.check_methodB_valid(d, oci)
-    m!, gcol, lastRmean, best_θ, best_κ, best_warm = make_stateful_moments(; use_exact_grad = use_exact_grad, find_smallest = find_smallest, δ = δ)
+    m!, gcol, lastRmean, best_θ, best_κ, best_warm, lastθ_st, lastRcol_st, dRdθ_st, lastok_st = make_stateful_moments(; use_exact_grad = use_exact_grad, find_smallest = find_smallest, δ = δ)
     obj = CS.PsiObjectiveBundleImplicitMethodB(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = m!, moments_jacobian! = error, d = d, outer_constr_index = oci,
         inequality_index = Int64[], complement_index = [0 0], l = length(θinit), U = U, N = JacW,
@@ -456,15 +567,66 @@ function outer_solve_nested_cached(find_smallest, θinit; use_exact_grad::Bool =
     fpmap = CS.FreeParamMap(l_full, free_idx, fixed_idx, fixed_vals)
     @assert CS.n_free(fpmap) == D + 1
 
-    div_grad_fn! = make_seq_div_grad_fn!(obj, fpmap)
+    div_grad_fn! = if gradient_method == :pointwise_ad
+        make_seq_div_grad_fn!(obj, fpmap)
+    elseif gradient_method in (:fixed_dual_fd, :boundary)
+        # OLD, flawed (D+1)-reduced additive-correction methods -- kept only for A/B regression
+        # comparison against the corrected :fixed_dual_fd_full / :boundary_full methods below; do
+        # not use for production results (see full_gradient_method_wiring.jl's module docstring).
+        make_seq_div_grad_fn_corrected!(obj, fpmap, γ, U, D, (1 / θinit[1]) / (σ - 1), gradient_method)
+    elseif gradient_method in (:fixed_dual_fd_full, :boundary_full)
+        make_seq_div_grad_fn_full!(obj, fpmap, γ, U, D, gcol, lastθ_st, lastRcol_st, dRdθ_st, lastok_st, gradient_method)
+    else
+        error("unknown gradient_method $gradient_method")
+    end
     function obj_grad_fn!(g_free, x_free)
         fill!(g_free, 0.0)
         g_free[1] = (-1.0)^find_smallest   # K = gamma'_focal = x_free[1] directly
     end
 
+    # Optional per-variable KNITRO scaling (Part 12-adjacent numerical fix, additive/off by
+    # default): a probe inner solve + one gradient evaluation AT theta_init gives a representative
+    # constraint-gradient magnitude per free coordinate. Addresses a severe cross-variable scale
+    # mismatch found at D=20 real data (gamma'_focal's own constraint-gradient component ~1e8 vs
+    # the entire Acol block ~10-11500), which appeared to leave Acol unexplored regardless of
+    # gradient_method. This probe solve is thrown away (one extra inner solve, negligible next to
+    # the whole outer search) -- it does not seed outer_loop_cached's own cache.
+    #
+    # IMPORTANT (first attempt got this wrong): scaling EVERY coordinate by 1/|g_probe[i]|,
+    # INCLUDING x_free[1]=gamma'_focal, also rescales the OUTER OBJECTIVE's gradient (obj_grad_fn!
+    # is a hard-coded +-1 at index 1, 0 elsewhere -- untouched by var_scales, since KNITRO variable
+    # scaling is a property of the VARIABLE shared by objective AND constraint). Scaling index 1 by
+    # 1/|g_probe[1]| (~1e-9 at D=4) shrinks the SCALED objective gradient to ~0 everywhere, so
+    # KNITRO's own KKT check is satisfied trivially at lambda~0 WITHOUT moving at all -- caught
+    # immediately: a D=4 test converged in 0 iterations at theta_init with the naive scaling,
+    # WORSE than no scaling at all (which genuinely explores and improves kappa). Fixed: leave
+    # gamma'_focal's own scale at 1.0 (preserving the objective's natural units exactly), and
+    # rescale ONLY the Acol block RELATIVE to gamma's own constraint-gradient magnitude, so each
+    # Acol coordinate's constraint-sensitivity becomes comparable in ABSOLUTE size to gamma's own
+    # (not driven to some arbitrary O(1) that ignores the objective's own natural scale).
+    var_scales = nothing
+    if use_var_scaling
+        x_free0 = CS.pack_free(θinit, fpmap)
+        _, inner_x0, nStatus0 = inner_loop(obj, θinit)
+        nStatus0 in (0, -100, -101, -103) || @warn "use_var_scaling: probe inner solve at theta_init did not cleanly converge (status=$nStatus0); scaling may be unreliable"
+        g_probe = zeros(length(x_free0))
+        div_grad_fn!(g_probe, x_free0, θinit, inner_x0)
+        ref_mag = abs(g_probe[1])   # gamma'_focal's own constraint-gradient magnitude -- the reference scale
+        floor_mag = 1e-8 * maximum(abs, g_probe)
+        # scaling_power=1.0 (full ratio match) OVERCORRECTED at D=4: A moved 383% (vs 31%
+        # unscaled) but converged to a WORSE, non-converged (status -102) result in 6x the wall
+        # time -- KNITRO evidently takes too-aggressive steps in the newly-inflated Acol
+        # directions. scaling_power<1 (e.g. 0.5 = sqrt of the ratio) is a caller-tunable
+        # compromise between "no correction" (1.0, i.e. scale=1 for Acol, the pre-scaling
+        # default reached via power=0) and "full magnitude match" (power=1).
+        var_scales = [1.0; [(ref_mag / max(abs(g_probe[i]), floor_mag))^scaling_power for i in 2:length(g_probe)]]
+        @printf("  [use_var_scaling] probe |g_free| range = [%.3e, %.3e] (gamma'=%.3e)  Acol scaleFactors range = [%.3e, %.3e]\n",
+                minimum(abs, g_probe), maximum(abs, g_probe), ref_mag, minimum(var_scales[2:end]), maximum(var_scales[2:end]))
+    end
+
     r = CS.outer_loop_cached(obj, fpmap, θ_lo, θ_hi, θinit;
         obj_grad_fn! = obj_grad_fn!, div_grad_fn! = div_grad_fn!,
-        has_gravity = false, use_cache = true, outer_loop_opt = OUTER_OPT_FILE)
+        has_gravity = false, use_cache = true, outer_loop_opt = OUTER_OPT_FILE, var_scales = var_scales)
 
     gp = r.θ_min_full[3]
     gp, r.θ_min_full, r.nStatus, best_θ[], best_κ[], best_warm[], r.cache
@@ -477,11 +639,49 @@ KAPPA_POINT_EST = 1 - GP_POINT_EST^(σ/(σ-1))
 
 gp2kappa(gp) = 1 - gp^(σ/(σ-1))
 
+"""
+`GRADIENT_METHOD` env var (default `pointwise_ad`, fully backward compatible): selects
+`outer_solve_nested_cached`'s `gradient_method` keyword for the WHOLE batch loop below --
+`pointwise_ad` (existing default, provably misses the winner-boundary term),
+`fixed_dual_fd_full` (corrected full-(D+2) fixed-dual finite-difference derivative, see
+derivative_diagnostics/full_d2_correction_report.md), or the deprecated reduced-model
+`fixed_dual_fd`/`boundary` kept only for A/B comparison.
+"""
+const GRADIENT_METHOD = Symbol(get(ENV, "GRADIENT_METHOD", "pointwise_ad"))
+"""
+`USE_VAR_SCALING` env var (default false, fully backward compatible): threads
+`outer_solve_nested_cached`'s `use_var_scaling` keyword -- see that function's own comment for
+what this does and why (a severe gamma'-vs-Acol constraint-gradient scale mismatch found at D=20
+real data that appeared to leave Acol unexplored regardless of gradient_method).
+"""
+const USE_VAR_SCALING = lowercase(get(ENV, "USE_VAR_SCALING", "false")) in ("1", "true", "yes")
+"""
+`SCALING_POWER` env var (default 1.0, matching `outer_solve_nested_cached`'s own default):
+threads the `scaling_power` keyword through. BUG FOUND AND FIXED: this was previously NOT
+threaded through `run_one_bound` at all -- every batch-loop run using USE_VAR_SCALING=true
+(including the D=20 delta-grid run reported as "scaling_power=0.5" in
+full_d2_correction_report.md/D20_METHOD_WRITEUP.md) silently used the function default
+(1.0), not whatever SCALING_POWER env var was set (that env var only existed in the
+standalone debug_scaling_d4.jl script until now). The D=20 delta-grid RESULTS themselves
+remain independently verified and valid (see verify_d20_deltagrid.jl) -- only their
+documented scaling_power label was wrong; see the correction in full_d2_correction_report.md.
+"""
+const SCALING_POWER = parse(Float64, get(ENV, "SCALING_POWER", "1.0"))
+"""
+`VERIFY_HARDMAX` env var (default true): after the outer loop settles on a best-feasible theta,
+independently re-check it against the TRUE hard-max (rho=0) economic model (`hardmax_verify.jl`)
+before it gets saved/reported, rather than trusting the smoothed (rho>0) inversion's own
+gravity-feasibility check alone. Adds ~1-3 min per saved (bound,delta) checkpoint at D=20/W=80000
+(see derivative_diagnostics/hardmax_inversion_report.md for timing at other W). Off-switch is
+for fast dev iteration only -- keep this on for anything whose kappa/gamma' might get reported.
+"""
+const VERIFY_HARDMAX = lowercase(get(ENV, "VERIFY_HARDMAX", "true")) in ("1", "true", "yes")
+
 function run_one_bound(name::Symbol, fs::Bool, δval::Real, θinit)
-    @printf("\n----- %s bound: gamma'_focal %s, delta=%g (warm-started) -----\n", name, fs ? "MINIMIZED" : "MAXIMIZED", δval); flush(stdout)
+    @printf("\n----- %s bound: gamma'_focal %s, delta=%g (warm-started), gradient_method=%s, use_var_scaling=%s, scaling_power=%.3g -----\n", name, fs ? "MINIMIZED" : "MAXIMIZED", δval, GRADIENT_METHOD, USE_VAR_SCALING, SCALING_POWER); flush(stdout)
     t0 = time()
     timing_before = seq_timing_snapshot()
-    gp, θstar, st, bθ, b_gp, bwarm, cache = outer_solve_nested_cached(fs, θinit; use_exact_grad = true, δ = δval)
+    gp, θstar, st, bθ, b_gp, bwarm, cache = outer_solve_nested_cached(fs, θinit; use_exact_grad = true, δ = δval, gradient_method = GRADIENT_METHOD, use_var_scaling = USE_VAR_SCALING, scaling_power = SCALING_POWER)
     κ = gp2kappa(gp)
     _, Rθ, _, _, _, okθ = seq_gravcol(θstar; δ = δval)
     CS.summarize(cache; label = "$name bound cache stats")
@@ -494,13 +694,28 @@ function run_one_bound(name::Symbol, fs::Bool, δval::Real, θinit)
     if bθ === nothing
         @printf("  best-feasible: NONE FOUND\n")
         return (κ = κ, gp = gp, R = Rθ, ok = okθ, best_κ = NaN, best_gp = NaN, best_θ = nothing, best_ok = false,
-                θstar = θstar, cache = cache, nStatus = st, wall = wall, seqt = seqt)
+                θstar = θstar, cache = cache, nStatus = st, wall = wall, seqt = seqt,
+                hardmax_verified = false, hardmax_focal_err = NaN, hardmax_R_mean = NaN,
+                hardmax_max_share_err = NaN, hardmax_mean_share_err = NaN, hardmax_homotopy_all_ok = false,
+                hardmax_wall = 0.0)
     else
-        _, Rb, _, _, _, okb = seq_gravcol(bθ; δ = δval, warm = bwarm)
+        _, Rb, _, umat_b, p_b, okb = seq_gravcol(bθ; δ = δval, warm = bwarm)
         bκ = gp2kappa(b_gp)
         @printf("  best-feasible: gamma'_%s = %.6f -> kappa = %.6f  exact R_mean = %.3e  gravity-feasible=%s\n", name, b_gp, bκ, Rb, okb)
+        if VERIFY_HARDMAX
+            hv = verify_hardmax_point(bθ, umat_b, p_b)
+            @printf("  HARD-MAX VERIFY: hardmax_verified=%s  R_mean_hardmax=%.3e  focal_err=%.3e  max_share_err=%.3e  mean_share_err=%.3e  homotopy_all_ok=%s  wall=%.1fs\n",
+                    hv.verified, hv.R_mean_hardmax, hv.focal_err, hv.max_hard_err, hv.mean_hard_err, hv.homotopy_all_ok, hv.wall)
+            hv.verified || @printf("  *** WARNING: this point is NOT independently hard-max-verified -- the reported kappa/gamma' rests on the SMOOTHED model's gravity check only ***\n")
+        else
+            hv = (verified = missing, focal_err = NaN, R_mean_hardmax = NaN, max_hard_err = NaN,
+                  mean_hard_err = NaN, homotopy_all_ok = missing, wall = 0.0)
+        end
         return (κ = κ, gp = gp, R = Rθ, ok = okθ, best_κ = bκ, best_gp = b_gp, best_θ = bθ, best_ok = okb,
-                θstar = θstar, cache = cache, nStatus = st, wall = wall, seqt = seqt)
+                θstar = θstar, cache = cache, nStatus = st, wall = wall, seqt = seqt,
+                hardmax_verified = hv.verified, hardmax_focal_err = hv.focal_err, hardmax_R_mean = hv.R_mean_hardmax,
+                hardmax_max_share_err = hv.max_hard_err, hardmax_mean_share_err = hv.mean_hard_err,
+                hardmax_homotopy_all_ok = hv.homotopy_all_ok, hardmax_wall = hv.wall)
     end
 end
 
@@ -527,6 +742,11 @@ end
         D, W, ρ, FREEZE_MU, DELTA_GRID, GRAVITY_SEED)
 @printf("point estimate kappa = %.6f\n", KAPPA_POINT_EST)
 
+# SKIP_BATCH_LOOP (additive, off by default -- default behavior is completely unchanged): lets a
+# driver `include` this file purely for its setup/function definitions (economy, theta_r0,
+# outer_solve_nested_cached, etc. -- e.g. sequential_gravity/derivative_diagnostics/
+# run_part5_gradient_method_comparison.jl) without triggering the default 12-solve batch below.
+if lowercase(get(ENV, "SKIP_BATCH_LOOP", "false")) != "true"
 for (name, fs) in ((:lower, false), (:upper, true))
     BOUND_ARG in ("both", String(name)) || continue
     θcur = copy(θr0)   # warm-start chain within this bound direction only
@@ -535,7 +755,18 @@ for (name, fs) in ((:lower, false), (:upper, true))
         existing = load_if_done(path)
         if existing !== nothing
             @printf("\n----- %s bound, delta=%g -- ALREADY DONE, skipping (resume) -----\n", name, δval)
-            θcur = existing["theta_star"]
+            # Warm-start the NEXT delta from the verified gravity-FEASIBLE best point, not the
+            # raw KNITRO endpoint (which can be, and at D=20/W=80000 often was, gravity-infeasible
+            # -- chaining the warm start from an infeasible point propagated a broken starting
+            # point through the entire rest of the delta grid, caught when delta=2.0/5.0 both
+            # found ZERO feasible points after inheriting delta=1.0's infeasible raw endpoint).
+            existing_best = get(existing, "best_feasible_theta", nothing)
+            if existing_best !== nothing
+                θcur = existing_best
+            else
+                @printf("  WARNING: no feasible point saved for delta=%g -- falling back to the raw (possibly infeasible) endpoint for warm-starting the next delta\n", δval)
+                θcur = existing["theta_star"]
+            end
             flush(stdout)
             continue
         end
@@ -546,6 +777,14 @@ for (name, fs) in ((:lower, false), (:upper, true))
             "R_mean_at_solution" => r.R, "gravity_feasible" => r.ok,
             "best_feasible_kappa" => r.best_κ, "best_feasible_gp" => r.best_gp,
             "best_feasible_theta" => r.best_θ, "best_feasible_gravity_ok" => r.best_ok,
+            # Independent hard-max (rho=0) re-verification of best_feasible_theta -- a NEW,
+            # SEPARATE flag, does NOT change the meaning of best_feasible_gravity_ok above (that
+            # remains the smoothed-model check exactly as before). See hardmax_verify.jl /
+            # derivative_diagnostics/hardmax_inversion_report.md. `missing` if VERIFY_HARDMAX=false.
+            "hardmax_verified" => r.hardmax_verified, "hardmax_R_mean" => r.hardmax_R_mean,
+            "hardmax_focal_err" => r.hardmax_focal_err, "hardmax_max_share_err" => r.hardmax_max_share_err,
+            "hardmax_mean_share_err" => r.hardmax_mean_share_err, "hardmax_homotopy_all_ok" => r.hardmax_homotopy_all_ok,
+            "hardmax_verify_wall" => r.hardmax_wall,
             "wall" => r.wall,
             "unique_free_x" => length(Set(rr.x_hash for rr in r.cache.trace)),
             "inner_solves" => r.cache.n_inner_solve, "grad_computations" => r.cache.n_grad_compute,
@@ -557,8 +796,18 @@ for (name, fs) in ((:lower, false), (:upper, true))
             "starting_point_source" => δval == DELTA_GRID[1] ? "theta_r0 (initial)" : "warm-started from prior delta",
             "kappa_point_estimate" => KAPPA_POINT_EST,
             "gravity_seed" => GRAVITY_SEED,
+            "gradient_method" => String(GRADIENT_METHOD),
+            "use_var_scaling" => USE_VAR_SCALING,
+            "scaling_power" => SCALING_POWER,
             "done" => true))
-        θcur = r.θstar
+        # Same fix as the resume path above: warm-start the NEXT delta from the verified
+        # gravity-feasible best point, never the raw (possibly infeasible) KNITRO endpoint.
+        if r.best_θ !== nothing
+            θcur = r.best_θ
+        else
+            @printf("  WARNING: no feasible point found for delta=%g -- falling back to the raw (possibly infeasible) endpoint for warm-starting the next delta\n", δval)
+            θcur = r.θstar
+        end
     end
 end
 let gt = seq_timing_snapshot()
@@ -566,3 +815,4 @@ let gt = seq_timing_snapshot()
             gt.dest_inv_s, gt.n_dest_inversions, gt.n_dest_nonconverged, gt.influence_s, gt.gravity_resid_s)
 end
 println("PRODUCTION_RUN DONE  D=$D")
+end # SKIP_BATCH_LOOP guard

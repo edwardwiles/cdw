@@ -26,6 +26,7 @@ module ProfiledGravity
 
 using LinearAlgebra
 using ForwardDiff
+using Optim
 
 export build_log_x, build_log_x_fromU, invert_destination, DestInversion,
        dest_stats, dest_share, potential_free, share_jacobian_closed, share_jacobian_smoothed,
@@ -382,16 +383,115 @@ function _dest_share!(ws::_InvWorkspace{T}, log_x::AbstractMatrix, logp::Abstrac
 end
 
 """
-    invert_destination(log_x, p, λ̂; ref=1, ρ=0.0, tol=1e-10, maxit=100, u_init=nothing)
+    invert_destination(log_x, p, λ̂; ref=1, ρ=0.0, tol=1e-10, maxit=100, u_init=nothing,
+                       method=:trustregion)
 
 Recover `u[·,d]` (gauge u[ref]=0) so model shares match the observed column `λ̂` (Σ=1, all >0)
-under LFD weights `p` (Σ=1). Damped Newton on the convex potential φ−λ̂·u (gradient share−λ̂,
-Hessian `free_hessian`), with an EXACT line search along the Newton direction (the objective is
-convex and C¹ in u; g(α)=obj(u+α·step) is convex with g'(α)=⟨step, share−λ̂⟩, so we bracket the
-sign change of g' and bisect — this takes the maximal safe step through the dense winner-switch
-kinks instead of chattering).  ρ>0 smooths the model so this converges to machine-ish tolerance.
+under LFD weights `p` (Σ=1).
+
+For `ρ>0` (the smoothed regime), the default (`method=:trustregion`) minimizes the convex
+potential `φ−λ̂·u` via Optim.jl's `NewtonTrustRegion`, reusing the SAME analytic gradient
+(`share−λ̂`) and Hessian (`share_jacobian_smoothed`) as the hand-rolled path below. Validated
+(`derivative_diagnostics/tune_trustregion.jl`, 5 destinations, D=20/W=80000 real data) to be
+BOTH more reliable and substantially faster than the hand-rolled LM-damped Newton at a tight
+(1e-8-level) tolerance -- the hand-rolled solver's own convergence criterion failed to be
+satisfied on 3/5 test destinations there (oscillating near, but not reaching, tol within
+maxit), while NewtonTrustRegion converged cleanly on all 5, 3-15x faster. A plain (undamped)
+Newton -- via Optim's `Newton()` or NLsolve's `:newton`, with or without a line search -- FAILS
+outright (overshoots to a non-finite point in ~2 iterations): a line search alone only rescales
+the same bad direction, it doesn't fix it, which is why a trust-region-style step modification
+(matching the hand-rolled path's own LM-damping rationale) is genuinely necessary here, not
+optional. `method=:handrolled` restores the original Levenberg-Marquardt damped Newton with its
+own exact bisection line search (kept verbatim, available if ever needed for cross-checking or
+if a future case behaves differently).
+
+For `ρ≤0` (the hard-max regime), `method` is not applicable -- this always uses the hand-rolled
+Newton-direction + exact-bisection-line-search path (unchanged; see `_invert_destination_handrolled`),
+since ρ=0's objective is only C⁰ (dense winner-switch kinks) and Optim's smooth trust-region
+machinery doesn't apply there. See `derivative_diagnostics/hardmax_inversion.jl` for the
+rho-continuation (homotopy) approach used to reach a rho=0 answer in practice.
 """
 function invert_destination(log_x::AbstractMatrix, p::AbstractVector, λ̂::AbstractVector;
+                            ref::Int = 1, ρ::Real = 0.0, tol::Real = 1e-10, maxit::Int = 100,
+                            ls_iters::Int = 80,
+                            u_init::Union{Nothing,AbstractVector} = nothing, verbose::Bool = false,
+                            method::Symbol = :trustregion)
+    if ρ > 0 && method == :trustregion
+        return _invert_destination_trustregion(log_x, p, λ̂; ref = ref, ρ = ρ, tol = tol, maxit = maxit,
+            u_init = u_init)
+    end
+    return _invert_destination_handrolled(log_x, p, λ̂; ref = ref, ρ = ρ, tol = tol, maxit = maxit,
+        ls_iters = ls_iters, u_init = u_init, verbose = verbose)
+end
+
+"""
+    _invert_destination_trustregion(log_x, p, λ̂; ref, ρ, tol, maxit, u_init)
+
+`invert_destination`'s default ρ>0 solver: Optim.jl `NewtonTrustRegion` on the exact same
+`φ(u)−λ̂·u` objective/gradient/Hessian the hand-rolled path uses. See `invert_destination`'s
+docstring for the validation summary and rationale.
+"""
+function _invert_destination_trustregion(log_x::AbstractMatrix, p::AbstractVector, λ̂::AbstractVector;
+        ref::Int, ρ::Real, tol::Real, maxit::Int, u_init::Union{Nothing,AbstractVector})
+    S, D = size(log_x)
+    @assert length(p) == S && length(λ̂) == D
+    logp = log.(p)
+    fi = free_idx(ref, D)
+    T = float(promote_type(eltype(log_x), eltype(p)))
+    u0_full = u_init === nothing ? zeros(T, D) : T.(collect(u_init))
+    u0 = u0_full[fi]
+
+    f(u_free) = begin
+        u = _insert_ref(u_free, ref, D)
+        st = dest_stats(log_x, logp, u; ρ = ρ)
+        st.logdenom - dot(λ̂, u)
+    end
+    g!(G, u_free) = begin
+        u = _insert_ref(u_free, ref, D)
+        st = dest_stats(log_x, logp, u; ρ = ρ)
+        @inbounds for (k, o) in enumerate(fi); G[k] = st.share[o] - λ̂[o]; end
+    end
+    h!(H, u_free) = begin
+        u = _insert_ref(u_free, ref, D)
+        st = dest_stats(log_x, logp, u; ρ = ρ)
+        H .= share_jacobian_smoothed(st.rweight, st.W, st.share, ρ; ref = ref)
+    end
+
+    # initial_delta kept at Optim's own default (1.0): validated safe across the tested
+    # destinations, whereas a much larger radius (10.0) caused an outright non-finite failure
+    # on one of them (tune_trustregion.jl Part C) -- don't be tempted to enlarge it for speed.
+    res = Optim.optimize(f, g!, h!, u0, Optim.NewtonTrustRegion(),
+        Optim.Options(iterations = maxit, x_abstol = tol, f_abstol = 1e-14))
+    u = _insert_ref(Optim.minimizer(res), ref, D)
+    st = dest_stats(log_x, logp, u; ρ = ρ)
+    share = copy(st.share)
+    gerr = maximum(abs.(share .- λ̂))
+    gnorm = norm([share[o] - λ̂[o] for o in fi])
+    fval = st.logdenom - dot(λ̂, u)
+    # `converged` reflects the SAME criterion _invert_destination_handrolled uses (max abs
+    # share error < tol) rather than Optim's own x_abstol/f_abstol flags: those check step size
+    # in RAW u-space, which can stay large near the optimum when the objective is very flat
+    # there (observed directly: a destination with share_err=3.7e-8, well inside tol=1e-6,
+    # still reported Optim.converged(res)==false on its x_abstol criterion) -- gerr<tol is the
+    # metric that's actually economically meaningful and comparable across both solver paths.
+    return DestInversion(u, share, gerr, fval, gnorm, Optim.iterations(res),
+        gerr < tol, ref, T(ρ), st)
+end
+
+"""
+    _invert_destination_handrolled(log_x, p, λ̂; ref, ρ, tol, maxit, ls_iters, u_init, verbose)
+
+The ORIGINAL destination-inversion solver (unchanged): damped Newton on the convex potential
+φ−λ̂·u (gradient share−λ̂, Hessian `free_hessian`), with an EXACT line search along the Newton
+direction (the objective is convex and C¹ in u for ρ>0; g(α)=obj(u+α·step) is convex with
+g'(α)=⟨step, share−λ̂⟩, so we bracket the sign change of g' and bisect — this takes the maximal
+safe step through the dense winner-switch kinks instead of chattering). ρ>0 smooths the model
+so this converges to machine-ish tolerance; ρ≤0 uses a Newton-DIRECTION + exact-bisection line
+search since the hard-max objective is only C⁰. Still the ONLY path for ρ≤0 (see
+`invert_destination`'s docstring); for ρ>0, `invert_destination`'s default now goes through
+`_invert_destination_trustregion` instead -- this remains reachable via `method=:handrolled`.
+"""
+function _invert_destination_handrolled(log_x::AbstractMatrix, p::AbstractVector, λ̂::AbstractVector;
                             ref::Int = 1, ρ::Real = 0.0, tol::Real = 1e-10, maxit::Int = 100,
                             ls_iters::Int = 80,
                             u_init::Union{Nothing,AbstractVector} = nothing, verbose::Bool = false)

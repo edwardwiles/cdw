@@ -99,6 +99,11 @@ exact_R(um) = gravity_residual(um, log.(τ), log.(wHat), σ).R_beta
 
 # ---- initialization: reduced focal-only LFD --------------------------------------------------
 p, val0, st0 = recover_lfd(θr, EK_moments_focal!, D + 1)
+# BUG FIX (2026-07-16, see sequential_gravity/run_profiled_production.jl's recover_lfd for the full
+# writeup): st0/stc were previously printed for diagnostics but never actually checked -- a rejected
+# nStatus (e.g. -300=KN_RC_UNBOUNDED) still returns a finite-looking p derived from a genuinely
+# failed/unbounded inner solve.
+st0 ∈ (0, -100, -101, -103) || error("recover_lfd (initial, focal-only) returned nStatus=$st0 -- not a converged solve")
 umat = invert_omitted(p)
 R = exact_R(umat)
 @printf("init: focal-only LFD (status %d)  R_beta=%.6e\n", st0, R)
@@ -121,6 +126,12 @@ for k in 1:12
         @. G[:, D+2] = ψbar + Rk
     end
     p_cand, valc, stc = recover_lfd(θr, moments_aug!, D + 2)
+    # BUG FIX (2026-07-16): stc was previously printed/unused -- a rejected nStatus (e.g.
+    # -300=KN_RC_UNBOUNDED) still returns a finite-looking p_cand derived from a failed solve.
+    if stc ∉ (0, -100, -101, -103)
+        @printf("    iter %d: augmented recover_lfd returned nStatus=%d (not converged) -- rejecting this candidate\n", k, stc)
+        break
+    end
     # exact re-inversion + damping: accept largest α with |R_α|<|R_k|
     α = 1.0; accepted = false; R_new = R; p_new = p_cand; um_new = umat
     for _ in 1:12

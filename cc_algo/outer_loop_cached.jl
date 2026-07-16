@@ -66,7 +66,8 @@ opt_err, outer_iters, outer_fc).
 function outer_loop_cached(obj, m::FreeParamMap, θ_lb_full::AbstractVector, θ_ub_full::AbstractVector,
         θ_init_full::AbstractVector; obj_grad_fn!, div_grad_fn!,
         gravity_grad_fn! = nothing, has_gravity::Bool = false, gravity_value_scale::Float64 = 1.0,
-        use_cache::Bool = true, outer_loop_opt::AbstractString)
+        use_cache::Bool = true, outer_loop_opt::AbstractString,
+        var_scales::Union{Nothing,AbstractVector{Float64}} = nothing)
 
     !has_gravity || gravity_grad_fn! !== nothing || error("outer_loop_cached: has_gravity=true requires gravity_grad_fn!")
 
@@ -81,6 +82,17 @@ function outer_loop_cached(obj, m::FreeParamMap, θ_lb_full::AbstractVector, θ_
     KNITRO.KN_set_var_lobnds_all(kc, x_lo)
     KNITRO.KN_set_var_upbnds_all(kc, x_hi)
     KNITRO.KN_set_var_primal_init_values_all(kc, x_init)
+    # Optional per-variable scaling (additive -- default nothing means unchanged behavior).
+    # KN_set_var_scalings_all(kc, scaleFactors, scaleCenters) tells KNITRO's INTERNAL linear
+    # algebra to work with x'_i = (x_i - center_i)/scaleFactors_i, so a caller-supplied
+    # scaleFactors[i] ~ 1/|d(constraint)/dx_i| makes every free coordinate's EFFECTIVE gradient
+    # magnitude ~O(1) in KNITRO's own scaled space, regardless of how differently-sized the raw
+    # gradient components are. Precedent: full_aod_diag/solve_scaled.jl (a full-A_od outer-loop
+    # variant, different method but the same KNITRO scaling API), used there for a different
+    # (ill-conditioning) reason. Introduced here to address a severe cross-variable gradient-scale
+    # mismatch found at D=20 real data (gamma'_focal's own constraint-gradient component ~1e8,
+    # vs the entire Acol block ~10-11500) that appeared to prevent Acol from being explored at all.
+    var_scales === nothing || KNITRO.KN_set_var_scalings_all(kc, collect(Float64, var_scales), zeros(nf))
 
     ncon = 1 + (has_gravity ? 1 : 0)
     cIndices = KNITRO.KN_add_cons(kc, ncon)

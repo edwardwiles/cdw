@@ -80,6 +80,11 @@ function recover_lfd(θ, moments_fn, d)
         l = length(θ), U = U, N = JacW, lower_limit = -5000,
         outer_loop_opt = "ek_outer_loop_options.opt", inner_loop_opt = "ek_inner_loop_options.opt")
     val, x, nStatus = inner_loop(obj, θ)
+    # BUG FIX (2026-07-16, see sequential_gravity/run_profiled_production.jl's recover_lfd for the
+    # full writeup): inner_loop_internal(::PsiObjectiveBundleDelta,...) NaNs its own cache field on
+    # a rejected nStatus (e.g. -300=KN_RC_UNBOUNDED) but NOT the x it returns to this caller --
+    # checking only isfinite(x) silently accepts a genuinely failed/unbounded solve.
+    nStatus ∈ (0, -100, -101, -103) || return fill(1.0 / W, W), false
     all(isfinite, x) || return fill(1.0 / W, W), false
     G = zeros(W, d); K = zeros(W); moments_fn(K, G, θ, U, (γ = γ,))
     arg0 = zeros(W)

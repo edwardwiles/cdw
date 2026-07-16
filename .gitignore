@@ -1,0 +1,29 @@
+# Ephemeral run outputs -- checkpoints, logs, and completion sentinels from batch/overnight runs.
+# These are regenerable from the driver scripts + env vars documented in each script's header,
+# not source; keeping them out of git keeps the repo diffable and reviewable.
+*.log
+*_ALLDONE
+*_run.log
+
+# Result/checkpoint directories produced by batch drivers (sequential_gravity/run_profiled_production.jl
+# and friends) -- named by convention (out_*, batch_out*, coldstart*, d20_upper*, *_checkpoints).
+batch_out*/
+coldstart_*/
+d20_upper*/
+out_lc/
+out_lu/
+out_gc/
+out_gu/
+out_lu_multistart50/
+**/logs/
+**/*_checkpoints/
+
+# delta_star_schedule.jl's own output files (regenerable via the script + env vars in its header)
+delta_star_schedule_*.csv
+delta_star_schedule_*.jld2
+delta_star_schedule_*_out.jld2
+delta_star_schedule_out.jld2
+
+# Generic JLD2 result/checkpoint files -- exceptions for genuine INPUT/seed data are re-added
+# explicitly below with `git add -f` where that data is needed to reproduce a comparison.
+*.jld2
