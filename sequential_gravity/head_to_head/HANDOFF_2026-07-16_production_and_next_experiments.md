@@ -54,32 +54,50 @@ Repo: `/bbkinghome/edav/gravity_robustness/trade_robustness_modular_perf`, branc
   swept into this commit (they were sitting uncommitted in the working tree; see "Things you may
   have forgotten" below).
 
-### ⚠️ IMPORTANT: production defaults do NOT match the config that won the head-to-head comparison
+### RESOLVED: production defaults now match the config that won the head-to-head comparison
 
-This was found while writing this handoff and had NOT been surfaced before — please read
-carefully, it directly affects task 1 below.
+(Originally flagged as a discrepancy in this handoff's first version; fixed same-day on user
+request.) `run_profiled_production.jl`'s defaults are now `GRADIENT_METHOD=fixed_dual_fd_full`,
+`USE_VAR_SCALING=true`, `SCALING_POWER=1.0` -- matching the LC runs that actually won the
+corrected head-to-head comparison (`FINAL_REPORT_2026-07-16.md`). The old `pointwise_ad` default
+is still available (`GRADIENT_METHOD=pointwise_ad`) for A/B comparison only -- it's the OLD,
+cheap outer-constraint gradient proved to silently drop the winner-boundary/Dirac term and report
+false/premature convergence (re-confirmed THIS session: a pointwise_ad+no-scaling run converged
+in 2 outer iterations to kappa=0.0377 vs fixed_dual_fd_full's genuine 0.0821 at the identical
+delta=1.0 budget). Do not use it for anything reported. Task 1 below no longer needs to set these
+3 env vars explicitly -- they're the default now -- but it doesn't hurt to set them anyway for
+self-documenting run commands.
 
-`run_profiled_production.jl`'s defaults are `GRADIENT_METHOD=pointwise_ad` and
-`USE_VAR_SCALING=false`. But the LC runs that actually won the corrected head-to-head comparison
-(the ones `FINAL_REPORT_2026-07-16.md` reports and that justify making LC the production default
-at all) were run with `GRADIENT_METHOD=fixed_dual_fd_full` and `USE_VAR_SCALING=true,
-SCALING_POWER=1.0` (confirmed from those runs' own saved JLD2 metadata). `pointwise_ad` is the
-OLD, cheap outer-constraint gradient that a prior session's own investigation
-([[sequential-winner-boundary-derivative-fix]] / [[full-d2-winner-boundary-fix]] in project
-memory) proved silently drops the winner-boundary/Dirac term and can report false/premature
-convergence — directly observed again THIS session (a `:pointwise_ad`, no-scaling diagnostic run
-converged in 2 outer iterations to kappa=0.0377, vs the genuine `fixed_dual_fd_full` LC answer of
-kappa=0.0821 at the same delta=1.0 budget — see the warm-start-experiment discussion earlier in
-this session's transcript).
+### Common-marginals restriction (CDW eq. 35/36) — now wired into production too
 
-**This was NOT changed as part of this session's consolidation** (a real cost tradeoff —
-`fixed_dual_fd_full` needs its own battery of extra inner solves per outer iterate — deserves an
-explicit decision, not a silent default flip). For task 1 below (the "production-ready" graph),
-you almost certainly want `GRADIENT_METHOD=fixed_dual_fd_full USE_VAR_SCALING=true
-SCALING_POWER=1.0` explicitly set — otherwise the "production" graph will reproduce the cheap,
-provably-incomplete gradient's under-exploration, not the genuine LC result the whole comparison
-was based on. Worth raising with the user whether these should just become the new hard-coded
-defaults in `run_profiled_production.jl` rather than something every caller must remember to set.
+A separate concurrent session had implemented and validated this (D=4) in a SEPARATE, UNCOMMITTED
+working copy (`/bbkinghome/edav/gravity_robustness/trade_robustness_common_marginals`, same
+`origin` remote, branch `feature/common-marginals`, but genuinely uncommitted — not merely on an
+unmerged branch). Ported into `trade_robustness_modular_perf/sequential_gravity/
+run_profiled_production.jl` this session: `common_marginals_moments.jl` (the moment-construction
+module, copied verbatim) plus the `CM_L`/`CM_REF`/`CM_EQ36` env vars and the `nCM`-threading edits
+through `recover_lfd`/`seq_gravcol`/`make_stateful_moments`/`outer_solve_nested_cached`. Off by
+default (`CM_L=0`) — smoke-tested to be an EXACT no-op vs the pre-CM baseline
+(`seq_gravcol(θr0; δ=1.0)` gives the identical `R_mean=2.0682e-05` with or without this port).
+`CM_L>0` smoke-tested to actually engage (57 extra moments at `CM_L=3`, `D=20`) and still solve
+successfully. Also adopted 2 other real fixes from that same worktree: an opt-file absolute-path
+fix in `recover_lfd` (bare relative filenames silently fail once anything in this codebase's own
+setup chain `cd()`s elsewhere — see `setup/setwd.jl`, confirmed responsible for a wrong-directory
+output earlier this session too) and a `BLAS_NUM_THREADS` shared-machine courtesy cap (default 19).
+
+**⚠️ New, real gap found while porting, not present before**: `GRADIENT_METHOD=fixed_dual_fd_full`
+(now the production default, see above) is **NOT compatible with `CM_ENABLED=true`** —
+`make_seq_div_grad_fn_full!`/`full_fixed_dual_criterion.jl` (the corrected-gradient machinery)
+hard-assumes exactly `D+2` moments and was never extended to the extra CM columns (it was written
+against the `pointwise_ad` default that was in effect before this session flipped the default).
+Attempting `CM_L>0` together with `fixed_dual_fd_full` now fails FAST with a clear, actionable
+error (added this session, at the `outer_solve_nested_cached` dispatch site) rather than silently
+producing a wrong gradient or a cryptic deep assertion — but it does still fail. **If task 1/2/3
+below ever need `CM_L>0`, set `GRADIENT_METHOD=pointwise_ad` explicitly** (the only gradient path
+currently validated with CM on), accepting that gradient's known weaknesses (see above), OR do the
+real work of extending `full_fixed_dual_criterion.jl`'s frozen-moments construction to include the
+CM block first. Tasks 1/2/3 as specified by the user do NOT mention CM_L, so this likely doesn't
+block them — flagging so nobody is surprised by the crash if CM is turned on later.
 
 ### Things you may have forgotten (surfaced during a `git status` audit before committing)
 
@@ -107,19 +125,20 @@ Two exceptions force-added because they're seed/input data needed for reproducib
 
 ## Next steps (NOT done — this is the actual handoff)
 
-Three experiments the user wants, each in principle runnable as its own KNITRO instance
-(process). **Concurrency note**: there are only 4 KNITRO licenses total on `demand.mit.edu`. The
-user's own count implies 4 concurrent uses across these 3 tasks — it's not obvious from their
-instructions where the 4th comes from (each task as described is 1 instance = 3 total). Confirm
-with the user before launching multiple concurrent KNITRO processes whether they mean literally 3
-instances (1 per task) or something finer-grained (e.g. splitting task 1's upper/lower bounds
-into 2 instances). Don't guess and accidentally exceed 4 concurrent KNITRO checkouts.
+**Concurrency, confirmed by the user (2026-07-16): exactly 4 concurrent KNITRO instances, one
+each for**: (1) task 1's upper bound, (2) task 1's lower bound, (3) task 2 (W-robustness), (4)
+task 3 (full-A_od). I.e. task 1's own upper and lower bounds run as 2 SEPARATE concurrent
+processes/instances, not one process doing both bounds in sequence -- run task 1's driver twice
+(`BOUND=upper` and `BOUND=lower`, separately launched), not once with `BOUND=both`. This uses all
+4 licenses at once; don't launch a 5th concurrent KNITRO process on top of these 4.
 
 ### Task 1: production-ready graph (W=80,000)
 
-Run LC, **both bounds** (upper AND lower), delta grid **0.1, 1.0, 2.0, 5.0**, **5 starts each**
-(one of the 5 = Astar/`θr0`'s own A_od — i.e. `Acol_star`), W=80,000. For delta > 0.1, warm-start
-from the **best-feasible solution of the previous delta** (not a cold restart at each delta) —
+Run LC, **both bounds, as 2 separate concurrent instances** (`BOUND=upper` in one process,
+`BOUND=lower` in another -- see concurrency note above, do NOT use `BOUND=both` in a single
+process for this task), delta grid **0.1, 1.0, 2.0, 5.0**, **5 starts each** (one of the 5 =
+Astar/`θr0`'s own A_od — i.e. `Acol_star`), W=80,000. For delta > 0.1, warm-start from the
+**best-feasible solution of the previous delta** (not a cold restart at each delta) —
 i.e. delta-chaining PER START (5 independent chains, each running 0.1→1.0→2.0→5.0), not one
 chain per delta.
 

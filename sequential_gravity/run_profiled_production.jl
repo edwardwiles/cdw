@@ -19,6 +19,14 @@ using Parameters, Base.Threads, Random, Dates, DelimitedFiles
 using Distributions, Statistics, SpecialFunctions, InvertedIndices
 using NLsolve, ForwardDiff, Calculus, LinearAlgebra, JLD2, Printf
 
+# Shared-machine courtesy cap: OpenBLAS defaults to using ALL available cores for the
+# linear-algebra-heavy parts of the inner/outer solve (Hessian outer-products, ForwardDiff
+# Jacobians), which is bad manners on a heavily multi-tenant box. Cap explicitly rather than
+# relying on the launching shell to set OPENBLAS_NUM_THREADS. 19 matches this repo's own
+# PARALLEL_INVERSION convention (D-1 destinations at D=20). Ported from the sibling
+# common-marginals session, 2026-07-16.
+LinearAlgebra.BLAS.set_num_threads(parse(Int, get(ENV, "BLAS_NUM_THREADS", "19")))
+
 include(joinpath(@__DIR__, "..", "setup", "include_setup.jl"))
 include(joinpath(@__DIR__, "..", "prestep", "include_prestep.jl"))
 include(joinpath(@__DIR__, "..", "prepare_cc", "include_prepare_cc.jl"))
@@ -36,6 +44,11 @@ using .ProfiledGravity
 # hardmax_verify.jl's own docstring and derivative_diagnostics/hardmax_inversion_report.md.
 # Wired into run_one_bound below (VERIFY_HARDMAX env var, default on).
 include(joinpath(@__DIR__, "hardmax_verify.jl"))
+# Common-marginals restriction (CDW eq. 35/36) -- theta-independent extra CDF-equality inner-loop
+# moments, appended after the gravity column. Off by default (CM_L=0); see CM_L/CM_REF/CM_EQ36
+# below and common_marginals_moments.jl's own file-level comment. Ported from the sibling
+# common-marginals session, 2026-07-16.
+include(joinpath(@__DIR__, "common_marginals_moments.jl"))
 CS.include(joinpath(@__DIR__, "PsiObjectiveBundleImplicitMethodB.jl"))
 # gradient_method support (Part 5 of the winner-boundary-derivative task): additive, no effect
 # unless outer_solve_nested_cached is called with gradient_method != :pointwise_ad (the default).
@@ -72,6 +85,20 @@ const DEST_INV_TOL = parse(Float64, get(ENV, "DEST_INV_TOL", "1e-6"))
 # purely so this task's full delta-grid/both-bound comparison can be produced without a second
 # ~400-line driver copy).
 const GRAVITY_SEED = lowercase(get(ENV, "GRAVITY_SEED", "false")) in ("1", "true", "yes")
+
+# Common-marginals restriction (CDW eq. 35): (D-1)*CM_L extra, theta-INDEPENDENT CDF-equality
+# inner-loop moments (common_marginals_moments.jl), appended after the gravity column. CM_L=0
+# (default) is OFF and reproduces the prior unrestricted behavior exactly -- nothing below changes
+# shape/timing/results when CM_L=0. CM_REF is the fixed reference country for the CDF comparison
+# (paper convention: distinct from, and unrelated to, baseIndex/focal). Ported from the sibling
+# common-marginals session, 2026-07-16.
+const CM_L = parse(Int, get(ENV, "CM_L", "0"))
+const CM_REF = parse(Int, get(ENV, "CM_REF", "1"))
+const CM_ENABLED = CM_L > 0
+# eq. 36 companion (truncated (1-σ)-moment condition alongside the pure-CDF eq. 35 match) -- see
+# common_marginals_moments.jl's file-level comment for the exponent convention. Doubles the extra
+# moment count (nCM below) when on.
+const CM_EQ36 = lowercase(get(ENV, "CM_EQ36", "false")) in ("1", "true", "yes")
 
 # Destination-level parallelism for the D-1 omitted-destination inversions (see
 # full_aod_diag/sequential_inversion_performance/parallelism_report.md: destinations are exactly
@@ -176,6 +203,15 @@ Uσ = γ.Uσ; λData = Matrix(reshape(γ.P, (D, D))'); wHat = γ.wHat; τ = γ.�
 omitted = [d for d in 1:D if d != focal]; ref = 1
 logτ = log.(τ); logw = log.(wHat)
 
+const nCM = CM_ENABLED ? n_cm_moments(D, CM_L; include_truncated_moment = CM_EQ36) : 0
+if CM_ENABLED
+    CM_Moments, cm_thresholds, cm_origins = precalc_common_marginals_cdf(U, CM_REF, CM_L;
+        include_truncated_moment = CM_EQ36, μHat = γ.μHat, σHat = σ)
+    global γ = (; γ..., CM_Moments = CM_Moments)
+    @printf("[common marginals ON] L=%d, refIndex1=%d, %d non-ref origins, eq36=%s -> %d extra moments\n",
+            CM_L, CM_REF, length(cm_origins), CM_EQ36, nCM)
+end
+
 θr0_orig = build_focal_theta(prep.θ_initial, D, focal)
 let γf0 = θr0_orig[3], μ0 = θr0_orig[1]
     global θr0 = vcat(μ0, σ, θr0_orig[4] / γf0, fill(γf0^(-σ / (μ0 * (σ - 1))), D))
@@ -195,7 +231,17 @@ function recover_lfd(θ, moments_fn, d)
     obj = PsiObjectiveBundleDelta(γ = γ, (moments!) = moments_fn, moments_jacobian! = error,
         d = d, outer_constr_index = oci, inequality_index = Int64[], complement_index = [0 0],
         l = length(θ), U = U, N = JacW, lower_limit = -5000, use_cached_x = use_warm,
-        outer_loop_opt = "ek_outer_loop_options.opt", inner_loop_opt = "ek_inner_loop_options.opt")
+        # absolute, @__DIR__-anchored paths -- NOT bare relative filenames. This codebase's own
+        # setup (setup/setwd.jl) can `cd()` into a DIFFERENT sibling worktree mid-script (confirmed
+        # this session: sequential_gravity/delta_star_schedule.jl's own JLD2 output landed in
+        # trade_robustness_modular instead of trade_robustness_modular_perf for exactly this
+        # reason), which makes a relative opt-file path fail SILENTLY on later KNITRO calls,
+        # degrading results rather than erroring loudly. This function is called on every
+        # seq_gravcol iteration, far more often than any other KNITRO entry point in this driver,
+        # so it's the single highest-value place to make this robust. Ported from the sibling
+        # common-marginals session, 2026-07-16.
+        outer_loop_opt = joinpath(@__DIR__, "..", "ek_outer_loop_options.opt"),
+        inner_loop_opt = joinpath(@__DIR__, "..", "ek_inner_loop_options.opt"))
     use_warm && (obj.x .= x_init)
     val, x, nStatus = inner_loop(obj, θ)
     # BUG FIX (2026-07-16): inner_loop_internal(obj::PsiObjectiveBundleDelta,...) already computes
@@ -316,8 +362,17 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing,
         moments_aug_seed! = (K, G, θθ, Uarg, obj) -> begin
             EK_moments_focal_norm_directgp!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj)
             @. G[:, D+2] = infl_seed.ψ_bar + infl_seed.R_beta
+            CM_ENABLED && append_cm_moments!(G, D + 2, obj.γ.CM_Moments)
         end
-        p, ok = recover_lfd(θ, moments_aug_seed!, D + 2)
+        p, ok = recover_lfd(θ, moments_aug_seed!, D + 2 + nCM)
+    elseif CM_ENABLED
+        # blind (no gravity linearization yet), but CM moments are theta-independent/exact --
+        # enforce them from the very first LFD recovery rather than deferring them like gravity.
+        moments_focal_cm! = (K, G, θθ, Uarg, obj) -> begin
+            EK_moments_focal_norm_directgp!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj)
+            append_cm_moments!(G, D + 1, obj.γ.CM_Moments)
+        end
+        p, ok = recover_lfd(θ, moments_focal_cm!, D + 1 + nCM)
     else
         p, ok = recover_lfd(θ, EK_moments_focal_norm_directgp!, D + 1)
     end
@@ -352,8 +407,9 @@ function seq_gravcol(θ; δ::Real = δ, maxit = 20, tol = 5e-4, warm = nothing,
         abs(R) <= tol && break
         moments_aug! = (K, G, θθ, Uarg, obj) -> begin
             EK_moments_focal_norm_directgp!(K, @view(G[:, 1:D+1]), θθ, Uarg, obj); @. G[:, D+2] = infl.ψ_bar + infl.R_beta
+            CM_ENABLED && append_cm_moments!(G, D + 2, obj.γ.CM_Moments)
         end
-        p_cand, okc = recover_lfd(θ, moments_aug!, D + 2)
+        p_cand, okc = recover_lfd(θ, moments_aug!, D + 2 + nCM)
         if !okc
             verbose && println("    [seq] iter $k: augmented recover_lfd FAILED (linearized moment likely unmatchable)")
             break
@@ -494,6 +550,7 @@ function make_stateful_moments(; use_exact_grad::Bool = true, find_smallest::Boo
         else
             @inbounds @views @. G[:, D+2] = gcol[][1:nrow]
         end
+        CM_ENABLED && append_cm_moments!(G, D + 2, obj.γ.CM_Moments)
     end
     # lastθ/lastRcol/dRdθ are additionally exposed (beyond the pre-existing gcol/lastRmean) so that
     # an external caller (derivative_diagnostics/full_fixed_dual_criterion.jl) can reconstruct the
@@ -551,7 +608,7 @@ winner/argmax dependence on theta[3]).
 """
 function outer_solve_nested_cached(find_smallest, θinit; use_exact_grad::Bool = true, δ::Real = δ,
         gradient_method::Symbol = :pointwise_ad, use_var_scaling::Bool = false, scaling_power::Float64 = 1.0)
-    d = D + 2; oci = d + 1
+    d = D + 2 + nCM; oci = d + 1
     CS.check_methodB_valid(d, oci)
     m!, gcol, lastRmean, best_θ, best_κ, best_warm, lastθ_st, lastRcol_st, dRdθ_st, lastok_st = make_stateful_moments(; use_exact_grad = use_exact_grad, find_smallest = find_smallest, δ = δ)
     obj = CS.PsiObjectiveBundleImplicitMethodB(δ = δ, find_smallest = find_smallest, γ = γ,
@@ -575,6 +632,15 @@ function outer_solve_nested_cached(find_smallest, θinit; use_exact_grad::Bool =
         # not use for production results (see full_gradient_method_wiring.jl's module docstring).
         make_seq_div_grad_fn_corrected!(obj, fpmap, γ, U, D, (1 / θinit[1]) / (σ - 1), gradient_method)
     elseif gradient_method in (:fixed_dual_fd_full, :boundary_full)
+        # make_seq_div_grad_fn_full!/full_fixed_dual_criterion.jl hard-assert d==D+2 (the frozen
+        # full-(D+2)-moment fixed-dual criterion was never extended to the extra CM columns when
+        # the common-marginals restriction was wired in, 2026-07-16) -- fail here with a clear,
+        # actionable message instead of that deeper, more cryptic assertion.
+        CM_ENABLED && error("GRADIENT_METHOD=$gradient_method is not yet implemented for " *
+            "CM_ENABLED=true (CM_L=$CM_L) -- make_seq_div_grad_fn_full! assumes exactly D+2 " *
+            "moments, not D+2+nCM. Set GRADIENT_METHOD=pointwise_ad when using CM_L>0, or extend " *
+            "full_fixed_dual_criterion.jl's frozen-moments construction to include the CM block " *
+            "first.")
         make_seq_div_grad_fn_full!(obj, fpmap, γ, U, D, gcol, lastθ_st, lastRcol_st, dRdθ_st, lastok_st, gradient_method)
     else
         error("unknown gradient_method $gradient_method")
@@ -640,21 +706,27 @@ KAPPA_POINT_EST = 1 - GP_POINT_EST^(σ/(σ-1))
 gp2kappa(gp) = 1 - gp^(σ/(σ-1))
 
 """
-`GRADIENT_METHOD` env var (default `pointwise_ad`, fully backward compatible): selects
+`GRADIENT_METHOD` env var (default `fixed_dual_fd_full` as of 2026-07-16): selects
 `outer_solve_nested_cached`'s `gradient_method` keyword for the WHOLE batch loop below --
-`pointwise_ad` (existing default, provably misses the winner-boundary term),
-`fixed_dual_fd_full` (corrected full-(D+2) fixed-dual finite-difference derivative, see
-derivative_diagnostics/full_d2_correction_report.md), or the deprecated reduced-model
-`fixed_dual_fd`/`boundary` kept only for A/B comparison.
+`fixed_dual_fd_full` (CORRECT: full-(D+2) fixed-dual finite-difference derivative, see
+derivative_diagnostics/full_d2_correction_report.md -- this is the config that actually won the
+D=20 real-data 4-method head-to-head comparison, head_to_head/FINAL_REPORT_2026-07-16.md),
+`pointwise_ad` (OLD default until 2026-07-16 -- provably misses the winner-boundary term via
+ForwardDiff through the hard argmin's Bool; can report false/premature convergence, directly
+re-confirmed 2026-07-16: a pointwise_ad+no-scaling run converged in 2 outer iterations to
+kappa=0.0377 vs fixed_dual_fd_full's genuine 0.0821 at the identical delta=1.0 budget -- kept
+available for A/B comparison only, do not use for anything reported), or the deprecated
+reduced-model `fixed_dual_fd`/`boundary` kept only for A/B comparison.
 """
-const GRADIENT_METHOD = Symbol(get(ENV, "GRADIENT_METHOD", "pointwise_ad"))
+const GRADIENT_METHOD = Symbol(get(ENV, "GRADIENT_METHOD", "fixed_dual_fd_full"))
 """
-`USE_VAR_SCALING` env var (default false, fully backward compatible): threads
-`outer_solve_nested_cached`'s `use_var_scaling` keyword -- see that function's own comment for
-what this does and why (a severe gamma'-vs-Acol constraint-gradient scale mismatch found at D=20
-real data that appeared to leave Acol unexplored regardless of gradient_method).
+`USE_VAR_SCALING` env var (default true as of 2026-07-16, matching the config that won the
+head-to-head comparison): threads `outer_solve_nested_cached`'s `use_var_scaling` keyword -- see
+that function's own comment for what this does and why (a severe gamma'-vs-Acol
+constraint-gradient scale mismatch found at D=20 real data that appeared to leave Acol
+unexplored regardless of gradient_method).
 """
-const USE_VAR_SCALING = lowercase(get(ENV, "USE_VAR_SCALING", "false")) in ("1", "true", "yes")
+const USE_VAR_SCALING = lowercase(get(ENV, "USE_VAR_SCALING", "true")) in ("1", "true", "yes")
 """
 `SCALING_POWER` env var (default 1.0, matching `outer_solve_nested_cached`'s own default):
 threads the `scaling_power` keyword through. BUG FOUND AND FIXED: this was previously NOT
