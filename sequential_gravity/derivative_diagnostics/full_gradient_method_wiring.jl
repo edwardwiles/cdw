@@ -66,9 +66,14 @@ uses internally for ForwardDiff.Dual theta. Same closure signature
 function make_seq_div_grad_fn_full!(obj, fpmap, γobj, U::Matrix{Float64}, D::Int,
         gcol_st, lastθ_st, lastRcol_st, dRdθ_st, lastok_st, method::Symbol;
         Acol_offset::Int=3, h_fd::Float64=0.1,
-        trade_moments_fn!::Function=EK_moments_focal_norm_directgp!)
+        trade_moments_fn!::Function=EK_moments_focal_norm_directgp!,
+        nCM::Int=0)
     d = obj.d; oci = obj.outer_constr_index
-    @assert d == D + 2 "make_seq_div_grad_fn_full! requires the full (D+2)-moment problem (got d=$d)"
+    # nCM (common-marginals extra moments, default 0): the frozen full-moments function below is
+    # extended to append the (theta-independent) CM block when nCM>0 -- see
+    # full_fixed_dual_criterion.jl::make_frozen_gravity_moments's own CM_Moments kwarg. Added
+    # 2026-07-16 alongside the CM_L/CM_REF wiring in run_profiled_production.jl.
+    @assert d == D + 2 + nCM "make_seq_div_grad_fn_full! requires the full (D+2+nCM)-moment problem (got d=$d, expected $(D+2+nCM))"
     cfg_cache = Ref{Any}(nothing)
     return function (g_free, x_free, θ_full, inner_x)
         # ---- 1. full-(D+2) AD, exact and unmodified (gives g_free[1]=gamma'_focal exactly;
@@ -94,8 +99,9 @@ function make_seq_div_grad_fn_full!(obj, fpmap, γobj, U::Matrix{Float64}, D::In
         # ---- 2. Replace the Acol block with the full-(D+2) fixed-dual FD gradient ----
         Acol0 = θ0[Acol_offset+1:Acol_offset+D]
 
-        frozen_moments = make_frozen_gravity_moments(trade_moments_fn!, D, lastθ_st[], lastRcol_st[], gcol_st[], dRdθ_st[])
-        x_fixed_full = collect(inner_x)   # length oci = D+3: (zeta, lambda_1..lambda_{D+2}) -- the REAL inner solution, unreduced
+        frozen_moments = make_frozen_gravity_moments(trade_moments_fn!, D, lastθ_st[], lastRcol_st[], gcol_st[], dRdθ_st[];
+            CM_Moments = nCM > 0 ? γobj.CM_Moments : nothing)
+        x_fixed_full = collect(inner_x)   # length oci = D+3+nCM: (zeta, lambda_1..lambda_{D+2+nCM}) -- the REAL inner solution, unreduced
 
         method_grad_log = if method == :fixed_dual_fd_full
             fixed_dual_fd_gradient(θ0, γobj, Usub, frozen_moments, d, x_fixed_full, h_fd;

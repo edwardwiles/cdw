@@ -632,16 +632,15 @@ function outer_solve_nested_cached(find_smallest, θinit; use_exact_grad::Bool =
         # not use for production results (see full_gradient_method_wiring.jl's module docstring).
         make_seq_div_grad_fn_corrected!(obj, fpmap, γ, U, D, (1 / θinit[1]) / (σ - 1), gradient_method)
     elseif gradient_method in (:fixed_dual_fd_full, :boundary_full)
-        # make_seq_div_grad_fn_full!/full_fixed_dual_criterion.jl hard-assert d==D+2 (the frozen
-        # full-(D+2)-moment fixed-dual criterion was never extended to the extra CM columns when
-        # the common-marginals restriction was wired in, 2026-07-16) -- fail here with a clear,
-        # actionable message instead of that deeper, more cryptic assertion.
-        CM_ENABLED && error("GRADIENT_METHOD=$gradient_method is not yet implemented for " *
-            "CM_ENABLED=true (CM_L=$CM_L) -- make_seq_div_grad_fn_full! assumes exactly D+2 " *
-            "moments, not D+2+nCM. Set GRADIENT_METHOD=pointwise_ad when using CM_L>0, or extend " *
-            "full_fixed_dual_criterion.jl's frozen-moments construction to include the CM block " *
-            "first.")
-        make_seq_div_grad_fn_full!(obj, fpmap, γ, U, D, gcol, lastθ_st, lastRcol_st, dRdθ_st, lastok_st, gradient_method)
+        # nCM (common-marginals extra moments, 0 when CM_ENABLED=false): make_seq_div_grad_fn_full!
+        # now threads this through to build the frozen full-(D+2+nCM)-moment fixed-dual criterion
+        # correctly, including the CM block -- fixed 2026-07-16 (was previously a hard D+2-only
+        # assumption; GRADIENT_METHOD=fixed_dual_fd_full + CM_ENABLED=true used to fail). NOTE:
+        # :boundary_full's own gradient path (boundary_envelope_gradient_full) is separately,
+        # pre-existingly unimplemented in this codebase (not defined in any included file) --
+        # unrelated to common marginals, not addressed here; :fixed_dual_fd_full is the only fully
+        # working corrected method.
+        make_seq_div_grad_fn_full!(obj, fpmap, γ, U, D, gcol, lastθ_st, lastRcol_st, dRdθ_st, lastok_st, gradient_method; nCM = nCM)
     else
         error("unknown gradient_method $gradient_method")
     end

@@ -61,13 +61,23 @@ or W in the standalone validation drivers); only the first `nrow=size(G,1)`
 entries are read, mirroring production's `gcol[][1:nrow]`.
 """
 function make_frozen_gravity_moments(trade_moments_fn!::Function, D::Int,
-        lastθ::Vector{Float64}, lastRcol::Float64, gcol::Vector{Float64}, dRdθ::Vector{Float64})
+        lastθ::Vector{Float64}, lastRcol::Float64, gcol::Vector{Float64}, dRdθ::Vector{Float64};
+        CM_Moments::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     lastθ_c = copy(lastθ); gcol_c = copy(gcol); dRdθ_c = copy(dRdθ)
     return function (K, G, θ, U, obj)
         trade_moments_fn!(K, @view(G[:, 1:D+1]), θ, U, obj)
         nrow = size(G, 1)
         Rlin = lastRcol + dot(dRdθ_c, θ .- lastθ_c)
         @inbounds @views @. G[:, D+2] = (gcol_c[1:nrow] - lastRcol) + Rlin
+        # Common-marginals block (CDW eq. 35/36), if enabled: theta-INDEPENDENT, so no freezing/
+        # linearization is needed (unlike the gravity column above) -- a plain copy is exact at
+        # every perturbed theta the finite-difference gradient evaluates, matching
+        # append_cm_moments!'s convention exactly (run_profiled_production.jl). Ported/extended
+        # 2026-07-16 to make GRADIENT_METHOD=fixed_dual_fd_full usable with CM_ENABLED=true.
+        if CM_Moments !== nothing
+            ncm = size(CM_Moments, 2)
+            @views G[:, D+3:D+2+ncm] .= CM_Moments[1:nrow, :]
+        end
         return nothing
     end
 end
@@ -148,7 +158,10 @@ already generic in d/moments_fn), and checks
 derivative -- per the task's explicit instruction.
 """
 function test_full_fixed_dual_identity(θ::Vector{Float64}, frozen::NamedTuple, γobj, U::Matrix{Float64}, D::Int;
-        trade_moments_fn!::Function=EK_moments_focal_norm_directgp!, l::Int=length(θ), find_smallest::Bool=true)
-    moments_fn = make_frozen_gravity_moments(trade_moments_fn!, D, frozen.θ, frozen.Rcol, frozen.gcol, frozen.dRdθ)
-    return test_fixed_dual_identity(θ, moments_fn, D + 2, γobj, U; l=l, find_smallest=find_smallest)
+        trade_moments_fn!::Function=EK_moments_focal_norm_directgp!, l::Int=length(θ), find_smallest::Bool=true,
+        CM_Moments::Union{Nothing,AbstractMatrix{Float64}} = nothing)
+    moments_fn = make_frozen_gravity_moments(trade_moments_fn!, D, frozen.θ, frozen.Rcol, frozen.gcol, frozen.dRdθ;
+        CM_Moments = CM_Moments)
+    nCM = CM_Moments === nothing ? 0 : size(CM_Moments, 2)
+    return test_fixed_dual_identity(θ, moments_fn, D + 2 + nCM, γobj, U; l=l, find_smallest=find_smallest)
 end
