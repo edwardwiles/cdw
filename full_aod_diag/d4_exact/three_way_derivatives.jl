@@ -59,7 +59,7 @@ function frozen_adjoint_Q(x_free::AbstractVector, ctx, base::BaseDualState)
     obj = ctx.obj
     θ_full = CS.reconstruct_full(x_free, ctx.m)
     W = size(obj.U, 1); d = obj.d
-    K = zeros(W); G = zeros(eltype(θ_full), W, d)
+    K = zeros(eltype(θ_full), W); G = zeros(eltype(θ_full), W, d)
     obj.moments!(K, G, θ_full, obj.U, obj)
     oci = obj.outer_constr_index
     acc = zero(eltype(θ_full))
@@ -82,7 +82,7 @@ function fixed_dual_L(x_free::AbstractVector, ctx, base::BaseDualState)
     obj = ctx.obj
     θ_full = CS.reconstruct_full(x_free, ctx.m)
     W = size(obj.U, 1); d = obj.d
-    K = zeros(W); G = zeros(eltype(θ_full), W, d)
+    K = zeros(eltype(θ_full), W); G = zeros(eltype(θ_full), W, d)
     obj.moments!(K, G, θ_full, obj.U, obj)
     oci = obj.outer_constr_index
     q = [-base.ζstar - dot(base.λstar, @view(G[s, 1:oci-1])) for s in 1:W]
