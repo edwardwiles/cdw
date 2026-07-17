@@ -142,22 +142,31 @@ println("KNITRO terminal: status=$nStatus  gamma'_focal=$(w_min[1])  opt_err=$(o
 println("total Delta(w) evaluations (incl. FD gradient probes): ", n_eval[])
 
 # ---- exact fresh feasibility recheck of BOTH the raw terminal point and the tracked best-feasible ----
+# NOTE (bug found + fixed while reviewing the first two runs' output): the feasibility gate below
+# MUST use max_abs_moment_kkt_resid (the LFD-WEIGHTED moment residual mean(m*.*G_j), which the inner
+# CC dual actually drives to zero -- validated in test_inner_diagnostics.jl), NOT the raw UNWEIGHTED
+# max_abs_moment_resid (mean(G_j) under the base measure) -- the latter is expected to be large away
+# from the base point (that is the whole point of reweighting) and is NOT a feasibility criterion.
+# An earlier version of this gate used max_abs_moment_resid and would have wrongly rejected genuinely
+# feasible points.
 function full_recheck(w, label)
     xf = x_free_from_w(w)
     r = evaluate_fullA(xf, ctx; cache = nothing, warm = false)   # COLD re-solve
     κ = 1 - r.gamma_focal_prime^(ctx.σ / (ctx.σ - 1))
     println("[$label] gamma'_focal=$(r.gamma_focal_prime)  kappa=$κ  Delta_dual=$(r.Delta_dual)  Delta-delta=$(r.Delta_minus_delta)")
-    println("         gravity_value=$(r.gravity_value)  max_abs_moment_resid=$(r.max_abs_moment_resid)  inner_status=$(r.inner_status)")
+    println("         gravity_value=$(r.gravity_value)  max_abs_moment_kkt_resid=$(r.max_abs_moment_kkt_resid)  mean_m_resid=$(r.mean_m_resid)  inner_status=$(r.inner_status)")
+    println("         w = ", w)   # full reduced-coordinate vector, for exact reproducibility
     return (label = label, gamma_focal_prime = r.gamma_focal_prime, kappa = κ, Delta_dual = r.Delta_dual,
             Delta_minus_delta = r.Delta_minus_delta, gravity_value = r.gravity_value,
-            max_abs_moment_resid = r.max_abs_moment_resid, inner_status = r.inner_status)
+            max_abs_moment_kkt_resid = r.max_abs_moment_kkt_resid, mean_m_resid = r.mean_m_resid,
+            inner_status = r.inner_status, w = collect(w))
 end
 
 println("\n" * "="^78); println("EXACT FRESH FEASIBILITY RECHECK"); println("="^78)
 terminal_check = full_recheck(w_min, "raw_terminal")
 best_check = best_feasible[] === nothing ? nothing : full_recheck(best_feasible[].w, "best_feasible_tracked")
 
-status_label = if best_check !== nothing && best_check.max_abs_moment_resid < 1e-4 && abs(best_check.gravity_value) < 1e-6 && best_check.Delta_minus_delta <= 1e-4
+status_label = if best_check !== nothing && best_check.max_abs_moment_kkt_resid < 1e-4 && best_check.mean_m_resid < 1e-4 && abs(best_check.gravity_value) < 1e-6 && best_check.Delta_minus_delta <= 1e-4
     "BEST_FEASIBLE_STALLED_OR_VERIFIED (external KKT stationarity NOT checked yet -- sec 22 not done this run)"
 else
     "INFEASIBLE_OR_NUMERICALLY_UNRESOLVED"
