@@ -1,0 +1,7 @@
+metric,value
+n_switches_h01,184
+t_star,0.00018182584183887507
+G_jump_at_threshold,0.00020575197250189293
+G_jump_at_control,1.7577244325849006e-9
+Q_jump_at_threshold,8.274393141894211e-6
+Q_jump_at_control,1.3710480971027006e-10
