@@ -1,0 +1,24 @@
+outer_index,name,A_location,economic_meaning,representation,lower_bound,upper_bound,normalization,is_free,free_x_position,pack_fn,unpack_fn
+1,mu,-,"Frechet shape parameter",level,0.16666666666666669,0.16666666666666669,"-",false,missing,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+2,sigma,-,"elasticity of substitution",level,2.5,2.5,"-",false,missing,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+3,gamma_theta[1],-,"OLD gamma_d slot -- INERT under gammanorm gauge (moments! ignores it)",level,0.9701548739451527,0.9701548739451527,"gamma_d==1 (all d)",false,missing,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+4,gamma_theta[2],-,"OLD gamma_d slot -- INERT under gammanorm gauge (moments! ignores it)",level,0.898534602899728,0.898534602899728,"gamma_d==1 (all d)",false,missing,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+5,gamma_theta[3],-,"OLD gamma_d slot -- INERT under gammanorm gauge (moments! ignores it)",level,0.9256006070125016,0.9256006070125016,"gamma_d==1 (all d)",false,missing,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+6,gamma_theta[4],-,"OLD gamma_d slot -- INERT under gammanorm gauge (moments! ignores it)",level,0.8675016084408224,0.8675016084408224,"gamma_d==1 (all d)",false,missing,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+7,gamma_focal_prime,-,"counterfactual real-income normalizer at baseIndex (direct, K==this)",level,0.8527667963635073,1.0,"direct gamma'_focal (no sigma/(sigma-1) power)",true,1,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+8,A_od[1,1],A[1,1],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00013539084580665154,13539.084580665152,"-",true,2,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+9,A_od[2,1],A[2,1],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00013539084580665154,13539.084580665152,"-",true,3,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+10,A_od[3,1],A[3,1],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00013539084580665154,13539.084580665152,"-",true,4,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+11,A_od[4,1],A[4,1],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00013539084580665154,13539.084580665152,"-",true,5,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+12,A_od[1,2],A[1,2],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00029150897736769936,29150.897736769937,"-",true,6,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+13,A_od[2,2],A[2,2],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00029150897736769936,29150.897736769937,"-",true,7,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+14,A_od[3,2],A[3,2],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00029150897736769936,29150.897736769937,"-",true,8,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+15,A_od[4,2],A[4,2],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00029150897736769936,29150.897736769937,"-",true,9,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+16,A_od[1,3],A[1,3],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00021665249382648162,21665.24938264816,"-",true,10,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+17,A_od[2,3],A[2,3],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00021665249382648162,21665.24938264816,"-",true,11,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+18,A_od[3,3],A[3,3],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00021665249382648162,21665.24938264816,"-",true,12,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+19,A_od[4,3],A[4,3],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.00021665249382648162,21665.24938264816,"-",true,13,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+20,A_od[1,4],A[1,4],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.000414283000554425,41428.300055442494,"-",true,14,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+21,A_od[2,4],A[2,4],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.000414283000554425,41428.300055442494,"-",true,15,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+22,A_od[3,4],A[3,4],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.000414283000554425,41428.300055442494,"-",true,16,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
+23,A_od[4,4],A[4,4],"bilateral efficiency shifter theta (Aod_theta), column-major",level,0.000414283000554425,41428.300055442494,"-",true,17,CS.pack_free / FreeParamMap,CS.reconstruct_full / FreeParamMap
