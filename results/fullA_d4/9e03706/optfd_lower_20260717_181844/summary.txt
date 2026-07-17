@@ -1,0 +1,5 @@
+direction=lower find_smallest=false maxit=15 h=0.01
+knitro_status=-502 opt_err=0.0514120009926724 feas_err=0.0 outer_iters=4 wall_seconds=119.04184103012085 n_eval=3081
+status_label=INFEASIBLE_OR_NUMERICALLY_UNRESOLVED
+terminal: (label = "raw_terminal", gamma_focal_prime = 0.9509286277252348, kappa = 0.08044042673184448, Delta_dual = 0.5094258381622084, Delta_minus_delta = -0.49057416183779157, gravity_value = -3.0899761915836876e-18, max_abs_moment_resid = 0.16279523778134594, inner_status = 0)
+best_feasible: (label = "best_feasible_tracked", gamma_focal_prime = 0.9709650021474632, kappa = 0.0479217867004017, Delta_dual = 0.032071934335986436, Delta_minus_delta = -0.9679280656640136, gravity_value = -5.04371205862631e-18, max_abs_moment_resid = 0.032250858943753215, inner_status = 0)

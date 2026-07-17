@@ -84,6 +84,24 @@ function eval_F(w::Vector{Float64})
     return Δ, r
 end
 
+"""
+    eval_grad_central_fd(w, h) -> Vector
+
+Central FD, with a one-sided fallback when the inner solve fails at one side
+of the probe (task sec 17's own guidance: an infeasible/failed inner solve
+during a perturbation must not be silently ignored). Caught for real: the
+first version of this function let a NaN from a failed inner solve at ONE
+probe point propagate straight into the KNITRO Jacobian callback, which
+KNITRO treats as a fatal "Evaluation error" (status -502) and aborts the
+ENTIRE outer solve, not just that one gradient -- confirmed from
+`ERROR: Jacobian element jac[4]... is undefined at the current point` in the
+lower-direction run's knitro.log (results/fullA_d4/9e03706/optfd_lower_.../knitro.log),
+reproducible identically across two independent attempts (same outer_iters=4
+both times). Fix: fall back to a one-sided difference using whichever side is
+finite; if BOTH sides fail, report 0.0 for that component and flag it in the
+callback log (a crude but non-fatal fallback -- a genuinely adaptive h per
+task sec 13 would be the correct long-term fix, not implemented here).
+"""
 function eval_grad_central_fd(w::Vector{Float64}, h::Float64 = FIXED_H)
     n = length(w)
     g = zeros(n)
@@ -92,7 +110,21 @@ function eval_grad_central_fd(w::Vector{Float64}, h::Float64 = FIXED_H)
         wm = copy(w); wm[i] -= h
         Δp, rp = Delta_of_w(wp); record!(wp, Δp, rp, "G+")
         Δm, rm = Delta_of_w(wm); record!(wm, Δm, rm, "G-")
-        g[i] = (Δp - Δm) / (2h)
+        Δ0 = nothing
+        if isfinite(Δp) && isfinite(Δm)
+            g[i] = (Δp - Δm) / (2h)
+        elseif isfinite(Δp)
+            Δ0, r0 = Delta_of_w(w); record!(w, Δ0, r0, "G0")
+            g[i] = (Δp - Δ0) / h
+            println("  [grad fallback] coord $i: backward probe non-finite, using forward one-sided FD")
+        elseif isfinite(Δm)
+            Δ0, r0 = Delta_of_w(w); record!(w, Δ0, r0, "G0")
+            g[i] = (Δ0 - Δm) / h
+            println("  [grad fallback] coord $i: forward probe non-finite, using backward one-sided FD")
+        else
+            g[i] = 0.0
+            println("  [grad fallback] coord $i: BOTH probes non-finite, reporting g[i]=0.0 (flagged, not a real gradient)")
+        end
     end
     return g
 end
