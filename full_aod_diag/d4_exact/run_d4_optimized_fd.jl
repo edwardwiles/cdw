@@ -30,11 +30,12 @@ const RUN_ID = "optfd_$(DIRECTION)_$(Dates.format(now(), "yyyymmdd_HHMMSS"))"
 const OUTDIR = joinpath(D4X_ROOT, "results", "fullA_d4", COMMIT, RUN_ID)
 mkpath(OUTDIR)
 const FIXED_H = 0.01   # per h_sweep.jl (results/fullA_d4/1bdb1cc/h_sweep.csv), well below h=0.1's demonstrated failure
-const MAXIT = 15        # deliberately SHORT per task sec 18 framing
+const MAXIT = parse(Int, get(ENV, "D4X_MAXIT", "15"))   # deliberately SHORT (15) by default per task sec 18 framing
+const OPT_FILE = "csw_outer_fcga_no_maxit$(MAXIT).opt"  # must exist -- see e.g. csw_outer_fcga_no_maxit15.opt / maxit40.opt
 const FIND_SMALLEST = DIRECTION == "upper"   # calibrated post-hoc against which gives larger kappa; see final printout
 
 ctx = d4_exact_setup(find_smallest = FIND_SMALLEST,
-    outer_loop_opt = joinpath(@__DIR__, "csw_outer_fcga_no_maxit15.opt"))  # eval_fcga=no (real BFGS); maxit=15 baked into the opt file
+    outer_loop_opt = joinpath(@__DIR__, OPT_FILE))  # eval_fcga=no (real BFGS)
 pe = build_pivot_elimination(ctx)
 D = ctx.D; D2 = D^2
 
@@ -131,7 +132,7 @@ end
 
 # ---- raw KNITRO NLP: minimize/maximize gamma'_focal s.t. Delta(w) <= delta ----
 kc = KNITRO.KN_new()
-KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_fcga_no_maxit15.opt"))
+KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, OPT_FILE))
 xIndices = KNITRO.KN_add_vars(kc, D2)
 KNITRO.KN_set_var_lobnds_all(kc, w_lo)
 KNITRO.KN_set_var_upbnds_all(kc, w_hi)
