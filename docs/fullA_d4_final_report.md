@@ -102,7 +102,7 @@ requested and reported** — including the previously-reported "best-conditioned
 from an earlier session. (`results/fullA_d4/bf00b00/knitro_default.log`,
 `knitro_fcga_no.log`)
 
-## 7. Short D=4 solver runs (task §18) — IN PROGRESS
+## 7. Short D=4 solver runs (task §18) — headline result: a verified stationary point exists
 
 A from-scratch outer-loop KNITRO driver (`run_d4_optimized_fd.jl`) was built: pivot-eliminated
 reduced coordinates (gravity dropped as an explicit constraint, satisfied exactly by construction),
@@ -111,41 +111,61 @@ unsafe) as the gradient method, `eval_fcga=no` (genuine BFGS, per §6 above), ma
 best-feasible-incumbent tracking, and an exact fresh cold recheck of both the raw terminal point
 and the tracked best-feasible point.
 
-First attempt (before a feasibility-gate bug fix, see below) at maxit=15/timeout=400s:
-- **upper** direction did not finish within 400s (still mid-search).
-- **lower** direction terminated at KNITRO status **-502** after only 4 outer iterations
-  (opt_err=0.051, not converged) — not yet diagnosed further.
+Two bugs were found and fixed while getting this running (both in the new driver, not production
+code): a feasibility-gate that checked the wrong (unweighted, not LFD-weighted) moment residual,
+and a missing guard against a non-finite FD probe crashing the entire KNITRO solve
+(`ERROR: Jacobian element jac[4]... is undefined at the current point`, KNITRO status -502,
+reproduced identically twice before the fix — see commits `6b38f02`, next one). After both fixes:
 
-A real bug was caught while reviewing this output: the feasibility gate used the raw, UNWEIGHTED
-moment residual (expected to be large away from the base point — not a feasibility criterion) 
-instead of the LFD-weighted KKT residual the inner dual actually targets. Fixed, and both
-directions re-launched with a 600s timeout. **This section will be updated with final numbers once
-those complete** — do not treat the two data points above as representative of the method's
-viability; they reflect an unfinished driver, not the method itself.
+- **Upper direction (maxit=15)**: hit the iteration cap (KNITRO status -400, not internally
+  converged — `opt_err=0.0016`) but the tracked best-feasible point is **exactly feasible on a
+  fresh cold recheck** (gravity_value≈1.6e-18, max_abs_moment_kkt_resid≈1.7e-16, mean_m_resid≈0,
+  Delta−delta=−0.0011, i.e. essentially binding) and **passes the external KKT stationarity check
+  (task §22) cleanly**: constraint multiplier eta=0.0083>0, KKT residual 0.14% relative to the
+  objective gradient's own norm, complementary slackness ≈−9e-6, zero active bounds, zero
+  non-finite gradient probes. κ=0.1706. **This is a genuine `VERIFIED_STATIONARY_FEASIBLE_CANDIDATE`**
+  per every criterion task §25 lists — the first point in this investigation (and, as far as this
+  investigation's audit found, in this codebase's full-A history) checked this rigorously.
+  (`results/fullA_d4/9e03706/optfd_upper_20260717_182444/`, `stationarity_check_upper.txt`)
+- **Lower direction (maxit=15, after the fix)**: completed cleanly (no crash) and is exactly
+  feasible (gravity≈3.4e-18, KKT≈6e-16), but Delta−delta=−0.101 — **far from binding**, meaning the
+  search simply ran out of iterations before using its divergence budget. The stationarity check
+  correctly reports this as **NOT stationary** (residual=1.0, eta≈0, since a fixed nonzero
+  objective gradient cannot be a KKT point at an inactive constraint) — an honest
+  `BEST_FEASIBLE_STALLED` result, not evidence against the method for this direction. A longer
+  maxit=40 upper run was launched to check whether the upper result was genuinely converging or
+  coincidentally near-stationary at maxit=15; not yet complete at the time of writing.
+  (`results/fullA_d4/9e03706/optfd_lower_20260717_190831/`, `stationarity_check_lower.txt`)
 
 ## 8. Status labels applied so far
 
-Per task §25's taxonomy, nothing in this investigation yet qualifies as
-`VERIFIED_STATIONARY_FEASIBLE_CANDIDATE` (external KKT stationarity, task §22, has not been run).
-The two completed short-run attempts are best characterized as
-`INFEASIBLE_OR_NUMERICALLY_UNRESOLVED` under the corrected feasibility gate — but with the caveat
-that this reflects the current (unfinished, un-tuned) driver rather than a considered judgment
-about the method.
+- **Upper direction, κ=0.1706**: `VERIFIED_STATIONARY_FEASIBLE_CANDIDATE` (task §25's strongest
+  label — exact hard gravity, exact hard primal divergence, all full moments, inner KKT, external
+  outer stationarity, and a fresh cold re-evaluation all pass).
+- **Lower direction, κ=0.0107 (partial)**: `BEST_FEASIBLE_STALLED` — exact feasible point found,
+  external stationarity fails, consistent with simply running out of the artificially short
+  maxit=15 budget rather than a numerical breakdown.
 
 ## 9. Status of this report / what remains
 
 **Done and reported above**: task §4, §6, §8, §9, §10, §11, §12 (A/B/C/D/E; F/G partial — F not
-attempted, G implemented as a policy function only), §13, §16.
+attempted, G implemented as a policy function only), §13, §16, §18 (one direction verified, one
+stalled), §22 (applied to both §18 candidates).
 
-**Not yet done** (see the working todo list in-session for current state): the full derivative
-benchmark suite across all required point classes (§14); scaling/conditioning experiments across
-the 5 required transformations (§15); the inner-tolerance schedule as a genuine adaptive rule
-(§17, currently only two fixed tolerances tested); completing and interpreting the short solver
-runs (§18); continuation from the sequential solution (§19); the gamma-profile (§20);
-derivative-free cross-checks and multistart (§21, §23); the external KKT stationarity check (§22).
+**Not yet done**: the full derivative benchmark suite across all required point classes (§14);
+scaling/conditioning experiments across the 5 required transformations (§15); the inner-tolerance
+schedule as a genuine adaptive rule (§17, currently only two fixed tolerances tested); a longer/
+tuned lower-direction run to see whether it also reaches a verified stationary point given enough
+iterations; continuation from the sequential solution (§19); the gamma-profile (§20);
+derivative-free cross-checks and multistart (§21, §23).
 
-**No overall recommendation (task §26's a/b/c/d) is offered yet** — it depends materially on
-whether a corrected gradient can be built and whether the short solver runs, once complete and
-tuned, converge to genuinely stationary points. The evidence so far is consistent with either
-"viable only with a hybrid/corrected-gradient method" or "not currently viable due to the
-uncorrected winner-boundary bias" — distinguishing between them requires the unfinished work above.
+**Preliminary reading toward task §26's recommendation** (still provisional — one verified point in
+one direction is encouraging but not sufficient for a confident overall call): the exact full-A
+method **can** reach a genuinely verified stationary feasible point at D=4, provided (a) gravity is
+eliminated rather than left as an explicit constraint, (b) the gradient is computed via optimized-
+value finite differences at a safe step size (not h=0.1, and not the uncorrected AD/Method-B
+gradient, which is confirmed biased), and (c) the KNITRO Hessian-mode misconfiguration is fixed
+(`eval_fcga=no`). This is closer to "(b) viable only with a hybrid/corrected-gradient method" than
+"(d) not currently viable" — but confirming the lower direction, multistart, and D=10+ scaling
+behavior (all outside this D=4 investigation's scope) remain necessary before that reading is
+solid.
