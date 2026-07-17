@@ -1,0 +1,578 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{The Sequential Profiled-Gravity Procedure:\\ Methodology for the Divergence-Constrained Upper/Lower Bounds}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note documents, in full technical detail, the procedure used to produce the ``main'' upper
+and lower bound estimates for the gains-from-trade robustness exercise (the runs labeled
+\texttt{upper (regular, W=80{,}000)} and \texttt{lower (regular, W=80{,}000)} in the accompanying
+output). The method is a divergence-constrained (Christensen--Connault-type) robust-inference
+calculation in which all bilateral efficiency shifters $A_{od}$ except the destination country's
+own column are \emph{profiled out} via an inner destination-share inversion, rather than carried as
+free outer parameters. Gravity's origin$\times$destination fixed-effect orthogonality restriction is
+then imposed on the resulting reweighted distribution via a \emph{linearized (influence-function)}
+moment, re-derived and re-imposed every time the loop re-solves. We give: the model and gauge
+conventions; the exact definition of the destination-share inversion and its Newton solve; the full
+derivation of the influence function used to linearize the gravity restriction; the augmented
+moment system fed to the inner divergence-minimization solve; the fixed-point (``sequential'')
+iteration used to drive the exact nonlinear gravity residual to zero; the outer optimization problem
+over $(\gamma'_{\text{focal}}, A_{\cdot,\text{focal}})$ and precisely how its gradient is computed
+(including the winner-boundary/Dirac-term correction this required); every convergence check and
+tolerance used; and what happens, at each level, when something fails to converge.
+\end{abstract}
+
+\tableofcontents
+
+\section{Motivation: the dimensionality problem}
+\label{sec:motivation}
+
+The underlying structural model is a standard Eaton--Kortum-style discrete-choice gravity model
+with $D$ countries. Each country pair $(o,d)$ has a bilateral efficiency shifter $A_{od}$. A
+fully general divergence-constrained robustness exercise would carry \emph{every} $A_{od}$ ($D^2$
+of them, $D^2-D$ free after a scale normalization) as a free parameter in the outer optimization.
+This does not scale: at $D=20$ that is $400$ parameters (in fact this is exactly the ``full-A-in-outer-loop''
+comparison method run alongside the sequential method as a cross-check).
+
+The procedure below instead keeps only the focal destination's own column, $A_{\cdot,\text{focal}}$
+($D$ parameters), in the outer optimization. Every other column $A_{\cdot,d}$, $d\neq\text{focal}$,
+is \emph{recovered} at each outer evaluation by inverting that destination's observed trade-share
+column against the current candidate reweighted distribution $F$. Because that inversion is a
+nonlinear, non-explicit function of $F$ (it is the solution of a fixed-point/root-finding problem,
+not a closed-form moment), it cannot enter the inner divergence-minimization problem directly as a
+CC moment. The resolution is to \emph{linearize} the resulting gravity restriction's dependence on
+$F$ around the current candidate $F$ (an influence-function/Gateaux-derivative argument), add that
+linearization as one extra scalar CC moment, re-solve, re-invert under the new $F$, recompute the
+\emph{exact} nonlinear gravity residual, and iterate until it is within tolerance. This lets gravity
+genuinely shape which distribution the divergence-minimization problem selects, rather than being
+checked only after the fact.
+
+\section{Model, notation, and gauge}
+\label{sec:model}
+
+\subsection{Draws and prices}
+Base productivity draws $U_{s,o}\sim\mathrm{Exp}(1)$, i.i.d.\ across simulation draws $s=1,\dots,W$
+and origins $o=1,\dots,D$ (one draw per \emph{origin}, shared across destinations). Let $\mu$ be the
+Fréchet-type shape parameter and $\sigma$ the (fixed) elasticity of substitution. Define
+\[
+\log x_{s,o} \;=\; \mu(1-\sigma)\log U_{s,o} \;=\; \mu \log(U_{s,o}^{1-\sigma}),
+\]
+which is destination-independent and precomputable once. The level price charged by origin $o$ in
+destination $d$ on draw $s$ is
+\[
+p_{od}(s) \;=\; w_o \cdot A_{od}^{-1}\cdot \tau_{od}\cdot U_{s,o}^{\mu},
+\]
+where $w_o$ is the wage, $\tau_{od}\geq 1$ is the bilateral iceberg/tariff cost, and $A_{od}$ is the
+structural efficiency shifter (so the code's internal variable named \texttt{AodPow} is $A_{od}^{-1}$;
+this is purely a naming artifact of the implementation, not a modeling choice). Define the
+\textbf{competitiveness index}
+\[
+u_{o,d} \;=\; (\sigma-1)\Big(\log A_{od} - \log w_o - \log \tau_{od}\Big).
+\]
+Since $\sigma>1$, $p_{od}^{1-\sigma}$ is monotone decreasing in $p_{od}$, so the winning (cheapest)
+origin on draw $s$ is
+\[
+\text{winner}(s,d) \;=\; \argmin_o p_{od}(s) \;=\; \argmax_o\big(u_{o,d}+\log x_{s,o}\big).
+\]
+
+\subsection{Trade shares under a reweighted distribution}
+Let $F$ be a probability distribution over the $W$ draws with weights $p(s)$ (the ``least-favorable
+distribution,'' or LFD, that the divergence-minimization problem selects), and let $F^*$ denote the
+base measure with $p^*(s)=1/W$. The $F$-implied trade share of origin $o$ in destination $d$ is
+\[
+\mathrm{share}_d(o;F) \;=\; \frac{\sum_{s:\,\text{winner}(s,d)=o} p(s)\cdot e^{u_{o,d}+\log x_{s,o}}}
+{\sum_s p(s)\cdot e^{u_{\text{winner}(s,d)},d} + \log x_{s,\text{winner}(s,d)}}.
+\]
+Equivalently, with $V_d(s)=\max_o(u_{o,d}+\log x_{s,o})$ the log of the winning value,
+$\mathrm{share}_d(o;F)=\sum_{s:\text{winner}(s,d)=o} p(s)e^{V_d(s)}\big/\sum_s p(s)e^{V_d(s)}$. This
+is matched, for every destination $d\neq\text{focal}$, against the observed data trade-share column
+$\hat\lambda_{\cdot,d}$.
+
+\subsection{Gauge}
+Trade shares are invariant to adding an arbitrary constant to an entire column $u_{\cdot,d}$ (it
+cancels in the ratio above). Two gauges appear in this procedure and are \textbf{not} the same
+thing:
+\begin{itemize}
+  \item \textbf{Destination-inversion gauge}: the Newton solve for each omitted column pins the
+  reference origin, $u_{1,d}=0$, and solves for the remaining $D-1$ free coordinates.
+  \item \textbf{Outer-parameterization gauge}: the outer optimization normalizes $\gamma_{\text{focal}}
+  \equiv 1$ (Section~\ref{sec:reduced}), which \emph{replaces} (does not add to) the older
+  $A_{1,\text{focal}}=1$ pin. All $D$ entries of $A_{\cdot,\text{focal}}$ are free under this
+  normalization.
+\end{itemize}
+These two gauges being different conventions is completely immaterial to the trade shares or the
+reported bounds (both are valid gauge choices and the model is gauge-invariant after two-way
+demeaning); it is only a hazard if one tries to compare a raw competitiveness matrix against an
+external closed-form calibration without first correcting for the gauge difference.
+
+\section{The robustness objective and the divergence budget}
+\label{sec:objective}
+
+The parameter of interest is a gains-from-trade-type object $\kappa\in[0,1]$. Under the
+$\gamma_{\text{focal}}\equiv1$ normalization,
+\[
+\kappa \;=\; 1-\big(\gamma'_{\text{focal}}\big)^{\sigma/(\sigma-1)},
+\]
+where $\gamma'_{\text{focal}}$ is a (counterfactual) normalization constant appearing directly as
+one entry of the outer parameter vector $\theta$. This transform is monotone decreasing in
+$\gamma'_{\text{focal}}$, so \emph{minimizing} $\gamma'_{\text{focal}}$ over the feasible set gives
+the \textbf{upper} bound on $\kappa$ and \emph{maximizing} it gives the \textbf{lower} bound.
+
+The ``feasible set'' is a divergence ball around the base measure $F^*$: the search is only allowed
+to consider distributions $F$ whose divergence from $F^*$ is at most a budget $\delta$. The
+divergence itself is the same Christensen--Connault (CC) hybrid exponential/quadratic functional
+used throughout this codebase's inner solves. Its convex-conjugate representation is
+\[
+\Psi(a) \;=\;
+\begin{cases}
+e^{a}-1, & a\le 1,\\[2pt]
+\tfrac{e}{2}\big(a^2+1\big)-1, & a>1,
+\end{cases}
+\qquad
+\Psi'(a)=d\Psi(a)=
+\begin{cases}
+e^{a}, & a\le 1,\\
+e\cdot a, & a>1,
+\end{cases}
+\]
+and the corresponding primal divergence generator (its Legendre dual) is
+\[
+\varphi(m) \;=\;
+\begin{cases}
+m\log m - m + 1, & 0<m\le e,\\[2pt]
+\dfrac{m^2}{2e}-\dfrac{e}{2}+1, & m>e,
+\end{cases}
+\qquad
+\mathrm{div}(F) \;=\; \frac{1}{W}\sum_{s=1}^{W}\varphi\big(W\cdot p(s)\big).
+\]
+By construction $\mathrm{div}(F^*)=0$.
+
+\section{Reduced parameterization: only $A_{\cdot,\text{focal}}$ is free}
+\label{sec:reduced}
+
+The outer parameter vector, for the runs documented here, is
+\[
+\theta \;=\; \big(\mu,\ \sigma,\ \gamma'_{\text{focal}},\ A_{1,\text{focal}},\dots,A_{D,\text{focal}}\big),
+\]
+of which \textbf{$\mu$ and $\sigma$ are held fixed} at their calibrated values throughout the search
+(the logs record this explicitly as \texttt{MU\_FIXED(removed)=true}); only $\gamma'_{\text{focal}}$
+and the $D$ entries of $A_{\cdot,\text{focal}}$ are free outer-optimization variables ($D+1$ free
+parameters total, versus $D^2-D$ under the full-$A$ comparison method).
+
+Under $\gamma_{\text{focal}}\equiv1$, an exact closed-form autarky argument (using the model's own
+Fréchet aggregator identity for the domestic/focal share, cross-checked independently against an
+unrelated derivation in this project and confirmed to agree) gives the \emph{theoretically exact}
+range for $\gamma'_{\text{focal}}$ implied by $\kappa\in[0,\kappa_{\max}]$:
+\[
+\kappa_{\max} \;=\; 1-\hat\lambda_{dd}^{\,1/(\sigma-1)},
+\qquad
+\gamma'_{\text{focal}}\in\big[\hat\lambda_{dd}^{\,1/\sigma},\ 1\big],
+\]
+where $\hat\lambda_{dd}$ is the observed domestic/own trade share of the focal country. These are
+used as hard bounds on $\theta_3=\gamma'_{\text{focal}}$ in the outer KNITRO solve, so the search is
+structurally prevented from exploring $(\gamma,\gamma')$ combinations that could not correspond to
+any genuine model equilibrium, rather than relying only on catching such violations after the fact.
+
+The \emph{reduced} inner moment system used at every outer evaluation ($D+1$ moments before the
+gravity linearization is appended) is:
+\begin{itemize}
+  \item $D$ \textbf{focal trade-share moments}: for each origin $o=1,\dots,D$, the (hard-argmax)
+  value contributed by $o$ winning at the focal destination, minus its data-share-implied target,
+  $\hat\lambda_{o,\text{focal}}\cdot\mathrm{gdp}_{\text{focal}}$.
+  \item $1$ \textbf{counterfactual price-index moment}: matches the focal country's own
+  counterfactual (post-shock) price index to the target implied by $\gamma'_{\text{focal}}$ directly.
+  This is the \emph{only} place $\gamma'_{\text{focal}}$ enters the moment system, and it enters
+  \emph{smoothly} (no hard-argmax dependence on it) — a fact used below in the outer-gradient
+  computation.
+\end{itemize}
+
+\section{Destination-share inversion}
+\label{sec:inversion}
+
+For every omitted destination $d\neq\text{focal}$, given the current candidate distribution
+$F$ (weights $p$), the procedure recovers $u_{\cdot,d}$ by solving
+\[
+\hat u_{\cdot,d} \;=\; \argmin_{u:\,u_1=0}\ \phi_d(u), \qquad
+\phi_d(u) \;=\; \log\!\sum_{s=1}^{W} p(s)\exp\!\Big(\max_o\big(u_o + \log x_{s,o}\big)\Big),
+\]
+whose gradient on the free coordinates is exactly $\nabla\phi_d = \mathrm{share}_d(\cdot;F)$, so the
+first-order condition $\nabla\phi_d - \hat\lambda_{\cdot,d} = 0$ is precisely ``match the observed
+share column.'' In practice the pipeline solves this at a small positive softmax temperature
+$\rho=2\times10^{-3}$ (replacing the hard $\max$ with $\rho\log\sum\exp(\cdot/\rho)$), which makes
+$\phi_d$ everywhere $C^\infty$ so a damped (Levenberg--Marquardt) Newton method has a well-defined
+gradient/Hessian to work with; $\rho\to0$ recovers the literal hard-argmax economic model. Away from
+ties the closed-form Hessian on the free coordinates is the softmax covariance of the winner
+indicator,
+\[
+H_d \;=\; \big(\mathrm{diag}(\mathrm{share}_d) - \mathrm{share}_d\,\mathrm{share}_d^\top\big)_{[\text{free},\text{free}]},
+\]
+which is positive semi-definite and generically positive definite on the free coordinates.
+
+\textbf{Convergence and safeguards.} Each destination's Newton solve runs for up to $150$ iterations
+with up to $50$ line-search steps per iteration, and is declared converged when the maximum absolute
+share error is below \texttt{DEST\_INV\_TOL}$=10^{-6}$ (environment-configurable). If the free
+coordinates' norm exceeds $10^{8}$ at any point the solve bails out immediately rather than grinding
+to the iteration cap — this catches the genuine structural-degeneracy failure mode where, at extreme
+$\theta$ (e.g.\ $\mu$ far from its calibrated value, or a divergence-implied reweighting that makes a
+target share numerically unreachable given an ill-conditioned $H_d$), the Newton iterates run off to
+infinity. \textbf{If any single omitted destination fails to converge, the entire evaluation at that
+$\theta$ is treated as infeasible} (Section~\ref{sec:failure}) — a non-converged $u_{\cdot,d}$ is not
+trustworthy even if it happens to produce a superficially small gravity residual.
+
+\section{The gravity identification restriction}
+\label{sec:gravity}
+
+With the full competitiveness matrix $u_{o,d}$ assembled (focal column from $\theta$ directly;
+every omitted column from the inversion above), define $\log A_{od} = \log w_o + \log\tau_{od} +
+u_{o,d}/(\sigma-1)$. Let $Q=\log\tau$ and let $\tilde Q,\ \widetilde{\log A}$ denote the two-way
+(origin- and destination-fixed-effect) demeaned versions of $Q$ and $\log A$ over the \emph{full}
+$D\times D$ grid (including the diagonal $o=d$, matching the pre-existing gravity-moment convention
+elsewhere in this codebase). The identifying restriction is the standard gravity orthogonality
+condition $\E[\Delta\Delta\log A\cdot\Delta\Delta\log\tau]=0$, whose finite-sample analogue is
+\[
+R_{\mathrm{sum}} \;=\; \sum_{o,d}\tilde Q_{od}\cdot\widetilde{\log A}_{od}, \qquad
+R_{\mathrm{mean}} \;=\; R_{\mathrm{sum}}/D^2, \qquad
+R_{\mathrm{beta}} \;=\; R_{\mathrm{sum}}\big/\textstyle\sum_{od}\tilde Q_{od}^2.
+\]
+All three vanish together ($R_{\mathrm{sum}}=0\iff R_{\mathrm{mean}}=0\iff R_{\mathrm{beta}}=0$), so
+they are the same identifying condition; they differ only in how a finite numerical tolerance
+against them behaves. \textbf{$R_{\mathrm{mean}}$ is the quantity actually checked against
+tolerance} ($|R_{\mathrm{mean}}|\le\mathrm{tol}=5\times10^{-4}$ is the ``gravity feasible'' gate),
+because it is the literal, unembellished sample-moment average with no extra variance
+normalization. $R_{\mathrm{beta}}$'s numerical \emph{scale} (not its role as the tolerance check) is
+still used for the solver-facing linearized moment and its gradient, because $R_{\mathrm{mean}}$'s
+much smaller magnitude was empirically found to make the outer search take oversized, destabilizing
+steps; since $\sum_{od}\tilde Q_{od}^2$ is a data-only constant, $R_{\mathrm{beta}}\equiv
+(D^2/\textstyle\sum\tilde Q^2)\cdot R_{\mathrm{mean}}$ exactly, so this is purely a numerical-conditioning
+choice, decoupled from the (separately correct) tolerance check.
+
+\section{The influence function: linearizing gravity's dependence on $F$}
+\label{sec:influence}
+
+This is the mathematical core of the procedure: since $R$ depends on $F$ only through the
+destination inversions $u_{\cdot,d}(F)$, and those inversions are themselves solutions of a nested
+fixed-point problem (not an explicit function of $F$), $R$ cannot be written down as, or
+differentiated as, an ordinary CC moment. The fix is to compute its \emph{Gateaux derivative} at
+the current $F$ and use that local linear approximation as one additional scalar moment.
+
+\subsection{Draw-level objects}
+At a converged inversion $u_{\cdot,d}$, with $V_{\!d}(s)=\max_o(u_{o,d}+\log x_{s,o})$,
+$\mathrm{Vexp}_d(s)=e^{V_d(s)}$, and $M_d=\sum_s p(s)\,\mathrm{Vexp}_d(s)$, define the free-coordinate
+score perturbation object
+\[
+\xi_{d}(s,o) \;=\; \mathrm{Vexp}_d(s)\cdot\big(\mathbf{1}\{\text{winner}(s,d)=o\} - \hat\lambda_{o,d}\big),
+\qquad o\ \text{ranging over the free (non-reference) origins.}
+\]
+By construction $\E_F[\xi_d(\cdot,o)]=0$ at a converged inversion (this is exactly the first-order
+condition of the Newton solve).
+
+\subsection{Implicit derivative of the inversion}
+For an arbitrary mean-zero score perturbation $h$ (i.e.\ a direction in which $F$ could be tilted,
+with $\E_F[h]=0$), the implicit function theorem applied to the inversion's fixed-point condition
+gives the Gateaux derivative of $u_{\cdot,d}$ in that direction \emph{without ever forming
+$H_d^{-1}$ explicitly}:
+\[
+D_F u_d[h] \;=\; -H_d^{-1}\cdot\frac{1}{M_d}\,\E_F\big[h\cdot\xi_{d,\text{free}}\big].
+\]
+
+\subsection{Adjoint solve and the influence function}
+Let $c_d = \tilde Q_{\cdot,d}/(\sigma-1)$ restricted to the free coordinates (the sensitivity of $R$
+to $u_{\cdot,d}$ directly, from the closed-form identity $\widetilde{\log A}=\tilde Q + \tilde u/(\sigma-1)$).
+Rather than differentiate $R$ through $D_F u_d[h]$ directly (which would require the explicit
+$H_d^{-1}$), solve the \emph{adjoint} system
+\[
+H_d\,a_d \;=\; c_d
+\]
+(exploiting $H_d$'s symmetry), and then the pointwise influence function of the gravity residual is
+\[
+\psi_R(s) \;=\; -\sum_{d\neq\text{focal}}\frac{a_d^\top \xi_{d,\text{free}}(s)}{M_d},
+\qquad
+\bar\psi(s) \;=\; \psi_R(s) - \E_F[\psi_R].
+\]
+This satisfies, by construction, $\E_F[\psi_R]=0$ automatically, and the influence of an arbitrary
+tilt $h$ on $R$ is exactly $\E_F[h\cdot\psi_R]$ — i.e.\ $\bar\psi$ is the score whose CC moment
+condition $\E_F[\bar\psi]=0$ (or, offset, $\E_F[\bar\psi]=-R$) is the correct first-order surrogate
+for ``move $F$ so that the gravity residual moves by $-R$, i.e.\ toward zero.'' \emph{The
+linearization is recomputed from scratch (not accumulated) at every iteration of the sequential
+loop below}, since it is only a locally valid, first-order surrogate for the true nonlinear
+restriction.
+
+\subsection{Directional-derivative validation}
+Because the closed-form $H_d$ used above is the exact Hessian of the finite-sample softmax
+potential \emph{away from winner ties}, but (being derived from a hard-argmax-differentiated
+branch) omits the population extensive-margin (boundary-switching) term, this construction is
+validated against a direct numerical directional derivative (perturb $F$, re-invert exactly,
+recompute $R$, compare to the predicted linear change) before being trusted; this check passed at
+relative error $\sim\!10^{-4}$ on synthetic data and $3.8\times10^{-5}$ on real pipeline draws.
+
+\section{The augmented inner (divergence-minimization) problem}
+\label{sec:inner}
+
+At a given outer $\theta$ and a given sequential-loop iterate $F$ (weights $p$), the inner problem
+is the standard CC dual: find dual variables $x=(\zeta,\lambda_1,\dots,\lambda_{D+2})$ solving
+\[
+\min_{\zeta,\lambda}\quad \frac{1}{W}\sum_{s=1}^{W}\Psi\!\Big(-\zeta-\textstyle\sum_j \lambda_j G_j(s;\theta)\Big) + \zeta,
+\]
+whose optimal value is exactly $\delta^*(\theta)$ — the minimum divergence from $F^*$ needed to
+satisfy all $D+2$ equality moments $\E_F[G_j]=0$ simultaneously — by convex (Fenchel) duality. The
+moment vector $G(\cdot;\theta)$ is:
+\begin{enumerate}
+  \item the $D$ focal trade-share moments (Section~\ref{sec:reduced});
+  \item the $1$ counterfactual price-index moment;
+  \item the $1$ linearized-gravity moment $\bar\psi_k$, offset so its target is $-R_k$ (subscript
+  $k$ denotes the current sequential-loop iteration; this moment is entirely replaced, not
+  accumulated, each iteration).
+\end{enumerate}
+Given the optimal dual solution $x^*=(\zeta^*,\lambda^*)$, the recovered LFD weights are
+\[
+m(s) \;=\; d\Psi\big(-\zeta^*-\textstyle\sum_j\lambda_j^* G_j(s;\theta)\big), \qquad
+p(s) \;=\; m(s)\Big/\textstyle\sum_r m(r),
+\]
+which is the standard exponential-tilting form for this class of divergence problems, evaluated
+here on the finite empirical support of $W$ draws under base weight $1/W$.
+
+The KNITRO solver used for this dual optimization reports a termination status code (\texttt{nStatus})
+for every call; only codes $\{0,-100,-101,-103\}$ (optimal, or feasible-and-terminated-on-a-tight
+tolerance) are accepted as a genuine solve — any other code (in particular $-300$, ``problem
+determined unbounded,'' which for this convex-dual construction is the signature of the underlying
+\emph{primal} moment-matching problem being infeasible) causes the call to be rejected and treated
+as a failed inner solve.
+
+\section{The sequential fixed-point iteration (at a fixed $\theta$)}
+\label{sec:sequential}
+
+Putting Sections~\ref{sec:inversion}--\ref{sec:inner} together, at a fixed outer $\theta$:
+
+\begin{enumerate}[label=\arabic*.]
+  \item Solve the \emph{reduced} inner problem (focal moments only, $D+1$ of them; no gravity
+  moment yet) to get an initial $F_0$ (weights $p_0$).
+  \item Invert every omitted destination under $p_0$; assemble $u$; compute the exact $R_0$.
+  \item Iterate $k=0,1,2,\dots$ (up to $\mathrm{maxit}=20$):
+  \begin{enumerate}[label=(\alph*)]
+    \item If $|R_k|\le\mathrm{tol}$: \textbf{converged}, stop.
+    \item Otherwise compute the influence function $\bar\psi_k$ (Section~\ref{sec:influence}) at
+    the current $(u,p_k)$, solve the augmented ($D+2$-moment) inner problem to get a
+    \emph{candidate} $p_{\text{cand}}$.
+    \item \textbf{Damped update with backtracking line search}: for $\alpha\in\{1,\tfrac12,\tfrac14,\dots\}$
+    (up to $12$ halvings), form $p_\alpha=(1-\alpha)p_k+\alpha\,p_{\text{cand}}$, re-invert all
+    omitted destinations under $p_\alpha$ (warm-started — the very first, $\alpha=1$, trial warm-starts
+    from $u$ at $p_k$; subsequent smaller-$\alpha$ trials warm-start by interpolating between the
+    two known endpoint solutions rather than restarting cold, which was found to cut total Newton
+    iterations by roughly $1.7\times$ with a bit-identical accepted trajectory), and accept the
+    first $\alpha$ for which \emph{every} destination converges \emph{and} $|R_\alpha|<|R_k|$. If no
+    $\alpha$ in the schedule satisfies this, stop (see Section~\ref{sec:failure}).
+    \item Set $p_{k+1}=p_\alpha$, $u_{k+1}=u_\alpha$, $R_{k+1}=R_\alpha$; continue.
+  \end{enumerate}
+  \item Report the converged $\mathrm{div}(F_{\text{final}})$ (computed via the \emph{exact primal}
+  divergence functional $\varphi$ applied directly to the accepted weights — necessary because a
+  damped convex combination $p_\alpha$ is \emph{not} itself the argmin of any single
+  divergence-minimization problem, so its divergence cannot simply be read off a solver's internal
+  value) as $\Delta_{\text{sequential}}(\theta)$, and declare the $\theta$-evaluation
+  \textbf{gravity-feasible} iff $|R_{\text{final}}|\le\mathrm{tol}$ \textbf{and}
+  $\Delta_{\text{sequential}}(\theta)\le\delta$ — \emph{both} conditions are required (see
+  Section~\ref{sec:failure} for why conflating them was a real, previously-fixed bug).
+\end{enumerate}
+
+\section{The outer optimization problem}
+\label{sec:outer}
+
+The outer problem, solved by KNITRO, is:
+\[
+\min_{\theta}\ \ (\text{or}\ \max_\theta)\quad \gamma'_{\text{focal}}
+\qquad\text{s.t.}\qquad
+\Delta_{\text{sequential}}(\theta)\ \le\ \delta,
+\qquad
+\gamma'_{\text{focal}}\in\big[\hat\lambda_{dd}^{1/\sigma},\,1\big],
+\]
+with $\mu,\sigma$ fixed and $A_{\cdot,\text{focal}}$ otherwise unconstrained (generic wide bounds).
+Minimizing $\gamma'_{\text{focal}}$ gives $\kappa_{\text{upper}}$; maximizing gives
+$\kappa_{\text{lower}}$. \textbf{Gravity does not enter as a second outer constraint} in this
+method — it is folded entirely into $\Delta_{\text{sequential}}(\theta)$ via the sequential loop's
+own inner augmented moment (Section~\ref{sec:sequential}). This is a deliberate design choice
+whose validity is checked directly (Section~\ref{sec:outer-gradient}) — it is what allows the
+divergence-budget-constraint gradient to be computed as a single scalar envelope-theorem
+derivative, with no additional total-derivative correction for a second constraint.
+
+\subsection{The outer gradient}
+\label{sec:outer-gradient}
+
+Two gradients are needed for KNITRO's SQP steps.
+
+\paragraph{Objective gradient.} Trivial: $\gamma'_{\text{focal}}=\theta_3$ enters the objective
+directly, so its gradient is the unit vector $e_1$ (in the free-coordinate ordering
+$(\gamma'_{\text{focal}}, A_{1,\text{focal}},\dots,A_{D,\text{focal}})$), sign-flipped depending on
+whether the search is minimizing or maximizing.
+
+\paragraph{Constraint gradient (the hard part).} At the optimal dual solution $(\zeta^*,\lambda^*)$
+of the inner problem, the \emph{envelope theorem} says the total derivative of
+$\Delta_{\text{sequential}}(\theta)$ with respect to $\theta$ equals the \emph{partial} derivative
+of the dual objective with respect to $\theta$, holding $(\zeta^*,\lambda^*)$ fixed — because the
+inner problem's own first-order conditions in $(\zeta,\lambda)$ vanish at the optimum. Concretely,
+this is the scalar function
+\[
+Q(\theta) \;=\; \frac{1}{W}\sum_{s=1}^{W} d\Psi(a_0(s))\cdot\sum_{j}\lambda_j^*\,G_j(s;\theta),
+\]
+(with $a_0(s)$ evaluated at the converged solution), whose gradient in $\theta$ is the constraint
+gradient KNITRO needs.
+
+\textbf{This is exact and unproblematic for $\gamma'_{\text{focal}}$}: $\gamma'_{\text{focal}}$ enters
+$G$ only through the smooth counterfactual price-index moment, never through any hard-argmax
+winner rule, so plain automatic differentiation of $Q$ with respect to $\theta_3$ is exact. It is
+\textbf{not} unproblematic for the $A_{\cdot,\text{focal}}$ block: those parameters directly enter
+the focal destination's own winner rule (Section~\ref{sec:model}), a hard $\argmax$ whose
+derivative is zero almost everywhere and undefined at ties. Naive automatic differentiation through
+this hard $\argmax$ silently \textbf{drops the winner-boundary (extensive-margin, Dirac-mass) term}
+— the contribution from draws that switch which origin wins as $A_{\cdot,\text{focal}}$ moves — and
+this was confirmed, not merely suspected: a validated diagnostic comparing the naive-AD gradient
+against a from-scratch finite-difference gradient (which genuinely re-evaluates the winner rule at
+perturbed points and so captures real winner switches) found a real, non-negligible discrepancy.
+
+\textbf{The correction used for the reported bounds} (\texttt{gradient\_method=fixed\_dual\_fd\_full},
+the default for these runs): the $A_{\cdot,\text{focal}}$ block of the constraint gradient is instead
+computed by \emph{central finite differences directly on $Q(\theta)$}, perturbing each coordinate of
+$A_{\cdot,\text{focal}}$ multiplicatively in log-space by a step $h=0.1$, with the dual variables
+$(\zeta^*,\lambda^*)$ held fixed at their already-converged value (still an envelope-theorem
+argument — only the derivative-taking method for the $\theta$-dependence changes, from automatic
+differentiation to finite differences) but the moment matrix $G$ \emph{genuinely recomputed} at each
+perturbed point, so any draws whose winner switches within the finite step are correctly reflected.
+This directly captures the winner-boundary term that automatic differentiation cannot see. (Two
+earlier, now-deprecated variants, \texttt{:fixed\_dual\_fd} and \texttt{:boundary}, attempted an
+\emph{additive correction} to the plain-AD gradient on a reduced $(D+1)$-moment problem; this was
+found not to be generally valid, because the gravity moment's own dual multiplier $\lambda_R$ enters
+the same nonlinear $\Psi(\cdot)$ argument as every other moment, so its contribution to the
+winner-boundary jump cannot be isolated and dropped. The full, $(D+2)$-moment, direct-replacement
+method described above is the one actually used for the reported results.)
+
+\subsection{Known imprecision this does \emph{not} introduce}
+The augmented moment's own dependence on $\theta$, when the inner solver's automatic-differentiation
+machinery needs it (a separate need from the outer KNITRO gradient above — this occurs inside the
+inner solve's own handling of dual/derivative number types), is represented by a \emph{frozen local
+linear surrogate} using the same envelope-theorem sensitivity of $R$ to $\theta$ (holding $F$ fixed)
+used to build the influence-function moment itself, rather than differentiated through the discrete
+inversions directly. This affects only the \emph{efficiency} of the search (how directly it is
+steered toward the optimum), never the validity of a reported bound: feasibility of every reported
+point is always checked \emph{exactly} (the nonlinear $R$ and the exact primal divergence functional,
+never the linear surrogate), so a reported bound can only be as good, never systematically biased,
+regardless of how good the gradient guidance was along the way.
+
+\section{Checks, validation, and multistart}
+\label{sec:checks}
+
+\begin{itemize}
+  \item \textbf{Gravity feasibility}: $|R_{\text{mean}}|\le 5\times10^{-4}$ at the converged
+  sequential-loop iterate.
+  \item \textbf{Divergence-budget feasibility}: $\mathrm{div}(F_{\text{final}})\le\delta$, checked
+  via the \emph{exact primal} functional $\varphi$ applied directly to the accepted (possibly
+  damped-combination) weights, not read off any solver's internal value. \textbf{Both} of the above
+  are required for a $\theta$ to count as feasible; requiring only the first was a real,
+  previously-diagnosed bug (it let the search report economically impossible negative $\kappa$,
+  since the theory proves $\kappa\in[0,\kappa_{\max}]$).
+  \item \textbf{Destination-inversion convergence}: every omitted destination's own Newton solve
+  must converge (max share error $<10^{-6}$) at every iterate used; a non-converged destination
+  invalidates the whole evaluation (Section~\ref{sec:inversion}).
+  \item \textbf{Best-feasible-$\theta$ tracking}: KNITRO's own terminal iterate at the outer
+  iteration cap is not always the best (or even a feasible) point the search visited along the way
+  — the search can wander off a good point near the cap. The procedure therefore separately tracks
+  the best feasible $\theta$ (extremal $\kappa$ subject to feasibility) seen across the
+  \emph{entire} search and reports it alongside KNITRO's raw terminal answer
+  (\texttt{best\_feasible\_kappa}/\texttt{best\_feasible\_gp} versus the raw \texttt{kappa}/\texttt{gamma\_p}
+  columns). Because the sequential loop is warm-started from the previous $\theta$'s state (not a
+  pure function of $\theta$ alone), the tracker snapshots the destination-inversion state that
+  achieved feasibility and re-verifies \emph{warm}, not cold, to avoid a spurious failure on
+  re-check.
+  \item \textbf{Hard-max (rho$\to$0) verification}: a fully independent, after-the-fact check —
+  given a converged production point's $(\theta,u,p)$, re-invert every omitted destination's
+  competitiveness column via a $\rho$-continuation homotopy down to the literal zero-temperature
+  hard-argmax model (not the $\rho=2\times10^{-3}$ softmax used throughout the main solve), and
+  check that the resulting hard-max gravity residual is within the same tolerance. This is a
+  \emph{separate} flag (\texttt{hardmax\_verified}) from the smoothed-model \texttt{gravity\_ok} /
+  \texttt{best\_feasible\_gravity\_ok} used to select the reported point; the two can disagree (a
+  bounded, nonzero hard-max share-matching error at higher $\delta$ is expected and is not itself
+  evidence of a problem; it does not gate or change \texttt{best\_feasible\_kappa}).
+  \item \textbf{Five-start multistart, per $\delta$}: the outer search is run from five different
+  starting points (one anchored at the closed-form calibration, $A^*$; four random perturbations)
+  at every $\delta$ on the grid, to guard against the outer KNITRO search converging to a
+  local/non-global point or hitting its iteration cap short of the true extremum; the reported
+  number at each $\delta$ is the best across all five starts. Within a given start, each $\delta$ on
+  the grid is warm-started from that same start's solution at the previous $\delta$.
+\end{itemize}
+
+\section{Failure modes: what happens when it does not converge}
+\label{sec:failure}
+
+\begin{itemize}
+  \item \textbf{A single destination's Newton solve diverges} (competitiveness norm exceeds
+  $10^8$, or fails to reach the $10^{-6}$ share-error tolerance within $150$ iterations): the whole
+  evaluation at that $\theta$ (and that iterate) is marked infeasible; a plausible genuine cause is
+  $\mu$ moving far from its calibrated value, making origins nearly tied and requiring increasingly
+  extreme competitiveness values to match a fixed target share — this can be genuine economic/numerical
+  infeasibility, not merely a bug.
+  \item \textbf{The backtracking line search in the sequential loop exhausts all $12$ halvings}
+  without finding an $\alpha$ that both keeps every destination converged and reduces $|R|$: the
+  loop stops where it is (not converged), and the $\theta$-evaluation is reported as gravity-infeasible.
+  \item \textbf{The sequential loop reaches its iteration cap ($20$) without $|R|$ falling below
+  tolerance}: same outcome — reported infeasible at that $\theta$.
+  \item \textbf{Consequence for the outer search, in every case above}: the moment closure feeds the
+  outer KNITRO problem a deliberately \emph{unsatisfiable} constant column in place of the (missing)
+  gravity moment — a strictly positive, non-constant sentinel vector for which $\E_F[\cdot]=0$ is
+  impossible for \emph{any} distribution $F$. This makes the inner divergence-minimization problem
+  provably infeasible at that $\theta$, so KNITRO's own outer solve correctly treats that $\theta$ as
+  infeasible and moves away from it. (The alternative of silently reusing the previous iterate's
+  gravity column was tried historically and is explicitly wrong: it lets the search escape to
+  gravity-violating $\theta$ that only \emph{looks} fine because a stale, no-longer-applicable moment
+  was reused.)
+  \item \textbf{KNITRO's own inner-solve status code is anything other than
+  $\{0,-100,-101,-103\}$} (in particular $-300$, unbounded-dual/infeasible-primal): that solve is
+  rejected outright and treated as a failed evaluation, regardless of whether it returned
+  superficially finite-looking numbers.
+\end{itemize}
+
+\section{Practical settings used for the reported bounds}
+\label{sec:settings}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Setting & Value \\
+\midrule
+Softmax temperature $\rho$ (destination inversion) & $2\times10^{-3}$ \\
+Destination-inversion tolerance (\texttt{DEST\_INV\_TOL}) & $10^{-6}$ \\
+Destination-inversion iteration cap / line-search cap & $150$ / $50$ \\
+Sequential-loop gravity tolerance (on $R_{\mathrm{mean}}$) & $5\times10^{-4}$ \\
+Sequential-loop iteration cap & $20$ \\
+Backtracking line-search schedule & $\alpha\in\{1,\tfrac12,\tfrac14,\dots\}$, up to $12$ halvings \\
+Outer gradient method & \texttt{fixed\_dual\_fd\_full} (Section~\ref{sec:outer-gradient}) \\
+Outer per-coordinate variable scaling & on (\texttt{use\_var\_scaling}, power $=1.0$) \\
+$\mu,\sigma$ & fixed at calibrated values (not searched) \\
+Multistart & $5$ starts (\,$A^*$-anchored $+$ $4$ random\,) per $\delta$ \\
+$\delta$ grid & $0.1,\ 1.0,\ 2.0,\ 5.0$ \\
+Monte Carlo draws $W$ & $80{,}000$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The per-coordinate KNITRO variable scaling deserves a note: a probe evaluation at the initial
+$\theta$ found the constraint-gradient magnitude for $\gamma'_{\text{focal}}$ to be many orders of
+magnitude larger than for the $A_{\cdot,\text{focal}}$ block, which otherwise left the $A$ block
+effectively unexplored by the search regardless of gradient method. The fix rescales only the $A$
+block's KNITRO-internal variable scale, relative to $\gamma'_{\text{focal}}$'s own natural
+constraint-gradient magnitude (leaving $\gamma'_{\text{focal}}$'s own scale at $1.0$, since also
+rescaling it was found to shrink the \emph{objective's} gradient toward zero and caused the search
+to falsely satisfy its own KKT stopping test at the initial point without moving at all).
+
+\end{document}
