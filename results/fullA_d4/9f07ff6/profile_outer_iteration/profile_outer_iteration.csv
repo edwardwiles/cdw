@@ -1,0 +1,7 @@
+source,config,outer_iters,n_eval_total,wall_seconds,implied_evals_per_outer_iter,implied_seconds_per_outer_iter,note
+derived_from_phaseB,auto_bfgs_hessopt2,15,549,24.4,36.6,1.63,"eval count includes obj+FD-gradient probes together; NOT a fresh live-instrumented run, see docs/fullA_performance_profile.md sec on this file's provenance"
+derived_from_phaseB,auto_sr1_hessopt3,15,555,17.2,37.0,1.15,derived_from_existing_log_not_reinstrumented
+derived_from_phaseB,auto_lbfgs_hessopt6,15,546,17.6,36.4,1.17,derived_from_existing_log_not_reinstrumented
+derived_from_phaseB,sqp_bfgs,15,555,18.2,37.0,1.21,"status=-410, derived_from_existing_log_not_reinstrumented"
+derived_from_phaseB,direct_bfgs,15,549,16.6,36.6,1.11,derived_from_existing_log_not_reinstrumented
+derived_from_phaseB,auto_productfd_hessopt4_CONTROL,15,9586,324.0,639.1,21.60,"product-findiff needs an extra Hessian-vector FD pass per outer iterate on top of the objective+gradient FD probes -- this is WHY its per-eval-type cost differs so much, not merely more outer work"
