@@ -1,0 +1,82 @@
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'par_blasnumthreads' deprecated, please use 'blas_numthreads'.
+WARNING:  Option 'par_concurrent_evals' deprecated, please use 'concurrent_evals'.
+WARNING:  Option 'par_lsnumthreads' deprecated, please use 'linsolver_numthreads'.
+WARNING:  Option 'par_conicnumthreads' deprecated, please use 'conic_numthreads'.
+WARNING:  Option 'par_msnumthreads' deprecated, please use 'ms_numthreads'.
+WARNING:  Option 'par_numthreads' deprecated, please use 'numthreads'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+>>> D=4 c8 frontier run (SMOOTHED_AD path), direction=lower, hessopt_tag=sr1, maxit=15, maxtime_real=300.0
+Rho feasibility scan at w0 (shared common start point):
+  rho=0.3026912654036264  inner_status=-300  inner_solve_ok=false  Delta=NaN
+  rho=0.17280092631344068  inner_status=-300  inner_solve_ok=false  Delta=NaN
+  rho=0.07767278262695462  inner_status=0  inner_solve_ok=true  Delta=0.22209714815091275
+  rho=0.02997731246491183  inner_status=0  inner_solve_ok=true  Delta=0.0029862941114860413
+  rho=0.014617846861377171  inner_status=0  inner_solve_ok=true  Delta=0.0010052212146660733
+  rho=0.005911647887408607  inner_status=0  inner_solve_ok=true  Delta=0.0010096751579839404
+  rho=0.0029976656296429862  inner_status=0  inner_solve_ok=true  Delta=0.001010407725420714
+Chosen FIXED rho for this solve: 4.053254561098285e-7  (tuner=-2.467153209664276e6)
+wall-clock budget override: maxtime_real=300.0s, maxit=1e6
+KNITRO terminal (smoothed problem): status=-401  gamma'_focal=0.9901941538730819  opt_err=0.00437532461499611  feas_err=5.671151104280625e-9  outer_iters=2275  wall=300.1s
+total smoothed Delta(w) evaluations: 11862
+
+==============================================================================
+EXACT FRESH FEASIBILITY RECHECK (hard oracle, cold)
+==============================================================================
+[raw_terminal] gamma'_focal=0.9901941538730819  kappa=0.016289599252403253  Delta_dual=0.9999969647782332  Delta-delta=-3.035221766811702e-6
+         gravity_value=-1.0679391398982219e-17  max_abs_moment_kkt_resid=5.861977570020827e-16  mean_m_resid=6.661338147750939e-16  inner_status=0
+[best_feasible_tracked] gamma'_focal=0.9969567454222098  kappa=0.005066944000066909  Delta_dual=0.9999992440979479  Delta-delta=-7.559020520631066e-7
+         gravity_value=-8.673617379884035e-18  max_abs_moment_kkt_resid=1.8629542353210128e-15  mean_m_resid=1.9984014443252818e-15  inner_status=0
+[cold_dense_fast_recheck] N/A for smoothed_ad (evaluate_fullA_fast not loaded on this path -- full_recheck's evaluate_fullA cold check above is the authoritative exact-hard check for this config)
+
+STATUS LABEL: BEST_FEASIBLE_STALLED_OR_VERIFIED
+
+gradient calls: 2276 total (2276 expensive/delta_fd, 0 cheap)  total gradient wall time=156.88s  total inner solves consumed by gradients=2276  compressed_fallback_count=0
+
+Wrote /bbkinghome/edav/gravity_robustness/gravity-fullA-d4/gravity-fullA-d4-c8-algo-frontier/results/fullA_d4/57b2e14/optfdc8_lower_smoothed_ad_sr1_dense_20260718_171635
