@@ -1,0 +1,8 @@
+budget,label,grad,hess,resdir,wall_wrapper,knitro_status,outer_iters,n_eval,gradient_calls,n_cheap,total_inner_solves_in_gradients
+60.0,control_deltafd_productfd,delta_fd,productfd,optfd_upper_delta_fd_productfd_20260718_072302,111.1,-401,2,1800,56,0,1792
+60.0,deltafd_sr1,delta_fd,sr1,optfd_upper_delta_fd_sr1_20260718_072453,110.5,-411,50,1796,51,0,1632
+60.0,deltafd_lbfgs,delta_fd,lbfgs,optfd_upper_delta_fd_lbfgs_20260718_072644,111.9,-401,46,1692,47,0,1504
+60.0,lfixcomposite_sr1,lfix_composite,sr1,optfd_upper_lfix_composite_sr1_20260718_072835,93.7,-103,113,474,114,114,114
+60.0,lfixcomposite_lbfgs,lfix_composite,lbfgs,optfd_upper_lfix_composite_lbfgs_20260718_073009,80.2,-101,60,300,61,61,61
+60.0,hybrid_sr1,hybrid,sr1,optfd_upper_hybrid_sr1_20260718_073129,111.4,-411,46,1399,47,7,1327
+60.0,hybrid_lbfgs,hybrid,lbfgs,optfd_upper_hybrid_lbfgs_20260718_073321,112.0,-411,41,1387,42,2,1329

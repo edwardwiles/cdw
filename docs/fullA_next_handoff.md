@@ -3,6 +3,119 @@
 Written at the end of the "performance profiling, D=4 completion, and staged scaling" continuation.
 Read this first if picking up this investigation again.
 
+## CONTINUATION 4 UPDATE — read this section first
+
+Branch `diag/fullA-d4-exact`, worktree `/bbkinghome/edav/gravity_robustness/gravity-fullA-d4`. Commits
+this continuation: `5917add` (Phase 3a: composite gradient), `ed64fb7` (Phase 3b: live driver
+extension + refresh-policy bug fixes), plus three merge commits pulling in the three background-agent
+branches dispatched at the start of this continuation (`86d3612` smoothed-consistent, `126c52c`
+jach-audit, `e4f7036` phase5-sequential — see §0 below), plus this doc update and
+`docs/fullA_algorithm_frontier_v2.md`.
+
+### 0. Background-agent workstreams (§3 of the handover prompt) — all three completed and merged
+
+All three agents dispatched from `b5c109d` finished and were reviewed + merged into
+`diag/fullA-d4-exact` this continuation (none were blindly merged — each doc was read, each
+agent's own validation claims spot-checked against its stated method before merging):
+
+1. **jac_h audit** (`docs/fullA_jach_audit.md`, merged `126c52c`) — confirmed via runtime counters
+   (not static analysis) that the dense `jac_h` tensor is allocated once per bundle construction but
+   NEVER populated or read in the live full-A cached/Method-B path (only in a legacy branch nothing
+   here reaches). Added an opt-in `needs_outer_moment_jacobian=false` mode (default `true`, fully
+   backward compatible), validated at D=4/6/8 (12/12 checks PASS + a real end-to-end production run
+   matching the prior documented baseline numbers exactly), wired into both named production drivers.
+   Saves ~14ms (D=4) to ~220ms (D=8) of one-time construction cost; **not** an active-computation
+   removal (nothing was actively running). Touches shared `cc_algo/` files, additively/guarded.
+2. **Smoothed-consistent full-A** (`docs/fullA_smoothed_consistent_experiment.md`, merged `86d3612`)
+   — a genuinely consistent (same-temperature values+allocation) smoothed solve, temperature homotopy,
+   then exact-hard polish via `lfix_incremental.jl`'s `:incremental_o1` tier. **Headline result: a NEW
+   best upper candidate, κ=0.17197168927740825** (exact-feasible, `inner_status=0`,
+   `max_abs_moment_kkt_resid=1.07e-16`), beating the existing `upper_maxit40` incumbent
+   (κ=0.17176461388430053) by +0.12% relative. The polish only ran 2 rounds (1 accepted step) before
+   stalling in its single tried direction — flagged as unfinished headroom, not a ceiling. **This is
+   now the best validated upper candidate and should be the starting point for any further upper-
+   direction work (Phase 6), not `upper_maxit40`.**
+3. **Sequential/profiled reconstruction** (`docs/fullA_sequential_exact_comparison.md`, merged
+   `e4f7036`) — re-ran the production sequential method correctly (maxit 25→150, `eval_fcga=no`
+   genuinely honoring `hessopt=4`, real 5-start multistart per `sequential_methodology.tex`).
+   Best-of-5 upper κ=0.157907 — clears the fixed-A floor (0.1440) confirming genuine convergence
+   (unlike the retracted 0.0779 run), but **falls short of the full-A incumbent by ~8% relative**.
+   The reconstructed full-A point is NOT exactly feasible in the hard-max oracle (KNITRO -300,
+   independently LP-certified infeasible) — root-caused to an economically extreme implied
+   `Aod_theta[4,4]` (≈41-122× calibration) that amplifies small (1-2 percentage point) share-matching
+   gaps into a real, nonzero moment residual, not a smoothing/numerical artifact. **Answers the
+   handover's question 6 directly: a properly-run sequential reconstruction does NOT beat the current
+   full-A incumbent** — no warm-start action required on that basis (though it remains a reasonable
+   diversity-of-starts candidate on weaker grounds).
+
+### 1. Phase 3 (composite hybrid gradient) — DONE, validated, with an important caveat found
+
+`full_aod_diag/d4_exact/composite_gradient.jl`: gamma'_focal component is an EXACT closed-form
+derivative of `L_fix` (uses `base.m_star`, no re-evaluation of `Psi` needed); A-block is central FD
+over `lfix_incremental.jl`'s `:incremental_o1` tier with a NEW adaptive-bandwidth-per-coordinate
+selector (switching-mass target + floor/ceiling + h-vs-h/2 diagnostic), replacing the flagged
+`FIXED_H=0.01` gap. Validated (`test_composite_gradient.jl`) at `upper_maxit40`/`lower_stalled`
+(calibration/fixed_A are documented cold-infeasible, skipped): gamma matches the true tangent to
+~1e-6 relative; A-block cosine 0.973-0.9997 against a MATCHED-bandwidth `Delta_FD` reference.
+
+**Important, re-usable finding**: `Delta_dual`'s own finite-difference estimate is itself severely
+h-dependent near these candidates (confirmed: the gamma FD slope moves from -76.2 at h=0.01 to -44.6
+at h=1e-5 at `upper_maxit40`, while `L_fix`'s FD barely moves over the same range) — consistent with
+the historical `results/fullA_d4/1bdb1cc/h_sweep.csv` finding that raw `Delta_dual` FD doesn't
+stabilize even at h=0.00625. **Any future comparison against a `Delta_FD` "ground truth" MUST use a
+matched (or small) h, or the comparison is measuring Delta_dual's own curvature bias, not the cheap
+method's error** — this cost real time to discover this continuation (see composite_gradient.jl's
+Phase 3a commit message) and should not need re-discovering.
+
+Two real bugs were found and fixed in `HybridGradientPolicy` before trusting it (full detail in the
+Phase 3b commit message): (1) the winner-jump trigger compared a whole-matrix hash for exact equality,
+which fires on virtually every step at W=8000 draws — fixed to a genuine fractional-change threshold;
+(2) the disagreement trigger was fed the gamma component, which is exact in the cheap method but
+severely biased in the h=0.01 expensive method (see above), so it disagreed almost every call for
+reasons unrelated to staleness — fixed by comparing `||A-block gradient||` instead. **NOT wired**
+(documented gap): the "rejected-step" and "failed random-directional check" triggers — would need a
+`KN_set_newpoint_callback` to detect KNITRO's own accept/reject decision, not implemented given time.
+
+**A separate, more serious finding**: `hybrid` mode's gradient-SOURCE switching (cheap vs expensive
+across outer iterates) causes KNITRO to terminate prematurely (status -102 after only ~2 outer
+iterations) when paired with a quasi-Newton Hessian mode (SR1/BFGS/L-BFGS) — plausibly because those
+methods' curvature updates assume a consistent gradient source across secant pairs, and switching
+breaks that assumption. `lfix_composite` (always cheap, no switching) does not show this. **Treat
+`hybrid` as not-yet-safe-to-use for a real run** until this is either fixed (e.g. reset/skip the
+Hessian update on a source switch, if KNITRO's API allows signaling that) or `hybrid` is restricted to
+`productfd`-style Hessian modes that don't accumulate cross-iterate curvature.
+
+`run_d4_optimized_fd.jl` extended (backward compatible, default behavior unchanged, verified) with
+`D4X_GRADIENT_METHOD` (`delta_fd`|`lfix_composite`|`hybrid`), `D4X_HESSOPT`
+(`auto`|`sr1`|`lbfgs`|`productfd`), `D4X_MAXTIME_REAL` (wall-clock override via
+`KN_set_param_by_name`, avoids one `.opt` file per budget), `D4X_REFRESH_EVERY`/`D4X_GAP_TOL`.
+
+### 2. Phase 4 (wall-clock frontier) — minimum bar MET, decisively
+
+See `docs/fullA_algorithm_frontier_v2.md` for the full table/interpretation. One wall-clock budget
+(60s), one direction (upper), 7 configs. **`lfix_composite` (the always-cheap composite gradient, no
+source-switching) beats the historical `delta_fd`+`productfd` control by +10.2% relative κ
+(0.172457 vs. 0.156552) using 13-16x fewer inner CC-dual solves (114 vs. 1792), and modestly beats
+even the best-tuned `delta_fd` variant found here (`deltafd_lbfgs`, 0.171774) too** — the clearest,
+most decisive finding of this continuation. `hybrid` (both Hessian modes) underperforms
+`lfix_composite` here (κ 0.1686-0.1696) because the refresh policy, even after the two bug fixes
+above, still triggers an expensive refresh on the large majority of calls (7/47, 2/42 cheap) —
+flagged as a real tuning gap for a future continuation, not hidden. Multiple budgets
+(30/60/180/~324s per the task's full spec) and the lower direction were not run this continuation —
+flagged as the natural next step given the time this continuation spent on Phase 3's derivation and
+the two `HybridGradientPolicy` bugs. **Given `lfix_composite` alone already clears the bar
+decisively, a future continuation should consider whether `hybrid`'s extra complexity is worth
+pursuing further, or whether `lfix_composite` should simply become the new default.**
+
+### 3. Phases 6-8 — NOT STARTED this continuation
+
+Given the time spent on Phase 3 (composite gradient derivation + two real bugs found in the refresh
+policy + the hybrid/quasi-Newton incompatibility discovery) and Phase 4's minimum bar, Phases 6
+(gamma profile / upper polish / lower completion), 7 (nested-W stability), and 8 (D=6 pilot) were not
+started. **Phase 6's starting point should now be the smoothed-consistent candidate
+(κ=0.17197168927740825, §0.2 above), not `upper_maxit40`** — it is validated, exact-feasible, and
+already ahead of the old incumbent before any of this continuation's own polishing is applied to it.
+
 ## CONTINUATION 3 UPDATE (in progress, mid-session) — read this section first
 
 Branch/worktree unchanged. Commits so far this continuation: `f500490` (Phase 0: resume audit +
