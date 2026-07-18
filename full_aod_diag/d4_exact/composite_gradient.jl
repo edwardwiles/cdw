@@ -80,8 +80,12 @@ per the dependency graph). Uses the SAME `update_winner_o1` case analysis as
 downstream contribution value) -- reuses that exact logic rather than a
 separate re-derivation.
 """
-function count_winner_flips(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
-    length(changed_origins) != 1 && return count_winner_flips_multi(cache, ctx, θ_full, d, changed_origins)
+function count_winner_flips(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int}; multi_method::Symbol = :top3)
+    if length(changed_origins) != 1
+        multi_method === :top3 && return count_winner_flips_multi_top3(cache, ctx, θ_full, d, changed_origins)
+        multi_method === :generic && return count_winner_flips_multi(cache, ctx, θ_full, d, changed_origins)
+        error("count_winner_flips: multi_method must be :top3 or :generic, got $multi_method")
+    end
     o = changed_origins[1]
     new_price, _ = price_and_pTsigma_cell(θ_full, ctx, o, d)
     flips = 0
@@ -94,7 +98,21 @@ function count_winner_flips(cache::LFixBaseCache, ctx, θ_full::AbstractVector, 
     return flips
 end
 
-"Fallback for the rare two-changed-origins-in-one-destination case: full O(D) rescan (correctness over speed, matching dest_contrib_incremental's own fallback discipline)."
+"""
+    count_winner_flips_multi(cache, ctx, θ_full, d, changed_origins) -> Int
+
+ORIGINAL fallback for the two-changed-origins-in-one-destination case: full O(D)
+rescan (correctness over speed, matching dest_contrib_incremental's own fallback
+discipline). KEPT as the trusted reference / documented fallback per this
+investigation's additive discipline -- `count_winner_flips`'s default now routes
+to `count_winner_flips_multi_top3` instead (Continuation 8, see that function's
+docstring); reach this original via `count_winner_flips(...; multi_method=:generic)`.
+Exact equivalence between the two is verified (not assumed) in
+`test_winner_top3_equivalence.jl`, including synthetic forced-2-changed-origin
+cases beyond what a real D=4 run naturally exercises (per that file's own
+docstring, this branch is RARE in a real run -- 3 of 15 A-block coordinates at
+D=4, see `docs/winner_certificate_report.md` sec 2's audit).
+"""
 function count_winner_flips_multi(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
     D = cache.D; W = cache.W
     new_price = Dict{Int,Vector{Float64}}()
@@ -110,6 +128,64 @@ function count_winner_flips_multi(cache::LFixBaseCache, ctx, θ_full::AbstractVe
         end
         _, wo, _ = min_and_secondmin(col)
         flips += (wo != cache.winner0[ω, d])
+    end
+    return flips
+end
+
+"""
+    count_winner_flips_multi_top3(cache, ctx, θ_full, d, changed_origins) -> Int
+
+Continuation 8 deliverable: O(1)-per-draw replacement for `count_winner_flips_multi`'s
+O(D) rescan, using the cached top-3 ranking (`cache.winner0/runnerup0/third0` and
+their price levels -- `lfix_incremental.jl`'s LFixBaseCache extended additively with
+`third0`/`third_price0` this continuation, computed for free from the already-built
+dense `price0` array) exactly the way `winner_certificate.jl::coord_winner_update!`
+does for the analogous `WinnerRefCache`. EXACT (not approximate): with <=2 changed
+origins the best surviving UNCHANGED origin is at worst rank 3 (same proof,
+reused not re-derived -- see `coord_winner_update!`'s docstring). Only counts
+FLIPS relative to `cache.winner0` (matching `count_winner_flips_multi`'s own
+return contract exactly) -- verified bit-identical to `count_winner_flips_multi`
+across a real coordinate sweep AND synthetic forced-2-changed-origin cases in
+`test_winner_top3_equivalence.jl`.
+"""
+function count_winner_flips_multi_top3(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
+    D = cache.D; W = cache.W
+    length(changed_origins) > 2 && return count_winner_flips_multi(cache, ctx, θ_full, d, changed_origins)
+    Cd = changed_origins
+    new_price = Dict{Int,Vector{Float64}}()
+    for o in Cd
+        p, _ = price_and_pTsigma_cell(θ_full, ctx, o, d)
+        new_price[o] = p
+    end
+    flips = 0
+    @inbounds for ω in 1:W
+        r1 = cache.winner0[ω, d]; r2 = cache.runnerup0[ω, d]; r3 = cache.third0[ω, d]
+        best_o = 0; best_p = Inf
+        if !(r1 in Cd)
+            best_o = r1; best_p = cache.winner_price0[ω, d]
+        elseif !(r2 in Cd)
+            best_o = r2; best_p = cache.runnerup_price0[ω, d]
+        elseif r3 != 0 && !(r3 in Cd)
+            best_o = r3; best_p = cache.third_price0[ω, d]
+        end
+        bo = best_o; bp = best_p
+        for o in Cd
+            v = new_price[o][ω]
+            if v < bp
+                bp = v; bo = o
+            end
+        end
+        if bo == 0
+            # extremely defensive: all of top-3 were changed (needs D<=3 & |Cd|>=3);
+            # unreachable for |Cd|<=2 with D>=3, same as coord_winner_update!'s own
+            # defensive branch. Full O(D) column rescan.
+            col = Vector{Float64}(undef, D)
+            for o in 1:D
+                col[o] = haskey(new_price, o) ? new_price[o][ω] : cache.price0[ω, o, d]
+            end
+            _, bo, _ = min_and_secondmin(col)
+        end
+        flips += (bo != r1)
     end
     return flips
 end
@@ -134,7 +210,8 @@ choice -- two independent criteria, both logged).
 """
 function select_bandwidth(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int;
         h0::Float64 = 0.01, h_floor::Float64 = 1e-4, h_ceil::Float64 = 0.1,
-        target_mass_frac::Tuple{Float64,Float64} = (0.003, 0.03), max_iter::Int = 6)
+        target_mass_frac::Tuple{Float64,Float64} = (0.003, 0.03), max_iter::Int = 6,
+        multi_method::Symbol = :top3)
 
     cells = affected_cells(pe, coord_idx)
     @assert !isempty(cells) "select_bandwidth: coord_idx=$coord_idx has no affected A_od cells (gamma coordinate uses the analytic path, not this)"
@@ -148,7 +225,7 @@ function select_bandwidth(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coo
         total_flips = 0
         for d in affected_dests
             origins_here = [o for (o, dd) in cells if dd == d]
-            total_flips += count_winner_flips(cache, ctx, θ_full, d, origins_here)
+            total_flips += count_winner_flips(cache, ctx, θ_full, d, origins_here; multi_method = multi_method)
         end
         return total_flips / (cache.W * length(affected_dests))
     end
@@ -183,16 +260,16 @@ probe's inner reconstruction is non-finite (mirrors
 discipline for the SAME reason: a NaN silently propagating into a KNITRO
 Jacobian callback is fatal, not merely wrong).
 """
-function a_block_fd_component(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64)
-    Lp = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h; tier = :incremental_o1)
-    Lm = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h; tier = :incremental_o1)
+function a_block_fd_component(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64; multi_method::Symbol = :top3)
+    Lp = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h; tier = :incremental_o1, multi_method = multi_method)
+    Lm = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h; tier = :incremental_o1, multi_method = multi_method)
     if isfinite(Lp) && isfinite(Lm)
         return (Lp - Lm) / (2h)
     elseif isfinite(Lp)
-        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1)
+        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1, multi_method = multi_method)
         return (Lp - L0) / h
     elseif isfinite(Lm)
-        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1)
+        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1, multi_method = multi_method)
         return (L0 - Lm) / h
     else
         return 0.0
@@ -211,7 +288,7 @@ per-coordinate chosen h, switching mass, h-vs-h/2 slope-stability ratio, and
 the base's winner_hash (for the refresh policy's "large winner-hash change"
 trigger).
 """
-function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Nothing,BaseDualState} = nothing)
+function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Nothing,BaseDualState} = nothing, multi_method::Symbol = :top3)
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache(x_free0, ctx, base)
     D = ctx.D; D2 = D^2
@@ -223,10 +300,10 @@ function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Not
 
     h_used = zeros(D2); switch_mass = zeros(D2); slope_ratio = fill(NaN, D2)
     for k in 2:D2
-        h, m, selmeta = select_bandwidth(cache, ctx, pe, w0, k)
+        h, m, selmeta = select_bandwidth(cache, ctx, pe, w0, k; multi_method = multi_method)
         h_used[k] = h; switch_mass[k] = m
-        g[k] = a_block_fd_component(cache, ctx, pe, w0, k, h)
-        g_half = a_block_fd_component(cache, ctx, pe, w0, k, h / 2)
+        g[k] = a_block_fd_component(cache, ctx, pe, w0, k, h; multi_method = multi_method)
+        g_half = a_block_fd_component(cache, ctx, pe, w0, k, h / 2; multi_method = multi_method)
         denom = max(abs(g[k]), abs(g_half), 1e-12)
         slope_ratio[k] = abs(g[k] - g_half) / denom
     end

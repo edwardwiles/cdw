@@ -408,6 +408,35 @@ function certified_winner_update_threaded(ref::WinnerRefCache, ctx, x_free′::A
                               "certificate(threaded): $n_cert certified, $n_rescan rescanned")
 end
 
+"""
+    winners_from_certificate_threaded(ref, ctx, x_free'; tol_far) -> (winner', wval', CertStats)
+
+Continuation 8 addition: threaded-winner-matrix counterpart to
+`winners_from_certificate`, for ORDINARY standalone value evaluations at large
+W*D -- see `certified_winner_update_threaded`'s own threading-discipline
+docstring (Section 6 above, and this repo's docs/winner_certificate_report.md
+Context A: draw-level threading is a wash-to-slight-LOSS at the production
+D=4/W=8000 scale, and only pays off at large W*D, e.g. D=10/W=80000). Do NOT
+use inside an already-coordinate-threaded context (Context B: nested inner
+threading measured 7.33x SLOWER than outer-threaded+inner-serial) -- this is
+for a caller-level, non-nested value evaluation only.
+"""
+function winners_from_certificate_threaded(ref::WinnerRefCache, ctx, x_free′::AbstractVector; tol_far::Float64 = Inf)
+    winner′, stats = certified_winner_update_threaded(ref, ctx, x_free′; tol_far = tol_far)
+    θ_full′ = CS.reconstruct_full(x_free′, ctx.m)
+    γo = ctx.γ; D = ref.D; W = ref.W; σ = ref.σ; μ = ref.μ
+    _, _, AodPow = constCons_matrix(θ_full′, ctx)
+    wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
+    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:D]
+    UσPow = γo.Uσ .^ (-μ)
+    wval = Matrix{Float64}(undef, W, D)
+    @inbounds for d in 1:D, s in 1:W
+        wo = winner′[s, d]
+        wval[s, d] = constConsσ[wo, d] / UσPow[s, wo]
+    end
+    return winner′, wval, stats
+end
+
 # ---- Section 2: coordinate-update specialization ---------------------------
 
 """
@@ -484,4 +513,205 @@ function coord_winner_update!(winner_out::AbstractMatrix{Int}, ref::WinnerRefCac
         end
     end
     return winner_out
+end
+
+# ============================================================================
+# Continuation 8: persistent winner-margin cache for repeated NEARBY VALUE
+# evaluations (line search / profile continuation / successive KNITRO outer
+# iterates), per the standing brief's Section 3 second half. This is a
+# WIRING layer on top of Sections 1+6 above -- it does not re-derive or
+# change the certificate math, only owns the caller-persisted WinnerRefCache
+# object across many calls and logs certified/rescanned/fallback fractions.
+#
+# SCOPE, decided by measurement (not assumed): only the WINNER identity (and
+# hence the winner's wval/pTsigma) is provably exact under the winner-margin
+# certificate -- certified_winner_update's proof is specifically that a
+# certified cell's cached WINNER is the unique strict argmin at the new point;
+# it says nothing about whether the runner-up/third-place identities are also
+# unchanged (a lower-ranked competitor can cross the runner-up without ever
+# threatening the winner). Reusing a stale runner-up/third under the
+# winner-only certificate would NOT be provably exact, so this layer is
+# deliberately scoped to what IS exact: winner + wval, i.e. an L_fix VALUE
+# evaluator (lfix_value_certified, composite_gradient_fast.jl), not a
+# replacement for the exact-top-3-dependent gradient tiers (those need exact
+# runner-up/third and are handled by Section 2's per-call coordinate update /
+# this continuation's count_winner_flips_multi_top3 / dest_contrib_incremental_
+# top3 instead -- see composite_gradient.jl / lfix_incremental.jl).
+#
+# Measured justification for targeting build_lfix_base_cache's WINNER
+# construction specifically: at D=4/W=8000 (warm), build_lfix_base_cache costs
+# ~13ms, of which price0/pTsigma0 construction (the O(D^2) redundant-power-call
+# loop over price_and_pTsigma_cell) is ~50% (~6.5ms) and the mandatory
+# self-validation obj.moments! call is ~37% (~4.7ms, untouched here -- it is
+# NOT a winner-computation cost and this layer does not skip it). By contrast
+# build_winner_ref's log-decomposition (logCC + mulU, O(D^2)+O(W*D) one-time,
+# NO per-cell power-call redundancy) gets the winner/runnerup/third ranking in
+# ~1.85ms COLD -- already ~3.5x cheaper than price0's construction even before
+# any persistence/certification; persistence across repeated nearby calls (via
+# certified_winner_update's certify-then-rescan-only-uncertified path) drives
+# the WARM per-call winner cost toward zero as the certified fraction rises to
+# 97-100% at accepted/line-search step sizes (Section 1's own measurement).
+# ============================================================================
+
+"""
+    PersistentWinnerCache
+
+Caller-owned, mutable, PERSISTENT wrapper around a `WinnerRefCache` reference
+plus cumulative `Ref`-style call counters (this codebase's own instrumentation
+convention -- see `instrumentation.jl`'s `@prof`/`PROF_COUNTS` and
+`oracle_fast.jl`'s `InnerCallCounters` -- reused here, not reinvented). Built
+ONCE by the caller (e.g. at the first accepted outer point / first
+profile-continuation step) and passed into `winner_value_update!` /
+`lfix_value_certified` across MANY subsequent nearby calls -- NOT rebuilt every
+call, per the standing brief's explicit "persistent cache object the caller
+owns and passes across repeated calls" requirement.
+
+Fields:
+- `ref`: the current `WinnerRefCache` anchor, or `nothing` before first use.
+- `tol_far`: forwarded to `certified_winner_update`/`_threaded` on every call
+  (see that function's own docstring for the fallback semantics).
+- `n_calls`, `n_cells_total`, `n_certified_cells`, `n_rescanned_cells`,
+  `n_full_fallback_calls`, `n_rebuilds`: cumulative counters across the
+  cache's lifetime (reset with `reset_counters!`).
+- `total_cert_s`, `total_full_s`: cumulative wall time (seconds) spent in the
+  cheap certified path vs. a full O(W*D^2)-ish rebuild/fallback path
+  respectively -- the raw numbers `winner_cache_report(wc)` derives its speedup estimate
+  from.
+"""
+mutable struct PersistentWinnerCache
+    ref::Union{Nothing,WinnerRefCache}
+    tol_far::Float64
+    n_calls::Int
+    n_cells_total::Int
+    n_certified_cells::Int
+    n_rescanned_cells::Int
+    n_full_fallback_calls::Int
+    n_rebuilds::Int
+    total_cert_s::Float64
+    total_full_s::Float64
+end
+
+"""
+    PersistentWinnerCache(; tol_far=0.3)
+
+Constructs an EMPTY persistent cache (`ref === nothing`) -- the reference is
+built lazily on the first call to `winner_value_update!`/`lfix_value_certified`
+(so construction never pays the O(W*D)-ish `build_winner_ref` cost until it is
+actually needed). `tol_far` default 0.3 matches the "continuation" step-size
+regime in `docs/winner_certificate_report.md`'s own measured table (Section 1:
+still 89-95% certified at that magnitude, only falling to a full-scan-comparable
+regime well beyond it) -- callers doing much larger jumps (e.g. a cold restart
+at an arbitrary new candidate) should pass a smaller `tol_far` explicitly, or
+just call `reset!` to force a fresh anchor at the new point.
+"""
+PersistentWinnerCache(; tol_far::Float64 = 0.3) =
+    PersistentWinnerCache(nothing, tol_far, 0, 0, 0, 0, 0, 0, 0.0, 0.0)
+
+"Force the next `winner_value_update!` call to rebuild the reference from scratch at its own point (e.g. after a large/rejected step, or when the caller knows the anchor is stale for a reason the tol_far guard alone would not catch)."
+function reset!(wc::PersistentWinnerCache)
+    wc.ref = nothing
+    return wc
+end
+
+"Reset only the cumulative counters/timers (keeps the current reference -- use between benchmark phases without discarding a still-good anchor)."
+function reset_counters!(wc::PersistentWinnerCache)
+    wc.n_calls = 0; wc.n_cells_total = 0; wc.n_certified_cells = 0; wc.n_rescanned_cells = 0
+    wc.n_full_fallback_calls = 0; wc.n_rebuilds = 0
+    wc.total_cert_s = 0.0; wc.total_full_s = 0.0
+    return wc
+end
+
+"""
+    winner_value_update!(wc::PersistentWinnerCache, ctx, x_free'; threaded=false, rebuild_on_fallback=true) -> (winner', wval', CertStats)
+
+THE core wiring primitive: get the EXACT winner matrix and winning-origin
+sigma-value (`wval`, == pTsigma at the winner -- exactly what `winners_from_
+certificate` produces) at a new nearby point `x_free'`, reusing `wc`'s
+persistent `WinnerRefCache` anchor across calls instead of rebuilding one every
+time. Builds the anchor lazily on first use (counted as a "rebuild"). On a
+`tol_far` full-scan fallback (point too far from the current anchor -- see
+`certified_winner_update`'s own docstring), the RETURNED winner/wval are still
+EXACT (the fallback is itself a full trusted scan, just slower) -- and, if
+`rebuild_on_fallback` (default true), the anchor is REBASED at the new point
+so FUTURE nearby calls certify cheaply again. Rebasing is a PURE PERFORMANCE
+policy: it never changes any returned value (every value returned by this
+function, certified or fallback, is bit-identical to a full
+`compute_winners_fast` scan by construction -- Section 1's proof, not
+re-derived here), so cache use never depends on callback order or history,
+per the standing brief's explicit correctness requirement.
+
+Accumulates `wc`'s cumulative counters (certified/rescanned cell counts, full-
+fallback call count, rebuild count, cert-path vs. full-path wall time) for
+`winner_cache_report(wc)` to summarize.
+
+`threaded`: forwards to `certified_winner_update_threaded`/`winners_from_
+certificate_threaded` when true. Per this repo's own measured threading
+discipline (docs/winner_certificate_report.md Section 6): only set `true` for
+an ordinary STANDALONE value evaluation at large W*D (e.g. D=10/W=80000-ish),
+called OUTSIDE an already-coordinate-threaded context. Leave `false` (default)
+when called from inside `composite_gradient_fast.jl`'s `threaded=true`
+per-coordinate loop, or at the production D=4/W=8000 scale where draw-level
+threading is a wash-to-slight-loss (Context A's own measured table).
+"""
+function winner_value_update!(wc::PersistentWinnerCache, ctx, x_free′::AbstractVector;
+        threaded::Bool = false, rebuild_on_fallback::Bool = true)
+    if wc.ref === nothing
+        t0 = time_ns()
+        wc.ref = build_winner_ref(x_free′, ctx)
+        wc.total_full_s += (time_ns() - t0) / 1e9
+        wc.n_rebuilds += 1
+    end
+
+    t0 = time_ns()
+    winner′, wval′, stats = threaded ?
+        winners_from_certificate_threaded(wc.ref, ctx, x_free′; tol_far = wc.tol_far) :
+        winners_from_certificate(wc.ref, ctx, x_free′; tol_far = wc.tol_far)
+    elapsed = (time_ns() - t0) / 1e9
+
+    wc.n_calls += 1
+    wc.n_cells_total += stats.n_cells
+    wc.n_certified_cells += stats.n_certified
+    wc.n_rescanned_cells += stats.n_rescan
+    if stats.fell_back_full
+        wc.n_full_fallback_calls += 1
+        wc.total_full_s += elapsed
+        if rebuild_on_fallback
+            t0 = time_ns()
+            wc.ref = build_winner_ref(x_free′, ctx)
+            wc.total_full_s += (time_ns() - t0) / 1e9
+            wc.n_rebuilds += 1
+        end
+    else
+        wc.total_cert_s += elapsed
+    end
+    return winner′, wval′, stats
+end
+
+"""
+    winner_cache_report(wc::PersistentWinnerCache) -> NamedTuple
+
+Summary of `wc`'s cumulative counters: certified/rescanned/cell fractions,
+full-fallback-call fraction, rebuild count, and an implied speedup estimate
+(total time actually spent vs. what `n_calls` full O(W*D^2)-ish scans would
+have cost at the SAME per-call full-scan rate this cache itself measured via
+its own fallback/rebuild calls -- a lower-bound estimate when few/no fallbacks
+occurred, since then the "full-scan cost per call" has to be extrapolated from
+the anchor-build cost alone; `benchmark_winner_accelerator.jl` cross-checks
+this against a directly-measured always-full-scan baseline).
+"""
+function winner_cache_report(wc::PersistentWinnerCache)
+    n = wc.n_calls
+    cert_frac = wc.n_cells_total > 0 ? wc.n_certified_cells / wc.n_cells_total : NaN
+    rescan_frac = wc.n_cells_total > 0 ? wc.n_rescanned_cells / wc.n_cells_total : NaN
+    fallback_frac = n > 0 ? wc.n_full_fallback_calls / n : NaN
+    total_s = wc.total_cert_s + wc.total_full_s
+    mean_full_s_per_call = wc.n_rebuilds > 0 ? wc.total_full_s / wc.n_rebuilds : NaN
+    implied_always_full_s = n > 0 && wc.n_rebuilds > 0 ? n * mean_full_s_per_call : NaN
+    speedup = (isfinite(implied_always_full_s) && total_s > 0) ? implied_always_full_s / total_s : NaN
+    return (n_calls = n, n_cells_total = wc.n_cells_total,
+            certified_frac = cert_frac, rescanned_frac = rescan_frac,
+            full_fallback_call_frac = fallback_frac, n_rebuilds = wc.n_rebuilds,
+            total_cert_s = wc.total_cert_s, total_full_s = wc.total_full_s, total_s = total_s,
+            mean_full_s_per_call = mean_full_s_per_call, implied_always_full_s = implied_always_full_s,
+            implied_speedup = speedup)
 end
