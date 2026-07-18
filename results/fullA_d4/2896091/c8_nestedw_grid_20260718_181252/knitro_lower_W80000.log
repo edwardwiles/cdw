@@ -1,0 +1,496 @@
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+Knitro presolve eliminated 0 variables and 0 constraints.
+
+bar_conic_enable:        0
+hessopt:                 3
+honorbnds:               1
+maxit:                   1000000
+maxtime_real:            450
+numthreads:              1
+outlev:                  3
+restarts:                0
+WARNING: Option ms_maxsolves was set, but option ms_enable='no'.
+WARNING: Option ms_startptrange was set, but option ms_enable='no'.
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                 16 (          16)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                         16 (          16)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                                1 (           1)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                    0 (           0)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            1 (           1)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                      16 (          16)
+Number of nonzeros in Hessian:                        0 (         136)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+  Iter      Objective      FeasError   OptError    ||Step||    CGits 
+--------  --------------  ----------  ----------  ----------  -------
+       0   -9.973650e-01   1.264e-01
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       1   -9.955189e-01   0.000e+00   3.119e-03   1.525e-02        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       2   -9.960666e-01   0.000e+00   2.443e-03   4.656e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       3   -9.963668e-01   0.000e+00   2.051e-03   2.610e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       4   -9.967475e-01   0.000e+00   1.532e-03   3.521e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       5   -9.970075e-01   1.203e-02   1.145e-03   3.313e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       6   -9.969663e-01   0.000e+00   1.208e-03   5.435e-04        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       7   -9.969856e-01   0.000e+00   9.419e-04   1.558e-02        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       8   -9.969884e-01   0.000e+00   2.964e-03   4.916e-03        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+       9   -9.970186e-01   0.000e+00   6.548e-03   3.069e-02        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      10   -9.970773e-01   0.000e+00   3.579e-04   9.609e-02        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      11   -9.970809e-01   0.000e+00   1.203e-03   1.793e-02        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      12   -9.970858e-01   0.000e+00   1.247e-03   1.253e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      13   -9.970964e-01   0.000e+00   1.013e-03   1.732e-03        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      14   -9.970985e-01   0.000e+00   5.340e-04   3.775e-04        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      15   -9.971045e-01   0.000e+00   1.057e-03   1.252e-01        6
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      16   -9.971609e-01   0.000e+00   4.944e-04   8.207e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      17   -9.971614e-01   0.000e+00   5.026e-04   3.843e-03        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      18   -9.971773e-01   0.000e+00   6.331e-04   1.908e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      19   -9.971866e-01   0.000e+00   4.480e-04   7.674e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      20   -9.971900e-01   0.000e+00   9.249e-04   3.664e-03        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      21   -9.971908e-01   0.000e+00   9.153e-04   7.942e-04        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      22   -9.971924e-01   0.000e+00   4.950e-04   1.166e-02        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      23   -9.971932e-01   0.000e+00   5.270e-04   9.066e-04       16
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      24   -9.971969e-01   0.000e+00   6.809e-04   1.635e-03        0
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      25   -9.971970e-01   0.000e+00   6.339e-04   1.098e-04        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      26   -9.971971e-01   0.000e+00   6.320e-04   9.667e-05        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      27   -9.971971e-01   0.000e+00   6.552e-04   1.058e-05        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      28   -9.971971e-01   0.000e+00   6.390e-04   5.275e-06        3
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      29   -9.971971e-01   0.000e+00   6.390e-04   1.319e-06        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      30   -9.971971e-01   0.000e+00   6.390e-04   1.258e-12        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      31   -9.971971e-01   0.000e+00   6.390e-04   1.101e-12        1
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+      32   -9.971971e-01   0.000e+00   6.390e-04   1.926e-12        1
+
+EXIT: Primal feasible solution; terminate because the relative change in
+      solution estimate < xtol for 3 consecutive iterations.
+
+Final Statistics
+----------------
+Final objective value               =  -9.97197133384713e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   6.39e-04 / 6.39e-04
+# of iterations                     =         32 
+# of CG iterations                  =         37 
+# of function evaluations           =        199
+# of gradient evaluations           =         33
+Total program time (secs)           =      56.27776 (  4682.367 CPU time)
+Time spent in evaluations (secs)    =      55.60879
+
+===============================================================================
+
