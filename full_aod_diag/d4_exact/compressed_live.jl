@@ -231,14 +231,17 @@ O(W*D^2) structure to compress here either; computed directly rather than
 introducing a dependency on the dense `moments!` path.
 """
 function inner_loop_internal_compressed(obj, θ_full, ctx)
-    cf = build_compressed_factual(θ_full, ctx; check_ties = true)   # may throw TiedWinnerError
+    # NOTE: build_compressed_factual is the compressed analog of dense's ONE `obj.moments!` call --
+    # timed under the SAME "inner_moment_build[_compressed]" label so the two are directly comparable
+    # in prof_summary() output (an earlier version of this function left this call OUTSIDE any @prof
+    # block, silently under-reporting the compressed build cost as ~0 -- fixed after the benchmark
+    # caught it, see docs/compressed_live_integration_report.md's speedup-measurement section).
+    cf = @prof "inner_moment_build_compressed" build_compressed_factual(θ_full, ctx; check_ties = true)   # may throw TiedWinnerError
 
     W = size(obj.U, 1)
     SW = ctx.γ.SamplingWeights[1:W]
-    @prof "inner_moment_build_compressed" begin
-        obj.H[:, 1] .= θ_full[3 + ctx.D] .* SW
-        obj.H[:, 2] .= 1.0
-    end
+    obj.H[:, 1] .= θ_full[3 + ctx.D] .* SW
+    obj.H[:, 2] .= 1.0
     obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
 
     grav_raw = compressed_gravity_raw(θ_full, ctx)
