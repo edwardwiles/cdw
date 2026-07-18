@@ -1,0 +1,3 @@
+method,time_seconds,bytes_allocated,grad_norm
+forwarddiff_scalar_envelope,3.14742017,492794840,43.18447814812035
+materialized_jac_h_tensor,3.294683322,93505592,43.184478148120306
