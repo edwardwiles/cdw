@@ -11,11 +11,14 @@ pointers), `d1db154` (Priority 1C: smoothed-gradient timing contradiction resolv
 (Priority 1A: warmed breakdown + F/G redundancy audit), `d84ba73` (Priority 2: threaded/cached
 composite gradient, equivalence-tested), `91fe104` (moment-construction audit: mu/sigma value cache,
 a user-requested addendum), `53d5331` (Priority 2 wiring + Priority 3: live `lfix_composite_fast`
-results + fair hard-vs-smoothed comparison). Priorities 0-2 and the fair comparison (Priority 3) are
-**complete**; Priorities 4-5 (gamma profile, upper polish, lower direction, nested-W, D=6 pilot) were
-**not started** this continuation, per the task's own explicit fallback ordering ("if context becomes
-tight, complete 0-2 and the comparison before starting the gamma profile") — this continuation's
-context became the binding constraint after the fair comparison, not before.
+results + fair hard-vs-smoothed comparison), `292fd89` (doc updates), `486a414` (Priority 4: lower
+direction completion + gamma-profile partial + a new bug found), `298019e` (Priority 5: D=6 pilot +
+D-scaling with the live gradient). Priorities 0-3 are **complete**. Priority 4 is **partially
+complete**: lower direction is fully done (a major improvement), the gamma profile is only reliable in
+a narrow window near the incumbent (blocked on a newly-discovered bug, see below), upper polish and
+full crossing-refinement were not reached. Priority 5 is **partially complete**: the D=6 pilot (both
+directions) and a D-scaling profile using the live gradient are done; nested-W (5a) was not attempted.
+See §"CONTINUATION 5 PART 2" below for the Priority 4/5 detail.
 
 ### Headline: new best-validated upper candidate, and it is now demonstrably fast to reach
 
@@ -79,24 +82,66 @@ evaluation, while the smoothed route only produces ONE trustworthy exact-hard ch
 end of its schedule, by design. This reverses the brief edge the smoothed-then-polished candidate held
 at the end of the prior continuation, once Priority 2's engineering fixes are applied to the hard side.
 
+### CONTINUATION 5 PART 2: Priority 4/5 (lower direction, gamma profile, D=6 pilot, D-scaling)
+
+Full detail: `docs/fullA_priority4_gamma_profile_and_lower.md`, `docs/fullA_priority5_d6_pilot_and_scaling.md`.
+
+**Lower direction: DONE, a major improvement.** `run_d4_optimized_fd.jl direction=lower`,
+`lfix_composite_fast`+SR1, 300s budget (converged at 22.6s, status -102): new canonical
+`lower_lfixcomposite_fast_sr1_300s`, **κ=0.005428799948779983**, `Delta-delta=+8.5e-7` — essentially
+EXACTLY on the divergence boundary, replacing the old `lower_stalled` candidate (κ=0.0107,
+`Delta-delta=-0.101`, far inside — simply ran out of iterations). Externally revalidated: same
+qualitative tier as the upper candidate (`EXACT_FEASIBLE_CANDIDATE`, degenerate-at-h=0.01-but-clean-
+at-h≤0.0025 KKT check, poll "improvements" are ~1e-7 in γ', negligible).
+
+**Gamma profile: a NEW BUG FOUND, only a narrow window validated.** `gamma_profile.jl` (new: fixes γ',
+minimizes Δ over the A-block only via KNITRO, sharing the same Priority 2 levers) hit a genuine,
+reproducible failure in `build_lfix_base_cache`'s self-validation (`max|q0_true-q0_cache|` up to ~13,
+not a tolerance issue) when evaluated at (γ',A) combinations DECOUPLED from any jointly-optimized
+trajectory — e.g. the incumbent's own A-block paired with a DIFFERENT γ'. Diagnosed this session (not
+root-caused): the winner computation matches exactly (0/32000 mismatches), the counterfactual term
+matches exactly (0.0 diff, ruling out γ' itself — the factual formulas never read it), but the factual
+`contrib0` reconstruction is wrong specifically for these z_free values. **This is a real, open bug —
+priority item for whoever continues gamma-profile or wide-parameter-space work.** A `try/catch`
+fallback (return a zero A-block gradient rather than crash) is now standard practice in any driver that
+might hit this (`gamma_profile.jl`, `run_d6_pilot.jl` both have it) — but only genuinely re-optimized
+points should be trusted; check `n_eval`/`n_grad_calls` aren't trivially 1 before trusting a
+`profile_Delta(g)` row. The 3 points that DID optimize successfully (g=0.8793/0.8859/0.8926) show
+`profile_Delta(g)` strictly decreasing toward the incumbent — real, if narrow, structural confirmation
+the incumbent sits close to the true crossing.
+
+**D=6 pilot: WORKS in both directions.** Calibration is cold-infeasible at D≥6 (confirmed, matches
+prior D=6 finding, now also D=8/10) — the fix is `ctx.θ0_up`'s own "natural" pre-gammanorm Aod values
+(NOT `ones(D,D)`), found by direct query (`inner_status=0` immediately, no search needed) — **use this
+for any future D≥6 work**, not calibration or random search (60 random trials + a 60s unconstrained
+Delta-min both failed first). `run_d6_pilot.jl`: lower converges genuinely (13.7s, κ=0.007458,
+`Delta-delta=-9.7e-5`); upper makes real progress within a 60s budget (κ=0.19758, 0.03% slack, would
+likely converge with more time). D=4→D=6 live gradient-call cost grows only ~1.49x (71ms→106ms) for a
+2.25x increase in free coordinates — sub-linear, decisively better than the old D^3.5-3.8 projection
+(only 2 data points, directional not a precise fit).
+
+**Not attempted**: multistart from the smoothed candidate/poll points/fixed-A (Priority 4 item 2),
+`profile_Delta(g)=delta` crossing refinement, nested-W (Priority 5a — a distinct engineering task, not
+reached), D=8/10 live pilots (conditional on D=6, now cleared, but not run).
+
 ### Immediate next steps for Continuation 6
 
-1. **Priority 4 (not started)**: gamma profile (`profile_Delta(g)`), upper polish from
-   `upper_lfixcomposite_sr1_60s`'s own poll-improved neighbors (none found this continuation --
-   Priority 0's poll found only 1 negligible ~2.5e-9 "improvement," noise), lower-direction completion
-   using `lfix_composite_fast` (should now be tractable in a similar ~25-30s-to-converge budget).
-2. **Wire `moments_fast.jl`'s cache into the live oracle path** (`oracle_fast.jl` or a new
-   `oracle_fast2.jl` mirroring it) — small, low-risk, stacks with everything else.
-3. **Try `h_mode=:cached` live in KNITRO** (equivalence-tested but not yet run against a real outer
-   loop) — the per-coordinate bandwidth barely moves between nearby outer iterates in practice
-   (see `composite_gradient_fast.jl`'s own `slope_ratio` diagnostic across iterates, not yet analyzed
-   quantitatively this continuation), so a revalidate-every-K-iterates policy could plausibly close
-   more of the remaining ~130ms→much-less gap.
-4. **A genuinely apples-to-apples hard-vs-smoothed timing run** (same process conditions, back-to-back,
-   not reusing an older experiment's numbers) if a precise ratio (not just the qualitative "hard route
-   wins here") is needed.
-5. Priority 5 (nested W, D=6 pilot) remains fully unstarted; gated on Priority 4 completing first per
-   the task's own ordering.
+1. **Root-cause and fix the `build_lfix_base_cache` self-validation bug** (Priority 4's finding above)
+   — the single highest-value remaining item; blocks a genuinely wide gamma profile and any future
+   work that decouples (γ,A) from a joint optimization trajectory. Start from: factual `contrib0`
+   piece is wrong despite winner/counterfactual both matching exactly — check `pTσ0`'s VALUE (not just
+   its use in winner-finding) against `hFunction!`'s own internal `pricesTempσ[winner]` directly at
+   the specific draws where the discrepancy concentrates (not fully isolated this session).
+2. Once fixed, re-run `gamma_profile.jl` across the FULL theoretical γ' interval, refine the
+   `profile_Delta(g)=delta` crossings, and attempt upper polish from the smoothed candidate / poll
+   points / fixed-A starts (Priority 4 items 2-3, not reached).
+3. **Wire `moments_fast.jl`'s cache into the live oracle path** — small, low-risk, still not done.
+4. **Try `h_mode=:cached` live in KNITRO** — equivalence-tested but not yet run against a real outer
+   loop.
+5. **Nested-W (Priority 5a)** and **D=8/10 live pilots** (gate now cleared by the D=6 pilot) — both
+   fully open.
+6. A genuinely apples-to-apples hard-vs-smoothed timing run (same process conditions, back-to-back) if
+   a precise ratio is needed — Priority 3's comparison reused older smoothed-route numbers.
 
 ## CONTINUATION 4 UPDATE — read this section next (superseded above by Continuation 5 for headline numbers)
 
