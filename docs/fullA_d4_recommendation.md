@@ -74,6 +74,61 @@ before this is resolved** (per the continuation prompt's own explicit ordering).
    (task §12G's `should_refresh` policy, implemented but not wired into a live solve this session)
    closes the gap Phase D found.
 
+## Update from continuation 2 (performance profiling / D=4 completion / staged scaling)
+
+Full detail: `docs/fullA_performance_profile.md`, `docs/fullA_scaling_projection.md`,
+`docs/fullA_d4_W_stability.md`, `docs/fullA_d4_final_report.md` §9. Three developments change the
+picture above:
+
+1. **Question 3 (can a cheap gradient replace optimized-value FD) is now answered more precisely, not
+   just "directionally yes"**: blockwise re-analysis (Phase 6) shows `L_fix_FD` specifically — not
+   cheap methods generally — survives scrutiny in the economically important gravity-tangent A-block
+   (cosine 0.997-0.999, norm ratio ≈1.0 at both upper candidates), while hard pathwise AD's A-block
+   gradient is actually **anti-correlated** with the truth near the optimum (cosine -0.67 to -0.79) and
+   `Q_adj_FD` overestimates A-block magnitude by 14-17x. The prior "directionally yes, quantitatively
+   not yet a clean win" verdict undersold `L_fix_FD` specifically and oversold the other two cheap
+   methods.
+2. **The D-scaling cost problem is now quantified, not just asserted**: full-gradient cost scales
+   empirically as D^3.5-3.8 (4 points, D=4..10, W=8000 fixed) — projecting ~18 minutes per
+   `Delta_FD` gradient at D=20 versus ~4.2 minutes per `L_fix_FD` gradient. This makes the case for a
+   validated `L_fix`-hybrid solver strictly stronger at higher D, and makes an unoptimized D=20 attempt
+   with the current architecture concretely, not just qualitatively, inadvisable.
+3. **A genuine external validity check now exists**: the sequential/profiled production method, run
+   fresh on the identical synthetic economy, gives a directly comparable (gauge-invariant) upper bound
+   of κ=0.0779 (genuinely feasible) — full-A's κ=0.1718 candidate clears it by more than 2x, with the
+   caveat that the sequential run used one start, not the production 5-start multistart, and did not
+   fully converge (`nStatus=-400`).
+
+## Final decision labels
+
+Per the continuation task's required taxonomy:
+
+- **D=4 mathematical/numerical viability**: `VIABLE_WITH_HYBRID_AND_PERFORMANCE_WORK`. The exact
+  method reaches a genuine, exactly-feasible, externally-corroborated (beats the sequential method's
+  own comparable number) candidate — but the profiling in this continuation identifies concrete,
+  unimplemented performance work (redundant moments recomputation, `L_fix`-hybrid gradient, block
+  reuse) needed before the method is efficient enough to iterate on freely, and Phase 4's gamma-
+  profile/upper-polish/lower-completion work remains undone.
+- **D=4, W=80,000 viability**: `NOT_CURRENTLY_VIABLE` (specific blocker: untested, not
+  intrinsically hard) — only cost-scaling was measured at W=80,000 (calibration point, ~14.4s per
+  `Delta_FD` gradient, tractable), no actual candidate was re-evaluated or re-optimized there. The
+  blocker is time-budget, not evidence of a problem — the one real W=20,000 candidate check available
+  was reassuring (more feasibility margin, not less).
+- **D=6/8 pilot viability**: `VIABLE_WITH_VALIDATED_METHOD` for a computational pilot specifically
+  (not a headline bound) — Phase 1C's cost data (`Delta_FD` gradients of 15-38s at D=6/8) is
+  compatible with a short supervised pilot using the existing architecture as-is, no additional
+  performance work strictly required to attempt one.
+- **Projected D=10 viability**: `VIABLE_ONLY_AS_BENCHMARK` currently — `Delta_FD` gradients of ~100s
+  make casual iteration impractical, but a single supervised computational pilot (per Phase 8A) is
+  plausible; a headline D=10 bound should wait for the `L_fix`-hybrid to be wired into a live solver
+  (Phase 6/7 follow-up) given the ~5x cost gap that gradient method offers at this D.
+- **Projected D=20 viability**: `NOT_CURRENTLY_VIABLE`, precise blocker: projected ~18 minutes per
+  `Delta_FD` gradient evaluation with the current (no block-reuse, no hybrid-gradient-in-solver)
+  architecture makes even a short pilot prohibitively expensive; this is a concrete, evidence-based
+  blocker (Phase 1C), not a qualitative caution, and it is specifically the redundant-moments-
+  recomputation and missing-hybrid-gradient gaps identified in Phase 1/6 that need closing first, per
+  the task's own Phase 8 gating criteria (none of which currently pass).
+
 ## Standing caveats carried forward
 
 - Every κ number in this report and its predecessor is for the **synthetic D=4 economy, W=8000,

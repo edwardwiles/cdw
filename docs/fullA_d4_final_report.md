@@ -182,7 +182,96 @@ already-validated `three_way_derivatives.jl`/`derivative_methods.jl` machinery. 
   cosine/norm-ratio undefined there, consistent with the lower direction sitting in a more
   numerically fragile region generally.
 
-## 8. What this session did NOT complete
+## 9. Continuation session 2: performance profiling, sequential-solution validation, blockwise gradients
+
+A second continuation (task: "exact full-A performance profiling, D=4 completion, and staged
+scaling") added the following, at commits `1b2a3a0`..`46b461c`. Full detail in
+`docs/fullA_performance_profile.md`, `docs/fullA_scaling_projection.md`, `docs/fullA_d4_W_stability.md`,
+`docs/fullA_d4_profile_and_bounds.md`, `docs/fullA_algorithm_frontier.md`, and
+`docs/fullA_next_handoff.md`; summarized here.
+
+### 9.1 Performance profile (Phase 1, mandatory-first per that continuation's task)
+
+Per-evaluation cost at D=4/W=8000 is dominated by `inner_solve` (53% of 31.1ms median) and
+`moments_recompute` (34%) — the latter is a **literal redundant second computation**:
+`cc_algo/inner_loop_functions.jl`'s `inner_loop_internal` already computes moments once internally;
+`oracle.jl` computes them again afterward. This is the single highest-value, lowest-risk optimization
+target identified (not yet implemented — Phase 2 work). `winner_compute` is the top allocator (4.9MB/
+call) from per-column `sort()` calls in `compute_winners`, a second contained target.
+
+The prior continuation's Phase D reported `n_inner_solves=34` for `Q_adj_FD`/`L_fix_FD` — confirmed
+this session to be a mislabeled FD-probe count, not a real inner-solve count: both methods do
+**zero** real inner solves (verified via `CS.INNER_SOLVE_COUNT[]` diffs), giving `L_fix_FD` a genuine
+~3.1x wall-clock advantage over `Delta_FD` (the ground truth, which does 34 real inner solves).
+
+D/W baseline scaling (D∈{4,6,8,10} at W=8000; D=4 at W∈{8000,20000,80000}, all measured, none
+compared economically across D per the task's instruction): full-gradient cost scales empirically as
+**D^3.5-3.8** — projecting to ~18 minutes per `Delta_FD` gradient at D=20, vs. ~4.2 minutes per
+`L_fix_FD` gradient, making the `L_fix` cost advantage considerably more valuable at larger D than the
+~3x measured at D=4. W-scaling at fixed D=4 looks close to linear-or-sub-linear (noisy, low
+confidence) — reassuring that W does not appear to compound the D-driven cost problem.
+
+### 9.2 Blockwise gradient re-check (Phase 6) — corrects a real flaw in the prior continuation's Phase D
+
+The prior continuation's full-vector-cosine finding ("even known-biased pathwise AD tracks direction
+well, cosine ~0.9999") is now shown to be **almost entirely a gamma-component artifact**. Decomposed
+by block at the two upper candidates:
+
+- **Hard pathwise AD**: A-block cosine goes **negative** (-0.67 to -0.79) — points in nearly the
+  wrong direction in the gravity-tangent A-block specifically, exactly where it matters.
+- **`Q_adj_FD`**: A-block direction moderate (cosine 0.84-0.87) but magnitude wildly wrong (norm
+  ratio 14-17x too large).
+- **`L_fix_FD`**: A-block cosine 0.997-0.999, gravity-tangent-projected norm ratio 0.98-1.00 at BOTH
+  upper candidates — genuinely validated blockwise, not a full-vector artifact.
+
+**Revised conclusion, superseding §7 above**: `L_fix_FD` specifically (not "cheap methods in general")
+is the credible building block for a hybrid live solver. `Q_adj_FD` costs the same but should not be
+used without the same scrutiny it currently fails; hard pathwise AD is far cheaper but unusable as a
+search direction near the optimum.
+
+### 9.3 Sequential/profiled solution located and compared (Phase 5, mandatory external validity check)
+
+A fresh sequential/profiled production run was executed for the identical synthetic economy (D=4,
+W=8000, seedFakeData=889, seedU=888, δ=1 — confirmed via matching `kappa_point_estimate=0.064208` and
+identical `theta_initial`, not assumed from filenames alone; two of the three candidate JLD2 files
+found in the production worktree's untracked output directories were actually stale D=10 results from
+a different, unrelated run, caught by checking the `D` field directly rather than trusting filenames).
+Since kappa is gauge-invariant (`sequential_methodology.tex` §2.3: the two gauges differ only in the
+A-parametrization, not in what `gamma_focal_prime`/kappa mean), a direct comparison is valid without
+reconstructing the full A matrix (that reconstruction — inverting the non-focal destination columns
+via the sequential method's own machinery, then converting between the two gauges — was not attempted
+this continuation, given time constraints; flagged as follow-up):
+
+| | sequential (genuinely feasible) | full-A (this investigation) |
+|---|---|---|
+| κ_upper | 0.0779 (KNITRO terminal, gravity-feasible) — best-feasible 0.1592 exists but is gravity-**infeasible**, not usable | **0.1718** (maxit=40, EXACT_FEASIBLE_CANDIDATE) |
+| κ_lower | **0.0046** (best-feasible, gravity-feasible) | 0.0107 (maxit=15, BEST_FEASIBLE_STALLED, Δ-δ=-0.101 far from binding) |
+
+Full-A's upper candidate clears the sequential method's own directly-comparable, genuinely-feasible
+number by more than 2x. **Caveat, not a final verdict**: the sequential run used one
+calibration-anchored start (not the production 5-start multistart `sequential_methodology.tex` §9
+specifies) and terminated at `nStatus=-400` (non-converged); it may not represent the sequential
+method's own best achievable number at this δ. This comparison is suggestive, real, and gauge-valid,
+not dispositive.
+
+### 9.4 Partial W-stability (Phase 3)
+
+Cost scaling only (no candidate re-optimization) confirmed at W=20,000/80,000 (§9.1). One direct
+candidate check: the maxit=40 upper candidate's exact theta remains feasible at an **independent**
+(not nested/common-draws, a documented time-budget shortcut) W=20,000 draw set, with `Delta` moving
+further from the budget (more safety margin, not less). Not extended to the lower candidate, the
+poll-improved points, W=80,000, or genuine nested draws — see `docs/fullA_d4_W_stability.md`.
+
+### 9.5 Not attempted this continuation
+
+Phase 2 (block-locality optimization — profiling identified two concrete targets, neither
+implemented), Phase 4 (gamma-profile, upper polish, lower-direction completion), Phase 7
+(wall-clock-matched algorithm frontier — the existing Phase B data is iteration-matched, explicitly
+does not substitute), Phase 8 (staged D pilots beyond the Phase 1C cost-benchmark harness). Each has
+a dedicated scoping document (`docs/fullA_d4_profile_and_bounds.md`, `docs/fullA_algorithm_frontier.md`)
+recording what exists to build on and what's needed to start, rather than being silently skipped.
+
+## 8. What this session did NOT complete (original continuation; see §9.5 for continuation-2's gaps)
 
 - **Phase C (lower-direction profiling + continuation)**: not attempted. The existing short run
   (maxit=15) is `BEST_FEASIBLE_STALLED` (feasible, Δ−δ=−0.101, far from binding) — genuinely just ran
