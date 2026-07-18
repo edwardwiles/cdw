@@ -19,8 +19,9 @@ include(joinpath(@__DIR__, "c8_gammabranch_core.jl"))
 using JLD2, Printf
 
 const COMMIT_C8 = strip(read(`git -C $(D4X_ROOT) rev-parse --short HEAD`, String))
-const LOWG_DIR = joinpath(D4X_ROOT, "results", "fullA_d4", COMMIT_C8, "c8_gammabranch_lowg_bracket")
-const HIGHG_DIR = joinpath(D4X_ROOT, "results", "fullA_d4", COMMIT_C8, "c8_gammabranch_highg_sweep")
+const LOWG_DIR = joinpath(D4X_ROOT, "results", "fullA_d4", "d6e3b05", "c8_gammabranch_lowg_bracket")
+const HIGHG_DIR = joinpath(D4X_ROOT, "results", "fullA_d4", "f6790e0", "c8_gammabranch_highg_sweep")
+const HIGHG_REFINE_DIR = joinpath(D4X_ROOT, "results", "fullA_d4", "128f260", "c8_gammabranch_highg_refine")
 const OUT_DIR = joinpath(D4X_ROOT, "results", "fullA_d4", COMMIT_C8)
 mkpath(OUT_DIR)
 
@@ -105,20 +106,42 @@ if isfile(joinpath(HIGHG_DIR, "highg_sweep_rows.csv"))
         push!(existing_g, g)
     end
 end
+for fname in ("fine_robust_profile.csv", "highg_bisection_trace.csv")
+    fpath = joinpath(HIGHG_REFINE_DIR, fname)
+    isfile(fpath) || continue
+    h, frows = read_simple_csv(fpath)
+    ig, iD, ik = col_idx(h,"g"), col_idx(h,"Delta"), col_idx(h,"best_kind")
+    existing_g = Set(r.g for r in rows)
+    for r in frows
+        g = parse(Float64, r[ig])
+        (g in existing_g) && continue
+        Δstr = r[iD]
+        Δ = (Δstr == "NaN") ? NaN : parse(Float64, Δstr)
+        push!(rows, (branch = "high_g", g = g, best_Delta = Δ, second_best_Delta = NaN,
+                      best_start_kind = "best_of_3:" * r[ik], n_feasible = isfinite(Δ) ? 1 : 0, n_total_starts = 3))
+        push!(existing_g, g)
+    end
+end
 sort!(rows, by = r -> r.g)
 
-# ---- recompute each row's A-solution + exact feasibility + runtime by RE-EVALUATING at (g, a
-# branch-appropriate warm-start) via a single profile_delta_at_gamma_c8 call -- gives a clean, single
-# canonical (knitro_status, wall, zfree) per row rather than re-parsing per-start zfree columns from
-# two differently-shaped wide CSVs. ----
+# ---- recompute each row's A-solution + exact feasibility + runtime by RE-EVALUATING at (g, warm-
+# start) via a single profile_delta_at_gamma_c8 call. IMPORTANT: within each branch, rows are
+# processed in ASCENDING g order with the warm-start CARRIED FORWARD from the previous row's own
+# converged A (true continuation) -- NOT re-started fresh from a fixed anchor every time. This matters
+# specifically for the high-g branch, where c8_gammabranch_highg_refine.jl established that a fixed
+# generic start (e.g. the lower incumbent's own A) reliably lands in a WORSE basin than a properly
+# continued one -- re-deriving A-solutions from a fixed anchor here would silently under-report the
+# true profile this deliverable is supposed to document. ----
 final_rows = NamedTuple[]
 Aod_jld2 = Dict{String,Any}()
 zfree_low_g_root = nothing
 zfree_lower_incumbent_confirmed = nothing
+zf_chain = Dict("low_g" => copy(ZFREE_INCUMBENT_C8), "high_g" => copy(ZFREE_LOWER_INCUMBENT))
 for (i, r) in enumerate(rows)
-    zf0 = r.branch == "low_g" ? ZFREE_INCUMBENT_C8 : ZFREE_LOWER_INCUMBENT
+    zf0 = zf_chain[r.branch]
     res = profile_delta_at_gamma_c8(r.g, zf0, ctx, pe; moment_repr = :compressed, maxtime_real = 20.0, hessopt_tag = "sr1")
     has_sol = res.best_zfree !== nothing && isfinite(res.best_Delta)
+    has_sol && (zf_chain[r.branch] = copy(res.best_zfree))   # carry forward within this branch's sorted-g chain
     key = "row$(i)_g$(round(r.g, digits=8))"
     Aod_jld2[key] = has_sol ? Aod_vec_c8(res.best_zfree) : fill(NaN, D^2)
     if has_sol && r.branch == "low_g" && abs(r.g - 0.892635789502) < 1e-6

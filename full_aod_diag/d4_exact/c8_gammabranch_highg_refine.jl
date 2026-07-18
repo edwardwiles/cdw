@@ -86,6 +86,7 @@ else
     zf_a = zf_lo
     bisect_trace = NamedTuple[]
     for it in 1:10
+        global g_a, g_b, zf_a
         g_mid = (g_a + g_b) / 2
         b = best_of_three(g_mid, zf_a; maxtime = 15.0)
         Δ = b.Delta

@@ -1,0 +1,4 @@
+label,Delta,Delta_minus_delta,eta,eta_nonneg,residual_relative,n_active_bounds,n_nonfinite_probes
+low_g_root,0.9999999999977335,-2.266520304772257e-12,0.011732461434081581,true,0.0023339123344565302,0,0
+high_g_lower_incumbent_registry_point,1.0000008524079531,8.524079531113671e-7,-0.0,true,1.0,0,1
+high_g_true_crossing_g0.997031,1.0729699528058796,0.07296995280587959,-0.0,true,1.0,0,1

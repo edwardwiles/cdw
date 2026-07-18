@@ -223,7 +223,13 @@ end
 function external_stationarity_check_c8(w::AbstractVector, ctx, pe;
         find_smallest::Bool, h::Float64 = 0.01,
         w_lo::Union{Nothing,AbstractVector} = nothing, w_hi::Union{Nothing,AbstractVector} = nothing,
-        bound_tol::Float64 = 1e-4, δ::Float64 = 1.0)
+        bound_tol::Float64 = 1e-4, δ::Float64 = 1.0, warm::Bool = false)
+    # NOTE: defaults to warm=false (COLD inner-dual start), unlike stationarity_check.jl's own
+    # warm=true default -- this function is called AFTER an arbitrary sequence of unrelated
+    # profile_delta_at_gamma_c8 sweeps that leave ctx.obj.arg1 (the shared inner-dual warm state) at
+    # whatever the LAST unrelated (g,A) point was; reusing that stale warm state here corrupts the
+    # central-FD Delta evaluations this diagnostic depends on (caught directly: warm=true gave a
+    # visibly wrong Delta at a point independently known to sit almost exactly at Delta=delta).
     nn = length(w)
     function x_free_from_w_local(ww)
         gp = ww[1]; zfree = ww[2:end]
@@ -231,7 +237,7 @@ function external_stationarity_check_c8(w::AbstractVector, ctx, pe;
         return vcat(gp, vec(exp.(z)))
     end
     function Delta_of_w(ww)
-        r = evaluate_fullA(x_free_from_w_local(ww), ctx; cache = nothing, warm = true)
+        r = evaluate_fullA(x_free_from_w_local(ww), ctx; cache = nothing, warm = warm)
         return r.Delta_dual
     end
     Δ0 = Delta_of_w(w)
