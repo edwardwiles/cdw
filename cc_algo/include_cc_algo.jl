@@ -37,11 +37,14 @@ export outer_loop,
        ensure_grad!,
        summarize,
        write_trace_csv,
-       outer_loop_cached
+       outer_loop_cached,
+       reset_jac_h_counters!,
+       jac_h_counters_snapshot
 
 include("knitro_compat.jl")   # restore KNITRO.jl 0.13/0.14 convenience wrappers on v1.2.1
 include("Psi.jl")
 include("ObjectiveBundle.jl")
+include("jac_h_instrumentation.jl")   # additive counters/timers + no-jac_h default helpers, must precede PsiObjectiveBundle.jl
 include("KLObjectiveBundle.jl")
 include("PsiObjectiveBundle.jl")
 include("inner_loop_functions.jl")

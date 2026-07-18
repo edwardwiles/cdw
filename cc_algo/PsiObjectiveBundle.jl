@@ -39,7 +39,7 @@ abstract type PsiObjectiveBundle <: ObjectiveBundle end
     arg0                ::Array{Float64,1} = zeros(M)
     arg1                ::Array{Float64,1} = zeros(M)
     arg2                ::Array{Float64,1} = zeros(M)
-    jac_h               ::Array{Float64,3} = zeros(N, d + 2, l)
+    jac_h               ::Array{Float64,3} = _instrumented_jac_h_default(N, d, l)
     x                   ::Array{Float64,1} = NaN .* ones(1 + outer_constr_index)    # cache variable that stores the last successful (η, ζ, λ)
     ∂x_∂θ               ::Array{Float64,2} = zeros(length(x), l)
     ∂c_∂θ               ::Array{Float64,2} = zeros(d - outer_constr_index + 1, l)
@@ -81,6 +81,8 @@ function (Q::PsiObjectiveBundleExplicit)(x, g = Float64[], θ = Float64[]; h = F
 
 	# gradient (and, if necessary, Jacobian of constraints) w.r.t. θ
 	elseif length(g) > 0 && length(θ) > 0
+
+		JAC_H_THETA_BRANCH_COUNT[] += 1   # ADDITIVE (jac_h audit): counts entry into this legacy outer-gradient branch
 
 		@unpack jac_h, H_copy, N, l, ∂x_∂θ, ∂c_∂θ = Q
 
@@ -160,7 +162,14 @@ end
     arg0                ::Array{Float64,1} = zeros(M)
     arg1                ::Array{Float64,1} = zeros(M)
     arg2                ::Array{Float64,1} = zeros(M)
-    jac_h               ::Array{Float64,3} = zeros(N, d + 2, l)
+    # ADDITIVE (jac_h audit, diag/fullA-d4-exact-jach-audit): when false, the dense N x (d+2) x l
+    # jac_h tensor below is NOT allocated (a 0x0x0 array is stored instead) and any legacy code path
+    # that would populate/read/contract it (calculate_jac_θ!, ift!) errors with a clear diagnostic
+    # instead of silently operating on an empty array or an out-of-bounds index. Default TRUE
+    # preserves exactly the prior unconditional-allocation behavior for every existing caller that
+    # does not pass this kwarg -- see docs/fullA_jach_audit.md for the runtime audit motivating this.
+    needs_outer_moment_jacobian ::Bool      = true
+    jac_h               ::Array{Float64,3} = needs_outer_moment_jacobian ? _instrumented_jac_h_default(N, d, l) : _skipped_jac_h_default()
     x                   ::Array{Float64,1} = NaN .* ones(outer_constr_index)        # cache variable that stores the last successful (ζ, λ)
     ∂x_∂θ               ::Array{Float64,2} = zeros(length(x), l)
     ∂c_∂θ               ::Array{Float64,2} = zeros(d - outer_constr_index + 2, l)
@@ -202,6 +211,8 @@ function (Q::PsiObjectiveBundleImplicit)(x, g = Float64[], θ = Float64[]; h = F
 
 	# gradient (and, if necessary, Jacobian of constraints) w.r.t. θ
 	elseif length(g) > 0 && length(θ) > 0
+
+		JAC_H_THETA_BRANCH_COUNT[] += 1   # ADDITIVE (jac_h audit): counts entry into this legacy outer-gradient branch
 
 		@unpack find_smallest, jac_h, H_copy, N, l, ∂x_∂θ, ∂c_∂θ = Q
 
@@ -286,7 +297,7 @@ end
     arg0                ::Array{Float64,1} = zeros(M)
     arg1                ::Array{Float64,1} = zeros(M)
     arg2                ::Array{Float64,1} = zeros(M)
-    jac_h               ::Array{Float64,3} = zeros(N, d + 2, l)
+    jac_h               ::Array{Float64,3} = _instrumented_jac_h_default(N, d, l)
     x                   ::Array{Float64,1} = NaN .* ones(outer_constr_index)        # cache variable that stores the last successful (ζ, λ)
     ∂x_∂θ               ::Array{Float64,2} = zeros(length(x), l)
     ∂c_∂θ               ::Array{Float64,2} = zeros(d - outer_constr_index + 1, l)
@@ -325,6 +336,8 @@ function (Q::PsiObjectiveBundleDelta)(x, g = Float64[], θ = Float64[]; h = Floa
 
 	# gradient (and, if necessary, Jacobian of constraints) w.r.t. θ
 	elseif length(g) > 0 && length(θ) > 0
+
+		JAC_H_THETA_BRANCH_COUNT[] += 1   # ADDITIVE (jac_h audit): counts entry into this legacy outer-gradient branch
 
 		@unpack jac_h, H_copy, N, l, ∂x_∂θ, ∂c_∂θ = Q
 
@@ -370,6 +383,8 @@ end
 # Implicit function theorem to calculate ∂x_∂θ and update jac_h and H_copy
 function ift!(η, λ, obj::PsiObjectiveBundleExplicit)
 
+    JAC_H_IFT_COUNT[] += 1   # ADDITIVE (jac_h audit): counts calls to the jac_h-reading/contracting ift! path
+
     @unpack jac_h, arg0, arg1, arg2, H, H_copy, H_subsam, l, M, N, outer_constr_index, ∂x_∂θ, ∂∂f_∂∂x, ∂∂f_∂x∂θ, inequality_index, η_min = obj
 
     ddPsi!(arg2, arg0)
@@ -401,6 +416,19 @@ end
 
 # Implicit function theorem to calculate ∂x_∂θ and update jac_h and H_copy
 function ift!(λ, obj::Union{PsiObjectiveBundleImplicit, PsiObjectiveBundleDelta})
+
+    # ADDITIVE (jac_h audit): defensive guard -- if this object was constructed with
+    # needs_outer_moment_jacobian=false, jac_h is a 0x0x0 placeholder and MUST NOT be indexed into
+    # below (that would either error opaquely on a bounds check or, worse, silently no-op on an
+    # empty array). Throw a clear diagnostic instead. In the normal callable flow this is
+    # unreachable (calculate_jac_θ! already errors first, see cc_algo/outer_loop_functions.jl), but
+    # this guard covers any direct/future call to ift! that bypasses that ordering.
+    if hasproperty(obj, :needs_outer_moment_jacobian) && !obj.needs_outer_moment_jacobian
+        error("ift!: this PsiObjectiveBundleImplicit was constructed with needs_outer_moment_jacobian=false " *
+              "-- jac_h was never allocated, so the legacy implicit-function-theorem outer-Jacobian " *
+              "contraction cannot run. See docs/fullA_jach_audit.md.")
+    end
+    JAC_H_IFT_COUNT[] += 1   # ADDITIVE (jac_h audit): counts calls to the jac_h-reading/contracting ift! path
 
     @unpack jac_h, arg0, arg1, arg2, H, H_copy, l, M, N, outer_constr_index, ∂x_∂θ, ∂∂f_∂∂x, ∂∂f_∂x∂θ, inequality_index = obj
 

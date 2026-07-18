@@ -231,12 +231,32 @@ end
 # Calculates the Jacobian of all moments with respect to θ at first N draws
 function calculate_jac_θ!(obj::ObjectiveBundle, θ)
 
+    # ADDITIVE (jac_h audit, diag/fullA-d4-exact-jach-audit): if this object was constructed with
+    # needs_outer_moment_jacobian=false (PsiObjectiveBundleImplicit only, see
+    # cc_algo/PsiObjectiveBundle.jl), jac_h is a 0x0x0 placeholder -- error clearly here rather than
+    # let the autodiff/analytic branch below write into (or bounds-error on) an empty array.
+    if hasproperty(obj, :needs_outer_moment_jacobian) && !obj.needs_outer_moment_jacobian
+        error("calculate_jac_θ!: this ObjectiveBundle was constructed with needs_outer_moment_jacobian=false " *
+              "-- the dense outer-moment Jacobian (jac_h) was never allocated, so the legacy " *
+              "ForwardDiff-through-moments!/analytic-Jacobian outer-gradient path (calculate_jac_θ!, " *
+              "calculate_jac_θ_autodiff!, ift!) cannot be used on this object. Construct a separate " *
+              "object with needs_outer_moment_jacobian=true (the default) if this path is needed, or " *
+              "use the free-only envelope-gradient / L_fix-incremental gradient path instead (see " *
+              "cc_algo/outer_loop_cached.jl, full_aod_diag/d4_exact/lfix_incremental.jl). " *
+              "See docs/fullA_jach_audit.md.")
+    end
+
+    JAC_H_POPULATE_COUNT[] += 1
+    t0 = time()
+
     # default to autodiff if no analytical jacobian is passed
     if obj.moments_jacobian! == error
         calculate_jac_θ_autodiff!(obj, θ)
     else
         obj.moments_jacobian!(@view(obj.jac_h[1:obj.N, 1, :]), select_jac_g_from_jac_h(obj, obj.jac_h), θ, @view(obj.U[1:obj.N, :]), obj)
     end
+
+    JAC_H_POPULATE_TIME[] += time() - t0
 
 end
 
