@@ -48,6 +48,97 @@ using LinearAlgebra: dot
 lin_to_od(lin::Int, D::Int) = (mod1(lin, D), div(lin - 1, D) + 1)   # (o, d) from column-major linear index
 
 """
+    min_secondmin_with_idx(col) -> (m1, idx1, m2, idx2)
+
+Same two-pass scan as `winners_v2.jl::min_and_secondmin`, additionally
+returning the runner-up's INDEX (needed for the O(1) incremental winner
+update below, which must know WHO the runner-up is, not just its value).
+"""
+function min_secondmin_with_idx(col)
+    n = length(col)
+    m1 = col[1]; idx1 = 1
+    m2 = oftype(m1, Inf); idx2 = 0
+    @inbounds for i in 2:n
+        v = col[i]
+        if isless(v, m1)
+            m2 = m1; idx2 = idx1
+            m1 = v; idx1 = i
+        elseif isless(v, m2)
+            m2 = v; idx2 = i
+        end
+    end
+    return m1, idx1, m2, idx2
+end
+
+"""
+    update_winner_o1(price_wo, wo, price_ro, ro, o_changed, new_price) -> (new_wo, new_price_wo, new_ro, new_price_ro)
+
+TRUE O(1) incremental winner update for ONE draw: given the CACHED winner
+(`wo`, value `price_wo`) and runner-up (`ro`, value `price_ro`) among D
+competitors, and that origin `o_changed`'s price changed to `new_price`
+(all OTHER origins unchanged), returns the new winner/runner-up without
+touching any of the other D-2 unchanged competitors. Proof this is exact
+(not an approximation): every unchanged competitor already satisfies
+`price >= price_wo` (by definition of `wo` being the prior global min) and,
+except for `ro` itself, `price >= price_ro` too. Case analysis:
+  - `o_changed == wo` (the winner's own price moved):
+      - `new_price <= price_ro`: winner unchanged (still <= everyone, since
+        every unchanged competitor is >= price_ro >= new_price by hypothesis
+        the case `new_price<=price_ro`... wait -- unchanged competitors are
+        >= price_wo_OLD, not necessarily >= new_price if new_price rose above
+        price_wo_OLD; but they ARE >= price_ro when >= second place, and
+        price_ro>=price_wo_OLD always) -- if `new_price <= price_ro` the
+        winner stays `wo` (its new price is still <= the former runner-up,
+        which was <= every other unchanged competitor).
+      - `new_price > price_ro`: `ro` becomes the new global min (it is <=
+        every unchanged competitor by definition, and now < o_changed too);
+        the new runner-up is `min(new_price, ro)` among {o_changed's new
+        price} vs the BEST of the remaining D-2 -- which we do NOT have
+        cached (this is the one case where an O(1) update cannot recover
+        the EXACT new runner-up without a fallback). Since this function is
+        used ONLY to determine the WINNER for the L_fix contribution
+        formula (the runner-up value is never used downstream), this case
+        returns `new_ro = o_changed`, `new_price_ro = new_price` as a
+        DELIBERATELY INEXACT placeholder for the runner-up alone, clearly
+        flagged via the `ro_exact` return -- callers that only need the
+        winner (the L_fix use case) are unaffected; a caller needing the
+        exact runner-up in this branch must fall back to a full rescan.
+  - `o_changed != wo`:
+      - `new_price >= price_wo`: winner unchanged. Runner-up: if
+        `o_changed == ro`, the exact new runner-up is unrecoverable without
+        the true third-place (same caveat as above, same placeholder);
+        otherwise (o_changed was neither winner nor runner-up) the runner-up
+        is unchanged UNLESS `new_price < price_ro`, in which case `o_changed`
+        becomes the new (exact) runner-up.
+      - `new_price < price_wo`: `o_changed` becomes the new winner (proof:
+        every unchanged competitor is >= price_wo > new_price, and the old
+        `wo` is now demoted). New runner-up = old `wo` EXACTLY (old winner's
+        price is unchanged and was <= every unchanged competitor).
+"""
+function update_winner_o1(price_wo::Float64, wo::Int, price_ro::Float64, ro::Int, o_changed::Int, new_price::Float64)
+    if o_changed == wo
+        if new_price <= price_ro
+            return wo, new_price, ro, price_ro, true
+        else
+            return ro, price_ro, o_changed, new_price, false   # runner-up inexact (flagged)
+        end
+    else
+        if new_price < price_wo
+            return o_changed, new_price, wo, price_wo, true
+        elseif o_changed == ro
+            if new_price < price_wo   # unreachable given outer branch, kept for clarity/symmetry
+                return o_changed, new_price, wo, price_wo, true
+            end
+            return wo, price_wo, o_changed, new_price, false   # runner-up inexact (flagged)
+        else
+            new_ro = new_price < price_ro ? o_changed : ro
+            new_price_ro = new_price < price_ro ? new_price : price_ro
+            return wo, price_wo, new_ro, new_price_ro, true
+        end
+    end
+end
+
+"""
 aod_level_cell(theta_full, ctx, o, d) -- the LEVEL Aod[o,d] (gravity_tariff.jl's own level-conversion
 formula), single cell, O(1). NOTE: `lambda = reshape(P,(D,D))'`, so `lambda[o,d] = P[d+(o-1)*D]`
 (the SAME d1=d+(o-1)*D linear-index convention used throughout hFunction.jl/winners.jl) -- verified
@@ -106,6 +197,9 @@ struct LFixBaseCache
     price0::Array{Float64,3}        # W x D x D  (levels, winner-finding)
     pTσ0::Array{Float64,3}          # W x D x D  (sigma-transformed)
     winner0::Matrix{Int}            # W x D
+    winner_price0::Matrix{Float64}  # W x D, price LEVEL of the cached winner
+    runnerup0::Matrix{Int}          # W x D, origin index of the cached runner-up
+    runnerup_price0::Matrix{Float64}  # W x D, price LEVEL of the cached runner-up
     contrib0::Matrix{Float64}       # W x D, cached per-destination contribution to q0
     λstar::Vector{Float64}
     ζstar::Float64
@@ -143,9 +237,13 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
         price0[:, o, d] .= p; pTσ0[:, o, d] .= ps
     end
     winner0 = Matrix{Int}(undef, W, D)
+    winner_price0 = Matrix{Float64}(undef, W, D)
+    runnerup0 = Matrix{Int}(undef, W, D)
+    runnerup_price0 = Matrix{Float64}(undef, W, D)
     @inbounds for d in 1:D, ω in 1:W
-        _, wo, _ = min_and_secondmin(@view(price0[ω, :, d]))
-        winner0[ω, d] = wo
+        m1, idx1, m2, idx2 = min_secondmin_with_idx(@view(price0[ω, :, d]))
+        winner0[ω, d] = idx1; winner_price0[ω, d] = m1
+        runnerup0[ω, d] = idx2; runnerup_price0[ω, d] = m2
     end
 
     CONST_d = zeros(D)
@@ -191,7 +289,8 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
     maxerr = maximum(abs.(q0_true .- q0_cache))
     maxerr < 1e-8 || error("build_lfix_base_cache: self-validation FAILED, max|q0_true-q0_cache|=$maxerr -- closed-form derivation has a bug, not a numerical-tolerance issue")
 
-    return LFixBaseCache(D, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, price0, pTσ0, winner0, contrib0,
+    return LFixBaseCache(D, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, price0, pTσ0,
+        winner0, winner_price0, runnerup0, runnerup_price0, contrib0,
         λstar, base.ζstar, q0_true, wPrime_bi, τPrime_bi, LPrime_bi, Uσ_bi, λ_cf, cf_contrib0)
 end
 
@@ -271,6 +370,42 @@ function dest_contrib_incremental(cache::LFixBaseCache, ctx, θ_full::AbstractVe
     return contrib
 end
 
+"""
+    dest_contrib_incremental_o1(cache, ctx, θ_full, d, changed_origins) -> Vector{W}
+
+Tier 3 (TRUE O(1) winner update): for the common case of exactly ONE changed
+origin in destination d, determines the new winner via `update_winner_o1`
+using ONLY the cached (winner, winner_price, runnerup, runnerup_price) --
+NO rescan of the other D-1 competitors at all (proven exact for the WINNER
+in every branch, see `update_winner_o1`'s docstring). For the rarer case of
+TWO changed origins in the SAME destination (both the direct coordinate AND
+the gravity pivot land in the same destination), chaining two O(1) updates
+can propagate an INEXACT cached runner-up into the second update's decision
+(traced through explicitly in `update_winner_o1`'s docstring) -- rather than
+risk a silent winner error in that narrow case, this falls back to
+`dest_contrib_incremental`'s full O(D) rescan for that specific call only
+(still only recomputing the 2 changed origins' prices, just not chaining
+the O(1) update) -- correctness first, documented not silently assumed.
+"""
+function dest_contrib_incremental_o1(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
+    length(changed_origins) != 1 && return dest_contrib_incremental(cache, ctx, θ_full, d, changed_origins)
+
+    D = cache.D; W = cache.W
+    o = changed_origins[1]
+    new_price, new_pTσ = price_and_pTsigma_cell(θ_full, ctx, o, d)
+    contrib = Vector{Float64}(undef, W)
+    @inbounds for ω in 1:W
+        wo, price_wo, ro, price_ro, _exact = update_winner_o1(
+            cache.winner_price0[ω, d], cache.winner0[ω, d],
+            cache.runnerup_price0[ω, d], cache.runnerup0[ω, d],
+            o, new_price[ω])
+        pTσ_wo = wo == o ? new_pTσ[ω] : cache.pTσ0[ω, wo, d]
+        d1w = d + (wo - 1) * D
+        contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
+    end
+    return contrib
+end
+
 "lfix_from_q(q, ζstar) -> Float64 -- the final scalar, matching fixed_dual_L's own formula exactly."
 function lfix_from_q(q::AbstractVector, ζstar::Float64)
     Psi_q = similar(q)
@@ -300,7 +435,8 @@ end
 The main entry point: `w0` is the cache's base reduced coordinate vector,
 `coord_idx`/`new_val` specify a SINGLE-coordinate perturbation (matching how
 a central-FD gradient probes one coordinate at a time). `tier` selects
-`:incremental` (Tier 2, default) or `:block_local` (Tier 1, for the separate
+`:incremental` (Tier 2, default), `:block_local` (Tier 1), or `:incremental_o1`
+(Tier 3, the TRUE O(1)-winner-update version) -- for the separate
 profiling/equivalence comparison the task requires).
 """
 function lfix_incremental_at(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, new_val::Float64; tier::Symbol = :incremental)
@@ -323,6 +459,9 @@ function lfix_incremental_at(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, 
         elseif tier == :incremental
             origins_here = [o for (o, dd) in cells if dd == d]
             dest_contrib_incremental(cache, ctx, θ_full, d, origins_here)
+        elseif tier == :incremental_o1
+            origins_here = [o for (o, dd) in cells if dd == d]
+            dest_contrib_incremental_o1(cache, ctx, θ_full, d, origins_here)
         else
             error("lfix_incremental_at: unknown tier=$tier")
         end

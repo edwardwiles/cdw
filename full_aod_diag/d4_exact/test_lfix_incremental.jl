@@ -25,7 +25,7 @@ function run_point_test(label, w0; hs = (0.02, 0.01, 0.005, 0.001))
     println("  base cache self-validation PASSED for $label (see build_lfix_base_cache internal check)")
 
     ok = true
-    maxdiff_bl = 0.0; maxdiff_inc = 0.0
+    maxdiff_bl = 0.0; maxdiff_inc = 0.0; maxdiff_o1 = 0.0
     for coord in 1:length(w0), sign in (+1, -1), h in hs
         new_val = w0[coord] + sign * h
         # trusted ground truth
@@ -35,16 +35,17 @@ function run_point_test(label, w0; hs = (0.02, 0.01, 0.005, 0.001))
 
         L_bl = lfix_incremental_at(cache, ctx, pe, w0, coord, new_val; tier = :block_local)
         L_inc = lfix_incremental_at(cache, ctx, pe, w0, coord, new_val; tier = :incremental)
+        L_o1 = lfix_incremental_at(cache, ctx, pe, w0, coord, new_val; tier = :incremental_o1)
 
-        d_bl = abs(L_bl - L_true); d_inc = abs(L_inc - L_true)
-        maxdiff_bl = max(maxdiff_bl, d_bl); maxdiff_inc = max(maxdiff_inc, d_inc)
-        if d_bl > 1e-8 || d_inc > 1e-8
-            println("    MISMATCH coord=$coord sign=$sign h=$h  L_true=$L_true  L_blocklocal=$L_bl (diff=$d_bl)  L_incremental=$L_inc (diff=$d_inc)")
+        d_bl = abs(L_bl - L_true); d_inc = abs(L_inc - L_true); d_o1 = abs(L_o1 - L_true)
+        maxdiff_bl = max(maxdiff_bl, d_bl); maxdiff_inc = max(maxdiff_inc, d_inc); maxdiff_o1 = max(maxdiff_o1, d_o1)
+        if d_bl > 1e-8 || d_inc > 1e-8 || d_o1 > 1e-8
+            println("    MISMATCH coord=$coord sign=$sign h=$h  L_true=$L_true  L_blocklocal=$L_bl (diff=$d_bl)  L_incremental=$L_inc (diff=$d_inc)  L_incremental_o1=$L_o1 (diff=$d_o1)")
             ok = false
         end
     end
     println(rpad(label, 34), " n_checks=", length(w0)*2*length(hs), "  max|block_local-true|=", maxdiff_bl,
-            "  max|incremental-true|=", maxdiff_inc, "  ", ok ? "PASS" : "FAIL")
+            "  max|incremental-true|=", maxdiff_inc, "  max|incremental_o1-true|=", maxdiff_o1, "  ", ok ? "PASS" : "FAIL")
     return ok
 end
 
