@@ -23,6 +23,7 @@
 include(joinpath(@__DIR__, "three_way_derivatives.jl"))
 include(joinpath(@__DIR__, "lfix_incremental.jl"))
 include(joinpath(@__DIR__, "derivative_methods.jl"))
+using LinearAlgebra: norm
 
 # ----------------------------------------------------------------------------
 # Gamma component: exact closed form
@@ -230,9 +231,8 @@ function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Not
         slope_ratio[k] = abs(g[k] - g_half) / denom
     end
 
-    winner0_hash = hash(cache.winner0)
     return g, (base = base, cache = cache, w0 = w0, h_used = h_used, switch_mass = switch_mass,
-               slope_ratio = slope_ratio, winner_hash = winner0_hash, gamma_component = g[1])
+               slope_ratio = slope_ratio, winner0 = copy(cache.winner0), gamma_component = g[1])
 end
 
 # ----------------------------------------------------------------------------
@@ -244,44 +244,86 @@ mutable struct HybridGradientPolicy
     refresh_every::Int
     gap_tol::Float64
     iters_since_refresh::Int
-    last_optimized_slope::Float64      # a scalar summary (gamma-direction component) of the last EXPENSIVE gradient
-    last_winner_hash::UInt64
-    winner_hash_jump_frac::Float64     # trigger threshold: fraction of D-blocks whose winner-hash differs
+    last_optimized_slope::Float64      # ||A-block|| of the last EXPENSIVE gradient (NOT the gamma component -- see decide_gradient!'s docstring for why)
+    last_winner0::Union{Nothing,Matrix{Int}}   # FULL cached winner matrix from the last gradient call
+    winner_jump_frac::Float64          # trigger threshold: FRACTION of the W*D winner entries that must
+                                        # differ from the last call before refreshing. NOTE: an earlier
+                                        # version of this policy compared a single `hash(winner0)` for
+                                        # exact equality -- at W=8000 draws, SOME winner somewhere flips on
+                                        # essentially every outer step, so an exact-hash check would trigger
+                                        # a refresh almost every call regardless of the configured
+                                        # threshold (silently degrading "hybrid" to "always expensive",
+                                        # defeating the entire point). Caught before any real run, not
+                                        # after -- fixed to a genuine fractional-change comparison.
     last_rejected::Bool
     n_refresh::Int
     n_cheap::Int
     log::Vector{NamedTuple}
 end
 
-HybridGradientPolicy(; refresh_every::Int = 5, gap_tol::Float64 = 0.05, winner_hash_jump_frac::Float64 = 0.0) =
-    HybridGradientPolicy(refresh_every, gap_tol, 0, NaN, UInt64(0), winner_hash_jump_frac, false, 0, 0, NamedTuple[])
+HybridGradientPolicy(; refresh_every::Int = 5, gap_tol::Float64 = 0.05, winner_jump_frac::Float64 = 0.02) =
+    HybridGradientPolicy(refresh_every, gap_tol, 0, NaN, nothing, winner_jump_frac, false, 0, 0, NamedTuple[])
 
 """
     decide_gradient!(policy, x_free0, ctx, pe, eval_grad_expensive; base=nothing) -> (g, meta)
 
-Live decision: on trigger (periodic / rejected-step / disagreement / winner-
-hash jump, via `should_refresh` plus the winner-hash extension), calls the
-supplied EXPENSIVE gradient function `eval_grad_expensive(w0)::Vector`
-(intended to be `eval_grad_central_fd` from run_d4_optimized_fd.jl, i.e. the
-full optimized-value Delta_FD gradient); otherwise computes the cheap
-composite gradient. Exact hard value/feasibility (computed separately by the
-caller's own `eval_F`) always governs acceptance -- this function only
-decides which GRADIENT to hand KNITRO.
+Live decision: on trigger (periodic / disagreement / winner-fraction jump --
+`rejected_step` is a documented no-op this session, see below -- via
+`should_refresh` plus the winner-fraction extension), calls the supplied
+EXPENSIVE gradient function `eval_grad_expensive(w0)::Vector` (intended to be
+`eval_grad_central_fd` from run_d4_optimized_fd.jl, i.e. the full
+optimized-value Delta_FD gradient); otherwise computes the cheap composite
+gradient. Exact hard value/feasibility (computed separately by the caller's
+own `eval_F`) always governs acceptance -- this function only decides which
+GRADIENT to hand KNITRO.
+
+NOT wired this session (documented gap, not a silent omission): "rejected-step"
+and "failed random-directional check" triggers from the task's suggested
+list. `policy.last_rejected` exists but nothing ever sets it true -- reading
+KNITRO's own accept/reject decision per callback would need a
+`KN_set_newpoint_callback`, not implemented here given the time this
+continuation had; the periodic + disagreement + winner-fraction-jump triggers
+below are the three that are genuinely live.
+
+DISAGREEMENT METRIC, IMPORTANT (found empirically this session, do not revert
+without re-reading): `should_refresh`'s "cheap_slope vs last_optimized_slope"
+comparison is fed the A-BLOCK GRADIENT NORM here, NOT the gamma component. A
+first version used the gamma component (matching derivative_methods.jl's own
+generic naming) and found it triggered an expensive refresh on EVERY SINGLE
+call, with zero cheap calls ever taken, in both a synthetic multi-step test
+and a real short KNITRO run -- not because the cheap gradient was wrong (the
+gamma component is analytically EXACT, see gamma_component_analytic), but
+because Delta_dual's own h=0.01 FD estimate of the gamma slope has such
+severe curvature-driven bias (documented in this file's own commit message
+and test_composite_gradient.jl) that it drifts by 15-40% between successive
+KNITRO iterates even for tiny steps, near this candidate. Comparing an EXACT
+cheap value against a NOISY expensive one on a coordinate where the two
+disagree for reasons having nothing to do with staleness silently defeated
+the entire point of "hybrid" (100% expensive calls, zero savings). The
+A-block norm does not suffer the same gamma-specific bias and is a more
+meaningful proxy for "has the cheap linearization drifted since the last
+anchor" -- still an IMPERFECT proxy (both slopes are still evaluated at
+different h -- composite's adaptive per-coordinate h vs the expensive
+function's own fixed h=0.01), flagged as a real follow-up, not silently
+assumed solved.
 """
 function decide_gradient!(policy::HybridGradientPolicy, x_free0::AbstractVector, ctx, pe,
         eval_grad_expensive::Function; base::Union{Nothing,BaseDualState} = nothing)
 
     g_cheap, meta = composite_gradient_at(x_free0, ctx, pe; base = base)
-    cheap_slope = meta.gamma_component
+    cheap_slope = norm(@view g_cheap[2:end])
 
-    winner_hash_changed = policy.last_winner_hash != UInt64(0) && meta.winner_hash != policy.last_winner_hash
+    winner_jump_frac_actual = policy.last_winner0 === nothing ? 0.0 :
+        count(meta.winner0 .!= policy.last_winner0) / length(meta.winner0)
+    winner_jumped = policy.last_winner0 !== nothing && winner_jump_frac_actual > policy.winner_jump_frac
+
     (do_refresh, reason) = should_refresh(policy.iters_since_refresh, cheap_slope, policy.last_optimized_slope;
                                             refresh_every = policy.refresh_every, gap_tol = policy.gap_tol)
     if !do_refresh && policy.last_rejected
         do_refresh, reason = true, :rejected_step
     end
-    if !do_refresh && winner_hash_changed
-        do_refresh, reason = true, :winner_hash_jump
+    if !do_refresh && winner_jumped
+        do_refresh, reason = true, :winner_fraction_jump
     end
     if !do_refresh && isnan(policy.last_optimized_slope)
         do_refresh, reason = true, :first_call
@@ -290,19 +332,19 @@ function decide_gradient!(policy::HybridGradientPolicy, x_free0::AbstractVector,
     if do_refresh
         g = eval_grad_expensive(meta.w0)
         policy.iters_since_refresh = 0
-        policy.last_optimized_slope = g[1]
+        policy.last_optimized_slope = norm(@view g[2:end])
         policy.n_refresh += 1
-        push!(policy.log, (kind = :refresh, reason = reason, gamma_slope = g[1], cheap_slope = cheap_slope,
-                            winner_hash = meta.winner_hash))
-        policy.last_winner_hash = meta.winner_hash
+        push!(policy.log, (kind = :refresh, reason = reason, a_block_norm = policy.last_optimized_slope, cheap_slope = cheap_slope,
+                            winner_jump_frac = winner_jump_frac_actual))
+        policy.last_winner0 = meta.winner0
         policy.last_rejected = false
         return g, merge(meta, (gradient_source = :expensive, refresh_reason = reason))
     else
         policy.iters_since_refresh += 1
         policy.n_cheap += 1
-        push!(policy.log, (kind = :cheap, reason = :none, gamma_slope = cheap_slope, cheap_slope = cheap_slope,
-                            winner_hash = meta.winner_hash))
-        policy.last_winner_hash = meta.winner_hash
+        push!(policy.log, (kind = :cheap, reason = :none, a_block_norm = cheap_slope, cheap_slope = cheap_slope,
+                            winner_jump_frac = winner_jump_frac_actual))
+        policy.last_winner0 = meta.winner0
         return g_cheap, merge(meta, (gradient_source = :cheap, refresh_reason = :none))
     end
 end
