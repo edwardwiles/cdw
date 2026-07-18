@@ -1,0 +1,9 @@
+point,method,median_s,min_s,mean_s,n_inner_solves_per_call,n_moments_evals_per_call,n_reps
+calibration,A_pathwise_AD,0.106827183,0.077070555,0.7407490221999999,0,2,10
+calibration,Q_adj_FD,0.350984451,0.28651837,0.456270253,0,34,10
+calibration,L_fix_FD,0.350708401,0.309495533,0.4122132727,0,34,10
+calibration,Delta_FD_optimized_value,1.09656429,0.997521582,1.3225108137,34,68,10
+upper_maxit40,A_pathwise_AD,0.084353239,0.068800169,0.1246861665,0,2,10
+upper_maxit40,Q_adj_FD,0.328119323,0.291195933,0.3947936439,0,34,10
+upper_maxit40,L_fix_FD,0.351740889,0.302626521,0.347299386,0,34,10
+upper_maxit40,Delta_FD_optimized_value,1.129850504,1.009490849,1.1726645358,34,68,10
