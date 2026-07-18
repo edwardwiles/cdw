@@ -80,5 +80,17 @@ report("lower_stalled (maxit15)", w_low)
 w_lfixcomposite_sr1 = [0.8926359584642946, 0.16935885803984474, 0.037584283338539824, 0.12216855636925181, 0.1378438125793156, 1.4358658074709083, 0.21920931970835777, 1.2241096016138515, 1.3275683327810723, 0.7077536256287202, 0.5456384492177044, 0.5135010576503252, 0.6960276724200908, 0.9333803510577844, 1.4851233069076464, 0.3113004424480845]
 report("upper_lfixcomposite_sr1_60s (new best)", w_lfixcomposite_sr1)
 
+# ---- Continuation 5, Priority 4: lower_lfixcomposite_fast_sr1_300s -- new best-feasible lower
+# incumbent, found by run_d4_optimized_fd.jl direction=lower, D4X_GRADIENT_METHOD=lfix_composite_fast,
+# hessopt=sr1, D4X_MAXTIME_REAL=300 (converged at 22.6s of its own budget, knitro_status=-102).
+# (results/fullA_d4/9e03706/optfd_lower_lfix_composite_fast_sr1_20260718_095249/summary.txt,
+# best_feasible_tracked row.) kappa=0.005428799948779983, Delta_dual=1.0000008524079531
+# (Delta-delta=8.52e-7 -- essentially EXACTLY on the divergence boundary, unlike the old
+# lower_stalled point which stopped far inside the feasible region, Delta-delta=-0.101, simply out of
+# iteration budget). This is a MUCH tighter, genuinely-converged lower-direction candidate -- see
+# docs/fullA_priority4_gamma_profile_and_lower.md for external revalidation.
+w_lower_lfixcomposite_fast = [0.9967391744173478, 0.33826763364911505, 0.2756097423805949, 0.3168080759212972, 0.28291467586724917, 1.124214996356822, 1.0586966677239436, 1.0353970705480537, 1.0651065385723435, 0.7972795304932372, 0.7498744164437179, 0.797300832305142, 0.7520482961532734, 1.464240420901755, 1.3955928233005424, 1.4031151818251653]
+report("lower_lfixcomposite_fast_sr1_300s (new best lower)", w_lower_lfixcomposite_fast)
+
 println()
 println("sequential_reconstructed: PENDING (Phase 5 of this continuation)")

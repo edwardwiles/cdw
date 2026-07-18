@@ -1,0 +1,5 @@
+point: lower_lfixcomposite_fast_sr1_300s, gamma_focal_prime=0.9967391744173478, kappa=0.005428799948779983
+EXACT_FEASIBLE_CANDIDATE = true
+H_BANDWIDTH_KKT_CANDIDATE(h=0.01) = false
+ROBUST_LOCAL_CANDIDATE = false
+n_poll_improvements_found = 3 / 288
