@@ -1,0 +1,14 @@
+--- maxit15 ---
+w[1] (gamma_focal_prime) = 0.8938496736355915, theoretical bounds [0.8527667963635073, 1.0] -- GENUINE economic bound (closed-form autarky argument, sequential_methodology.tex sec 4)
+  margin to lower bound = 0.04108287727208426, margin to upper bound = 0.10615032636440846
+z_free (log Aod_theta, non-pivot entries) range: min=0.001935434700755778 max=1.3598366690362491, max|z_free|=1.3598366690362491 at coord 14
+  box bounds used by the solver: [-8,8] in log-space (i.e. Aod_theta in [3.4e-4, 2981]) -- these are NOT derived from any economic restriction in sequential_methodology.tex (which imposes NO explicit bound on A_.,focal beyond 'generic wide bounds', sec 8) or in the full-A code; they exist only to keep KNITRO's line search inside a numerically safe region.
+  observed |z_free| is 16.998% of the way to the safeguard bound -- nowhere near active.
+
+--- maxit40 ---
+w[1] (gamma_focal_prime) = 0.8930839180420251, theoretical bounds [0.8527667963635073, 1.0] -- GENUINE economic bound (closed-form autarky argument, sequential_methodology.tex sec 4)
+  margin to lower bound = 0.040317121678517864, margin to upper bound = 0.10691608195797486
+z_free (log Aod_theta, non-pivot entries) range: min=-0.004379640581443034 max=1.3869167453049203, max|z_free|=1.3869167453049203 at coord 14
+  box bounds used by the solver: [-8,8] in log-space (i.e. Aod_theta in [3.4e-4, 2981]) -- these are NOT derived from any economic restriction in sequential_methodology.tex (which imposes NO explicit bound on A_.,focal beyond 'generic wide bounds', sec 8) or in the full-A code; they exist only to keep KNITRO's line search inside a numerically safe region.
+  observed |z_free| is 17.336% of the way to the safeguard bound -- nowhere near active.
+
