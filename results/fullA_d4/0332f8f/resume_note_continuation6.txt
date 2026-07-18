@@ -1,0 +1,7 @@
+Continuation 6 resume note, 2026-07-18
+branch=diag/fullA-d4-exact HEAD=0332f8f62e4d6b70e51c1ca5c14963a1f05668e4 (clean)
+julia 1.12.6, JULIA_NUM_THREADS unset (defaults to 1; set explicitly per-run), nproc=208
+Smoke tests: test_oracle.jl PASS, test_composite_gradient_fast.jl PASS (4/4),
+test_moments_fast.jl PASS (8/8 points, 0.0 diff). No drift since end of Continuation 5.
+Proceeding per the Continuation 6 task: (1) root-cause build_lfix_base_cache bug,
+(2) wire MuSigmaPowCache into live oracle path, (3) gamma profile, (4) as time permits.
