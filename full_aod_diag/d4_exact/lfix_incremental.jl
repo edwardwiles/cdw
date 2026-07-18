@@ -642,7 +642,7 @@ a central-FD gradient probes one coordinate at a time). `tier` selects
 (Tier 3, the TRUE O(1)-winner-update version) -- for the separate
 profiling/equivalence comparison the task requires).
 """
-function lfix_incremental_at(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, new_val::Float64; tier::Symbol = :incremental)
+function lfix_incremental_at(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, new_val::Float64; tier::Symbol = :incremental, multi_method::Symbol = :top3)
     D = cache.D
     w = copy(w0); w[coord_idx] = new_val
     z = pivot_expand(w[2:end], pe)
@@ -664,7 +664,7 @@ function lfix_incremental_at(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, 
             dest_contrib_incremental(cache, ctx, θ_full, d, origins_here)
         elseif tier == :incremental_o1
             origins_here = [o for (o, dd) in cells if dd == d]
-            dest_contrib_incremental_o1(cache, ctx, θ_full, d, origins_here)
+            dest_contrib_incremental_o1(cache, ctx, θ_full, d, origins_here; multi_method = multi_method)
         else
             error("lfix_incremental_at: unknown tier=$tier")
         end

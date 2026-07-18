@@ -210,7 +210,8 @@ choice -- two independent criteria, both logged).
 """
 function select_bandwidth(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int;
         h0::Float64 = 0.01, h_floor::Float64 = 1e-4, h_ceil::Float64 = 0.1,
-        target_mass_frac::Tuple{Float64,Float64} = (0.003, 0.03), max_iter::Int = 6)
+        target_mass_frac::Tuple{Float64,Float64} = (0.003, 0.03), max_iter::Int = 6,
+        multi_method::Symbol = :top3)
 
     cells = affected_cells(pe, coord_idx)
     @assert !isempty(cells) "select_bandwidth: coord_idx=$coord_idx has no affected A_od cells (gamma coordinate uses the analytic path, not this)"
@@ -224,7 +225,7 @@ function select_bandwidth(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coo
         total_flips = 0
         for d in affected_dests
             origins_here = [o for (o, dd) in cells if dd == d]
-            total_flips += count_winner_flips(cache, ctx, θ_full, d, origins_here)
+            total_flips += count_winner_flips(cache, ctx, θ_full, d, origins_here; multi_method = multi_method)
         end
         return total_flips / (cache.W * length(affected_dests))
     end
@@ -259,16 +260,16 @@ probe's inner reconstruction is non-finite (mirrors
 discipline for the SAME reason: a NaN silently propagating into a KNITRO
 Jacobian callback is fatal, not merely wrong).
 """
-function a_block_fd_component(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64)
-    Lp = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h; tier = :incremental_o1)
-    Lm = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h; tier = :incremental_o1)
+function a_block_fd_component(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64; multi_method::Symbol = :top3)
+    Lp = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h; tier = :incremental_o1, multi_method = multi_method)
+    Lm = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h; tier = :incremental_o1, multi_method = multi_method)
     if isfinite(Lp) && isfinite(Lm)
         return (Lp - Lm) / (2h)
     elseif isfinite(Lp)
-        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1)
+        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1, multi_method = multi_method)
         return (Lp - L0) / h
     elseif isfinite(Lm)
-        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1)
+        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1, multi_method = multi_method)
         return (L0 - Lm) / h
     else
         return 0.0
@@ -287,7 +288,7 @@ per-coordinate chosen h, switching mass, h-vs-h/2 slope-stability ratio, and
 the base's winner_hash (for the refresh policy's "large winner-hash change"
 trigger).
 """
-function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Nothing,BaseDualState} = nothing)
+function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Nothing,BaseDualState} = nothing, multi_method::Symbol = :top3)
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache(x_free0, ctx, base)
     D = ctx.D; D2 = D^2
@@ -299,10 +300,10 @@ function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Not
 
     h_used = zeros(D2); switch_mass = zeros(D2); slope_ratio = fill(NaN, D2)
     for k in 2:D2
-        h, m, selmeta = select_bandwidth(cache, ctx, pe, w0, k)
+        h, m, selmeta = select_bandwidth(cache, ctx, pe, w0, k; multi_method = multi_method)
         h_used[k] = h; switch_mass[k] = m
-        g[k] = a_block_fd_component(cache, ctx, pe, w0, k, h)
-        g_half = a_block_fd_component(cache, ctx, pe, w0, k, h / 2)
+        g[k] = a_block_fd_component(cache, ctx, pe, w0, k, h; multi_method = multi_method)
+        g_half = a_block_fd_component(cache, ctx, pe, w0, k, h / 2; multi_method = multi_method)
         denom = max(abs(g[k]), abs(g_half), 1e-12)
         slope_ratio[k] = abs(g[k] - g_half) / denom
     end
