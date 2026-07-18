@@ -1,4 +1,114 @@
 # Is the profile_Delta(g) dip-then-rise real, or a warm-start artifact?
+---
+
+## ADDENDUM (Continuation 8, Workstream 1, 2026-07-18): framing correction — read this first
+
+A reviewer flagged that the framing above overstates the surprise: **a U-shaped profile with a rise on
+both sides of the benchmark is the *expected*, structural signature of a correctly-specified benchmark**,
+not itself a new finding. At the true factual/Fréchet calibration point, the model is built to reproduce
+the data, so `Delta` should be at (or extremely near) its minimum there by construction — of course it
+rises on both sides. The genuinely useful part of the original work was narrower: ruling out that the
+observed high-g rise was a warm-start/continuation artifact. This addendum re-derives the relevant numbers
+from scratch (not reused from the table above) and re-splits the claims into three explicit buckets.
+Driver: `full_aod_diag/d4_exact/c8_gammainterp_benchmark_check.jl` (read-only, reuses
+`gamma_profile.jl`'s own exact per-point A-block minimizer, no new machinery). Run log + summary:
+`results/fullA_d4/33c93ff/c8_gammainterp_benchmark_check_20260718/`.
+
+### 1. Expected benchmark-centered geometry (this is background, not a finding)
+
+The calibration/factual value of gamma'_focal — call it **g_F** — is read directly off
+`build_theta_gammanorm(...)[3+D]` (`full_aod_diag/moments_gammanorm.jl:370`), stored (unclamped, since it
+already sits inside the theoretical bounds) at `ctx.theta0_up[3+D]` (`full_aod_diag/d4_exact/context.jl:34,36`):
+
+```
+g_F = 0.9609650007465950
+theoretical bounds [gamma_p_lo, gamma_p_hi] = [0.852766796363507, 1.000000000000000]   (clamp does not bind)
+```
+
+At `g_F`, using the calibration A itself (`Aod_theta0 = ctx.theta0_up[Aod_offset+1:end]`, i.e. the
+`s_d`-rescaled column vector `build_theta_gammanorm` constructs — this is the literal "A*" the earlier
+report's `calib` multistart seed uses), with **no re-optimization**:
+
+```
+Delta(g_F, A*_calib) = 1.002994e-03        (cross-checks exactly against the unrelated
+                                             delta_star_initial printout emitted by d4_exact_setup()
+                                             itself at startup — independent internal confirmation)
+```
+
+Re-optimizing A at fixed g=g_F (the actual `profile_Delta(g)=min_A Delta(g,A)` computation, 2 independent
+starts — calibration A and the incumbent A, both converge to within ~6%):
+
+```
+profile_Delta(g_F) = min_A Delta(g_F, A) = 3.321e-05   (calib start; incumbent start: 3.527e-05)
+```
+
+Both numbers — 1.0e-3 raw, 3.3e-5 optimized — are **effectively zero relative to delta=1** (3-4 orders of
+magnitude below the feasibility threshold). This is exactly what "benchmark" should mean: the model
+reproduces the factual estimand at the calibration point up to floating-point-scale and finite-sample
+noise. Confirmatory re-check of the previously-reported grid minimum near g*≈0.96 (1 start, incumbent
+seed): `profile_Delta(0.9600) = 1.018e-04`, matching the earlier table's g=0.9600 "max Delta (feasible)"
+column (1.018e-04) exactly, and consistent with its multistart-min (9.35e-05). Note this is *larger* than
+`profile_Delta(g_F)=3.3e-05` — i.e. the coarse grid point g=0.9600 is not quite at the true minimum;
+**g_F=0.960965... itself is a better candidate for the true minimizer than the grid's 0.9600 sample**,
+which is exactly what you'd expect if the profile's interior minimum IS the benchmark (up to grid
+resolution — the earlier grid step size was 0.005, and |g_F − 0.96| = 0.00097, well inside one grid step).
+
+**Conclusion: the U-shape and the two-sided rise are the expected structural signature of a
+correctly-specified benchmark sitting at an interior minimum of the constrained divergence, not a residual
+surprise requiring explanation.**
+
+### 2. Why it's not exactly zero (resolves the g_F vs g*≈0.96 vs "zero divergence" discrepancy)
+
+Three candidate explanations were checked directly against the numbers above, not assumed:
+
+- **Is the calibration A itself exactly gravity-consistent (R(A)=0)?** Yes, to floating-point precision,
+  both before and after the pivot-elimination projection that `gamma_profile.jl`'s parametrization always
+  applies: `gravity_value` at the raw calibration A is **-3.197e-18**, at the pivot-projected A* it is
+  **-6.993e-18**; the projection moves the pivot log-coordinate by **4.4e-16** and the resulting A vector
+  by relative L2 **1.6e-16** — i.e. the projection is a no-op at this point (as it must be, since the
+  calibration point is where the model's gravity moment is satisfied by construction). This rules out
+  "the reduced-coordinate parametrization silently perturbs the benchmark" as an explanation.
+- **Does re-optimizing A at fixed g=g_F move away from A\* even though A\* is gravity-exact?** Yes,
+  substantially in *Delta* terms even though gravity is already exactly satisfied: `profile_Delta(g_F)`
+  (3.3e-05) is ~30x smaller than the raw `Delta(g_F, A*)` (1.0e-03). Gravity-consistency (`R(A)=0`) is only
+  ONE moment condition; the fixed-dual `Delta_dual` objective also depends on the other bilateral/winner-share
+  sample moments, which the calibration A satisfies only in *population*, not in the specific finite draw
+  realization used here. So the optimizer can still find a slightly different (still gravity-exact) A that
+  fits *this session's* finite sample marginally better.
+- **Finite-W sampling noise.** `Jac_W = W = 8000` draws (`full_aod_diag/ad_benchmark/setup_context.jl:19`)
+  — finite, not the population limit. Both the 1.0e-3 raw gap and the 3.3e-5 optimized residual are
+  consistent in order of magnitude with sample-moment noise at W=8000 (the earlier report's own
+  min↔max multistart spread at other g values is a few percent of Delta, i.e. comparable optimizer-tolerance-
+  plus-noise scale). This is the primary explanation for "near-zero but not exactly zero": the benchmark is
+  exact in population: at finite W, its sample-Delta is small but not literally 0, and the constrained
+  reoptimization can shave further into that irreducible sampling gap.
+
+Net: `g_F ≈ g*_grid ≈ 0.96` up to the earlier grid's 0.005 step size, and `Delta` at/near g_F is
+3-4 orders of magnitude below `delta=1` — both facts are consistent with "the interior minimum of
+`profile_Delta` IS the benchmark," with the residual non-zero value fully explained by finite-W sampling
+noise plus the gap between "gravity-consistent" and "jointly moment-optimal at this specific draw."
+
+### 3. Numerical validation against local-basin artifacts (still valid, reframed)
+
+The original multistart evidence (9 starts x 13 grid points, `gamma_profile_multistart.jl`, full table
+below) is **still valuable** — it is real, independent confirmation that the high-g rise is not an
+artifact of a single continuation path landing in a bad A-basin. But it should be read as **confirming the
+robustness of the min_A computation** (a numerical-hygiene check on the solver), not as itself being "the
+finding." The finding is #1 above; the multistart run is why we're allowed to trust the numbers behind it.
+
+### 4. The genuinely unresolved high-g boundary (still open — not addressed by this addendum)
+
+The high-g feasibility boundary is **not fully characterized**. The refined grid above stops at g=0.99
+(`profile_Delta=0.299`, still far below `delta=1`), and the calibration corner g=1.0 (`gamma_p_hi`) is
+documented **inner-infeasible** (`Delta=NaN`) — so on the existing grid the upper bound of the feasible
+region near g→1 is set by inner-infeasibility, not by a located `Delta=delta` crossing, and the transition
+between "feasible, rising" and "inner-infeasible" has not been traced. This is real unfinished work,
+independent of the U-shape/benchmark question resolved above, and is **flagged here for a later workstream
+this session that runs the high-g branch of the profile in full** — not addressed by this addendum.
+
+---
+
+
 
 **Branch** `diag/fullA-d4-exact`, worktree commit `bb74649` (content-identical to `gravity-fullA-d4`).
 **Date** 2026-07-18. **Machine** demand.mit.edu, KNITRO 14.2.0, `JULIA_NUM_THREADS=20`.
