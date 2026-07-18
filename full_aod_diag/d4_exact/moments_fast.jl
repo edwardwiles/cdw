@@ -246,3 +246,40 @@ function EK_moments_gammanorm_directgp_fast!(K, G, θ, U, obj, pow_cache::MuSigm
 
     return nothing
 end
+
+"""
+    enable_pow_cache!(ctx) -> MuSigmaPowCache
+
+Opt-in wiring of the fixed-mu,sigma `MuSigmaPowCache` into the LIVE oracle path.
+
+`ctx.obj` is a `PsiObjectiveBundleImplicit` (`cc_algo/PsiObjectiveBundle.jl`), a
+**mutable** `@with_kw` struct whose `moments!::Function` field is invoked verbatim
+by every live consumer -- `inner_loop_internal` (`oracle.jl`, `oracle_fast.jl`,
+`oracle_profiled.jl`), `lfix_incremental.jl`, and the KNITRO F+G callback path all
+call `obj.moments!(K, G, θ, obj.U, obj)`. Rebinding that ONE field to a closure that
+dispatches to `EK_moments_gammanorm_directgp_fast!` (with a per-ctx `MuSigmaPowCache`)
+therefore threads the cache through the entire live path with a single field mutation
+-- no context-builder mirror, no change to any call site.
+
+This is a strict, equivalence-tested refactor of the moment build (byte-identical
+output; see `test_moments_fast.jl` and `verify_pow_cache_wiring.jl`): the ONLY change
+is that `U.^(-μ)`/`Uσ.^(-μ)` are served from a value cache keyed on `μ` instead of
+being recomputed on every call. `μ`/`σ` are provably invariant for a ctx's lifetime in
+this investigation (`context.jl` pins `θ_lo[1]==θ_hi[1]`, `θ_lo[2]==θ_hi[2]`; `free_idx`
+never touches indices 1,2), so after the first call the cache is pure reuse; `get_upow!`
+still recomputes if ever asked for a different `μ`, so the wiring is safe even outside
+that convention.
+
+Opt-in by design: `d4_exact_setup()` is left unchanged, so existing callers/tests are
+unaffected unless they explicitly call this. Returns the `MuSigmaPowCache` so callers
+can inspect `.n_recompute`/`.n_reuse` (the closure retains its own reference).
+
+    ctx = d4_exact_setup()
+    pow_cache = enable_pow_cache!(ctx)   # every subsequent live moments! build uses the cache
+"""
+function enable_pow_cache!(ctx)
+    obj = ctx.obj
+    pow_cache = MuSigmaPowCache(obj.U, obj.γ.Uσ)
+    obj.moments! = (K, G, θ, U, o) -> EK_moments_gammanorm_directgp_fast!(K, G, θ, U, o, pow_cache)
+    return pow_cache
+end

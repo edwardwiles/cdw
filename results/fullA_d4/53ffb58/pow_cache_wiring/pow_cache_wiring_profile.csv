@@ -1,0 +1,7 @@
+component,cache,median_ms,alloc_kb,gc_ms,extra
+moment_build_field,off,8.071392,4123.1405208333335,1.1649444100000002,
+moment_build_field,on,8.043733000000001,3601.273125,0.6319666399999999,
+live_inner_moment_build,off,9.647194500000001,4142.5728125,2.46176286,n_fg=[10]
+live_inner_moment_build,on,8.3146085,3620.0246875,0.78217288,n_fg=[10]
+live_eval_total,off,38.02001476287842,,,
+live_eval_total,on,33.761024475097656,,,
