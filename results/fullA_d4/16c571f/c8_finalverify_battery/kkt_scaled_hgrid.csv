@@ -1,0 +1,16 @@
+label,h,eta,eta_nonneg,residual_relative,complementary_slackness,n_nonfinite_probes,pass_h
+upper_lfixcomposite_sr1_60s,0.02,-0.0,true,1.0,0.0,1,false
+upper_lfixcomposite_sr1_60s,0.01,0.011732978667736158,true,0.0023339761650254492,-8.910283413407501e-8,0,true
+upper_lfixcomposite_sr1_60s,0.005,0.01992152997309729,true,0.0040853826454071976,-1.5128850321453666e-7,0,true
+upper_lfixcomposite_sr1_60s,0.0025,0.02172594271954666,true,0.005463960416152627,-1.6499161256207208e-7,0,true
+upper_lfixcomposite_sr1_60s,0.001,0.022167330688812367,true,0.0059428698682284994,-1.6834361039041612e-7,0,true
+lower_lfixcomposite_fast_sr1_300s_ORIGINAL,0.02,-0.0,true,1.0,-0.0,1,false
+lower_lfixcomposite_fast_sr1_300s_ORIGINAL,0.01,-0.0,true,1.0,-0.0,1,false
+lower_lfixcomposite_fast_sr1_300s_ORIGINAL,0.005,-0.0,true,1.0,-0.0,1,false
+lower_lfixcomposite_fast_sr1_300s_ORIGINAL,0.0025,0.002148581985829375,true,0.005863403056817861,1.8314683726327737e-9,0,true
+lower_lfixcomposite_fast_sr1_300s_ORIGINAL,0.001,0.00403011478568722,true,0.024875296150649182,3.4353018952714986e-9,0,true
+lower_v2_c8finalverify,0.02,-0.0,true,1.0,0.0,1,false
+lower_v2_c8finalverify,0.01,-0.0,true,1.0,0.0,1,false
+lower_v2_c8finalverify,0.005,-0.0,true,1.0,0.0,1,false
+lower_v2_c8finalverify,0.0025,0.0003444472534932869,true,0.0026898199327641432,-2.0216743880222807e-6,0,true
+lower_v2_c8finalverify,0.001,0.0030418652870054562,true,0.043914611329268945,-1.785370932758164e-5,0,true
