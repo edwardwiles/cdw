@@ -1,0 +1,20 @@
+Continuation 8, Workstream 1 benchmark-framing check.
+Driver: full_aod_diag/d4_exact/c8_gammainterp_benchmark_check.jl
+Machine: demand.mit.edu, KNITRO 14.2.0, JULIA_NUM_THREADS=20
+Commit: 33c93ff (tip of diag/fullA-d4-exact at time of this run)
+Full stdout: run_stdout.log
+
+Key numbers (see run_stdout.log for full precision / provenance):
+  g_F (calibration gamma'_focal, pre- and post-clamp, identical) = 0.9609650007465950
+  bounds: [gamma_p_lo, gamma_p_hi] = [0.852766796363507, 1.000000000000000]
+  gravity residual at raw calibration A                          = -3.197081e-18
+  gravity residual at pivot-projected calibration A*             = -6.992571e-18
+  |pivot coord raw - projected|                                  = 4.441e-16
+  relL2(A*_projected - A*_raw)                                   = 1.566e-16
+  Delta(g_F, A*) raw point, NO reoptimization                    = 1.002994e-03
+  profile_Delta(g_F) = min_A Delta(g_F,A) [2-start: calib/incumbent] = 3.321014e-05 (calib start)
+    incumbent-start cross-check                                  = 3.526629e-05  (agree to ~6%)
+  profile_Delta(0.9600) [1-start incumbent, reconfirmation]       = 1.017951e-04
+    (matches the previously-reported table's g=0.9600 "max Delta (feasible)" column = 1.018e-04;
+     previously-reported multistart-min at g=0.9600 was 9.354e-05)
+  W (Jac_W, finite draw count underlying all sample moments)     = 8000

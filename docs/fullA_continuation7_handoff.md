@@ -29,6 +29,8 @@ estimand), distinct from and not competing with the robustness-boundary γ'≈0.
 Report: `results/fullA_d4/bb74649/gamma_profile_nonmonotonicity_report.md`. Code:
 `full_aod_diag/d4_exact/gamma_profile_multistart.jl`, `analyze_multistart.jl`.
 
+**Continuation 8 correction (2026-07-18):** the report above framed the U-shape/rise itself as the finding; a reviewer correctly pointed out that a two-sided rise around the benchmark is the *expected* signature of a correctly-specified calibration, not a surprise — see the ADDENDUM at the top of that same report file for the re-derived numbers (g_F=0.960965..., Delta(g_F,A*)=1.0e-3 raw / 3.3e-5 optimized, both ~3-4 orders below delta=1) and the reframing (benchmark geometry vs. basin-artifact validation vs. the still-open high-g boundary).
+
 ## Workstream 2 — compressed winner-form factual moments: BUILT + VALIDATED, real speedup growing with D
 
 User's new ask (Continuation 6 addendum). **Verdict: compression works, equivalence-tested to machine
