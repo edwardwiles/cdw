@@ -40,14 +40,23 @@ include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(@__DIR__, "winners.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
 include(joinpath(@__DIR__, "gravity_elimination.jl"))
-include(joinpath(@__DIR__, "composite_gradient.jl"))
+include(joinpath(@__DIR__, "composite_gradient_fast.jl"))   # includes composite_gradient.jl itself (unmodified) -- see Continuation 5 Priority 2 extension below
 using KNITRO, Printf
 
 const COMMIT = "9e03706"
 const DIRECTION = length(ARGS) >= 1 ? ARGS[1] : "upper"
-const GRADIENT_METHOD = Symbol(get(ENV, "D4X_GRADIENT_METHOD", "delta_fd"))   # :delta_fd | :lfix_composite | :hybrid
+# Continuation 5, Priority 2 extension (backward compatible, delta_fd/lfix_composite/hybrid behavior
+# UNCHANGED): adds :lfix_composite_fast, which combines two equivalence-tested, additive levers found
+# this continuation (docs/fullA_p1_warmed_profile.md Part A, docs/fullA_moment_construction_audit.md):
+#   1. shared base-state: eval_F's own inner solve (already paid for at this outer iterate) is reused
+#      by the gradient callback instead of solve_base_state re-solving from scratch -- saves ~6.8% of
+#      the pair's cost (measured), changes NOTHING mathematically (verified: max diff exactly 0.0).
+#   2. threaded=true: Threads.@threads over the 15 A-block coordinates in composite_gradient_at_fast,
+#      h_mode=:adaptive (byte-identical bandwidth-selection logic to the original :lfix_composite --
+#      ONLY the scheduling changes, not the returned gradient).
+const GRADIENT_METHOD = Symbol(get(ENV, "D4X_GRADIENT_METHOD", "delta_fd"))   # :delta_fd | :lfix_composite | :lfix_composite_fast | :hybrid
 const HESSOPT_TAG = get(ENV, "D4X_HESSOPT", "auto")                          # "auto" | "sr1" | "lbfgs" | "productfd"
-GRADIENT_METHOD in (:delta_fd, :lfix_composite, :hybrid) || error("D4X_GRADIENT_METHOD must be delta_fd|lfix_composite|hybrid, got $GRADIENT_METHOD")
+GRADIENT_METHOD in (:delta_fd, :lfix_composite, :lfix_composite_fast, :hybrid) || error("D4X_GRADIENT_METHOD must be delta_fd|lfix_composite|lfix_composite_fast|hybrid, got $GRADIENT_METHOD")
 const RUN_ID = "optfd_$(DIRECTION)_$(GRADIENT_METHOD)_$(HESSOPT_TAG)_$(Dates.format(now(), "yyyymmdd_HHMMSS"))"
 const OUTDIR = joinpath(D4X_ROOT, "results", "fullA_d4", COMMIT, RUN_ID)
 mkpath(OUTDIR)
@@ -105,9 +114,29 @@ function record!(w, Δ, r, kind)
                           inner_status = r.inner_status, gravity_value = r.gravity_value))
 end
 
+# ---- shared base-state cache (Priority 2 lever 1): eval_F's inner solve at x is reused by the
+# gradient callback IF called at the exact same w KNITRO just evaluated F at (the common case -- a
+# KNITRO outer iterate calls cb_F! then cb_G! at the same x). Keyed on exact w equality (cheap, no
+# tolerance bucketing); a genuine mismatch (rare -- e.g. KNITRO probing a different point for the
+# gradient than the last F call) falls back to a fresh solve_base_state, never silently reuses a stale
+# base. ----
+const last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)   # (w=..., base=BaseDualState)
+
 function eval_F(w::Vector{Float64})
     Δ, r = Delta_of_w(w)
     record!(w, Δ, r, "F")
+    if GRADIENT_METHOD == :lfix_composite_fast
+        # Build the BaseDualState from what evaluate_fullA (inside Delta_of_w) just computed --
+        # ZERO additional inner solves (r.theta_full/zeta/lambda and ctx.obj.arg1 are already the
+        # converged values at this w). Equivalence verified in profile_p1a_warmed_and_redundancy.jl
+        # (max|g_shared - g_unshared| = 0.0 exactly).
+        if r.inner_status in (0, -100, -101, -103)
+            base = BaseDualState(x_free_from_w(w), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
+            last_F_state[] = (w = copy(w), base = base)
+        else
+            last_F_state[] = nothing   # infeasible F -- do not cache a state built on a failed solve
+        end
+    end
     return Δ, r
 end
 
@@ -169,6 +198,10 @@ Dispatches on GRADIENT_METHOD:
   :lfix_composite  -- ALWAYS the cheap composite gradient (1 inner solve total,
                        to build the base+cache at w; the A-block/gamma pieces
                        add zero further inner solves)
+  :lfix_composite_fast -- same math as :lfix_composite (h_mode=:adaptive is a
+                       byte-identical refactor), but (a) reuses eval_F's base
+                       state when called at the same w (0 inner solves, vs 1),
+                       and (b) threads the 15-coordinate A-block loop.
   :hybrid          -- HybridGradientPolicy decides per call (composite_gradient.jl)
 Every branch logs (gradient_source, reason, wall_seconds, n_inner_solves_consumed)
 to `grad_log` for the Phase 4 cost comparison.
@@ -184,6 +217,14 @@ function eval_grad_dispatch(w::Vector{Float64})
         xf = x_free_from_w(w)
         g, meta = composite_gradient_at(xf, ctx, pe)
         push!(grad_log, (source = :cheap, reason = :none, wall = time() - t0, n_inner = CS.INNER_SOLVE_COUNT[] - n0))
+        return g
+    elseif GRADIENT_METHOD == :lfix_composite_fast
+        xf = x_free_from_w(w)
+        shared = last_F_state[]
+        base = (shared !== nothing && shared.w == w) ? shared.base : nothing
+        g, meta = composite_gradient_at_fast(xf, ctx, pe; base = base, threaded = true, h_mode = :adaptive)
+        push!(grad_log, (source = base === nothing ? :cheap_unshared : :cheap_shared, reason = :none,
+                          wall = time() - t0, n_inner = CS.INNER_SOLVE_COUNT[] - n0))
         return g
     else   # :hybrid
         xf = x_free_from_w(w)
