@@ -93,4 +93,32 @@ w_lower_lfixcomposite_fast = [0.9967391744173478, 0.33826763364911505, 0.2756097
 report("lower_lfixcomposite_fast_sr1_300s (new best lower)", w_lower_lfixcomposite_fast)
 
 println()
+
+# ---- Continuation 8, Section 8: lower_v2 -- NEW headline lower incumbent, supersedes
+# lower_lfixcomposite_fast_sr1_300s above. Found after the two-branch gamma-profile workstream
+# (docs/fullA_gamma_profile_two_branches_c8.md) discovered the old lower incumbent sits exactly ON
+# the Delta=delta boundary using an A that is only locally-KKT-stationary, NOT the true constrained
+# minimizer at its own g -- an independent search found ~11% divergence slack unused at the same g,
+# and bracketed the TRUE profile_Delta(g)=delta crossing at g~=0.997031. This candidate is a genuine
+# production outer-loop run (run_d4_optimized_fd.jl direction=lower, gradient_method=
+# lfix_composite_fast, hessopt=sr1, D4X_MAXTIME_REAL=300, SAME driver class as the old incumbent),
+# warm-started from that high-g branch's near-crossing A
+# (results/fullA_d4/128f260/c8_gammabranch_a_solutions.jld2, row40_anchor). Converged (knitro_status=
+# -102, feas_err=0.0, opt_err=9.5e-4) at 13.5s of its 300s budget.
+# kappa=0.004387827651021192, Delta_dual=0.9941306706106116 (Delta-delta=-5.87e-3 -- comfortably
+# feasible, unlike the old incumbent's +8.5e-7 essentially-on-the-boundary point), beating the
+# registered lower_lfixcomposite_fast_sr1_300s (kappa=0.005428799948779983) by 19.2%, and beating the
+# two-branch workstream's own profile-multistart estimate (kappa=0.004943434515644718) by a further
+# 11.2% since the full outer loop pushed g past the profile's 0.997031 crossing once a genuinely-
+# optimized A freed up real slack. Verified via the full battery (fresh dense cold solve, primal+dual
+# divergence, gravity, moments, bounds, h-sweep secants, gravity-tangent directions, exact local poll,
+# unscaled external KKT residual) in docs/fullA_d4_final_candidate_verification_c8.md -- classified
+# "bandwidth-KKT candidate" (exact-feasible, stationary at a bound-respecting h_safe, not certified
+# robust across the FULL poll/h-grid; same caveat class as every other candidate in this registry,
+# NOT a downgrade specific to this point -- see that report for the full classification of all three
+# candidates side by side). results/fullA_d4/0a8e68c/c8_finalverify_lower_v2_opt_20260718_173246/summary.txt.
+w_lower_v2 = [0.9973649883022927, 0.4191333995096165, 0.3278704261228879, 0.34822377242086583, 0.3266848028818515, 1.1414170966875377, 1.299758470774316, 1.005176411943463, 1.0769193031619044, 0.8872003122885062, 0.7853545670122154, 0.8376830845864721, 0.7594387919364166, 1.7457822520932191, 1.4007037442409944, 1.5130549509169442]
+report("lower_v2 (headline lower, continuation 8)", w_lower_v2)
+
+println()
 println("sequential_reconstructed: PENDING (Phase 5 of this continuation)")
