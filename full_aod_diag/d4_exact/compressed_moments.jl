@@ -262,3 +262,39 @@ function materialize_dense_factual(cf::CompressedFactual)
     end
     return G
 end
+
+"""
+    materialize_dense_factual!(Gview, cf::CompressedFactual)
+
+ADDITIVE (continuation 8, live-integration): in-place variant of
+`materialize_dense_factual`, writing into a caller-supplied `W x (oci-1)`
+view/matrix instead of allocating a fresh one. Used by the live compressed
+Hessian-callback adapter (`compressed_live.jl`) to fill `obj.H`'s existing
+dense G columns from an already-built `CompressedFactual` -- this is cheaper
+than a from-scratch dense `moments!` call because `cf.winner`/`cf.wval`
+(the expensive part: winner search + per-winner sigma-value) are already
+computed; this is pure O(W*D) broadcast-equivalent write, no search, no
+sigma-value evaluation for losers. Identical formula to
+`materialize_dense_factual`, just avoiding the allocation -- not separately
+re-derived.
+"""
+function materialize_dense_factual!(Gview::AbstractMatrix, cf::CompressedFactual)
+    D = cf.D; W = cf.W; ncol = cf.oci - 1
+    size(Gview) == (W, ncol) || error("materialize_dense_factual!: size(Gview)=$(size(Gview)) != (W,oci-1)=($W,$ncol)")
+    @inbounds for d in 1:D, s in 1:W
+        wo = cf.winner[s, d]
+        v = cf.wval[s, d]
+        for o in 1:D
+            j = d + (o - 1) * D
+            r = (o == wo ? v : 0.0) - cf.Pmat[o, d] * cf.denom[d]
+            Gview[s, j] = cf.SW[s] * cf.nrm[j] * (r * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+        end
+    end
+    if cf.cf_col > 0
+        j = cf.cf_col
+        @inbounds for s in 1:W
+            Gview[s, j] = cf.SW[s] * cf.nrm[j] * (cf.cf_raw[s] * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+        end
+    end
+    return Gview
+end

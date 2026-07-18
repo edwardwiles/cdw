@@ -103,3 +103,67 @@ function compressed_cc_hvp(q::AbstractVector, p_ζ::Real, p_λ::AbstractVector, 
     @. Hp_λ = (1.0 / M) * Hp_λ
     return Hp_ζ, Hp_λ
 end
+
+# ============================================================================
+# HESSIAN-CALLBACK ADAPTER DECISION (continuation 8, live-integration).
+#
+# KNITRO's registered inner-loop Hessian callback in this codebase is DENSE,
+# not HVP-style: `ek_inner.opt` sets `hessopt exact` (=1), and
+# `oracle_fast.jl::inner_loop_KNITRO_profiled` registers it via
+# `KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, ...)` -- KNITRO asks for
+# the full packed dense (1+ncol)x(1+ncol) Hessian block every call, not a
+# matrix-vector product. `compressed_cc_hvp` above computes exact HVPs in
+# O(W*D) each, but building the FULL dense Hessian via (1+ncol) HVP calls
+# (one per basis vector) would cost O(ncol*W*D), which at D=4 (ncol=17) is
+# NOT cheaper than the dense path's direct O(W*ncol) BLAS `gemm!` (a single,
+# highly-optimized multithreaded call in `hessian!`) -- ncol sequential
+# scalar-loop HVP calls lose to one BLAS gemm in practice. A truly-compressed
+# dense-Hessian callback is therefore not the right target here.
+#
+# DECISION (matches the task brief's explicitly sanctioned fallback): the
+# compressed live integration (`compressed_live.jl`) keeps the Hessian
+# callback DENSE -- it materializes `obj.H`'s G columns from the
+# already-built `CompressedFactual` via `materialize_dense_factual!` (O(W*D^2)
+# writes, but reusing the ALREADY-COMPUTED `cf.winner`/`cf.wval`, so it skips
+# the winner-search and the D-1-losers'-sigma-value work the ORIGINAL dense
+# `moments!` build would redo) and then calls the UNCHANGED, existing
+# `hessian!(h, obj)` (cc_algo/PsiObjectiveBundle.jl) verbatim -- not
+# reimplemented, so its correctness is inherited, not re-proven.
+#
+# REFINEMENT beyond the brief's "once per Hessian call": since theta (hence G)
+# is FIXED for the entire inner KNITRO solve (only zeta,lambda vary),
+# `compressed_live.jl` materializes LAZILY and ONCE PER INNER SOLVE (cached on
+# first Hessian call, reused for every subsequent Hessian call in that same
+# solve), not once per call. This is strictly cheaper than "once per Hessian
+# call" whenever KNITRO calls the Hessian callback more than once per inner
+# solve (common), and never more expensive when it calls it exactly once.
+#
+# EXACTNESS: this makes the compressed live path's HESSIAN CALLBACK
+# bit-identical to the dense path's (same `hessian!` call on an equivalent
+# dense G) -- NOT an approximation, just a lazily-cached materialization. The
+# genuinely-compressed, no-dense-G-ever path is the OBJECTIVE/GRADIENT (FG)
+# callback only (`compressed_cc_value_grad`, used every FG call, of which
+# there are typically many more per inner solve than Hessian calls -- see
+# `docs/compressed_live_integration_report.md` for the measured FG-vs-Hessian
+# call-count ratio and the resulting speedup).
+# ============================================================================
+
+"""
+    compressed_moment_resid(cf::CompressedFactual, weights) -> Vector{oci-1}
+
+MOMENT-RESIDUAL formula (mean_s w_s*G_s over the inner-dual columns), from
+compressed moments only. `weights` is typically `ones(W)` (unweighted mean,
+matching `evaluate_fullA_fast`'s `moment_resid` diagnostic) or `m_weights`
+(the recovered LFD primal weights, matching its `max_abs_moment_kkt_resid`
+diagnostic). This is EXACTLY `compressed_transpose_contraction(weights, cf) /
+sum-normalization` depending on which mean convention the caller wants -- see
+`compressed_live.jl` callers for the exact normalization used at each call
+site (mirrors `oracle_fast.jl`'s own `moment_resid` (divide by W) vs
+`max_abs_moment_kkt_resid` (divide by W, using primal weights) conventions).
+Provided here as a thin, explicitly-named wrapper around
+`compressed_transpose_contraction` (no new math) so a caller doesn't have to
+re-derive which contraction primitive is the right one for a residual sum.
+"""
+compressed_moment_resid(cf::CompressedFactual, weights::AbstractVector) =
+    compressed_transpose_contraction(weights, cf)
+
