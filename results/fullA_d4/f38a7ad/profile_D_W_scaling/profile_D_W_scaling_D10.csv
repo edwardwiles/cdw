@@ -1,0 +1,2 @@
+D,W,n_free,nTotalMoments,ctx_build_s,eval_warm_median_s,eval_warm_min_s,eval_cold_median_s,eval_cold_min_s,grad_pathwise_s,grad_pathwise_alloc_bytes,grad_Qadj_FD_s,grad_Qadj_FD_alloc_bytes,grad_Lfix_FD_s,grad_Lfix_FD_alloc_bytes,grad_Delta_FD_s,grad_Delta_FD_alloc_bytes,n_eval_reps,n_grad_reps
+10,8000,101,102,39.342614601,0.282061415,0.263215643,0.383511452,0.286896839,9.020626527,2.7312791733333335e9,12.462203305333333,5.581213957333333e9,11.748240923666666,5.607086096e9,48.80902536466667,1.6488055573333334e10,5,3
