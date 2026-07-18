@@ -1,0 +1,5 @@
+label,classification,feasible_exact,phase1_max_resid
+"lower_incumbent (sanity: should be FEASIBLE)",FEASIBLE_LP,true,NaN
+"g=1.0 with calib A (doc#1: inner-infeasible)",CERTIFIED_INFEASIBLE,false,4.156606525297299e-5
+"g=1.0 with lower-incumbent A",CERTIFIED_INFEASIBLE,false,2.797099558475265e-5
+"first_failing_g with last-feasible A",CERTIFIED_INFEASIBLE,false,4.710794004793295e-5
