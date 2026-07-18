@@ -58,16 +58,33 @@ Drop-in replacement for `composite_gradient_at` with the three levers above.
 exactly (same select_bandwidth bisection, same h/2 diagnostic) -- equivalence
 with `composite_gradient_at` is verified in `test_composite_gradient_fast.jl`
 for every (h_mode, threaded) combination.
+
+Continuation 6: catches `TiedWinnerError` from `build_lfix_base_cache` (an exact price tie between
+2+ origins at some draw/destination -- see that error's docstring; NOT a correctness bug, a genuine
+edge case the O(1)/O(D) incremental machinery cannot represent) and falls back to a full-rebuild
+central-FD gradient (`fixed_dual_L`, always correct since it rebuilds the complete moment matrix via
+`obj.moments!` every probe, matching `MinInd!`'s true tie-splitting behavior) for the ENTIRE D2-dim
+gradient at that one point -- slower (32 full moment rebuilds instead of ~1) but always correct, per
+this file's own "correctness over speed on rare edge cases" precedent. `meta.tie_fallback` reports
+whether this path was taken.
 """
 function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
         base::Union{Nothing,BaseDualState} = nothing, threaded::Bool = false,
         h_mode::Symbol = :adaptive, h0::Float64 = 0.01,
-        bandwidth_cache::Union{Nothing,Dict{Int,Float64}} = nothing)
+        bandwidth_cache::Union{Nothing,Dict{Int,Float64}} = nothing,
+        tie_fallback_h::Float64 = 0.01)
     h_mode in (:adaptive, :fixed, :cached) || error("composite_gradient_at_fast: h_mode must be :adaptive|:fixed|:cached, got $h_mode")
     h_mode == :cached && bandwidth_cache === nothing && error("composite_gradient_at_fast: h_mode=:cached requires a bandwidth_cache Dict")
 
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
-    cache = build_lfix_base_cache(x_free0, ctx, base)
+    local cache
+    try
+        cache = build_lfix_base_cache(x_free0, ctx, base)
+    catch e
+        e isa TiedWinnerError || rethrow()
+        g_fb, meta_fb = full_rebuild_gradient_fallback(x_free0, ctx, pe, base; h = tie_fallback_h)
+        return g_fb, merge(meta_fb, (tie_fallback = true, tie_error = e))
+    end
     D = ctx.D; D2 = D^2
     z0 = log.(reshape(x_free0[2:end], D, D))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
@@ -119,5 +136,44 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
 
     return g, (base = base, cache = cache, w0 = w0, h_used = h_used, switch_mass = switch_mass,
                slope_ratio = slope_ratio, winner0 = copy(cache.winner0), gamma_component = g[1],
-               h_mode = h_mode, threaded = threaded, cache_hits = cache_hits)
+               h_mode = h_mode, threaded = threaded, cache_hits = cache_hits, tie_fallback = false)
+end
+
+"""
+    full_rebuild_gradient_fallback(x_free0, ctx, pe, base; h=0.01) -> (g, meta)
+
+Always-correct D2-dim central-FD gradient of `L_fix` (`fixed_dual_L`, full moment-matrix rebuild
+every probe -- reuses `three_way_derivatives.jl`'s already-validated construction, not a new formula)
+in the reduced pivot-eliminated coordinates. Used ONLY as the `TiedWinnerError` fallback -- correct
+regardless of ties (since `obj.moments!`/`MinInd!` are called directly, with their true tie-splitting
+behavior intact), at the cost of the O(n_free) full-rebuild cost this investigation's incremental
+machinery was built to avoid. `threaded` over the 2*D2 probes (safe: each probe is a fresh
+`obj.moments!` call into thread-local `K,G` buffers, no shared mutable state touched -- same argument
+`profile_lfix_tiers.jl` already established for FD-probe-level threading).
+"""
+function full_rebuild_gradient_fallback(x_free0::AbstractVector, ctx, pe, base::BaseDualState; h::Float64 = 0.01, threaded::Bool = true)
+    D = ctx.D; D2 = D^2
+    z0 = log.(reshape(x_free0[2:end], D, D))
+    w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
+    x_free_from_w(w) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
+
+    g = zeros(D2)
+    function do_coord!(k::Int)
+        wp = copy(w0); wp[k] += h
+        wm = copy(w0); wm[k] -= h
+        Lp = fixed_dual_L(x_free_from_w(wp), ctx, base)
+        Lm = fixed_dual_L(x_free_from_w(wm), ctx, base)
+        g[k] = (Lp - Lm) / (2h)
+        return nothing
+    end
+    if threaded
+        Threads.@threads for k in 1:D2
+            do_coord!(k)
+        end
+    else
+        for k in 1:D2
+            do_coord!(k)
+        end
+    end
+    return g, (base = base, w0 = w0, h_used = fill(h, D2), method = :full_rebuild_fallback, threaded = threaded)
 end

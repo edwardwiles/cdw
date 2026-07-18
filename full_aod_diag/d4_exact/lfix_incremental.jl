@@ -211,6 +211,70 @@ struct LFixBaseCache
 end
 
 """
+    TiedWinnerError
+
+Continuation 6 finding: `build_lfix_base_cache`'s self-validation was previously mislabeled as
+"closed-form derivation has a bug" for a specific, understood, and DIFFERENT condition -- an exact
+(bit-for-bit) price TIE between two or more origins at some (draw, destination) pair. `MinInd!`
+(`misc/smoothMinIndNew!.jl`), which `hFunction!` actually calls, sets `xInd[i]=1` for EVERY origin
+satisfying `x[i] <= xMin` (not `>`) -- i.e. on an exact tie, ALL tied origins get winner-share
+credit simultaneously (an economically sensible market-split convention). This cache's winner-finding
+(`min_secondmin_with_idx`'s `isless` scan, used throughout `lfix_incremental.jl`'s O(1)/O(D) tiers)
+assumes a UNIQUE arg-min winner per (draw,destination), by design -- the entire incremental-update
+case analysis in `update_winner_o1` is built on that assumption and is not economical to extend to
+N-way ties (correctness-critical code, not extended lightly). Root-caused this continuation via a
+direct per-(draw,destination) contrib0-vs-true-G scan: exactly 1/32000 (draw,destination) pairs had a
+bit-exact tie at the specific (decoupled, non-jointly-optimized) point that first exposed this;
+`price_and_pTsigma_cell`/`aod_pow_cell`/`CONST_d`'s own formulas were independently verified EXACT
+(0.0 diff) at every checked (draw,destination) pair once the tie was accounted for -- this is not a
+formula bug, it is a genuine unhandled edge case, now DETECTED EXPLICITLY (see `detect_price_ties`)
+rather than surfacing as a confusing self-validation failure.
+
+Ties are a probability-zero event for GENERIC continuous draws -- this has never been observed at any
+of this investigation's validated candidate points (upper/lower incumbents, poll neighbors, D=6 pilot
+start) and is not expected in a live KNITRO trajectory (a converged outer point's own A_od values are
+not chosen to create exact coincidences). It DOES occur when code (e.g. a gamma-profile driver)
+evaluates the composite gradient at ARBITRARY/decoupled (gamma',A) pairs, including degenerate ones
+inherited from an earlier failed optimization step. Callers should catch `TiedWinnerError` specifically
+(distinct from a genuine correctness bug) and fall back to a full-rebuild gradient (`fixed_dual_L`-based
+central FD, which correctly reflects `MinInd!`'s true tie-splitting behavior since it always rebuilds
+the complete moment matrix) for that one outer point, per this file's own established "correctness over
+speed" precedent for rare edge cases (see the 2-changed-origins fallback in `dest_contrib_incremental`).
+"""
+struct TiedWinnerError <: Exception
+    n_tied_pairs::Int
+    examples::Vector{Tuple{Int,Int}}   # (ω, d) pairs, first few only
+end
+Base.showerror(io::IO, e::TiedWinnerError) = print(io,
+    "TiedWinnerError: $(e.n_tied_pairs) (draw,destination) pair(s) have an EXACT price tie between " *
+    "2+ origins -- build_lfix_base_cache's unique-winner assumption does not hold here (NOT a " *
+    "derivation bug, see TiedWinnerError's docstring). First examples (ω,d): $(e.examples)")
+
+"""
+    detect_price_ties(price0::Array{Float64,3}, D::Int, W::Int; tol=0.0) -> Vector{Tuple{Int,Int}}
+
+Scans the cached `price0` (W x D x D) for (draw,destination) pairs where 2+ origins are tied at the
+row minimum (within `tol`, default EXACT bit-equality). Returns the list of tied `(ω,d)` pairs
+(empty if none) -- called BEFORE the self-validation so a tie is diagnosed precisely, not confused
+with a generic derivation bug.
+"""
+function detect_price_ties(price0::Array{Float64,3}, D::Int, W::Int; tol::Float64 = 0.0)
+    tied = Tuple{Int,Int}[]
+    @inbounds for d in 1:D, ω in 1:W
+        mn = price0[ω, 1, d]
+        for o in 2:D
+            price0[ω, o, d] < mn && (mn = price0[ω, o, d])
+        end
+        n_at_min = 0
+        for o in 1:D
+            price0[ω, o, d] <= mn + tol && (n_at_min += 1)
+        end
+        n_at_min > 1 && push!(tied, (ω, d))
+    end
+    return tied
+end
+
+"""
     build_lfix_base_cache(x_free0, ctx, base::BaseDualState) -> LFixBaseCache
 
 Builds the per-destination-contribution cache at the base point. Self-
@@ -218,7 +282,8 @@ validates internally: reconstructs q0 from the cache pieces and asserts it
 matches `-base.ζstar - lambda*'G0[s,1:oci-1]` computed directly (not merely
 assumed to match by construction) -- errors loudly if the closed-form
 derivation above has a sign/indexing bug, rather than silently producing a
-wrong cache.
+wrong cache. Throws `TiedWinnerError` (see above), NOT the generic error,
+when the failure is a detected exact price tie rather than a derivation bug.
 """
 function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState)
     obj = ctx.obj
@@ -236,6 +301,14 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
         p, ps = price_and_pTsigma_cell(base.θ_full0, ctx, o, d)
         price0[:, o, d] .= p; pTσ0[:, o, d] .= ps
     end
+
+    # ---- tie check BEFORE anything else (Continuation 6 fix, see TiedWinnerError's docstring): an
+    # exact price tie between 2+ origins means MinInd!'s real winner-splitting behavior cannot be
+    # represented by this cache's unique-arg-min machinery. Detected explicitly and distinctly from a
+    # genuine derivation bug, rather than surfacing only as a confusing self-validation failure. ----
+    tied_pairs = detect_price_ties(price0, D, W)
+    isempty(tied_pairs) || throw(TiedWinnerError(length(tied_pairs), tied_pairs[1:min(5, end)]))
+
     winner0 = Matrix{Int}(undef, W, D)
     winner_price0 = Matrix{Float64}(undef, W, D)
     runnerup0 = Matrix{Int}(undef, W, D)
