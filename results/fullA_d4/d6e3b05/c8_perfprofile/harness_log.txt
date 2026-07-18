@@ -1,0 +1,185 @@
+c8_perfprofile_harness.jl starting at 2026-07-18T16:24:39.444  commit=d6e3b05  nthreads=20
+
+==========================================================================================
+SETUP: D=4/W=8000
+==========================================================================================
+D=4 W=8000 nTotalMoments=18
+
+Warming up (untimed)...
+Warm-up complete.
+
+==========================================================================================
+PART A: value callback, D=4/W=8000, dense vs compressed
+==========================================================================================
+
+---- d4w8000_warm : dense vs compressed, median ms (N reps each) ----
+  component                             dense(ms)   compressed(ms)  d/c ratio
+  TOTAL                                   11.0470           8.2230      1.343
+  inner_moment_build                       5.5307           2.3533      2.350
+  winner_compute                           2.0304           1.7275      1.175
+  materialize_dense_for_postproc              NaN           1.1534        NaN
+  inner_knitro_dual_solve                  0.7965           0.6544      1.217
+  inner_dual_fg_callback                   0.2108           0.2512      0.839
+  kkt_residual_compute                     0.1953           0.1663      1.174
+  moment_resid_compute                     0.1917           0.1706      1.123
+  primal_weight_recovery                   0.1711           0.1562      1.096
+  primal_divergence_compute                0.1480           0.1338      1.106
+  moments_reuse                            0.1432           0.1459      0.981
+  gravity_compute                          0.0108           0.0072      1.494
+  reconstruct_full                         0.0012           0.0007      1.779
+  n_fg_calls/call: dense=1.0 compressed=1.0   n_hess_calls/call: dense=0.0 compressed=0.0
+
+---- d4w8000_cold : dense vs compressed, median ms (N reps each) ----
+  component                             dense(ms)   compressed(ms)  d/c ratio
+  TOTAL                                   22.1673          21.7217      1.021
+  inner_knitro_dual_solve                 11.8028          14.5195      0.813
+  inner_moment_build                       5.2385           2.5401      2.062
+  winner_compute                           1.7687           1.7659      1.002
+  inner_dual_hessian_callback              0.9883           1.0450      0.946
+  kkt_residual_compute                     0.2215           0.2257      0.981
+  moments_reuse                            0.2139           0.2386      0.897
+  moment_resid_compute                     0.1869           0.1858      1.006
+  inner_dual_fg_callback                   0.1670           0.2682      0.623
+  primal_divergence_compute                0.1426           0.1427      0.999
+  primal_weight_recovery                   0.1415           0.1814      0.780
+  gravity_compute                          0.0120           0.0152      0.788
+  reconstruct_full                         0.0013           0.0014      0.940
+  warm_start_reset                         0.0002           0.0002      1.473
+  n_fg_calls/call: dense=10.0 compressed=10.0   n_hess_calls/call: dense=9.0 compressed=9.0
+
+==========================================================================================
+PART B: value callback, D=4/W=80000 (one point)
+==========================================================================================
+D=4/W=80000: feasible point found via 'natural_theta'.
+
+---- d4w80000_warm : dense vs compressed, median ms (N reps each) ----
+  component                             dense(ms)   compressed(ms)  d/c ratio
+  TOTAL                                  123.8080         110.0668      1.125
+  inner_moment_build                      74.1138          41.1564      1.801
+  winner_compute                          28.6122          28.7826      0.994
+  materialize_dense_for_postproc              NaN          12.3134        NaN
+  inner_knitro_dual_solve                  3.8061           4.5544      0.836
+  inner_dual_fg_callback                   3.1595           3.9567      0.799
+  moments_reuse                            2.9599           2.7462      1.078
+  kkt_residual_compute                     2.3743           2.0316      1.169
+  moment_resid_compute                     2.3464           2.0052      1.170
+  primal_weight_recovery                   2.1783           2.6063      0.836
+  primal_divergence_compute                1.3760           1.3464      1.022
+  gravity_compute                          0.0197           0.0172      1.143
+  reconstruct_full                         0.0014           0.0014      0.980
+  n_fg_calls/call: dense=1.0 compressed=1.0
+
+  VERDICT CHECK -- inner_dual_fg_callback dense/compressed ratio: W=8000 -> 0.839   W=80000 -> 0.799   (ratio<1 means compressed is SLOWER; flips to >1 if compressed becomes faster at higher W)
+
+==========================================================================================
+PART C: hard L_fix gradient breakdown, D=4/W=8000
+==========================================================================================
+
+---- C1: full-gradient wall time (median ms, N=15), all 8 (multi_method x threaded x h_mode) combos ----
+  h_mode=adaptive threaded=true    top3=36.0811ms  generic=32.6341ms  generic/top3=0.904
+  h_mode=adaptive threaded=false   top3=124.7795ms  generic=125.9455ms  generic/top3=1.009
+  h_mode=fixed    threaded=true    top3=19.4192ms  generic=21.2144ms  generic/top3=1.092
+  h_mode=fixed    threaded=false   top3=51.3235ms  generic=46.4641ms  generic/top3=0.905
+
+---- C2: component decomposition, h_mode=:adaptive, multi_method=:top3, N=10 warmed reps ----
+  base_state solve (shareable w/ eval_F): 6.5487ms
+  cache_build             top3=14.2184ms  generic=13.9950ms
+  gamma_analytic          top3=0.0121ms  generic=0.0083ms
+  bandwidth_selection     top3=45.3045ms  generic=45.4969ms
+  fd_probes               top3=66.3788ms  generic=65.7326ms
+  RECONSTRUCTED TOTAL (sum of components): top3=132.4625ms  generic=131.7815ms
+
+---- C2b: per-coordinate cost, fallback coords (14/15/16) vs an ordinary coord (2), top3 vs generic ----
+  coord k=2    top3=6.90113ms  generic=7.05874ms  ratio(gen/top3)=1.023
+  coord k=14   top3=8.70569ms  generic=9.51380ms  ratio(gen/top3)=1.093
+  coord k=15   top3=7.81701ms  generic=8.33758ms  ratio(gen/top3)=1.067
+  coord k=16   top3=8.39524ms  generic=9.46696ms  ratio(gen/top3)=1.128
+
+---- C3: winner-margin certificate overhead/benefit, in composite_gradient_at_fast's own context ----
+  single call, winner_cache_mode=:none                 : 35.0795ms (median of 10)
+  single call, winner_cache_mode=:certificate (COLD anchor, N=8): 36.9896ms (median)
+  overhead of the certificate diagnostic on a SINGLE cold call: 1.9101ms (5.45% of the :none baseline)
+
+  K=10-point nearby-perturbation sequence, FULL composite_gradient_at_fast wall time per point (ms):
+    :none      [45.829, 41.732, 47.138, 45.906, 46.292, 50.992, 46.26, 43.948, 50.261, 45.919]
+    :certificate [442.005, 43.747, 88.305, 79.132, 41.523, 41.077, 43.632, 44.844, 40.035, 38.101]
+  totals: :none=464.28ms  :certificate=902.40ms  ratio=0.514 (in-context, full-gradient level)
+  wc_seq certificate report: (n_calls = 10, n_cells_total = 320000, certified_frac = 0.992584375, rescanned_frac = 0.007415625, full_fallback_call_frac = 0.0, n_rebuilds = 1, total_cert_s = 0.011278703000000001, total_full_s = 0.002702881, total_s = 0.013981584000000002, mean_full_s_per_call = 0.002702881, implied_always_full_s = 0.02702881, implied_speedup = 1.9331722357066263)
+
+  ISOLATED winner_value_update! cost alone across the same K=10 sequence (ms): [42.2233, 0.9967, 0.9816, 0.9948, 0.973, 0.9762, 0.9819, 0.9803, 0.988, 0.9625]
+  first (cold, anchor build) vs subsequent (certified) ratio: 43.02x
+  wc_isolated certificate report: (n_calls = 10, n_cells_total = 320000, certified_frac = 0.992584375, rescanned_frac = 0.007415625, full_fallback_call_frac = 0.0, n_rebuilds = 1, total_cert_s = 0.009852954999999998, total_full_s = 0.002385921, total_s = 0.012238876, mean_full_s_per_call = 0.002385921, implied_always_full_s = 0.02385921, implied_speedup = 1.9494608818652954)
+
+PART A/B/C complete. See /bbkinghome/edav/gravity_robustness/gravity-fullA-d4/gravity-fullA-d4-c8-perf-profile/results/fullA_d4/d6e3b05/c8_perfprofile for CSVs.
+
+==========================================================================================
+PART D: D-scaling grid, W=8000
+==========================================================================================
+
+---- D=6 ----
+D=6: feasible via 'natural_theta', setup wall=0.36s
+
+---- d6w8000_warm : dense vs compressed, median ms (N reps each) ----
+  component                             dense(ms)   compressed(ms)  d/c ratio
+  TOTAL                                   23.2397          14.6932      1.582
+  inner_moment_build                      12.2965           3.8248      3.215
+  winner_compute                           3.7503           3.6185      1.036
+  materialize_dense_for_postproc              NaN           2.1105        NaN
+  inner_knitro_dual_solve                  1.8000           1.1188      1.609
+  moments_reuse                            0.8323           0.6062      1.373
+  inner_dual_fg_callback                   0.8013           0.3550      2.257
+  kkt_residual_compute                     0.6410           0.4344      1.476
+  moment_resid_compute                     0.5783           0.3455      1.674
+  primal_weight_recovery                   0.3515           0.2703      1.300
+  primal_divergence_compute                0.1140           0.1124      1.014
+  gravity_compute                          0.0273           0.0150      1.821
+  reconstruct_full                         0.0022           0.0010      2.314
+  full composite_gradient_at_fast (top3, threaded, adaptive-h), D=6: median=67.83ms (N=8)
+
+---- D=8 ----
+D=8: feasible via 'natural_theta', setup wall=0.35s
+
+---- d8w8000_warm : dense vs compressed, median ms (N reps each) ----
+  component                             dense(ms)   compressed(ms)  d/c ratio
+  TOTAL                                   45.1042          27.7924      1.623
+  inner_moment_build                      28.1592           8.6140      3.269
+  winner_compute                           8.7690           7.8932      1.111
+  materialize_dense_for_postproc              NaN           5.2312        NaN
+  inner_knitro_dual_solve                  1.3410           1.2883      1.041
+  moments_reuse                            1.2894           0.9338      1.381
+  kkt_residual_compute                     0.8231           0.7022      1.172
+  moment_resid_compute                     0.6184           0.6326      0.978
+  inner_dual_fg_callback                   0.4207           0.5864      0.717
+  primal_weight_recovery                   0.3278           0.3539      0.926
+  primal_divergence_compute                0.1933           0.1914      1.010
+  gravity_compute                          0.0236           0.0207      1.136
+  reconstruct_full                         0.0010           0.0005      2.219
+  full composite_gradient_at_fast (top3, threaded, adaptive-h), D=8: median=118.40ms (N=5)
+
+---- D=10 ----
+D=10: feasible via 'natural_theta', setup wall=0.68s
+
+---- d10w8000_warm : dense vs compressed, median ms (N reps each) ----
+  component                             dense(ms)   compressed(ms)  d/c ratio
+  TOTAL                                   62.3988          41.5940      1.500
+  inner_moment_build                      42.0803          11.5626      3.639
+  winner_compute                          11.3474          11.7793      0.963
+  materialize_dense_for_postproc              NaN           7.9194        NaN
+  inner_knitro_dual_solve                  1.8400           2.2043      0.835
+  moments_reuse                            1.6014           1.6866      0.949
+  kkt_residual_compute                     1.3284           1.2407      1.071
+  moment_resid_compute                     1.0609           1.0122      1.048
+  inner_dual_fg_callback                   0.5332           0.7630      0.699
+  primal_weight_recovery                   0.3845           0.4268      0.901
+  primal_divergence_compute                0.2079           0.2148      0.968
+  gravity_compute                          0.0352           0.0350      1.006
+  reconstruct_full                         0.0015           0.0016      0.902
+  full composite_gradient_at_fast (top3, threaded, adaptive-h), D=10: median=150.30ms (N=5)
+
+---- D-scaling summary table ----
+  D    status      TOT_dense   TOT_comp       fg_dense        fg_comp    grad_ms
+  6    ok             23.240     14.693         0.8013         0.3550      67.83
+  8    ok             45.104     27.792         0.4207         0.5864     118.40
+  10   ok             62.399     41.594         0.5332         0.7630     150.30
+
+c8_perfprofile_harness.jl COMPLETE at 2026-07-18T16:26:40.843
