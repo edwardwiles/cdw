@@ -1,17 +1,24 @@
 === date ===
-Fri Jul 17 20:34:47 UTC 2026
+Sat Jul 18 01:28:19 UTC 2026
 === hostname ===
 demand.mit.edu
 === git ===
-commit: 53ffb58e8d9b18498279fab25da4d1b7cc47556a
+commit: f2fceb4d609c8f8e4e7a2b2925863492a1773af3
 branch: diag/fullA-d4-exact
 base (production HEAD at branch-off): 53ffb58e8d9b18498279fab25da4d1b7cc47556a on sequential-profiled-gravity
 On branch diag/fullA-d4-exact
+Your branch is up to date with 'origin/diag/fullA-d4-exact'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   environment.txt
+
 Untracked files:
   (use "git add <file>..." to include in what will be committed)
-	environment.txt
+	docs/fullA_d4_resume_audit.md
 
-nothing added to commit but untracked files present (use "git add" to track)
+no changes added to commit (use "git add" and/or "git commit -a")
 === julia ===
 julia version 1.12.6
 === julia threads (default) ===
@@ -26,12 +33,12 @@ Core(s) per socket:  26
 Socket(s):           4
 Model name:          Intel(R) Xeon(R) Platinum 8270 CPU @ 2.70GHz
 === env (relevant) ===
-KNITRODIR=/opt/shared_sw/knitro/13.0.1
 LD_LIBRARY_PATH=/opt/shared_sw/nag/6.25/mex.a64:/opt/shared_sw/knitro/13.0.1/lib:/opt/shared_sw/gurobi/13.0.2/linux64/lib
-_LMFILES_=/etc/modulefiles/stata/19.lua:/etc/modulefiles/matlab/2025b.lua:/etc/modulefiles/gurobi/13.0.2.lua:/etc/modulefiles/mathematica/14.0.lua:/etc/modulefiles/stattransfer/17.lua:/etc/modulefiles/knitro/13.0.1.lua:/etc/modulefiles/nag/6.25.lua:/etc/modulefiles/ampl/9.lua:/etc/modulefiles/StdEnv.lua
-__LMOD_REF_COUNT_LD_LIBRARY_PATH=/opt/shared_sw/nag/6.25/mex.a64:1;/opt/shared_sw/knitro/13.0.1/lib:1;/opt/shared_sw/gurobi/13.0.2/linux64/lib:1
-__LMOD_REF_COUNT_MATLABPATH=/opt/shared_sw/nag/6.25/mex.a64:1;/opt/shared_sw/nag/6.25/help/NAG:1;/opt/shared_sw/knitro/13.0.1/knitromatlab:1;/opt/shared_sw/gurobi/13.0.2/linux64/matlab:1
 __LMOD_REF_COUNT_PATH=/opt/shared_sw/ampl/9:1;/opt/shared_sw/knitro/13.0.1/knitroampl:1;/opt/shared_sw/mathematica/14.0/Executables:1;/opt/shared_sw/gurobi/13.0.2/linux64/bin:1;/opt/shared_sw/matlab/r2025b/bin:1;/opt/shared_sw/stata/19:1;/usr/local/bin:1;/usr/bin:1;/usr/local/sbin:1;/usr/sbin:1;/opt/puppetlabs/bin:1;/opt/dell/srvadmin/bin:1
+__LMOD_REF_COUNT_LD_LIBRARY_PATH=/opt/shared_sw/nag/6.25/mex.a64:1;/opt/shared_sw/knitro/13.0.1/lib:1;/opt/shared_sw/gurobi/13.0.2/linux64/lib:1
+KNITRODIR=/opt/shared_sw/knitro/13.0.1
 LOADEDMODULES=stata/19:matlab/2025b:gurobi/13.0.2:mathematica/14.0:stattransfer/17:knitro/13.0.1:nag/6.25:ampl/9:StdEnv
 MATLABPATH=/opt/shared_sw/nag/6.25/mex.a64:/opt/shared_sw/nag/6.25/help/NAG:/opt/shared_sw/knitro/13.0.1/knitromatlab:/opt/shared_sw/gurobi/13.0.2/linux64/matlab
+__LMOD_REF_COUNT_MATLABPATH=/opt/shared_sw/nag/6.25/mex.a64:1;/opt/shared_sw/nag/6.25/help/NAG:1;/opt/shared_sw/knitro/13.0.1/knitromatlab:1;/opt/shared_sw/gurobi/13.0.2/linux64/matlab:1
 PATH=/bbkinghome/edav/.juliaup/bin:/bbkinghome/edav/.vscode-server/cli/servers/Stable-125df4672b8a6a34975303c6b0baa124e560a4f7/server/bin/remote-cli:/opt/shared_sw/ampl/9:/opt/shared_sw/knitro/13.0.1/knitroampl:/opt/shared_sw/mathematica/14.0/Executables:/opt/shared_sw/gurobi/13.0.2/linux64/bin:/opt/shared_sw/matlab/r2025b/bin:/opt/shared_sw/stata/19:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/puppetlabs/bin:/opt/dell/srvadmin/bin
+_LMFILES_=/etc/modulefiles/stata/19.lua:/etc/modulefiles/matlab/2025b.lua:/etc/modulefiles/gurobi/13.0.2.lua:/etc/modulefiles/mathematica/14.0.lua:/etc/modulefiles/stattransfer/17.lua:/etc/modulefiles/knitro/13.0.1.lua:/etc/modulefiles/nag/6.25.lua:/etc/modulefiles/ampl/9.lua:/etc/modulefiles/StdEnv.lua
