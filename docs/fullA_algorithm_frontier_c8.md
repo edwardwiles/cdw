@@ -1,5 +1,23 @@
 # Continuation 8, workstream B: algorithm frontier RERUN (post compressed-live + winner-accelerator)
 
+**CORRECTION (added by the coordinating session after merge):** this workstream branched from
+`d6e3b05`, which predates Section 8's registry update. Every "canonical lower incumbent" comparison
+below (notably the "**-14.6% relative improvement**" framing in §4) is against the OLD registered
+`lower_lfixcomposite_fast_sr1_300s` (κ=0.005428799948779983), which Section 8
+(`docs/fullA_d4_final_candidate_verification_c8.md`, merged before this report) already superseded
+with **`lower_v2`, κ=0.004387827651021192**, now the registered headline lower incumbent in
+`candidate_registry.jl`. Against that current baseline, this report's `lfixcomposite_lbfgs_compressed`
+finding (κ=0.004634148517618675) is **not** an improvement — 0.004634 > 0.004388, i.e. it is a
+*looser* (worse) lower bound than `lower_v2` by relative +5.6%. The finding is still worth keeping on
+record (a genuinely different, LBFGS+compressed-found local optimum, independently cold-hard-
+rechecked, that a plain multi-config frontier run reached from a generic start in ~22s without any
+of Section 8's targeted warm-starting from the gamma-profile branch work) — it just is not the
+current best-known lower candidate. All other numbers/comparisons in this report (the upper-direction
+table, the JIT "stuck-at-15s" finding, fallback counts, stationarity diagnostics) are unaffected by
+this correction and stand as reported.
+
+---
+
 **Supersedes `docs/fullA_algorithm_frontier_v2.md`.** That report predates two pieces of
 infrastructure landed earlier in this same continuation-8 session on `diag/fullA-d4-exact`
 (base commit `d6e3b05`, tip of the merged Wave 1 work):
