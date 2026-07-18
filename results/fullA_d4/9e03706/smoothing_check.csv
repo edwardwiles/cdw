@@ -1,3 +1,10 @@
 quantity,value
-hard_jump_at_threshold,8.274393141894211e-6
-smoothed_tuner100_jump_at_threshold,NaN
+hard_jump_at_threshold,8.273159073840302e-6
+smoothed_tuner100_jump_delta1e-8_this_run,1.5246763834103616e-10
+smoothed_tuner100_delta1e-9_sample1,Inf
+smoothed_tuner100_delta1e-9_sample2,1.5246771727095432e-11
+smoothed_tuner100_delta1e-9_sample3,1.5246771727095432e-11
+smoothed_tuner100_delta1e-8_sample1,1.5246763834103616e-10
+smoothed_tuner100_delta1e-8_sample2,1.5246763834103616e-10
+smoothed_tuner100_delta1e-8_sample3,0.000945204385882239
+note,"OPEN BUG (unresolved this session): this diagnostic's result is call-history-dependent across process runs at both delta=1e-8 and 1e-9 -- NOT a stable function of (theta,tuner,delta) alone. Do not use ANY single value from this file as a headline claim. Isolated to the Method E smoothing-diagnostic path ONLY; evaluate_fullA (used in Phases A/B/D/F) is unaffected -- see docs/fullA_d4_resume_audit.md sec 6.4."
