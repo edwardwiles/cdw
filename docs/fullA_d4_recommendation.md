@@ -1,5 +1,26 @@
 # D=4 exact full-A: viability recommendation
 
+## CONTINUATION 5 UPDATE — read this first
+
+Every κ≈0.1718 figure below (this doc was written when `upper_maxit40`, κ=0.17176461, was the
+headline) is superseded by `upper_lfixcomposite_sr1_60s`, **κ=0.17245688540655113** — see
+`docs/fullA_d4_final_report.md`'s own top-of-file update section for the full chain and
+classification (`EXACT_FEASIBLE_CANDIDATE` + `H_BANDWIDTH_KKT_CANDIDATE(h=0.01)`, not
+`ROBUST_LOCAL_CANDIDATE` — the same qualitative tier this doc's Q1 answer already assigned
+`upper_maxit40`, i.e. **this update does not change the qualitative verdict below** ("viable only
+with a hybrid/corrected-gradient method"), only the specific number. Separately, Continuation 4 (see
+`docs/fullA_next_handoff.md`) resolved this doc's "Not (a) viable for scaling as-is" cost argument in
+the OPPOSITE direction from what's written below: `lfix_composite` (the composite hybrid gradient) now
+demonstrably beats the historical `Delta_FD`-productfd control by +10.2% relative κ using 13-29x fewer
+inner CC-dual solves in a matched 60s wall-clock budget (`docs/fullA_algorithm_frontier_v2.md`) — the
+"$O(n\_free)$ FD-probe cost is the bottleneck and only gets worse with D" concern below is the
+specific problem `lfix_composite`'s incremental/O(1)-winner machinery was built to solve, and per
+`docs/fullA_block_local_performance.md` §7 the ratio should improve, not worsen, with D. The sequential
+comparison this doc flags as unavailable now exists and is unfavorable to sequential, not full-A (see
+`docs/fullA_sequential_exact_comparison.md`, retraction in `docs/fullA_next_handoff.md` §2a resolved).
+
+---
+
 Written at the end of the continuation session covering Phases A, B, D, F (mandatory setup +
 corrections #1-#5 all resolved with primary evidence; Phases C, E, G not attempted — see
 `docs/fullA_d4_final_report.md` §8). This is the concise answer the continuation prompt asks for;

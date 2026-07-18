@@ -1,5 +1,27 @@
 # Full-A D=4 exact formulation: findings report
 
+## CONTINUATION 5 UPDATE — read this first: the headline number below (κ=0.17176461, `upper_maxit40`)
+## is SUPERSEDED, not current
+
+The best validated upper candidate as of Continuation 5 (Priority 0) is
+**`upper_lfixcomposite_sr1_60s`, κ=0.17245688540655113** (`lfix_composite` gradient + SR1 Hessian,
+60s wall-clock budget, KNITRO status -103 genuine convergence at 42.7s of its own budget) —
+canonicalized in `full_aod_diag/d4_exact/candidate_registry.jl` and externally revalidated in
+`full_aod_diag/d4_exact/phaseA_lfixcomposite_sr1_revalidation.jl` (`docs/fullA_next_handoff.md`
+§CONTINUATION 4 UPDATE and this doc's own history for the intermediate chain: `upper_maxit40`
+0.17176461 → smoothed-consistent-polished 0.17197169 → `upper_lfixcomposite_sr1_60s` 0.17245689,
+each beating the previous). Classification: `EXACT_FEASIBLE_CANDIDATE` (8/8 fresh cold+warm rechecks
+at 2 inner tolerances pass) + `H_BANDWIDTH_KKT_CANDIDATE` at h=0.01 (relative KKT residual 0.23%), but
+**NOT** `ROBUST_LOCAL_CANDIDATE` — same tier §4 below assigns `upper_maxit40`, carried forward
+honestly rather than silently upgraded: h=0.02 is degenerate (31/32 probes cross a winner boundary),
+h≤0.01 is stable (cosine>0.9999) but the KKT residual grows slightly as h shrinks (0.23%→0.59%),
+consistent with the run having stopped at its own KNITRO `opt_err=0.0021` rather than exact
+stationarity. **Do not cite κ=0.17176461 (this doc's §4) or κ=0.17197169
+(`docs/fullA_smoothed_consistent_experiment.md`) as the current best incumbent** — both are real,
+historically-accurate intermediate results, preserved unchanged below/there, but superseded.
+
+---
+
 Branch `diag/fullA-d4-exact`, worktree `../gravity-fullA-d4`, off production commit `53ffb58`.
 All artifacts under `results/fullA_d4/<commit>/`. This report supersedes the prior interim version
 (`git log -- docs/fullA_d4_final_report.md` for history); `docs/fullA_d4_code_audit.md` remains the
