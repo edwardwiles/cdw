@@ -125,11 +125,14 @@ its first session.
 
 ## 5. D/W baseline scaling matrix (Phase 1C)
 
-*(This section is completed once `results/fullA_d4/<commit>/profile_D_W_scaling/profile_D_W_scaling.csv`
-finishes generating — see that file and the corresponding commit for the fitted timing laws, D=6/8/10
-projections at W=8000, and W=8000/20000/80000 projections at D=4. Filled in incrementally per the
-"continuously updated" instruction; check `docs/fullA_next_handoff.md` for current status if this
-section is still a placeholder when read.)*
+Complete — see `docs/fullA_scaling_projection.md` for the full table, fitted power-law exponents, and
+D=20 projection. Headline: full-gradient cost (`Delta_FD`/`L_fix_FD`/`Q_adj_FD`) scales empirically as
+**D^3.5-3.8** at fixed W=8000 (steeper than `n_free`'s exact D² growth alone — a genuine compounding
+effect, not just "more coordinates"), while W-scaling at fixed D=4 looks close to linear-or-better
+(exact eval ~W^0.94, gradient ~W^0.64, though the latter fit is noisy with only 3 points). Projected
+D=20 cost: ~18 minutes per `Delta_FD` gradient vs. ~4.2 minutes per `L_fix_FD` gradient — the
+`L_fix`-hybrid cost advantage found in §4 becomes considerably more valuable at larger D, not just a
+D=4 curiosity.
 
 ## 6. Top-10 hotspots, consolidated
 
@@ -150,4 +153,6 @@ section is still a placeholder when read.)*
 9. Context/economy construction (`ctx build time`) is itself non-trivial (33-51s observed for a fresh
    D=4/W=8000 economy in the D/W scaling driver) — a one-time cost per process, irrelevant to steady-
    state per-evaluation cost but relevant to short pilot-run wall-clock budgets.
-10. *(D/W scaling hotspot — filled in once §5 completes.)*
+10. Full-gradient cost's D^3.5-3.8 empirical scaling (§5 / `docs/fullA_scaling_projection.md`) —
+    the single biggest reason a naive `Delta_FD`-only, no-block-reuse D=20 run is not attempted this
+    continuation: projected ~18 minutes per gradient evaluation before any Phase 2 optimization.
