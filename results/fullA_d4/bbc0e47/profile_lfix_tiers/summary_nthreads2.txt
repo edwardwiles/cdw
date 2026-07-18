@@ -1,0 +1,7 @@
+D=4 W=8000 N_REPS=20 NTHREADS=2
+gradient cross-check: PASS (all tiers agree with full-rebuild to <1e-8)
+full_rebuild (fixed_dual_L, baseline): median=0.375296874s  speedup_vs_full=1.0x
+block_local (Tier 1): median=0.138372888s  speedup_vs_full=2.7122139273410264x
+incremental (Tier 2): median=0.076314907s  speedup_vs_full=4.917740042584341x
+incremental_o1 (Tier 3): median=0.047099722s  speedup_vs_full=7.968133527412328x
+incremental_o1_threaded (nthreads=2): median=0.028369557s  speedup_vs_full=13.228859160543113x
