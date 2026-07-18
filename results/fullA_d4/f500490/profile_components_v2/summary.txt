@@ -1,0 +1,8 @@
+OLD total warm median: 0.035031619s
+NEW total warm median: 0.017092196s
+speedup: 2.0495680601837236x
+inner_knitro_dual_solve inclusive total: 0.050958616000000005s over 50 calls
+  fg_callback total: 0.020221888s  hessian_callback total: 0.0s
+  EXCLUSIVE (KNITRO overhead) total: 0.030736728000000005s (60.317038437621626% of inclusive)
+n_fg_calls (warmed): min=1 max=1 mean=1.0
+n_hess_calls (warmed): min=0 max=0 mean=0.0

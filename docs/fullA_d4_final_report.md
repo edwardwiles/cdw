@@ -192,6 +192,12 @@ scaling") added the following, at commits `1b2a3a0`..`46b461c`. Full detail in
 
 ### 9.1 Performance profile (Phase 1, mandatory-first per that continuation's task)
 
+> **CORRECTED (continuation 3)**: `inner_solve` below is NOT "the CC multiplier optimization" — it
+> is dominated by a moment-matrix BUILD (the same O(D²W) cost as Finding #1's redundant second call),
+> with the actual dual optimization over `(ζ,λ)` being comparatively cheap. See
+> `docs/fullA_performance_profile_v2.md` for the corrected, nested-timer breakdown. Raw numbers below
+> preserved unchanged.
+
 Per-evaluation cost at D=4/W=8000 is dominated by `inner_solve` (53% of 31.1ms median) and
 `moments_recompute` (34%) — the latter is a **literal redundant second computation**:
 `cc_algo/inner_loop_functions.jl`'s `inner_loop_internal` already computes moments once internally;

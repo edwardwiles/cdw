@@ -1,0 +1,11 @@
+N_GRAD=20 HFD=0.01 reduced_dim=16
+TOTAL_lfix_gradient_16dim median: 0.289076358s
+inner_solve_count diff per gradient: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+all exactly 1: true
+lfix_base_solve: n=20 mean_s=0.01061714745 total_s=0.212342949
+lfix_base_state_setup: n=20 mean_s=4.6549999999999997e-8 total_s=9.31e-7
+lfix_reconstruct: n=640 mean_s=5.77653125e-7 total_s=0.000369698
+lfix_perturbation_moments: n=640 mean_s=0.009082430431249998 total_s=5.812755475999999
+lfix_q_assembly: n=640 mean_s=0.0001314178734375 total_s=0.084107439
+lfix_scalar_eval: n=640 mean_s=4.752127812500001e-5 total_s=0.030413618000000003
+lfix_fd_assembly: n=320 mean_s=2.4914093750000002e-6 total_s=0.0007972510000000001

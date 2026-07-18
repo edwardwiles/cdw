@@ -1,3 +1,12 @@
+> **SUPERSEDED (continuation 3) — see `docs/fullA_performance_profile_v2.md` for the canonical,
+> corrected profile.** This document's characterization of `inner_solve` (§2, §6 item 1) as "the
+> actual KNITRO CC dual optimization" is **imprecise**: `inner_solve` (wrapping the entire
+> `inner_loop_internal` call) is mostly a moment-matrix BUILD (`obj.moments!`, the SAME kind of
+> O(D²W) cost as Finding #1's redundant second call), not the dual optimization itself — the true
+> convex multiplier optimization over `(ζ,λ)` is cheap once the moment matrix is fixed (confirmed by
+> patching in nested timers around KNITRO's own inner-solve callbacks). This document's raw numbers
+> are preserved below UNCHANGED for history; do not cite its "inner_solve=53%" framing as current.
+
 # Full-A D=4 exact formulation: performance profile
 
 Phase 1 deliverable for the "performance profiling, D=4 completion, and staged scaling"
