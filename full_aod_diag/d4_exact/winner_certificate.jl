@@ -330,6 +330,84 @@ function winners_from_certificate(ref::WinnerRefCache, ctx, x_free′::AbstractV
     return winner′, wval, stats
 end
 
+# ---- Section 6: draw-level-threaded certificate ----------------------------
+
+"""
+    certified_winner_update_threaded(ref, ctx, x_free'; tol_far) -> (winner', CertStats)
+
+Draw-level-threaded version of `certified_winner_update` for ORDINARY exact
+value evaluations (NOT for use inside a coordinate-parallel L_fix gradient --
+see the report's threading discipline). Each thread owns a disjoint draw-chunk;
+winner' writes are disjoint by (s,d); the CertStats counters are accumulated in
+thread-local buffers and reduced DETERMINISTICALLY (fixed thread order), so the
+result is bit-identical to the single-threaded path and order-independent.
+"""
+function certified_winner_update_threaded(ref::WinnerRefCache, ctx, x_free′::AbstractVector; tol_far::Float64 = Inf)
+    θ_full′ = CS.reconstruct_full(x_free′, ctx.m)
+    D = ref.D; W = ref.W
+    δ, logCC′, maxabsδ = shift_matrix(ref, ctx, θ_full′)
+    winner′ = Matrix{Int}(undef, W, D)
+
+    if maxabsδ > tol_far
+        Threads.@threads for s in 1:W
+            @inbounds for d in 1:D
+                bo = 1; bs = logCC′[1, d] + ref.mulU[s, 1]
+                for o in 2:D
+                    v = logCC′[o, d] + ref.mulU[s, o]
+                    (v < bs) && (bs = v; bo = o)
+                end
+                winner′[s, d] = bo
+            end
+        end
+        return winner′, CertStats(W * D, 0, W * D, -1, true, maxabsδ, "far: full rescan (threaded)")
+    end
+
+    minδ = Vector{Float64}(undef, D); argminδ = Vector{Int}(undef, D); min2δ = Vector{Float64}(undef, D)
+    @inbounds for d in 1:D
+        m1 = Inf; a1 = 0; m2 = Inf
+        for o in 1:D
+            v = δ[o, d]
+            if v < m1
+                m2 = m1; m1 = v; a1 = o
+            elseif v < m2
+                m2 = v
+            end
+        end
+        minδ[d] = m1; argminδ[d] = a1; min2δ[d] = m2
+    end
+
+    nT = Threads.nthreads()
+    cert_t = zeros(Int, nT); resc_t = zeros(Int, nT); sw_t = zeros(Int, nT)
+    Threads.@threads for s in 1:W
+        tid = Threads.threadid()
+        @inbounds for d in 1:D
+            w = ref.winner[s, d]
+            mink = (argminδ[d] == w) ? min2δ[d] : minδ[d]
+            thr = δ[w, d] - mink
+            if ref.margin[s, d] > thr
+                winner′[s, d] = w
+                cert_t[tid] += 1
+            else
+                bo = 1; bs = logCC′[1, d] + ref.mulU[s, 1]
+                for o in 2:D
+                    v = logCC′[o, d] + ref.mulU[s, o]
+                    (v < bs) && (bs = v; bo = o)
+                end
+                winner′[s, d] = bo
+                resc_t[tid] += 1
+                (bo != w) && (sw_t[tid] += 1)
+            end
+        end
+    end
+    # deterministic reduction (fixed thread order)
+    n_cert = 0; n_rescan = 0; n_switch = 0
+    for t in 1:nT
+        n_cert += cert_t[t]; n_rescan += resc_t[t]; n_switch += sw_t[t]
+    end
+    return winner′, CertStats(W * D, n_cert, n_rescan, n_switch, false, maxabsδ,
+                              "certificate(threaded): $n_cert certified, $n_rescan rescanned")
+end
+
 # ---- Section 2: coordinate-update specialization ---------------------------
 
 """
