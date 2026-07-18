@@ -3,6 +3,40 @@
 Written at the end of the "performance profiling, D=4 completion, and staged scaling" continuation.
 Read this first if picking up this investigation again.
 
+## CONTINUATION 3 UPDATE (in progress, mid-session) — read this section first
+
+Branch/worktree unchanged. Commits so far this continuation: `f500490` (Phase 0: resume audit +
+candidate registry), `6613e40` (Phase 1: dedupe moments + fast winners + corrected inner-solve
+profiling), `0ddc364`/`bbc0e47` (Phase 2: incremental `L_fix` — block-local/incremental/O(1)-winner
+tiers, all equivalence-tested at machine precision + separately profiled). Full detail:
+`docs/fullA_continuation3_resume_audit.md`, `docs/fullA_performance_profile_v2.md`,
+`docs/fullA_block_local_performance.md`.
+
+**Phase 0-2 status: COMPLETE, all equivalence tests pass.** Headline: `incremental_o1` (Tier 3, O(1)
+winner update) is 7.34x faster than a full-rebuild `L_fix` gradient single-threaded, 44.5x at
+`JULIA_NUM_THREADS=16`, at D=4 — all cross-checked against `fixed_dual_L`/`evaluate_fullA` to machine
+precision. Corrected the profiling INTERPRETATION per explicit user request: continuation 2's
+"inner_solve=53%" conflated a moment-matrix BUILD (unavoidable, O(D²W)) with the actual (cheap) CC
+dual optimization — nested timers now separate these; see `docs/fullA_performance_profile_v2.md`.
+
+**Not yet done this continuation** (queued, not started or in progress when this was last saved):
+Phase 3 (composite hybrid gradient + live outer solver — the natural next step, `lfix_incremental.jl`'s
+`incremental_o1` tier is the A-block piece; still need the gamma-coordinate analytic/AD piece and
+wiring into a KNITRO custom-gradient callback, following `run_d4_optimized_fd.jl`'s existing
+`cb_G!`/`KN_set_cb_grad` pattern), Phase 4 (wall-clock-matched algorithm frontier), Phase 5 (reliable
+sequential benchmark), Phase 6 (gamma profile / upper polish / lower completion), Phase 7 (nested-W
+stability), Phase 8 (gated D=6+ pilot — blocked partly on a D=6 base-infeasibility issue found while
+attempting a quick generalization check, see `docs/fullA_block_local_performance.md` §7).
+**Two additional user-requested investigations were queued mid-session, not yet started**: (a) audit
+and eliminate the dense `jac_h` (draw×moment×outer-param) tensor allocation in the cached/Method-B
+full-A path where it's unused by the `L_fix`/hybrid gradient method — establish actual runtime
+behavior via counters, not just grep, before changing anything; (b) a genuinely CONSISTENT smoothed
+full-A solve (log-sum-exp values AND softmax allocation probabilities at the SAME temperature,
+throughout — not just smoothing the min) as a controlled comparison against the exact hard-value
+method, first fixing the known-nondeterministic `smoothed_frozen_adjoint_Q` diagnostic. Both are
+substantial, separately-scoped investigations — see the conversation this session for the full
+requirement text if picking this up without the original prompt.
+
 ## 1. Where everything is
 
 - Repo: `git@github.com:habibiscoding/Trade-Model-Robustness.git`, branch `diag/fullA-d4-exact`,
