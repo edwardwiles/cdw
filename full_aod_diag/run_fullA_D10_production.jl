@@ -72,12 +72,22 @@ q_tilde, N_obs = precompute_q_tilde(τ)
 @assert N_obs == D^2
 
 function make_fullA_obj(δval, find_smallest)
+    # needs_outer_moment_jacobian=false: this driver's gradient path (make_div_grad_fn! below, via
+    # envelope_scalar_div_ctx) and gravity_grad_fn! (gravity_tariff.jl) never call this bundle's
+    # callable with a nonempty theta, so the legacy dense N x (d+2) x l jac_h tensor
+    # (cc_algo/PsiObjectiveBundle.jl) is never populated or read -- confirmed by a runtime counter
+    # audit (docs/fullA_jach_audit.md: JAC_H_POPULATE_COUNT/JAC_H_THETA_BRANCH_COUNT both 0 across a
+    # full evaluate_fullA + L_fix-incremental + short outer-loop exercise) and validated bit-identical
+    # against the jac_h-allocated default at D=4/6/8 (same audit doc). Skipping the allocation saves
+    # ~28MB at D=4 scaling to ~300MB+ at D=8-10 (8*Jac_W*(d+2)*l bytes) plus its one-time
+    # allocation+zeroing wall time, with zero observed behavior change.
     PsiObjectiveBundleImplicit(δ = δval, find_smallest = find_smallest, γ = γ,
         (moments!) = EK_moments_gammanorm_directgp!, moments_jacobian! = error, d = nTotalMoments,
         outer_constr_index = outer_constr_index, inequality_index = inequality_index,
         complement_index = complement_index, l = l_full, U = U, N = params.Jac_W,
         lower_limit = -50, use_cached_x = true,
-        outer_loop_opt = OUTER_OPT, inner_loop_opt = INNER_OPT)
+        outer_loop_opt = OUTER_OPT, inner_loop_opt = INNER_OPT,
+        needs_outer_moment_jacobian = false)
 end
 
 function make_div_grad_fn!(obj, m)

@@ -39,7 +39,8 @@ existing D=4 diagnostic function (`evaluate_fullA`, `compute_winners`,
 """
 function d_exact_setup_scaled(; D::Int, W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
-        inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"))
+        inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
+        needs_outer_moment_jacobian::Bool = true)
     so, pp, params_used = build_ad_context_scaled(D = D, W = W)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
     @unpack θ_initial, θ_initial_up, U, γ, outer_constr_index, nTotalMoments, complement_index, inequality_index = pp
@@ -73,7 +74,8 @@ function d_exact_setup_scaled(; D::Int, W::Int, δ::Float64 = 1.0, find_smallest
         outer_constr_index = outer_constr_index, inequality_index = inequality_index,
         complement_index = complement_index, l = l_full, U = U, N = params_used.Jac_W,
         lower_limit = -50, use_cached_x = true,
-        outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt)
+        outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
+        needs_outer_moment_jacobian = needs_outer_moment_jacobian)
     @assert obj.outer_constr_index == obj.d
 
     return (so = so, pp = pp, D = Dact, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,

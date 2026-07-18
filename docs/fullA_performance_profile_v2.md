@@ -194,3 +194,29 @@ evaluators are benchmarked against (`docs/fullA_block_local_performance.md`).
 6. `lfix_perturbation_moments` — **100.5% of a full-rebuild `L_fix` gradient's wall time** (§8): the
    32 per-probe full moment-matrix rebuilds, not the base CC dual solve (3.7%) or the scalar
    Psi-evaluation machinery (≤1.5% combined). This is Phase 2's direct target.
+
+## 10. 2026-07-18 addendum: `jac_h` (the dense outer-moment Jacobian) — allocated but never computed or read in this path
+
+Full writeup: `docs/fullA_jach_audit.md`. None of the profiling above ever measured `jac_h`
+(`cc_algo/PsiObjectiveBundle.jl`'s `N × (d+2) × l` dense-Jacobian tensor) because it turns out to be
+irrelevant to every number in this document: a runtime counter audit (not static reading) confirms
+the full-A cached/Method-B path (`evaluate_fullA`, `outer_loop_cached`, the `L_fix`/incremental
+machinery, and a genuine short `outer_loop_cached` KNITRO trajectory) **never calls
+`calculate_jac_θ!`/`calculate_jac_θ_autodiff!`** (0 populate-calls measured) **and never enters the
+bundle callable's `θ`-nonempty branch that reads/contracts `jac_h`** (0 branch-entries measured) —
+gradients for this path come entirely from `envelope_scalar_div_ctx` (a separate, standalone
+ForwardDiff-over-a-free-only-closure function) and the closed-form gravity gradient
+(`gravity_tariff.jl`), neither of which touch `obj.jac_h`.
+
+**Explicitly, so this document does not read as claiming otherwise anywhere**: the CC inner optimizer
+does **not** automatically compute the full moment Jacobian for this path. `jac_h` is allocated once
+per bundle construction (29.44 MB at this document's D=4/W=8000/l=23/d=18 sizing,
+`8 * N * (d+2) * l` bytes, confirmed by `Base.summarysize`) and then sits as inert, untouched memory
+for the object's entire lifetime — it is not a redundant *active* computation in the sense Phase 1's
+`inner_moment_build` finding (§4 above) was; it never ran in the first place along this path. An
+opt-in `needs_outer_moment_jacobian=false` construction mode (default `true`, fully backward
+compatible) now exists to skip the allocation; validated bit-identical (to a stated, justified
+tolerance) at D=4/6/8 and now wired into both named production drivers
+(`run_fullA_D4_production.jl`, `run_fullA_D10_production.jl`). See `docs/fullA_jach_audit.md` §8 for
+the full performance table (construction-time savings only, ~13–218 ms depending on D; zero
+measured per-call cost while allocated, since it is never touched).
