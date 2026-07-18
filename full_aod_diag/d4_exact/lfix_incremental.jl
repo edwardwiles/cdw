@@ -71,6 +71,39 @@ function min_secondmin_with_idx(col)
 end
 
 """
+    min_secondthirdmin_with_idx(col) -> (m1, idx1, m2, idx2, m3, idx3)
+
+Continuation 8 addition (additive -- extends, does not replace,
+`min_secondmin_with_idx` above): same first-occurrence `isless` scan, extended
+to rank-3. `idx3`/`m3` are `0`/`Inf` if `D<3`. Matches
+`winner_certificate.jl::top3_scan`'s semantics exactly (same tie-break
+convention), duplicated here rather than `include`d from that file to keep
+`lfix_incremental.jl` self-contained (this file predates `winner_certificate.jl`
+and other files depend on its current include order) -- equivalence with
+`top3_scan` is verified in `test_winner_top3_equivalence.jl`.
+"""
+function min_secondthirdmin_with_idx(col)
+    n = length(col)
+    m1 = col[1]; idx1 = 1
+    m2 = oftype(m1, Inf); idx2 = 0
+    m3 = oftype(m1, Inf); idx3 = 0
+    @inbounds for i in 2:n
+        v = col[i]
+        if isless(v, m1)
+            m3 = m2; idx3 = idx2
+            m2 = m1; idx2 = idx1
+            m1 = v; idx1 = i
+        elseif isless(v, m2)
+            m3 = m2; idx3 = idx2
+            m2 = v; idx2 = i
+        elseif isless(v, m3)
+            m3 = v; idx3 = i
+        end
+    end
+    return m1, idx1, m2, idx2, m3, idx3
+end
+
+"""
     update_winner_o1(price_wo, wo, price_ro, ro, o_changed, new_price) -> (new_wo, new_price_wo, new_ro, new_price_ro)
 
 TRUE O(1) incremental winner update for ONE draw: given the CACHED winner
@@ -200,6 +233,16 @@ struct LFixBaseCache
     winner_price0::Matrix{Float64}  # W x D, price LEVEL of the cached winner
     runnerup0::Matrix{Int}          # W x D, origin index of the cached runner-up
     runnerup_price0::Matrix{Float64}  # W x D, price LEVEL of the cached runner-up
+    # ---- Continuation 8 addition (additive; every field above is UNCHANGED in
+    # meaning/values -- old code reading only the fields above continues to work
+    # exactly as before). Third-place cache, needed by `coord_winner_update!`-style
+    # exact O(1) top-3 updates for the same-destination-two-changed-origins case
+    # (see count_winner_flips_multi_top3 / dest_contrib_incremental_top3). Computed
+    # essentially for FREE from the ALREADY-BUILT dense price0/pTσ0 below (an extra
+    # O(W*D^2) PASS over data already in memory, not an extra O(W*D^2) RECOMPUTE) ----
+    third0::Matrix{Int}             # W x D, origin index of the cached third-place (0 if D<3)
+    third_price0::Matrix{Float64}   # W x D, price LEVEL of the cached third-place (Inf if D<3)
+    third_pTσ0::Matrix{Float64}     # W x D, sigma-transformed value of the cached third-place
     contrib0::Matrix{Float64}       # W x D, cached per-destination contribution to q0
     λstar::Vector{Float64}
     ζstar::Float64
@@ -313,10 +356,26 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
     winner_price0 = Matrix{Float64}(undef, W, D)
     runnerup0 = Matrix{Int}(undef, W, D)
     runnerup_price0 = Matrix{Float64}(undef, W, D)
+    # Continuation 8: extended to rank-3 (additive -- winner0/winner_price0/runnerup0/
+    # runnerup_price0 are computed IDENTICALLY to before, min_secondthirdmin_with_idx's
+    # first two return values match min_secondmin_with_idx's exactly by construction,
+    # verified in test_winner_top3_equivalence.jl). third0/third_price0 are NEW.
+    third0 = Matrix{Int}(undef, W, D)
+    third_price0 = Matrix{Float64}(undef, W, D)
     @inbounds for d in 1:D, ω in 1:W
-        m1, idx1, m2, idx2 = min_secondmin_with_idx(@view(price0[ω, :, d]))
+        m1, idx1, m2, idx2, m3, idx3 = min_secondthirdmin_with_idx(@view(price0[ω, :, d]))
         winner0[ω, d] = idx1; winner_price0[ω, d] = m1
         runnerup0[ω, d] = idx2; runnerup_price0[ω, d] = m2
+        third0[ω, d] = idx3; third_price0[ω, d] = m3
+    end
+    # third_pTσ0: sigma-transformed value of the cached third-place, needed by
+    # dest_contrib_incremental_top3 (mirrors how pTσ0 is already stored densely for
+    # every origin -- third_pTσ0 just indexes it at the third-place origin, O(W*D),
+    # free given pTσ0 is already fully materialized above).
+    third_pTσ0 = Matrix{Float64}(undef, W, D)
+    @inbounds for d in 1:D, ω in 1:W
+        t = third0[ω, d]
+        third_pTσ0[ω, d] = t == 0 ? Inf : pTσ0[ω, t, d]
     end
 
     CONST_d = zeros(D)
@@ -363,7 +422,8 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
     maxerr < 1e-8 || error("build_lfix_base_cache: self-validation FAILED, max|q0_true-q0_cache|=$maxerr -- closed-form derivation has a bug, not a numerical-tolerance issue")
 
     return LFixBaseCache(D, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, price0, pTσ0,
-        winner0, winner_price0, runnerup0, runnerup_price0, contrib0,
+        winner0, winner_price0, runnerup0, runnerup_price0,
+        third0, third_price0, third_pTσ0, contrib0,
         λstar, base.ζstar, q0_true, wPrime_bi, τPrime_bi, LPrime_bi, Uσ_bi, λ_cf, cf_contrib0)
 end
 
@@ -444,7 +504,70 @@ function dest_contrib_incremental(cache::LFixBaseCache, ctx, θ_full::AbstractVe
 end
 
 """
-    dest_contrib_incremental_o1(cache, ctx, θ_full, d, changed_origins) -> Vector{W}
+    dest_contrib_incremental_top3(cache, ctx, θ_full, d, changed_origins) -> Vector{W}
+
+Continuation 8: O(1)-per-draw replacement for `dest_contrib_incremental_o1`'s
+2-changed-origin fallback (which previously ALWAYS called `dest_contrib_incremental`,
+an O(D) rescan using the full `cache.price0[:,o,d]` background array for every draw).
+Uses the SAME exact top-3-cache argument as
+`winner_certificate.jl::coord_winner_update!` (reused, not re-derived): with <=2
+changed origins in one destination, the best surviving UNCHANGED origin is at worst
+rank 3, so the exact new winner is argmin over {changed origins' NEW (price,pTsigma)}
+union {first of (winner0,runnerup0,third0) not in changed_origins}. Falls back to
+`dest_contrib_incremental`'s O(D) rescan only for the never-happens-for-a-single-
+reduced-coordinate |changed_origins|>2 case (safety net, matches this file's own
+established fallback discipline). Equivalence with `dest_contrib_incremental` is
+verified exactly (not just to tolerance) in `test_winner_top3_equivalence.jl`,
+including synthetic forced-2-changed-origin cases beyond what a real D=4 run
+naturally exercises.
+"""
+function dest_contrib_incremental_top3(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
+    length(changed_origins) > 2 && return dest_contrib_incremental(cache, ctx, θ_full, d, changed_origins)
+
+    D = cache.D; W = cache.W
+    Cd = changed_origins
+    new_price = Dict{Int,Vector{Float64}}(); new_pTσ = Dict{Int,Vector{Float64}}()
+    for o in Cd
+        p, ps = price_and_pTsigma_cell(θ_full, ctx, o, d)
+        new_price[o] = p; new_pTσ[o] = ps
+    end
+    contrib = Vector{Float64}(undef, W)
+    @inbounds for ω in 1:W
+        r1 = cache.winner0[ω, d]; r2 = cache.runnerup0[ω, d]; r3 = cache.third0[ω, d]
+        best_o = 0; best_p = Inf; best_pTσ = Inf
+        if !(r1 in Cd)
+            best_o = r1; best_p = cache.winner_price0[ω, d]; best_pTσ = cache.pTσ0[ω, r1, d]
+        elseif !(r2 in Cd)
+            best_o = r2; best_p = cache.runnerup_price0[ω, d]; best_pTσ = cache.pTσ0[ω, r2, d]
+        elseif r3 != 0 && !(r3 in Cd)
+            best_o = r3; best_p = cache.third_price0[ω, d]; best_pTσ = cache.third_pTσ0[ω, d]
+        end
+        bo = best_o; bp = best_p; bpTσ = best_pTσ
+        for o in Cd
+            v = new_price[o][ω]
+            if v < bp
+                bp = v; bo = o; bpTσ = new_pTσ[o][ω]
+            end
+        end
+        if bo == 0
+            # extremely defensive: all of top-3 were changed (needs D<=3 & |Cd|>=3);
+            # unreachable for |Cd|<=2 with D>=3 -- same defensive fallback as
+            # coord_winner_update!'s own docstring. Full O(D) column rescan.
+            col = Vector{Float64}(undef, D)
+            for o in 1:D
+                col[o] = haskey(new_price, o) ? new_price[o][ω] : cache.price0[ω, o, d]
+            end
+            _, bo, _ = min_and_secondmin(col)
+            bpTσ = haskey(new_pTσ, bo) ? new_pTσ[bo][ω] : cache.pTσ0[ω, bo, d]
+        end
+        d1w = d + (bo - 1) * D
+        contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * bpTσ)
+    end
+    return contrib
+end
+
+"""
+    dest_contrib_incremental_o1(cache, ctx, θ_full, d, changed_origins; multi_method=:top3) -> Vector{W}
 
 Tier 3 (TRUE O(1) winner update): for the common case of exactly ONE changed
 origin in destination d, determines the new winner via `update_winner_o1`
@@ -455,13 +578,20 @@ TWO changed origins in the SAME destination (both the direct coordinate AND
 the gravity pivot land in the same destination), chaining two O(1) updates
 can propagate an INEXACT cached runner-up into the second update's decision
 (traced through explicitly in `update_winner_o1`'s docstring) -- rather than
-risk a silent winner error in that narrow case, this falls back to
-`dest_contrib_incremental`'s full O(D) rescan for that specific call only
-(still only recomputing the 2 changed origins' prices, just not chaining
-the O(1) update) -- correctness first, documented not silently assumed.
+risk a silent winner error in that narrow case, this now DEFAULTS
+(`multi_method=:top3`) to the exact O(1) top-3-cache update
+`dest_contrib_incremental_top3` (Continuation 8, closes the same fallback
+`count_winner_flips_multi_top3` closes in composite_gradient.jl). The ORIGINAL
+O(D) rescan (`dest_contrib_incremental`) is kept, reachable via
+`multi_method=:generic`, as the documented reference/fallback -- correctness
+first, and both are verified exactly equal in `test_winner_top3_equivalence.jl`.
 """
-function dest_contrib_incremental_o1(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
-    length(changed_origins) != 1 && return dest_contrib_incremental(cache, ctx, θ_full, d, changed_origins)
+function dest_contrib_incremental_o1(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int}; multi_method::Symbol = :top3)
+    if length(changed_origins) != 1
+        multi_method === :top3 && return dest_contrib_incremental_top3(cache, ctx, θ_full, d, changed_origins)
+        multi_method === :generic && return dest_contrib_incremental(cache, ctx, θ_full, d, changed_origins)
+        error("dest_contrib_incremental_o1: multi_method must be :top3 or :generic, got $multi_method")
+    end
 
     D = cache.D; W = cache.W
     o = changed_origins[1]
