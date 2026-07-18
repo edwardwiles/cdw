@@ -68,12 +68,21 @@ Aod_free_pos = [1 + (d - 1) * D + o for o in 1:D, d in 1:D]
 q_tilde, N_obs = precompute_q_tilde(τ)
 
 # ---- production bundle: moments! computes K/G from the FULL theta (unchanged contract) ----
+# needs_outer_moment_jacobian=false: this driver's gradient path (make_div_grad_fn! below, via
+# envelope_scalar_div_ctx) and gravity_grad_fn! (gravity_tariff.jl) never call this bundle's callable
+# with a nonempty theta, so the legacy dense N x (d+2) x l jac_h tensor (cc_algo/PsiObjectiveBundle.jl)
+# is never populated or read -- confirmed by a runtime counter audit (docs/fullA_jach_audit.md:
+# JAC_H_POPULATE_COUNT/JAC_H_THETA_BRANCH_COUNT both 0 across a full evaluate_fullA +
+# L_fix-incremental + short outer-loop exercise) and validated bit-identical against the
+# jac_h-allocated default at D=4/6/8 (same audit doc). The separate "reference" bundle below
+# (obj_ref, PsiObjectiveBundleImplicitMethodBFullA) has no jac_h field at all, so it is unaffected.
 obj = PsiObjectiveBundleImplicit(δ = 1.0, find_smallest = true, γ = γ,
     (moments!) = EK_moments_gammanorm_directgp!, moments_jacobian! = error, d = nTotalMoments,
     outer_constr_index = outer_constr_index, inequality_index = inequality_index,
     complement_index = complement_index, l = l_full, U = U, N = AD_PARAMS.Jac_W,
     lower_limit = -50, use_cached_x = true,
-    outer_loop_opt = OUTER_OPT, inner_loop_opt = INNER_OPT)
+    outer_loop_opt = OUTER_OPT, inner_loop_opt = INNER_OPT,
+    needs_outer_moment_jacobian = false)
 @assert obj.outer_constr_index == obj.d "expected exactly one extra outer-loop moment (gravity)"
 
 # ---- free-only divergence-envelope gradient (Method B, wrapped through FreeParamMap) ----

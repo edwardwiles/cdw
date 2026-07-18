@@ -24,7 +24,8 @@ and moment/gravity wiring as the production driver, not a re-derived variant.
 """
 function d4_exact_setup(; δ::Float64 = 1.0, find_smallest::Bool = true,
                           outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
-                          inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"))
+                          inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
+                          needs_outer_moment_jacobian::Bool = true)
     so, pp = build_ad_context()
     D = so.D; bi = AD_PARAMS.baseIndex; σ = AD_PARAMS.σHat; μHat = pp.γ.μHat
     @unpack θ_initial, θ_initial_up, U, γ, outer_constr_index, nTotalMoments, complement_index, inequality_index = pp
@@ -58,7 +59,8 @@ function d4_exact_setup(; δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_constr_index = outer_constr_index, inequality_index = inequality_index,
         complement_index = complement_index, l = l_full, U = U, N = AD_PARAMS.Jac_W,
         lower_limit = -50, use_cached_x = true,
-        outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt)
+        outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
+        needs_outer_moment_jacobian = needs_outer_moment_jacobian)
     @assert obj.outer_constr_index == obj.d
 
     return (so = so, pp = pp, D = D, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
