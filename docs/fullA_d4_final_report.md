@@ -229,30 +229,49 @@ is the credible building block for a hybrid live solver. `Q_adj_FD` costs the sa
 used without the same scrutiny it currently fails; hard pathwise AD is far cheaper but unusable as a
 search direction near the optimum.
 
-### 9.3 Sequential/profiled solution located and compared (Phase 5, mandatory external validity check)
+### 9.3 Sequential/profiled solution located — comparison RETRACTED as unreliable (corrected after
+    user review)
 
 A fresh sequential/profiled production run was executed for the identical synthetic economy (D=4,
 W=8000, seedFakeData=889, seedU=888, δ=1 — confirmed via matching `kappa_point_estimate=0.064208` and
 identical `theta_initial`, not assumed from filenames alone; two of the three candidate JLD2 files
 found in the production worktree's untracked output directories were actually stale D=10 results from
 a different, unrelated run, caught by checking the `D` field directly rather than trusting filenames).
-Since kappa is gauge-invariant (`sequential_methodology.tex` §2.3: the two gauges differ only in the
-A-parametrization, not in what `gamma_focal_prime`/kappa mean), a direct comparison is valid without
-reconstructing the full A matrix (that reconstruction — inverting the non-focal destination columns
-via the sequential method's own machinery, then converting between the two gauges — was not attempted
-this continuation, given time constraints; flagged as follow-up):
 
-| | sequential (genuinely feasible) | full-A (this investigation) |
-|---|---|---|
-| κ_upper | 0.0779 (KNITRO terminal, gravity-feasible) — best-feasible 0.1592 exists but is gravity-**infeasible**, not usable | **0.1718** (maxit=40, EXACT_FEASIBLE_CANDIDATE) |
-| κ_lower | **0.0046** (best-feasible, gravity-feasible) | 0.0107 (maxit=15, BEST_FEASIBLE_STALLED, Δ-δ=-0.101 far from binding) |
+**This section originally reported the sequential run's terminal κ_upper=0.0779 as "genuinely
+feasible" and compared it directly against full-A's κ=0.1718, concluding full-A "beats" the
+sequential method by >2x. This comparison was wrong and is retracted.** The error, caught on review
+(the sequential method's own domain owner correctly flagged it): a properly-run sequential search
+should weakly dominate the trivial "hold every `A_od` fixed at the calibration value `A_od*`, only
+optimize `gamma'_focal`" benchmark, which this investigation separately computed as
+**κ_fixedA=0.1440** (`results/fullA_d4/a377fff/movement_and_fixedA_check.txt`) — sequential frees
+strictly more of the parameter space than that benchmark. The reported sequential κ_upper=0.0779 is
+*below* κ_fixedA=0.1440, which is not possible for a properly-converged sequential search and is
+therefore direct internal evidence that **this specific run did not converge**, not evidence about
+the sequential method's true capability.
 
-Full-A's upper candidate clears the sequential method's own directly-comparable, genuinely-feasible
-number by more than 2x. **Caveat, not a final verdict**: the sequential run used one
-calibration-anchored start (not the production 5-start multistart `sequential_methodology.tex` §9
-specifies) and terminated at `nStatus=-400` (non-converged); it may not represent the sequential
-method's own best achievable number at this δ. This comparison is suggestive, real, and gauge-valid,
-not dispositive.
+**Root cause, confirmed from the run's own configuration** (not speculative): the run used
+`run_profiled_production.jl`'s *default* `OUTER_OPT_FILE`, which resolves to
+`full_aod_diag/csw_outer_25.opt` — the same production opt file this investigation's own Phase B
+(prior continuation) already flagged for two compounding problems: (a) **`maxit=25`**, a small outer-
+iteration cap, and the run terminated at `nStatus=-400` — the exact "hit the iteration cap without
+internal convergence" code this investigation has seen throughout its own short D=4 full-A runs, not
+a distinguishing status specific to a genuine plateau; (b) **`eval_fcga=yes` combined with
+`hessopt=4`**, which this investigation independently confirmed (Phase B, prior continuation) gets
+*silently downgraded to L-BFGS* by KNITRO — so the run did not even use its own requested Hessian mode.
+On top of both: the run used **one** calibration-anchored start, not the production **5-start
+multistart** `sequential_methodology.tex` §9 specifies as necessary "to guard against the outer KNITRO
+search converging to a local/non-global point or hitting its iteration cap short of the true extremum"
+— language that describes exactly the failure mode observed here.
+
+**Corrected status**: no reliable comparison between full-A and the sequential method exists yet from
+this continuation. Making one requires re-running `run_profiled_production.jl` with a materially
+larger `maxit` (or `maxtime_real`), `eval_fcga=no` (to get the genuinely-requested Hessian mode), and
+the full 5-start multistart the production methodology specifies — none of which this continuation
+did. The gauge-invariance argument for why κ is directly comparable once a reliable sequential number
+exists (`sequential_methodology.tex` §2.3) still holds and is unaffected by this retraction; only the
+specific κ_upper=0.0779 data point is withdrawn. See `docs/fullA_d4_recommendation.md` for how this
+changes the viability verdict.
 
 ### 9.4 Partial W-stability (Phase 3)
 

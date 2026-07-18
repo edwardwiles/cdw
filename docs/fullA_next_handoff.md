@@ -50,6 +50,24 @@ Read this first if picking up this investigation again.
    `docs/fullA_scaling_projection.md`, updated `docs/fullA_d4_final_report.md` §9 and
    `docs/fullA_d4_recommendation.md` (with the required final decision labels), this handoff).
 
+## 2a. CORRECTION (post-hoc, flagged by the sequential method's domain owner): the Phase 5
+    full-A-vs-sequential comparison was wrong and is retracted
+
+The original version of this handoff (and §9.3 of `docs/fullA_d4_final_report.md`) reported the
+sequential run's terminal κ_upper=0.0779 as a valid comparison point and concluded full-A "beats"
+sequential by >2x. **This was an error**: 0.0779 is below this investigation's own fixed-A benchmark
+(κ_fixedA=0.1440, `results/fullA_d4/a377fff/movement_and_fixedA_check.txt`), which a properly-run
+sequential search should never fall below (it optimizes a strict superset of what "fixed-A" allows).
+Root cause, confirmed not speculated: the run used the *default* opt file
+(`full_aod_diag/csw_outer_25.opt`, `maxit=25`, `eval_fcga=yes`+`hessopt=4`→silently downgraded to
+L-BFGS) and one start, not the production 5-start multistart `sequential_methodology.tex` §9 requires.
+**To get a reliable comparison next time**: re-run `run_profiled_production.jl` with a much larger
+`maxit`/`maxtime_real`, `eval_fcga=no`, and genuine multistart (5 starts per the production spec) —
+none of which the retracted run used. Both `docs/fullA_d4_final_report.md` and
+`docs/fullA_d4_recommendation.md` have been corrected; treat any other document or memory referencing
+"full-A beats sequential" or "κ=0.0779" from this investigation as stale until a proper comparison
+exists.
+
 ## 3. What was NOT attempted, and why (do not silently assume it's done)
 
 - **Phase 2** (block-locality optimization, incremental moment updates, parallel FD, allocation

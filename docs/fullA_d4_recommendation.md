@@ -93,22 +93,26 @@ picture above:
    `Delta_FD` gradient at D=20 versus ~4.2 minutes per `L_fix_FD` gradient. This makes the case for a
    validated `L_fix`-hybrid solver strictly stronger at higher D, and makes an unoptimized D=20 attempt
    with the current architecture concretely, not just qualitatively, inadvisable.
-3. **A genuine external validity check now exists**: the sequential/profiled production method, run
-   fresh on the identical synthetic economy, gives a directly comparable (gauge-invariant) upper bound
-   of κ=0.0779 (genuinely feasible) — full-A's κ=0.1718 candidate clears it by more than 2x, with the
-   caveat that the sequential run used one start, not the production 5-start multistart, and did not
-   fully converge (`nStatus=-400`).
+3. **RETRACTED (see `docs/fullA_d4_final_report.md` §9.3 for the full correction)**: this document
+   originally claimed a sequential/profiled run on the identical economy gave a directly comparable
+   κ=0.0779, and that full-A's κ=0.1718 candidate beat it by >2x. That sequential number is unreliable
+   — it is *below* the trivial fixed-A benchmark (κ_fixedA=0.1440), which a properly-converged
+   sequential search cannot be, and the run's own configuration explains why (default opt file with
+   `maxit=25`, `eval_fcga=yes`+`hessopt=4` silently downgraded to L-BFGS, and one start instead of the
+   production-specified 5-start multistart). **No reliable full-A-vs-sequential comparison exists yet.**
+   Do not cite the 0.0779 number, or the ">2x" claim, in any future summary of this investigation.
 
 ## Final decision labels
 
 Per the continuation task's required taxonomy:
 
 - **D=4 mathematical/numerical viability**: `VIABLE_WITH_HYBRID_AND_PERFORMANCE_WORK`. The exact
-  method reaches a genuine, exactly-feasible, externally-corroborated (beats the sequential method's
-  own comparable number) candidate — but the profiling in this continuation identifies concrete,
-  unimplemented performance work (redundant moments recomputation, `L_fix`-hybrid gradient, block
-  reuse) needed before the method is efficient enough to iterate on freely, and Phase 4's gamma-
-  profile/upper-polish/lower-completion work remains undone.
+  method reaches a genuine, exactly-feasible candidate (κ=0.1718) that clears its own internal
+  fixed-A sanity check (κ_fixedA=0.1440) — external corroboration against the sequential method is
+  **not yet available** (the attempted comparison was retracted, see above) — and the profiling in
+  this continuation identifies concrete, unimplemented performance work (redundant moments
+  recomputation, `L_fix`-hybrid gradient, block reuse) needed before the method is efficient enough to
+  iterate on freely; Phase 4's gamma-profile/upper-polish/lower-completion work remains undone.
 - **D=4, W=80,000 viability**: `NOT_CURRENTLY_VIABLE` (specific blocker: untested, not
   intrinsically hard) — only cost-scaling was measured at W=80,000 (calibration point, ~14.4s per
   `Delta_FD` gradient, tractable), no actual candidate was re-evaluated or re-optimized there. The
