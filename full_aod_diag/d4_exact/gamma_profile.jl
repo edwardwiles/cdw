@@ -24,6 +24,7 @@ include(joinpath(@__DIR__, "winners.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
 include(joinpath(@__DIR__, "gravity_elimination.jl"))
 include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
+include(joinpath(@__DIR__, "live_defaults.jl"))   # enable_live_defaults! (pow cache / autarky-CF-v2 opt-ins; see docs/lowrisk_specialization_live_wiring.md)
 using KNITRO, Printf, Dates
 
 const COMMIT = strip(read(`git rev-parse --short HEAD`, String))
@@ -32,6 +33,24 @@ const OUTDIR = joinpath(D4X_ROOT, "results", "fullA_d4", COMMIT, RUN_ID)
 mkpath(OUTDIR)
 
 ctx = d4_exact_setup(find_smallest = true)
+
+# ---- Continuation 8, workstream 4: opt-in low-risk moment-build specializations ----
+# GP_ENABLE_POW_CACHE=1 (default): fixed-mu,sigma power cache, bit-identical, modest
+#   allocation/GC win (see docs/fullA_pow_cache_wiring.md) -- on by default, no known
+#   downside.
+# GP_ENABLE_AUTARKY_CF_V2=0 (default): cached-base focal-autarky CF column
+#   (docs/autarky_cf_v2_cached_base.md). OFF by default: this driver's per-eval cost is
+#   a FULL evaluate_fullA call (full inner KNITRO dual solve over ALL D^2 moments, not
+#   a CF-only column), so UsigmaPow is already materialized for the factual block
+#   regardless -- v2's real win (skipping a from-raw-Usigma sigma-power) does not apply
+#   here. See docs/lowrisk_specialization_live_wiring.md for the measured before/after.
+# Both flags read once and passed straight through -- set at the process environment,
+# not per-call, matching how this script is normally invoked (`ENV_VAR=... julia ...`).
+const GP_ENABLE_POW_CACHE = get(ENV, "GP_ENABLE_POW_CACHE", "1") == "1"
+const GP_ENABLE_AUTARKY_CF_V2 = get(ENV, "GP_ENABLE_AUTARKY_CF_V2", "0") == "1"
+const GP_LIVE_DEFAULTS = enable_live_defaults!(ctx; pow_cache = GP_ENABLE_POW_CACHE, autarky_cf_v2 = GP_ENABLE_AUTARKY_CF_V2)
+println("gamma_profile.jl live-defaults wiring: pow_cache=", GP_ENABLE_POW_CACHE, " autarky_cf_v2=", GP_ENABLE_AUTARKY_CF_V2)
+
 pe = build_pivot_elimination(ctx)
 D = ctx.D; D2 = D^2
 n = D2 - 1   # A-block-only reduced dimension (z_free)
