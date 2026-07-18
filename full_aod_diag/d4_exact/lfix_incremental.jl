@@ -1,0 +1,342 @@
+# ============================================================================
+# Phase 2 (continuation 3): block-local AND genuinely incremental exact
+# evaluators for L_fix, per the user's explicit design (base cache of
+# q_s^* = -zeta*-lambda*'G_s(theta0) decomposed into PER-DESTINATION
+# contributions; a perturbation updates ONLY the 1-2 affected destination
+# blocks' contribution and reassembles q_s from cached pieces -- never
+# rebuilds the full G matrix).
+#
+# DEPENDENCY GRAPH, verified directly from moments/hFunction.jl and
+# full_aod_diag/moments_gammanorm.jl (not assumed):
+#   - Perturbing Aod_theta[o,d] (one entry of the D x D free matrix) changes
+#     ONLY the D moment columns of hFunction!'s destination-d block
+#     (d1 = d + (o'-1)*D for o' in 1:D, ALL D origins at that destination --
+#     because MinInd! picks a winner across all D origins for fixed d, so
+#     the winner CAN switch even though only one origin's underlying price
+#     changed). If (o,d)==(baseIndex,baseIndex), it ALSO changes the single
+#     counterfactual column (index D^2+1) via hFunctionCounter!'s
+#     constConsσ[baseIndex,baseIndex].
+#   - In the pivot-reduced coordinates (gravity_elimination.jl), ONE z_free
+#     coordinate maps to exactly ONE direct Aod entry PLUS the pivot Aod
+#     entry (pivot_expand's affine combination) -- i.e. up to 2 affected
+#     destinations, up to 2 changed (o,d) cells total.
+#   - gamma'_focal (w[1]) changes ONLY the counterfactual column; zero A_od
+#     entries change; hFunctionCounter!'s counterType==1 branch never calls
+#     MinInd!, so this coordinate is smooth (no winner-switching machinery
+#     needed at all).
+#
+# CLOSED-FORM SIMPLIFICATION (derived, then verified empirically against the
+# trusted fixed_dual_L below): within ANY destination-d block, a "loser"
+# column's raw value is `-P[d1]*denom[d]`, a FIXED DATA CONSTANT independent
+# of which origin lost or who won; only the WINNING origin's column carries
+# theta-dependence (`pricesTempσ[winner] - P[d1(winner)]*denom[d]`). This
+# means the lambda*-weighted contribution of an ENTIRE destination-d block to
+# q_s collapses to:
+#
+#   contrib[s,d] = (SW[s]/gammafac) * ( CONST_d[d] + lambda*[d1(winner(s,d))] * pTsigma(winner(s,d), s, d) )
+#
+# where CONST_d[d] = -denom[d] * sum_o lambda*[d+(o-1)D]*P[d+(o-1)D] is a
+# PURE DATA+lambda* constant (zero draws-loop cost, computed ONCE). A
+# perturbation therefore only needs the NEW winner(s,d) and their pTsigma
+# value, per draw -- exactly the incremental target.
+# ============================================================================
+include(joinpath(@__DIR__, "instrumentation.jl"))
+include(joinpath(@__DIR__, "winners_v2.jl"))
+using SpecialFunctions: gamma as spgamma
+using LinearAlgebra: dot
+
+lin_to_od(lin::Int, D::Int) = (mod1(lin, D), div(lin - 1, D) + 1)   # (o, d) from column-major linear index
+
+"""
+aod_level_cell(theta_full, ctx, o, d) -- the LEVEL Aod[o,d] (gravity_tariff.jl's own level-conversion
+formula), single cell, O(1). NOTE: `lambda = reshape(P,(D,D))'`, so `lambda[o,d] = P[d+(o-1)*D]`
+(the SAME d1=d+(o-1)*D linear-index convention used throughout hFunction.jl/winners.jl) -- verified
+against `winners.jl::factual_prices`'s own (already-validated) full-matrix formula, not re-derived
+from scratch a second time.
+"""
+function aod_level_cell(θ_full::AbstractVector, ctx, o::Int, d::Int)
+    γo = ctx.γ
+    μ = θ_full[1]
+    D = ctx.D
+    lambda_od = γo.P[d + (o - 1) * D]; lambda_1d = γo.P[d]   # lambda[1,d] = P[d+(1-1)*D] = P[d]
+    Aod_θ_od = θ_full[ctx.Aod_offset + o + (d - 1) * D]
+    return Aod_θ_od * γo.cHat[o, d] * ((γo.wHat[o] * γo.τ[o, d]) / (γo.wHat[1, 1] * γo.τ[1, d]))^(1 / μ) * (lambda_od / lambda_1d)
+end
+
+"""
+aod_pow_cell(theta_full, ctx, o, d, mu) -- AodPow[o,d] = (Aod_level[o,d]/cHat[o,d])^(-mu). This, NOT
+the level Aod, is what hFunction!/hFunctionCounter! actually receive as their (locally-named) `Aod`
+argument -- both call sites pass `AodPow`, confirmed from moments_gammanorm.jl's call:
+`hFunction!(..., AodPow, ...)` / `hFunctionCounter!(..., AodPow, ...)`. Conflating the level with
+AodPow here was the root cause of an earlier self-validation failure in this file.
+"""
+function aod_pow_cell(θ_full::AbstractVector, ctx, o::Int, d::Int)
+    μ = θ_full[1]
+    lvl = aod_level_cell(θ_full, ctx, o, d)
+    return (lvl / ctx.γ.cHat[o, d])^(-μ)
+end
+
+"""
+    price_and_pTsigma_cell(θ_full, ctx, o, d) -> (price::Vector{W}, pTσ::Vector{W})
+
+O(W) single-(o,d)-cell recompute of hFunction!'s `pricesTemp[o]`/`pricesTempσ[o]`
+formulas for destination d (UoModel==1: o1=o).
+"""
+function price_and_pTsigma_cell(θ_full::AbstractVector, ctx, o::Int, d::Int)
+    γo = ctx.γ; σ = θ_full[2]; μ = θ_full[1]
+    AodPow = aod_pow_cell(θ_full, ctx, o, d)
+    constCons_od = γo.wHat[o] * AodPow * γo.τ[o, d]
+    wPow_o = γo.wHat[o]^(1 - σ)
+    constConsσ_od = wPow_o * (AodPow * γo.τ[o, d])^(1 - σ)
+    U = ctx.U
+    # NOTE: hFunction! divides by UPow/UσPow = U.^(-mu)/Uσ.^(-mu), NOT raw U/Uσ -- these power
+    # transforms are applied by the CALLER (EK_moments_gammanorm_directgp!) before hFunction! ever
+    # sees them; matched here exactly, not omitted.
+    price = constCons_od ./ (@view(U[:, o]) .^ (-μ))
+    pTσ = constConsσ_od ./ (@view(γo.Uσ[:, o]) .^ (-μ))
+    return price, pTσ
+end
+
+struct LFixBaseCache
+    D::Int; oci::Int; W::Int; μ::Float64; σ::Float64; baseIndex::Int
+    gammafac::Float64
+    SW::Vector{Float64}
+    denom::Vector{Float64}          # length D
+    CONST_d::Vector{Float64}        # length D
+    price0::Array{Float64,3}        # W x D x D  (levels, winner-finding)
+    pTσ0::Array{Float64,3}          # W x D x D  (sigma-transformed)
+    winner0::Matrix{Int}            # W x D
+    contrib0::Matrix{Float64}       # W x D, cached per-destination contribution to q0
+    λstar::Vector{Float64}
+    ζstar::Float64
+    q0::Vector{Float64}
+    wPrime_bi::Float64; τPrime_bi::Float64; LPrime_bi::Float64
+    Uσ_bi::Vector{Float64}
+    λ_cf::Float64
+    cf_contrib0::Vector{Float64}
+end
+
+"""
+    build_lfix_base_cache(x_free0, ctx, base::BaseDualState) -> LFixBaseCache
+
+Builds the per-destination-contribution cache at the base point. Self-
+validates internally: reconstructs q0 from the cache pieces and asserts it
+matches `-base.ζstar - lambda*'G0[s,1:oci-1]` computed directly (not merely
+assumed to match by construction) -- errors loudly if the closed-form
+derivation above has a sign/indexing bug, rather than silently producing a
+wrong cache.
+"""
+function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState)
+    obj = ctx.obj
+    D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
+    γo = ctx.γ
+    gammafac = spgamma(μ * (1 - σ) + 1)
+    SW = γo.SamplingWeights[1:W]
+    denom = [γo.wHat[d] * γo.L[d] for d in 1:D]   # gamma[d]==1 factual side, always
+    λstar = base.λstar
+
+    price0 = Array{Float64}(undef, W, D, D)
+    pTσ0 = Array{Float64}(undef, W, D, D)
+    for d in 1:D, o in 1:D
+        p, ps = price_and_pTsigma_cell(base.θ_full0, ctx, o, d)
+        price0[:, o, d] .= p; pTσ0[:, o, d] .= ps
+    end
+    winner0 = Matrix{Int}(undef, W, D)
+    @inbounds for d in 1:D, ω in 1:W
+        _, wo, _ = min_and_secondmin(@view(price0[ω, :, d]))
+        winner0[ω, d] = wo
+    end
+
+    CONST_d = zeros(D)
+    for d in 1:D
+        s = 0.0
+        for o in 1:D
+            d1 = d + (o - 1) * D
+            s += λstar[d1] * (-γo.P[d1] * denom[d])
+        end
+        CONST_d[d] = s
+    end
+
+    contrib0 = Matrix{Float64}(undef, W, D)
+    @inbounds for d in 1:D, ω in 1:W
+        wo = winner0[ω, d]
+        d1w = d + (wo - 1) * D
+        contrib0[ω, d] = (SW[ω] / gammafac) * (CONST_d[d] + λstar[d1w] * pTσ0[ω, wo, d])
+    end
+
+    # ---- counterfactual column pieces ----
+    wPrime = copy(γo.wPrimeHat); insert!(wPrime, bi, 1.0)
+    wPrime_bi = wPrime[bi]   # == 1.0 by construction, kept symbolic for clarity/robustness
+    τPrime_bi = γo.τPrime[bi, bi]
+    LPrime_bi = γo.LPrime[bi]
+    # hFunctionCounter!'s own 4th positional arg (named Uσ in its body) is bound to UσPow = Uσ.^(-mu)
+    # by its caller (EK_moments_gammanorm_directgp!) -- matched exactly, mu fixed so precomputed once.
+    Uσ_bi = γo.Uσ[:, bi] .^ (-μ)     # UoModel==1: o1 = baseIndex
+    d1_cf = D^2 + 1
+    λ_cf = oci - 1 >= d1_cf ? λstar[d1_cf] : 0.0
+
+    AodPow_bibi0 = aod_pow_cell(base.θ_full0, ctx, bi, bi)
+    γ_prime_bi0 = base.θ_full0[3+D]
+    constConsσ_bibi = wPrime_bi^(1 - σ) * (AodPow_bibi0 * τPrime_bi)^(1 - σ)
+    denom_cf0 = γ_prime_bi0^σ * wPrime_bi_gdp(wPrime_bi, LPrime_bi)
+    raw_cf0 = constConsσ_bibi ./ Uσ_bi .- denom_cf0
+    cf_contrib0 = λ_cf .* (raw_cf0 ./ gammafac .* SW)
+
+    # ---- self-validation: reconstruct q0 from cache, compare against direct computation ----
+    K = zeros(W); Gfull = zeros(W, obj.d)
+    obj.moments!(K, Gfull, base.θ_full0, obj.U, obj)
+    q0_true = [-base.ζstar - dot(λstar, @view(Gfull[s, 1:oci-1])) for s in 1:W]
+    q0_cache = [-base.ζstar - sum(@view(contrib0[s, :])) - cf_contrib0[s] for s in 1:W]
+    maxerr = maximum(abs.(q0_true .- q0_cache))
+    maxerr < 1e-8 || error("build_lfix_base_cache: self-validation FAILED, max|q0_true-q0_cache|=$maxerr -- closed-form derivation has a bug, not a numerical-tolerance issue")
+
+    return LFixBaseCache(D, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, price0, pTσ0, winner0, contrib0,
+        λstar, base.ζstar, q0_true, wPrime_bi, τPrime_bi, LPrime_bi, Uσ_bi, λ_cf, cf_contrib0)
+end
+
+"gdp used inside hFunctionCounter! for baseIndex: wPrime[bi]*LPrime[bi] (wPrime[bi]==1 always, kept explicit)."
+wPrime_bi_gdp(wPrime_bi, LPrime_bi) = wPrime_bi * LPrime_bi
+
+"""
+    cf_contrib_at(cache, θ_full) -> Vector{W}
+
+Recomputes the counterfactual column's lambda*-weighted contribution at an
+arbitrary theta (only Aod[bi,bi] and gamma'_focal matter) -- O(W), no draws
+loop beyond a single broadcast.
+"""
+function cf_contrib_at(cache::LFixBaseCache, θ_full::AbstractVector, ctx)
+    bi = cache.baseIndex; σ = cache.σ
+    AodPow_bibi = aod_pow_cell(θ_full, ctx, bi, bi)
+    γ_prime_bi = θ_full[3+ctx.D]
+    constConsσ_bibi = cache.wPrime_bi^(1 - σ) * (AodPow_bibi * cache.τPrime_bi)^(1 - σ)
+    denom_cf = γ_prime_bi^σ * wPrime_bi_gdp(cache.wPrime_bi, cache.LPrime_bi)
+    raw_cf = constConsσ_bibi ./ cache.Uσ_bi .- denom_cf
+    return cache.λ_cf .* (raw_cf ./ cache.gammafac .* cache.SW)
+end
+
+"""
+    dest_contrib_block_local(cache, ctx, θ_full, d) -> Vector{W}
+
+Tier 1 (block-local): FULL recompute of destination d's price/pTsigma/winner
+for ALL D origins (not just the changed one), then the same closed-form
+contribution formula. Correct but does not exploit that D-1 origins are
+usually unchanged -- Tier 2 below does.
+"""
+function dest_contrib_block_local(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int)
+    D = cache.D; W = cache.W
+    price_d = Matrix{Float64}(undef, W, D); pTσ_d = Matrix{Float64}(undef, W, D)
+    for o in 1:D
+        p, ps = price_and_pTsigma_cell(θ_full, ctx, o, d)
+        price_d[:, o] .= p; pTσ_d[:, o] .= ps
+    end
+    contrib = Vector{Float64}(undef, W)
+    @inbounds for ω in 1:W
+        _, wo, _ = min_and_secondmin(@view(price_d[ω, :]))
+        d1w = d + (wo - 1) * D
+        contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_d[ω, wo])
+    end
+    return contrib
+end
+
+"""
+    dest_contrib_incremental(cache, ctx, θ_full, d, changed_origins) -> Vector{W}
+
+Tier 2 (genuinely incremental): recomputes price/pTsigma ONLY for the origins
+in `changed_origins` (1 or 2 of them, per the dependency graph above);
+combines with CACHED `cache.price0[:,o,d]`/`cache.pTσ0[:,o,d]` for every
+other origin, then a fresh min/secondmin rescan (the scan itself is
+inherently O(D) per draw -- cannot be avoided without a fancier order-
+statistic structure -- but the PRICE FORMULA EVALUATION is O(|changed|) not
+O(D)).
+"""
+function dest_contrib_incremental(cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
+    D = cache.D; W = cache.W
+    new_price = Dict{Int,Vector{Float64}}(); new_pTσ = Dict{Int,Vector{Float64}}()
+    for o in changed_origins
+        p, ps = price_and_pTsigma_cell(θ_full, ctx, o, d)
+        new_price[o] = p; new_pTσ[o] = ps
+    end
+    contrib = Vector{Float64}(undef, W)
+    col = Vector{Float64}(undef, D)
+    @inbounds for ω in 1:W
+        for o in 1:D
+            col[o] = haskey(new_price, o) ? new_price[o][ω] : cache.price0[ω, o, d]
+        end
+        _, wo, _ = min_and_secondmin(col)
+        pTσ_wo = haskey(new_pTσ, wo) ? new_pTσ[wo][ω] : cache.pTσ0[ω, wo, d]
+        d1w = d + (wo - 1) * D
+        contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
+    end
+    return contrib
+end
+
+"lfix_from_q(q, ζstar) -> Float64 -- the final scalar, matching fixed_dual_L's own formula exactly."
+function lfix_from_q(q::AbstractVector, ζstar::Float64)
+    Psi_q = similar(q)
+    CS.Psi!(Psi_q, q)
+    return -(sum(Psi_q) / length(q) + ζstar)
+end
+
+"""
+    affected_cells(pe, coord_idx) -> Vector{Tuple{Int,Int}}
+
+`coord_idx` in 1:D^2 (1-indexed into the reduced w vector: 1=gamma'_focal,
+2:D^2 = z_free[1:D^2-1]). Returns the list of (o,d) Aod cells that change
+when coord_idx is perturbed (empty for coord_idx==1 -- gamma only touches
+the counterfactual column, no A_od cell).
+"""
+function affected_cells(pe, coord_idx::Int)
+    coord_idx == 1 && return Tuple{Int,Int}[]
+    k = coord_idx - 1   # index into z_free
+    dir_lin = pe.other_idx[k]
+    piv_lin = pe.pivot_lin
+    return [lin_to_od(dir_lin, pe.D), lin_to_od(piv_lin, pe.D)]
+end
+
+"""
+    lfix_incremental_at(cache, ctx, pe, w0, coord_idx, new_val; tier=:incremental) -> Float64
+
+The main entry point: `w0` is the cache's base reduced coordinate vector,
+`coord_idx`/`new_val` specify a SINGLE-coordinate perturbation (matching how
+a central-FD gradient probes one coordinate at a time). `tier` selects
+`:incremental` (Tier 2, default) or `:block_local` (Tier 1, for the separate
+profiling/equivalence comparison the task requires).
+"""
+function lfix_incremental_at(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, new_val::Float64; tier::Symbol = :incremental)
+    D = cache.D
+    w = copy(w0); w[coord_idx] = new_val
+    z = pivot_expand(w[2:end], pe)
+    Aod_theta = exp.(z)
+    x_free = vcat(w[1], vec(Aod_theta))
+    θ_full = CS.reconstruct_full(x_free, ctx.m)
+
+    cells = affected_cells(pe, coord_idx)
+    affected_dests = unique(last.(cells))   # destinations touched
+    cf_touched = coord_idx == 1 || any(((o, d),) -> o == cache.baseIndex && d == cache.baseIndex, cells)
+
+    q = copy(cache.q0)
+    for d in affected_dests
+        old_contrib = @view cache.contrib0[:, d]
+        new_contrib = if tier == :block_local
+            dest_contrib_block_local(cache, ctx, θ_full, d)
+        elseif tier == :incremental
+            origins_here = [o for (o, dd) in cells if dd == d]
+            dest_contrib_incremental(cache, ctx, θ_full, d, origins_here)
+        else
+            error("lfix_incremental_at: unknown tier=$tier")
+        end
+        # q_s = -zeta* - sum_d contrib[s,d] - cf_contrib[s] (contrib is defined WITHOUT the leading
+        # minus, matching contrib_true_mat's own validated definition) -- an INCREASE in a
+        # destination's contribution DECREASES q, hence subtract the delta, not add it. (Sign bug
+        # caught by the self-validation-passing-but-perturbation-failing pattern: q0 alone was right,
+        # only perturbation deltas had the flip.)
+        q .-= new_contrib .- old_contrib
+    end
+    if cf_touched
+        new_cf = cf_contrib_at(cache, θ_full, ctx)
+        q .-= new_cf .- cache.cf_contrib0
+    end
+
+    return lfix_from_q(q, cache.ζstar)
+end
