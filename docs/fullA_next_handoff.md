@@ -3,7 +3,102 @@
 Written at the end of the "performance profiling, D=4 completion, and staged scaling" continuation.
 Read this first if picking up this investigation again.
 
-## CONTINUATION 4 UPDATE — read this section first
+## CONTINUATION 5 UPDATE — read this section FIRST (supersedes Continuation 4's headline numbers)
+
+Branch `diag/fullA-d4-exact` unchanged, worktree unchanged. Commits this continuation: `56877ff`
+(Priority 0: candidate canonicalization + external revalidation), `0ed1944` (Priority 0: stale-doc
+pointers), `d1db154` (Priority 1C: smoothed-gradient timing contradiction resolved), `f559b01`
+(Priority 1A: warmed breakdown + F/G redundancy audit), `d84ba73` (Priority 2: threaded/cached
+composite gradient, equivalence-tested), `91fe104` (moment-construction audit: mu/sigma value cache,
+a user-requested addendum), `53d5331` (Priority 2 wiring + Priority 3: live `lfix_composite_fast`
+results + fair hard-vs-smoothed comparison). Priorities 0-2 and the fair comparison (Priority 3) are
+**complete**; Priorities 4-5 (gamma profile, upper polish, lower direction, nested-W, D=6 pilot) were
+**not started** this continuation, per the task's own explicit fallback ordering ("if context becomes
+tight, complete 0-2 and the comparison before starting the gamma profile") — this continuation's
+context became the binding constraint after the fair comparison, not before.
+
+### Headline: new best-validated upper candidate, and it is now demonstrably fast to reach
+
+**`upper_lfixcomposite_sr1_60s`, κ=0.17245688540655113`** (already the Continuation 4 incumbent, NOT a
+new number) is now canonicalized in `candidate_registry.jl` and externally revalidated
+(`phaseA_lfixcomposite_sr1_revalidation.jl`): `EXACT_FEASIBLE_CANDIDATE` (8/8 cold/warm rechecks at 2
+tolerances) + `H_BANDWIDTH_KKT_CANDIDATE(h=0.01)`, but **NOT** `ROBUST_LOCAL_CANDIDATE` — same tier as
+the old `upper_maxit40` incumbent, carried forward honestly (h=0.02 is degenerate, 31/32 probes cross
+a winner boundary; h≤0.01 is stable but KKT residual grows slightly as h shrinks, consistent with the
+run having stopped at KNITRO's own `opt_err=0.0021` rather than exact stationarity). **What changed
+this continuation**: a new `D4X_GRADIENT_METHOD=lfix_composite_fast` KNITRO driver option
+(`run_d4_optimized_fd.jl`) reaches this EXACT SAME point (bit-identical `w`) in **26.9s instead of
+42.7s** (1.59x faster wall-clock), with the gradient callback itself 2.57x cheaper (183ms→71ms/call)
+and consuming **zero** inner CC-dual solves per call (was 1) — see `docs/fullA_p2_p3_fast_gradient_and_comparison.md`.
+
+### What Priority 1 found (docs/fullA_p1_warmed_profile.md)
+
+1. **The archived "3.147s" smoothed-gradient timing was a JIT-compilation artifact, not a real cost.**
+   Isolated directly: same closure, unwarmed first call = 3.85s, warmed median (N=30) = 44ms (86.7x
+   difference). The smoothed gradient's TRUE warmed cost is ~44ms/call at D=4 — cite this number, not
+   3.147s, in any future comparison.
+2. **The live composite-gradient callback's documented 0.14-0.18s cost is now precisely localized**:
+   `composite_gradient_at` alone (unshared base) = 141.0ms, of which only ~10-12ms is its own
+   (shareable) inner solve — the other ~130ms is the SERIAL per-coordinate bandwidth-selection+FD
+   loop. Sharing the base state with `eval_F` saves only 10.9ms (6.8%) — real but NOT the primary
+   lever (Priority 2's threading fix is).
+
+### What Priority 2 built (docs/fullA_p2_p3_fast_gradient_and_comparison.md, composite_gradient_fast.jl)
+
+`composite_gradient_at_fast` adds three composable levers (threaded A-block loop; `h_mode=:fixed`
+skipping the bisection+diagnostic; `h_mode=:cached` reusing a caller-owned per-coordinate bandwidth
+across outer iterates) plus a shared-base-state wiring in `run_d4_optimized_fd.jl`. Only
+`h_mode=:adaptive` (byte-identical to the original) + `threaded=true` + shared base was validated
+live end-to-end this continuation (see live results above); `h_mode=:fixed`/`:cached` are
+equivalence-tested (`test_composite_gradient_fast.jl`, 4/4 PASS) but **not yet run live in KNITRO** —
+flagged as the natural next lever if `:adaptive`'s ~27s-to-converge is still a bottleneck for a future
+continuation's larger-D work.
+
+### User-addendum: moment-construction audit (docs/fullA_moment_construction_audit.md)
+
+Found and fixed ONE genuinely redundant computation: `EK_moments_gammanorm_directgp!` recomputed
+`UPow=U.^(-mu)`/`UσPow=Uσ.^(-mu)` via a full `O(W*D)` broadcast on EVERY call despite `mu`/`sigma`
+being PROVABLY fixed for a ctx's entire lifetime in this investigation (never in `free_idx`). Fixed via
+`moments_fast.jl::MuSigmaPowCache` (bit-identical output, 8/8 equivalence points at exactly 0.0 diff),
+giving a real 1.06x-1.41x warmed speedup across D=4/6/8/10 (W=8000) and D=4/W=80000. Also confirmed
+draw-chunk threading (`Threads.@threads` over `Th=nthreads()` draw chunks) already exists in
+production and is genuinely active (not dead code) — benchmarked 1/2/4/8/16 threads, plateaus past 2
+threads at this problem size. **NOT YET WIRED** into the live `oracle_fast.jl`/`evaluate_fullA` path or
+`run_d4_optimized_fd.jl` (additive/standalone as of this continuation) — low-priority next step given
+its ~2ms-per-call impact is small relative to Priority 2's ~130ms A-block lever, but free and stacks
+correctly with everything else once wired.
+
+### Priority 3: the fair comparison's bottom line
+
+At a matched ~60s-class wall-clock budget, the fast hard route (`lfix_composite_fast`+SR1) reaches a
+**higher** exact-hard κ (0.172457) in **less** wall time (26.9s) than the smoothed route's own
+previously-reported total (κ=0.171972 after ~80.5s homotopy+polish, numbers REUSED from the unchanged
+prior experiment, not re-run under identical conditions — flagged, see the doc's own caveats section).
+The hard route also has a structural transparency advantage: every `eval_F` call IS a valid exact-hard
+evaluation, while the smoothed route only produces ONE trustworthy exact-hard checkpoint, at the very
+end of its schedule, by design. This reverses the brief edge the smoothed-then-polished candidate held
+at the end of the prior continuation, once Priority 2's engineering fixes are applied to the hard side.
+
+### Immediate next steps for Continuation 6
+
+1. **Priority 4 (not started)**: gamma profile (`profile_Delta(g)`), upper polish from
+   `upper_lfixcomposite_sr1_60s`'s own poll-improved neighbors (none found this continuation --
+   Priority 0's poll found only 1 negligible ~2.5e-9 "improvement," noise), lower-direction completion
+   using `lfix_composite_fast` (should now be tractable in a similar ~25-30s-to-converge budget).
+2. **Wire `moments_fast.jl`'s cache into the live oracle path** (`oracle_fast.jl` or a new
+   `oracle_fast2.jl` mirroring it) — small, low-risk, stacks with everything else.
+3. **Try `h_mode=:cached` live in KNITRO** (equivalence-tested but not yet run against a real outer
+   loop) — the per-coordinate bandwidth barely moves between nearby outer iterates in practice
+   (see `composite_gradient_fast.jl`'s own `slope_ratio` diagnostic across iterates, not yet analyzed
+   quantitatively this continuation), so a revalidate-every-K-iterates policy could plausibly close
+   more of the remaining ~130ms→much-less gap.
+4. **A genuinely apples-to-apples hard-vs-smoothed timing run** (same process conditions, back-to-back,
+   not reusing an older experiment's numbers) if a precise ratio (not just the qualitative "hard route
+   wins here") is needed.
+5. Priority 5 (nested W, D=6 pilot) remains fully unstarted; gated on Priority 4 completing first per
+   the task's own ordering.
+
+## CONTINUATION 4 UPDATE — read this section next (superseded above by Continuation 5 for headline numbers)
 
 Branch `diag/fullA-d4-exact`, worktree `/bbkinghome/edav/gravity_robustness/gravity-fullA-d4`. Commits
 this continuation: `5917add` (Phase 3a: composite gradient), `ed64fb7` (Phase 3b: live driver

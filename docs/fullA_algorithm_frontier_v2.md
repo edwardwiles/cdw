@@ -105,6 +105,26 @@ gradient (`lfix_composite`) beats the historical optimized-value-FD control by +
 13-29x fewer inner CC-dual solves, and modestly beats the best-tuned `delta_fd` variant found here too.
 This is the clearest, most decisive finding of this continuation.
 
+## 4a. CONTINUATION 5 addendum: `lfix_composite_fast` reaches the SAME point, faster
+
+Priority 2's shared-base-state + threaded-A-block levers (`docs/fullA_p2_p3_fast_gradient_and_comparison.md`)
+were validated live at the same 60s budget, same start, same D=4/W=8000/δ=1/upper setup:
+
+| config | best-feasible κ | KNITRO status | outer iters | wall to converge | gradient wall (per-call) | inner solves/grad-call |
+|---|---|---|---|---|---|---|
+| `lfixcomposite_sr1` (this doc's own row, above) | 0.172457 | -103 | 113 | 42.7s | 20.90s (183ms) | 1.00 |
+| **`lfixcomposite_fast_sr1`** | **0.172457 (bit-identical `w`)** | -103 | 113 | **26.9s** | **8.12s (71ms)** | **0.00** |
+| `lfixcomposite_lbfgs` (this doc's own row, above) | 0.172345 | -101 | 60 | 29.4s | -- | 1.00 |
+| **`lfixcomposite_fast_lbfgs`** | **0.172345** (agrees to 4dp) | -101 | 60 | **22.5s** | 6.19s (101ms) | **0.00** |
+
+`h_mode=:adaptive` (the mode used here) is a byte-identical refactor of the original bandwidth
+selection (verified in `test_composite_gradient_fast.jl`), so SR1 takes the IDENTICAL optimization
+path and lands on the identical point — the entire 1.59x wall-clock improvement is pure engineering
+(shared base state removes 1 inner solve/moment-build per gradient call; threading parallelizes the
+15-coordinate A-block loop), not a different search trajectory. This is now the recommended
+`lfix_composite` configuration going forward; the un-suffixed `lfix_composite` rows above remain the
+historical control.
+
 ## 5. What this does and does not establish
 
 - This is ONE wall-clock budget (60s), ONE starting point, ONE direction (upper). The task's full
