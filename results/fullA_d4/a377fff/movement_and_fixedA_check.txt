@@ -1,0 +1,6 @@
+max_rel_change_Aod_theta = 0.5942998605138827
+max_rel_change_structural_Aod = 0.1395990930551094
+gp_fixedA_star = 0.9109408705840424  kappa_fixedA = 0.14398052318084642
+gp_found = 0.8930839180420251  kappa_movedA = 0.17176461388430053
+kappa_gain = 0.027784090703454112
+verdict = GENUINE improvement from moving A_od (not just a fixed-A-reachable point)
