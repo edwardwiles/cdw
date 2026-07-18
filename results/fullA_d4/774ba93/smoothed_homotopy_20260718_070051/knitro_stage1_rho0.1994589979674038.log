@@ -1,0 +1,35 @@
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+ERROR: User routine for grad_callback returned -500.
+       Could not evaluate first derivatives at the current point.
+WARNING: Evaluation error in Knitro presolver.
+         No presolve will be applied.
+bar_conic_enable:        0
+hessopt:                 4
+honorbnds:               1
+maxit:                   15
+maxtime_real:            10000
+numthreads:              1
+outlev:                  3
+presolve:                0
+restarts:                0
+WARNING: Option ms_maxsolves was set, but option ms_enable='no'.
+WARNING: Option ms_startptrange was set, but option ms_enable='no'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+ERROR: User routine for grad_callback returned -500.
+       Could not evaluate first derivatives at the current point.
+
+EXIT: Callback function error.
+
+===============================================================================
+
