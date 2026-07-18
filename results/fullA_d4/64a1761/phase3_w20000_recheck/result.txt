@@ -1,0 +1,4 @@
+W=8000 (original):  kappa=0.17176461388430053  Delta=0.9987689551138884  Delta-delta=-0.0012310448861115875  gravity=-4.228388472693467e-18  inner_status=0
+W=20000 (independent draws, SAME theta): kappa=0.17176461388430053  Delta=0.87603578861103  Delta-delta=-0.12396421138896996  gravity=-4.228388472693467e-18  inner_status=0
+STILL FEASIBLE AT W=20000 (same theta, independent draws): true
+NOTE: independent (not nested/common) draws -- see script header for why, given continuation time budget.
