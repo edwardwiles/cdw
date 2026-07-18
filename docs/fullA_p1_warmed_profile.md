@@ -59,6 +59,59 @@ measured cleanly. `ForwardDiff.gradient`'s allocation (~77MB/call) remains high 
 16 free coordinates) -- not addressed this continuation (out of scope for the hard-focused Priority 2
 work), flagged as a secondary lever if the smoothed route is pursued further in a future continuation.
 
+## Part A: exact-hard evaluation, fresh warmed breakdown + the F/G callback redundancy audit
+
+Script: `full_aod_diag/d4_exact/profile_p1a_warmed_and_redundancy.jl`. Raw data:
+`results/fullA_d4/<commit>/profile_p1a_warmed_and_redundancy/{part1_warmed_breakdown.csv,part2_redundancy_audit.txt}`.
+
+### Fresh warmed breakdown at the current canonical candidate (`upper_lfixcomposite_sr1_60s`)
+
+`evaluate_fullA_fast`, N=50 reps, pre-warmed, median TOTAL = **12.84ms** (vs. the ~17ms/~35ms figures
+in `docs/fullA_performance_profile_v2.md` §4/§6, measured at the calibration point on an earlier
+commit -- same rank order of hotspots, slightly cheaper here):
+
+| component | median | % of total |
+|---|---|---|
+| `inner_moment_build` | 7.971ms | 69.2% |
+| `winner_compute` | 1.971ms | 14.8% |
+| `inner_knitro_dual_solve` (inclusive) | 0.378ms | 2.6% |
+| `inner_dual_fg_callback` (nested) | 0.181ms | 1.2% |
+| everything else (KKT/moment-resid/primal-weight/divergence/moments_reuse/gravity/reconstruct) | ≤0.17ms each | ≤1.1% each |
+
+`inner_moment_build` remains the dominant, structurally-unremovable cost, confirming
+`fullA_performance_profile_v2.md`'s §9 conclusion still holds at the new candidate/commit.
+
+### The F+G callback redundancy audit (task's explicit Priority 1A/2.3 requirement)
+
+Measured directly, not assumed, using the ACTUAL functions `run_d4_optimized_fd.jl`'s `cb_F!`/`cb_G!`
+call (`evaluate_fullA` for F, `composite_gradient_at` for G under `D4X_GRADIENT_METHOD=lfix_composite`),
+warmed, N=30 reps, at `upper_lfixcomposite_sr1_60s`:
+
+| call pattern | warmed median | inner solves/call |
+|---|---|---|
+| `eval_F` alone (`evaluate_fullA`) | 21.3ms | 1.00 |
+| `composite_gradient_at` alone, **UNSHARED base (current wiring)** | **141.0ms** | 1.00 |
+| cb_F!+cb_G! sequence, UNSHARED (as currently wired in `run_d4_optimized_fd.jl`) | 159.5ms | 2.00 |
+| cb_F!+cb_G! sequence, **SHARED base (the fix)** | 148.6ms | 1.00 |
+| **savings from sharing** | **10.9ms (6.8%)** | 1 fewer inner solve/call |
+
+Equivalence check: `max|g_unshared - g_shared| = 0.0` exactly (sharing the base state changes nothing
+mathematically, as it must -- `composite_gradient_at` already accepted an optional `base` kwarg for
+exactly this, just never wired up in the live driver).
+
+**Finding, precise and load-bearing for Priority 2's design**: the redundant base-state solve
+`eval_grad_dispatch` currently pays IS real (confirmed, not hypothesized) but small -- only **11ms
+(6.8%)** of the live composite-gradient callback's cost. The dominant cost is `composite_gradient_at`
+ALONE: **141ms**, of which only ~10-12ms is its own (shared-away-able) inner solve -- **the other
+~130ms is inside the per-coordinate bandwidth-selection + adaptive-h FD loop itself** (15 A-block
+coordinates, `select_bandwidth` + two `a_block_fd_component` calls each), run serially with no
+threading and no bandwidth caching across nearby outer points. This number (141ms) reproduces the
+continuation prompt's documented 0.14-0.18s live-callback range exactly, and now localizes it: the
+base-state-sharing fix (Priority 2 item 3) is worth implementing (it's free, correct, and stacks with
+everything else) but is NOT the primary lever -- the A-block loop itself (Priority 2 items 1-2:
+threading + bandwidth caching) is where the ~130ms actually goes. See Part B below for a component-
+level breakdown of that loop.
+
 ### What this changes about prior claims
 
 - `fullA_smoothed_consistent_experiment.md`'s "Gradient benchmark" section (`3.147s`,

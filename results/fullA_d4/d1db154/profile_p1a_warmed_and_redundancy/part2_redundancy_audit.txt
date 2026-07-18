@@ -1,0 +1,7 @@
+eval_F alone (warmed median ms): 21.3125555  inner_solves/call: 1.0
+composite_gradient_at alone, UNSHARED (ms): 141.01740099999998  inner_solves/call: 1.0
+F+G sequence UNSHARED (ms): 159.4881845  inner_solves/call: 2.0
+F+G sequence SHARED (ms): 148.5724615  inner_solves/call: 1.0
+savings_ms: 10.91572299999999
+savings_pct: 6.844220488320869
+max_abs_gradient_diff_shared_vs_unshared: 0.0
