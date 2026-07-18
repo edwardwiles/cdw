@@ -70,5 +70,15 @@ end
 w_low = [0.9935715170663789, -0.14329335035836313, -0.282902177899273, -0.3558713414458916, -0.020237525450975312, 0.40434904269459543, 0.8961983696609168, 0.3146203506836819, 0.6385391937801699, 0.25485162740256434, 0.04641952506696054, 0.2546749283154236, 0.7202823581899669, 1.0948019663930175, 0.5314878884720499, 1.0693627886900385]
 report("lower_stalled (maxit15)", w_low)
 
+# ---- Continuation 5, Priority 0: upper_lfixcomposite_sr1_60s -- new best-feasible incumbent found
+# by the Continuation 4 Phase 4 wall-clock frontier (results/fullA_d4/9e03706/
+# optfd_upper_lfix_composite_sr1_20260718_072835/summary.txt, best_feasible_tracked row).
+# lfix_composite gradient + SR1 Hessian, D4X_MAXTIME_REAL=60, converged (knitro_status=-103) at 42.7s.
+# kappa=0.17245688540655113, beating the prior upper_maxit40 headline (0.17176461388430053) by
+# +0.12*... see docs/fullA_next_handoff.md CONTINUATION 4 UPDATE sec 2. NOT yet externally validated
+# for local stationarity as of this registry entry -- see phaseA_lfixcomposite_sr1_revalidation.jl.
+w_lfixcomposite_sr1 = [0.8926359584642946, 0.16935885803984474, 0.037584283338539824, 0.12216855636925181, 0.1378438125793156, 1.4358658074709083, 0.21920931970835777, 1.2241096016138515, 1.3275683327810723, 0.7077536256287202, 0.5456384492177044, 0.5135010576503252, 0.6960276724200908, 0.9333803510577844, 1.4851233069076464, 0.3113004424480845]
+report("upper_lfixcomposite_sr1_60s (new best)", w_lfixcomposite_sr1)
+
 println()
 println("sequential_reconstructed: PENDING (Phase 5 of this continuation)")

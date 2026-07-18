@@ -1,0 +1,6 @@
+--- lfixcomposite_sr1 ---
+w[1] (gamma_focal_prime) = 0.8926359584642946, theoretical bounds [0.8527667963635073, 1.0] -- GENUINE economic bound (closed-form autarky argument, sequential_methodology.tex sec 4)
+  margin to lower bound = 0.03986916210078728, margin to upper bound = 0.10736404153570545
+z_free (log Aod_theta, non-pivot entries) range: min=0.037584283338539824 max=1.4851233069076464, max|z_free|=1.4851233069076464 at coord 14
+  box bounds used by the solver: [-8,8] in log-space -- numerical safeguard only, not an economic restriction (see phaseA_upper_revalidation.jl step 2 for the full argument, unchanged here).
+  observed |z_free| is 18.564% of the way to the safeguard bound -- nowhere near active.

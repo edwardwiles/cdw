@@ -1,0 +1,2 @@
+max|gravity_value - gravity_value(w0)| across all multi-h probes = 4.119968255444917e-18
+gravity_value(w0) = -3.577867169202165e-18
