@@ -1,0 +1,19 @@
+c10_chunked_hessian_jitcheck.jl starting at 2026-07-19T11:22:49.774
+
+---- WARM-UP PASS (pays first-call JIT for every variant, in this order: chunks first, reference LAST -- reverse of the main sweep) ----
+  warmup chunk_size=5000: 7.730s
+  warmup chunk_size=10000: 4.148s
+  warmup chunk_size=20000: 4.218s
+  warmup chunk_size=40000: 4.195s
+  warmup chunk_size=80000: 4.281s
+  warmup reference: 4.355s
+
+---- TIMED PASS (everything already JIT-compiled for both paths; reference run FIRST this time) ----
+  reference cold (JIT-warm): median=4.128s  reps=[4.129, 4.1, 4.128]
+  chunk_size=  5000 cold (JIT-warm): median=3.954s  speedup=1.044x  reps=[3.93, 4.007, 3.954]
+  chunk_size= 10000 cold (JIT-warm): median=3.968s  speedup=1.041x  reps=[3.996, 3.968, 3.885]
+  chunk_size= 20000 cold (JIT-warm): median=4.129s  speedup=1.000x  reps=[4.129, 4.292, 4.075]
+  chunk_size= 40000 cold (JIT-warm): median=4.278s  speedup=0.965x  reps=[4.322, 4.218, 4.278]
+  chunk_size= 80000 cold (JIT-warm): median=4.231s  speedup=0.976x  reps=[4.218, 4.231, 4.322]
+
+c10_chunked_hessian_jitcheck.jl COMPLETE at 2026-07-19T11:25:30.930

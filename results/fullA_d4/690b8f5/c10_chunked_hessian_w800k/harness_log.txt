@@ -1,0 +1,27 @@
+c10_chunked_hessian_w800k_probe.jl starting at 2026-07-19T11:26:39.091
+
+---- Step 0: analytic + empirical memory probe (BEFORE touching W=800,000) ----
+  analytic chunk buffer footprint: chunk_size=40000 x ncol=402 x 8 bytes = 128.64 MB
+  Base.summarysize of a REAL chunk buffer: 128.64 MB (matches analytic: false)
+  for comparison, obj.H itself at W=800000: 2.59 GB (unchanged by this task's chunking -- Part 2 addresses building this faster, not smaller)
+  baseline's H_copy (the SECOND full-size buffer chunking ELIMINATES): another 2.59 GB avoided
+  Probe PASSED: chunk buffer is 128.64 MB, nowhere near the 25.0 GB safety ceiling. Proceeding.
+
+---- Step 1: d20_real_setup(W=800,000) ----
+  d20_real_setup(W=800000) wall=187.00s  VmHWM=16.97 GB
+  D=20 W=800000 n_inner=402
+
+---- Step 2: ONE baseline (dense) cold+warm solve ----
+  baseline cold: status=0 n_fg=5 n_hess=4 wall=42.491s VmHWM=16.97 GB K=-0.9877618976
+  baseline warm: status=0 n_fg=1 n_hess=0 wall=13.796s
+
+---- Step 3: ONE chunked (chunk_size=40000) cold+warm solve ----
+  chunked cold: status=0(ref 0) n_fg=5(ref 5) n_hess=4(ref 4) wall=37.099s(ref 42.491s) speedup=1.145x VmHWM=16.97 GB |dK|=0.000e+00 max|dx|=1.128e-17
+  chunked warm: status=0(ref 0) n_fg=1(ref 1) n_hess=0(ref 0) wall=13.206s(ref 13.796s) speedup=1.045x
+
+---- Isolated Hessian-callback-only timing at W=800,000 (baseline vs chunked, both JIT-warm from the solves above) ----
+  hessian! (baseline): 5.01404s   hessian_chunked!(cs=40000): 5.71860s   speedup=0.877x   max_rel_diff=6.280e-15
+
+Final VmHWM = 16.97 GB
+
+c10_chunked_hessian_w800k_probe.jl COMPLETE at 2026-07-19T11:31:58.151

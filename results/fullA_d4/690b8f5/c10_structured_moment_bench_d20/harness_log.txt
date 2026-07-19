@@ -1,0 +1,27 @@
+c10_structured_moment_bench_d20.jl starting at 2026-07-19T11:38:08.750  nthreads=20
+d20_real_setup(W=80000) wall = 54.55s  VmHWM=2.61 GB
+D=20 W=80000 ncol=401
+
+==========================================================================================
+Isolated moment-construction timing (median of N reps), + correctness vs dense
+==========================================================================================
+  (a) dense (obj.moments!):              median=1.1925s  reps=[1.2427, 1.2208, 1.1925, 1.184, 1.1802]
+  n_tied (real D=20 data) = 0
+  (b1) structured+ger! (incl winner search): median=0.2896s  reps=[0.2752, 0.2896, 0.3294, 0.2665, 0.3003]
+  (b1) structured+ger! (fill only, cf reused): median=0.0765s  reps=[0.0745, 0.0784, 0.0765, 0.0765, 0.077]
+  (b2) structured+broadcast (fill only, cf reused): median=0.0518s  reps=[0.0521, 0.052, 0.0517, 0.0517, 0.0518]
+  (c) compressed+materialize (incl winner search): median=0.4787s  reps=[0.4906, 0.4753, 0.4638, 0.4804, 0.4787]
+  (c) compressed+materialize (fill only, cf reused): median=0.2592s  reps=[0.2661, 0.2606, 0.2579, 0.2592, 0.2555]
+
+  max|structured - dense|       = 1.137e-13  (bit_identical=false)
+  max|compressed_mat - dense|   = 1.137e-13  (bit_identical=false)
+  max|structured - compressed_mat| = 1.137e-13  (bit_identical=false)
+  max|structured(ger) - structured(bcast)| = 0.000e+00  (bit_identical=true)
+
+  SPEEDUP vs dense (fill-only / winner-search-reused basis): structured=15.586x  compressed_mat=4.600x
+  SPEEDUP vs dense (full, incl own winner search): structured=4.117x  compressed_mat=2.491x
+
+==========================================================================================
+Complete cold inner-solve, each moment-construction as front end (dense-Hessian solve UNCHANGED)
+==========================================================================================
+  (a) dense:                cold status=0 n_fg=6 n_hess=5 wall=6.924s K=-0.9877618976

@@ -1,0 +1,52 @@
+c10_chunked_hessian_bench_d20.jl starting at 2026-07-19T11:18:56.930  commit=690b8f5  nthreads=20
+d20_real_setup(W=80000) wall = 59.16s  VmHWM=2.64 GB
+D=20  W=80000  n_inner (incl zeta)=402  ncol (excl zeta)=401
+
+---- REFERENCE: dense baseline (oracle_fast.jl inner_loop_internal_profiled) ----
+  cold: status=0 n_fg=6 n_hess=5 wall=7.302s K=-0.9877618976
+  warm: status=0 n_fg=1 n_hess=0 wall=1.341s K=-0.9877618976
+  VmHWM after reference solves = 2.64 GB
+  isolated hessian! (baseline): median=0.50366s  alloc(1 call)=0.00 MB
+
+---- chunk_size=5000 ----
+  Hessian correctness: bit_identical=false max|diff|=2.728e-12 max_rel_diff=2.366e-15
+  isolated hessian_chunked!: median=0.48988s  speedup_vs_dense=1.028x  alloc(1 call, zbuf reused)=0.00 MB
+  cold: status=0(ref 0) n_fg=6(ref 6) n_hess=5(ref 5) wall=4.300s(ref 7.302s) speedup=1.698x |dK|=0.000e+00 max|dx|=5.551e-17
+  warm: status=0(ref 0) n_fg=1(ref 1) n_hess=0(ref 0) wall=1.296s(ref 1.341s) speedup=1.035x
+  VmHWM = 2.64 GB
+
+---- chunk_size=10000 ----
+  Hessian correctness: bit_identical=false max|diff|=9.095e-13 max_rel_diff=2.178e-15
+  isolated hessian_chunked!: median=0.47571s  speedup_vs_dense=1.059x  alloc(1 call, zbuf reused)=0.00 MB
+  cold: status=0(ref 0) n_fg=6(ref 6) n_hess=5(ref 5) wall=4.121s(ref 7.302s) speedup=1.772x |dK|=0.000e+00 max|dx|=2.776e-17
+  warm: status=0(ref 0) n_fg=1(ref 1) n_hess=0(ref 0) wall=1.386s(ref 1.341s) speedup=0.968x
+  VmHWM = 2.64 GB
+
+---- chunk_size=20000 ----
+  Hessian correctness: bit_identical=false max|diff|=5.457e-12 max_rel_diff=1.991e-15
+  isolated hessian_chunked!: median=0.48059s  speedup_vs_dense=1.048x  alloc(1 call, zbuf reused)=0.00 MB
+  cold: status=0(ref 0) n_fg=6(ref 6) n_hess=5(ref 5) wall=4.077s(ref 7.302s) speedup=1.791x |dK|=0.000e+00 max|dx|=2.776e-17
+  warm: status=0(ref 0) n_fg=1(ref 1) n_hess=0(ref 0) wall=1.341s(ref 1.341s) speedup=1.000x
+  VmHWM = 2.64 GB
+
+---- chunk_size=40000 ----
+  Hessian correctness: bit_identical=false max|diff|=1.364e-12 max_rel_diff=2.548e-15
+  isolated hessian_chunked!: median=0.48272s  speedup_vs_dense=1.043x  alloc(1 call, zbuf reused)=0.00 MB
+  cold: status=0(ref 0) n_fg=6(ref 6) n_hess=5(ref 5) wall=4.250s(ref 7.302s) speedup=1.718x |dK|=0.000e+00 max|dx|=4.163e-17
+  warm: status=0(ref 0) n_fg=1(ref 1) n_hess=0(ref 0) wall=1.402s(ref 1.341s) speedup=0.957x
+  VmHWM = 2.64 GB
+
+---- chunk_size=80000 ----
+  Hessian correctness: bit_identical=true max|diff|=0.000e+00 max_rel_diff=0.000e+00
+  isolated hessian_chunked!: median=0.53241s  speedup_vs_dense=0.946x  alloc(1 call, zbuf reused)=0.00 MB
+  cold: status=0(ref 0) n_fg=6(ref 6) n_hess=5(ref 5) wall=4.099s(ref 7.302s) speedup=1.781x |dK|=0.000e+00 max|dx|=0.000e+00
+  warm: status=0(ref 0) n_fg=1(ref 1) n_hess=0(ref 0) wall=1.340s(ref 1.341s) speedup=1.001x
+  VmHWM = 2.64 GB
+
+====================================================================================================
+SUMMARY (W=80,000, reference dense: cold=7.302s warm=1.341s hess_only=0.50366s)
+       chunk   bit_id     hess_s |   hess_spd   cold_s |   cold_spd   warm_s |   warm_spd
+
+VmHWM at end of W=80k sweep = 2.64 GB
+
+c10_chunked_hessian_bench_d20.jl (W=80k portion) COMPLETE at 2026-07-19T11:21:46.982
