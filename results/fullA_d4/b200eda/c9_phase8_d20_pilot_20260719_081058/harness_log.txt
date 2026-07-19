@@ -1,0 +1,160 @@
+c9_phase8_d20_pilot.jl starting at 2026-07-19T08:10:58.894  commit=b200eda  nthreads=20
+Safety checks passed: needs_outer_moment_jacobian=false default present; ReentrantLock thread-safety fix present.
+
+==========================================================================================
+PART 0: memory sanity probe
+==========================================================================================
+d20_real_setup probe wall=55.8s  VmHWM=2.66 GB
+D=20 gp0(calibration)=0.9877618976237339 bounds=(κ_min = 0.0, κ_max = 0.11279224042326097, γp_lo = 0.9307117545219048, γp_hi = 1.0)
+sanity: dense Delta=0.002590861875112205 compressed Delta=0.002590861875112199 diff=6.071532165918825e-18
+PART 0 VmHWM=2.66 GB
+G_UPPER=0.9976395165999713  G_LOWER=0.9778842786474965
+
+==========================================================================================
+BRANCH 1 (upper): PROFILE at g=0.9976395165999713 find_smallest=false
+==========================================================================================
+[upper_profile] warm-cache seed (cold): inner_status=0 Delta=0.2308841490034605
+  [upper_profile F DEBUG 1] norm(zfree-zfree_start)=0.0 zfree[1:3]=[17.757485166041388, 17.757485166041388, 17.757485166041388] warm_status=0 warm_Delta=0.2308841490034605
+  [upper_profile] eval 1 t=1.5s Delta=0.2308841490034605 status=0 cold_retries=0 rejected=0
+  [upper_profile F DEBUG 2] norm(zfree-zfree_start)=0.16900270773697867 zfree[1:3]=[17.760770393223023, 17.75778374592556, 17.758327817024764] warm_status=0 warm_Delta=0.21457303566314562
+  [upper_profile] eval 2 t=16.4s Delta=0.21457303566314562 status=0 cold_retries=0 rejected=0
+  [upper_profile F DEBUG 3] norm(zfree-zfree_start)=0.1600551205721621 zfree[1:3]=[17.760564096001602, 17.75798869265224, 17.759236387257317] warm_status=0 warm_Delta=0.21450876983637945
+  [upper_profile] eval 3 t=24.2s Delta=0.21450876983637945 status=0 cold_retries=0 rejected=0
+  [upper_profile F DEBUG 4] norm(zfree-zfree_start)=20.033997433294118 zfree[1:3]=[17.98714233347127, 17.957053334454343, 18.607270784148593] warm_status=-300 warm_Delta=NaN
+  [upper_profile F DEBUG 4] cold retry: status=-300 Delta=NaN
+  [upper_profile F DEBUG 5] norm(zfree-zfree_start)=10.047056056349458 zfree[1:3]=[17.873853214736435, 17.857521013553292, 18.183253585702953] warm_status=-300 warm_Delta=NaN
+  [upper_profile F DEBUG 5] cold retry: status=-300 Delta=NaN
+  [upper_profile F DEBUG 6] norm(zfree-zfree_start)=5.0544016975825 zfree[1:3]=[17.81720865536902, 17.807754853102765, 17.971244986480137] warm_status=0 warm_Delta=5.313582147104514
+  [upper_profile] eval 4 t=70.2s Delta=5.313582147104514 status=0 cold_retries=2 rejected=2
+  [upper_profile F DEBUG 7] norm(zfree-zfree_start)=2.559672260480453 zfree[1:3]=[17.78888637568531, 17.782871772877503, 17.865240686868727] warm_status=0 warm_Delta=0.5637151603585451
+  [upper_profile] eval 5 t=75.8s Delta=0.5637151603585451 status=0 cold_retries=2 rejected=2
+  [upper_profile F DEBUG 8] norm(zfree-zfree_start)=1.31536158958183 zfree[1:3]=[17.774725235843455, 17.770430232764873, 17.81223853706302] warm_status=0 warm_Delta=0.2741541005729907
+  [upper_profile] eval 10 t=108.4s Delta=0.20216260893035332 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 20 t=174.5s Delta=0.19501116619088266 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 30 t=226.8s Delta=0.1941104573205229 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 40 t=268.2s Delta=0.1929825264221822 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 50 t=308.4s Delta=0.19298944107425678 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 60 t=351.2s Delta=0.19299546425548303 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 70 t=386.7s Delta=0.19299704279803104 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 80 t=431.6s Delta=0.1929970585557576 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 90 t=464.0s Delta=0.1929166330591366 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 100 t=501.6s Delta=0.19291663303225948 status=0 cold_retries=2 rejected=2
+  [upper_profile] eval 110 t=536.9s Delta=0.19299706205639344 status=0 cold_retries=2 rejected=2
+[upper_profile] PROFILE DONE: status=-101 wall_ext=566.1s n_eval=119 n_grad_calls=28 grad_wall_total=101.9s cache_hits=6783 cache_misses=4389 invalidations=10
+  best: Delta=0.19291663303052292 gravity=3.9871534893154424e-18 kkt=2.5420262894648715e-12 found_at_eval=119 t=563.1s
+VmHWM after profile1 = 4.09 GB
+
+==========================================================================================
+BRANCH 1 (upper): POLISH warm-started from profile1
+==========================================================================================
+[upper_polish] polish start point: inner_status=-101 Delta=0.19291663303052362 g_start=0.9976395165999713
+  [upper_polish] eval 1 t=4.7s gp=0.9976395165999713 Delta=0.1929166330305236 status=0 cold_retries=0 rejected=0
+  [upper_polish] eval 2 t=13.5s gp=0.9977408209208428 Delta=0.20166330924078063 status=0 cold_retries=0 rejected=0
+  [upper_polish] eval 3 t=64.3s gp=0.9988416283227767 Delta=0.36820520449902405 status=0 cold_retries=1 rejected=1
+  [upper_polish] eval 4 t=125.1s gp=0.9994202907683633 Delta=0.6786942831093745 status=0 cold_retries=2 rejected=2
+  [upper_polish] eval 5 t=136.4s gp=0.9997430484720489 Delta=1.6110569083614057 status=-100 cold_retries=2 rejected=2
+  [upper_polish] eval 10 t=168.5s gp=0.9995989144473617 Delta=0.9877200263641149 status=0 cold_retries=2 rejected=2
+  [upper_polish] eval 20 t=250.5s gp=0.9996118669020737 Delta=1.00250063449919 status=0 cold_retries=2 rejected=2
+  [upper_polish] eval 30 t=338.4s gp=0.9995998712690876 Delta=0.9940676970462881 status=0 cold_retries=2 rejected=2
+  [upper_polish] eval 40 t=403.5s gp=0.9996127900514892 Delta=1.0329296814008235 status=0 cold_retries=2 rejected=2
+[upper_polish] POLISH DONE: status=-401 wall_ext=483.5s n_eval=49 n_grad_calls=14 grad_wall_total=43.3s
+  best_feasible: gp=0.9996143293685681 kappa=0.0006427017478249919 Delta=0.9976929835863543 Delta-delta=-0.002307016413645724 gravity=5.667937907211096e-18 kkt=1.6880335629299026e-12 found_at_eval=44 t=435.9s
+  COLD RECHECK (dense evaluate_fullA): inner_status=0 Delta=0.9976929835863457 (matches: true)
+VmHWM after polish1 = 4.85 GB
+BRANCH 1 total wall = 1109.2s
+
+==========================================================================================
+BRANCH 2 (lower): PROFILE at g=0.9778842786474965 find_smallest=true
+==========================================================================================
+[lower_profile] warm-cache seed (cold): inner_status=0 Delta=0.1296445841730066
+  [lower_profile F DEBUG 1] norm(zfree-zfree_start)=0.0 zfree[1:3]=[17.757485166041388, 17.757485166041388, 17.757485166041388] warm_status=0 warm_Delta=0.1296445841730066
+  [lower_profile] eval 1 t=1.1s Delta=0.1296445841730066 status=0 cold_retries=0 rejected=0
+  [lower_profile F DEBUG 2] norm(zfree-zfree_start)=0.2676355105150392 zfree[1:3]=[17.724713477046585, 17.758382609779236, 17.757241922332785] warm_status=0 warm_Delta=0.09102856288191301
+  [lower_profile] eval 2 t=9.4s Delta=0.09102856288191301 status=0 cold_retries=0 rejected=0
+  [lower_profile F DEBUG 3] norm(zfree-zfree_start)=20.06042231275922 zfree[1:3]=[14.797740588320572, 17.903809928351752, 17.715694781312916] warm_status=-300 warm_Delta=NaN
+  [lower_profile F DEBUG 3] cold retry: status=-300 Delta=NaN
+  [lower_profile F DEBUG 4] norm(zfree-zfree_start)=10.074526592667683 zfree[1:3]=[16.26122703268358, 17.831096269065494, 17.73646835182285] warm_status=-300 warm_Delta=NaN
+  [lower_profile F DEBUG 4] cold retry: status=-300 Delta=NaN
+  [lower_profile F DEBUG 5] norm(zfree-zfree_start)=5.083931295407961 zfree[1:3]=[16.99297025486508, 17.794739439422365, 17.746855137077816] warm_status=-300 warm_Delta=NaN
+  [lower_profile F DEBUG 5] cold retry: status=-300 Delta=NaN
+  [lower_profile F DEBUG 6] norm(zfree-zfree_start)=2.5931868601121963 zfree[1:3]=[17.358841865955835, 17.7765610246008, 17.752048529705302] warm_status=0 warm_Delta=4.049756060866539
+  [lower_profile] eval 3 t=28.5s Delta=4.049756060866539 status=0 cold_retries=3 rejected=3
+  [lower_profile F DEBUG 7] norm(zfree-zfree_start)=1.3562926229149825 zfree[1:3]=[17.541777671501208, 17.767471817190017, 17.754645226019043] warm_status=0 warm_Delta=0.5778750892575293
+  [lower_profile] eval 4 t=33.9s Delta=0.5778750892575293 status=0 cold_retries=3 rejected=3
+  [lower_profile F DEBUG 8] norm(zfree-zfree_start)=0.7522837132565894 zfree[1:3]=[17.633245574273896, 17.762927213484627, 17.755943574175912] warm_status=0 warm_Delta=0.17955722428864754
+  [lower_profile] eval 5 t=38.3s Delta=0.17955722428864754 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 10 t=68.2s Delta=0.07631538827983451 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 20 t=129.7s Delta=0.06712803081912726 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 30 t=189.5s Delta=0.06368623388186509 status=-101 cold_retries=3 rejected=3
+  [lower_profile] eval 40 t=255.3s Delta=0.5442474910591752 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 50 t=311.0s Delta=0.05645166352651666 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 60 t=370.4s Delta=0.07130390244869259 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 70 t=418.9s Delta=0.055082514458462045 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 80 t=453.0s Delta=0.05458193074898919 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 90 t=485.1s Delta=0.054590143540322544 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 100 t=518.6s Delta=0.054590132347922746 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 110 t=548.1s Delta=0.05459014189338497 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 120 t=579.6s Delta=0.054590144279734375 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 130 t=609.2s Delta=0.05459014487566636 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 140 t=641.0s Delta=0.054590144878008166 status=0 cold_retries=3 rejected=3
+  [lower_profile] eval 150 t=667.5s Delta=0.05459014487938098 status=0 cold_retries=3 rejected=3
+[lower_profile] PROFILE DONE: status=-101 wall_ext=676.6s n_eval=152 n_grad_calls=50 grad_wall_total=181.7s cache_hits=5187 cache_misses=14763 invalidations=36
+  best: Delta=0.05458184524561761 gravity=7.176876280767796e-18 kkt=1.4855705054994673e-12 found_at_eval=152 t=672.5s
+VmHWM after profile2 = 5.46 GB
+
+==========================================================================================
+BRANCH 2 (lower): POLISH warm-started from profile2
+==========================================================================================
+[lower_polish] polish start point: inner_status=0 Delta=0.05458184524561777 g_start=0.9778842786474965
+  [lower_polish] eval 1 t=1.1s gp=0.9778842786474965 Delta=0.05458184524561777 status=0 cold_retries=0 rejected=0
+  [lower_polish] eval 2 t=10.0s gp=0.9670377105431471 Delta=0.4754149571124632 status=0 cold_retries=0 rejected=0
+  [lower_polish] eval 3 t=16.9s gp=0.9660687097493386 Delta=0.5807282186374003 status=0 cold_retries=0 rejected=0
+  [lower_polish] eval 4 t=26.2s gp=0.9602311021156378 Delta=0.8327860237894139 status=0 cold_retries=0 rejected=0
+  [lower_polish] eval 5 t=34.7s gp=0.958108460317012 Delta=1.0661746530275662 status=0 cold_retries=0 rejected=0
+  [lower_polish] eval 10 t=71.5s gp=0.9572538940822423 Delta=1.0142931322342699 status=0 cold_retries=0 rejected=0
+  [lower_polish] eval 20 t=174.5s gp=0.9701739952759222 Delta=0.5384771562415647 status=0 cold_retries=0 rejected=0
+  [lower_polish] eval 30 t=299.4s gp=0.9560868674623104 Delta=1.0060425679985703 status=0 cold_retries=3 rejected=3
+  [lower_polish] eval 40 t=359.6s gp=0.9558469404405261 Delta=1.000239194492218 status=0 cold_retries=3 rejected=3
+  [lower_polish] eval 50 t=398.8s gp=0.9557618453695537 Delta=1.0009268428382743 status=0 cold_retries=3 rejected=3
+  [lower_polish] eval 60 t=448.5s gp=0.9568006405150029 Delta=0.9133349191719774 status=0 cold_retries=3 rejected=3
+[lower_polish] POLISH DONE: status=-401 wall_ext=462.5s n_eval=63 n_grad_calls=31 grad_wall_total=111.9s
+  best_feasible: gp=0.9557005124111125 kappa=0.0727367850163042 Delta=0.9998833203676407 Delta-delta=-0.00011667963235928447 gravity=7.735240399597831e-18 kkt=1.4671839798641173e-12 found_at_eval=58 t=433.7s
+  COLD RECHECK (dense evaluate_fullA): inner_status=0 Delta=0.999883320367641 (matches: true)
+VmHWM after polish2 = 6.34 GB
+BRANCH 2 total wall = 1188.9s
+
+==========================================================================================
+DIRECTIONAL SECANT DIAGNOSTICS (5 dirs each, h=0.02)
+==========================================================================================
+
+-- profile1 (upper, fixed-g) --
+  dir 1: status+=0 status-=0 secant=-0.003073399698831636 pred=-0.0004406610416671921 abs_err=0.002632738657164444
+  dir 2: status+=0 status-=0 secant=-0.004929711364706074 pred=-0.00019864418710204842 abs_err=0.0047310671776040255
+  dir 3: status+=0 status-=0 secant=0.013729345044501129 pred=-0.0013178915054902866 abs_err=0.015047236549991416
+  dir 4: status+=0 status-=0 secant=-0.0116061550242047 pred=0.0009960909061322 abs_err=0.012602245930336901
+  dir 5: status+=0 status-=0 secant=-0.01276983297363865 pred=-0.0005267584283936835 abs_err=0.012243074545244967
+
+-- profile2 (lower, fixed-g) --
+  dir 1: status+=0 status-=0 secant=0.0021511393696117473 pred=0.0002134072398820908 abs_err=0.0019377321297296564
+  dir 2: status+=0 status-=0 secant=0.001293368113843181 pred=-0.0002188113955051649 abs_err=0.0015121795093483458
+  dir 3: status+=0 status-=0 secant=-0.0007048116652154032 pred=-0.00025434408673228557 abs_err=0.00045046757848311766
+  dir 4: status+=0 status-=0 secant=-0.0001601473739920936 pred=-0.00030611915952070414 abs_err=0.00014597178552861053
+  dir 5: status+=0 status-=0 secant=0.0017354207492185567 pred=0.0001783963823385407 abs_err=0.001557024366880016
+
+-- polish1 (upper, joint) --
+  dir 1: status+=0 status-=0 secant=-0.7334019200113839 pred=0.02111319587692974 abs_err=0.7545151158883137
+  dir 2: status+=0 status-=0 secant=0.399501029354421 pred=-0.05058436406408502 abs_err=0.450085393418506
+  dir 3: status+=0 status-=0 secant=0.18600192328908638 pred=-0.0118481883823652 abs_err=0.19785011167145158
+  dir 4: status+=0 status-=0 secant=-0.29267641766218544 pred=0.0172125446327601 abs_err=0.30988896229494556
+  dir 5: status+=0 status-=0 secant=0.22262506316171327 pred=0.0016729771436188932 abs_err=0.22095208601809438
+
+-- polish2 (lower, joint) --
+  dir 1: status+=0 status-=0 secant=0.009776645422995833 pred=0.008817520944140797 abs_err=0.0009591244788550359
+  dir 2: status+=0 status-=0 secant=0.010690371052388126 pred=0.0007882822292514186 abs_err=0.009902088823136708
+  dir 3: status+=0 status-=0 secant=0.0055926477101897465 pred=-0.0012420617687898927 abs_err=0.006834709478979639
+  dir 4: status+=0 status-=0 secant=-0.0008082909938478267 pred=-0.006628044924867686 abs_err=0.00581975393101986
+  dir 5: status+=0 status-=0 secant=0.0050923965463162135 pred=0.014952891361156613 abs_err=0.0098604948148404
+
+Wrote summary to /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c9-phase8/results/fullA_d4/b200eda/c9_phase8_d20_pilot_20260719_081058/summary.txt
+FINAL VmHWM = 6.34 GB
+OUTDIR = /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c9-phase8/results/fullA_d4/b200eda/c9_phase8_d20_pilot_20260719_081058
