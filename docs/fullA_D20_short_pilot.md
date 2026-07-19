@@ -273,7 +273,74 @@ still improving at time-limit) if the target application needs the tightest
 possible κ; the current numbers are already real, correct, and immediately
 usable κ values, not placeholders.
 
-## 8. Files
+## 8. Addendum (coordinating session): a label-convention correction, and the fixed-A* comparison the user requested
+
+### 8.1 The "upper"/"lower" labels in §Headline/§1-4 above are swapped relative to this investigation's established convention
+
+This task's driver (`c9_phase8_d20_pilot.jl` line 370) sets
+`evalResult.obj[1] = find_smallest ? w[1] : -w[1]` (minimizing γ' when
+`find_smallest=true`, maximizing γ' when `find_smallest=false`), and its
+"BRANCH 1 (upper)" uses `find_smallest=false` (γ' maximized) while "BRANCH 2
+(lower)" uses `find_smallest=true` (γ' minimized). Since κ is a strictly
+DEcreasing function of γ' (`κ = 1 - γ'^(σ/(σ-1))`, σ/(σ-1)=5/3>0), maximizing
+γ' minimizes κ and vice versa — so this task's "upper" branch is actually the
+SMALL-κ branch (κ=0.00064) and its "lower" branch is the LARGE-κ branch
+(κ=0.0727).
+
+This is the **opposite** of every other κ result in this investigation's
+history, including this session's own D=10 gate (Phase 7:
+`find_smallest = direction == "upper"`, i.e. upper→`find_smallest=true`→γ'
+minimized→κ maximized) and the canonical D=4 registry (`upper_lfixcomposite_sr1_60s`:
+κ=0.1725, γ'=0.8926 — LARGE κ, SMALL γ'; `lower_v2`: κ=0.00439, γ'=0.9974 —
+small κ, large γ'). Confirmed directly by re-reading both scripts' source
+line-by-line, not inferred.
+
+**This is a labeling bug in this task's own driver, not a numerical error** —
+every optimization, cold-recheck, and gravity/KKT check in §1-6 above is
+computed correctly and is fully trustworthy; only the English words "upper"
+and "lower" attached to the two branches are swapped relative to convention.
+Corrected mapping, used in §8.2 below and recommended for anyone citing these
+numbers going forward:
+
+| this doc's label (§1-6) | corrected label | γ'_focal | κ |
+|---|---|---|---|
+| "upper" (`find_smallest=false`) | **lower** (small κ) | 0.999614 | 0.000643 |
+| "lower" (`find_smallest=true`) | **upper** (large κ) | 0.955701 | 0.072737 |
+
+### 8.2 Fixed-A* comparison (user request): is the free-A search doing real work?
+
+Per the standing Continuation 8 precedent (`docs/fullA_d4_section10_dimension_scaling_c8.md`
+§6, the same sanity check run at D=4/6/8/10: hold A_od at its natural-theta
+calibration value, search ONLY γ'_focal via a trivial 1-D KNITRO run, and
+compare the resulting κ to the free-A search's κ) — run fresh at real
+D=20/W=80,000 in `c9_fixedA_pilot_d20_real.jl` (direct adaptation of
+`c8_fixedA_pilot.jl`, same `find_smallest = direction == "upper"` convention,
+i.e. NOT the swapped convention this task's own driver used — confirmed
+internally consistent with the D=4/D=10 registry per §8.1's cross-check).
+
+| direction (corrected convention) | κ (fixed-A\*) | γ' (fixed-A\*) | κ (free-A, this task, corrected label) | γ' (free-A) | gain from free-A search |
+|---|---|---|---|---|---|
+| **upper** (large κ) | 0.05305 | 0.96782 | **0.07274** | 0.95570 | **+37.1%** |
+| **lower** (small κ) | 0.001352 | 0.99919 | **0.000643** | 0.99961 | **−52.5%** (i.e. 52.5% tighter) |
+
+**The free-A outer loop is doing genuine, substantial work at real D=20**,
+consistent with Continuation 8's D=4/6/8/10 finding (there: +20% to +33% on
+the upper side, growing with D) — here the upper-side gain (+37.1%) continues
+that growth trend cleanly (D=4:+19.8%→D=6:+21.9%→D=8:+23.2%→D=10:+32.5%→D=20:
+**+37.1%**), and the lower-side gain (−52.5%, a MUCH larger swing than D=10's
+−28.5%) is the largest free-A improvement found at any dimension in this
+investigation to date. This is strong evidence the free-A search is not
+"staying basically at the starting point" — it is finding meaningfully
+different, better A_od configurations than the naive fixed-A gamma-only
+search, at the largest scale this investigation has ever tested.
+
+Fixed-A\* driver: `full_aod_diag/d4_exact/c9_fixedA_pilot_d20_real.jl`. Raw
+output: `results/fullA_d4/a1ff74a/d20real_fixedA_pilot_20260719_084531/summary.txt`.
+Upper direction converged cleanly (KNITRO status 0, 110.5s); lower stalled at
+the 120s budget (status -401) but its best-feasible point is comfortably
+interior (Δ−δ=−0.370, not a boundary artifact) and cold-recheck-verified.
+
+## 9. Files
 
 New, all under `full_aod_diag/d4_exact/`: `c9_phase8_d20_pilot.jl` (main
 driver, includes all three bugfixes from §0 with inline explanatory
