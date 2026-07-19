@@ -1,0 +1,4 @@
+config,median_s,reps
+validate_dense_true,7.2474365234375,7.371;7.228;7.218;7.266
+validate_dense_false,5.400635480880737,5.672;5.427;5.374;5.348
+speedup,1.341959950656693,

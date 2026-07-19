@@ -89,7 +89,8 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
         winner_cache_mode::Symbol = :none,
         winner_cache::Union{Nothing,PersistentWinnerCache} = nothing,
         winner_cache_threaded::Bool = false,
-        multi_method::Symbol = :top3)
+        multi_method::Symbol = :top3,
+        validate_dense::Bool = false)
     h_mode in (:adaptive, :fixed, :cached) || error("composite_gradient_at_fast: h_mode must be :adaptive|:fixed|:cached, got $h_mode")
     h_mode == :cached && bandwidth_cache === nothing && error("composite_gradient_at_fast: h_mode=:cached requires a bandwidth_cache Dict")
     winner_cache_mode in (:none, :certificate) || error("composite_gradient_at_fast: winner_cache_mode must be :none|:certificate, got $winner_cache_mode")
@@ -99,7 +100,10 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     local cache
     try
-        cache = build_lfix_base_cache(x_free0, ctx, base)
+        # Continuation 9, Phase 3.2: validate_dense passthrough (default false, matching
+        # build_lfix_base_cache's own new default) -- lets a caller opt into the dense
+        # self-validation rebuild for diagnostic runs without editing this file again.
+        cache = build_lfix_base_cache(x_free0, ctx, base; validate_dense = validate_dense)
     catch e
         e isa TiedWinnerError || rethrow()
         g_fb, meta_fb = full_rebuild_gradient_fallback(x_free0, ctx, pe, base; h = tie_fallback_h)

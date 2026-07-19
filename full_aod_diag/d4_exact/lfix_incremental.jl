@@ -318,17 +318,35 @@ function detect_price_ties(price0::Array{Float64,3}, D::Int, W::Int; tol::Float6
 end
 
 """
-    build_lfix_base_cache(x_free0, ctx, base::BaseDualState) -> LFixBaseCache
+    build_lfix_base_cache(x_free0, ctx, base::BaseDualState; validate_dense::Bool=false) -> LFixBaseCache
 
-Builds the per-destination-contribution cache at the base point. Self-
-validates internally: reconstructs q0 from the cache pieces and asserts it
-matches `-base.ζstar - lambda*'G0[s,1:oci-1]` computed directly (not merely
-assumed to match by construction) -- errors loudly if the closed-form
-derivation above has a sign/indexing bug, rather than silently producing a
-wrong cache. Throws `TiedWinnerError` (see above), NOT the generic error,
-when the failure is a detected exact price tie rather than a derivation bug.
+Builds the per-destination-contribution cache at the base point.
+
+`validate_dense` (Continuation 9, Phase 3.2; default `false`, additive/opt-out
+-- every pre-existing call site keeps working unchanged and now SKIPS the
+dense rebuild by default): when `true`, self-validates internally by doing a
+SECOND, full dense `obj.moments!` rebuild (`Gfull = zeros(W, obj.d)`) purely
+to reconstruct q0 independently and assert it matches
+`-base.ζstar - lambda*'G0[s,1:oci-1]` computed directly (not merely assumed to
+match by construction) -- errors loudly if the closed-form derivation above
+has a sign/indexing bug, rather than silently producing a wrong cache.
+
+Per `docs/compressed_live_integration_report.md` §7 and the W80k
+microbenchmark (`docs/fullA_D20_W80k_microbenchmark.md` §3D), this dense
+rebuild is NOT a dependency of the cache's actual contents -- it is a pure
+self-check that duplicates work the caller's own moment build (dense OR
+compressed) already did, and at D=20/W=80000 it alone costs ~3.5s of every
+~6.4s full-gradient call. Kept as an explicit, cheap-to-enable diagnostic
+(`validate_dense=true`) rather than deleted outright, per the standing
+brief's "keep dense self-validation behind an explicit diagnostic flag, run
+it on D=4/D=8" instruction.
+
+Throws `TiedWinnerError` (see above), NOT the generic error, when the
+failure is a detected exact price tie rather than a derivation bug (the tie
+check itself is always run, regardless of `validate_dense` -- it is O(W*D),
+not the dense O(W*D^2) rebuild this flag guards).
 """
-function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState)
+function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState; validate_dense::Bool = false)
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
@@ -413,18 +431,30 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
     raw_cf0 = constConsσ_bibi ./ Uσ_bi .- denom_cf0
     cf_contrib0 = λ_cf .* (raw_cf0 ./ gammafac .* SW)
 
-    # ---- self-validation: reconstruct q0 from cache, compare against direct computation ----
-    K = zeros(W); Gfull = zeros(W, obj.d)
-    obj.moments!(K, Gfull, base.θ_full0, obj.U, obj)
-    q0_true = [-base.ζstar - dot(λstar, @view(Gfull[s, 1:oci-1])) for s in 1:W]
-    q0_cache = [-base.ζstar - sum(@view(contrib0[s, :])) - cf_contrib0[s] for s in 1:W]
-    maxerr = maximum(abs.(q0_true .- q0_cache))
-    maxerr < 1e-8 || error("build_lfix_base_cache: self-validation FAILED, max|q0_true-q0_cache|=$maxerr -- closed-form derivation has a bug, not a numerical-tolerance issue")
+    # ---- q0 (needed by lfix_from_q/lfix_incremental_at regardless of validate_dense) ----
+    # ALWAYS computed from the cache pieces (contrib0/cf_contrib0) -- this is the cache's
+    # actual, load-bearing output, not the validation. Continuation 9, Phase 3.2: previously
+    # q0_true (the dense-rebuilt version) was stored in the cache and q0_cache was only used
+    # transiently for the error check; both are identical to <1e-8 whenever validation passes
+    # (that IS what the check asserts), so storing q0_cache unconditionally is equivalent and
+    # removes the dense dependency from the field itself.
+    q0 = [-base.ζstar - sum(@view(contrib0[s, :])) - cf_contrib0[s] for s in 1:W]
+
+    # ---- self-validation (OPT-IN, default off -- Continuation 9, Phase 3.2): reconstruct q0
+    # from cache, compare against a SECOND, full dense obj.moments! rebuild. See this function's
+    # docstring for why this is safe to skip by default (a pure self-check, not a dependency). ----
+    if validate_dense
+        K = zeros(W); Gfull = zeros(W, obj.d)
+        obj.moments!(K, Gfull, base.θ_full0, obj.U, obj)
+        q0_true = [-base.ζstar - dot(λstar, @view(Gfull[s, 1:oci-1])) for s in 1:W]
+        maxerr = maximum(abs.(q0_true .- q0))
+        maxerr < 1e-8 || error("build_lfix_base_cache: self-validation FAILED, max|q0_true-q0_cache|=$maxerr -- closed-form derivation has a bug, not a numerical-tolerance issue")
+    end
 
     return LFixBaseCache(D, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, price0, pTσ0,
         winner0, winner_price0, runnerup0, runnerup_price0,
         third0, third_price0, third_pTσ0, contrib0,
-        λstar, base.ζstar, q0_true, wPrime_bi, τPrime_bi, LPrime_bi, Uσ_bi, λ_cf, cf_contrib0)
+        λstar, base.ζstar, q0, wPrime_bi, τPrime_bi, LPrime_bi, Uσ_bi, λ_cf, cf_contrib0)
 end
 
 "gdp used inside hFunctionCounter! for baseIndex: wPrime[bi]*LPrime[bi] (wPrime[bi]==1 always, kept explicit)."

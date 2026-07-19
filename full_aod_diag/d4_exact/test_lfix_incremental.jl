@@ -21,7 +21,11 @@ x_free_from_w(w) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
 function run_point_test(label, w0; hs = (0.02, 0.01, 0.005, 0.001))
     xf0 = x_free_from_w(w0)
     base = solve_base_state(xf0, ctx)
-    cache = build_lfix_base_cache(xf0, ctx, base)
+    # Continuation 9, Phase 3.2: build_lfix_base_cache's dense self-validation is now opt-in
+    # (validate_dense=false by default) -- this test explicitly requests it since its whole
+    # point is to confirm the closed-form derivation, not just the incremental-vs-fixed_dual_L
+    # equivalence checked below.
+    cache = build_lfix_base_cache(xf0, ctx, base; validate_dense = true)
     println("  base cache self-validation PASSED for $label (see build_lfix_base_cache internal check)")
 
     ok = true

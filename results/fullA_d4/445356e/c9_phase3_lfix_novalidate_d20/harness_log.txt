@@ -1,0 +1,19 @@
+c9_phase3_lfix_novalidate_d20_bench.jl starting at 2026-07-18T22:41:05.799  commit=445356e  nthreads=20
+d20_real_setup(W=80000) wall = 57.87s  VmHWM=2.82 GB
+
+Warming up (untimed)...
+Warm-up complete, wall = 17.9s
+
+---- validate_dense=true (old unconditional-dense-rebuild behavior), N=4 ----
+  median=7.247s  reps=[7.371, 7.228, 7.218, 7.266]
+
+---- validate_dense=false (NEW default), N=4 ----
+  median=5.401s  reps=[5.672, 5.427, 5.374, 5.348]
+
+bit_identical(g_true, g_false) = true  max|diff| = 0.0
+
+HEADLINE: validate_dense=true median=7.247s  validate_dense=false median=5.401s  speedup=1.342x
+For reference, docs/fullA_D20_W80k_microbenchmark.md's already-published Part 1C (adaptive+threaded, effectively validate_dense=true since that was unconditional then) = 6.435s
+VmHWM at end of run = 3.94 GB
+
+c9_phase3_lfix_novalidate_d20_bench.jl COMPLETE at 2026-07-18T22:43:22.545
