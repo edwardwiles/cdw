@@ -1,0 +1,20 @@
+c9_phase4_kernels_v2_d20_bench.jl starting at 2026-07-18T23:16:40.132  commit=15ec0cb  nthreads=20
+d20_real_setup(W=80000) wall = 55.68s  VmHWM=2.66 GB
+D=20  ncol=401  W=80000
+D=20 correctness cross-check: dual_contraction maxdiff=0.0  transpose_contraction maxdiff=0.0  BIT-IDENTICAL
+
+---- compressed_dual_contraction: original vs v2, N=30 ----
+  original: median=3.4444ms   v2: median=1.9639ms   speedup=1.754x
+
+---- compressed_transpose_contraction: original vs v2, N=30 ----
+  original: median=3.0558ms   v2: median=3.7914ms   speedup=0.806x
+
+---- compressed_cc_value_grad: original vs v2, N=30 ----
+  original: median=8.4934ms   v2: median=6.8898ms   speedup=1.233x
+
+---- compressed_cc_hvp: original vs v2, N=30 ----
+  original: median=7.0504ms   v2: median=6.5430ms   speedup=1.078x
+
+VmHWM at end of run = 2.66 GB
+
+c9_phase4_kernels_v2_d20_bench.jl COMPLETE at 2026-07-18T23:17:48.378
