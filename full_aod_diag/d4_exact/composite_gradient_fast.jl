@@ -61,6 +61,33 @@
 # ============================================================================
 include(joinpath(@__DIR__, "composite_gradient.jl"))
 include(joinpath(@__DIR__, "winner_certificate.jl"))
+include(joinpath(@__DIR__, "bandwidth_quantile.jl"))
+
+# ----------------------------------------------------------------------------
+# Continuation 9, Phase 5 addition (additive; every existing h_mode/kwarg
+# below is UNCHANGED in meaning/default -- callers that never pass
+# h_mode=:quantile or validate_frac see byte-identical behavior to before this
+# session). Adds:
+#   - h_mode=:quantile: same adaptive-bandwidth CONTRACT as h_mode=:adaptive
+#     (per-coordinate select + h-vs-h/2 diagnostic), but the bandwidth itself
+#     comes from `select_bandwidth_quantile`'s closed-form order-statistic
+#     lookup (bandwidth_quantile.jl) instead of `select_bandwidth`'s
+#     bisection -- see that file's header for the derivation and exact
+#     scope (falls back to bisection on the rare same-destination
+#     two-changed-origin coordinates).
+#   - `validate_frac::Float64=1.0`: for h_mode in (:adaptive,:quantile) only,
+#     the FRACTION of A-block coordinates (a fixed, deterministic periodic
+#     subsample, not random -- reproducible across calls at the same D) that
+#     additionally pay the h-vs-h/2 slope-stability diagnostic (2 extra
+#     `a_block_fd_component` probes). Coordinates outside the subsample still
+#     get their real bandwidth selected and their real gradient FD computed
+#     (this flag NEVER skips work that feeds the returned gradient `g`,
+#     matching composite_gradient.jl's own "diagnostic, reported not used to
+#     override" framing for slope_ratio) -- only the EXTRA validation-only
+#     h/2 probe is skipped for non-sampled coordinates. Default 1.0
+#     reproduces the original "validate every coordinate every call" behavior
+#     exactly.
+# ----------------------------------------------------------------------------
 
 """
     composite_gradient_at_fast(x_free0, ctx, pe; base=nothing, threaded=false,
@@ -90,8 +117,10 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
         winner_cache::Union{Nothing,PersistentWinnerCache} = nothing,
         winner_cache_threaded::Bool = false,
         multi_method::Symbol = :top3,
-        validate_dense::Bool = false)
-    h_mode in (:adaptive, :fixed, :cached) || error("composite_gradient_at_fast: h_mode must be :adaptive|:fixed|:cached, got $h_mode")
+        validate_dense::Bool = false,
+        validate_frac::Float64 = 1.0)
+    h_mode in (:adaptive, :fixed, :cached, :quantile) || error("composite_gradient_at_fast: h_mode must be :adaptive|:fixed|:cached|:quantile, got $h_mode")
+    0.0 <= validate_frac <= 1.0 || error("composite_gradient_at_fast: validate_frac must be in [0,1], got $validate_frac")
     h_mode == :cached && bandwidth_cache === nothing && error("composite_gradient_at_fast: h_mode=:cached requires a bandwidth_cache Dict")
     winner_cache_mode in (:none, :certificate) || error("composite_gradient_at_fast: winner_cache_mode must be :none|:certificate, got $winner_cache_mode")
     winner_cache_mode == :certificate && winner_cache === nothing &&
@@ -117,6 +146,16 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
     g[1] = gamma_component_analytic(cache, base, w0[1])
 
     h_used = zeros(D2); switch_mass = fill(NaN, D2); slope_ratio = fill(NaN, D2); cache_hits = falses(D2)
+    bandwidth_meta = Vector{Any}(undef, D2)   # per-coordinate select_bandwidth(_quantile) meta, :adaptive/:quantile only
+
+    # Continuation 9, Phase 5: deterministic evenly-spaced subsample mask for the
+    # validate_frac-gated h/2 diagnostic (see header comment above for why this is
+    # a fixed periodic pattern, not random, and why it never affects the returned
+    # gradient itself -- only whether the EXTRA validation probe runs).
+    n_coords = D2 - 1   # coordinates 2:D2
+    should_validate(k::Int) = validate_frac >= 1.0 ? true :
+        (validate_frac <= 0.0 ? false :
+         floor(Int, (k - 1) * validate_frac) > floor(Int, (k - 2) * validate_frac))
 
     "One coordinate's worth of work -- called either serially or under Threads.@threads, writes only to its OWN index k of the pre-allocated output arrays (thread-safe by construction, no shared mutable state)."
     function do_coord!(k::Int)
@@ -137,13 +176,22 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
             end
             h_used[k] = h
             g[k] = a_block_fd_component(cache, ctx, pe, w0, k, h; multi_method = multi_method)
-        else   # :adaptive -- byte-for-byte the ORIGINAL composite_gradient_at computation
-            h, m, _ = select_bandwidth(cache, ctx, pe, w0, k; multi_method = multi_method)
-            h_used[k] = h; switch_mass[k] = m
+        elseif h_mode == :adaptive || h_mode == :quantile
+            # :adaptive -- byte-for-byte the ORIGINAL composite_gradient_at computation when
+            # validate_frac==1.0 (the default). :quantile substitutes the closed-form selector
+            # (bandwidth_quantile.jl) for the bisection but is otherwise identical in structure.
+            h, m, selmeta = h_mode == :adaptive ?
+                select_bandwidth(cache, ctx, pe, w0, k; multi_method = multi_method) :
+                select_bandwidth_quantile(cache, ctx, pe, w0, k; multi_method = multi_method)
+            h_used[k] = h; switch_mass[k] = m; bandwidth_meta[k] = selmeta
             g[k] = a_block_fd_component(cache, ctx, pe, w0, k, h; multi_method = multi_method)
-            g_half = a_block_fd_component(cache, ctx, pe, w0, k, h / 2; multi_method = multi_method)
-            denom = max(abs(g[k]), abs(g_half), 1e-12)
-            slope_ratio[k] = abs(g[k] - g_half) / denom
+            if should_validate(k)
+                g_half = a_block_fd_component(cache, ctx, pe, w0, k, h / 2; multi_method = multi_method)
+                denom = max(abs(g[k]), abs(g_half), 1e-12)
+                slope_ratio[k] = abs(g[k] - g_half) / denom
+            end
+        else
+            error("composite_gradient_at_fast: unreachable h_mode=$h_mode")
         end
         return nothing
     end
@@ -173,7 +221,8 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
     return g, (base = base, cache = cache, w0 = w0, h_used = h_used, switch_mass = switch_mass,
                slope_ratio = slope_ratio, winner0 = copy(cache.winner0), gamma_component = g[1],
                h_mode = h_mode, threaded = threaded, cache_hits = cache_hits, tie_fallback = false,
-               winner_cache_mode = winner_cache_mode, winner_cert_stats = winner_cert_stats)
+               winner_cache_mode = winner_cache_mode, winner_cert_stats = winner_cert_stats,
+               validate_frac = validate_frac, bandwidth_meta = bandwidth_meta)
 end
 
 """
