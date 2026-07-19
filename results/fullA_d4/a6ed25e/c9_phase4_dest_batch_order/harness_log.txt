@@ -1,0 +1,15 @@
+c9_phase4_dest_batch_order_bench.jl starting at 2026-07-18T23:24:12.922  commit=a6ed25e
+d20_real_setup(W=80000) wall = 54.96s  VmHWM=2.65 GB
+D=20  D^2=400  n_A_block_coords=399
+first 10 natural-order destinations: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+first 10 dest-sorted-order destinations: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+---- h_mode=:fixed, serial, N=4 ----
+  natural order:      min=16.2412s  mean=16.8109s
+  dest-sorted order:  min=16.3474s  mean=16.5253s
+  speedup(min, natural/dest-sorted) = 0.993x
+
+---- h_mode=:adaptive, serial, N=4 ----
+  natural order:      min=32.6144s  mean=33.2747s
+  dest-sorted order:  min=32.3447s  mean=32.7686s
+  speedup(min, natural/dest-sorted) = 1.008x
