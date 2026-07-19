@@ -148,6 +148,17 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
     h_used = zeros(D2); switch_mass = fill(NaN, D2); slope_ratio = fill(NaN, D2); cache_hits = falses(D2)
     bandwidth_meta = Vector{Any}(undef, D2)   # per-coordinate select_bandwidth(_quantile) meta, :adaptive/:quantile only
 
+    # Continuation 9: fixes a pre-existing thread-safety bug in h_mode=:cached (found by the
+    # Phase 5 bandwidth-optimization task, docs/fullA_D20_bandwidth_optimization_report.md
+    # sec 3F, race_check.jl repro: 3/200 trials corrupted a Dict populated via threaded=true).
+    # A plain Dict is not safe for concurrent haskey/setindex! from Threads.@threads. Guard just
+    # the dict read/write with a lock local to this call (bandwidth_cache is caller-owned but
+    # only ever touched by ONE composite_gradient_at_fast call's own threaded loop at a time, so
+    # a fresh lock per call is sufficient -- no cross-call sharing needed). The expensive
+    # select_bandwidth work on a cache miss stays OUTSIDE the lock, so contention is limited to
+    # a handful of dict-sized operations, not the per-coordinate bandwidth search itself.
+    bandwidth_cache_lock = ReentrantLock()
+
     # Continuation 9, Phase 5: deterministic evenly-spaced subsample mask for the
     # validate_frac-gated h/2 diagnostic (see header comment above for why this is
     # a fixed periodic pattern, not random, and why it never affects the returned
@@ -165,12 +176,18 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
             g[k] = a_block_fd_component(cache, ctx, pe, w0, k, h; multi_method = multi_method)
             # slope_ratio/switch_mass intentionally left NaN -- diagnostic-only, skipped for speed
         elseif h_mode == :cached
-            if haskey(bandwidth_cache, k)
-                h = bandwidth_cache[k]
+            local h, is_hit
+            lock(bandwidth_cache_lock) do
+                is_hit = haskey(bandwidth_cache, k)
+                h = is_hit ? bandwidth_cache[k] : NaN
+            end
+            if is_hit
                 cache_hits[k] = true
             else
                 h, m, _ = select_bandwidth(cache, ctx, pe, w0, k; multi_method = multi_method)
-                bandwidth_cache[k] = h
+                lock(bandwidth_cache_lock) do
+                    bandwidth_cache[k] = h
+                end
                 switch_mass[k] = m
                 cache_hits[k] = false
             end
