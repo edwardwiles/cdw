@@ -1,0 +1,105 @@
+c9_bandwidth_optimization_benchmark.jl starting at 2026-07-18T23:02:00.240  commit=2573f3e  nthreads=20
+
+==========================================================================================
+PART 0: context/setup, W=80000, memory safety check
+==========================================================================================
+d20_real_setup(W=80000) wall = 57.53s   VmHWM = 2.66 GB
+Memory safety check PASSED (VmHWM 2.66 GB, well under the 109GB pre-fix bug's scale).
+D=20  D^2=400  gamma'_focal=0.9877618976237339
+
+Warming up (untimed)...
+Warm-up complete, wall = 49.9s
+Point 1 (calibration): inner_status=0  Delta_dual=0.002590861875112194
+
+==========================================================================================
+PART 1: full 400-coordinate gradient wall-clock, threaded=true, N=4/config
+==========================================================================================
+
+-- h_mode=:adaptive (BASELINE, bisection) --
+  median=5.502s  reps=[5.5, 5.5, 5.48, 5.6]
+
+-- h_mode=:quantile (NEW, closed-form order-statistic) --
+  median=5.112s  reps=[5.15, 5.07, 5.19, 4.86]
+
+-- h_mode=:fixed (h0=0.01, pre-existing) --
+  median=3.024s  reps=[3.02, 3.03, 3.0, 3.07]
+
+-- h_mode=:cached, COLD (empty Dict, every coord a miss -- should ~= :adaptive minus h/2 diagnostic) --
+  median=4.183s  reps=[4.2, 4.22, 4.14, 4.16]
+
+-- h_mode=:cached, WARM (Dict pre-populated from a prior call at the SAME point -- every coord a hit) --
+  median=2.958s  reps=[2.9, 3.01, 2.98, 2.94]  (all cache_hits=false)
+
+-- summary: speedup vs :adaptive baseline --
+  adaptive       median=5.502s   speedup=1.00x
+  quantile       median=5.112s   speedup=1.08x
+  fixed          median=3.024s   speedup=1.82x
+  cached_cold    median=4.183s   speedup=1.32x
+  cached_warm    median=2.958s   speedup=1.86x
+
+==========================================================================================
+PART 2: winner-switch counts / weighted switching mass
+==========================================================================================
+  adaptive  : n_coords_with_mass=399  mean_mass=0.00059  median_mass=0.00017  min=0.00000  max=0.00576
+  quantile  : n_coords_with_mass=399  mean_mass=0.00053  median_mass=0.00017  min=0.00000  max=0.00522
+  h_mode=:quantile fallback-to-bisection coordinates (same-destination collision): 19 / 399
+
+==========================================================================================
+PART 3: per-coordinate A-block gradient agreement, adaptive vs quantile
+==========================================================================================
+  cosine(g_adaptive, g_quantile) [A-block, 399 coords] = 0.998371
+  sign agreement = 0.997   median relerr = 0.000   mean relerr = 0.007
+  (D=4/W=8000 dev test found cosine~0.83, sign-agreement noisy on a few coords -- checking whether the 10x-larger-W here (more draws per target mass fraction) tightens this, per the FD-noise hypothesis.)
+
+==========================================================================================
+PART 4: BandwidthCachePolicy staleness-detection demo (10 simulated outer points)
+==========================================================================================
+  iter  1: step=0.01 invalidated=true  reason=init           cache_hits=  0/399  wall=4.007s
+  iter  2: step=0.01 invalidated=false reason=none           cache_hits=398/399  wall=3.085s
+  iter  3: step=0.01 invalidated=false reason=none           cache_hits=399/399  wall=3.060s
+  iter  4: step=0.01 invalidated=false reason=none           cache_hits=399/399  wall=3.085s
+  iter  5: step=0.01 invalidated=false reason=none           cache_hits=399/399  wall=2.936s
+  iter  6: step=0.01 invalidated=false reason=none           cache_hits=399/399  wall=2.886s
+  iter  7: step=0.50 invalidated=true  reason=move_threshold cache_hits=  0/399  wall=4.000s
+  iter  8: step=0.01 invalidated=false reason=none           cache_hits=399/399  wall=2.978s
+  iter  9: step=0.01 invalidated=false reason=none           cache_hits=398/399  wall=2.885s
+  iter 10: step=0.01 invalidated=false reason=none           cache_hits=399/399  wall=2.956s
+  policy totals: n_invalidations=1  n_hits=3190  n_misses=800
+
+==========================================================================================
+PART 5: directional secant validation (5 random directions, h=0.02)
+==========================================================================================
+  dir 1: status+=0 status-=0  secant=6.381749511906497e-5
+      predicted[adaptive   ] = 9.18428118738774e-5  abs_err=2.8025316754812433e-5
+      predicted[quantile   ] = 0.00017465913824375612  abs_err=0.00011084164312469115
+      predicted[cached_warm] = 9.18428118738774e-5  abs_err=2.8025316754812433e-5
+      predicted[fixed      ] = 2.9404973463820673e-6  abs_err=6.087699777268291e-5
+  dir 2: status+=0 status-=0  secant=0.000740505447278429
+      predicted[adaptive   ] = 0.000609587825750482  abs_err=0.00013091762152794698
+      predicted[quantile   ] = 0.0005483367811060664  abs_err=0.00019216866617236255
+      predicted[cached_warm] = 0.000609587825750482  abs_err=0.00013091762152794698
+      predicted[fixed      ] = 0.0003644260062700529  abs_err=0.00037607944100837606
+  dir 3: status+=0 status-=0  secant=0.0002528314750346026
+      predicted[adaptive   ] = -5.511733675310486e-5  abs_err=0.0003079488117877075
+      predicted[quantile   ] = -5.1460653858102216e-5  abs_err=0.00030429212889270484
+      predicted[cached_warm] = -5.511733675310486e-5  abs_err=0.0003079488117877075
+      predicted[fixed      ] = 0.00019186205225914094  abs_err=6.096942277546166e-5
+  dir 4: status+=0 status-=0  secant=0.0004607459963141148
+      predicted[adaptive   ] = 0.0008541661309604028  abs_err=0.00039342013464628805
+      predicted[quantile   ] = 0.000809980871072349  abs_err=0.0003492348747582342
+      predicted[cached_warm] = 0.0008541661309604028  abs_err=0.00039342013464628805
+      predicted[fixed      ] = 0.0004969238213520254  abs_err=3.617782503791058e-5
+  dir 5: status+=0 status-=0  secant=-0.0005936483619984993
+      predicted[adaptive   ] = -0.0005452238044679656  abs_err=4.842455753053371e-5
+      predicted[quantile   ] = -0.0005924466919685792  abs_err=1.201670029920155e-6
+      predicted[cached_warm] = -0.0005452238044679656  abs_err=4.842455753053371e-5
+      predicted[fixed      ] = -0.00041273011888929065  abs_err=0.00018091824310920867
+
+  5/5 directional secants finite/sane.
+  adaptive     mean_abs_err=0.000182  median_abs_err=0.000131
+  quantile     mean_abs_err=0.000192  median_abs_err=0.000192
+  fixed        mean_abs_err=0.000143  median_abs_err=0.000061
+  cached_warm  mean_abs_err=0.000182  median_abs_err=0.000131
+
+VmHWM at end of run = 5.87 GB
+c9_bandwidth_optimization_benchmark.jl COMPLETE at 2026-07-18T23:07:50.341

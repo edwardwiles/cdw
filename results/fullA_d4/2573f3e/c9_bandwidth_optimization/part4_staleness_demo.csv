@@ -1,0 +1,11 @@
+iter,step,invalidated,reason,cache_hits,wall_s
+1,0.01,true,init,0,4.007263792
+2,0.01,false,none,398,3.085159657
+3,0.01,false,none,399,3.060259583
+4,0.01,false,none,399,3.084706154
+5,0.01,false,none,399,2.936008713
+6,0.01,false,none,399,2.886122698
+7,0.5,true,move_threshold,0,3.999894067
+8,0.01,false,none,399,2.978398937
+9,0.01,false,none,398,2.884924249
+10,0.01,false,none,399,2.955783564
