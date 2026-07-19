@@ -1,0 +1,107 @@
+c9_phase3_compressed_d20_benchmark.jl starting at 2026-07-18T22:35:24.620  commit=445356e  nthreads=20
+
+==========================================================================================
+PART 0: context/setup, W=80000
+==========================================================================================
+d20_real_setup(W=80000) wall = 54.26s
+VmHWM after setup = 2.64 GB
+
+Warming up (untimed, both modes)...
+Warm-up complete, wall = 19.7s  VmHWM=2.64 GB
+Point 1 (calibration) dense: inner_status=0 Delta_dual=0.002590861875112193
+Point 1 (calibration) compressed: inner_status=0 Delta_dual=0.0025908618751121918 fallback_count=0
+abs(Delta_dual diff) = 1.3010426069826053e-18
+winner_hash match: true
+
+==========================================================================================
+PART 1: DENSE mode, Point 1 (calibration)
+==========================================================================================
+
+---- dense, warm-started (N=6) ----
+
+---- dense_warm : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         6      1828.4222
+  inner_moment_build                            6      1203.3438
+  winner_compute                                6       288.9775
+  moments_reuse                                 6       136.5813
+  inner_knitro_dual_solve                       6        56.2479
+  kkt_residual_compute                          6        49.7200
+  moment_resid_compute                          6        48.5613
+  inner_dual_fg_callback                        6        48.3668
+  primal_weight_recovery                        6        24.0308
+  primal_divergence_compute                     6         0.8871
+  gravity_compute                               6         0.0775
+  reconstruct_full                              6         0.0039
+
+---- dense, COLD (warm=false, N=3) ----
+
+---- dense_cold : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         3      4625.2112
+  inner_knitro_dual_solve                       3      2842.1076
+  inner_moment_build                            3      1162.1336
+  inner_dual_hessian_callback                  15       494.5170
+  winner_compute                                3       300.8976
+  moments_reuse                                 3       139.6497
+  inner_dual_fg_callback                       18        53.0016
+  kkt_residual_compute                          3        49.6706
+  moment_resid_compute                          3        47.4783
+  primal_weight_recovery                        3        26.8094
+  primal_divergence_compute                     3         0.8803
+  gravity_compute                               3         0.0850
+  reconstruct_full                              3         0.0038
+  warm_start_reset                              3         0.0008
+
+==========================================================================================
+PART 2: COMPRESSED mode, Point 1 (calibration)
+==========================================================================================
+
+---- compressed, warm-started (N=6) ----
+
+---- compressed_warm : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         6      1061.9199
+  winner_compute_compressed                     6       289.2599
+  materialize_dense_for_postproc                6       262.4310
+  inner_moment_build_compressed                 6       209.8390
+  moments_reuse_compressed                      6       137.7428
+  kkt_residual_compute_compressed               6        49.0625
+  moment_resid_compute_compressed               6        47.9294
+  primal_weight_recovery_compressed             6        26.9875
+  inner_knitro_dual_solve_compressed            6        19.5803
+  inner_dual_fg_callback_compressed             6        12.4315
+  primal_divergence_compute_compressed          6         0.8451
+  gravity_compute_compressed                    6         0.0674
+  reconstruct_full_compressed                   6         0.0037
+
+---- compressed, COLD (warm=false, N=3) ----
+
+---- compressed_cold : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         3      5012.8498
+  inner_knitro_dual_solve_compressed            3      4173.3854
+  inner_dual_hessian_callback_compressed         24       470.7159
+  winner_compute_compressed                     3       307.1942
+  inner_moment_build_compressed                 3       207.8359
+  moments_reuse_compressed                      3       143.4437
+  kkt_residual_compute_compressed               3        49.0991
+  moment_resid_compute_compressed               3        47.7185
+  primal_weight_recovery_compressed             3        27.0370
+  inner_dual_fg_callback_compressed            27        13.2202
+  primal_divergence_compute_compressed          3         0.8916
+  gravity_compute_compressed                    3         0.0764
+  reconstruct_full_compressed                   3         0.0041
+  warm_start_reset_compressed                   3         0.0006
+
+COMPRESSED_FALLBACK_COUNT at end of run = 0
+
+==========================================================================================
+PART 3: headline speedup summary
+==========================================================================================
+  warm TOTAL: dense=1.8159s  compressed=1.0520s  speedup(dense/compressed)=1.726x
+  cold TOTAL: dense=4.6252s  compressed=5.0128s  speedup(dense/compressed)=0.923x
+  warm inner_moment_build: dense=1.2033s  compressed=0.2098s  speedup=5.735x
+VmHWM at end of run = 2.64 GB
+
+c9_phase3_compressed_d20_benchmark.jl COMPLETE at 2026-07-18T22:37:39.337
