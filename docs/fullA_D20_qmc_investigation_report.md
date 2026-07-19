@@ -217,8 +217,33 @@ transfer to the region that matters.
 
 ## 5. Short (maxit=30-capped) continuation from the upper candidate
 
-*(Filled in once `c10_phase7_short_continuation.jl` completes — see
-`results/fullA_d4/.../c10_phase7_short_continuation_*/summary.txt`.)*
+All 4 replicates warm-started from the exact saved upper candidate
+(`gamma'=0.955701`, kappa=0.072737 at seed-888 production draws), joint
+constrained polish (maximize/minimize gamma' subject to Delta_dual<=1),
+capped at `maxit=30` outer iterations (not full convergence — every
+replicate hit `KNITRO status=-410`, the iteration-limit stop, exactly as
+intended; none converged to a `-101`/`-103` code, so these are genuinely
+"a few dozen iterations," not accidental full optimizations). Raw output:
+`results/fullA_d4/d3e225e/c10_phase7_short_continuation_20260719_120146/`.
+
+| replicate | draw type | wall (s) | n_eval | n_grad_calls | final γ' | κ after capped continuation |
+|---|---|---|---|---|---|---|
+| pseudorandom_r1 | pseudorandom | 356.2 | 53 | 31 | 0.954870 | 0.074080 |
+| halton_r1 | halton | 359.4 | 50 | 31 | 0.955270 | 0.073432 |
+| halton_r2 | halton | 467.5 | 57 | 31 | 0.953950 | 0.075565 |
+| sobol_r1 | sobol | 282.1 | 43 | 31 | 0.956022 | 0.072216 |
+
+All 4 replicates move only a small amount from the starting κ=0.072737 within
+their capped 30-iteration budget (as expected — this is deliberately NOT a
+full re-optimization), landing in a tight band **κ∈[0.0722, 0.0756]**, a
+4.6% spread relative to the mean (0.0739). **There is no separation by draw
+type**: the two Halton replicates (0.0734, 0.0756) bracket the pseudorandom
+result (0.0741) from both sides, and the single Sobol replicate (0.0722) is
+the closest of all four to the original production value (0.0727) — the
+opposite of what a systematic QMC bias (as seen at calibration, §3) would
+predict. This is consistent with §3–4's finding that the upper-candidate
+region shows no reliable QMC-vs-MC difference: even after a genuine (if
+short) re-optimization step, draw type does not organize the results.
 
 ## 6. Assessment: does W=80,000 randomized QMC match a larger MC run's precision?
 
@@ -248,6 +273,21 @@ advantage anywhere in this investigation, but it also shows no demonstrated
 harm at the actual decision-relevant point**, only a real, replicated,
 unexplained bias at a diagnostic anchor point (calibration) that this
 investigation does not itself optimize over.
+
+## 6b. Synthesis across §3-5
+
+Three independent lines of evidence at the decision-relevant upper-candidate
+region now agree: (i) Δ_dual itself (§3, ≤4-12% draw-type spread against an
+~8% pseudorandom-seed-noise floor), (ii) the full A-block gradient direction
+(§4, cosine ≥0.9999894 across every draw type, essentially perfect), and
+(iii) κ after a genuine short re-optimization step (§5, 4.6% spread, no
+draw-type ordering). None of the three shows a QMC-vs-MC difference that
+rises above ordinary Monte Carlo noise at this point. The ONLY place a large
+draw-type effect appears anywhere in this investigation is Δ_dual at the
+calibration point (§3-4), where BOTH the value and the gradient direction
+are effectively unidentified by any W=80,000 estimator regardless of draw
+type — a fact about that specific point's proximity to the divergence floor,
+not a QMC-specific problem.
 
 ## 7. Verdict, per this task's explicit instruction
 
