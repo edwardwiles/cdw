@@ -144,6 +144,31 @@ function structured_dense_factual(cf; use_ger::Bool = true)
 end
 
 """
+    materialize_dense_factual_structured!(Gview, cf::CompressedFactual; use_ger=false) -> Gview
+
+Continuation 10, Section 9 (finalize-architecture, Part A #1): drop-in
+replacement for `compressed_moments.jl::materialize_dense_factual!` with the
+IDENTICAL signature `(Gview::AbstractMatrix, cf::CompressedFactual)`, so every
+call site of the old function can swap to this one with no other change.
+Internally calls `structured_coeffs`/`structured_fill_chunk!` (this file) over
+`rows = 1:cf.W` (the full draw range), reproducing the exact same formula via
+the rank-one-fixed-term + winner-scatter decomposition instead of the old
+single nested loop -- see `docs/fullA_D20_structured_moment_report.md` for the
+~4-23x isolated / ~1.32x full-cold-inner-solve speedup and the bit-for-bit
+equivalence check (`c10_structured_moment_verify.jl`). `use_ger=false`
+(broadcast) by default -- that report found broadcast ~30% faster than
+`BLAS.ger!` for this D^2-wide rank-one fill; `use_ger=true` is available and
+produces an identical result if ever preferred.
+"""
+function materialize_dense_factual_structured!(Gview::AbstractMatrix, cf; use_ger::Bool = false)
+    W = cf.W; ncol = cf.oci - 1
+    size(Gview) == (W, ncol) || error("materialize_dense_factual_structured!: size(Gview)=$(size(Gview)) != (W,oci-1)=($W,$ncol)")
+    a, FixedCol = structured_coeffs(cf)
+    structured_fill_chunk!(Gview, cf, a, FixedCol, 1:W; use_ger = use_ger)
+    return Gview
+end
+
+"""
     fill_K_directgp!(Kview, θ_full, ctx)
 
 Fill the objective column K exactly as `EK_moments_gammanorm_directgp!` does
