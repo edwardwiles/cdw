@@ -466,10 +466,10 @@ mip_implications yes
 mip_integer_tol 1e-08
 
 # Specifies absolute stop tolerance for sufficiently small integrality gap.
-mip_integral_gap_abs 1e-06
+mip_opt_gap_abs 1e-06
 
 # Specifies relative stop tolerance for sufficiently small integrality gap.
-mip_integral_gap_rel 1e-06
+mip_opt_gap_rel 1e-06
 
 # How to handle integer variables by default.
 #   none   = 0 = no special treatment
