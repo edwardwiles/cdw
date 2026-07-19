@@ -1,0 +1,7 @@
+c10_stratmarg_screen_sweep.jl starting 2026-07-19T12:47:50.293 commit=97cdd80 nthreads=20
+
+==========================================================================================
+Building reference structural context (W=80000, production draws)
+==========================================================================================
+d20_real_setup(W=80000) wall=39.1s
+Calibration: gp0=0.9877618976237339 norm(zfree0)=315.4691125394215
