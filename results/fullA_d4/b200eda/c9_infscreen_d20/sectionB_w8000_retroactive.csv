@@ -1,0 +1,5 @@
+point,pairwise_infeasible,winner_scan_feasible,n_zero_win_positive_share_pairs,n_positive_share_pairs,real_inner_status,real_Delta_dual,real_wall_s
+calibration_W8000,true,false,5,400,-300,NaN,9.278679132461548
+gravity_tangent_W8000,true,false,5,400,-300,NaN,0.31891798973083496
+upper_branch_W8000,true,false,5,400,-300,NaN,0.3119468688964844
+lower_branch_W8000,true,false,5,400,-300,NaN,0.30913710594177246

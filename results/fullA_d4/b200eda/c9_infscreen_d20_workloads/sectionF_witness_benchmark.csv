@@ -1,0 +1,2 @@
+D,W,build_wall_s,mem_est_GB,n_queries,query_median_us,query_mean_us,candidate_size_median,frac_resolved_lt_W,full_scan_ms,witness_allpairs_ms,breakeven_outer_points
+20,80000,2.471297025680542,0.3648,400,15.020370483398438,138.57722282409668,293.5,1.0,302.901867,6.008148193359375,8.323844086745519
