@@ -64,6 +64,7 @@ include(joinpath(@__DIR__, "gravity_elimination.jl"))
 include(joinpath(@__DIR__, "three_way_derivatives.jl"))
 include(joinpath(@__DIR__, "lfix_incremental.jl"))
 include(joinpath(@__DIR__, "compressed_moments.jl"))
+include(joinpath(@__DIR__, "structured_moment_build.jl"))   # Continuation 10 Section 9: structured dense-materialize, used by compressed_live.jl / infeasibility_screen.jl
 include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
 include(joinpath(@__DIR__, "compressed_live.jl"))

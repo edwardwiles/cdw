@@ -770,7 +770,11 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
 
     if !st.dense_materialized
         ncolI = st.cf.oci - 1
-        materialize_dense_factual!(@view(obj.H[:, 3:2+ncolI]), st.cf)
+        # Continuation 10 Section 9: structured (rank-one + winner-scatter) construction
+        # replaces the generic materialize_dense_factual! here -- same swap as
+        # compressed_live.jl's Hessian callback, kept consistent
+        # (docs/fullA_D20_structured_moment_report.md).
+        materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
         fill_gravity_column!(obj, st.grav_raw)
         st.dense_materialized = true
     end
@@ -789,17 +793,9 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
     mean_m_resid = abs(sum(m_weights) / W - 1.0)
     ζstar = inner_x[1]; λstar = inner_x[2:end]
     nkkt = min(length(λstar), size(G, 2))
-    max_abs_moment_kkt_resid = begin
-        acc = 0.0
-        @inbounds for j in 1:nkkt
-            s = 0.0
-            for ω in 1:W
-                s += m_weights[ω] * G[ω, j]
-            end
-            acc = max(acc, abs(s / W))
-        end
-        acc
-    end
+    # Continuation 10 Section 9: BLAS-gemv swap (kkt_residual_blas, oracle_fast.jl) --
+    # see docs/fullA_D20_blas_audit_report.md, ~2.1-2.2x.
+    max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
 
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
     Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
@@ -813,14 +809,9 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
     R_mean = R_sum / ctx.D^2
     R_beta = R_sum / sum(ctx.q_tilde .^ 2)
 
-    moment_resid = begin
-        mr = zeros(d)
-        @inbounds for j in 1:d, ω in 1:W
-            mr[j] += G[ω, j]
-        end
-        mr ./= W
-        mr
-    end
+    # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --
+    # see docs/fullA_D20_blas_audit_report.md, ~2.1x.
+    moment_resid = moment_resid_blas(G, d, W)
     max_abs_moment_resid = isempty(moment_resid) ? NaN : maximum(abs.(moment_resid))
 
     winner_hash = hash(wres.winner)   # REUSED, not recomputed -- the screen's own winner IS the answer

@@ -166,7 +166,11 @@ function _callbackEvalH_inner_compressed!(kc, cb, evalRequest, evalResult, userP
     @prof "inner_dual_hessian_callback_compressed" begin
         if !st.dense_materialized
             ncolI = st.cf.oci - 1
-            materialize_dense_factual!(@view(obj.H[:, 3:2+ncolI]), st.cf)
+            # Continuation 10 Section 9: structured (rank-one + winner-scatter) construction
+            # replaces the generic materialize_dense_factual! here -- this IS the actual
+            # Hessian-callback moment-materialization step (docs/fullA_D20_structured_moment_report.md,
+            # ~4-23x isolated / ~1.32x full-cold-inner-solve, bit-identical).
+            materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
             fill_gravity_column!(obj, st.grav_raw)
             st.dense_materialized = true
         end
@@ -355,7 +359,9 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     if !st.dense_materialized
         @prof "materialize_dense_for_postproc" begin
             ncolI = st.cf.oci - 1
-            materialize_dense_factual!(@view(obj.H[:, 3:2+ncolI]), st.cf)
+            # Continuation 10 Section 9: same structured swap as the Hessian callback above,
+            # kept consistent so this (rarely-hit) fallback path can never drift from it.
+            materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
             fill_gravity_column!(obj, st.grav_raw)
             st.dense_materialized = true
         end
@@ -379,17 +385,9 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     mean_m_resid = abs(sum(m_weights) / W - 1.0)
     ζstar = inner_x[1]; λstar = inner_x[2:end]
     nkkt = min(length(λstar), size(G, 2))
-    max_abs_moment_kkt_resid = @prof "kkt_residual_compute_compressed" begin
-        acc = 0.0
-        @inbounds for j in 1:nkkt
-            s = 0.0
-            for ω in 1:W
-                s += m_weights[ω] * G[ω, j]
-            end
-            acc = max(acc, abs(s / W))
-        end
-        acc
-    end
+    # Continuation 10 Section 9: BLAS-gemv swap (kkt_residual_blas, oracle_fast.jl) --
+    # see docs/fullA_D20_blas_audit_report.md, ~2.1-2.2x.
+    max_abs_moment_kkt_resid = @prof "kkt_residual_compute_compressed" kkt_residual_blas(G, m_weights, nkkt, W)
 
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
     Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
@@ -404,14 +402,9 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
         (gv, lA, rs, rs / ctx.D^2, rs / sum(ctx.q_tilde .^ 2))
     end
 
-    moment_resid = @prof "moment_resid_compute_compressed" begin
-        mr = zeros(d)
-        @inbounds for j in 1:d, ω in 1:W
-            mr[j] += G[ω, j]
-        end
-        mr ./= W
-        mr
-    end
+    # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --
+    # see docs/fullA_D20_blas_audit_report.md, ~2.1x.
+    moment_resid = @prof "moment_resid_compute_compressed" moment_resid_blas(G, d, W)
     max_abs_moment_resid = isempty(moment_resid) ? NaN : maximum(abs.(moment_resid))
 
     winner, price_, gap_ = @prof "winner_compute_compressed" compute_winners_fast(θ_full, ctx)

@@ -60,6 +60,37 @@
 include(joinpath(@__DIR__, "instrumentation.jl"))
 include(joinpath(@__DIR__, "winners_v2.jl"))
 using KNITRO
+using LinearAlgebra: mul!
+
+# ============================================================================
+# Continuation 10, Section 9 (finalize-architecture, Part A #2): BLAS-gemv
+# replacements for the hand-rolled KKT-residual / moment-residual reductions.
+# Validated (docs/fullA_D20_blas_audit_report.md, Section 4 of this
+# continuation's BLAS audit) at ~2.1-2.2x over the nested-loop form on a
+# synthetic W=80,000 x d=402 matrix; used identically by oracle_fast.jl's own
+# dense tail, compressed_live.jl's compressed tail, and
+# infeasibility_screen.jl's screened-compressed tail (the SAME pattern was
+# independently present, hand-rolled, in all three). `transpose(view(...))`
+# is a lazy wrapper -- `transpose(G)*v` dispatches to BLAS gemv (no copy) for
+# dense Float64 arrays, which is exactly the swap the audit benchmarked.
+# ============================================================================
+
+"BLAS-gemv max-abs KKT residual: max_j |sum_ω m_weights[ω]*G[ω,j]| / W for j in 1:nkkt. Equivalent to the hand-rolled nested-loop reduction it replaces (Continuation 10 BLAS audit, ~2.1-2.2x)."
+function kkt_residual_blas(G::AbstractMatrix, m_weights::AbstractVector, nkkt::Int, W::Int)
+    nkkt == 0 && return 0.0
+    s = Vector{Float64}(undef, nkkt)
+    mul!(s, transpose(@view(G[:, 1:nkkt])), m_weights)
+    return maximum(abs, s) / W
+end
+
+"BLAS-gemv moment residual: column-mean of G[:,1:d] (Continuation 10 BLAS audit, ~2.1x). Uses gemv against a vector of ones rather than sum(dims=1) to avoid a full-size temporary."
+function moment_resid_blas(G::AbstractMatrix, d::Int, W::Int)
+    d == 0 && return Float64[]
+    mr = Vector{Float64}(undef, d)
+    mul!(mr, transpose(@view(G[:, 1:d])), ones(W))
+    mr ./= W
+    return mr
+end
 
 # ---- per-inner-solve callback counters (reset at the start of each inner_loop_KNITRO_profiled call) ----
 mutable struct InnerCallCounters
@@ -266,17 +297,9 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
     ζstar = inner_x[1]; λstar = inner_x[2:end]
     # Phase 1C fix: preallocated reduction instead of a column-slicing list comprehension.
     nkkt = min(length(λstar), size(G, 2))
-    max_abs_moment_kkt_resid = @prof "kkt_residual_compute" begin
-        acc = 0.0
-        @inbounds for j in 1:nkkt
-            s = 0.0
-            for ω in 1:W
-                s += m_weights[ω] * G[ω, j]
-            end
-            acc = max(acc, abs(s / W))
-        end
-        acc
-    end
+    # Continuation 10 Section 9: BLAS-gemv swap (kkt_residual_blas, oracle_fast.jl), was a
+    # hand-rolled nested loop -- see docs/fullA_D20_blas_audit_report.md, ~2.1-2.2x.
+    max_abs_moment_kkt_resid = @prof "kkt_residual_compute" kkt_residual_blas(G, m_weights, nkkt, W)
 
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
     Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
@@ -292,14 +315,9 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
     end
 
     # Phase 1C fix: preallocated reduction instead of sum(G,dims=1) (a full temp-array allocation).
-    moment_resid = @prof "moment_resid_compute" begin
-        mr = zeros(d)
-        @inbounds for j in 1:d, ω in 1:W
-            mr[j] += G[ω, j]
-        end
-        mr ./= W
-        mr
-    end
+    # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --
+    # see docs/fullA_D20_blas_audit_report.md, ~2.1x.
+    moment_resid = @prof "moment_resid_compute" moment_resid_blas(G, d, W)
     max_abs_moment_resid = isempty(moment_resid) ? NaN : maximum(abs.(moment_resid))
 
     # Phase 1B fix: allocation-free two-pass min/second-min instead of per-column sort().
