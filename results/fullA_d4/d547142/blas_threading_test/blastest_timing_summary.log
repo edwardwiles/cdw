@@ -1,0 +1,20 @@
+=== D=8, OPENBLAS_NUM_THREADS=1 ===
+
+real	2m39.141s
+user	7m31.140s
+sys	0m11.244s
+=== D=8, OPENBLAS_NUM_THREADS=20 ===
+
+real	2m38.378s
+user	29m30.930s
+sys	0m11.417s
+=== D=10, OPENBLAS_NUM_THREADS=1 ===
+
+real	4m4.758s
+user	11m30.672s
+sys	0m18.331s
+=== D=10, OPENBLAS_NUM_THREADS=20 ===
+
+real	3m51.139s
+user	49m33.264s
+sys	0m24.529s
