@@ -1,0 +1,5 @@
+label,feasible,inner_status,Delta_dual,note
+calibration_natural_theta,true,0,0.00026237076791181784,primary benchmark point (reused from warm-start check above)
+gravity_tangent_perturbation,true,0,0.0002779727070384637,random unit direction in pivot-reduced z-space, step=0.02, exact gravity-tangent
+upper_branch_gp_offset_0.01,true,0,0.21690370705662493,gamma' = gp0*(1+0.01), A at natural theta
+lower_branch_gp_offset_0.01,true,0,0.12689170838791308,gamma' = gp0*(1-0.01), A at natural theta

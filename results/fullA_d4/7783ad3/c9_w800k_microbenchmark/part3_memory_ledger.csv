@@ -1,0 +1,8 @@
+array,shape,theoretical_MB,observed_MB
+ctx.U (Frechet draws),800000 x 20,128.0,128.0
+inner K/G moment matrix (evaluate_fullA, dense),800000 x 402,2572.8,NaN
+winners.jl gap (W x D),800000 x 20,128.0,NaN
+lfix_incremental price/runnerup/third/contrib buffers (6x, W x D each),6 x (800000 x 20),768.0,NaN
+compressed_moments wval (W x D),800000 x 20,128.0,NaN
+n_free (gradient vector length),400,0.0032,NaN
+jac_h (THE BUG, W80k doc sec 0 -- confirmed ABSENT here),800000 x 404 x l_full(~423),1.0937088e6,0.0

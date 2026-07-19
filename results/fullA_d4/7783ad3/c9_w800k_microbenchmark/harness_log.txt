@@ -1,0 +1,188 @@
+c9_w800k_microbenchmark.jl starting at 2026-07-19T06:46:12.409  commit=7783ad3  nthreads=20
+  [VmHWM after process start] 0.54 GB
+
+==========================================================================================
+PART 0: context/setup, W=800000
+==========================================================================================
+  [VmHWM after d20_real_setup(W=800000) cold] 17.03 GB
+D = 20  n_free (1+D^2) = 401  nTotalMoments = 402
+d20_real_setup(W=800000) wall (cold, JIT paid) = 176.75s
+gc_live_bytes: before=95757352  after=13658887544  delta=13563.1 MB
+size(ctx.U) = (800000, 20)  (128.0 MB)
+gamma'_focal (natural theta, calibration) = 0.9877618976237339  bounds = [0.9307117545219048, 1.0]
+pivot chosen: linear index 263 (largest |gravity coeff|)
+
+==========================================================================================
+WARM-START STABILITY CHECK (Phase 9)
+==========================================================================================
+cold evaluate_fullA: wall=68.16s  inner_status=0  Delta_dual=0.00026237076791181784
+  [VmHWM after cold evaluate_fullA] 17.03 GB
+warm evaluate_fullA (immediately after, same point): wall=37.99s  inner_status=0  Delta_dual=0.00026237076791181784
+  [VmHWM after warm evaluate_fullA] 18.17 GB
+warm-start speedup = 1.79x   |Delta diff| = 0.0   BOTH crash-free and finite: true
+
+Warming up (untimed, dense + compressed)...
+Warm-up complete, wall = 217.3s
+  [VmHWM after full warm-up (dense+compressed value, adaptive+fixed+cached gradient)] 20.89 GB
+
+==========================================================================================
+FINDING THE 4 OUTER POINTS
+==========================================================================================
+Point 1 (calibration/natural theta): inner_status=0  Delta_dual=0.00026237076791181784
+Point 2 (gravity-tangent perturbation, |step|=0.02): inner_status=0  Delta_dual=0.0002779727070384637  gravity_raw=-2.336672522140759e-15  wall=56.11s
+  upper-branch try gamma'=gp0*(1+0.01)=0.9976395165999713: inner_status=0  Delta_dual=0.21690370705662493  wall=89.46s
+Point 3 (upper branch): FOUND at offset=0.01
+  lower-branch try gamma'=gp0*(1-0.01)=0.9778842786474965: inner_status=0  Delta_dual=0.12689170838791308  wall=90.83s
+Point 4 (lower branch): FOUND at offset=0.01
+  [VmHWM after 4-point search] 20.89 GB
+
+---- 4-point summary ----
+  calibration_natural_theta: feasible=true inner_status=0 Delta_dual=0.00026237076791181784
+  gravity_tangent_perturbation: feasible=true inner_status=0 Delta_dual=0.0002779727070384637
+  upper_branch_gp_offset_0.01: feasible=true inner_status=0 Delta_dual=0.21690370705662493
+  lower_branch_gp_offset_0.01: feasible=true inner_status=0 Delta_dual=0.12689170838791308
+
+==========================================================================================
+PART 1: FULL breakdown at Point 1 (calibration/natural theta)
+==========================================================================================
+
+---- 1A(dense): evaluate_fullA_fast dense, warm-started (N=4) ----
+
+---- part1a_value_dense_warm : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         4     18862.4731
+  inner_moment_build                            4     12259.9449
+  inner_dual_hessian_callback                   7      5114.9482
+  winner_compute                                4      3221.9765
+  moments_reuse                                 4      1443.4475
+  inner_dual_fg_callback                       11       554.7145
+  inner_knitro_dual_solve                       4       539.3460
+  kkt_residual_compute                          4       496.5388
+  moment_resid_compute                          4       467.1840
+  primal_weight_recovery                        4       278.8783
+  primal_divergence_compute                     4         7.3866
+  gravity_compute                               4         0.0840
+  reconstruct_full                              4         0.0078
+  [VmHWM after 1A dense warm (N=4)] 20.89 GB
+
+---- 1A(dense): evaluate_fullA_fast dense, COLD (warm=false, N=2) ----
+
+---- part1a_value_dense_cold : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         2     41730.8886
+  inner_knitro_dual_solve                       2     23343.6517
+  inner_moment_build                            2     12326.6166
+  inner_dual_hessian_callback                   8      5103.3094
+  winner_compute                                2      3162.5066
+  moments_reuse                                 2      1446.4648
+  inner_dual_fg_callback                       10       576.7515
+  kkt_residual_compute                          2       491.4189
+  moment_resid_compute                          2       467.1510
+  primal_weight_recovery                        2       264.1347
+  primal_divergence_compute                     2         7.5275
+  gravity_compute                               2         0.0677
+  reconstruct_full                              2         0.0037
+  warm_start_reset                              2         0.0004
+  [VmHWM after 1A dense cold (N=2)] 20.89 GB
+
+---- 1A(compressed): evaluate_fullA_fast compressed, warm-started (N=4) ----
+
+---- part1a_value_compressed_warm : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         4     11278.5640
+  inner_dual_hessian_callback_compressed          2      6202.6425
+  winner_compute_compressed                     4      3208.2498
+  materialize_dense_for_postproc                3      2653.9560
+  inner_moment_build_compressed                 4      2441.6049
+  moments_reuse_compressed                      4      1434.5782
+  kkt_residual_compute_compressed               4       496.3029
+  moment_resid_compute_compressed               4       470.8339
+  primal_weight_recovery_compressed             4       237.8768
+  inner_knitro_dual_solve_compressed            4        88.0387
+  inner_dual_fg_callback_compressed             6        79.1066
+  primal_divergence_compute_compressed          4         7.5311
+  gravity_compute_compressed                    4         0.0765
+  reconstruct_full_compressed                   4         0.0049
+  COMPRESSED_FALLBACK_COUNT so far = 0
+  [VmHWM after 1A compressed warm (N=4)] 20.89 GB
+
+---- 1A(compressed): evaluate_fullA_fast compressed, COLD (warm=false, N=2) ----
+
+---- part1a_value_compressed_cold : component breakdown, median ms (N reps) ----
+  component                                     N     median(ms)
+  TOTAL                                         2     35365.8058
+  inner_knitro_dual_solve_compressed            2     27030.3730
+  inner_dual_hessian_callback_compressed         10      4794.0072
+  winner_compute_compressed                     2      3227.9677
+  inner_moment_build_compressed                 2      2429.2781
+  moments_reuse_compressed                      2      1427.5598
+  kkt_residual_compute_compressed               2       490.3928
+  moment_resid_compute_compressed               2       473.4137
+  primal_weight_recovery_compressed             2       237.7052
+  inner_dual_fg_callback_compressed            12        77.5861
+  primal_divergence_compute_compressed          2         7.3618
+  gravity_compute_compressed                    2         0.0844
+  reconstruct_full_compressed                   2         0.0045
+  warm_start_reset_compressed                   2         0.0007
+  [VmHWM after 1A compressed cold (N=2)] 20.89 GB
+
+---- 1A headline: dense vs compressed @ W=800,000 ----
+  warm TOTAL: dense=18.7772s  compressed=11.1444s  speedup(dense/compressed)=1.685x
+  cold TOTAL: dense=41.5230s  compressed=35.3401s  speedup(dense/compressed)=1.175x
+  warm inner_moment_build: dense=12.2599s  compressed=2.4416s  speedup=5.021x
+
+---- 1B: evaluate_fullA (plain oracle, warm-started, N=3) ----
+  total median=39.325s  inner median=12.809s  post median=26.318s
+  [VmHWM after 1B plain oracle (N=3)] 20.89 GB
+
+---- 1C: composite_gradient_at_fast, full 400-coordinate gradient, threaded=true, N=2 per config ----
+  h_mode=adaptive threaded=true  median=48.418s  (N=2, reps=[48.49, 48.34])
+  [VmHWM after 1C gradient h_mode=adaptive] 20.89 GB
+  h_mode=fixed    threaded=true  median=29.458s  (N=2, reps=[29.72, 29.19])
+  [VmHWM after 1C gradient h_mode=fixed] 21.07 GB
+  h_mode=cached   threaded=true  median=28.969s  (N=2, reps=[28.93, 29.01])
+  [VmHWM after 1C gradient h_mode=cached] 21.07 GB
+  NOTE: serial (threaded=false) full-gradient timing intentionally NOT re-measured here
+        (cost-prohibitive at W=800,000 -- the c9_w800k_threadsweep.jl script's own
+        JULIA_NUM_THREADS=1 process run supplies this data point instead.)
+
+---- 1F: optimized-value directional secants, 5 random gravity-tangent directions, h=0.02 ----
+  dir 1: status+=0 status-=0  D+=0.0002730893609965301 D-=0.0002753819044594142  secant=-5.731358657210271e-5  wall+=55.45s wall-=55.68s
+  dir 2: status+=0 status-=0  D+=0.0002681538911753486 D-=0.0002682957882663634  secant=-3.5474272753701535e-6  wall+=58.20s wall-=57.24s
+  dir 3: status+=0 status-=0  D+=0.00026987336173099917 D-=0.00027016935402644527  secant=-7.399807386152457e-6  wall+=54.45s wall-=54.91s
+  dir 4: status+=0 status-=0  D+=0.00027368186475905967 D-=0.00026971564055908246  secant=9.915560499943024e-5  wall+=54.21s wall-=54.40s
+  dir 5: status+=0 status-=0  D+=0.0002672762069914194 D-=0.0002755323683604406  secant=-0.0002064040342255306  wall+=54.49s wall-=54.52s
+  5/5 directional secants finite/sane.
+  [VmHWM after 1F secants (5 dirs)] 21.07 GB
+
+==========================================================================================
+PART 2: lighter checks at points 2-4
+==========================================================================================
+
+---- gravity_tangent_perturbation ----
+  value(warm,dense) median=18.143s  full_grad(cached,threaded) single=28.792s
+  [VmHWM after Part2 point gravity_tangent_perturbation] 21.07 GB
+
+---- upper_branch_gp_offset_0.01 ----
+  value(warm,dense) median=18.211s  full_grad(cached,threaded) single=29.227s
+  [VmHWM after Part2 point upper_branch_gp_offset_0.01] 21.07 GB
+
+---- lower_branch_gp_offset_0.01 ----
+  value(warm,dense) median=18.621s  full_grad(cached,threaded) single=29.244s
+  [VmHWM after Part2 point lower_branch_gp_offset_0.01] 21.07 GB
+
+==========================================================================================
+PART 3: memory ledger
+==========================================================================================
+  array                                                          shape                  theory(MB)   observed(MB)
+  ctx.U (Frechet draws)                                          800000 x 20                128.00         128.00
+  inner K/G moment matrix (evaluate_fullA, dense)                800000 x 402              2572.80            n/a
+  winners.jl gap (W x D)                                         800000 x 20                128.00            n/a
+  lfix_incremental price/runnerup/third/contrib buffers (6x, W x D each) 6 x (800000 x 20)          768.00            n/a
+  compressed_moments wval (W x D)                                800000 x 20                128.00            n/a
+  n_free (gradient vector length)                                400                          0.00            n/a
+  jac_h (THE BUG, W80k doc sec 0 -- confirmed ABSENT here)       800000 x 404 x l_full(~423)     1093708.80           0.00
+VmHWM at end of run = 21065508 KB = 21.07 GB
+Base.gc_live_bytes() at end of run = 12630.7 MB
+
+c9_w800k_microbenchmark.jl COMPLETE at 2026-07-19T07:28:32.286
