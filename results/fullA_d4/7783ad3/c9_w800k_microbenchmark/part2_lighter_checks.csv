@@ -1,0 +1,4 @@
+label,feasible,value_median_s,grad_s
+gravity_tangent_perturbation,true,18.1425194925,28.79216847
+upper_branch_gp_offset_0.01,true,18.211158617000002,29.227095614
+lower_branch_gp_offset_0.01,true,18.6208125715,29.244447156
