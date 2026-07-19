@@ -1,0 +1,70 @@
+c9_phase6_gradval_d20.jl starting at 2026-07-19T06:38:33.129  commit=7783ad3  nthreads=20
+
+==========================================================================================
+STEP 0: context build + memory sanity check
+==========================================================================================
+d20_real_setup(W=80000) wall = 54.74s   VmHWM = 2618728 KB = 2.62 GB
+MEMCHECK PASS (< 5GB). Proceeding.
+D=20 D2=400 n_free=401
+gamma'_focal (natural theta) = 0.9877618976237339  bounds=[0.9307117545219048, 1.0]
+
+==========================================================================================
+STEP 1: the 3 outer points
+==========================================================================================
+Point 1 (calibration): inner_status=0 Delta_dual=0.002590861875112194
+Point 3 (upper, gp0*1.01=0.9976395165999713): inner_status=0 Delta_dual=0.23088414900346932
+Point 4 (lower, gp0*0.99=0.9778842786474965): inner_status=0 Delta_dual=0.1296445841730067
+
+Built 20 deterministic unit directions (seed=20260719) in the 399-dim pivot-reduced A-block.
+
+==========================================================================================
+POINT: calibration
+==========================================================================================
+  Delta_dual(w0) = 0.002590861875112205  wall=8.07s
+  solve_base_state wall=1.53s  inner_status=0
+  fast gradient (h_mode=:cached, threaded=true): wall=8.99s  cache_hits=0/399  gamma_component=0.07599176425946445
+  ||g_Ablock|| = 0.01429974067612065  max|g_Ablock| = 0.005075525317284156
+  [steepest,h=0.020] pred_slope=-1.429974e-02 central=-1.414092e-02 right=-1.028193e-02 left=-1.799992e-02 Delta0=0.002591 Delta+=0.002385 actual_decreases=true
+  [steepest,h=0.005] pred_slope=-1.429974e-02 central=-1.424544e-02 right=-1.492072e-02 left=-1.357017e-02 Delta0=0.002591 Delta+=0.002516 actual_decreases=true
+  SUMMARY point=calibration h=0.020  direction-sample cosine(pred,central)=0.7296  sign_agree=17/20 (85.0%)  mean_abs_err=4.228e-04  median_abs_err=4.039e-04
+  SUMMARY point=calibration h=0.005  direction-sample cosine(pred,central)=0.4148  sign_agree=14/20 (70.0%)  mean_abs_err=6.544e-04  median_abs_err=5.983e-04
+
+==========================================================================================
+POINT: upper_gp1.01
+==========================================================================================
+  Delta_dual(w0) = 0.23088414900346266  wall=8.84s
+  solve_base_state wall=1.34s  inner_status=0
+  fast gradient (h_mode=:cached, threaded=true): wall=4.18s  cache_hits=0/399  gamma_component=97.68006080510662
+  ||g_Ablock|| = 0.16900270773720497  max|g_Ablock| = 0.1555307158878855
+  [steepest,h=0.020] pred_slope=-1.690027e-01 central=-2.284661e-01 right=-1.831188e-01 left=-2.738135e-01 Delta0=0.230884 Delta+=0.227222 actual_decreases=true
+  [steepest,h=0.005] pred_slope=-1.690027e-01 central=-2.077037e-01 right=-2.599452e-01 left=-1.554622e-01 Delta0=0.230884 Delta+=0.229584 actual_decreases=true
+  SUMMARY point=upper_gp1.01 h=0.020  direction-sample cosine(pred,central)=0.9544  sign_agree=19/20 (95.0%)  mean_abs_err=8.789e-03  median_abs_err=8.330e-03
+  SUMMARY point=upper_gp1.01 h=0.005  direction-sample cosine(pred,central)=0.9394  sign_agree=18/20 (90.0%)  mean_abs_err=1.140e-02  median_abs_err=1.002e-02
+
+==========================================================================================
+POINT: lower_gp0.99
+==========================================================================================
+  Delta_dual(w0) = 0.12964458417300687  wall=8.92s
+  solve_base_state wall=1.39s  inner_status=0
+  fast gradient (h_mode=:cached, threaded=true): wall=4.09s  cache_hits=0/399  gamma_component=-29.383788802655843
+  ||g_Ablock|| = 0.2676355105152956  max|g_Ablock| = 0.19061023791964066
+  [steepest,h=0.020] pred_slope=-2.676355e-01 central=-2.751681e-01 right=-2.703126e-01 left=-2.800236e-01 Delta0=0.129645 Delta+=0.124238 actual_decreases=true
+  [steepest,h=0.005] pred_slope=-2.676355e-01 central=-2.679036e-01 right=-2.609350e-01 left=-2.748723e-01 Delta0=0.129645 Delta+=0.128340 actual_decreases=true
+  SUMMARY point=lower_gp0.99 h=0.020  direction-sample cosine(pred,central)=0.9955  sign_agree=19/20 (95.0%)  mean_abs_err=1.274e-03  median_abs_err=1.168e-03
+  SUMMARY point=lower_gp0.99 h=0.005  direction-sample cosine(pred,central)=0.9885  sign_agree=18/20 (90.0%)  mean_abs_err=2.008e-03  median_abs_err=1.661e-03
+
+==========================================================================================
+ALL SUMMARY ROWS
+==========================================================================================
+(point = "calibration", h = 0.02, n_dirs = 20, cosine_pred_vs_central = 0.7295735174825941, sign_agree_frac = 0.85, n_sign_match = 17, n_sign_valid = 20, mean_abs_err = 0.00042275375083282614, median_abs_err = 0.0004039005633387445, norm_g_Ablock = 0.01429974067612065, wall_fast_s = 8.992398023605347, cache_hits = 0, Delta0 = 0.002590861875112205)
+(point = "calibration", h = 0.005, n_dirs = 20, cosine_pred_vs_central = 0.41481001845628396, sign_agree_frac = 0.7, n_sign_match = 14, n_sign_valid = 20, mean_abs_err = 0.0006543700642687174, median_abs_err = 0.0005983247683547738, norm_g_Ablock = 0.01429974067612065, wall_fast_s = 8.992398023605347, cache_hits = 0, Delta0 = 0.002590861875112205)
+(point = "upper_gp1.01", h = 0.02, n_dirs = 20, cosine_pred_vs_central = 0.9543745188598223, sign_agree_frac = 0.95, n_sign_match = 19, n_sign_valid = 20, mean_abs_err = 0.008789024079750777, median_abs_err = 0.008329678213218897, norm_g_Ablock = 0.16900270773720497, wall_fast_s = 4.177235126495361, cache_hits = 0, Delta0 = 0.23088414900346266)
+(point = "upper_gp1.01", h = 0.005, n_dirs = 20, cosine_pred_vs_central = 0.9393555358673127, sign_agree_frac = 0.9, n_sign_match = 18, n_sign_valid = 20, mean_abs_err = 0.011402306025783583, median_abs_err = 0.010019519370660725, norm_g_Ablock = 0.16900270773720497, wall_fast_s = 4.177235126495361, cache_hits = 0, Delta0 = 0.23088414900346266)
+(point = "lower_gp0.99", h = 0.02, n_dirs = 20, cosine_pred_vs_central = 0.9954910905349725, sign_agree_frac = 0.95, n_sign_match = 19, n_sign_valid = 20, mean_abs_err = 0.0012744160375738269, median_abs_err = 0.0011677911514169559, norm_g_Ablock = 0.2676355105152956, wall_fast_s = 4.085347890853882, cache_hits = 0, Delta0 = 0.12964458417300687)
+(point = "lower_gp0.99", h = 0.005, n_dirs = 20, cosine_pred_vs_central = 0.9885091932181167, sign_agree_frac = 0.9, n_sign_match = 18, n_sign_valid = 20, mean_abs_err = 0.0020084067779084806, median_abs_err = 0.0016614923348120042, norm_g_Ablock = 0.2676355105152956, wall_fast_s = 4.085347890853882, cache_hits = 0, Delta0 = 0.12964458417300687)
+
+Wrote: /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c9-phase6/results/fullA_d4/7783ad3/c9_phase6_gradval_d20_20260719_063832/direction_secants.csv
+Wrote: /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c9-phase6/results/fullA_d4/7783ad3/c9_phase6_gradval_d20_20260719_063832/steepest_descent_probe.csv
+Wrote: /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c9-phase6/results/fullA_d4/7783ad3/c9_phase6_gradval_d20_20260719_063832/summary.csv
+Final VmHWM = 5261616 KB = 5.26 GB
+DONE at 2026-07-19T07:08:49.894
