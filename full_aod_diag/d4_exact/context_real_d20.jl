@@ -20,6 +20,7 @@
 # (thetaHat=0) -- both already AD_PARAMS defaults, unchanged.
 # ============================================================================
 include(joinpath(@__DIR__, "context.jl"))   # -> AD_PARAMS, build_ad_context, master_setup etc., CS, d4_exact_setup
+include(joinpath(@__DIR__, "infeasibility_screen.jl"))   # -> precompute_pairwise_M, build_extreme_draw_witness (Continuation 10, Section 5)
 
 const D20_REAL = 20
 
@@ -48,7 +49,8 @@ unchanged on the returned `ctx`.
 function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
-        needs_outer_moment_jacobian::Bool = false)
+        needs_outer_moment_jacobian::Bool = false,
+        build_screen::Bool = true)
     # false is the PRODUCTION default (matches run_fullA_D4_production.jl /
     # run_fullA_D10_production.jl -- neither needs an analytic outer moment
     # Jacobian, both use a ForwardDiff/Method-B gradient path instead), NOT
@@ -98,11 +100,35 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         needs_outer_moment_jacobian = needs_outer_moment_jacobian)
     @assert obj.outer_constr_index == obj.d
 
+    # ---- Continuation 10, Section 5: build the exact infeasibility-screen structures
+    # ONCE here, at context-construction time, per the standing brief's explicit
+    # instruction ("build the exact extreme-draw witness index ONCE during context
+    # setup ... not per-evaluation"). Both structures are draw-free at every
+    # SUBSEQUENT outer point (they depend only on ctx.U/ctx.D, never on theta), so
+    # building them once per ctx and reusing across the whole outer-loop run is
+    # exactly the right amortization boundary -- see docs/fullA_D20_infeasibility_screening_report.md
+    # sec 6 for the (already independently measured) per-scale cost: 2.47s/0.365GB at
+    # W=80,000, 32.5s/3.65GB at W=800,000, both negligible next to a single outer-loop
+    # run (hundreds-to-thousands of evaluations) and both already confirmed
+    # memory-safe against this repo's own 40GB self-imposed kill threshold.
+    # `build_screen=false` is available for callers that do not need the screen
+    # (e.g. a microbenchmark that only cares about context build time) -- default
+    # `true` per this task's "on by default" requirement.
+    screen_pairwise = nothing; screen_witness = nothing
+    t_pairwise = NaN; t_witness = NaN
+    if build_screen
+        ctx_min = (U = U, D = Dact)   # precompute_pairwise_M/build_extreme_draw_witness need only these two fields
+        t_pairwise = @elapsed screen_pairwise = precompute_pairwise_M(ctx_min)
+        t_witness = @elapsed screen_witness = build_extreme_draw_witness(ctx_min)
+    end
+
     return (so = so, pp = pp, D = Dact, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
             θ0_up = θ0_up, θ_lo = θ_lo, θ_hi = θ_hi, l_full = l_full,
             free_idx = free_idx, fixed_idx = fixed_idx, fixed_vals = fixed_vals, m = m,
             Aod_offset = Aod_offset, Aod_free_pos = Aod_free_pos,
             τ = τ, q_tilde = q_tilde, N_obs = N_obs, obj = obj,
             nTotalMoments = nTotalMoments, outer_constr_index = outer_constr_index,
-            bounds = bounds, δ = δ, find_smallest = find_smallest)
+            bounds = bounds, δ = δ, find_smallest = find_smallest,
+            pairwise = screen_pairwise, witness = screen_witness,
+            screen_setup_wall = (pairwise = t_pairwise, witness = t_witness))
 end
