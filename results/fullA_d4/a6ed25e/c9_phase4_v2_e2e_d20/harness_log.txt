@@ -1,0 +1,18 @@
+c9_phase4_v2_e2e_d20_bench.jl starting at 2026-07-18T23:24:29.288  commit=a6ed25e
+d20_real_setup(W=80000) wall = 53.82s  VmHWM=2.63 GB
+
+---- COLD inner solve, N=5 ----
+  original: median=4.4576s  reps=[4.5868, 4.4053, 4.4201, 4.4576, 4.5623]
+  v2:       median=4.5107s  reps=[4.4659, 4.5512, 4.4784, 4.5107, 4.557]
+  speedup(cold) = 0.988x
+
+---- WARM inner solve, N=5 ----
+  original: median=0.2388s  reps=[0.2491, 0.2388, 0.234, 0.2265, 0.2394]
+  v2:       median=0.2176s  reps=[0.2484, 0.2168, 0.2176, 0.2275, 0.2168]
+  speedup(warm) = 1.097x
+
+  correctness: status_orig=0 status_v2=0  |dK_hard|=0.0  max|dx|=0.0  n_fg(orig)=9 n_fg(v2)=9 n_hess(orig)=8 n_hess(v2)=8
+
+VmHWM at end of run = 2.63 GB
+
+c9_phase4_v2_e2e_d20_bench.jl COMPLETE at 2026-07-18T23:26:42.532
