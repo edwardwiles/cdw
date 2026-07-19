@@ -1,23 +1,40 @@
 # Full-A D=20 real-data (W=80,000): removing mandatory dense W-by-moment materialization
 
-Continuation 9, Phase 3. Measured on `demand.mit.edu`, `JULIA_NUM_THREADS=20`,
-`OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, commit `445356e` (base commit
-`090eb68`, this session's changes on top). Real-data context via
-`context_real_d20.jl`'s `d20_real_setup` (France focal, `baseIndex=2`, σ=2.5,
-μ estimated via gravity), same as the W80k microbenchmark
-(`docs/fullA_D20_W80k_microbenchmark.md`, this task's direct evidence base —
-read in full before this task started). Two concrete, evidence-backed targets
-from that document's own findings, both addressed here:
+Continuation 9, Phase 3 (3.1, 3.2, and — added mid-task at the user's
+explicit direction, elevated from optional to required — 3C). Measured on
+`demand.mit.edu`, `JULIA_NUM_THREADS=20`, `OPENBLAS_NUM_THREADS=1`,
+`MKL_NUM_THREADS=1`, commits `445356e` (3.1/3.2) and `2573f3e` (3C). Real-data
+context via `context_real_d20.jl`'s `d20_real_setup` (France focal,
+`baseIndex=2`, σ=2.5, μ estimated via gravity), same as the W80k
+microbenchmark (`docs/fullA_D20_W80k_microbenchmark.md`, this task's direct
+evidence base — read in full before this task started). Three concrete,
+evidence-backed targets, all addressed here:
 
-1. **§3.1**: port `:compressed` moment representation
+1. **§1 (3.1)**: port `:compressed` moment representation
    (`compressed_live.jl`/`oracle_fast.jl`, previously validated only at
    D=4/6/8/10 on synthetic contexts) to the real D=20 context and re-measure.
-2. **§3.2**: `build_lfix_base_cache`'s unconditional dense self-validation
+2. **§2 (3.2)**: `build_lfix_base_cache`'s unconditional dense self-validation
    rebuild (flagged in `docs/compressed_live_integration_report.md` §7 as
    real, undone work) — make it opt-in, default off.
+3. **§3 (3C)**: eliminate the last dense-materialization dependency from the
+   inner CC dual solve itself — the Hessian callback, which even in
+   `:compressed` mode still lazily materializes the full dense
+   `W×(oci-1)` `G` matrix. Three alternatives benchmarked at D=20/W=80,000:
+   quasi-Newton (no Hessian), an exact dense accumulation built from repeated
+   compressed Hessian-vector products, and a genuinely matrix-free HVP-only
+   solve.
 
-**Headline: both targets succeeded cleanly, both memory-safe, both
-correctness-verified before being trusted for timing.**
+**Headline: 3.1 and 3.2 both succeeded cleanly (memory-safe, correctness-
+verified, real speedups). 3C is a genuine mixed result, reported honestly**:
+two of the three dense-Hessian-free options (compressed dense-accumulation,
+matrix-free HVP) converge to the EXACT same optimum as the existing dense-
+Hessian baseline, robustly across perturbed starts — but both are SLOWER in
+wall-clock (2.7x and 4.5x respectively) despite doing asymptotically fewer
+FLOPs, and the third option (quasi-Newton) fails to converge at all at
+D=20's scale within default settings. The existing dense-Hessian compressed
+baseline remains the right default; this task's own evidence does not
+support switching it, but the alternatives are now built, validated, and
+benchmarked rather than untried.
 
 ---
 
@@ -255,29 +272,178 @@ at D=20/W=80,000.
 
 ---
 
-## 3. What this task did NOT cover (explicitly out of scope, not overlooked)
+## 3. Phase 3C — inner second-order method: three ways off the dense Hessian
+
+Added mid-task at the user's explicit direction (elevated from "if time
+permits" to required): compressed_live.jl's FG callback is already
+dense-free (§1 above), but its **Hessian** callback still lazily
+materializes the full dense `W × (oci-1)` `G` matrix once per inner solve
+purely to call the unchanged `hessian!` (`cc_algo/PsiObjectiveBundle.jl`,
+one `O(W·ncol²)` BLAS `gemm!`). Three alternatives, all built on
+`compressed_cc_inner.jl`'s `compressed_cc_value_grad`/`compressed_cc_hvp` —
+**already built in Continuation 8, already validated against the real dense
+bundle by central-FD (`test_compressed_cc_inner.jl`, tol 1e-5) but never
+wired into an actual KNITRO solve before this task**:
+
+- **Option 3 (`:qn`)**: no Hessian callback at all. KNITRO's own dense
+  quasi-Newton approximation (BFGS/SR1/L-BFGS, `hessopt` 2/3/6) drives the
+  solve from the (already dense-free) FG callback alone. New `.opt` files
+  only (`ek_inner_{bfgs,sr1,lbfgs}.opt`); zero new solver code —
+  `inner_loop_KNITRO_compressed` (compressed_live.jl) already skips Hessian
+  registration whenever `hessopt != 1`.
+- **Option 1 (`:denseaccum`)**: KNITRO still gets a dense
+  `(ncol+1)×(ncol+1)` Hessian each call (`hessopt=exact`), but it is built
+  from `(ncol+1)` calls to `compressed_cc_hvp` (one per basis direction),
+  each `O(W·D)` — total `O(W·D·(ncol+1)) = O(W·D³)`, vs the dense path's
+  `O(W·ncol²) = O(W·D⁴)`. **Never touches the `W×(oci-1)` `G` matrix.**
+- **Option 2 (`:hvp`)**: genuinely matrix-free. `hessopt=product` (5) makes
+  KNITRO call the registered Hessian callback **only** in `KN_RC_EVALHV`
+  mode (confirmed from `KNITRO.jl`'s `C_wrapper.jl` `EvalRequest.vec`/
+  `EvalResult.hessVec` fields and `libknitro.jl`'s `KN_RC_EVALHV=7` vs
+  `KN_RC_EVALH=3` codes) — one `compressed_cc_hvp` call per KNITRO-requested
+  direction, `O(W·D)`. The dense `(ncol+1)×(ncol+1)` block is **never
+  assembled, not even implicitly**. Requires the CG-based interior
+  algorithm (`ek_inner_hvp.opt`: `algorithm=cg`) since product Hessians
+  are incompatible with direct/SQP factorization.
+
+New file: `full_aod_diag/d4_exact/compressed_inner_alt_solvers.jl` (all three
+solver-loop wrappers + both new callbacks). No existing file touched beyond
+the new `.opt` files (copies of `full_aod_diag/ek_inner.opt` with `hessopt`/
+`algorithm` changed).
+
+### 3C.1 Correctness first, at D=4
+
+Script: `full_aod_diag/d4_exact/c9_phase3c_correctness_d4.jl`. All three
+options solved from cold, compared against the trusted dense
+`evaluate_fullA` reference at the calibration point:
+
+| variant | status | n_fg | n_hess | \|Δζ\| vs dense | max\|Δλ\| vs dense | verdict |
+|---|---|---|---|---|---|---|
+| qn_bfgs (hessopt=2) | −103 | 85 | 0 | 2.6e-13 | 2.1e-10 | PASS |
+| qn_sr1 (hessopt=3) | 0 | 38 | 0 | 7.7e-14 | 2.3e-12 | PASS |
+| qn_lbfgs (hessopt=6) | −400 | 214 | 0 | 3.6e-07 | 4.0e-05 | CHECK (converges to KNITRO's own looser internal tolerance, not chased further) |
+| **denseaccum** | 0 | 5 | 4 | **6.7e-17** | **1.4e-13** | **PASS, essentially exact** |
+| **hvp** | −100 | 6 | 79 | 3.2e-12 | 1.3e-11 | **PASS** |
+
+**4/5 pass at D=4**, and critically the two genuinely-new pieces
+(`denseaccum`, `hvp`) match the dense reference to near machine precision —
+direct confirmation that `compressed_cc_hvp` (built but never
+KNITRO-integrated before this task) is correct in production use, not just
+in its own standalone FD test.
+
+### 3C.2 D=20/W=80,000 timing + robustness
+
+Script: `full_aod_diag/d4_exact/c9_phase3c_d20_bench.jl`. Isolates the
+**inner solve itself** (`inner_loop_internal_compressed_variant`), not the
+full `evaluate_fullA_fast` pipeline, per this task's "eliminate dense
+materialization from the inner CC dual solve" framing. Reference: the
+existing compressed baseline (`inner_loop_internal_compressed`,
+`hessopt=exact` + lazy one-time dense materialization for the Hessian) —
+cold solve **7.334s**, `n_fg=9, n_hess=8`, `Delta_dual=0.0025908619`
+(matches the calibration value exactly).
+
+| variant | cold wall | n_fg (cold) | n_hess (cold) | warm wall | robustness (2 perturbed starts) | \|Δζ\| vs ref | max\|Δλ\| vs ref |
+|---|---|---|---|---|---|---|---|
+| **REFERENCE** (dense-Hessian compressed baseline) | **7.334s** | 9 | 8 | — | — | — | — |
+| qn_bfgs (hessopt=2) | 3.695s | 326 | 0 | 3.197s | both hit iter-limit, don't converge | 1.4e-05 | 7.5e-02 |
+| qn_sr1 (hessopt=3) | 2.463s | 206 | 0 | 2.401s | both hit iter-limit, don't converge | 1.1e-04 | 1.3e-01 |
+| qn_lbfgs (hessopt=6) | 2.586s | 300 | 0 | 2.776s | both hit iter-limit, don't converge | 2.4e-04 | 1.5e-01 |
+| **denseaccum** | **20.073s** | 8 | 7 | 19.347s | 119.8s / 82.7s, **both converge exactly** | **1.8e-16** | **4.9e-14** |
+| **hvp** (matrix-free) | **32.983s** | 9 | 3015 (HV calls) | 32.981s | 48.3s / 55.0s, **both converge** | 3.2e-13 | 1.6e-10 |
+
+All five variants' cold-solve `Delta_dual` at the calibration point: reference/denseaccum/hvp all land on **0.0025908619** (matching to 10+ digits); the three quasi-Newton variants land on visibly different, non-converged values (0.0025442 / 0.0024638 / 0.0020670) — a clean, large-margin signal that they did not reach the true optimum, consistent with their `status=-400` (iteration-limit) codes and `n_iters=100` (hit the default cap) in every quasi-Newton run, cold or perturbed.
+
+**Honest findings, all real, none smoothed over**:
+
+1. **All three quasi-Newton options (Option 3) fail to converge within the
+   default 100-iteration cap at D=20's 401-dual-variable inner problem** —
+   BFGS, SR1, and L-BFGS all hit `status=-400` (KNITRO's iteration-limit
+   code) with `n_iters=100` and materially wrong duals (`max|Δλ|` vs the
+   converged reference 0.075–0.15, not small). This is a genuine, D-scale-
+   dependent negative result, not a bug: quasi-Newton's dense internal
+   Hessian *approximation* still costs `O(ncol²)` to build/update per
+   iteration and apparently needs far more than 100 iterations to converge
+   a 401-dimensional dual problem from a cold start. Raising `maxit` was not
+   attempted (out of this task's time budget) but is the obvious next step
+   if Option 3 is pursued further — flagged, not silently written off.
+2. **Option 1 (`:denseaccum`) converges to the exact same optimum as the
+   dense reference** (`|Δζ|=1.8e-16, max|Δλ|=4.9e-14` — bit-identical up to
+   floating-point noise) but **costs ~2.7x MORE wall-clock** (20.07s vs
+   7.33s cold) despite doing asymptotically fewer flops (`O(W·D³)` vs
+   `O(W·D⁴)`). The `(ncol+1)=402` separate `compressed_cc_hvp` calls per
+   Hessian evaluation (7 Hessian calls in this cold solve → 2,814 total HVP
+   calls) lose to one large, highly-optimized BLAS `gemm!` in practice —
+   the same "many small scalar-loop calls vs one big vectorized call"
+   pattern `compressed_cc_inner.jl`'s own header already flagged as the
+   reason a truly-compressed dense-Hessian callback wasn't attempted in
+   Continuation 8, now confirmed empirically at D=20 rather than assumed
+   from the D=4 argument.
+3. **A metric limitation, reported rather than hidden**: this benchmark's
+   `max_moment_resid` column is computed via `compressed_moment_resid(cf,
+   ones(W))` — the UNWEIGHTED mean moment (mirrors `evaluate_fullA_fast`'s
+   own `moment_resid` diagnostic convention) — which depends only on `θ`
+   (hence identical, 0.2149, across every variant at the same point), not
+   on the converged dual solution. It does **not** discriminate
+   converged-vs-not solutions the way the KKT residual
+   (`compressed_moment_resid(cf, dPsq)`, i.e. weighted by the converged
+   primal weights) would. Caught only after the run completed; not
+   re-run given time budget — `Delta_dual` and the direct `Δζ/Δλ`-vs-
+   reference comparison are the metrics that actually discriminate
+   convergence quality in the table above, and they do so clearly (e.g.
+   the qn variants' `Delta_dual` values 0.00206–0.00254 visibly differ from
+   the converged 0.0025908619).
+
+### 3C.3 What Phase 3C did NOT cover
+
+- **Raising quasi-Newton's `maxit`** to see if Option 3 converges given more
+  iterations — flagged in finding 1 above, not attempted.
+- **A proper per-variant KKT-residual metric** (weighted by `dPsq`, not
+  unweighted) — see finding 3; the raw duals already give a clear
+  convergence signal, so this was not chased further.
+- **Wiring any of the three variants into the production
+  `evaluate_fullA_fast_compressed` path** — this section is a diagnostic
+  comparison (`compressed_inner_alt_solvers.jl` is additive/standalone,
+  mirrors `compressed_live.jl`'s own "additive, does not modify production"
+  discipline), not a production change. Given `:denseaccum`'s wall-clock
+  loss and `:qn`'s convergence failure at D=20, the existing dense-Hessian
+  compressed baseline (`inner_loop_KNITRO_compressed`, already live via
+  `moment_representation=:compressed`) remains the right default — this
+  task's own evidence does not support switching it.
+- **Per-variant peak memory** — only whole-process `VmHWM` was recorded
+  (**2.66 GB** at the end of the full 5-variant run), not isolated
+  per variant (would need separate processes); given none of the variants
+  ever materializes the `W×(oci-1)` dense `G` (`:denseaccum`/`:hvp`) or
+  needs it only once (the reference), no variant was expected to be a
+  memory outlier, and none was observed to be (process stayed well under
+  the safety thresholds throughout).
+
+---
+
+## 4. What this task did NOT cover (explicitly out of scope, not overlooked)
 
 - **A genuinely compressed `LFixBaseCache` build** (avoiding the `W×D×D`
   `price0`/`pTσ0` dense arrays inside `build_lfix_base_cache` itself, not
   just the redundant self-validation rebuild) — `docs/compressed_live_integration_report.md`
-  §7 explicitly calls this "new work," distinct from what §3.2 above removed.
-  Not attempted here; §3.2 only removed the SECOND, purely-diagnostic dense
+  §7 explicitly calls this "new work," distinct from what §2 above removed.
+  Not attempted here; §2 only removed the SECOND, purely-diagnostic dense
   rebuild, not the cache's own primary dense construction.
 - **Postprocessing/residuals** (primal-weight recovery, moment residuals, KKT
-  checks) still re-materializing dense `obj.H` per
-  `compressed_live_integration_report.md` §2 — the brief's fuller Phase 3
-  scope, not reached given time budget after finishing 3.1/3.2 well.
-- **Inner second-order method options** (exact compressed Hessian
-  accumulation vs matrix-free HVPs vs quasi-Newton) — same reason, not
-  reached.
+  checks) still re-materializing dense `obj.H` in the PRODUCTION
+  `evaluate_fullA_fast_compressed` path per
+  `compressed_live_integration_report.md` §2 — though §3C.2's benchmark
+  above demonstrates in passing that `Delta_dual` itself is fully
+  recoverable compressed (`Delta_dual = -f` from `compressed_cc_value_grad`
+  directly, no materialization needed) — a real, evidence-backed
+  simplification opportunity for that production tail, flagged here but not
+  wired in (out of scope for this task).
 - **W=800,000** — out of this task's scope (a separate memory-safety
   concern), as it was for the W80k doc.
 
 ---
 
-## 4. Files
+## 5. Files
 
-New (all under `full_aod_diag/d4_exact/`):
+New (all under `full_aod_diag/d4_exact/`), Phase 3.1/3.2:
 `c9_phase3_compressed_d20_sanity.jl` (minimal memory-safe sanity probe, run
 first, per the standing safety discipline), `c9_phase3_compressed_d20_benchmark.jl`
 (timed dense-vs-compressed value-callback re-measurement),
@@ -285,13 +451,23 @@ first, per the standing safety discipline), `c9_phase3_compressed_d20_benchmark.
 check for the new flag), `c9_phase3_lfix_novalidate_d20_bench.jl` (D=20
 gradient timing A/B).
 
+New, Phase 3C: `compressed_inner_alt_solvers.jl` (all three variants' solver
+loops + callbacks), `c9_phase3c_correctness_d4.jl` (D=4 correctness check),
+`c9_phase3c_d20_bench.jl` (D=20 timing/robustness comparison),
+`ek_inner_bfgs.opt`/`ek_inner_sr1.opt`/`ek_inner_lbfgs.opt`/`ek_inner_hvp.opt`
+(new `.opt` files, each a copy of `full_aod_diag/ek_inner.opt` with only
+`hessopt`, and for `ek_inner_hvp.opt` also `algorithm`, changed).
+
 Modified, additive only: `lfix_incremental.jl` (`build_lfix_base_cache` gains
 `validate_dense::Bool=false`, no other behavior change),
 `composite_gradient_fast.jl` (`composite_gradient_at_fast` gains a matching
 passthrough kwarg), `test_lfix_incremental.jl` (one call site updated to
 `validate_dense=true` to preserve its self-validation coverage).
 `compressed_live.jl`/`oracle_fast.jl`/`compressed_moments.jl`/`compressed_cc_inner.jl`/
-`c8_perfprofile_harness.jl` — **untouched**.
+`c8_perfprofile_harness.jl`/`cc_algo/PsiObjectiveBundle.jl` — **untouched**.
+
+Raw logs + CSVs, Phase 3C:
+`results/fullA_d4/2573f3e/c9_phase3c_d20_bench/`.
 
 Raw logs + CSVs:
 `results/fullA_d4/445356e/c9_phase3_compressed_d20_benchmark/`,
