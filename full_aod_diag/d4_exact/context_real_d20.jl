@@ -48,7 +48,19 @@ unchanged on the returned `ctx`.
 function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
-        needs_outer_moment_jacobian::Bool = true)
+        needs_outer_moment_jacobian::Bool = false)
+    # false is the PRODUCTION default (matches run_fullA_D4_production.jl /
+    # run_fullA_D10_production.jl -- neither needs an analytic outer moment
+    # Jacobian, both use a ForwardDiff/Method-B gradient path instead), NOT
+    # context_scaled.jl's diagnostic default of true. This matters far more
+    # here than at D4/D6/8/10: `jac_h` is a dense N x (d+2) x l tensor
+    # (draws x moments x full-theta-length) -- at D=20/W=80000 that's
+    # 80000 x 404 x 423 x 8 bytes ~= 109GB (confirmed by direct measurement,
+    # this session -- a real-data D=20 benchmark run at the old true default
+    # stabilized at ~109GB RSS; a W=800000 probe at the same default was
+    # killed after climbing to ~780GB and still rising, headed past 1TB).
+    # See docs/fullA_D20_production_path_audit.md and the continuation-9
+    # W80k/W800k microbenchmark docs for the full incident writeup.
     so, pp, params_used = build_ad_context_real_d20(W = W)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
     @unpack θ_initial, θ_initial_up, U, γ, outer_constr_index, nTotalMoments, complement_index, inequality_index = pp
