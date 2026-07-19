@@ -1,0 +1,68 @@
+c10_stratmarg_screen_sweep.jl starting 2026-07-19T13:04:54.885 commit=97cdd80 nthreads=20
+
+==========================================================================================
+Building reference structural context (W=80000, production draws)
+==========================================================================================
+d20_real_setup(W=80000) wall=55.9s
+Calibration: gp0=0.9877618976237339 norm(zfree0)=315.4691125394215
+Loaded upper candidate: gp=0.9557005124111125 (expect 0.955701), norm(zfree)=313.67919349409243
+
+==========================================================================================
+POINT: calibration  gp=0.9877618976237339  find_smallest=true
+==========================================================================================
+  [calibration W=8000 plain] n_zero_win_pairs across 15 reps: mean=4.47 std=3.2 min=1 max=10 (0/15 fully-feasible reps)
+  [calibration W=8000 stratified] n_zero_win_pairs across 15 reps: mean=1.33 std=0.9 min=0 max=3 (2/15 fully-feasible reps)
+  [calibration W=20000 plain] n_zero_win_pairs across 15 reps: mean=0.4 std=0.63 min=0 max=2 (10/15 fully-feasible reps)
+  [calibration W=20000 stratified] n_zero_win_pairs across 15 reps: mean=0.07 std=0.26 min=0 max=1 (14/15 fully-feasible reps)
+  [calibration W=40000 plain] n_zero_win_pairs across 12 reps: mean=0.0 std=0.0 min=0 max=0 (12/12 fully-feasible reps)
+  [calibration W=40000 stratified] n_zero_win_pairs across 12 reps: mean=0.0 std=0.0 min=0 max=0 (12/12 fully-feasible reps)
+  [calibration W=80000 plain] n_zero_win_pairs across 10 reps: mean=0.0 std=0.0 min=0 max=0 (10/10 fully-feasible reps)
+  [calibration W=80000 stratified] n_zero_win_pairs across 10 reps: mean=0.0 std=0.0 min=0 max=0 (10/10 fully-feasible reps)
+
+==========================================================================================
+POINT: upper_candidate  gp=0.9557005124111125  find_smallest=false
+==========================================================================================
+  [upper_candidate W=8000 plain] n_zero_win_pairs across 15 reps: mean=3.27 std=2.05 min=0 max=8 (1/15 fully-feasible reps)
+  [upper_candidate W=8000 stratified] n_zero_win_pairs across 15 reps: mean=1.27 std=0.96 min=0 max=3 (3/15 fully-feasible reps)
+  [upper_candidate W=20000 plain] n_zero_win_pairs across 15 reps: mean=0.27 std=0.59 min=0 max=2 (12/15 fully-feasible reps)
+  [upper_candidate W=20000 stratified] n_zero_win_pairs across 15 reps: mean=0.07 std=0.26 min=0 max=1 (14/15 fully-feasible reps)
+  [upper_candidate W=40000 plain] n_zero_win_pairs across 12 reps: mean=0.0 std=0.0 min=0 max=0 (12/12 fully-feasible reps)
+  [upper_candidate W=40000 stratified] n_zero_win_pairs across 12 reps: mean=0.0 std=0.0 min=0 max=0 (12/12 fully-feasible reps)
+  [upper_candidate W=80000 plain] n_zero_win_pairs across 10 reps: mean=0.0 std=0.0 min=0 max=0 (10/10 fully-feasible reps)
+  [upper_candidate W=80000 stratified] n_zero_win_pairs across 10 reps: mean=0.0 std=0.0 min=0 max=0 (10/10 fully-feasible reps)
+
+Wrote /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c10-stratmarg/results/fullA_d4/97cdd80/c10_stratmarg_screen_sweep_20260719_130454/screen_sweep.csv (208 rows)
+
+==========================================================================================
+AGGREGATE TABLE
+==========================================================================================
+  calibration W=8000 plain: mean_n_zero=4.47 std=3.2 range=[1,10] frac_fully_feasible=0.0 frac_pairwise_infeasible=0.93
+  calibration W=8000 stratified: mean_n_zero=1.33 std=0.9 range=[0,3] frac_fully_feasible=0.13 frac_pairwise_infeasible=0.73
+  calibration W=20000 plain: mean_n_zero=0.4 std=0.63 range=[0,2] frac_fully_feasible=0.67 frac_pairwise_infeasible=0.33
+  calibration W=20000 stratified: mean_n_zero=0.07 std=0.26 range=[0,1] frac_fully_feasible=0.93 frac_pairwise_infeasible=0.07
+  calibration W=40000 plain: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+  calibration W=40000 stratified: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+  calibration W=80000 plain: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+  calibration W=80000 stratified: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+  upper_candidate W=8000 plain: mean_n_zero=3.27 std=2.05 range=[0,8] frac_fully_feasible=0.07 frac_pairwise_infeasible=0.93
+  upper_candidate W=8000 stratified: mean_n_zero=1.27 std=0.96 range=[0,3] frac_fully_feasible=0.2 frac_pairwise_infeasible=0.67
+  upper_candidate W=20000 plain: mean_n_zero=0.27 std=0.59 range=[0,2] frac_fully_feasible=0.8 frac_pairwise_infeasible=0.2
+  upper_candidate W=20000 stratified: mean_n_zero=0.07 std=0.26 range=[0,1] frac_fully_feasible=0.93 frac_pairwise_infeasible=0.07
+  upper_candidate W=40000 plain: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+  upper_candidate W=40000 stratified: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+  upper_candidate W=80000 plain: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+  upper_candidate W=80000 stratified: mean_n_zero=0.0 std=0.0 range=[0,0] frac_fully_feasible=1.0 frac_pairwise_infeasible=0.0
+
+==========================================================================================
+FOLLOW-UP: real inner-solve check where stratification changes feasibility
+==========================================================================================
+  [calibration W=80000 plain seed=8000001001] inner_status=0 Delta_dual=0.0025501183534256157 kappa=0.0203135174923732 wall=18.23s
+  calibration W=8000: plain frac_fully_feasible=0.0 stratified frac_fully_feasible=0.13333333333333333 -> newly_feasible_via_stratification=false
+  calibration W=20000: plain frac_fully_feasible=0.6666666666666666 stratified frac_fully_feasible=0.9333333333333333 -> newly_feasible_via_stratification=false
+  calibration W=40000: plain frac_fully_feasible=1.0 stratified frac_fully_feasible=1.0 -> newly_feasible_via_stratification=false
+  [upper_candidate W=80000 plain seed=8000001001] inner_status=0 Delta_dual=1.0867553391640508 kappa=0.0727367850163042 wall=12.53s
+  upper_candidate W=8000: plain frac_fully_feasible=0.06666666666666667 stratified frac_fully_feasible=0.2 -> newly_feasible_via_stratification=false
+  upper_candidate W=20000: plain frac_fully_feasible=0.8 stratified frac_fully_feasible=0.9333333333333333 -> newly_feasible_via_stratification=false
+  upper_candidate W=40000: plain frac_fully_feasible=1.0 stratified frac_fully_feasible=1.0 -> newly_feasible_via_stratification=false
+
+OUTDIR = /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c10-stratmarg/results/fullA_d4/97cdd80/c10_stratmarg_screen_sweep_20260719_130454

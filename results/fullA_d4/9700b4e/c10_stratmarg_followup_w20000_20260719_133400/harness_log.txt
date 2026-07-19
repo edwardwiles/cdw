@@ -1,0 +1,15 @@
+c10_stratmarg_followup_w20000.jl starting 2026-07-19T13:34:00.791 commit=9700b4e
+
+==========================================================================================
+POINT: calibration
+==========================================================================================
+  [calibration W=20000 plain seed=2000012001] screen n_zero_win_pairs=2 (pairwise_infeasible=true)  REAL inner_status=-300 Delta_dual=NaN kappa=NaN wall=21.98s
+  [calibration W=20000 stratified seed=2000012002] screen n_zero_win_pairs=0 (pairwise_infeasible=false)  REAL inner_status=-300 Delta_dual=NaN kappa=NaN wall=1.41s
+
+==========================================================================================
+POINT: upper_candidate
+==========================================================================================
+  [upper_candidate W=20000 plain seed=2000012001] screen n_zero_win_pairs=2 (pairwise_infeasible=true)  REAL inner_status=-300 Delta_dual=NaN kappa=NaN wall=1.01s
+  [upper_candidate W=20000 stratified seed=2000012002] screen n_zero_win_pairs=0 (pairwise_infeasible=false)  REAL inner_status=0 Delta_dual=1.859450179978904 kappa=0.0727367850163042 wall=7.3s
+
+OUTDIR = /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c10-stratmarg/results/fullA_d4/9700b4e/c10_stratmarg_followup_w20000_20260719_133400

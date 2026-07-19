@@ -1,0 +1,5 @@
+point,W,scheme,seed,screen_n_zero_win_pairs,screen_pairwise_infeasible,inner_status,Delta_dual,kappa,wall_s
+calibration,20000,plain,2000012001,2,true,-300,NaN,NaN,21.976788997650146
+calibration,20000,stratified,2000012002,0,false,-300,NaN,NaN,1.4103679656982422
+upper_candidate,20000,plain,2000012001,2,true,-300,NaN,NaN,1.0087230205535889
+upper_candidate,20000,stratified,2000012002,0,false,0,1.859450179978904,0.0727367850163042,7.304072141647339
