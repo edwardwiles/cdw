@@ -1,0 +1,84 @@
+{
+  "task": "Continuation 9, Phase 2 (W=80000 half): full-A_od D=20 real-data production microbenchmark",
+  "commit": "bd313a2",
+  "machine": "demand.mit.edu",
+  "env": {"JULIA_NUM_THREADS_default_run": 20, "OPENBLAS_NUM_THREADS": 1, "MKL_NUM_THREADS": 1},
+  "D": 20,
+  "W": 80000,
+  "n_free": 401,
+  "nTotalMoments": 402,
+  "headline_bug_fixed": {
+    "description": "d20_real_setup defaulted needs_outer_moment_jacobian=true (context_scaled.jl's diagnostic default), which at D=20 allocates a dense jac_h tensor of size W x (d+2) x l_full ~= 80000 x 404 x 423 x 8 bytes ~= 109GB. Fixed in commit bd313a2 by defaulting to false (matching the production drivers' ForwardDiff/Method-B gradient path, which never needs this tensor).",
+    "pre_fix_VmHWM_W80000_GB": 109.03,
+    "pre_fix_setup_wall_s_first_call": 102.11,
+    "pre_fix_setup_wall_s_second_call": 62.27,
+    "post_fix_VmHWM_after_setup_GB": 2.6,
+    "post_fix_VmHWM_end_of_full_run_GB": 4.47,
+    "post_fix_setup_wall_s_first_call": 53.1,
+    "post_fix_setup_wall_s_second_call": 15.0,
+    "W800000_probe_by_coordinating_session_pre_fix": "killed after climbing to ~780GB and still rising, headed past 1TB",
+    "size_formula": "W * (nTotalMoments+2) * l_full * 8 bytes",
+    "size_formula_at_D20_W80000": "80000 * 404 * 423 * 8 = ~109.0e9 bytes = 109 GB"
+  },
+  "part0_setup": {
+    "setup_wall_s_cold_JIT": 53.1,
+    "setup_wall_s_warm": 15.0,
+    "gc_live_delta_MB": 1791.8,
+    "vmhwm_after_setup_KB": 2602240,
+    "U_size_MB_observed": 12.8,
+    "U_shape_observed": "80000 x 20 (NOT 80000 x D^2 -- UoModel=1 branch of drawU taken)"
+  },
+  "four_points": [
+    {"label": "calibration_natural_theta", "feasible": true, "inner_status": 0, "Delta_dual": 0.002590861875112194, "gamma_prime": 0.9877618976237339},
+    {"label": "gravity_tangent_perturbation", "feasible": true, "inner_status": 0, "Delta_dual": 0.0025760562613564722, "gravity_raw": -2.336672522140759e-15, "note": "random unit direction in pivot-reduced z-space, step=0.02; exact (not approximate) gravity-tangent by pivot-elimination construction"},
+    {"label": "upper_branch_gp_offset_0.01", "feasible": true, "inner_status": 0, "Delta_dual": 0.23088414900346865, "gamma_prime": 0.9976395165999713, "note": "found on first try (offset=0.01); Delta jumps ~90x vs calibration because gamma' bound is tight [0.9307,1.0] and calibration already sits near the upper edge"},
+    {"label": "lower_branch_gp_offset_0.01", "feasible": true, "inner_status": 0, "Delta_dual": 0.12964458417300675, "gamma_prime": 0.9778842786474965, "note": "found on first try (offset=0.01)"}
+  ],
+  "gamma_prime_bounds": [0.9307117545219048, 1.0],
+  "part1a_value_callback_dense_ms": {
+    "warm_TOTAL_median": 1862.146, "warm_inner_moment_build_median": 1211.124, "warm_winner_compute_median": 308.760,
+    "cold_TOTAL_median": 4719.525, "cold_inner_knitro_dual_solve_median": 2895.948, "cold_inner_moment_build_median": 1219.957,
+    "cold_inner_dual_hessian_callback_median": 507.952
+  },
+  "part1b_evaluateFullA_plain_s": {"total_median": 3.679, "inner_median": 1.270, "post_median": 2.409},
+  "part1c_full_gradient_400coord_s": {
+    "adaptive_threaded": 6.435, "adaptive_serial": 35.295, "fixed_threaded": 4.377, "fixed_serial": 11.433,
+    "threading_speedup_adaptive": 5.485, "threading_speedup_fixed": 2.612
+  },
+  "part1d_gradient_decomposition_s": {"base_state": 1.273, "cache_build": 3.512, "gamma_analytic": 0.0001, "fd_and_bandwidth": 15.702, "reconstructed_total": 20.487, "note": "does not fully reconstruct 1C's directly-measured adaptive-serial total of 35.295s -- reported as an open gap, not chased further given time budget"},
+  "part1e_percoord_ms": [
+    {"k": 2, "top3": 72.325, "generic": 70.449, "ratio": 0.974},
+    {"k": 200, "top3": 80.556, "generic": 79.771, "ratio": 0.990},
+    {"k": 399, "top3": 78.889, "generic": 81.600, "ratio": 1.034}
+  ],
+  "part1f_directional_secants": {"n_directions": 5, "n_finite_sane": 5, "h": 0.02, "wall_per_probe_s_range": [5.14, 5.79]},
+  "part2_lighter_checks_s": [
+    {"label": "gravity_tangent_perturbation", "value_median": 1.841, "grad_median": 6.246},
+    {"label": "upper_branch_gp_offset_0.01", "value_median": 1.832, "grad_median": 6.341},
+    {"label": "lower_branch_gp_offset_0.01", "value_median": 1.770, "grad_median": 6.083}
+  ],
+  "thread_sweep": [
+    {"threads": 1, "setup_wall_s": 59.69, "value_median_s": 2.486, "grad_median_s": 36.982, "grad_threaded": false},
+    {"threads": 5, "setup_wall_s": 55.13, "value_median_s": 1.951, "grad_median_s": 12.186, "grad_threaded": true},
+    {"threads": 10, "setup_wall_s": 53.28, "value_median_s": 1.898, "grad_median_s": 8.378, "grad_threaded": true},
+    {"threads": 20, "setup_wall_s": 56.60, "value_median_s": 1.758, "grad_median_s": 6.767, "grad_threaded": true}
+  ],
+  "memory_ledger_MB": {
+    "ctx_U_theoretical_wrong_assumption_D2cols": 256.0,
+    "ctx_U_observed_actual_Dcols": 12.8,
+    "inner_KG_moment_matrix_theoretical": 257.28,
+    "winners_gap_theoretical": 12.8,
+    "lfix_incremental_6buffers_theoretical": 76.8,
+    "compressed_moments_wval_theoretical": 12.8,
+    "gradient_vector_theoretical": 0.0032,
+    "sum_of_ledger_theoretical_MB": 415.7,
+    "jac_h_bug_theoretical_MB": 109000,
+    "note": "the sum of every array this session could enumerate (~416MB) is dwarfed 260x by the single jac_h allocation the bug produced (109GB) -- the headline finding of this benchmark is a single mis-defaulted flag, not the enumerable steady-state arrays"
+  },
+  "process_notes": {
+    "total_wall_main_benchmark_s": 750,
+    "peak_VmHWM_main_benchmark_GB": 4.47,
+    "no_stray_processes_confirmed": true,
+    "server_memory_recovered_confirmed": true
+  }
+}

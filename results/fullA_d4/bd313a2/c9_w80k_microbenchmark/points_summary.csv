@@ -1,0 +1,5 @@
+label,feasible,inner_status,Delta_dual,note
+calibration_natural_theta,true,0,0.002590861875112194,primary benchmark point
+gravity_tangent_perturbation,true,0,0.0025760562613564722,random unit direction in pivot-reduced z-space, step=0.02, exact gravity-tangent
+upper_branch_gp_offset_0.01,true,0,0.23088414900346865,gamma' = gp0*(1+0.01), A at natural theta
+lower_branch_gp_offset_0.01,true,0,0.12964458417300675,gamma' = gp0*(1-0.01), A at natural theta

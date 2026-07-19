@@ -1,0 +1,7 @@
+array,shape,theoretical_MB,observed_MB
+ctx.U (Frechet draws),80000 x 400,256.0,12.8
+inner K/G moment matrix (evaluate_fullA),80000 x 402,257.28,NaN
+winners.jl gap (W x D),80000 x 20,12.8,NaN
+lfix_incremental price/runnerup/third/contrib buffers (6x, W x D each),6 x (80000 x 20),76.8,NaN
+compressed_moments wval (W x D),80000 x 20,12.8,NaN
+n_free (gradient vector length),400,0.0032,NaN
