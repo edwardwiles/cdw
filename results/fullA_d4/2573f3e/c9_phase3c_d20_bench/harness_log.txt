@@ -1,0 +1,50 @@
+c9_phase3c_d20_bench.jl starting at 2026-07-18T22:56:13.629  commit=2573f3e  nthreads=20
+d20_real_setup(W=80000) wall = 55.19s  VmHWM=2.66 GB
+D=20  ncol (inner dual vars, excl zeta)=401  n_inner (incl zeta)=402
+
+---- reference: existing compressed baseline (hessopt=exact, lazy dense materialization) ----
+  cold: status=0 n_fg=9 n_hess=8 wall=7.334s Delta_dual=0.0025908619
+
+---- qn_bfgs (opt=ek_inner_bfgs.opt, variant=qn) ----
+  cold: status=-400 n_fg=326 n_hess=0 n_iters=100 wall=3.695s Delta_dual=0.0025441704 max|moment_resid|=2.149e-01 |dζ vs ref|=1.354e-05 max|dλ vs ref|=7.547e-02
+  warm: status=-400 n_fg=326 n_hess=0 wall=3.197s
+  start 1: status=-400 wall=1.729s |dζ vs ref|=9.103e-02 max|dλ vs ref|=NaN
+  start 2: status=-400 wall=1.630s |dζ vs ref|=2.306e-01 max|dλ vs ref|=NaN
+
+---- qn_sr1 (opt=ek_inner_sr1.opt, variant=qn) ----
+  cold: status=-400 n_fg=206 n_hess=0 n_iters=100 wall=2.463s Delta_dual=0.0024637774 max|moment_resid|=2.149e-01 |dζ vs ref|=1.122e-04 max|dλ vs ref|=1.276e-01
+  warm: status=-400 n_fg=206 n_hess=0 wall=2.401s
+  start 1: status=-400 wall=1.895s |dζ vs ref|=9.905e-01 max|dλ vs ref|=NaN
+  start 2: status=-400 wall=1.750s |dζ vs ref|=4.807e-01 max|dλ vs ref|=NaN
+
+---- qn_lbfgs (opt=ek_inner_lbfgs.opt, variant=qn) ----
+  cold: status=-400 n_fg=300 n_hess=0 n_iters=100 wall=2.586s Delta_dual=0.0020670103 max|moment_resid|=2.149e-01 |dζ vs ref|=2.367e-04 max|dλ vs ref|=1.505e-01
+  warm: status=-400 n_fg=300 n_hess=0 wall=2.776s
+  start 1: status=-400 wall=2.195s |dζ vs ref|=1.511e+00 max|dλ vs ref|=NaN
+  start 2: status=-400 wall=2.126s |dζ vs ref|=2.079e+00 max|dλ vs ref|=NaN
+
+---- denseaccum (opt=ek_inner.opt, variant=denseaccum) ----
+  cold: status=0 n_fg=8 n_hess=7 n_iters=7 wall=20.073s Delta_dual=0.0025908619 max|moment_resid|=2.149e-01 |dζ vs ref|=1.787e-16 max|dλ vs ref|=4.890e-14
+  warm: status=0 n_fg=8 n_hess=7 wall=19.347s
+  start 1: status=0 wall=119.762s |dζ vs ref|=3.990e-17 max|dλ vs ref|=1.911e-13
+  start 2: status=0 wall=82.688s |dζ vs ref|=1.050e-16 max|dλ vs ref|=1.502e-13
+
+---- hvp (opt=ek_inner_hvp.opt, variant=hvp) ----
+  cold: status=-100 n_fg=9 n_hess=3015 n_iters=8 wall=32.983s Delta_dual=0.0025908619 max|moment_resid|=2.149e-01 |dζ vs ref|=3.220e-13 max|dλ vs ref|=1.619e-10
+  warm: status=-100 n_fg=9 n_hess=3015 wall=32.981s
+  start 1: status=-100 wall=48.252s |dζ vs ref|=7.481e-11 max|dλ vs ref|=2.669e-08
+  start 2: status=-100 wall=55.026s |dζ vs ref|=9.711e-12 max|dλ vs ref|=2.657e-08
+
+====================================================================================================
+SUMMARY (reference: existing compressed baseline, hessopt=exact + lazy dense materialization)
+  variant          cold_s   n_fg_c   n_hess_c |   warm_s   n_fg_w   n_hess_w |     Delta_dual   max_mresid
+  REFERENCE(dense)    7.334        9          8 |        -        -          - |   0.0025908619          NaN
+  qn_bfgs           3.695      326          0 |    3.197      326          0 |   0.0025441704    2.149e-01
+  qn_sr1            2.463      206          0 |    2.401      206          0 |   0.0024637774    2.149e-01
+  qn_lbfgs          2.586      300          0 |    2.776      300          0 |   0.0020670103    2.149e-01
+  denseaccum       20.073        8          7 |   19.347        8          7 |   0.0025908619    2.149e-01
+  hvp              32.983        9       3015 |   32.981        9       3015 |   0.0025908619    2.149e-01
+
+VmHWM at end of run = 2.66 GB
+
+c9_phase3c_d20_bench.jl COMPLETE at 2026-07-18T23:04:40.311
