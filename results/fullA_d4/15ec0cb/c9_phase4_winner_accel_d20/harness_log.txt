@@ -1,0 +1,22 @@
+c9_phase4_winner_accel_d20_bench.jl starting at 2026-07-18T23:18:38.464  commit=15ec0cb  nthreads=20
+d20_real_setup(W=80000) wall = 53.77s  VmHWM=2.66 GB
+D=20  D^2 (A-block coords)=400  W=80000
+
+====================================================================================================
+PART 1: full 400-coordinate gradient, top3 vs generic multi_method, D=20
+====================================================================================================
+  h_mode=:fixed      generic: min=  3.343s mean=  3.455s  |  top3: min=  2.849s mean=  3.000s  |  speedup(min)=1.174x
+  h_mode=:adaptive   generic: min=  6.504s mean=  6.540s  |  top3: min=  4.843s mean=  4.935s  |  speedup(min)=1.343x
+
+====================================================================================================
+PART 2: winner-margin certificate, warm persistent cache vs uncached full rebuild, D=20
+====================================================================================================
+  uncached full-rebuild sweep (15 points): min=28.559s total (1.9039s/point)  mean=28.626s
+  WARM certified sweep        (15 points): min=1.367s total (0.0911s/point)  mean=1.454s
+
+  SPEEDUP (full sweep, warm cache reused across all points): 28.559s -> 1.367s = 20.899x
+
+  certified/rescanned/fallback breakdown (final timed sweep's PersistentWinnerCache):
+    n_calls=15  n_cells_total=24000000
+    certified_frac=0.9877  rescanned_frac=0.0123  full_fallback_call_frac=0.0000  n_rebuilds=1
+    total_cert_s=0.86937  total_full_s=0.42122

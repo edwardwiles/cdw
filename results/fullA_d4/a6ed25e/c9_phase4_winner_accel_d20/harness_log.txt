@@ -1,0 +1,37 @@
+c9_phase4_winner_accel_d20_bench.jl starting at 2026-07-18T23:23:52.829  commit=a6ed25e  nthreads=20
+d20_real_setup(W=80000) wall = 56.96s  VmHWM=2.66 GB
+D=20  D^2 (A-block coords)=400  W=80000
+
+====================================================================================================
+PART 1: full 400-coordinate gradient, top3 vs generic multi_method, D=20
+====================================================================================================
+  h_mode=:fixed      generic: min=  3.380s mean=  3.585s  |  top3: min=  2.923s mean=  2.935s  |  speedup(min)=1.157x
+  h_mode=:adaptive   generic: min=  6.734s mean=  6.800s  |  top3: min=  4.896s mean=  4.975s  |  speedup(min)=1.376x
+
+====================================================================================================
+PART 2: winner-margin certificate, warm persistent cache vs uncached full rebuild, D=20
+====================================================================================================
+  uncached full-rebuild sweep (15 points): min=29.058s total (1.9372s/point)  mean=29.088s
+  WARM certified sweep        (15 points): min=1.372s total (0.0915s/point)  mean=1.404s
+
+  SPEEDUP (full sweep, warm cache reused across all points): 29.058s -> 1.372s = 21.176x
+
+  certified/rescanned/fallback breakdown (final timed sweep's PersistentWinnerCache):
+    n_calls=15  n_cells_total=24000000
+    certified_frac=0.9877  rescanned_frac=0.0123  full_fallback_call_frac=0.0000  n_rebuilds=1
+    total_cert_s=0.84622  total_full_s=0.44776
+
+  certified-sweep values vs trusted full-rebuild (same points): max|diff| = 0.0
+
+====================================================================================================
+PART 3: order-randomization correctness check
+====================================================================================================
+  permutation: [11, 4, 2, 5, 15, 7, 9, 14, 13, 6, 8, 10, 1, 12, 3]
+  max|value(in-order) - value(permuted-order)| over all 15 points = 0.0
+  ORDER-INDEPENDENCE: CONFIRMED (bit-identical regardless of evaluation order)
+  permuted-order sweep's own cache stats: certified_frac=0.9880 rescanned_frac=0.0120 full_fallback_call_frac=0.0000 n_rebuilds=1
+  (NOTE: the cache's internal STATS above may legitimately differ between orderings -- e.g. which point triggers the lazy first-build/rebuild -- only the RETURNED VALUES are required to match, which is what order_maxdiff checks.)
+
+VmHWM at end of run = 4.35 GB
+
+c9_phase4_winner_accel_d20_bench.jl COMPLETE at 2026-07-18T23:28:57.316

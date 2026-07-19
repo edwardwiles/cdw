@@ -1,0 +1,2 @@
+n_points,full_rebuild_min_s,certified_min_s,speedup,certified_frac,rescanned_frac,full_fallback_call_frac,n_rebuilds
+15,28.55860456,1.366535593,20.89854425035821,0.987701875,0.012298125,0.0,1
