@@ -1,0 +1,42 @@
+c9_infscreen_d20_validate.jl starting at 2026-07-19T07:51:00.680  commit=b200eda  nthreads=8
+
+==========================================================================================
+SECTION A: setup (W=80000) + known-feasible zero-FP check
+==========================================================================================
+d20_real_setup(W=80000) wall=54.38s  VmHWM=2.64 GB
+precompute_pairwise_M: wall=0.1743s   Pmat: n_positive=400 / 400  min(nonzero)=8.3223807e-5
+  calibration: pairwise.infeasible=false (worst_slack=2.156)  winner_scan.feasible=true  t_a=49.98ms  t_pairwise=35.351ms  t_winnerscan=957.1ms
+  gravity_tangent: pairwise.infeasible=false (worst_slack=2.1575)  winner_scan.feasible=true  t_a=0.02ms  t_pairwise=0.02ms  t_winnerscan=266.1ms
+  upper_branch_offset01: pairwise.infeasible=false (worst_slack=2.156)  winner_scan.feasible=true  t_a=0.02ms  t_pairwise=0.018ms  t_winnerscan=294.8ms
+  lower_branch_offset01: pairwise.infeasible=false (worst_slack=2.156)  winner_scan.feasible=true  t_a=0.01ms  t_pairwise=0.017ms  t_winnerscan=241.5ms
+SECTION A false positives on known-feasible D=20 points: 0 / 4
+
+==========================================================================================
+SECTION B: retroactive W=8000 check (historical -300 finding)
+==========================================================================================
+d20_real_setup(W=8000) wall=3.58s
+  calibration_W8000: pairwise.infeasible=true  winner_scan.feasible=false  n_zero_win_positive_share_pairs=5 / 400
+    REAL dense solve: inner_status=-300  Delta_dual=NaN  wall=9.28s
+  gravity_tangent_W8000: pairwise.infeasible=true  winner_scan.feasible=false  n_zero_win_positive_share_pairs=5 / 400
+    REAL dense solve: inner_status=-300  Delta_dual=NaN  wall=0.32s
+  upper_branch_W8000: pairwise.infeasible=true  winner_scan.feasible=false  n_zero_win_positive_share_pairs=5 / 400
+    REAL dense solve: inner_status=-300  Delta_dual=NaN  wall=0.31s
+  lower_branch_W8000: pairwise.infeasible=true  winner_scan.feasible=false  n_zero_win_positive_share_pairs=5 / 400
+    REAL dense solve: inner_status=-300  Delta_dual=NaN  wall=0.31s
+
+*** RETROACTIVE FINDING: W=8000 historical -300 points -- structurally feasible (exact screen)=false; ALL real dense solves returned -300=true
+*** CONFIRMS the hypothesis for at least one point: a zero-winner structural infeasibility
+*** WAS detected by the exact screen among these W=8000 points.
+
+==========================================================================================
+SECTION C: screen timing at W=80000 vs the dense value-callback baseline
+==========================================================================================
+  pairwise_M_build(one-time)                           N=3 median=67.4498ms  min=65.5272ms  max=83.3590ms
+  compute_a_od                                         N=8 median=0.0119ms  min=0.0100ms  max=0.0310ms
+  pairwise_certificate(with a)                         N=8 median=0.0279ms  min=0.0250ms  max=0.0470ms
+  order_destinations                                   N=8 median=0.0291ms  min=0.0269ms  max=0.0510ms
+  screen_hard_winners(full_scan=false, feasible->all D) N=8 median=270.7989ms  min=252.1479ms  max=322.9020ms
+  evaluate_fullA_fast(dense, warm, REFERENCE)          N=8 median=1964.1020ms  min=1955.5740ms  max=2106.1289ms
+
+Saved logs/CSVs to /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c9-infscreen/results/fullA_d4/b200eda/c9_infscreen_d20
+c9_infscreen_d20_validate.jl SECTION A-C complete at 2026-07-19T07:52:42.278

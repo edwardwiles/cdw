@@ -1,0 +1,51 @@
+c9_infscreen_d20_workloads.jl starting at 2026-07-19T07:54:00.323  commit=b200eda  nthreads=8
+d20_real_setup(W=80000) wall=55.85s  VmHWM=2.65 GB
+D=20  n_free_A(pivot-reduced)=399  n_positive_share_pairs=400/400
+
+==========================================================================================
+SECTION D: random A-perturbation sweep (pure screen, no KNITRO)
+==========================================================================================
+  step=  0.5  N=25  pairwise_infeasible=0  winner_infeasible=0
+  step=  1.0  N=25  pairwise_infeasible=0  winner_infeasible=0
+  step=  2.0  N=25  pairwise_infeasible=0  winner_infeasible=0
+  step=  4.0  N=25  pairwise_infeasible=0  winner_infeasible=0
+  step=  8.0  N=25  pairwise_infeasible=0  winner_infeasible=0
+  step= 16.0  N=25  pairwise_infeasible=2  winner_infeasible=2
+
+SECTION D SUMMARY (N=150 total, D=20/W=80000):
+  pairwise-certified infeasible: 2 / 150
+  exact winner-scan infeasible:  2 / 150
+  FALSE POSITIVES (pairwise infeasible but exact winner-scan feasible): 0
+  false negatives (pairwise feasible but exact winner-scan infeasible): 0  (expected/acceptable, catch rate=100.0%)
+  early-exit stage among exact-infeasible points: median=1.0/20  mean=1.0/20  (lower = more work saved)
+zero false positives confirmed: true
+
+==========================================================================================
+SECTION E: realistic workload benchmark (5 classes)
+==========================================================================================
+Class 3 (uncaught zero-winner) candidates found: 0
+  [1_feasible] calibration: rejected_pairwise=false  rejected_winner=false  t_screen=250.07ms  t_full_solve=13.418s status=0 Delta=0.002590861875112194
+  [1_feasible] gravity_tangent: rejected_pairwise=false  rejected_winner=false  t_screen=250.9ms  t_full_solve=4.977s status=0 Delta=0.0025760562613564705
+  [1_feasible] small_perturb_1: rejected_pairwise=false  rejected_winner=false  t_screen=236.28ms  t_full_solve=4.886s status=0 Delta=0.0033324904590326995
+  [1_feasible] small_perturb_2: rejected_pairwise=false  rejected_winner=false  t_screen=237.16ms  t_full_solve=4.863s status=0 Delta=0.004571099472338585
+  [1_feasible] small_perturb_3: rejected_pairwise=false  rejected_winner=false  t_screen=240.06ms  t_full_solve=4.875s status=0 Delta=0.006983971517088349
+  [2_pairwise_certified_infeasible] pairwise_certified_1: rejected_pairwise=true  rejected_winner=false  t_screen=0.04ms
+  [2_pairwise_certified_infeasible] pairwise_certified_2: rejected_pairwise=true  rejected_winner=false  t_screen=0.02ms
+  [5_feasible_outside_budget] outside_budget_calibration: rejected_pairwise=false  rejected_winner=false  t_screen=268.0ms  t_full_solve=4.957s status=0 Delta=0.002590861875112194
+
+  Class 4 search: screen-passing points, probing for a genuine KNITRO -300/failure at W=80000...
+    candidate 1 (step=0.5): inner_status=0 Delta_dual=0.007711666298560308 wall=4.89s
+    candidate 2 (step=16.0): inner_status=-300 Delta_dual=NaN wall=3.76s
+    candidate 3 (step=2.0): inner_status=0 Delta_dual=0.08666761515313061 wall=5.53s
+    candidate 4 (step=1.0): inner_status=0 Delta_dual=0.030959166485609608 wall=4.92s
+    candidate 5 (step=4.0): inner_status=0 Delta_dual=0.3492883978908799 wall=5.97s
+    candidate 6 (step=8.0): inner_status=-300 Delta_dual=NaN wall=5.48s
+  Class 4: found 2 genuine screen-pass-but-KNITRO-fails example(s) among 6 probed at W=80000.
+
+SECTION E complete. Class sizes: 1(feasible)=5 2(pairwise-infeasible)=2 3(uncaught-zerowinner)=0 4(real-KNITRO-fail-found)=2 5(outside-budget)=1
+
+==========================================================================================
+SECTION F: extreme-draw witness benchmark, W=80000
+==========================================================================================
+build_extreme_draw_witness: wall=2.32s  VmHWM before=4.02 GB  after=4.02 GB  delta=0.0 GB
+estimated structure memory (D*(D-1) sorted pairs x (Int32 idx + Float64 val)): 0.365 GB
