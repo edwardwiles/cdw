@@ -1,0 +1,242 @@
+# Continuation 12: common-marginals restriction for the full-A_od exact solver
+
+Status: IN PROGRESS. This document is being filled in as results land; see the "Open items"
+section at the bottom for exactly what is unfinished and the commands to resume it.
+
+## 1. Repo audit (section 1 of the standing brief)
+
+- Production full-A branch: `diag/fullA-d4-exact`, worktree `gravity-fullA-d4`, HEAD `02583bc`
+  at the start of this continuation. That worktree had substantial UNCOMMITTED work from
+  continuation 11 (an active overnight delta=1 push, PID still running at session start) — not
+  touched, not built on top of.
+- This continuation's work lives on a NEW additive branch, `diag/fullA-d4-exact-common-marginals`,
+  in a NEW worktree `gravity-fullA-d4-c12-common-marginals`, branched from `diag/fullA-d4-exact`
+  commit `02583bc`. Three further sibling worktrees/branches (`-cm-interval-hessian`,
+  `-cm-hessian-arch`, `-cm-conditioning`) were created off THIS branch for parallel subagent
+  workstreams (see Section 9).
+- D=4 synthetic driver: `full_aod_diag/d4_exact/context.jl::d4_exact_setup(...)` is the canonical
+  context builder every script in that directory uses. Trusted oracle: `oracle.jl::evaluate_fullA`
+  (dense/reference); `oracle_fast.jl::evaluate_fullA_fast` (dense/compressed dispatch, not used by
+  this continuation's new code yet — see Section 8, "what's not done").
+- D=20 real-data driver: `context_real_d20.jl::d20_real_setup`, production batch driver
+  `c10_d20_production_driver.jl`.
+- Dense CC inner solver: `cc_algo/PsiObjectiveBundle.jl` (`PsiObjectiveBundleImplicit`, dense BLAS
+  `hessian!`), `cc_algo/inner_loop_functions.jl` (KNITRO dual-solve bundle).
+- Compressed CC inner solver: `full_aod_diag/d4_exact/compressed_*.jl`, dispatched via
+  `oracle_fast.jl`'s `moment_representation=:dense|:compressed`. NOT used by this continuation's
+  CM implementation (the CM block is dense-appended; compressed's winner-form representation does
+  not naturally accommodate the CM columns, which are draw-level bin-membership functions, not
+  winner-index functions — flagged as future work, not attempted this continuation).
+- Structured moment construction: `structured_moment_build.jl` (continuation 10). Not touched.
+- Exact Hessian: `cc_algo/PsiObjectiveBundle.jl::hessian!` (dense BLAS gemm, no block structure);
+  chunked-over-draws variant `chunked_hessian.jl` (D=20/large-W memory bounding, not relevant here).
+- Fast outer gradient: `composite_gradient_fast.jl`/`lfix_incremental.jl` (the "Lfix" machinery).
+  **NOT yet wired to be CM-aware** — see Section 7/9 "what's not done."
+- Checkpoint/resume + infeasibility screening: `c10_d20_production_driver.jl`'s `D20Checkpoint`;
+  `infeasibility_screen.jl`'s exact pairwise certificate (`S_sod = B_so + a_od`).
+- Candidate registry: `candidate_registry.jl`, literal `w` (pivot-reduced-log-A) vectors, current
+  D=4 headline upper `kappa=0.17245688540655113`, headline lower `kappa=0.004387827651021192`.
+- **No existing full-A common-marginals implementation existed anywhere in this repo** before this
+  continuation. A sequential-method (not full-A) analog exists and was validated/reused as the
+  math reference: `sequential_gravity/common_marginals_moments.jl` on branch
+  `fix/cm-fixed-dual-gradient` (same git-common-dir as this repo — a same-repo branch, not an
+  external file). A disconnected LEGACY full-A-adjacent implementation exists
+  (`moments/pairewiseIndependenceMoment!.jl`, `sameMarginalsMoment`/`independenceMoment` flags in
+  `moments/moments!.jl`) but is explicitly asserted OFF (`error(...)`) in the current exact
+  `gammanorm`/`directgp` moments path this branch's whole machinery is built around — not reused.
+
+**Correction mid-session (user-flagged, verified in code)**: the LATEST full-A production driver
+(`c10_d20_production_driver.jl`, `composite_gradient_fast.jl`) does NOT enforce the gravity
+moment as a live KNITRO outer constraint. It analytically ELIMINATES gravity via
+`gravity_elimination.jl::build_pivot_elimination`/`pivot_expand` — one A_od entry per D×D block
+is solved as an affine function of the other D²−1 (in log-A coordinates, where the gravity moment
+is exactly linear), so gravity is satisfied by CONSTRUCTION and KNITRO's outer decision variables
+are the reduced `zfree` (D²−1 dims), never the raw A_od block. A second, older production path
+(`run_fullA_D4_production.jl`, `CS.outer_loop_cached`) DOES carry gravity as a live outer
+constraint with an analytic tariff-based gradient, over the FULL (unreduced) A_od parameterization
+— both conventions currently coexist in the codebase. This does not change the CM implementation's
+column-layout requirement (gravity must stay the sole outer-only suffix column in `G` regardless
+of how the caller constructs θ — see Section 2), but it does mean any FAST/production-grade
+CM-aware outer-loop wiring (Section 7/9) should reuse `zfree`/pivot-elimination, not the raw
+17-dim layout used for this continuation's fixed-point validation and first correctness-focused
+outer solve (Section 6).
+
+## 2. Mathematical formulation implemented
+
+CDW eq. 35 (cumulative-CDF, anchored-to-reference-country form), exactly as already validated in
+the sequential-method codebase: for non-reference origin `o` and quantile cutoff `z_l` (an
+evenly-spaced-probability empirical quantile of the reference origin `1`'s raw baseline Exp(1)
+draws), impose
+
+```
+E_F[ 1{U_o <= z_l} - 1{U_1 <= z_l} ] = 0,   o = 2..D,  l = 1..L
+```
+
+under the least-favorable reweighted F the CC inner dual solve finds. Ported verbatim (math
+unchanged, attributed) into `full_aod_diag/d4_exact/common_marginals_moments.jl`, including the
+already-validated orthonormal-contrast alternative (`contrasts=:orthonormal`, a closed-form
+`R=(BB')^{-1/2}` Helmert-like reparameterization removing the shared-reference-country
+correlation the anchored form induces — same restriction count, exact invertible transform).
+
+**New (full-A-specific) glue**, also in that file:
+- `wrap_moments_with_cm(core_moments!, ncore_full, CM)`: builds a `moments!`-compatible closure.
+  CRITICAL layout fact (found by reading `cc_algo/PsiObjectiveBundle.jl`'s callable, not assumed):
+  moment columns `outer_constr_index:d` are OUTER-only (evaluated at θ directly, never
+  inner-CC-reweighted); in this codebase that suffix is currently exactly ONE column, the
+  gravity/orthogonality moment, which `newGravityMoment!.jl` unconditionally writes to `G[:,end]`
+  of whatever view it receives. The common-marginals restriction is an INNER moment (imposed on
+  the least-favorable F via its own dual multiplier), so it must be spliced BEFORE the gravity
+  column, not after — `wrap_moments_with_cm` calls the core moments function into a same-eltype
+  temporary sized to the ORIGINAL column count (so gravity lands at ITS local last position),
+  then relocates: pre-gravity core -> `G`'s prefix, CM block -> the next `ncm` columns, gravity ->
+  `G`'s new last column.
+- `build_cm_augmented_obj(ctx, CS; L, contrasts=:anchored)`: builds a NEW
+  `PsiObjectiveBundleImplicit` (via `CS.PsiObjectiveBundleImplicit`) with `d` and
+  `outer_constr_index` both grown by `ncm=(D-1)*L`, leaving the original context's `obj`
+  untouched (fully additive, no destructive edits to trusted production code).
+
+## 3. Dense reference validation (section 2/12 of the brief)
+
+`c12_validate_dense_cm.jl`, `c12_d4_fixed_param_battery.jl` (both committed). At D=4, W=8000,
+calibration point (A_od=1), L in {10,20,50}, both `:anchored` and `:orthonormal` contrasts:
+
+- Inner KNITRO dual solve converges cleanly (`nStatus=0`) at every L/contrast combination.
+- KKT residuals (`sum(m*G_j)/W` at the solved LFD weights `m`) are at MACHINE PRECISION
+  (~1e-16 to 1e-17) for both the pre-existing core moments and the new CM block — the strongest
+  form of "this restriction is correctly imposed on the least-favorable F" evidence available.
+- Anchored and orthonormal contrasts agree exactly (same max residual, same `Delta_dual`,
+  same `gamma'_focal`) — confirms the rotation is a true invertible reparameterization, not an
+  accidental change to the feasible set.
+- `Delta_dual` (the CC divergence needed to satisfy ALL restrictions from calibration) increases
+  monotonically with `L` (0.0010 baseline -> 0.0033 (L=10) -> 0.0051 (L=20) -> 0.0115 (L=50)) —
+  expected: more restrictions shrink the feasible-F set, so more divergence is needed to still
+  rationalize the same θ.
+- **Economically meaningful finding**: the EXISTING unrestricted D=4 upper headline candidate
+  (`candidate_registry.jl`'s `w_up40`, kappa=0.17246) is badly INFEASIBLE under the CM
+  restriction — `Delta_dual` jumps from ~1.0 (its own unrestricted value) to 1.87 (L=10) /
+  1.99 (L=20) / 2.18 (L=50), all far past `delta=1`. The restriction has real economic bite; the
+  restricted upper bound at delta=1 will be materially smaller than 0.1725.
+- A deliberately structurally-infeasible point (one A_od entry driven to ~1e-6, so that origin can
+  essentially never win a destination cell under exact hard-max) is correctly rejected
+  (`nStatus=-300`, KNITRO's unbounded-dual code) at every L tested — the CM-augmented bundle
+  inherits the base solver's infeasibility detection correctly, no special-casing needed.
+
+## 4. Sign-convention finding (not in the original brief, discovered mid-session)
+
+The plain generic outer-loop path (`CS.outer_loop`, `cc_algo/outer_loop_functions.jl`) and the
+specialized cached/envelope-gradient path (`CS.outer_loop_cached`,
+`run_fullA_D4_production.jl`) use DIFFERENT internal sign conventions for `find_smallest` under
+the `directgp` objective convention (`K = gamma'_focal` directly, not `kappa`). The cached path's
+own `obj_grad_fn!` applies a compensating `(-1)^find_smallest` flip so `find_smallest` keeps its
+"finds smallest kappa" meaning; the plain generic path does NOT apply this compensation, so under
+it `find_smallest=true` empirically finds the SMALLEST `gamma'_focal`, i.e. the LARGEST kappa
+(upper bound) — verified empirically (not just derived from reading code, which is easy to get
+backwards here), `c12_sign_convention_smoke_test.jl`: `find_smallest=true` moved kappa from 0.064
+(calibration) toward the known upper anchor (reaching 0.164 in a 25-iteration smoke run, target
+~0.1725); `find_smallest=false` moved it toward the known lower anchor (reaching 0.0039, target
+~0.0044). **Any future CM-aware outer-loop script using the plain `CS.outer_loop` path for an
+UPPER bound must use `find_smallest=true`** — the opposite of a naive reading of
+`moments_gammanorm.jl`'s own docstring, which describes the CACHED path's convention, not this one.
+
+## 5. D=4 delta=1 CM-constrained upper-bound solve (section 13)
+
+Driver: `c12_d4_delta1_upper_cm.jl` (usage: `julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl <L> <delta>`).
+Deliberately uses the GENERIC ForwardDiff/dense-jac_h outer-loop path (`CS.outer_loop`,
+`needs_outer_moment_jacobian=true` — safe at D=4's scale, unlike D=20 where this tensor caused a
+prior server-wide memory incident, see `docs/fullA_jach_audit.md`), NOT the specialized
+Method-B/envelope-gradient cached path (`run_fullA_D4_production.jl`'s `div_grad_fn!`): that path
+hardcodes a direct call to `EK_moments_gammanorm_directgp!` inside
+`ad_benchmark/derivative_core.jl::moment_map!`, bypassing `obj.moments!` entirely — confirmed by
+reading the code, not assumed — so it would silently ignore the CM columns if reused naively. The
+plain `CS.outer_loop` path dispatches `calculate_grad_k_autodiff!`/the dense-Jacobian gradient
+generically THROUGH `obj.moments!`, so it correctly picks up the CM wrapper. This is the
+correctness-first choice; a CM-aware fast envelope-gradient path is future work (Section 9).
+
+**L=10 result** (`csw_outer_100.opt`, maxit=100, generic ForwardDiff outer path):
+
+| L | status | outer_iters | opt_err | feas_err | gamma'_focal | kappa | Delta_dual (recheck) | gravity | CM max KKT | wall |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 10 | -400 (maxit hit) | 100/100 | 0.0195 | 1.3e-7 | 0.9056808059 | **0.1522028746** | 0.95766 (<=1) | -8.3e-9 | 1.8e-14 | 217s |
+
+`status=-400` fired because `outer_iters` exactly hit the 100-iteration cap (`csw_outer_100.opt`),
+not a real failure -- `opt_err=0.0195` shows the KKT optimality gap hasn't fully closed yet, while
+`feas_err=1.3e-7` shows the point is tightly feasible. This is the SAME "best-feasible-found-in-a-
+fixed-budget, not yet a certified optimum" situation continuation 11 documented repeatedly for the
+unrestricted problem (see `[[d20-delta1-round4-independent-verification]]` in memory) -- more
+outer budget would likely push kappa higher still (the direction of travel, 0.0642 calibration ->
+0.1522, is toward the unrestricted anchor 0.1725, consistent with the restriction's real but
+not-total bite).
+
+**Independent re-verification is genuinely independent of the search's own bookkeeping**: a
+FRESH cold `evaluate_fullA` call at the reported solution (not reusing KNITRO's own internal
+state) gives `nStatus=0` (clean, unrelated to the OUTER status), confirms `Delta_dual=0.9577<=1`
+(the delta=1 constraint holds), `gravity_value=-8.3e-9` (~0, correctly eliminated), and separately
+recomputes the CM-block's own KKT residual at that exact point: `1.8e-14`, machine precision --
+the common-marginals restriction is genuinely, exactly satisfied by the least-favorable F at this
+solution, not merely "close enough."
+
+**Headline comparison**: unrestricted upper kappa=0.17246 vs CM-restricted (L=10) kappa=0.15220
+-- an **11.8% reduction** in the upper bound purely from imposing this restriction, at the same
+delta=1 divergence budget. Confirms the Section 3 finding (the unrestricted candidate is badly
+CM-infeasible) translates into a real, materially different answer once the restricted problem is
+actually re-optimized rather than just checked at the old optimum.
+
+L=20 and L=50 runs: see below / resume commands at the end of this document for status at handoff
+time if not yet complete.
+
+## 6. Parallel subagent workstreams (sections 3-6, 8-11 of the brief)
+
+Three subagents launched in sibling worktrees off this branch, each with the validated dense
+reference as ground truth to equivalence-test against:
+
+1. **`diag/fullA-d4-exact-cm-interval-hessian`**: bin-index precomputation + interval-moment
+   reformulation (sections 3-4), lookup/histogram-based dual objective+gradient (sections 5-6).
+2. **`diag/fullA-d4-exact-cm-hessian-arch`**: exact Hessian architecture comparison A-D + Schur
+   block elimination (sections 8, 10).
+3. **`diag/fullA-d4-exact-cm-conditioning`**: conditioning-preserving transformations (anchored vs
+   interval vs standardized vs orthonormal, reference-country sensitivity) + adaptive quantile
+   activation (sections 9, 11).
+
+[RESULTS FILLED IN AS EACH AGENT COMPLETES]
+
+## 7. D=20 scaling (sections 15-16)
+
+NOT STARTED this continuation — gated on the D=4 outer-solve result and subagent findings above
+per the brief's own decision criteria ("proceed only after the D=4 equivalence and outer-solve
+gates pass"). Next command to resume: adapt `context_real_d20.jl::d20_real_setup` +
+`common_marginals_moments.jl::build_cm_augmented_obj` following the exact same pattern as Section
+5's D=4 driver, starting with the production microbenchmark table (Section 15's "First") before
+any long outer solve.
+
+## 8. What's exact vs approximate
+
+Everything implemented this continuation is EXACT (no smoothing, no approximation of the
+hard-max economics, no change to the CC divergence normalization): the cumulative-CDF moment
+block is a literal finite-grid restriction, the orthonormal-contrast rotation is an exact
+invertible linear reparameterization (not an approximation), and the inner CC dual solve is the
+same exact KNITRO solve as the rest of this codebase. No approximate/smooth basis (brief Section
+14) has been attempted.
+
+## 9. What's NOT done / open items (resume here)
+
+- The FAST Lfix/composite-gradient outer-loop path is not yet CM-aware (Section 7 of the brief).
+  `lfix_incremental.jl`'s `BaseDualState`/`LFixBaseCache` caching would need to be checked for
+  whether it assumes a fixed `obj.d`/moment layout that would need updating for the CM-augmented
+  bundle; not yet audited.
+- The compressed (`:compressed`) moment representation does not support CM columns; the CM block
+  is always dense-appended even when the economic block uses the compressed winner-form path.
+  Whether this matters for D=20/W=80000 performance is untested.
+- Real D=20 data has not been touched.
+- The adaptive-grid restart protocol's OUTER-LOOP integration (grow the active set across outer
+  KNITRO iterations, restart with a fresh quasi-Newton history) was explicitly out of scope for
+  the conditioning subagent (fixed-outer-point activation only) and is unimplemented.
+- Smooth-basis pilot (Section 14) not attempted (optional per the brief).
+
+## Resume commands
+
+```bash
+cd /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c12-common-marginals
+source .knitro_env.sh && export JULIA_NUM_THREADS=8 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl 20 1.0   # extend to L=20
+julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl 50 1.0   # extend to L=50
+```
