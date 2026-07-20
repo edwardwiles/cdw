@@ -1,8 +1,8 @@
 # Production-candidate integration: exact fast infeasibility screens beyond zero-winner rejection
 
-**Branch**: `integration/fullA-fast-range-screen`
-**No merge performed.** This branch is a reviewable production candidate. Await
-explicit user approval before any component is merged into a production line.
+**Branch**: `integration/fullA-fast-range-screen`, merged into `diag/fullA-d4-exact`
+per explicit user approval ("You can merge it in... the driver should use this
+as the new method, since this is the new production method").
 
 ## 0. Branch provenance
 
@@ -328,19 +328,26 @@ Files to carry forward:
 - `docs/fullA_fast_range_screen_production_integration.md` (this file),
   `docs/fullA_warm_start_reliability_note.md`.
 
-**One wiring decision deliberately left open**: this branch adds
-`evaluate_fullA_screened_ranged` as a new, parallel entry point — it does
-NOT replace `evaluate_fullA_screened`'s call sites inside
-`c10_d20_production_driver.jl::run_polish_checkpointed`'s `cb_F!`/`cb_G!`
-(the actual KNITRO callback hot path). Flipping that switch is a substantive
-production behavior change beyond what this integration branch's mandate
-covers (§8 of the original brief: prepare a reviewable candidate, do not
-merge). Recommend the user make that specific call explicitly, informed by
-§5's numbers.
+**Update — driver wiring decision resolved**: the user explicitly directed
+"the driver should use this as the new method, since this is the new
+production method." `screened_eval` (the single chokepoint every
+`cb_F!`/`cb_G!`/`cb_newpt!` callback in both `run_profile_checkpointed` and
+`run_polish_checkpointed` routes through) now calls
+`evaluate_fullA_screened_ranged` directly — this is no longer a parallel
+opt-in entry point, it IS the production callback path. Validated
+end-to-end (not just the standalone screen functions): a real 60s
+`run_profile_checkpointed` run at D=20/W=80,000 from a known feasible
+catalogue anchor completed cleanly (KNITRO `status=-401`, the expected
+outer time-limit code, 14 real evaluations, all correctly screened), with
+the starting point's `Delta_dual` matching the catalogue's independently
+recorded value to ~1e-9 and the new 7-field `screen_counts` shape
+(`pairwise/witness/winner/envelope/winning_range/safety_net/passed`)
+confirmed live. See `full_aod_diag/d4_exact/smoke_test_driver_wiring.jl`.
 
 ### Verdict
 
-**RECOMMEND MERGE**
+**MERGED** (into `diag/fullA-d4-exact`, per explicit user approval — see
+commit log for the merge commit).
 
 Both the envelope pre-winner screen and the fused winner-range screen are:
 - exact (not heuristic) one-sided certificates, re-derived and live-verified
@@ -362,12 +369,6 @@ tax) — it is the only screen covering the counterfactual column and the
 (structurally near-impossible, but not screen-proven-impossible by the other
 two) positive-side bilateral case.
 
-Not recommended for this merge: flipping the driver's actual `cb_F!`/`cb_G!`
-callbacks to call `evaluate_fullA_screened_ranged` instead of
-`evaluate_fullA_screened` — leave that as an explicit follow-up decision
-once this branch itself is approved, since it is the one change here that
-would alter the production hot path's real behavior rather than add an
-opt-in capability next to it.
 
 ## 9. See also
 
