@@ -9,8 +9,17 @@
 # linear reparameterization, Continuation 12's Section 6a) -- so their SOLVED economic content
 # (Delta_dual, gamma'_focal, kappa, core-moment residuals) must AGREE, even though the raw
 # (zeta,lambda) dual vectors and per-basis Hessian/condition number legitimately differ.
-include(joinpath(@__DIR__, "context.jl"))
-include(joinpath(@__DIR__, "context_real_d20.jl"))
+const _CMP_SCALE = length(ARGS) >= 1 ? ARGS[1] : "d4"
+# NOTE: context.jl and context_real_d20.jl must NOT both be include()d in the same process -- doing
+# so triggers an ambiguous PsiObjectiveBundleDelta binding (each pulls in prepare_cc/PMM.jl's call
+# chain independently; the two module-loads collide). Same failure mode candidate_registry.jl hits
+# when included alongside oracle_fast.jl's own chain -- a pre-existing repo fragility, not something
+# to fix broadly here. Load only the ONE context file this invocation actually needs.
+if _CMP_SCALE == "d4"
+    include(joinpath(@__DIR__, "context.jl"))
+else
+    include(joinpath(@__DIR__, "context_real_d20.jl"))
+end
 include(joinpath(@__DIR__, "winners.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
@@ -82,7 +91,7 @@ function compare_bases(ctx, θ_full::Vector{Float64}, L::Int, contrasts::Symbol,
             tC_cold = tC1, tI_cold = tI1, tC_warm = tC2, tI_warm = tI2, condC = condC, condI = condI)
 end
 
-scale = length(ARGS) >= 1 ? ARGS[1] : "d4"
+scale = _CMP_SCALE
 
 if scale == "d4"
     ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
