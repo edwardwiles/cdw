@@ -71,6 +71,7 @@ include(joinpath(@__DIR__, "compressed_live.jl"))
 include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
 include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))   # Continuation 11 Section 2: validated bit-identical vs composite_gradient_at_fast (0.0 diff, 5 points incl. trajectory test), ~1.1-1.9x faster; now the default gradient below
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
+include(joinpath(@__DIR__, "fast_range_screen.jl"))   # production-candidate: pre-winner envelope + fused winning-range screen; opt-in via evaluate_fullA_screened_ranged, NOT wired into run_polish_checkpointed's cb_F!/cb_G! by default yet -- see docs/fullA_fast_range_screen_production_integration.md
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
