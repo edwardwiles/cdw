@@ -11,14 +11,22 @@
 #
 # Two things are new relative to that pilot driver:
 #
-#   SECTION 5 -- every evaluation goes through `evaluate_fullA_screened`
-#   (infeasibility_screen.jl), reusing the ctx-level `pairwise`/`witness`
-#   structures `context_real_d20.jl::d20_real_setup` now builds ONCE at
-#   context-construction time (Continuation 10 change), in the exact order
-#   the standing brief specifies: pairwise cert -> witness -> destination
-#   winner-scan w/ early exit -> compressed moments -> CC inner solve. A
-#   raw, unscreened `evaluate_fullA_fast` call no longer appears anywhere in
-#   this driver's hot path.
+#   SECTION 5 -- every evaluation goes through `evaluate_fullA_screened_ranged`
+#   (fast_range_screen.jl, integration/fullA-fast-range-screen -- promoted to
+#   THE production screening path; the underlying pairwise/witness/zero-winner
+#   checks are infeasibility_screen.jl's, unchanged), reusing the ctx-level
+#   `pairwise`/`witness` structures `context_real_d20.jl::d20_real_setup`
+#   builds ONCE at context-construction time plus a per-ctx
+#   `RangedScreenContext` (`rsc`, built once via `build_ranged_screen_context`
+#   right after `ctx`) in the order: pairwise cert -> pre-winner envelope
+#   cert -> witness -> destination winner-scan (fused zero-winner + winning-
+#   range checks, single pass) -> general range-screen safety net (reusing
+#   the already-built CompressedFactual) -> CC inner solve. A raw, unscreened
+#   `evaluate_fullA_fast` call no longer appears anywhere in this driver's
+#   hot path. See docs/fullA_fast_range_screen_production_integration.md for
+#   the validation/benchmark backing this promotion (real D=20/W=80,000, 0
+#   false positives across the recovered pathology catalogue, no measurable
+#   overhead on warm feasible calls).
 #
 #   SECTION 6 -- checkpoint/resume. Every accepted KNITRO outer iterate (via
 #   `KN_set_newpt_callback`), every new best-feasible point, every
@@ -71,7 +79,7 @@ include(joinpath(@__DIR__, "compressed_live.jl"))
 include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
 include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))   # Continuation 11 Section 2: validated bit-identical vs composite_gradient_at_fast (0.0 diff, 5 points incl. trajectory test), ~1.1-1.9x faster; now the default gradient below
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
-include(joinpath(@__DIR__, "fast_range_screen.jl"))   # production-candidate: pre-winner envelope + fused winning-range screen; opt-in via evaluate_fullA_screened_ranged, NOT wired into run_polish_checkpointed's cb_F!/cb_G! by default yet -- see docs/fullA_fast_range_screen_production_integration.md
+include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
@@ -105,7 +113,7 @@ struct D20Checkpoint
     knitro_iter::Int
     wall_elapsed::Float64
     checkpoint_reason::Symbol   # :iteration | :new_best | :wall_interval | :stage_complete
-    screen_counts::NamedTuple   # (pairwise=.., witness=.., winner=.., passed=..) cumulative at ckpt time
+    screen_counts::NamedTuple   # (pairwise=.., witness=.., winner=.., envelope=.., winning_range=.., safety_net=.., passed=..) cumulative at ckpt time -- loosely typed field, old 4-key checkpoints from before the fast-range-screen wiring still deserialize fine (never destructured on resume, report-only)
     # ---- fields ONLY for the resume-reproducibility acceptance test, not needed for optimization ----
     verify_Delta_dual::Float64
     verify_gravity_value::Float64
@@ -126,22 +134,36 @@ load_checkpoint(path::AbstractString) = deserialize(path)::D20Checkpoint
 x_free_from_w(w, pe) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
 
 # ============================================================================
-# Screened evaluation wrapper (Section 5): EVERY call in this driver goes
-# through this, never raw evaluate_fullA_fast. Tracks per-stage rejection
-# counts for the report.
+# Screened evaluation wrapper (Section 5, extended by the fast-range-screen
+# integration): EVERY call in this driver goes through this, never raw
+# evaluate_fullA_fast. Tracks per-stage rejection counts for the report.
+#
+# Now routes through evaluate_fullA_screened_ranged (fast_range_screen.jl) --
+# the pre-winner envelope + fused winning-range + general safety-net screens
+# are THE production path, not an opt-in alternative alongside the old one.
+# When `rsc.envelope === nothing` (unsupported ctx -- see fast_range_screen.jl's
+# EnvelopeUnsupportedContext), evaluate_fullA_screened_ranged itself falls
+# back to the existing zero-winner-only screen_hard_winners automatically, so
+# this wrapper needs no separate fallback branch.
 # ============================================================================
 mutable struct ScreenCounters
     pairwise::Int
     witness::Int
     winner::Int
+    envelope::Int
+    winning_range::Int
+    safety_net::Int
     passed::Int
     rejections::Vector{NamedTuple}   # audit trail: (stage, o, d, n_eval)
 end
-ScreenCounters() = ScreenCounters(0, 0, 0, 0, NamedTuple[])
-as_namedtuple(sc::ScreenCounters) = (pairwise = sc.pairwise, witness = sc.witness, winner = sc.winner, passed = sc.passed)
+ScreenCounters() = ScreenCounters(0, 0, 0, 0, 0, 0, 0, NamedTuple[])
+as_namedtuple(sc::ScreenCounters) = (pairwise = sc.pairwise, witness = sc.witness, winner = sc.winner,
+                                      envelope = sc.envelope, winning_range = sc.winning_range,
+                                      safety_net = sc.safety_net, passed = sc.passed)
 
-function screened_eval(xf::AbstractVector{Float64}, ctx, sc::ScreenCounters, n_eval_ref::Ref{Int}; warm::Bool = true)
-    result, screen_meta = evaluate_fullA_screened(xf, ctx; moment_representation = :compressed,
+function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContext, sc::ScreenCounters,
+        n_eval_ref::Ref{Int}; warm::Bool = true)
+    result, screen_meta = evaluate_fullA_screened_ranged(xf, ctx, rsc; moment_representation = :compressed,
         cache = nothing, use_cache = false, warm = warm, tag = "",
         pairwise = ctx.pairwise, witness = ctx.witness, use_witness = ctx.witness !== nothing)
     st = screen_meta.screen_status
@@ -154,6 +176,16 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, sc::ScreenCounters, n_e
     elseif st === :winner_scan_infeasible
         sc.winner += 1
         push!(sc.rejections, (stage = :winner, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+    elseif st === :EXACT_INFEASIBLE_PREWINNER_ENVELOPE
+        sc.envelope += 1
+        push!(sc.rejections, (stage = :envelope, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+    elseif st === :EXACT_INFEASIBLE_WINNING_RANGE
+        sc.winning_range += 1
+        push!(sc.rejections, (stage = :winning_range, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+    elseif st === :EXACT_INFEASIBLE_MOMENT_RANGE
+        sc.safety_net += 1
+        push!(sc.rejections, (stage = :safety_net, o = get(screen_meta, :certificate, nothing) === nothing ? 0 : screen_meta.certificate.origin,
+                               d = get(screen_meta, :certificate, nothing) === nothing ? 0 : screen_meta.certificate.destination, n_eval = n_eval_ref[]))
     else
         sc.passed += 1
     end
@@ -191,12 +223,15 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     ctx = d20_real_setup(W = W, δ = delta, find_smallest = find_smallest)
     pe = build_pivot_elimination(ctx)
     D = ctx.D; D2 = D^2; n = D2 - 1
+    rsc = build_ranged_screen_context(ctx)
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed,
-       " screen_setup_wall=", ctx.screen_setup_wall)
+       " screen_setup_wall=", ctx.screen_setup_wall,
+       " envelope_screen_supported=", rsc.envelope !== nothing,
+       rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
     if resumed !== nothing
         ctx.obj.x .= resumed.dual_warm_start
-        r_verify, _ = evaluate_fullA_screened(x_free_from_w(vcat(g, zfree_start), pe), ctx;
+        r_verify, _ = evaluate_fullA_screened_ranged(x_free_from_w(vcat(g, zfree_start), pe), ctx, rsc;
             moment_representation = :compressed, cache = nothing, use_cache = false, warm = true,
             pairwise = ctx.pairwise, witness = ctx.witness, use_witness = ctx.witness !== nothing)
         d_delta = abs(r_verify.Delta_dual - resumed.verify_Delta_dual)
@@ -216,7 +251,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     # seed the compressed warm-start cache with a cold solve first (same fix c9_phase8_d20_pilot.jl
     # found necessary -- a fresh ctx's very first warm=true call has no prior state to warm-start
     # from and can spuriously report infeasible).
-    r_seed, _ = screened_eval(x_free_from_w(vcat(g, zfree_start), pe), ctx, sc, n_eval; warm = false)
+    r_seed, _ = screened_eval(x_free_from_w(vcat(g, zfree_start), pe), ctx, rsc, sc, n_eval; warm = false)
     lp("[", label, "] warm-cache seed (cold): inner_status=", r_seed.inner_status, " Delta=", r_seed.Delta_dual,
        " screen_status=", get(r_seed, :screen_status, :unknown))
     r_seed.inner_status in FEASIBLE_CODES || error("run_profile_checkpointed($label): start point not inner-feasible, cannot proceed")
@@ -261,10 +296,10 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         zfree = evalRequest.x
         w = vcat(g, zfree)
         xf = x_free_from_w(w, pe)
-        r, _ = screened_eval(xf, ctx, sc, n_eval; warm = true)
+        r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
         if !(r.inner_status in FEASIBLE_CODES)
             n_cold_retries[] += 1
-            r, _ = screened_eval(xf, ctx, sc, n_eval; warm = false)
+            r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
@@ -286,7 +321,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
                        delta_feasible = Δ <= ctx.δ + 1e-6))
         if n_eval[] <= 5 || n_eval[] % 10 == 0
             lp("  [", label, "] eval ", n_eval[], " t=", round(t_el, digits = 1), "s Delta=", Δ, " status=", r.inner_status,
-               " screens(pw/wt/wn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.passed)
+               " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed)
         end
         if is_new_best
             do_checkpoint(:new_best, w, r)
@@ -306,9 +341,9 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         base = shared !== nothing && shared.w == w ? shared.base : nothing
         if base === nothing
             n_g_recompute[] += 1
-            r_g, _ = screened_eval(xf, ctx, sc, n_eval; warm = true)
+            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
             if !(r_g.inner_status in FEASIBLE_CODES)
-                r_g, _ = screened_eval(xf, ctx, sc, n_eval; warm = false)
+                r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
             end
             r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_profile_checkpointed($label): cb_G! could not recompute a feasible base state"))
             base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
@@ -328,7 +363,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         knitro_iter[] += 1
         w_now = vcat(g, x)
         xf_now = x_free_from_w(w_now, pe)
-        r_now, _ = screened_eval(xf_now, ctx, sc, n_eval; warm = true)
+        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true)
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, w_now, r_now)
         end
@@ -347,13 +382,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     b = best[]
     lp("[", label, "] PROFILE DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
        "s n_eval=", n_eval[], " n_grad_calls=", n_grad_calls[],
-       " screens(pw/wt/wn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.passed)
+       " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed)
     if b !== nothing
         lp("  best: Delta=", b.Delta_dual, " gravity=", b.gravity_value, " found_at_eval=", b.n_eval)
     end
     # final stage-complete checkpoint at the terminal point
     w_final = vcat(g, collect(xsol))
-    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, sc, n_eval; warm = true)
+    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true)
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, g = g, find_smallest = find_smallest, ctx = ctx, pe = pe,
@@ -400,13 +435,16 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                                             d20_real_setup(W = W, δ = delta, find_smallest = find_smallest, inner_loop_opt = inner_opt_override)
     pe = build_pivot_elimination(ctx)
     D = ctx.D; D2 = D^2
+    rsc = build_ranged_screen_context(ctx)
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " screen_setup_wall=", ctx.screen_setup_wall,
-       " inner_opt=", inner_opt_override === nothing ? "default" : inner_opt_override)
+       " inner_opt=", inner_opt_override === nothing ? "default" : inner_opt_override,
+       " envelope_screen_supported=", rsc.envelope !== nothing,
+       rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
     w0 = vcat(g_start, zfree_start)
     if resumed !== nothing
         ctx.obj.x .= resumed.dual_warm_start
-        r_verify, _ = evaluate_fullA_screened(x_free_from_w(w0, pe), ctx; moment_representation = :compressed,
+        r_verify, _ = evaluate_fullA_screened_ranged(x_free_from_w(w0, pe), ctx, rsc; moment_representation = :compressed,
             cache = nothing, use_cache = false, warm = true, pairwise = ctx.pairwise, witness = ctx.witness,
             use_witness = ctx.witness !== nothing)
         lp("[", label, "] RESUME VALIDATION: |ΔDelta_dual|=", abs(r_verify.Delta_dual - resumed.verify_Delta_dual),
@@ -417,7 +455,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
 
     sc = ScreenCounters()
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
-    r0, _ = screened_eval(x_free_from_w(w0, pe), ctx, sc, n_eval; warm = false)
+    r0, _ = screened_eval(x_free_from_w(w0, pe), ctx, rsc, sc, n_eval; warm = false)
     lp("[", label, "] polish start point: inner_status=", r0.inner_status, " Delta=", r0.Delta_dual)
     r0.inner_status in FEASIBLE_CODES || error("run_polish_checkpointed($label): start point not inner-feasible, cannot proceed")
 
@@ -463,7 +501,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
         t_warm0 = time()
-        r, _ = screened_eval(xf, ctx, sc, n_eval; warm = true)
+        r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
         t_warm = time() - t_warm0
         cold_time = NaN; cold_status = missing
         if !(r.inner_status in FEASIBLE_CODES)
@@ -471,7 +509,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             warm_status = r.inner_status
             if !skip_cold_retry
                 t_cold0 = time()
-                r, _ = screened_eval(xf, ctx, sc, n_eval; warm = false)
+                r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
                 cold_time = time() - t_cold0
                 cold_status = r.inner_status
             end
@@ -500,7 +538,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         push!(trace, (idx = n_eval[], t_elapsed = t_el, gp = w[1], Delta_dual = Δ, inner_status = r.inner_status, feasible = feasible))
         if n_eval[] <= 5 || n_eval[] % 10 == 0
             lp("  [", label, "] eval ", n_eval[], " t=", round(t_el, digits = 1), "s gp=", w[1], " Delta=", Δ,
-               " screens(pw/wt/wn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.passed)
+               " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed)
         end
         if is_new_best
             do_checkpoint(:new_best, w, r)
@@ -519,9 +557,9 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         base = shared !== nothing && shared.w == w ? shared.base : nothing
         if base === nothing
             n_g_recompute[] += 1
-            r_g, _ = screened_eval(xf, ctx, sc, n_eval; warm = true)
+            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
             if !(r_g.inner_status in FEASIBLE_CODES)
-                r_g, _ = screened_eval(xf, ctx, sc, n_eval; warm = false)
+                r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
             end
             r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_polish_checkpointed($label): cb_G! could not recompute a feasible base state"))
             base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
@@ -538,7 +576,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function cb_newpt!(kc2, x, lambda, user_data)
         knitro_iter[] += 1
         xf_now = x_free_from_w(x, pe)
-        r_now, _ = screened_eval(xf_now, ctx, sc, n_eval; warm = true)
+        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true)
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, collect(x), r_now)
         end
@@ -561,11 +599,11 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         κ = 1 - b.gp^(σ / (σ - 1))
     end
     lp("[", label, "] POLISH DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
-       "s n_eval=", n_eval[], " kappa=", κ, " screens(pw/wt/wn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.passed,
+       "s n_eval=", n_eval[], " kappa=", κ, " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed,
        " n_cold_retries(F)=", n_cold_retries[], " n_rejected(F)=", n_rejected[], " n_g_recompute=", n_g_recompute[])
 
     w_final = collect(xsol)
-    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, sc, n_eval; warm = true)
+    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true)
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, find_smallest = find_smallest, ctx = ctx, pe = pe,
