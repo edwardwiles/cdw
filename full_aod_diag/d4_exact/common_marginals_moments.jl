@@ -51,14 +51,23 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
                                        include_truncated_moment::Bool = false,
                                        μHat::Union{Nothing,Real} = nothing,
                                        σHat::Union{Nothing,Real} = nothing,
-                                       contrasts::Symbol = :anchored)
+                                       contrasts::Symbol = :anchored,
+                                       probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     W, D = size(U)
     @assert 1 <= refIndex1 <= D
     @assert L >= 1
     @assert contrasts in (:anchored, :orthonormal) "contrasts must be :anchored or :orthonormal, got $contrasts"
     include_truncated_moment && @assert(μHat !== nothing && σHat !== nothing,
         "include_truncated_moment=true requires μHat and σHat (the fixed baseline-calibrated values)")
-    z = quantile(U[:, refIndex1], collect(range(1 / L, (L - 1) / L, length = L)))
+    # Continuation 13, Section 6: `probs=` lets a caller supply an EXPLICIT probability grid (e.g.
+    # nested_quantile_grids.jl's genuinely-nested Q_10/Q_20/Q_50) in place of the default evenly-
+    # spaced `k/L` grid -- the default path (`probs === nothing`) is byte-for-byte unchanged.
+    if probs === nothing
+        z = quantile(U[:, refIndex1], collect(range(1 / L, (L - 1) / L, length = L)))
+    else
+        @assert length(probs) == L "precalc_common_marginals_cdf: length(probs)=$(length(probs)) != L=$L"
+        z = quantile(U[:, refIndex1], probs)
+    end
     origins = [o for o in 1:D if o != refIndex1]
     nO = length(origins)
     R = contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
@@ -182,14 +191,15 @@ Returns `(obj_cm, CM, z, origins, ncore, ncm)`.
 """
 function build_cm_augmented_obj(ctx, CS; L::Int, contrasts::Symbol = :anchored,
                                  include_truncated_moment::Bool = false,
-                                 refIndex1::Int = ctx.γ.refIndex1)
+                                 refIndex1::Int = ctx.γ.refIndex1,
+                                 probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     obj0 = ctx.obj
     ncore = obj0.d
     μHat = include_truncated_moment ? ctx.μHat : nothing
     σHat = include_truncated_moment ? ctx.σ : nothing
     CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L;
         include_truncated_moment = include_truncated_moment, μHat = μHat, σHat = σHat,
-        contrasts = contrasts)
+        contrasts = contrasts, probs = probs)
     ncm = size(CM, 2)
     @assert ncm == n_cm_moments(ctx.D, L; include_truncated_moment = include_truncated_moment)
 
