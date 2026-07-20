@@ -90,8 +90,9 @@ point: Architecture-C inner solve (`archC_base_state`) + the CM-aware Lfix
 gradient (`composite_gradient_at_fast_cm`), fully wired for a KNITRO OUTER
 callback's `cb_G!`.
 """
-function cm_production_gradient(x_free0::AbstractVector, pcx, ctx, pe; kwargs...)
-    base = archC_base_state(x_free0, pcx.ctx_cm, pcx.cctx)
+function cm_production_gradient(x_free0::AbstractVector, pcx, ctx, pe;
+        base::Union{Nothing,BaseDualState} = nothing, kwargs...)
+    base = base === nothing ? archC_base_state(x_free0, pcx.ctx_cm, pcx.cctx) : base
     cache = build_lfix_base_cache_cm(x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins)
     return composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
 end
