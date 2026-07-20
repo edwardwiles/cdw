@@ -1,0 +1,22 @@
+{
+  "category": "FEASIBLE_FINITE_DIVERGENCE",
+  "description": "First-pass delta=2 frontier result (profile-then-polish), kappa~0.0814; source: master_log.txt",
+  "source_checkpoint": "/bbkinghome/edav/gravity_robustness/gravity-fullA-d4/results/fullA_d4/c11_frontier/delta_2_0/d2_profile_stage_complete_neval141.jls",
+  "run_id": "c10_prod_d2_profile_20260719_152757", "label": "d2_profile", "branch": "lower",
+  "find_smallest": true, "delta_target": 2.0, "W": 80000, "draw_seed_param": 20260719,
+  "note_on_seed": "per docs/fullA_continuation11_handoff.md sec 1, effective U draws always use seedU=888 regardless of draw_seed_param (unconditional re-seed in prepare_cc/master_prepare_cc.jl:35)",
+  "D": 20, "sigma": 2.5,
+  "gamma_prime_focal_at_checkpoint": 0.953986058875669, "kappa_at_checkpoint": 0.07550752553115037,
+  "n_eval": 141, "knitro_iter": 65, "wall_elapsed_seconds": 1205.8217060565948, "checkpoint_reason": "stage_complete",
+  "verify_Delta_dual": 0.8073143264282389, "verify_gravity_value": 5.9978064181898106e-18, "verify_max_abs_moment_kkt_resid": 1.4381782875716453e-12, "verify_moment_resid_norm": 12.512053626016645,
+  "best_feasible": {
+    "gp_note": "best_feasible schema varies by source script; gp_own is from the checkpoint's own NamedTuple when present, else null -- ck.g (top-level gamma_prime_focal_at_checkpoint above) is the authoritative best-feasible gp per the D20Checkpoint docstring",
+    "gp_own": null,
+    "kappa": 0.07550752553115037, "Delta_dual": 0.8073143264282389, "gravity_value": 5.9978064181898106e-18, "kkt_resid": 1.4381782875716453e-12, "inner_status": 0, "t_elapsed": 1201.9468319416046, "n_eval": 141
+  },
+  "screen_counts": {"pairwise": 2, "witness": 0, "winner": 0, "passed": 238},
+  "reduced_zfree_csv": "/bbkinghome/edav/gravity_robustness/gravity-fullA-d20-fast-infeasibility/diagnostics/infeasibility_points/feasible_delta2_firstpass_zfree.csv",
+  "logAod_full_csv": "/bbkinghome/edav/gravity_robustness/gravity-fullA-d20-fast-infeasibility/diagnostics/infeasibility_points/feasible_delta2_firstpass_logAod_full.csv",
+  "Aod_theta_full_csv": "/bbkinghome/edav/gravity_robustness/gravity-fullA-d20-fast-infeasibility/diagnostics/infeasibility_points/feasible_delta2_firstpass_Aod_theta_full.csv",
+  "solver_state_note": "KNITRO's internal quasi-Newton (SR1/BFGS/L-BFGS) Hessian-approximation state is NOT exposed by the KNITRO.jl/C API for extraction+reinjection across separate KN_new() instances -- checked via names(KNITRO, all=true); nothing hessian/state/restart-shaped beyond KN_get_hessian_values (exact-Hessian-mode only, not applicable to this driver's SR1 default). NOT checkpointed. A resumed run restarts its outer Hessian approximation from KNITRO's own default initialization."
+}

@@ -1,0 +1,27 @@
+{
+  "category": "ZERO_WINNER_INFEASIBLE",
+  "confidence": "HIGH - independently reproduced this session (2026-07-20) via a fresh read-only Julia call against gravity-fullA-d4's own evaluate_fullA_screened, not just re-stated from a prior doc",
+  "description": "The sequential-linearization method's own delta=5 upper-bound (large-kappa) headline point, reconstructed into the full-A_od natural-theta parameterization and fed into the exact full-A hard-max oracle. Fails the cheap pairwise never-wins screen before any inner CC dual solve is attempted.",
+  "D": 20, "W": 80000, "sigma": 2.5, "delta_target": 5.0, "find_smallest": true,
+  "gp_focal": 0.939766840445484,
+  "kappa_as_reported_by_sequential_method": 0.0983592569940217,
+  "kappa_note": "kappa = 1 - gp^(sigma/(sigma-1)) is a closed-form function of gp alone (gauge-invariant), so this number is valid regardless of whether the point is feasible under our exact criterion; it is NOT a valid same-criterion comparator to our own kappa numbers since it is provably infeasible here (see screen_status).",
+  "draw_seed_param": 20260719,
+  "effective_seedU": 888,
+  "note_on_seed": "per docs/fullA_continuation11_handoff.md sec 1, master_prepare_cc.jl unconditionally re-seeds with seedU=888 after draw_seed is set, so the effective U draws always use seed 888 regardless of draw_seed_param",
+  "screen_status": "pairwise_certified_infeasible",
+  "worst_o": 17, "worst_d": 1, "worst_slack": -0.020320170124159986,
+  "worst_slack_interpretation": "m_od < 0 means origin 17 can literally never win destination 1 on any of the W=80000 fixed simulation draws (some rival k dominates it on every single draw) -- a hard structural infeasibility, not a numerical-tolerance issue",
+  "n_pairwise_violations_at_this_point": "not re-enumerated this session (only the first/worst violation is reported by evaluate_fullA_screened's early-exit); c11_pairwise_slack_diag_delta5.jl (see source pointer) is designed to enumerate ALL violating cells but its own stdout was not captured to a saved log by the prior session -- see report for what is/isn't independently confirmed",
+  "inner_status": null,
+  "inner_status_note": "never reached the real inner CC dual solve -- the pairwise screen rejects before that stage by construction",
+  "reconstruction_method": "u[o,d] destination-share-inversion output from the sequential method's own production run, inverted back to full-A's Aod_theta gauge via the validated gauge-conversion formula in docs/fullA_sequential_exact_comparison.md sec 2.2 (round-trip validated to ~1e-15 on the focal column in that phase's D=4 analog)",
+  "reduced_zfree_or_full_Aod": "full_Aod_theta_matrix only (this is a RECONSTRUCTED point, not one this repo's own outer-loop optimizer ever visited in reduced-z form)",
+  "Aod_theta_full_csv": "source_csv_copies/c11_Aod_theta_full_delta5_upper.csv",
+  "source_file_provenance": [
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c11_verify_sequential_point_delta5.jl (lines 1-53) -- the script whose header documents this point's origin and the same gp/kappa numbers used here",
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c11_pairwise_slack_diag_delta5.jl (lines 1-74) -- full pairwise-violation enumeration script (per-cell m_od, small/medium/large share classification), same point",
+    "gravity-fullA-d4/docs/fullA_continuation11_handoff.md sec 3 (lines 84-108) -- the analogous delta=1 point's documented pairwise-screen failure (worst_o/worst_d not given there); this JSON's delta=5 numbers are from THIS session's independent re-run, not copied from that doc",
+    "independent re-verification: this session, /tmp/.../scratchpad/verify_delta5_points.jl -> diagnostics/infeasibility_points/delta5_sequential_point_verification_INDEPENDENT.json (label=raw_sequential_delta5)"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "category": "UNRESOLVED_NUMERICAL_FAILURE",
+  "confidence": "HIGH - directly quoted from the prior session's own append-only master log, not reinterpreted",
+  "description": "The first-pass delta=0.1 frontier run (continuation from delta=1 via 0.5, 0.25 intermediate steps) found NO feasible point at all within its first polish budget; only resolved to feasibility after a manual +1200s budget extension from checkpoint. This is a genuine boundary/near-infeasible-region case at a tight divergence budget (delta=0.1 is close to the theoretical Frechet/gravity limit), distinct from BOTH the zero-winner and the screen-passed-but-inner-infeasible categories: it never got a clean -300 or a clean pairwise rejection, it simply ran out of time before finding ANY feasible point on the first attempt.",
+  "D": 20, "W": 80000, "sigma": 2.5, "delta_target": 0.1, "find_smallest": true,
+  "first_attempt_result": "WARNING: delta=0.1 polish produced no feasible point; marking UNRESOLVED. FINAL delta=0.1 g=NaN kappa=NaN source=UNRESOLVED_no_feasible_point (best Delta=0.10052, 0.5% over target, still improving when the 900s budget ran out)",
+  "eventual_resolution": "extended +1200s from the same checkpoint -> crossed into feasibility -> g=0.9738573142 kappa=0.0431903414 (see c11_main_results_export_COPY.csv row 'delta_0_1', KNITRO status -411, 'near-boundary')",
+  "still_partial_at_time_of_this_recovery_session": "2 of the 5 overnight-cascade delta=0.1 starts (s3_randjitter, s5_E) show 'killed early, round 1 partial' in c11_main_results_export_COPY.csv with a blank outer_knitro_status_code and the note 'Could not locate a POLISH/PROFILE DONE log line ... likely still-running job at export time' -- genuinely unresolved/ambiguous as of this session's snapshot, not resolved retroactively here",
+  "source_file_provenance": [
+    "gravity-fullA-d4/results/fullA_d4/c11_frontier/master_log.txt lines ~26-32 (delta=0.1 continuation section, 'WARNING: delta=0.1 polish produced no feasible point' and 'FINAL delta=0.1 g=NaN kappa=NaN source=UNRESOLVED_no_feasible_point')",
+    "gravity-fullA-d4/c11_main_results_export.csv rows for delta_nominal=0.1 (copied to source_csv_copies/c11_main_results_export_COPY.csv in this worktree)",
+    "gravity-fullA-d4/docs/fullA_continuation11_handoff.md sec 2 (first-pass table + prose describing the delta=0.1 extension)"
+  ]
+}

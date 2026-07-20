@@ -1,0 +1,19 @@
+{
+  "category": "ZERO_WINNER_INFEASIBLE",
+  "confidence": "HIGH - from Continuation 9's own validated screening report; not independently re-run this session, but the report documents cross-checks against the real dense oracle (not just the screen alone)",
+  "description": "4 known D=20 real-data outer points (calibration, gravity-tangent, upper-branch offset=0.01, lower-branch offset=0.01), each re-evaluated at W=8000 instead of the production W=80000. All 4 fail the pairwise never-wins screen with exactly 5 of 400 positive-target-share (o,d) cells having ZERO winning draws among the 8000 available -- and all 4 real dense-oracle KNITRO calls independently return inner_status=-300, exactly matching the screen's prediction. This retroactively explains this investigation's own historical 'W=8000 is uniformly infeasible/unbounded at every delta' finding (docs/fullA_D20_production_path_audit.md) as genuine zero-winner structural infeasibility, not a vague numerical-conditioning issue.",
+  "D": 20, "W": 8000, "sigma": 2.5,
+  "points": [
+    {"label": "calibration_W8000", "pairwise_infeasible": true, "winner_scan_feasible": false, "n_zero_win_positive_share_cells": 5, "n_total_positive_share_cells": 400, "real_dense_inner_status": -300},
+    {"label": "gravity_tangent_W8000", "pairwise_infeasible": true, "winner_scan_feasible": false, "n_zero_win_positive_share_cells": 5, "n_total_positive_share_cells": 400, "real_dense_inner_status": -300},
+    {"label": "upper_branch_W8000", "pairwise_infeasible": true, "winner_scan_feasible": false, "n_zero_win_positive_share_cells": 5, "n_total_positive_share_cells": 400, "real_dense_inner_status": -300},
+    {"label": "lower_branch_W8000", "pairwise_infeasible": true, "winner_scan_feasible": false, "n_zero_win_positive_share_cells": 5, "n_total_positive_share_cells": 400, "real_dense_inner_status": -300}
+  ],
+  "contrast_at_W80000": "the SAME 4 points reconstructed at the production W=80000 all PASS both the pairwise and winner-scan screens (worst_slack ~2.156-2.1575, all positive/feasible) -- table in the same source doc, sec 4.3 -- direct evidence that this specific pathology is a too-few-draws phenomenon for these particular points, distinct from the delta=5 sequential-derived-point pathology (which stays screen-passed-but-inner-infeasible at the FULL production W=80000, see nonzero_winner_infeasible_delta5_candidate*.json)",
+  "reduced_zfree_or_full_Aod": "not recovered in this session -- the source report characterizes these points structurally (violation counts, status codes) but this session did not locate or re-export their literal (gp, A_od) values; a follow-up could extract them from docs/fullA_D20_W80k_microbenchmark.md (the doc that originally defined 'calibration/gravity_tangent/upper_branch_offset01/lower_branch_offset01') if needed",
+  "source_file_provenance": [
+    "gravity-fullA-d4/docs/fullA_D20_infeasibility_screening_report.md sec 4.3 (D=20 W=80000 control table, lines ~151-164) and sec 5 (D=20 W=8000 finding, lines ~211-241, table at ~223-228)",
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c9_infscreen_d20_validate.jl -- the script that produced sec 4.3/sec 5's numbers",
+    "gravity-fullA-d4/docs/fullA_D20_W80k_microbenchmark.md -- original definition of the 4 named points (calibration/gravity_tangent/upper_branch/lower_branch)"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "category": "ZERO_WINNER_INFEASIBLE",
+  "confidence": "MEDIUM - documented claim from a prior session's handoff doc, NOT independently re-verified this session (time-budget choice: the delta=5 analog was prioritized for fresh re-verification since it had richer follow-up repair-chain evidence)",
+  "description": "The sequential-linearization method's own delta=1 upper-bound headline point (kappa=0.081517862942719), reconstructed into full-A_od natural-theta parameterization the same way as the delta=5 point, evaluated in the exact full-A hard-max oracle.",
+  "D": 20, "W": 80000, "sigma": 2.5, "delta_target": 1.0, "find_smallest": true,
+  "gp_focal": 0.950259956422648,
+  "kappa_as_reported_by_sequential_method": 0.081517862942719,
+  "draw_seed_param": null,
+  "effective_seedU": 888,
+  "screen_status": "pairwise_certified_infeasible (or possibly a later screen stage -- the handoff doc's wording is 'fails the pairwise zero-winner screen', taken at face value here)",
+  "worst_o": null, "worst_d": null, "worst_slack": null,
+  "worst_slack_note": "not given in the source doc; would need a fresh run of c11_verify_sequential_point.jl to recover the exact (o,d,slack) triple",
+  "inner_status": null,
+  "reconstruction_method": "same u-inversion -> Aod_theta gauge-conversion methodology as the delta=5 point (docs/fullA_sequential_exact_comparison.md sec 2.2), applied to the sequential method's delta=1 production result",
+  "Aod_theta_full_csv": "source_csv_copies/c11_Aod_theta_full_delta1_upper.csv",
+  "source_file_provenance": [
+    "gravity-fullA-d4/docs/fullA_continuation11_handoff.md sec 3, lines 84-108: \"Fed this exact A_od matrix into our exact full-A hard-max oracle ... certified structurally infeasible -- fails the pairwise zero-winner screen ...\"",
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c11_verify_sequential_point.jl -- the script that produced this finding (not re-run this session)",
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c11_Aod_theta_full_delta1_upper.csv -- the reconstructed matrix, copied to source_csv_copies/ in this worktree"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "category": "UNRESOLVED_NUMERICAL_FAILURE / THE KEY PATHOLOGY CANDIDATE",
+  "confidence": "HIGH - independently reproduced this session (2026-07-20) via a fresh read-only Julia call against gravity-fullA-d4's own evaluate_fullA_screened; this is a REAL, freshly-confirmed instance of the exact pathology described in the task brief: every bilateral cell has >=1 winner (screen_status=screen_passed -- pairwise AND witness AND destination winner-scan all pass), yet the real inner CC dual solve reports inner_status=-300 (KNITRO's unbounded/primal-infeasible family).",
+  "description": "A perturbed variant of the sequential method's delta=5 raw point (see zero_winner_infeasible_delta5_sequential_raw.json), repaired to CLEAR the cheap pairwise never-wins screen. Same LP repair as candidate 2, margin=0.5 (larger safety buffer, larger L1 perturbation, still all 20 columns LP-feasible).",
+  "D": 20,
+  "W": 80000,
+  "sigma": 2.5,
+  "delta_target": 5.0,
+  "find_smallest": true,
+  "gp_focal": 0.939766840445484,
+  "kappa": 0.098359256994022,
+  "kappa_note": "closed-form function of gp alone; validity as a same-criterion comparator is moot here since the point is infeasible (inner_status=-300, Delta_dual undefined/NaN)",
+  "draw_seed_param": 20260719,
+  "effective_seedU": 888,
+  "note_on_seed": "per docs/fullA_continuation11_handoff.md sec 1, effective U draws always use seedU=888 regardless of draw_seed_param",
+  "screen_status": "screen_passed",
+  "screen_status_meaning": "pairwise-never-wins certificate PASSES, extreme-draw witness PASSES, full destination-by-destination hard-winner scan PASSES -- every one of the 400 positive-target-share (o,d) cells has at least one winning draw among the W=80000. This is exactly the 'cheap screens pass' precondition for the pathology.",
+  "inner_status": -300,
+  "inner_status_meaning": "KNITRO unbounded/primal-infeasible-family status on the real inner CC divergence-minimization dual solve -- the point is genuinely infeasible (no valid reweighting of the W draws matches all ~400 bilateral moments simultaneously) despite passing every cheap winner-existence screen. This is a JOINT infeasibility across all destinations/moments together, not a per-cell issue any single-column check can see.",
+  "Delta_dual": null,
+  "gravity_value": null,
+  "moment_resid_norm": 0.0,
+  "elapsed_seconds_this_eval": null,
+  "reduced_zfree_or_full_Aod": "full_Aod_theta_matrix only (perturbed-repair point, not a literal outer-loop-visited reduced-z point)",
+  "Aod_theta_full_csv": "source_csv_copies/c11_Aod_theta_full_delta5_upper_LPFIXED_margin0.5.csv",
+  "verification_json": "delta5_sequential_point_verification_INDEPENDENT.json (this session's own independent re-run; see the entry with label=\"lpfixed_margin0.5_delta5\")",
+  "source_file_provenance": [
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c11_lp_feasibility_repair_delta5.jl (LP repair, candidates 2-5)",
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c11_verify_sequential_point_delta5.jl -- the general evaluate_fullA_screened calling pattern this session's fresh verification script followed",
+    "gravity-fullA-d4/full_aod_diag/d4_exact/c11_Aod_theta_full_delta5_upper_LPFIXED_margin0.5.csv -- copied to source_csv_copies/ in this worktree",
+    "independent re-verification: this session, /tmp/.../scratchpad/verify_delta5_points.jl -> diagnostics/infeasibility_points/delta5_sequential_point_verification_INDEPENDENT.json"
+  ]
+}
