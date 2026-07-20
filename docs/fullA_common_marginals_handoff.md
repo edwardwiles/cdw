@@ -1,7 +1,8 @@
 # Continuation 12: common-marginals restriction for the full-A_od exact solver
 
-Status: IN PROGRESS. This document is being filled in as results land; see the "Open items"
-section at the bottom for exactly what is unfinished and the commands to resume it.
+Status: D=4 gates PASSED (architecture built, validated, and a real constrained outer solve
+produced at 3 grid sizes). D=20 scaling NOT started -- see Section 9 "what's not done" and the
+resume commands at the end for exactly how to continue.
 
 ## 1. Repo audit (section 1 of the standing brief)
 
@@ -230,27 +231,146 @@ the CM-restricted upper bound (0.152-0.156) is meaningfully below the unrestrict
 
 ## 6. Parallel subagent workstreams (sections 3-6, 8-11 of the brief)
 
-Three subagents launched in sibling worktrees off this branch, each with the validated dense
-reference as ground truth to equivalence-test against:
+Three subagents ran in sibling worktrees off this branch, each with the validated dense reference
+as ground truth to equivalence-test against. All three branches are now MERGED into this one
+(clean merges, disjoint new files, no conflicts). Full reports:
+`docs/fullA_cm_interval_lookup_report.md`, `docs/fullA_cm_hessian_architecture_report.md`,
+`docs/fullA_cm_conditioning_and_adaptive_grid_report.md`.
 
-1. **`diag/fullA-d4-exact-cm-interval-hessian`**: bin-index precomputation + interval-moment
-   reformulation (sections 3-4), lookup/histogram-based dual objective+gradient (sections 5-6).
-2. **`diag/fullA-d4-exact-cm-hessian-arch`**: exact Hessian architecture comparison A-D + Schur
-   block elimination (sections 8, 10).
-3. **`diag/fullA-d4-exact-cm-conditioning`**: conditioning-preserving transformations (anchored vs
-   interval vs standardized vs orthonormal, reference-country sensitivity) + adaptive quantile
-   activation (sections 9, 11).
+### 6a. Interval/bin-index reformulation + lookup kernels (sections 3-6)
 
-[RESULTS FILLED IN AS EACH AGENT COMPLETES]
+Cumulative<->interval transform built two independent ways (block-cumsum and an explicit
+`kron(upper-tri-ones, I_nO)` matrix), agreeing with each other and reconstructing the dense
+reference to 0-1.11e-16 at L in {10,20,50}, both contrast modes. The interval-augmented CC inner
+solve matches the dense one (Delta_dual/Delta_primal ~1e-15-1e-19, LFD weights ~1e-14-1e-16) at
+calibration/perturbed/infeasible points, correctly rejecting the infeasible one identically.
+
+O(D)-per-draw lookup FG kernels (interval basis, plus a cumulative-suffix-sum diagnostic variant)
+reproduce the dense callable to machine precision and were wired into a REAL live KNITRO inner
+solve (not just an isolated microkernel), matching the untouched dense baseline to the same
+tolerance across 12 configs. Two real bugs caught and fixed en route: a reshape-orientation bug
+that silently transposed origin<->bin, and an off-by-one BLAS slice bound.
+
+**Honest end-to-end benchmark**: the isolated FG-kernel cost shows the expected O(D) vs O(D*L)
+scaling clearly (dense 324/511/998 mus/call vs lookup flat ~325-365 mus/call at L=10/20/50 ->
+1.0x/1.4x/2.9x). But the FULL cold KNITRO inner solve only speeds up 1.18-1.29x, because (a) at
+D=4 the problem converges in just 4-5 KNITRO iterations, so KNITRO's own per-iteration overhead
+dominates the callback saving, and (b) the Hessian callback was deliberately left dense/unoptimized
+for this workstream (that's Section 6b's job), so its cost grows with L and partially offsets the
+FG win. **Conclusion: the lookup formulation is a real, verified, correct win, but a MODEST one
+end-to-end at D=4 -- the bigger payoff is expected at D=20/L=50 where KNITRO iteration overhead is
+a much smaller share of total cost and the O(D) vs O(D*L) gap is larger in absolute terms**, not
+yet measured. Threaded histogram building: ~25-30% win from 1->8 threads, REGRESSED at 16 threads
+(workload too small for W=8000) -- a real but limited finding, not a production recommendation.
+
+### 6b. Exact Hessian architecture comparison + block elimination (sections 8, 10)
+
+Four architectures compared (A: trusted dense BLAS baseline; B: structured/cached moment-block
+materialization; C: exact structured Hessian via weighted bin-contingency tables `T_op`/`T_o1`/
+`T_1p`/`T_11`; D: matrix-free HVP via KNITRO's CG mode, diagnostic-only per the brief).
+
+**Winner: Architecture C.** Hessian-callback time 1.4x (L=10) -> **5.2x (L=50, anchored)** faster
+than dense BLAS; full cold KNITRO inner solve 1.1x -> **2.7x (L=50)** faster. All four architectures
+agree with the trusted baseline to ~1e-15 -- but only after a real bug was found and fixed: C's
+first implementation was off by a uniform 2x on the `H_EC` (economic-CM cross) block because it was
+written only into the upper-triangle position and never mirrored before a symmetrization step
+averaged it against an unset zero. Architecture B gave a modest, real 5-8% cold-solve speedup from
+avoiding `wrap_moments_with_cm`'s fresh-allocated `G_tmp` per call. Architecture D validated
+correctly as an independent oracle but was 4-8x SLOWER overall (138-394 HV calls per solve vs 4
+dense calls) -- confirmed diagnostic-only, as the brief anticipated.
+
+**Block elimination (Schur complement on `H_CC`) does NOT help**: 1.46x SLOWER than direct
+factorization of the full Hessian, because `H_CC` (150x150 at L=50) already costs 81% of factoring
+the entire 168x168 matrix -- eliminating the LARGE block gives no asymptotic benefit here (this
+would likely flip at larger D where the CM block is a smaller fraction of the total). Correctness
+of the reorganization itself was verified (~1e-27 at a KKT point, ~2e-9 on a random RHS) even
+though it isn't the right lever to pull.
+
+**D=20/L=50/W=80000 projection** (not run, explicitly out of scope for this workstream): C's
+nominal FLOP advantage shrinks somewhat with D (322x at D=4 -> ~216x at D=20 projected, since the
+core-moment count grows ~D^3 and partially catches up to the ~D^2-scaling CM block at fixed L), but
+memory is likely the more decisive factor given this repo's prior 109GB jac_h incident (see
+Section 1) -- C is the only architecture avoiding an ~828MB dense Hessian-step scratch buffer
+(needs only ~297MB of its own bin-table scratch instead). A fully memory-lean D=20 pipeline would
+also need the FG callback itself restructured to match (Section 6a's lookup kernels, not yet
+combined with Architecture C's Hessian -- see Section 9 "what's not done").
+
+### 6c. Conditioning experiments + adaptive quantile activation (sections 9, 11)
+
+96 runs (4 bases x 3 L's x 2 points x 4 reference countries), all converged. Conditioning ranking,
+CONSISTENT at every L and both test points: **interval < std_interval < orthonormal < anchored**.
+At L=50, interval beats anchored by ~11-13x and orthonormal by ~3-4x in `cond(Hessian)`. Critically,
+anchored's conditioning DEGRADES ~4x from L=10 to L=50 while interval's stays flat -- i.e. the
+anchored default (what Sections 3-5 above and the D=4 outer solves used) is the WORST-scaling
+choice as L grows, exactly the regime a future D=20/L=50 run would stress hardest.
+
+Sparsity tradeoff (structural, not just numerical): anchored and interval columns are each a
+function of exactly 2 origins' raw draws (provably sparse); orthonormal's rotation matrix is fully
+dense (every column touches all D origins), forfeiting the per-origin sparsity this codebase's
+compressed-moment machinery elsewhere already exploits. **Net recommendation from this workstream:
+interval basis dominates orthonormal on BOTH conditioning AND sparsity -- there is no scenario
+found where orthonormal is the better choice.** (Standardizing interval columns further made
+conditioning ~2x WORSE, not better -- not adopted.)
+
+Reference-country sensitivity is real but an order of magnitude smaller than basis choice
+(single-digit % spread for anchored/interval/orthonormal across all 4 possible reference
+countries, up to ~19% for standardized-interval) and never changed feasibility or iteration count
+in any of the 96 runs -- basis choice is the first-order lever, not reference-country choice.
+
+Rank deficiency: exactly one redundant column at the exact calibration point (A_od=1) only, traced
+to a pre-existing degeneracy in the CORE (non-CM) moment set at that one symmetric point -- not
+introduced by CM in any basis, absent at any perturbed point, nothing removed (out of scope, not a
+bug in this continuation's work).
+
+Adaptive quantile activation: **found no exploitable redundancy across quantile levels at D=4** --
+starting from a 7-threshold seed and adding the largest violations, the loop always escalated to
+the FULL 50/50 (or 20/20) candidate grid; a follow-up check showed 41-43 of 43 un-imposed
+thresholds still violate even a loose 1e-3 tolerance after only 7 are imposed. This is a genuine,
+if not the hoped-for, negative result: each quantile threshold carries distinct binding
+information at this D and W, so a coarse active subset is a poor approximation of the dense grid.
+The final fully-covered active set DOES agree with the independent dense L=50 reference to
+5.2e-18/3.2e-16 (Delta_dual) -- so the MACHINERY is correct, it just doesn't buy fewer constraints
+here. Warm-restart (reusing the previous dual solution) was verified correct against a cold
+re-solve and saves ~35% wall time even though iteration count doesn't change at D=4's easy scale.
 
 ## 7. D=20 scaling (sections 15-16)
 
 NOT STARTED this continuation — gated on the D=4 outer-solve result and subagent findings above
 per the brief's own decision criteria ("proceed only after the D=4 equivalence and outer-solve
-gates pass"). Next command to resume: adapt `context_real_d20.jl::d20_real_setup` +
-`common_marginals_moments.jl::build_cm_augmented_obj` following the exact same pattern as Section
-5's D=4 driver, starting with the production microbenchmark table (Section 15's "First") before
-any long outer solve.
+gates pass"), which have now passed. Next command to resume: adapt
+`context_real_d20.jl::d20_real_setup` + `common_marginals_moments.jl::build_cm_augmented_obj`
+following the exact same pattern as Section 5's D=4 driver, starting with the production
+microbenchmark table (brief Section 15's "First") before any long outer solve. Given Section 6's
+findings, the D=20 attempt should NOT simply copy the D=4 driver's choices verbatim: use the
+INTERVAL basis (not anchored -- Section 6c's clear conditioning+sparsity win), Hessian
+Architecture C (Section 6b), and budget for the fact that the lookup-kernel FG win (Section 6a)
+is expected to matter much more at D=20 scale than the modest 1.2-1.3x seen at D=4.
+
+## 7b. Production decision criteria (brief Section 16) -- assessed against this continuation's evidence
+
+1. Cumulative and interval formulations produce the same finite-grid result: **YES**, verified to
+   ~1e-14-1e-19 across multiple points and L (Section 6a).
+2. Optimized implementation avoids repeated construction of fixed moments: **PARTIAL** -- bin
+   indices/CM block are precomputed once per context as designed, but `wrap_moments_with_cm`
+   still allocates a fresh `G_tmp` temporary per `moments!` call (flagged, not yet fixed -- a
+   known, modest cost per Architecture B's 5-8% measurement).
+3. Exact inner solutions remain numerically stable: **YES** -- every converged run (dozens, across
+   all three subagent workstreams plus the D=4 outer solves) hit KKT/complementarity residuals at
+   or near machine precision; the one deliberately-infeasible test point was correctly rejected
+   every time, never silently "solved."
+4. Memory remains safe at D=20/L=50/W=80000: **PROJECTED safe for Architecture C specifically**
+   (Section 6b: ~297MB own scratch vs dense's ~828MB), memory behavior of the FG path (Section 6a)
+   at that scale is UNMEASURED.
+5. Full outer solve produces a cold-verified exact-feasible candidate: **YES at D=4** (Section 5,
+   all three L's independently re-verified feasible with CM KKT residuals at/near machine
+   precision); **NOT YET at D=20**.
+6. Reproducible under checkpoint/resume: **UNTESTED** -- this continuation's D=4 outer solves did
+   not exercise `D20Checkpoint`-style resume (not needed at D=4's ~4-6 minute run times); the
+   existing checkpoint/resume machinery was not touched or extended to be CM-aware.
+
+**Overall**: the D=4 architecture and its findings are trustworthy and ready to build on; the D=20
+production run itself has not been attempted, so criteria 4-6 are informed projections/gaps, not
+confirmed results.
 
 ## 8. What's exact vs approximate
 
@@ -263,24 +383,50 @@ same exact KNITRO solve as the rest of this codebase. No approximate/smooth basi
 
 ## 9. What's NOT done / open items (resume here)
 
-- The FAST Lfix/composite-gradient outer-loop path is not yet CM-aware (Section 7 of the brief).
-  `lfix_incremental.jl`'s `BaseDualState`/`LFixBaseCache` caching would need to be checked for
-  whether it assumes a fixed `obj.d`/moment layout that would need updating for the CM-augmented
-  bundle; not yet audited.
+- **Not yet combined**: Section 6a's lookup FG kernels + Section 6b's Architecture C Hessian +
+  Section 6c's interval basis have each been validated INDEPENDENTLY against the dense reference,
+  but never assembled into one single fastest-known CM-augmented bundle. Doing so (interval basis
+  + lookup FG + structured Hessian, all together) is the natural next step before any D=20 attempt
+  and should be re-equivalence-tested as a combined unit, not assumed to compose correctly just
+  because each piece works alone.
+- The FAST Lfix/composite-gradient OUTER-loop path (as opposed to the inner CC dual solve
+  architectures above) is not yet CM-aware (brief Section 7). `lfix_incremental.jl`'s
+  `BaseDualState`/`LFixBaseCache` caching would need to be checked for whether it assumes a fixed
+  `obj.d`/moment layout that would need updating for the CM-augmented bundle; not yet audited. The
+  D=4 outer solves in Section 5 used the generic ForwardDiff/dense-jac_h path instead (correct but
+  slower per outer iteration; safe at D=4, would need `needs_outer_moment_jacobian=false` at D=20
+  per the prior memory incident, meaning the Lfix path or an equivalent is likely REQUIRED, not
+  just an optimization, before a D=20 CM outer solve is practical).
 - The compressed (`:compressed`) moment representation does not support CM columns; the CM block
   is always dense-appended even when the economic block uses the compressed winner-form path.
   Whether this matters for D=20/W=80000 performance is untested.
-- Real D=20 data has not been touched.
+- Real D=20 data has not been touched at all this continuation.
 - The adaptive-grid restart protocol's OUTER-LOOP integration (grow the active set across outer
   KNITRO iterations, restart with a fresh quasi-Newton history) was explicitly out of scope for
-  the conditioning subagent (fixed-outer-point activation only) and is unimplemented.
-- Smooth-basis pilot (Section 14) not attempted (optional per the brief).
+  the conditioning subagent (fixed-outer-point activation only) and is unimplemented -- though
+  Section 6c's finding (no exploitable quantile-level redundancy at D=4) suggests this may not be
+  a high-value direction regardless, pending a check at larger D.
+- The L=10/20/50 comparison in Section 5 needs multistart-per-L (not just more single-start
+  iterations) before its L-dependence can be trusted; the headline "CM restriction cuts the upper
+  bound 9-12%" finding does not depend on resolving this.
+- Smooth-basis pilot (brief Section 14) not attempted (optional per the brief).
 
 ## Resume commands
 
 ```bash
 cd /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c12-common-marginals
 source .knitro_env.sh && export JULIA_NUM_THREADS=8 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl 20 1.0   # extend to L=20
-julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl 50 1.0   # extend to L=50
+
+# Reproduce or extend the D=4 delta=1 CM-constrained upper bound:
+julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl 10 1.0 csw_outer_300.opt
+julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl 20 1.0 csw_outer_300.opt
+julia --project=. full_aod_diag/d4_exact/c12_d4_delta1_upper_cm.jl 50 1.0 csw_outer_300.opt
+
+# Read before starting D=20 work:
+#   docs/fullA_cm_interval_lookup_report.md
+#   docs/fullA_cm_hessian_architecture_report.md
+#   docs/fullA_cm_conditioning_and_adaptive_grid_report.md
+# Then: combine interval basis + lookup FG + Architecture C Hessian into one bundle, re-validate
+# against the dense reference, THEN adapt context_real_d20.jl::d20_real_setup following context.jl
+# ::d4_exact_setup's pattern for the production microbenchmark table (brief Section 15 "First").
 ```
