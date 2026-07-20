@@ -69,6 +69,7 @@ include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
 include(joinpath(@__DIR__, "compressed_live.jl"))
 include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
+include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))   # Continuation 11 Section 2: validated bit-identical vs composite_gradient_at_fast (0.0 diff, 5 points incl. trajectory test), ~1.1-1.9x faster; now the default gradient below
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
@@ -312,7 +313,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
             base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
-        gfull, meta = composite_gradient_at_fast(xf, ctx, pe; base = base, threaded = true,
+        gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
                                                    h_mode = :cached, bandwidth_cache = policy.cache)
         meta.tie_fallback || record_hits!(policy, meta.cache_hits[2:end])
         n_grad_calls[] += 1
@@ -372,7 +373,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
-        logio::Union{Nothing,IO} = nothing)
+        logio::Union{Nothing,IO} = nothing,
+        inner_opt_override::Union{Nothing,AbstractString} = nothing,
+        skip_cold_retry::Bool = true)   # validated 2026-07-20: cold retry rescued 0/30 warm failures (all genuine
+    # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
+    # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
+    # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
 
     mkpath(ckpt_dir)
@@ -389,10 +395,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     end
 
     Random.seed!(draw_seed)   # see file header -- required for cross-process reproducibility
-    ctx = d20_real_setup(W = W, δ = delta, find_smallest = find_smallest)
+    ctx = inner_opt_override === nothing ? d20_real_setup(W = W, δ = delta, find_smallest = find_smallest) :
+                                            d20_real_setup(W = W, δ = delta, find_smallest = find_smallest, inner_loop_opt = inner_opt_override)
     pe = build_pivot_elimination(ctx)
     D = ctx.D; D2 = D^2
-    lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " screen_setup_wall=", ctx.screen_setup_wall)
+    lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " screen_setup_wall=", ctx.screen_setup_wall,
+       " inner_opt=", inner_opt_override === nothing ? "default" : inner_opt_override)
 
     w0 = vcat(g_start, zfree_start)
     if resumed !== nothing
@@ -449,13 +457,26 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     end
 
     n_cold_retries = Ref(0); n_rejected = Ref(0)
+    warm_cold_trace = NamedTuple[]   # additive diagnostic: filled only on warm-attempt failure (rare), read by caller after KN_solve
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
+        t_warm0 = time()
         r, _ = screened_eval(xf, ctx, sc, n_eval; warm = true)
+        t_warm = time() - t_warm0
+        cold_time = NaN; cold_status = missing
         if !(r.inner_status in FEASIBLE_CODES)
             n_cold_retries[] += 1
-            r, _ = screened_eval(xf, ctx, sc, n_eval; warm = false)
+            warm_status = r.inner_status
+            if !skip_cold_retry
+                t_cold0 = time()
+                r, _ = screened_eval(xf, ctx, sc, n_eval; warm = false)
+                cold_time = time() - t_cold0
+                cold_status = r.inner_status
+            end
+            push!(warm_cold_trace, (n_eval = n_eval[], gp = w[1], warm_time = t_warm, warm_status = warm_status,
+                                     cold_time = cold_time, cold_status = cold_status,
+                                     rescued = !skip_cold_retry && r.inner_status in FEASIBLE_CODES && isfinite(r.Delta_dual)))
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
@@ -505,7 +526,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
-        gfull, meta = composite_gradient_at_fast(xf, ctx, pe; base = base, threaded = true,
+        gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
                                                    h_mode = :cached, bandwidth_cache = policy.cache)
         meta.tie_fallback || record_hits!(policy, meta.cache_hits[2:end])
         n_grad_calls[] += 1
@@ -539,7 +560,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         κ = 1 - b.gp^(σ / (σ - 1))
     end
     lp("[", label, "] POLISH DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
-       "s n_eval=", n_eval[], " kappa=", κ, " screens(pw/wt/wn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.passed)
+       "s n_eval=", n_eval[], " kappa=", κ, " screens(pw/wt/wn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.passed,
+       " n_cold_retries(F)=", n_cold_retries[], " n_rejected(F)=", n_rejected[], " n_g_recompute=", n_g_recompute[])
 
     w_final = collect(xsol)
     r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, sc, n_eval; warm = true)
@@ -549,5 +571,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             knitro_status = nStatus_code, wall_ext = wall_ext, n_eval = n_eval[], n_grad_calls = n_grad_calls[],
             best_feasible = b, kappa = κ, trace = trace, screen_counts = as_namedtuple(sc),
             screen_rejections = sc.rejections, final_checkpoint = final_ckpt,
+            n_cold_retries = n_cold_retries[], n_rejected = n_rejected[], n_g_recompute = n_g_recompute[],
+            warm_cold_trace = warm_cold_trace,
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
 end
