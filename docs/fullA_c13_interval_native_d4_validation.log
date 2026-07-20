@@ -1,0 +1,108 @@
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+----------------------------------------------------------------------------------------------------
+L=10 contrasts=anchored point=calibration
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 8.188e-16
+  cond(H) interval-native: min=1.219e+04 max=1.719e+04 | cond(H) cumulative: min=3.411e+04 max=3.592e+04 | ratio(cum/int) at max-x = 1.98x
+----------------------------------------------------------------------------------------------------
+L=10 contrasts=anchored point=unrestricted_upper_candidate
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 8.361e-16
+  cond(H) interval-native: min=2.170e+04 max=2.766e+04 | cond(H) cumulative: min=6.210e+04 max=7.109e+04 | ratio(cum/int) at max-x = 2.57x
+----------------------------------------------------------------------------------------------------
+L=10 contrasts=orthonormal point=calibration
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 6.661e-16
+  cond(H) interval-native: min=1.189e+04 max=1.680e+04 | cond(H) cumulative: min=1.640e+04 max=2.025e+04 | ratio(cum/int) at max-x = 1.21x
+----------------------------------------------------------------------------------------------------
+L=10 contrasts=orthonormal point=unrestricted_upper_candidate
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 5.690e-16
+  cond(H) interval-native: min=2.015e+04 max=2.570e+04 | cond(H) cumulative: min=2.819e+04 max=3.406e+04 | ratio(cum/int) at max-x = 1.33x
+----------------------------------------------------------------------------------------------------
+L=20 contrasts=anchored point=calibration
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 3.331e-16
+  cond(H) interval-native: min=1.179e+04 max=1.280e+04 | cond(H) cumulative: min=6.184e+04 max=6.275e+04 | ratio(cum/int) at max-x = 5.21x
+----------------------------------------------------------------------------------------------------
+L=20 contrasts=anchored point=unrestricted_upper_candidate
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 2.914e-16
+  cond(H) interval-native: min=2.067e+04 max=2.210e+04 | cond(H) cumulative: min=1.063e+05 max=1.227e+05 | ratio(cum/int) at max-x = 5.55x
+----------------------------------------------------------------------------------------------------
+L=20 contrasts=orthonormal point=calibration
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 1.943e-16
+  cond(H) interval-native: min=1.174e+04 max=1.270e+04 | cond(H) cumulative: min=2.209e+04 max=2.301e+04 | ratio(cum/int) at max-x = 1.86x
+----------------------------------------------------------------------------------------------------
+L=20 contrasts=orthonormal point=unrestricted_upper_candidate
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 1.804e-16
+  cond(H) interval-native: min=1.997e+04 max=2.114e+04 | cond(H) cumulative: min=3.817e+04 max=4.187e+04 | ratio(cum/int) at max-x = 1.98x
+----------------------------------------------------------------------------------------------------
+L=50 contrasts=anchored point=calibration
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 5.898e-17
+  cond(H) interval-native: min=1.176e+04 max=1.539e+04 | cond(H) cumulative: min=1.379e+05 max=1.463e+05 | ratio(cum/int) at max-x = 8.96x
+----------------------------------------------------------------------------------------------------
+L=50 contrasts=anchored point=unrestricted_upper_candidate
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 9.021e-17
+  cond(H) interval-native: min=2.030e+04 max=2.247e+04 | cond(H) cumulative: min=2.449e+05 max=2.532e+05 | ratio(cum/int) at max-x = 11.27x
+----------------------------------------------------------------------------------------------------
+L=50 contrasts=orthonormal point=calibration
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 5.551e-17
+  cond(H) interval-native: min=1.176e+04 max=1.539e+04 | cond(H) cumulative: min=4.159e+04 max=4.292e+04 | ratio(cum/int) at max-x = 2.79x
+----------------------------------------------------------------------------------------------------
+L=50 contrasts=orthonormal point=unrestricted_upper_candidate
+----------------------------------------------------------------------------------------------------
+  max|H_interval_native - H_dense_interval_ref| = 7.112e-17
+  cond(H) interval-native: min=2.006e+04 max=2.200e+04 | cond(H) cumulative: min=7.171e+04 max=7.335e+04 | ratio(cum/int) at max-x = 3.33x
+
+====================================================================================================
+SUMMARY
+====================================================================================================
+L=10 anchored    calibration            maxdiff=8.188e-16 cond_int=1.719e+04 cond_cum=3.411e+04
+L=10 anchored    upper_candidate        maxdiff=8.361e-16 cond_int=2.766e+04 cond_cum=7.109e+04
+L=10 orthonormal calibration            maxdiff=6.661e-16 cond_int=1.680e+04 cond_cum=2.025e+04
+L=10 orthonormal upper_candidate        maxdiff=5.690e-16 cond_int=2.570e+04 cond_cum=3.406e+04
+L=20 anchored    calibration            maxdiff=3.331e-16 cond_int=1.203e+04 cond_cum=6.266e+04
+L=20 anchored    upper_candidate        maxdiff=2.914e-16 cond_int=2.210e+04 cond_cum=1.227e+05
+L=20 orthonormal calibration            maxdiff=1.943e-16 cond_int=1.192e+04 cond_cum=2.221e+04
+L=20 orthonormal upper_candidate        maxdiff=1.804e-16 cond_int=2.114e+04 cond_cum=4.187e+04
+L=50 anchored    calibration            maxdiff=5.898e-17 cond_int=1.539e+04 cond_cum=1.379e+05
+L=50 anchored    upper_candidate        maxdiff=9.021e-17 cond_int=2.247e+04 cond_cum=2.532e+05
+L=50 orthonormal calibration            maxdiff=5.551e-17 cond_int=1.539e+04 cond_cum=4.292e+04
+L=50 orthonormal upper_candidate        maxdiff=7.112e-17 cond_int=2.200e+04 cond_cum=7.335e+04
+
+WORST max|H_interval_native - H_dense_interval_ref| across ALL points/L/contrasts: 8.361e-16
+PASS: interval-native Architecture C matches the dense interval-basis reference to machine precision.
+DONE
