@@ -109,7 +109,8 @@ this file's own "correctness over speed on rare edge cases" precedent. `meta.tie
 whether this path was taken.
 """
 function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
-        base::Union{Nothing,BaseDualState} = nothing, threaded::Bool = false,
+        base::Union{Nothing,BaseDualState} = nothing,
+        cache::Union{Nothing,LFixBaseCache} = nothing, threaded::Bool = false,
         h_mode::Symbol = :adaptive, h0::Float64 = 0.01,
         bandwidth_cache::Union{Nothing,Dict{Int,Float64}} = nothing,
         tie_fallback_h::Float64 = 0.01,
@@ -127,16 +128,23 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
         error("composite_gradient_at_fast: winner_cache_mode=:certificate requires a winner_cache::PersistentWinnerCache (build ONCE, pass across repeated calls -- see winner_certificate.jl's PersistentWinnerCache docstring)")
 
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
-    local cache
-    try
-        # Continuation 9, Phase 3.2: validate_dense passthrough (default false, matching
-        # build_lfix_base_cache's own new default) -- lets a caller opt into the dense
-        # self-validation rebuild for diagnostic runs without editing this file again.
-        cache = build_lfix_base_cache(x_free0, ctx, base; validate_dense = validate_dense)
-    catch e
-        e isa TiedWinnerError || rethrow()
-        g_fb, meta_fb = full_rebuild_gradient_fallback(x_free0, ctx, pe, base; h = tie_fallback_h)
-        return g_fb, merge(meta_fb, (tie_fallback = true, tie_error = e))
+    # Continuation 13: `cache=` lets a caller pass a PRE-BUILT LFixBaseCache (e.g.
+    # `lfix_cm_aware.jl::build_lfix_base_cache_cm`, whose q0 already has the common-marginals
+    # block's constant contribution folded in) instead of having this function build a plain
+    # (non-CM) one internally. Mirrors the existing `base=` pattern exactly. When `cache` is
+    # supplied, its construction (and any TiedWinnerError handling) is entirely the CALLER's
+    # responsibility -- this function only reaches the try/catch below on the default path.
+    if cache === nothing
+        try
+            # Continuation 9, Phase 3.2: validate_dense passthrough (default false, matching
+            # build_lfix_base_cache's own new default) -- lets a caller opt into the dense
+            # self-validation rebuild for diagnostic runs without editing this file again.
+            cache = build_lfix_base_cache(x_free0, ctx, base; validate_dense = validate_dense)
+        catch e
+            e isa TiedWinnerError || rethrow()
+            g_fb, meta_fb = full_rebuild_gradient_fallback(x_free0, ctx, pe, base; h = tie_fallback_h)
+            return g_fb, merge(meta_fb, (tie_fallback = true, tie_error = e))
+        end
     end
     D = ctx.D; D2 = D^2
     z0 = log.(reshape(x_free0[2:end], D, D))
