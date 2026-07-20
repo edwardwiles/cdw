@@ -1,0 +1,71 @@
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+====================================================================================================
+ADAPTIVE GRID: calibration point, L_full=50, ref=1
+====================================================================================================
+round  1  n_active_thresh=7   n_active_cols=21    iters=4     t=8.15s  warm=false  max_inactive_violation=5.748e-03 (l=7)  Delta_dual=0.002981
+round  2  n_active_thresh=50  n_active_cols=150   iters=4     t=0.11s  warm=true   max_inactive_violation=0.000e+00 (l=-1)  Delta_dual=0.011505
+
+--- Verification vs dense L=50 (calibration) ---
+  dense L=50:    nStatus=0 ok=true  Delta_dual=0.011505192697397606
+  adaptive (final round): nStatus=0 ok=true  Delta_dual=0.0115051926973976
+  |Delta_dual diff| = 5.204170427930421e-18
+  max|p_dense - p_adaptive| (LFD weights) = 8.402566836762659e-19
+
+====================================================================================================
+ADAPTIVE GRID: perturbed-feasible point, L_full=50, ref=1
+====================================================================================================
+round  1  n_active_thresh=7   n_active_cols=21    iters=5     t=0.04s  warm=false  max_inactive_violation=9.628e-03 (l=8)  Delta_dual=0.040029
+round  2  n_active_thresh=50  n_active_cols=150   iters=4     t=0.22s  warm=true   max_inactive_violation=0.000e+00 (l=-1)  Delta_dual=0.050342
+
+--- Verification vs dense L=50 (perturbed) ---
+  dense L=50:    nStatus=0 ok=true  Delta_dual=0.05034194800039922
+  adaptive (final round): nStatus=0 ok=true  Delta_dual=0.05034194800039954
+  |Delta_dual diff| = 3.191891195797325e-16
+  max|p_dense - p_adaptive| (LFD weights) = 5.095750210681871e-18
+
+====================================================================================================
+ROBUSTNESS CHECK: L_full=20, calibration point
+====================================================================================================
+round  1  n_active_thresh=6   n_active_cols=18    iters=4     t=0.03s  warm=false  max_inactive_violation=6.185e-03 (l=3)  Delta_dual=0.002535
+round  2  n_active_thresh=20  n_active_cols=60    iters=4     t=0.13s  warm=true   max_inactive_violation=0.000e+00 (l=-1)  Delta_dual=0.005051
+
+--- Verification vs dense L=20 (calibration) ---
+  dense L=20:    nStatus=0 ok=true  Delta_dual=0.0050511425007728735
+  adaptive (final round): nStatus=0 ok=true  Delta_dual=0.005051142500772873
+  |Delta_dual diff| = 8.673617379884035e-19
+  max|p_dense - p_adaptive| (LFD weights) = 4.20128341838133e-18
+
+====================================================================================================
+WARM VS COLD comparison at the FINAL active set (calibration, L_full=50) -- re-solve from scratch
+====================================================================================================
+cold-restart at final active set: nStatus=0 iters=4 t=0.1696760654449463s  Delta_dual=0.011505192697397618
+adaptive last round (warm=true): iters=4 t=0.10950112342834473s  Delta_dual=0.0115051926973976
+
+DONE
