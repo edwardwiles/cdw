@@ -197,26 +197,36 @@ budget) with CM-block KKT residuals at or near machine precision in every case.
 clean comparison**: kappa is NOT monotonically decreasing in L (0.1522 < 0.1552 < 0.1564), which
 would be surprising if these were a strictly NESTED sequence of restrictions (more restrictions
 can only shrink the feasible-F set further, so kappa_max should be weakly decreasing in a nested
-sequence). Checked directly: the L-quantile grids as constructed (`k/L` for `k=1..L-1`) give
-**L=10's 9 cutpoints as an exact subset of L=20's 19** (both are multiples of 0.05) -- so L=10 vs
-L=20 IS a clean nested comparison, and kappa rising slightly (0.1522 -> 0.1564) going from L=10 to
-L=20 is therefore most likely an OPTIMIZATION artifact, not a genuine violation: L=10 stopped at
-the 100-iteration cap with `opt_err=0.0195` (still climbing, not yet KKT-converged), while L=20
-reached a genuine KKT point (`status=-101`, `opt_err=0.00206`) in fewer iterations. **L=50's 49
-cutpoints are NOT a superset of L=20's 19** (0.05 is not a multiple of 0.02) -- confirmed directly
-(`set(L20_grid).issubset(set(L50_grid))` is `False` in a quick Python check) -- so L=20 vs L=50 is
-NOT a nested comparison at all, and L=50 additionally has the LOOSEST convergence of the three
-(`opt_err=0.0485`, worse than both L=10 and L=20) despite the tightest feasibility. **Conclusion:
-these three numbers should NOT be read as "the CM-restricted upper bound tightens monotonically
-from L=10 to L=50"** -- that comparison needs either (a) matched, fully-converged outer budgets at
-every L, or (b) a genuinely nested grid construction (build a single L=50 candidate grid once,
-then take L=10/L=20 as SUBSETS of it, exactly as the standing brief's Section 11 adaptive-grid
-design already anticipates) before the L-dependence itself can be trusted. The economically solid,
-well-supported finding from this pass is narrower but still real: **at every L tested, the
-CM-restricted upper bound (0.152-0.156) is meaningfully below the unrestricted headline (0.1725)**
--- roughly a 9-12% reduction depending on L and convergence quality -- not the specific
-value/ordering of the L-dependence itself, which needs the nested-grid + matched-budget follow-up
-described above before it can be reported with confidence.
+sequence, ASSUMING both searches find their own true global optimum). Checked directly: the
+L-quantile grids as constructed (`k/L` for `k=1..L-1`) give **L=10's 9 cutpoints as an exact
+subset of L=20's 19** (both are multiples of 0.05) -- so L=10 vs L=20 IS a clean nested comparison
+-- but **L=50's 49 cutpoints are NOT a superset of L=20's 19** (0.05 is not a multiple of 0.02,
+confirmed directly: `set(L20_grid).issubset(set(L50_grid))` is `False`) -- so L=20 vs L=50 is not
+nested at all, compounded by L=50 having the loosest optimizer convergence of the three
+(`opt_err=0.0485`).
+
+For the genuinely nested L=10-vs-L=20 pair, ruled out the "L=10 just needs more budget" hypothesis
+directly: re-ran L=10 with a 3x larger iteration cap (`csw_outer_300.opt`, 300 vs 100) and it
+converged to a genuine KKT point (`status=-102`) after only 116 iterations at
+**kappa=0.1517529468** -- barely different from the original 100-iteration value (0.1522, a
+-0.3% move), not the "still climbing toward 0.156" pattern budget-starvation would predict. Both
+L=10 runs are tightly converged and land at ~0.152, while L=20 lands at 0.156, a genuine ~2.6%
+higher value on a STRICTLY LARGER feasible set (L=10's 9 restrictions are a subset of L=20's 19,
+so L=20's problem is MORE constrained, and its optimum should be weakly BELOW L=10's, not above
+it). **Conclusion, more precise than the earlier draft of this section**: this is not an
+optimizer-budget artifact -- it is most likely a NON-CONVEX LANDSCAPE / single-start local-optimum
+artifact. The outer KNITRO search here is single-start (one initial point, the calibration
+equilibrium) over a genuinely non-convex problem (this matches continuation 11's own documented finding for the UNRESTRICTED problem: a 3-point
+multistart there found a 6-9% spread in kappa at matched budgets, see
+`docs/fullA_continuation11_handoff.md` Section 4 in the parent `diag/fullA-d4-exact` branch) --
+so a single L=10
+run converging to a WORSE local optimum than a single L=20 run is entirely plausible without
+either run being "wrong." **This L-dependence finding therefore needs multistart at each L (not
+just more single-start iterations) before it can be read as "kappa vs L," and is flagged
+explicitly as unresolved** -- the economically solid, well-supported finding from this pass is
+narrower but still real regardless of this ambiguity: **at every L tested, from every start tried,
+the CM-restricted upper bound (0.152-0.156) is meaningfully below the unrestricted headline
+(0.1725)** -- a 9-12% reduction -- not the specific value/ordering of the L-dependence itself.
 
 ## 6. Parallel subagent workstreams (sections 3-6, 8-11 of the brief)
 

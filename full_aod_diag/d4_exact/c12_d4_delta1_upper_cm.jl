@@ -29,11 +29,12 @@ using Printf
 
 L = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 10
 δ = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : 1.0
+opt_name = length(ARGS) >= 3 ? ARGS[3] : "csw_outer_100.opt"
 
-println(">>> Continuation 12 section 13: D=4 CM-constrained upper bound, L=$L, delta=$δ"); flush(stdout)
+println(">>> Continuation 12 section 13: D=4 CM-constrained upper bound, L=$L, delta=$δ, opt=$opt_name"); flush(stdout)
 
 ctx = d4_exact_setup(δ = δ, find_smallest = true, needs_outer_moment_jacobian = true,
-                      outer_loop_opt = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_100.opt"))
+                      outer_loop_opt = joinpath(D4X_ROOT, "full_aod_diag", opt_name))
 aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = :anchored)
 obj_cm = aug.obj_cm
 println(">>> obj_cm: d=$(obj_cm.d)  outer_constr_index=$(obj_cm.outer_constr_index)  ncm=$(aug.ncm)"); flush(stdout)
@@ -71,7 +72,8 @@ cm_kkt = maximum(abs(sum(m_full .* G[:, j]) / W) for j in cm_cols)
 using Serialization
 outdir = joinpath(D4X_ROOT, "results", "fullA_d4", "c12_common_marginals")
 mkpath(outdir)
-outfile = joinpath(outdir, "delta$(δ)_L$(L)_anchored.jls")
+opt_tag = replace(opt_name, ".opt" => "")
+outfile = joinpath(outdir, "delta$(δ)_L$(L)_anchored_$(opt_tag).jls")
 serialize(outfile, (L = L, δ = δ, γp = γp_min, κ = κ, θ_min = θ_min, nStatus = nStatus,
                      Delta_dual = r_final.Delta_dual, gravity_value = r_final.gravity_value,
                      cm_kkt = cm_kkt, wall = t_elapsed))
