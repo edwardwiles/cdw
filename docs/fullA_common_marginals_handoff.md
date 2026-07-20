@@ -181,8 +181,42 @@ delta=1 divergence budget. Confirms the Section 3 finding (the unrestricted cand
 CM-infeasible) translates into a real, materially different answer once the restricted problem is
 actually re-optimized rather than just checked at the old optimum.
 
-L=20 and L=50 runs: see below / resume commands at the end of this document for status at handoff
-time if not yet complete.
+**L=20 and L=50 results** (same setup, `csw_outer_100.opt`, maxit=100):
+
+| L | status | outer_iters | opt_err | feas_err | gamma'_focal | kappa | Delta_dual (recheck) | gravity | CM max KKT | wall |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 10 | -400 (maxit hit) | 100/100 | 0.0195 | 1.3e-7 | 0.9056808059 | 0.1522028746 | 0.95766 | -8.3e-9 | 1.8e-14 | 217s |
+| 20 | -101 (genuine KKT convergence) | 76/100 | 0.00206 | 1.3e-18 | 0.9029744779 | **0.1564209371** | 0.99969 | 8.1e-20 | 6.3e-15 | 248s |
+| 50 | -102 (genuine KKT convergence, looser) | 42/100 | 0.0485 | 1.1e-15 | 0.9037514955 | 0.1552107445 | 0.99988 | -6.8e-17 | 1.4e-16 | 371s |
+
+All three are independently re-verified feasible (Delta_dual right at the delta=1 boundary, as
+expected for an upper-bound problem at the optimum -- the search should fully use the divergence
+budget) with CM-block KKT residuals at or near machine precision in every case.
+
+**Important caveat, found while writing this up -- do not over-read the L=10/20/50 ordering as a
+clean comparison**: kappa is NOT monotonically decreasing in L (0.1522 < 0.1552 < 0.1564), which
+would be surprising if these were a strictly NESTED sequence of restrictions (more restrictions
+can only shrink the feasible-F set further, so kappa_max should be weakly decreasing in a nested
+sequence). Checked directly: the L-quantile grids as constructed (`k/L` for `k=1..L-1`) give
+**L=10's 9 cutpoints as an exact subset of L=20's 19** (both are multiples of 0.05) -- so L=10 vs
+L=20 IS a clean nested comparison, and kappa rising slightly (0.1522 -> 0.1564) going from L=10 to
+L=20 is therefore most likely an OPTIMIZATION artifact, not a genuine violation: L=10 stopped at
+the 100-iteration cap with `opt_err=0.0195` (still climbing, not yet KKT-converged), while L=20
+reached a genuine KKT point (`status=-101`, `opt_err=0.00206`) in fewer iterations. **L=50's 49
+cutpoints are NOT a superset of L=20's 19** (0.05 is not a multiple of 0.02) -- confirmed directly
+(`set(L20_grid).issubset(set(L50_grid))` is `False` in a quick Python check) -- so L=20 vs L=50 is
+NOT a nested comparison at all, and L=50 additionally has the LOOSEST convergence of the three
+(`opt_err=0.0485`, worse than both L=10 and L=20) despite the tightest feasibility. **Conclusion:
+these three numbers should NOT be read as "the CM-restricted upper bound tightens monotonically
+from L=10 to L=50"** -- that comparison needs either (a) matched, fully-converged outer budgets at
+every L, or (b) a genuinely nested grid construction (build a single L=50 candidate grid once,
+then take L=10/L=20 as SUBSETS of it, exactly as the standing brief's Section 11 adaptive-grid
+design already anticipates) before the L-dependence itself can be trusted. The economically solid,
+well-supported finding from this pass is narrower but still real: **at every L tested, the
+CM-restricted upper bound (0.152-0.156) is meaningfully below the unrestricted headline (0.1725)**
+-- roughly a 9-12% reduction depending on L and convergence quality -- not the specific
+value/ordering of the L-dependence itself, which needs the nested-grid + matched-budget follow-up
+described above before it can be reported with confidence.
 
 ## 6. Parallel subagent workstreams (sections 3-6, 8-11 of the brief)
 
