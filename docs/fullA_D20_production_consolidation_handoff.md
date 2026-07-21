@@ -47,9 +47,80 @@ point via the same adversarial recipe as `test_infeasibility_screen.jl`'s test 9
 `worst_o`/`worst_d`, and that the driver's exact field-access pattern
 (`(stage=:pairwise, o=screen_meta.worst_o, d=screen_meta.worst_d, ...)`) no longer throws.
 
-## 4. Exact-point cache — TBD (Phase B)
+## 4. Exact-point cache (Phase B, DONE)
 
-## 5. Successful-dual / KKT-scored bank — TBD (Phase B)
+Commit `43928e3`. `SafeExactCache` (lock-guarded, ported from
+`diag/fullA-d20-warmstart-replay/safe_exact_cache.jl`) wired directly into all 5 real production
+evaluation paths (`oracle.jl::evaluate_fullA`, `oracle_fast.jl::evaluate_fullA_fast`,
+`compressed_live.jl::evaluate_fullA_fast_compressed`,
+`infeasibility_screen.jl::evaluate_fullA_screened`,
+`fast_range_screen.jl::evaluate_fullA_screened_ranged`) — not just a parallel diagnostic entry
+point, the actual `cache::Union{Nothing,Dict}` slot every one of those functions already had.
+
+New `is_cacheable_result` guard fixes a real latent bug in production's *previous* raw-Dict
+behavior: it used to cache a bare `-300`/unresolved inner-solve failure unconditionally
+(`cache !== nothing && (cache[key] = result)`, no status check), permanently answering that exact
+point with a stale failure for the rest of the run even if a different warm start would have
+succeeded. Now only `inner_status in (0,-100,-101,-103)` (genuinely solved) or `inner_status <=
+-9000` (an exact screen certificate — pairwise/witness/winner-scan/envelope/winning-range/
+moment-range, all inherently exact and draw-independent) get cached.
+
+`cache` kept **untyped** (not widened to `Union{Nothing,Dict,SafeExactCache}`) after an
+include-order issue: `context_real_d20.jl` includes `infeasibility_screen.jl` before `oracle.jl`,
+and a type annotation referencing `SafeExactCache` needs it resolved at parse time, unlike a
+function-body reference (`FullAEvalKey(...)`) which resolves at call time. Dispatch is correct
+regardless via `_cache_lookup`/`_cache_store!`.
+
+Validated (`test_safe_exact_cache.jl`, 18/18 + `test_safe_exact_cache_stress.jl`, 5/5):
+same-key repeated call (cache hit, byte-identical, zero new inner solves), the cacheability
+predicate across every real status/sentinel value, screen-certified-infeasible caching, a
+500-trial × 8-thread synthetic lock-stress test (zero corrupted/mismatched hits, zero lost/wrong
+keys, zero crashes — kept in its own standalone script, see the note below), and a real
+3-concurrent-KNITRO-solve probe (no process crash regardless of KNITRO's own resource-contention
+outcome).
+
+**Real, non-obvious finding**: running the 500-trial synthetic stress test in the *same process*
+right after the earlier real-KNITRO sections silently kills the Julia process (exit code 1, no
+stacktrace) on this machine, while it passes cleanly (500/500, exit 0) as its own process. This
+is a genuine interaction between KNITRO's internal threading/license-check state and a later
+plain `Threads.@threads` use in the same process — orthogonal to `SafeExactCache`'s own
+correctness, and exactly why the source branch's own `cache_threadsafety_test.jl` already
+isolated its raw-vs-safe comparison into separate processes ("a real Dict data race can hard-crash
+the Julia process (segfault), not just throw a catchable exception"). Resolved here by keeping
+`test_safe_exact_cache_stress.jl` a separate script, matching that precedent.
+
+**Second real finding, caught by fixing a Julia scoping bug**: `test_safe_exact_cache.jl`'s
+section-3 adversarial-infeasible-point search originally left `found_infeasible`/`xf_bad` without
+`global` inside a top-level `for` loop — Julia's soft-scope rules silently created loop-local
+shadows, so `found_infeasible` never actually propagated `true` to the outer scope in earlier
+runs (masking the bug: the `if found_infeasible` branch that uses `xf_bad` never ran). Adding
+`global` correctly propagates it, which then exposed `xf_bad` having the exact same bug
+(`UndefVarError`) — fixed the same way. Both fixes are in the committed test file; this was a
+bug in the new test script, not in production code.
+
+## 5. Successful-dual / KKT-scored bank (Phase B, DONE)
+
+Commit `9f11643`. `dual_bank.jl`: small recency-bounded bank (default size 8) of
+successfully-solved dual vectors, Policy P3 from `diag/fullA-d20-warmstart-replay` (candidates
+`{current production last-successful slot (obj.x, if not NaN-poisoned), last-accepted, nearest-
+successful-by-scaled-reduced-coordinate-distance, neutral}`, scored via `cheap_score`'s KKT-proxy
+— `compressed_cc_value_grad`, no KNITRO call — lowest score wins). Wired into
+`c10_d20_production_driver.jl`'s `screened_eval` (used by every `cb_F!`/`cb_G!`/`cb_newpt!` in
+both `run_profile_checkpointed` and `run_polish_checkpointed`) via `use_dual_bank::Bool=true`
+(`dual_bank_size::Int=8`), independently toggleable from the exact-cache's own
+`use_exact_cache::Bool=true` (both wired in the same commit since they were built in the same
+session, but each is revertible independently by flipping its own kwarg — see commit message).
+
+Validated (`test_dual_bank.jl`, 9/9): history eviction at `maxsize` (recency window, not
+value-based), `cheap_score`'s scoring direction (a converged dual scores at or below neutral at
+its own point — confirms lower-is-better matches `select_warm_start`'s `argmin`), correct
+fallback to neutral when the bank is empty and `obj.x` is NaN-poisoned, the selected candidate is
+always either a genuinely-recorded success or neutral (never fabricated), and deterministic
+selection at fixed bank/point state.
+
+Not yet run against a live δ=5 trajectory with organic failures in this phase (that validation —
+"same optimum/gradient, no reused failed dual, non-increased wall time" — is deferred to the
+canonical post-integration A/B, Phase F/section 11, per the plan).
 
 ## 6. Draw-design port (pseudorandom / sobol_randomized / halton_scrambled) — TBD (addendum)
 
