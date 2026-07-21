@@ -80,6 +80,7 @@ include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
 include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))   # Continuation 11 Section 2: validated bit-identical vs composite_gradient_at_fast (0.0 diff, 5 points incl. trajectory test), ~1.1-1.9x faster; now the default gradient below
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
+include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
@@ -162,10 +163,33 @@ as_namedtuple(sc::ScreenCounters) = (pairwise = sc.pairwise, witness = sc.witnes
                                       safety_net = sc.safety_net, passed = sc.passed)
 
 function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContext, sc::ScreenCounters,
-        n_eval_ref::Ref{Int}; warm::Bool = true)
+        n_eval_ref::Ref{Int}; warm::Bool = true, bank::Union{Nothing,DualBank} = nothing,
+        zfree::Union{Nothing,AbstractVector{Float64}} = nothing,
+        exact_cache::Union{Nothing,SafeExactCache} = nothing)
+    # Successful-dual/KKT-scored bank (dual_bank.jl): only engages on warm calls (a cold call
+    # resets obj.x .= NaN itself downstream, making any assignment here moot) and only when the
+    # caller supplied both a bank and the reduced (zfree) coordinates it's indexed on. Falls back
+    # silently to production's existing single-slot ctx.obj.x behavior (no-op here) on a
+    # TiedWinnerError while building the scoring factual -- never lets a diagnostic scoring step
+    # abort a real optimization callback.
+    if warm && bank !== nothing && zfree !== nothing
+        θ_full_score = CS.reconstruct_full(xf, ctx.m)
+        cf_score = try
+            build_compressed_factual(θ_full_score, ctx; check_ties = true)
+        catch e
+            e isa TiedWinnerError ? nothing : rethrow()
+        end
+        if cf_score !== nothing
+            x0, _label = select_warm_start(bank, ctx.obj, cf_score, zfree)
+            ctx.obj.x .= x0
+        end
+    end
     result, screen_meta = evaluate_fullA_screened_ranged(xf, ctx, rsc; moment_representation = :compressed,
-        cache = nothing, use_cache = false, warm = warm, tag = "",
+        cache = exact_cache, use_cache = exact_cache !== nothing, warm = warm, tag = "",
         pairwise = ctx.pairwise, witness = ctx.witness, use_witness = ctx.witness !== nothing)
+    if bank !== nothing && zfree !== nothing && result.inner_status in FEASIBLE_CODES
+        record_success!(bank, n_eval_ref[], zfree, vcat(result.zeta, result.lambda))
+    end
     st = screen_meta.screen_status
     if st === :pairwise_certified_infeasible
         sc.pairwise += 1
@@ -202,7 +226,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
-        logio::Union{Nothing,IO} = nothing)
+        logio::Union{Nothing,IO} = nothing,
+        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true)
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
 
     mkpath(ckpt_dir)
@@ -247,6 +272,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
 
     sc = ScreenCounters()
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
+    bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
+    exact_cache = use_exact_cache ? SafeExactCache() : nothing
 
     # seed the compressed warm-start cache with a cold solve first (same fix c9_phase8_d20_pilot.jl
     # found necessary -- a fresh ctx's very first warm=true call has no prior state to warm-start
@@ -296,7 +323,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         zfree = evalRequest.x
         w = vcat(g, zfree)
         xf = x_free_from_w(w, pe)
-        r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
+        r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = zfree, exact_cache = exact_cache)
         if !(r.inner_status in FEASIBLE_CODES)
             n_cold_retries[] += 1
             r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
@@ -341,7 +368,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         base = shared !== nothing && shared.w == w ? shared.base : nothing
         if base === nothing
             n_g_recompute[] += 1
-            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
+            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = zfree, exact_cache = exact_cache)
             if !(r_g.inner_status in FEASIBLE_CODES)
                 r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
             end
@@ -363,7 +390,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         knitro_iter[] += 1
         w_now = vcat(g, x)
         xf_now = x_free_from_w(w_now, pe)
-        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true)
+        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x), exact_cache = exact_cache)
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, w_now, r_now)
         end
@@ -388,7 +415,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     end
     # final stage-complete checkpoint at the terminal point
     w_final = vcat(g, collect(xsol))
-    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true)
+    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w_final[2:end], exact_cache = exact_cache)
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, g = g, find_smallest = find_smallest, ctx = ctx, pe = pe,
@@ -411,7 +438,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
         inner_opt_override::Union{Nothing,AbstractString} = nothing,
-        skip_cold_retry::Bool = true)   # validated 2026-07-20: cold retry rescued 0/30 warm failures (all genuine
+        skip_cold_retry::Bool = true,   # validated 2026-07-20: cold retry rescued 0/30 warm failures (all genuine
+        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true)
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
@@ -455,6 +483,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
 
     sc = ScreenCounters()
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
+    bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
+    exact_cache = use_exact_cache ? SafeExactCache() : nothing
     r0, _ = screened_eval(x_free_from_w(w0, pe), ctx, rsc, sc, n_eval; warm = false)
     lp("[", label, "] polish start point: inner_status=", r0.inner_status, " Delta=", r0.Delta_dual)
     r0.inner_status in FEASIBLE_CODES || error("run_polish_checkpointed($label): start point not inner-feasible, cannot proceed")
@@ -501,7 +531,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
         t_warm0 = time()
-        r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
+        r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache)
         t_warm = time() - t_warm0
         cold_time = NaN; cold_status = missing
         if !(r.inner_status in FEASIBLE_CODES)
@@ -557,7 +587,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         base = shared !== nothing && shared.w == w ? shared.base : nothing
         if base === nothing
             n_g_recompute[] += 1
-            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true)
+            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache)
             if !(r_g.inner_status in FEASIBLE_CODES)
                 r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
             end
@@ -576,7 +606,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function cb_newpt!(kc2, x, lambda, user_data)
         knitro_iter[] += 1
         xf_now = x_free_from_w(x, pe)
-        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true)
+        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x[2:end]), exact_cache = exact_cache)
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, collect(x), r_now)
         end
@@ -603,7 +633,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
        " n_cold_retries(F)=", n_cold_retries[], " n_rejected(F)=", n_rejected[], " n_g_recompute=", n_g_recompute[])
 
     w_final = collect(xsol)
-    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true)
+    r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w_final[2:end], exact_cache = exact_cache)
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, find_smallest = find_smallest, ctx = ctx, pe = pe,
