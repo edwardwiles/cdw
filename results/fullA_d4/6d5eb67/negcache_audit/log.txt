@@ -1,0 +1,141 @@
+==========================================================================================
+negcache_audit_experiment.jl starting 2026-07-21T15:30:00.572  commit=6d5eb67
+==========================================================================================
+ctx build: wall=78.83s  draw_checksum=(14781457884400657089,13743095358273730756)
+D=20  n_free_A=399  envelope_supported=true
+seed (calibration, cold): status=0 Delta=0.002590861875112203
+step=1.0 done: organic_so_far=0 bank_feed_so_far=8
+step=2.0 done: organic_so_far=0 bank_feed_so_far=16
+>>> ORGANIC CANDIDATE: step=4.0 i=8 inner_status=-300 screen_status=screen_passed wall=4.38s
+step=4.0 done: organic_so_far=1 bank_feed_so_far=23
+>>> ORGANIC CANDIDATE: step=8.0 i=1 inner_status=-300 screen_status=screen_passed wall=10.61s
+>>> ORGANIC CANDIDATE: step=8.0 i=2 inner_status=-300 screen_status=screen_passed wall=4.96s
+>>> ORGANIC CANDIDATE: step=8.0 i=3 inner_status=-300 screen_status=screen_passed wall=14.57s
+>>> ORGANIC CANDIDATE: step=8.0 i=4 inner_status=-300 screen_status=screen_passed wall=4.22s
+>>> ORGANIC CANDIDATE: step=8.0 i=5 inner_status=-300 screen_status=screen_passed wall=4.9s
+>>> ORGANIC CANDIDATE: step=8.0 i=6 inner_status=-300 screen_status=screen_passed wall=14.3s
+>>> ORGANIC CANDIDATE: step=8.0 i=7 inner_status=-300 screen_status=screen_passed wall=8.14s
+>>> ORGANIC CANDIDATE: step=8.0 i=8 inner_status=-300 screen_status=screen_passed wall=5.77s
+step=8.0 done: organic_so_far=9 bank_feed_so_far=23
+
+STEP A complete: 9 organic (screen-pass, KNITRO-fail) candidate(s) found among 32 trials.
+
+==========================================================================================
+STEP B: multi-start variant test at each organic candidate
+==========================================================================================
+DualBank populated with 8 successful trial(s) from the sweep.
+
+--- organic candidate 1 (step=4.0, i=8) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=4.63
+  [1_neutral rep2] status=-300 Delta=NaN wall=4.62
+  [1_neutral rep3] status=-300 Delta=NaN wall=4.48
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=4.58
+  [3_last_accepted] status=-300 Delta=NaN wall=5.26 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=4.41
+  [5_damped_0.1x] status=-300 Delta=NaN wall=4.48
+  [5_damped_0.5x] status=-300 Delta=NaN wall=4.44
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=4.59
+
+--- organic candidate 2 (step=8.0, i=1) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=10.34
+  [1_neutral rep2] status=-300 Delta=NaN wall=11.09
+  [1_neutral rep3] status=-300 Delta=NaN wall=10.06
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=9.97
+  [3_last_accepted] status=-300 Delta=NaN wall=5.12 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=11.52
+  [5_damped_0.1x] status=-300 Delta=NaN wall=12.24
+  [5_damped_0.5x] status=-300 Delta=NaN wall=5.45
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=10.45
+
+--- organic candidate 3 (step=8.0, i=2) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=4.49
+  [1_neutral rep2] status=-300 Delta=NaN wall=4.54
+  [1_neutral rep3] status=-300 Delta=NaN wall=4.79
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=5.1
+  [3_last_accepted] status=-300 Delta=NaN wall=6.63 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=4.88
+  [5_damped_0.1x] status=-300 Delta=NaN wall=4.38
+  [5_damped_0.5x] status=-300 Delta=NaN wall=5.58
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=5.31
+
+--- organic candidate 4 (step=8.0, i=3) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=13.84
+  [1_neutral rep2] status=-300 Delta=NaN wall=14.26
+  [1_neutral rep3] status=-300 Delta=NaN wall=14.17
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=13.45
+  [3_last_accepted] status=-300 Delta=NaN wall=4.65 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=14.08
+  [5_damped_0.1x] status=-300 Delta=NaN wall=5.44
+  [5_damped_0.5x] status=-300 Delta=NaN wall=4.77
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=13.38
+
+--- organic candidate 5 (step=8.0, i=4) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=4.11
+  [1_neutral rep2] status=-300 Delta=NaN wall=3.99
+  [1_neutral rep3] status=-300 Delta=NaN wall=3.89
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=4.09
+  [3_last_accepted] status=-300 Delta=NaN wall=5.61 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=4.0
+  [5_damped_0.1x] status=-300 Delta=NaN wall=4.18
+  [5_damped_0.5x] status=-300 Delta=NaN wall=5.32
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=4.58
+
+--- organic candidate 6 (step=8.0, i=5) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=4.68
+  [1_neutral rep2] status=-300 Delta=NaN wall=4.59
+  [1_neutral rep3] status=-300 Delta=NaN wall=4.65
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=4.48
+  [3_last_accepted] status=-300 Delta=NaN wall=3.92 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=4.94
+  [5_damped_0.1x] status=-300 Delta=NaN wall=4.85
+  [5_damped_0.5x] status=-300 Delta=NaN wall=4.2
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=4.72
+
+--- organic candidate 7 (step=8.0, i=6) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=13.05
+  [1_neutral rep2] status=-300 Delta=NaN wall=13.62
+  [1_neutral rep3] status=-300 Delta=NaN wall=13.1
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=13.04
+  [3_last_accepted] status=-300 Delta=NaN wall=11.21 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=12.54
+  [5_damped_0.1x] status=-300 Delta=NaN wall=16.21
+  [5_damped_0.5x] status=-300 Delta=NaN wall=4.51
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=12.51
+
+--- organic candidate 8 (step=8.0, i=7) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=8.95
+  [1_neutral rep2] status=-300 Delta=NaN wall=8.17
+  [1_neutral rep3] status=-300 Delta=NaN wall=8.43
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=8.54
+  [3_last_accepted] status=-300 Delta=NaN wall=6.82 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=8.42
+  [5_damped_0.1x] status=-300 Delta=NaN wall=9.15
+  [5_damped_0.5x] status=-300 Delta=NaN wall=6.71
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=8.99
+
+--- organic candidate 9 (step=8.0, i=8) ---
+  [1_neutral rep1] status=-300 Delta=NaN wall=5.94
+  [1_neutral rep2] status=-300 Delta=NaN wall=5.84
+  [1_neutral rep3] status=-300 Delta=NaN wall=5.74
+  [2_poisoned_prod_slot] status=-300 Delta=NaN wall=5.69
+  [3_last_accepted] status=-300 Delta=NaN wall=15.39 |x0|=1.19
+  [4_bank_selected(neutral)] status=-300 Delta=NaN wall=5.86
+  [5_damped_0.1x] status=-300 Delta=NaN wall=5.67
+  [5_damped_0.5x] status=-300 Delta=NaN wall=19.08
+  [6_fresh_context (structurally always true)] status=-300 Delta=NaN
+  [7_maxit5000_cold] status=-300 Delta=NaN wall=5.78
+
+STEP B complete: 0 / 90 variant attempts returned a FEASIBLE status (any >0 among candidates' variants means at least one alternative start RESCUED an organic failure).
+
+==========================================================================================
+STEP C: independent LP feasibility certificate (HiGHS)
+==========================================================================================
+  [calibration_SANITY_CHECK] lp1_status=OPTIMAL classification=FEASIBLE_LP phase1_max_resid=NaN wall=77.55s
