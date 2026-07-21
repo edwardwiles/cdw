@@ -1,0 +1,175 @@
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+[  1/ 48] basis=anchored     L=10  ref=1  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=3.640e+04  iters=4  max|lam_cm|=1.081e-01  Delta=0.003303  t=9.27s
+    perturbed  ok  rank=48/48  cond=5.342e+04  iters=5  max|lam_cm|=1.076e-01  Delta=0.040318  t=0.04s
+[  2/ 48] basis=anchored     L=10  ref=2  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=3.645e+04  iters=4  max|lam_cm|=1.083e-01  Delta=0.003485  t=0.04s
+    perturbed  ok  rank=48/48  cond=5.295e+04  iters=5  max|lam_cm|=1.642e-01  Delta=0.040505  t=0.04s
+[  3/ 48] basis=anchored     L=10  ref=3  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=3.686e+04  iters=4  max|lam_cm|=9.776e-02  Delta=0.003193  t=0.04s
+    perturbed  ok  rank=48/48  cond=5.339e+04  iters=5  max|lam_cm|=1.507e-01  Delta=0.040336  t=0.04s
+[  4/ 48] basis=anchored     L=10  ref=4  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=3.346e+04  iters=4  max|lam_cm|=9.470e-02  Delta=0.002780  t=0.07s
+    perturbed  ok  rank=48/48  cond=4.972e+04  iters=5  max|lam_cm|=1.550e-01  Delta=0.040042  t=0.04s
+[  5/ 48] basis=anchored     L=20  ref=1  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=6.266e+04  iters=4  max|lam_cm|=1.444e-01  Delta=0.005051  t=0.05s
+    perturbed  ok  rank=78/78  cond=9.265e+04  iters=5  max|lam_cm|=1.520e-01  Delta=0.042935  t=0.06s
+[  6/ 48] basis=anchored     L=20  ref=2  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=6.250e+04  iters=4  max|lam_cm|=1.446e-01  Delta=0.004557  t=0.05s
+    perturbed  ok  rank=78/78  cond=9.047e+04  iters=5  max|lam_cm|=1.980e-01  Delta=0.042852  t=0.07s
+[  7/ 48] basis=anchored     L=20  ref=3  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=6.327e+04  iters=4  max|lam_cm|=1.546e-01  Delta=0.004826  t=0.05s
+    perturbed  ok  rank=78/78  cond=9.184e+04  iters=5  max|lam_cm|=1.584e-01  Delta=0.042899  t=0.06s
+[  8/ 48] basis=anchored     L=20  ref=4  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=5.976e+04  iters=4  max|lam_cm|=1.540e-01  Delta=0.005064  t=0.05s
+    perturbed  ok  rank=78/78  cond=8.928e+04  iters=5  max|lam_cm|=2.011e-01  Delta=0.043080  t=0.06s
+[  9/ 48] basis=anchored     L=50  ref=1  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.437e+05  iters=4  max|lam_cm|=3.086e-01  Delta=0.011505  t=0.10s
+    perturbed  ok  rank=168/168  cond=2.154e+05  iters=5  max|lam_cm|=3.462e-01  Delta=0.050342  t=0.13s
+[ 10/ 48] basis=anchored     L=50  ref=2  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.430e+05  iters=4  max|lam_cm|=2.491e-01  Delta=0.010597  t=0.15s
+    perturbed  ok  rank=168/168  cond=2.080e+05  iters=5  max|lam_cm|=2.796e-01  Delta=0.050589  t=0.13s
+[ 11/ 48] basis=anchored     L=50  ref=3  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.450e+05  iters=4  max|lam_cm|=2.516e-01  Delta=0.011461  t=0.12s
+    perturbed  ok  rank=168/168  cond=2.124e+05  iters=5  max|lam_cm|=2.905e-01  Delta=0.051089  t=0.13s
+[ 12/ 48] basis=anchored     L=50  ref=4  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.410e+05  iters=4  max|lam_cm|=2.994e-01  Delta=0.011436  t=0.11s
+    perturbed  ok  rank=168/168  cond=2.131e+05  iters=5  max|lam_cm|=2.980e-01  Delta=0.050690  t=0.14s
+[ 13/ 48] basis=orthonormal  L=10  ref=1  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.630e+04  iters=4  max|lam_cm|=1.101e-01  Delta=0.003303  t=0.04s
+    perturbed  ok  rank=48/48  cond=2.470e+04  iters=5  max|lam_cm|=1.180e-01  Delta=0.040318  t=0.08s
+[ 14/ 48] basis=orthonormal  L=10  ref=2  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.633e+04  iters=4  max|lam_cm|=1.243e-01  Delta=0.003485  t=0.09s
+    perturbed  ok  rank=48/48  cond=2.478e+04  iters=5  max|lam_cm|=1.766e-01  Delta=0.040505  t=0.04s
+[ 15/ 48] basis=orthonormal  L=10  ref=3  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.631e+04  iters=4  max|lam_cm|=1.214e-01  Delta=0.003193  t=0.03s
+    perturbed  ok  rank=48/48  cond=2.479e+04  iters=5  max|lam_cm|=1.648e-01  Delta=0.040336  t=0.04s
+[ 16/ 48] basis=orthonormal  L=10  ref=4  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.643e+04  iters=4  max|lam_cm|=1.080e-01  Delta=0.002780  t=0.04s
+    perturbed  ok  rank=48/48  cond=2.490e+04  iters=5  max|lam_cm|=1.803e-01  Delta=0.040042  t=0.04s
+[ 17/ 48] basis=orthonormal  L=20  ref=1  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=2.229e+04  iters=4  max|lam_cm|=1.685e-01  Delta=0.005051  t=0.09s
+    perturbed  ok  rank=78/78  cond=3.266e+04  iters=5  max|lam_cm|=1.778e-01  Delta=0.042935  t=0.11s
+[ 18/ 48] basis=orthonormal  L=20  ref=2  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=2.240e+04  iters=4  max|lam_cm|=1.662e-01  Delta=0.004557  t=0.05s
+    perturbed  ok  rank=78/78  cond=3.286e+04  iters=5  max|lam_cm|=2.196e-01  Delta=0.042852  t=0.07s
+[ 19/ 48] basis=orthonormal  L=20  ref=3  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=2.237e+04  iters=4  max|lam_cm|=1.796e-01  Delta=0.004826  t=0.05s
+    perturbed  ok  rank=78/78  cond=3.271e+04  iters=5  max|lam_cm|=1.919e-01  Delta=0.042899  t=0.05s
+[ 20/ 48] basis=orthonormal  L=20  ref=4  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=2.256e+04  iters=4  max|lam_cm|=1.705e-01  Delta=0.005064  t=0.06s
+    perturbed  ok  rank=78/78  cond=3.307e+04  iters=5  max|lam_cm|=2.117e-01  Delta=0.043080  t=0.09s
+[ 21/ 48] basis=orthonormal  L=50  ref=1  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=4.203e+04  iters=4  max|lam_cm|=3.576e-01  Delta=0.011505  t=0.12s
+    perturbed  ok  rank=168/168  cond=6.207e+04  iters=5  max|lam_cm|=3.877e-01  Delta=0.050342  t=0.14s
+[ 22/ 48] basis=orthonormal  L=50  ref=2  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=4.218e+04  iters=4  max|lam_cm|=3.151e-01  Delta=0.010597  t=0.11s
+    perturbed  ok  rank=168/168  cond=6.229e+04  iters=5  max|lam_cm|=3.557e-01  Delta=0.050589  t=0.18s
+[ 23/ 48] basis=orthonormal  L=50  ref=3  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=4.247e+04  iters=4  max|lam_cm|=2.823e-01  Delta=0.011461  t=0.12s
+    perturbed  ok  rank=168/168  cond=6.266e+04  iters=5  max|lam_cm|=3.074e-01  Delta=0.051089  t=0.13s
+[ 24/ 48] basis=orthonormal  L=50  ref=4  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=4.255e+04  iters=4  max|lam_cm|=3.392e-01  Delta=0.011436  t=0.11s
+    perturbed  ok  rank=168/168  cond=6.303e+04  iters=5  max|lam_cm|=3.430e-01  Delta=0.050690  t=0.14s
+[ 25/ 48] basis=interval     L=10  ref=1  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.231e+04  iters=4  max|lam_cm|=1.464e-01  Delta=0.003303  t=0.05s
+    perturbed  ok  rank=48/48  cond=1.972e+04  iters=5  max|lam_cm|=2.671e-01  Delta=0.040318  t=0.04s
+[ 26/ 48] basis=interval     L=10  ref=2  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.272e+04  iters=4  max|lam_cm|=1.059e-01  Delta=0.003485  t=0.03s
+    perturbed  ok  rank=48/48  cond=2.109e+04  iters=5  max|lam_cm|=2.750e-01  Delta=0.040505  t=0.04s
+[ 27/ 48] basis=interval     L=10  ref=3  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.228e+04  iters=4  max|lam_cm|=1.398e-01  Delta=0.003193  t=0.03s
+    perturbed  ok  rank=48/48  cond=1.965e+04  iters=5  max|lam_cm|=2.457e-01  Delta=0.040336  t=0.04s
+[ 28/ 48] basis=interval     L=10  ref=4  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.147e+04  iters=4  max|lam_cm|=1.485e-01  Delta=0.002780  t=0.04s
+    perturbed  ok  rank=48/48  cond=1.948e+04  iters=5  max|lam_cm|=2.796e-01  Delta=0.040042  t=0.04s
+[ 29/ 48] basis=interval     L=20  ref=1  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=1.155e+04  iters=4  max|lam_cm|=2.239e-01  Delta=0.005051  t=0.05s
+    perturbed  ok  rank=78/78  cond=1.937e+04  iters=5  max|lam_cm|=3.726e-01  Delta=0.042935  t=0.05s
+[ 30/ 48] basis=interval     L=20  ref=2  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=1.188e+04  iters=4  max|lam_cm|=1.680e-01  Delta=0.004557  t=0.05s
+    perturbed  ok  rank=78/78  cond=2.031e+04  iters=5  max|lam_cm|=4.479e-01  Delta=0.042852  t=0.05s
+[ 31/ 48] basis=interval     L=20  ref=3  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=1.157e+04  iters=4  max|lam_cm|=1.713e-01  Delta=0.004826  t=0.05s
+    perturbed  ok  rank=78/78  cond=1.930e+04  iters=5  max|lam_cm|=3.549e-01  Delta=0.042899  t=0.05s
+[ 32/ 48] basis=interval     L=20  ref=4  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=1.120e+04  iters=4  max|lam_cm|=2.090e-01  Delta=0.005064  t=0.05s
+    perturbed  ok  rank=78/78  cond=1.945e+04  iters=5  max|lam_cm|=4.395e-01  Delta=0.043080  t=0.05s
+[ 33/ 48] basis=interval     L=50  ref=1  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.123e+04  iters=4  max|lam_cm|=2.908e-01  Delta=0.011505  t=0.10s
+    perturbed  ok  rank=168/168  cond=1.933e+04  iters=5  max|lam_cm|=5.707e-01  Delta=0.050342  t=0.16s
+[ 34/ 48] basis=interval     L=50  ref=2  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.157e+04  iters=4  max|lam_cm|=2.561e-01  Delta=0.010597  t=0.10s
+    perturbed  ok  rank=168/168  cond=1.969e+04  iters=5  max|lam_cm|=6.570e-01  Delta=0.050589  t=0.12s
+[ 35/ 48] basis=interval     L=50  ref=3  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.132e+04  iters=4  max|lam_cm|=2.095e-01  Delta=0.011461  t=0.14s
+    perturbed  ok  rank=168/168  cond=1.926e+04  iters=5  max|lam_cm|=6.767e-01  Delta=0.051089  t=0.12s
+[ 36/ 48] basis=interval     L=50  ref=4  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=1.127e+04  iters=4  max|lam_cm|=2.612e-01  Delta=0.011436  t=0.11s
+    perturbed  ok  rank=168/168  cond=1.927e+04  iters=5  max|lam_cm|=5.850e-01  Delta=0.050690  t=0.13s
+[ 37/ 48] basis=std_interval L=10  ref=1  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=2.278e+04  iters=4  max|lam_cm|=6.328e-02  Delta=0.003303  t=0.04s
+    perturbed  ok  rank=48/48  cond=3.376e+04  iters=5  max|lam_cm|=1.056e-01  Delta=0.040318  t=0.04s
+[ 38/ 48] basis=std_interval L=10  ref=2  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=2.331e+04  iters=4  max|lam_cm|=4.271e-02  Delta=0.003485  t=0.03s
+    perturbed  ok  rank=48/48  cond=3.537e+04  iters=5  max|lam_cm|=1.092e-01  Delta=0.040505  t=0.03s
+[ 39/ 48] basis=std_interval L=10  ref=3  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=2.256e+04  iters=4  max|lam_cm|=5.842e-02  Delta=0.003193  t=0.03s
+    perturbed  ok  rank=48/48  cond=3.324e+04  iters=5  max|lam_cm|=1.019e-01  Delta=0.040336  t=0.03s
+[ 40/ 48] basis=std_interval L=10  ref=4  (ncm=30, d=48)
+    calib      ok  rank=47/48  cond=1.949e+04  iters=4  max|lam_cm|=6.271e-02  Delta=0.002780  t=0.03s
+    perturbed  ok  rank=48/48  cond=2.959e+04  iters=5  max|lam_cm|=1.113e-01  Delta=0.040042  t=0.03s
+[ 41/ 48] basis=std_interval L=20  ref=1  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=2.275e+04  iters=4  max|lam_cm|=6.969e-02  Delta=0.005051  t=0.05s
+    perturbed  ok  rank=78/78  cond=3.411e+04  iters=5  max|lam_cm|=1.111e-01  Delta=0.042935  t=0.05s
+[ 42/ 48] basis=std_interval L=20  ref=2  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=2.349e+04  iters=4  max|lam_cm|=5.214e-02  Delta=0.004557  t=0.05s
+    perturbed  ok  rank=78/78  cond=3.636e+04  iters=5  max|lam_cm|=1.390e-01  Delta=0.042852  t=0.05s
+[ 43/ 48] basis=std_interval L=20  ref=3  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=2.263e+04  iters=4  max|lam_cm|=5.222e-02  Delta=0.004826  t=0.05s
+    perturbed  ok  rank=78/78  cond=3.346e+04  iters=5  max|lam_cm|=1.062e-01  Delta=0.042899  t=0.05s
+[ 44/ 48] basis=std_interval L=20  ref=4  (ncm=60, d=78)
+    calib      ok  rank=77/78  cond=1.960e+04  iters=4  max|lam_cm|=6.437e-02  Delta=0.005064  t=0.05s
+    perturbed  ok  rank=78/78  cond=3.009e+04  iters=5  max|lam_cm|=1.347e-01  Delta=0.043080  t=0.06s
+[ 45/ 48] basis=std_interval L=50  ref=1  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=2.304e+04  iters=4  max|lam_cm|=5.401e-02  Delta=0.011505  t=0.11s
+    perturbed  ok  rank=168/168  cond=3.493e+04  iters=5  max|lam_cm|=1.060e-01  Delta=0.050342  t=0.17s
+[ 46/ 48] basis=std_interval L=50  ref=2  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=2.373e+04  iters=4  max|lam_cm|=4.765e-02  Delta=0.010597  t=0.11s
+    perturbed  ok  rank=168/168  cond=3.692e+04  iters=5  max|lam_cm|=1.262e-01  Delta=0.050589  t=0.12s
+[ 47/ 48] basis=std_interval L=50  ref=3  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=2.293e+04  iters=4  max|lam_cm|=4.222e-02  Delta=0.011461  t=0.13s
+    perturbed  ok  rank=168/168  cond=3.418e+04  iters=5  max|lam_cm|=1.326e-01  Delta=0.051089  t=0.12s
+[ 48/ 48] basis=std_interval L=50  ref=4  (ncm=150, d=168)
+    calib      ok  rank=167/168  cond=2.024e+04  iters=4  max|lam_cm|=5.470e-02  Delta=0.011436  t=0.10s
+    perturbed  ok  rank=168/168  cond=3.141e+04  iters=5  max|lam_cm|=1.199e-01  Delta=0.050690  t=0.12s
+
+Total wall time: 27.0 s
+Wrote results to /bbkinghome/edav/gravity_robustness/gravity-fullA-d4-c12-conditioning/full_aod_diag/d4_exact/c12b_conditioning_battery_results.csv

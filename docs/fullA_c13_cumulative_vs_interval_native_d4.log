@@ -1,0 +1,147 @@
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+WARNING:  Option 'mip_integral_gap_abs' deprecated, please use 'mip_opt_gap_abs'.
+WARNING:  Option 'mip_integral_gap_rel' deprecated, please use 'mip_opt_gap_rel'.
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+----------------------------------------------------------------------------------------------------
+calibration  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0033034508  cold=4.903s(nfg=5,nhess=4)  warm=0.110s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0033034508  cold=0.670s(nfg=5,nhess=4)  warm=0.118s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.908e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=3.6396e+04  cond(H) interval-native=1.2314e+04  (interval/cumulative ratio=0.3383, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=1.243e-17  interval-native=3.997e-18
+----------------------------------------------------------------------------------------------------
+unrestricted_upper_candidate  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=2.4952751102  cold=0.030s(nfg=11,nhess=10)  warm=0.009s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=2.4952751102  cold=0.030s(nfg=11,nhess=10)  warm=0.009s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.332e-15   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=2.8772e+04  cond(H) interval-native=1.4628e+04  (interval/cumulative ratio=0.5084, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=6.972e-16  interval-native=2.087e-16
+----------------------------------------------------------------------------------------------------
+perturbed_5pct  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0778940067  cold=0.125s(nfg=6,nhess=5)  warm=0.009s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0778940067  cold=0.020s(nfg=6,nhess=5)  warm=0.008s(nfg=1,nhess=0)
+  |Delta_dual diff| = 7.494e-16   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=4.6294e+04  cond(H) interval-native=1.5473e+04  (interval/cumulative ratio=0.3342, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=1.243e-14  interval-native=9.933e-15
+----------------------------------------------------------------------------------------------------
+difficult_15pct  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=-300  Delta_dual=78.9279726376  cold=0.020s(nfg=4,nhess=3)  warm=0.015s(nfg=4,nhess=3)
+  interval-native: status=-300  Delta_dual=78.9279726381  cold=0.015s(nfg=4,nhess=3)  warm=0.015s(nfg=4,nhess=3)
+  |Delta_dual diff| = 5.421e-10   (should be ~0 -- same restriction, exact reparameterization)
+----------------------------------------------------------------------------------------------------
+calibration  L=20  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0050511425  cold=0.021s(nfg=5,nhess=4)  warm=0.010s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0050511425  cold=0.064s(nfg=5,nhess=4)  warm=0.010s(nfg=1,nhess=0)
+  |Delta_dual diff| = 5.204e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=6.2655e+04  cond(H) interval-native=1.1553e+04  (interval/cumulative ratio=0.1844, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=8.393e-17  interval-native=8.260e-17
+----------------------------------------------------------------------------------------------------
+unrestricted_upper_candidate  L=20  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=2.7065277413  cold=0.036s(nfg=11,nhess=10)  warm=0.011s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=2.7065277413  cold=0.035s(nfg=11,nhess=10)  warm=0.011s(nfg=1,nhess=0)
+  |Delta_dual diff| = 2.220e-15   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=4.6724e+04  cond(H) interval-native=1.3812e+04  (interval/cumulative ratio=0.2956, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=2.363e-16  interval-native=2.061e-16
+----------------------------------------------------------------------------------------------------
+perturbed_5pct  L=20  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0844337219  cold=0.025s(nfg=7,nhess=6)  warm=0.010s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0844337219  cold=0.025s(nfg=7,nhess=6)  warm=0.009s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.249e-16   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=7.9988e+04  cond(H) interval-native=1.4527e+04  (interval/cumulative ratio=0.1816, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=1.044e-16  interval-native=1.008e-16
+----------------------------------------------------------------------------------------------------
+difficult_15pct  L=20  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=-300  Delta_dual=79.1691599194  cold=0.018s(nfg=4,nhess=3)  warm=0.018s(nfg=4,nhess=3)
+  interval-native: status=-300  Delta_dual=79.1691599227  cold=0.018s(nfg=4,nhess=3)  warm=0.018s(nfg=4,nhess=3)
+  |Delta_dual diff| = 3.278e-09   (should be ~0 -- same restriction, exact reparameterization)
+----------------------------------------------------------------------------------------------------
+calibration  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0115051927  cold=0.031s(nfg=5,nhess=4)  warm=0.013s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0115051927  cold=0.029s(nfg=5,nhess=4)  warm=0.012s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.561e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.4369e+05  cond(H) interval-native=1.1231e+04  (interval/cumulative ratio=0.0782, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=6.128e-17  interval-native=3.519e-17
+----------------------------------------------------------------------------------------------------
+unrestricted_upper_candidate  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=3.0177595568  cold=0.061s(nfg=12,nhess=11)  warm=0.013s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=3.0177595568  cold=0.058s(nfg=12,nhess=11)  warm=0.013s(nfg=1,nhess=0)
+  |Delta_dual diff| = 4.441e-16   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.1586e+05  cond(H) interval-native=1.6160e+04  (interval/cumulative ratio=0.1395, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=1.901e-16  interval-native=1.563e-16
+----------------------------------------------------------------------------------------------------
+perturbed_5pct  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0999118995  cold=0.039s(nfg=7,nhess=6)  warm=0.013s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0999118995  cold=0.038s(nfg=7,nhess=6)  warm=0.012s(nfg=1,nhess=0)
+  |Delta_dual diff| = 5.551e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.8486e+05  cond(H) interval-native=1.4106e+04  (interval/cumulative ratio=0.0763, <1 means BETTER conditioned)
+  primal weight summary: mean(mC)=1.000000e+00 mean(mI)=1.000000e+00  (basis-specific dual vectors, NOT expected bit-identical -- compare downstream economic content instead)
+  CM-block max KKT residual: cumulative=2.895e-16  interval-native=8.793e-17
+----------------------------------------------------------------------------------------------------
+difficult_15pct  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=-300  Delta_dual=79.3416910079  cold=0.027s(nfg=4,nhess=3)  warm=0.026s(nfg=4,nhess=3)
+  interval-native: status=-300  Delta_dual=79.3416910072  cold=0.027s(nfg=4,nhess=3)  warm=0.026s(nfg=4,nhess=3)
+  |Delta_dual diff| = 6.701e-10   (should be ~0 -- same restriction, exact reparameterization)
+
+====================================================================================================
+SUMMARY
+====================================================================================================
+calibration                    L=10  |Delta diff|=1.91e-17  cold: cum=4.903s int=0.670s  warm: cum=0.110s int=0.118s  cond: cum=3.640e+04 int=1.231e+04 (statusC=0 statusI=0)
+unrestricted_upper_candidate   L=10  |Delta diff|=1.33e-15  cold: cum=0.030s int=0.030s  warm: cum=0.009s int=0.009s  cond: cum=2.877e+04 int=1.463e+04 (statusC=0 statusI=0)
+perturbed_5pct                 L=10  |Delta diff|=7.49e-16  cold: cum=0.125s int=0.020s  warm: cum=0.009s int=0.008s  cond: cum=4.629e+04 int=1.547e+04 (statusC=0 statusI=0)
+difficult_15pct                L=10  |Delta diff|=5.42e-10  cold: cum=0.020s int=0.015s  warm: cum=0.015s int=0.015s  cond: cum=NaN int=NaN (statusC=-300 statusI=-300)
+calibration                    L=20  |Delta diff|=5.20e-17  cold: cum=0.021s int=0.064s  warm: cum=0.010s int=0.010s  cond: cum=6.266e+04 int=1.155e+04 (statusC=0 statusI=0)
+unrestricted_upper_candidate   L=20  |Delta diff|=2.22e-15  cold: cum=0.036s int=0.035s  warm: cum=0.011s int=0.011s  cond: cum=4.672e+04 int=1.381e+04 (statusC=0 statusI=0)
+perturbed_5pct                 L=20  |Delta diff|=1.25e-16  cold: cum=0.025s int=0.025s  warm: cum=0.010s int=0.009s  cond: cum=7.999e+04 int=1.453e+04 (statusC=0 statusI=0)
+difficult_15pct                L=20  |Delta diff|=3.28e-09  cold: cum=0.018s int=0.018s  warm: cum=0.018s int=0.018s  cond: cum=NaN int=NaN (statusC=-300 statusI=-300)
+calibration                    L=50  |Delta diff|=1.56e-17  cold: cum=0.031s int=0.029s  warm: cum=0.013s int=0.012s  cond: cum=1.437e+05 int=1.123e+04 (statusC=0 statusI=0)
+unrestricted_upper_candidate   L=50  |Delta diff|=4.44e-16  cold: cum=0.061s int=0.058s  warm: cum=0.013s int=0.013s  cond: cum=1.159e+05 int=1.616e+04 (statusC=0 statusI=0)
+perturbed_5pct                 L=50  |Delta diff|=5.55e-17  cold: cum=0.039s int=0.038s  warm: cum=0.013s int=0.012s  cond: cum=1.849e+05 int=1.411e+04 (statusC=0 statusI=0)
+difficult_15pct                L=50  |Delta diff|=6.70e-10  cold: cum=0.027s int=0.027s  warm: cum=0.026s int=0.026s  cond: cum=NaN int=NaN (statusC=-300 statusI=-300)
+
+9/12 points: both converged AND Delta_dual agrees to <1e-6.  3 points: at least one architecture failed to converge.
+Mean warm-time ratio (interval/cumulative): 0.983x  (WITHIN the 10-20% acceptable-slowdown threshold)
+DONE
