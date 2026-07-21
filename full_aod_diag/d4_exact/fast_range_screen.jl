@@ -806,7 +806,8 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
         result = infeasible_result(x_free, θ_full, ctx, :pairwise_certified_infeasible,
                                     pres.worst_o, pres.worst_d, 0, t_screen, tag, warm)
         cache !== nothing && (cache[key] = result)
-        return result, (screen_status = :pairwise_certified_infeasible, elapsed = t_screen)
+        return result, (screen_status = :pairwise_certified_infeasible, worst_o = pres.worst_o,
+                         worst_d = pres.worst_d, elapsed = t_screen)
     end
 
     # ---- 2. NEW: pre-winner envelope certificate ----
