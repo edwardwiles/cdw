@@ -32,10 +32,25 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
         delta_stages::Vector{Float64} = [2.0, 3.0, 4.0, 5.0],
         stage_maxtime_real::Float64 = 90.0, hessopt_tag::String = "sr1",
         W_in::Int = 80000, draw_seed_in::Int = 20260719, ckpt_root::AbstractString,
-        use_dual_bank::Bool = true, use_exact_cache::Bool = true)
+        use_dual_bank::Bool = true, use_exact_cache::Bool = true,
+        reuse_context::Bool = true,   # task §5/§6: build the real-data context ONCE and thread it
+        # through every stage via set_context_delta! instead of paying the ~65-83s
+        # d20_real_setup_design/pe/rsc rebuild at every stage (the diagnosed root cause of the
+        # earlier staged-vs-direct comparison's staged arm losing on wall time -- see
+        # docs/fullA_driver_delta5_diagnostics_handoff.md §5-6). Set false to reproduce the old
+        # per-stage-rebuild behavior exactly (e.g. for an A/B wall-time comparison).
+        draw_design_in::Symbol = :pseudorandom, inner_opt_override::Union{Nothing,AbstractString} = nothing)
     g = g_start; zfree = copy(zfree_start)
     stage_summaries = NamedTuple[]
     res = nothing
+    reuse = nothing
+    if reuse_context
+        lp("=== building reusable context ONCE (task §5), delta_stages[1]=", delta_stages[1], " === ", Dates.now())
+        t0 = time()
+        reuse = build_fullA_context(W = W_in, δ = delta_stages[1], find_smallest = false,
+            draw_design = draw_design_in, draw_seed = draw_seed_in, inner_loop_opt = inner_opt_override)
+        lp("  context build: ", round(time() - t0, digits = 1), "s")
+    end
     for (i, delta) in enumerate(delta_stages)
         stage_label = "$(label)_stage$(i)_d$(delta)"
         ckpt_dir = joinpath(ckpt_root, "stage$(i)_d$(delta)")
@@ -47,7 +62,8 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
             maxtime_real = stage_maxtime_real, hessopt_tag = hessopt_tag,
             W_in = W_in, delta_in = delta, draw_seed_in = draw_seed_in,
             ckpt_dir = ckpt_dir, checkpoint_interval_s = 30.0,
-            use_dual_bank = use_dual_bank, use_exact_cache = use_exact_cache)
+            use_dual_bank = use_dual_bank, use_exact_cache = use_exact_cache,
+            reuse = reuse)
         t_stage = time() - t0
         b = res.best_feasible
         if b !== nothing

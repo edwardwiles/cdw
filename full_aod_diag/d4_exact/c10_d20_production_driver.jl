@@ -99,6 +99,8 @@ include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small
 include(joinpath(@__DIR__, "negative_cache.jl"))   # negative-cache audit (integration/fullA-negative-cache-audit): typed ConfirmedNegativeResult + SafeNegativeCache, opt-in via use_neg_cache= below; default OFF, zero behavior change unless explicitly enabled -- see docs/fullA_negative_cache_audit.md
 include(joinpath(@__DIR__, "incumbent_logic.jl"))   # pure, KNITRO-free incumbent seed/compare helpers -- see docs/fullA_driver_delta5_diagnostics_handoff.md §3
 include(joinpath(@__DIR__, "knitro_status.jl"))   # KNITRO termination-status decoder + native per-solve diagnostics -- see docs/fullA_driver_delta5_diagnostics_handoff.md §9-10
+include(joinpath(@__DIR__, "reusable_context.jl"))   # build_fullA_context / set_context_delta! -- see docs/fullA_driver_delta5_diagnostics_handoff.md §5
+include(joinpath(@__DIR__, "organic_failure_capture.jl"))   # organic -300 failure archive + replay -- see docs/fullA_driver_delta5_diagnostics_handoff.md §7-8
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
@@ -324,7 +326,9 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
-        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true)
+        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
+        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing)   # opt-in archive of the
+        # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no capture.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
 
     mkpath(ckpt_dir)
@@ -453,13 +457,20 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         zfree = evalRequest.x
         w = vcat(g, zfree)
         xf = x_free_from_w(w, pe)
+        dual_before = copy(ctx.obj.x)   # snapshot for organic-failure capture (task §7), before screened_eval mutates it
         r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = zfree, exact_cache = exact_cache)
+        warm_source = :warm
         if !(r.inner_status in FEASIBLE_CODES)
             n_cold_retries[] += 1
             # BUGFIX (negative-cache audit): pass exact_cache through on the cold retry -- previously
             # omitted, so a cold-retry SUCCESS was never written to the positive cache (see
             # docs/fullA_negative_cache_audit.md). Same fix applied to run_polish_checkpointed's cb_F!/cb_G!.
             r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
+            warm_source = :warm_then_cold
+        end
+        if organic_failures !== nothing
+            maybe_capture_organic_failure!(organic_failures, label, w, xf, r, ctx, pe, sc, n_eval[], knitro_iter[],
+                delta, find_smallest, draw_design, draw_seed, warm_source, dual_before, resume_from)
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
@@ -589,13 +600,22 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         inner_opt_override::Union{Nothing,AbstractString} = nothing,
         skip_cold_retry::Bool = true,   # validated 2026-07-20: cold retry rescued 0/30 warm failures (all genuine
         use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
-        use_neg_cache::Bool = false, neg_cache_code_version::String = "unknown")   # negative-cache audit,
+        use_neg_cache::Bool = false, neg_cache_code_version::String = "unknown",   # negative-cache audit,
         # Policy B (docs/fullA_negative_cache_audit.md): opt-in, default OFF (byte-identical behavior to
         # before this kwarg existed when omitted). Requires skip_cold_retry=false to ever have a
         # confirmation attempt to promote from -- with skip_cold_retry=true (this function's own
         # default) there is only ever a single (warm) attempt per point, which is NEVER cached here
         # regardless of use_neg_cache (a lone failure is a TransientFailureResult by construction, see
         # negative_cache.jl -- only a CONFIRMED compatible second failure is eligible).
+        reuse::Union{Nothing,NamedTuple} = nothing,   # a prior build_fullA_context(...) result (task §5) --
+        # when given, SKIPS the ~65-83s d20_real_setup_design/build_pivot_elimination/
+        # build_ranged_screen_context rebuild entirely and instead cheaply overrides delta on the
+        # existing context (set_context_delta!, reusable_context.jl). Ignored (with a warning) when
+        # resuming, since a resumed checkpoint's own W/find_smallest/draw_design/draw_seed take
+        # precedence and must still be validated against whatever context is actually used.
+        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing)   # opt-in archive of the
+        # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no
+        # capture, zero overhead beyond one is_organic_failure check per evaluation.
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
@@ -620,12 +640,32 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
            " n_eval=", resumed.n_eval, " knitro_iter=", resumed.knitro_iter, ")")
     end
 
-    ctx = inner_opt_override === nothing ?
-        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed) :
-        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_opt_override)
-    pe = build_pivot_elimination(ctx)
+    ctx_reused = false
+    if reuse !== nothing && resumed === nothing
+        if reuse_matches(reuse; W = W, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed)
+            ctx = set_context_delta!(reuse.ctx, delta)
+            pe = reuse.pe; rsc = reuse.rsc
+            ctx_reused = true
+            lp("[", label, "] REUSING context (task §5): delta overridden to ", delta,
+               " -- skipped the ~65-83s d20_real_setup_design/pe/rsc rebuild")
+        else
+            lp("[", label, "] WARNING: reuse= context does not match requested W/find_smallest/draw_design/",
+               "draw_seed -- falling back to a fresh build (this should not happen if the caller threads a ",
+               "single build_fullA_context(...) result through matching stages; see task §5)")
+        end
+    elseif reuse !== nothing && resumed !== nothing
+        lp("[", label, "] NOTE: reuse= given but also resuming from a checkpoint -- resumed W/find_smallest/",
+           "draw_design/draw_seed take precedence; reuse= is ignored this call (rebuild from scratch, matching ",
+           "the checkpoint's own recorded provenance) rather than risk silently reusing a mismatched context.")
+    end
+    if !ctx_reused
+        ctx = inner_opt_override === nothing ?
+            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed) :
+            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_opt_override)
+        pe = build_pivot_elimination(ctx)
+        rsc = build_ranged_screen_context(ctx)
+    end
     D = ctx.D; D2 = D^2
-    rsc = build_ranged_screen_context(ctx)
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
        " screen_setup_wall=", ctx.screen_setup_wall,
@@ -716,6 +756,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
+        dual_before = copy(ctx.obj.x)   # snapshot for organic-failure capture (task §7), before screened_eval mutates it
         t_warm0 = time()
         r_warm_result, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache, neg_cache = neg_cache)
         r = r_warm_result
@@ -752,6 +793,11 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             push!(warm_cold_trace, (n_eval = n_eval[], gp = w[1], warm_time = t_warm, warm_status = warm_status,
                                      cold_time = cold_time, cold_status = cold_status,
                                      rescued = !skip_cold_retry && r.inner_status in FEASIBLE_CODES && isfinite(r.Delta_dual)))
+        end
+        if organic_failures !== nothing
+            maybe_capture_organic_failure!(organic_failures, label, w, xf, r, ctx, pe, sc, n_eval[], knitro_iter[],
+                delta, find_smallest, draw_design, draw_seed, skip_cold_retry ? :warm_only : :warm_then_cold,
+                dual_before, resume_from)
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
