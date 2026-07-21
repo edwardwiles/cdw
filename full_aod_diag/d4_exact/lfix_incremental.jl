@@ -237,7 +237,8 @@ OTHER existing call site (`price_and_pTsigma_cell` itself is untouched and still
 `bandwidth_quantile.jl`/`composite_gradient.jl`/`composite_gradient_fast.jl`/`winner_certificate.jl`
 exactly as before) -- this is purely additive, wired ONLY into `build_lfix_base_cache` below.
 Verified bit-for-bit identical to the allocating version's output
-(`test_lfix_incremental.jl`'s `@testset "price_and_pTsigma_cell! matches allocating version"`).
+(`test_lfix_buffer_fix.jl`'s `@testset "price_and_pTsigma_cell! bit-for-bit identical to allocating version"`,
+formalized from the original print-based `c14_verify_lfix_buffer_fix.jl` check).
 """
 function price_and_pTsigma_cell!(pbuf::AbstractVector, psbuf::AbstractVector,
                                   θ_full::AbstractVector, ctx, o::Int, d::Int)

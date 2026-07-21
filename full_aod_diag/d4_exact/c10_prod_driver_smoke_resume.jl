@@ -5,7 +5,7 @@
 include(joinpath(@__DIR__, "c10_d20_production_driver.jl"))
 
 CKPT_DIR = joinpath(D4X_ROOT, "results", "fullA_d4", "c10_ckpt_smoke_test")
-latest_path = joinpath(CKPT_DIR, "smoke_upper_latest.jls")
+latest_path = joinpath(CKPT_DIR, "smoke_lower_latest.jls")   # addendum: c10_prod_driver_smoke_original.jl's own label was corrected from "smoke_upper" to "smoke_lower" (it passes find_smallest=false, the real lower direction) -- path updated to match
 @assert isfile(latest_path) "no checkpoint found at $latest_path -- run c10_prod_driver_smoke_original.jl first"
 
 latest = load_checkpoint(latest_path)

@@ -97,6 +97,12 @@ include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
 include(joinpath(@__DIR__, "negative_cache.jl"))   # negative-cache audit (integration/fullA-negative-cache-audit): typed ConfirmedNegativeResult + SafeNegativeCache, opt-in via use_neg_cache= below; default OFF, zero behavior change unless explicitly enabled -- see docs/fullA_negative_cache_audit.md
+include(joinpath(@__DIR__, "dual_bank_ab_harness.jl"))   # DualBankABStats type (needed by screened_eval's signature below) + the A/B harness itself -- see docs/fullA_driver_delta5_diagnostics_handoff.md §12
+include(joinpath(@__DIR__, "incumbent_logic.jl"))   # pure, KNITRO-free incumbent seed/compare helpers -- see docs/fullA_driver_delta5_diagnostics_handoff.md §3
+include(joinpath(@__DIR__, "direction_bounds.jl"))   # direction-aware gp box split at the Frechet benchmark -- see docs/fullA_driver_delta5_diagnostics_handoff.md's gamma-bounds addendum section
+include(joinpath(@__DIR__, "knitro_status.jl"))   # KNITRO termination-status decoder + native per-solve diagnostics -- see docs/fullA_driver_delta5_diagnostics_handoff.md §9-10
+include(joinpath(@__DIR__, "reusable_context.jl"))   # build_fullA_context / set_context_delta! -- see docs/fullA_driver_delta5_diagnostics_handoff.md §5
+include(joinpath(@__DIR__, "organic_failure_capture.jl"))   # organic -300 failure archive + replay -- see docs/fullA_driver_delta5_diagnostics_handoff.md §7-8
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
@@ -239,7 +245,12 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
         n_eval_ref::Ref{Int}; warm::Bool = true, bank::Union{Nothing,DualBank} = nothing,
         zfree::Union{Nothing,AbstractVector{Float64}} = nothing,
         exact_cache::Union{Nothing,SafeExactCache} = nothing,
-        neg_cache::Union{Nothing,SafeNegativeCache} = nothing)
+        neg_cache::Union{Nothing,SafeNegativeCache} = nothing,
+        ab_stats::Union{Nothing,DualBankABStats} = nothing)   # task §12: opt-in instrumentation for
+        # the successful-dual-bank A/B harness (dual_bank_ab_harness.jl) -- captures the
+        # select_warm_start label/candidate-count/scoring-wall-time this function already computes
+        # and previously discarded (`_label` below). nothing (default) = zero overhead, unchanged
+        # behavior.
     # Negative-cache audit (Policy B, opt-in): a CONFIRMED negative (see negative_cache.jl,
     # confirm_and_maybe_cache_negative!) short-circuits here with ZERO KNITRO call, same as an
     # exact_cache positive hit. Checked first (cheap dict lookup) -- default nothing, so every
@@ -271,7 +282,12 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
             e isa TiedWinnerError ? nothing : rethrow()
         end
         if cf_score !== nothing
+            t_score0 = ab_stats === nothing ? NaN : time()
+            n_cands_before = length(bank.history) + 1   # +1 for the always-present :neutral candidate; :actual/:last_accepted/:nearest are conditional, see dual_bank.jl select_warm_start
             x0, _label = select_warm_start(bank, ctx.obj, cf_score, zfree)
+            if ab_stats !== nothing
+                record_ab_selection!(ab_stats, _label, n_cands_before, time() - t_score0)
+            end
             ctx.obj.x .= x0
         end
     end
@@ -322,7 +338,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
-        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true)
+        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
+        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
+        # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no capture.
+        allow_direction_box_migration::Bool = false)   # addendum: by default, a fixed g (fresh or
+        # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
+        # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
+        # a validity gate on the caller's own g). See direction_bounds.jl.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
 
     mkpath(ckpt_dir)
@@ -359,6 +381,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
        " screen_setup_wall=", ctx.screen_setup_wall,
        " envelope_screen_supported=", rsc.envelope !== nothing,
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
+
+    # Direction-aware validity gate on the fixed g (addendum): reject -- do not clamp -- a
+    # g (fresh or resumed) on the wrong side of the Frechet benchmark for its own direction.
+    if !allow_direction_box_migration
+        validate_gp_in_direction_box(g, ctx, find_smallest; label = label,
+            what = resumed !== nothing ? "resumed checkpoint's fixed g" : "supplied fixed g")
+    end
 
     if resumed !== nothing
         # Hard reproducibility gate (§4 of the draw-design port brief): the regenerated draws for THIS
@@ -413,7 +442,14 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     KNITRO.KN_set_var_primal_init_values_all(kc, zfree_start)
 
     last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)
-    best = Ref{Union{Nothing,NamedTuple}}(resumed !== nothing ? resumed.best_feasible : nothing)
+    # See incumbent_logic.jl / docs/fullA_driver_delta5_diagnostics_handoff.md §3: seed the
+    # incumbent from the already-cold-verified start point (r_seed) rather than `nothing`.
+    seed_cand_feasible = r_seed.inner_status in FEASIBLE_CODES && isfinite(r_seed.Delta_dual)
+    seed_cand = (zfree = copy(zfree_start), Delta_dual = r_seed.Delta_dual, gravity_value = r_seed.gravity_value,
+                 max_abs_moment_kkt_resid = r_seed.max_abs_moment_kkt_resid, inner_status = r_seed.inner_status,
+                 t_elapsed = 0.0, n_eval = n_eval[])
+    best = Ref{Union{Nothing,NamedTuple}}(seed_incumbent(resumed !== nothing ? resumed.best_feasible : nothing,
+                                                           seed_cand_feasible, seed_cand))
     n_grad_calls = Ref(0)
     policy = BandwidthCachePolicy()
     policy.cache = bandwidth_cache
@@ -426,7 +462,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
+        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid),
@@ -444,13 +480,20 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         zfree = evalRequest.x
         w = vcat(g, zfree)
         xf = x_free_from_w(w, pe)
+        dual_before = copy(ctx.obj.x)   # snapshot for organic-failure capture (task §7), before screened_eval mutates it
         r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = zfree, exact_cache = exact_cache)
+        warm_source = :warm
         if !(r.inner_status in FEASIBLE_CODES)
             n_cold_retries[] += 1
             # BUGFIX (negative-cache audit): pass exact_cache through on the cold retry -- previously
             # omitted, so a cold-retry SUCCESS was never written to the positive cache (see
             # docs/fullA_negative_cache_audit.md). Same fix applied to run_polish_checkpointed's cb_F!/cb_G!.
             r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
+            warm_source = :warm_then_cold
+        end
+        if organic_failures !== nothing
+            maybe_capture_organic_failure!(organic_failures, label, w, xf, r, ctx, pe, sc, n_eval[], knitro_iter[],
+                delta, find_smallest, draw_design, draw_seed, warm_source, dual_before, resume_from)
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
@@ -462,7 +505,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         t_el = time() - t_start
         base = BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base)
-        is_new_best = best[] === nothing || Δ < best[].Delta_dual
+        is_new_best = is_better_profile(Δ, best[] === nothing ? nothing : best[].Delta_dual)
         if is_new_best
             best[] = (zfree = copy(zfree), Delta_dual = Δ, gravity_value = r.gravity_value,
                       max_abs_moment_kkt_resid = r.max_abs_moment_kkt_resid, inner_status = r.inner_status,
@@ -528,11 +571,23 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus_code, _, xsol, _ = KNITRO.KN_get_solution(kc)
+    # Native, KNITRO-reported per-solve diagnostics for THIS OUTER kc only, queried before KN_free
+    # (task §9/§10) -- distinct from n_eval/n_grad_calls/sc.* below, which are this driver's own
+    # hand-rolled counters accumulated across every cb_F!/cb_G! call of this one outer solve
+    # (themselves genuinely per-call since sc/n_eval/n_grad_calls are all freshly constructed at
+    # the top of this function, never shared across separate run_profile_checkpointed calls).
+    # Note this reports the OUTER polish/profile NLP's own iteration count, NOT the INNER CC dual
+    # solve's -- each screened_eval call below may trigger its own separate inner KNITRO solve with
+    # its own counters, audited separately (see docs/fullA_driver_delta5_diagnostics_handoff.md §9).
+    native_outer_diag = full_status_record(nStatus_code, kc)
     KNITRO.KN_free(kc)
 
     b = best[]
-    lp("[", label, "] PROFILE DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
+    lp("[", label, "] PROFILE DONE: status=", nStatus_code, " (", native_outer_diag.status_name, "/",
+       native_outer_diag.status_category, ") wall_ext=", round(wall_ext, digits = 1),
        "s n_eval=", n_eval[], " n_grad_calls=", n_grad_calls[],
+       " native_outer_iters=", native_outer_diag.n_iters, " native_outer_fc_evals=", native_outer_diag.n_fc_evals,
+       " native_outer_ga_evals=", native_outer_diag.n_ga_evals,
        " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed)
     if b !== nothing
         lp("  best: Delta=", b.Delta_dual, " gravity=", b.gravity_value, " found_at_eval=", b.n_eval)
@@ -543,7 +598,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, g = g, find_smallest = find_smallest, ctx = ctx, pe = pe,
-            knitro_status = nStatus_code, wall_ext = wall_ext, n_eval = n_eval[], n_grad_calls = n_grad_calls[],
+            knitro_status = nStatus_code, native_outer_diag = native_outer_diag, wall_ext = wall_ext,
+            n_eval = n_eval[], n_grad_calls = n_grad_calls[],
             zfree_terminal = collect(xsol), best = b, trace = trace, screen_counts = as_namedtuple(sc),
             screen_rejections = sc.rejections, final_checkpoint = final_ckpt,
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
@@ -567,13 +623,26 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         inner_opt_override::Union{Nothing,AbstractString} = nothing,
         skip_cold_retry::Bool = true,   # validated 2026-07-20: cold retry rescued 0/30 warm failures (all genuine
         use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
-        use_neg_cache::Bool = false, neg_cache_code_version::String = "unknown")   # negative-cache audit,
+        use_neg_cache::Bool = false, neg_cache_code_version::String = "unknown",   # negative-cache audit,
         # Policy B (docs/fullA_negative_cache_audit.md): opt-in, default OFF (byte-identical behavior to
         # before this kwarg existed when omitted). Requires skip_cold_retry=false to ever have a
         # confirmation attempt to promote from -- with skip_cold_retry=true (this function's own
         # default) there is only ever a single (warm) attempt per point, which is NEVER cached here
         # regardless of use_neg_cache (a lone failure is a TransientFailureResult by construction, see
         # negative_cache.jl -- only a CONFIRMED compatible second failure is eligible).
+        reuse::Union{Nothing,NamedTuple} = nothing,   # a prior build_fullA_context(...) result (task §5) --
+        # when given, SKIPS the ~65-83s d20_real_setup_design/build_pivot_elimination/
+        # build_ranged_screen_context rebuild entirely and instead cheaply overrides delta on the
+        # existing context (set_context_delta!, reusable_context.jl). Ignored (with a warning) when
+        # resuming, since a resumed checkpoint's own W/find_smallest/draw_design/draw_seed take
+        # precedence and must still be validated against whatever context is actually used.
+        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
+        # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no
+        # capture, zero overhead beyond one is_organic_failure check per evaluation.
+        allow_direction_box_migration::Bool = false)   # addendum: by default, a start point (fresh or
+        # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
+        # hard error, not silently clamped. Set true only for an explicit, deliberate migration of a
+        # pre-fix checkpoint/start point -- see direction_bounds.jl.
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
@@ -598,12 +667,32 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
            " n_eval=", resumed.n_eval, " knitro_iter=", resumed.knitro_iter, ")")
     end
 
-    ctx = inner_opt_override === nothing ?
-        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed) :
-        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_opt_override)
-    pe = build_pivot_elimination(ctx)
+    ctx_reused = false
+    if reuse !== nothing && resumed === nothing
+        if reuse_matches(reuse; W = W, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed)
+            ctx = set_context_delta!(reuse.ctx, delta)
+            pe = reuse.pe; rsc = reuse.rsc
+            ctx_reused = true
+            lp("[", label, "] REUSING context (task §5): delta overridden to ", delta,
+               " -- skipped the ~65-83s d20_real_setup_design/pe/rsc rebuild")
+        else
+            lp("[", label, "] WARNING: reuse= context does not match requested W/find_smallest/draw_design/",
+               "draw_seed -- falling back to a fresh build (this should not happen if the caller threads a ",
+               "single build_fullA_context(...) result through matching stages; see task §5)")
+        end
+    elseif reuse !== nothing && resumed !== nothing
+        lp("[", label, "] NOTE: reuse= given but also resuming from a checkpoint -- resumed W/find_smallest/",
+           "draw_design/draw_seed take precedence; reuse= is ignored this call (rebuild from scratch, matching ",
+           "the checkpoint's own recorded provenance) rather than risk silently reusing a mismatched context.")
+    end
+    if !ctx_reused
+        ctx = inner_opt_override === nothing ?
+            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed) :
+            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_opt_override)
+        pe = build_pivot_elimination(ctx)
+        rsc = build_ranged_screen_context(ctx)
+    end
     D = ctx.D; D2 = D^2
-    rsc = build_ranged_screen_context(ctx)
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
        " screen_setup_wall=", ctx.screen_setup_wall,
@@ -612,6 +701,14 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
     w0 = vcat(g_start, zfree_start)
+    # Direction-aware gp box (addendum, "correct the outer gamma bounds for upper and
+    # lower runs"): reject -- do not clamp -- a start point (fresh or resumed) that lies
+    # on the wrong side of the Frechet benchmark for its own declared direction. See
+    # direction_bounds.jl for the full derivation/evidence.
+    if !allow_direction_box_migration
+        validate_gp_in_direction_box(w0[1], ctx, find_smallest; label = label,
+            what = resumed !== nothing ? "resumed checkpoint's (g, zfree)" : "supplied start point")
+    end
     if resumed !== nothing
         if ctx.draw_meta.checksum_uniform != resumed.draw_checksum_uniform ||
            ctx.draw_meta.checksum_transformed != resumed.draw_checksum_transformed
@@ -642,8 +739,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     r0.inner_status in FEASIBLE_CODES || error("run_polish_checkpointed($label): start point not inner-feasible, cannot proceed")
 
     z_halfwidth = 30.0
-    w_lo = vcat(ctx.bounds.γp_lo, zfree_start .- z_halfwidth)
-    w_hi = vcat(ctx.bounds.γp_hi, zfree_start .+ z_halfwidth)
+    # Direction-aware gp box, split at the Frechet benchmark (addendum) -- replaces the old
+    # full-range [ctx.bounds.γp_lo, ctx.bounds.γp_hi] box, which let the "upper" and "lower"
+    # searches cross into each other's territory. See direction_bounds.jl.
+    gp_dir_lo, gp_dir_hi = direction_gamma_bounds(ctx, find_smallest)
+    w_lo = vcat(gp_dir_lo, zfree_start .- z_halfwidth)
+    w_hi = vcat(gp_dir_hi, zfree_start .+ z_halfwidth)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
@@ -657,7 +758,15 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     KNITRO.KN_set_con_upbnd(kc, cIndices[1], ctx.δ)
 
     last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)
-    best_feasible = Ref{Any}(resumed !== nothing ? resumed.best_feasible : nothing)
+    # See incumbent_logic.jl / docs/fullA_driver_delta5_diagnostics_handoff.md §3: seed the
+    # incumbent from the already-cold-verified start point (r0), gated on the SAME delta-budget
+    # feasibility test (`feasible = Δ <= ctx.δ + 1e-6`) cb_F! uses below, rather than `nothing`.
+    seed_cand_feasible = r0.inner_status in FEASIBLE_CODES && isfinite(r0.Delta_dual) && r0.Delta_dual <= ctx.δ + 1e-6
+    seed_cand = (gp = w0[1], w = copy(w0), Delta = r0.Delta_dual, gravity = r0.gravity_value,
+                 kkt = r0.max_abs_moment_kkt_resid, inner_status = r0.inner_status, t_elapsed = 0.0,
+                 n_eval = n_eval[])
+    best_feasible = Ref{Any}(seed_incumbent(resumed !== nothing ? resumed.best_feasible : nothing,
+                                             seed_cand_feasible, seed_cand))
     n_grad_calls = Ref(0)
     policy = BandwidthCachePolicy(); policy.cache = bandwidth_cache
     trace = NamedTuple[]
@@ -668,7 +777,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
+        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best_feasible[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid), SOLVER_STATE_NOTE,
@@ -686,6 +795,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
+        dual_before = copy(ctx.obj.x)   # snapshot for organic-failure capture (task §7), before screened_eval mutates it
         t_warm0 = time()
         r_warm_result, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache, neg_cache = neg_cache)
         r = r_warm_result
@@ -723,6 +833,11 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                                      cold_time = cold_time, cold_status = cold_status,
                                      rescued = !skip_cold_retry && r.inner_status in FEASIBLE_CODES && isfinite(r.Delta_dual)))
         end
+        if organic_failures !== nothing
+            maybe_capture_organic_failure!(organic_failures, label, w, xf, r, ctx, pe, sc, n_eval[], knitro_iter[],
+                delta, find_smallest, draw_design, draw_seed, skip_cold_retry ? :warm_only : :warm_then_cold,
+                dual_before, resume_from)
+        end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
             throw(DomainError(w[1], "run_polish_checkpointed($label): infeasible/non-finite point (inner_status=$(r.inner_status)), rejecting"))
@@ -735,7 +850,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         feasible = Δ <= ctx.δ + 1e-6
         base = BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base)
-        is_new_best = feasible && (best_feasible[] === nothing || (find_smallest ? w[1] < best_feasible[].gp : w[1] > best_feasible[].gp))
+        is_new_best = feasible && is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, gravity = r.gravity_value,
                                 kkt = r.max_abs_moment_kkt_resid, inner_status = r.inner_status,
@@ -807,6 +922,9 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus_code, _, xsol, _ = KNITRO.KN_get_solution(kc)
+    # See the matching comment in run_profile_checkpointed above (§9/§10): native per-solve
+    # diagnostics for THIS OUTER kc, queried before KN_free.
+    native_outer_diag = full_status_record(nStatus_code, kc)
     KNITRO.KN_free(kc)
 
     b = best_feasible[]
@@ -815,8 +933,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     if b !== nothing
         κ = 1 - b.gp^(σ / (σ - 1))
     end
-    lp("[", label, "] POLISH DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
-       "s n_eval=", n_eval[], " kappa=", κ, " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed,
+    lp("[", label, "] POLISH DONE: status=", nStatus_code, " (", native_outer_diag.status_name, "/",
+       native_outer_diag.status_category, ") wall_ext=", round(wall_ext, digits = 1),
+       "s n_eval=", n_eval[], " kappa=", κ,
+       " native_outer_iters=", native_outer_diag.n_iters, " native_outer_fc_evals=", native_outer_diag.n_fc_evals,
+       " native_outer_ga_evals=", native_outer_diag.n_ga_evals,
+       " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed,
        " n_cold_retries(F)=", n_cold_retries[], " n_rejected(F)=", n_rejected[], " n_g_recompute=", n_g_recompute[],
        neg_cache !== nothing ? " n_neg_confirmed=$(n_neg_confirmed[]) neg_cache_size=$(length(neg_cache))" : "")
 
@@ -825,7 +947,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, find_smallest = find_smallest, ctx = ctx, pe = pe,
-            knitro_status = nStatus_code, wall_ext = wall_ext, n_eval = n_eval[], n_grad_calls = n_grad_calls[],
+            knitro_status = nStatus_code, native_outer_diag = native_outer_diag, wall_ext = wall_ext,
+            n_eval = n_eval[], n_grad_calls = n_grad_calls[],
             best_feasible = b, kappa = κ, trace = trace, screen_counts = as_namedtuple(sc),
             screen_rejections = sc.rejections, final_checkpoint = final_ckpt,
             n_cold_retries = n_cold_retries[], n_rejected = n_rejected[], n_g_recompute = n_g_recompute[],
