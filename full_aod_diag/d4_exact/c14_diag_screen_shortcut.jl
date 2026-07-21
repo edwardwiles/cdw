@@ -6,17 +6,30 @@
 # the "cold value eval, complete callback" at what looks like the identical point. This script
 # isolates exactly which screen fired and why, to resolve the discrepancy honestly rather than
 # report a number without understanding it.
+# Include order matches c10_d20_production_driver.jl EXACTLY (not the ad-hoc subset used by
+# earlier c14 scripts) -- see this file's own investigation note below for why that ad-hoc subset
+# was silently wrong (missing compressed_cc_inner.jl/dual_bank.jl and several others produced a
+# real, reproducible bug: Delta_dual computed as -0.0 instead of the correct 0.2308841490034606,
+# with no error thrown -- confirmed by cross-checking against timing_harness.jl, unmodified, which
+# DOES include the full c10_d20_production_driver.jl chain and correctly reproduces the historical
+# value).
 include(joinpath(@__DIR__, "context_real_d20.jl"))
+include(joinpath(@__DIR__, "instrumentation.jl"))
 include(joinpath(@__DIR__, "winners.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
-include(joinpath(@__DIR__, "instrumentation.jl"))
-include(joinpath(@__DIR__, "oracle_fast.jl"))
 include(joinpath(@__DIR__, "gravity_elimination.jl"))
+include(joinpath(@__DIR__, "three_way_derivatives.jl"))
+include(joinpath(@__DIR__, "lfix_incremental.jl"))
 include(joinpath(@__DIR__, "compressed_moments.jl"))
 include(joinpath(@__DIR__, "structured_moment_build.jl"))
+include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
+include(joinpath(@__DIR__, "oracle_fast.jl"))
 include(joinpath(@__DIR__, "compressed_live.jl"))
-include(joinpath(@__DIR__, "infeasibility_screen.jl"))
+include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
+include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))
+include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))
+include(joinpath(@__DIR__, "dual_bank.jl"))
 using Printf, Random, LinearAlgebra
 
 lp(xs...) = (println(xs...); flush(stdout))
