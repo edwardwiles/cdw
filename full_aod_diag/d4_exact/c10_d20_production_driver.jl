@@ -97,6 +97,7 @@ include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
 include(joinpath(@__DIR__, "negative_cache.jl"))   # negative-cache audit (integration/fullA-negative-cache-audit): typed ConfirmedNegativeResult + SafeNegativeCache, opt-in via use_neg_cache= below; default OFF, zero behavior change unless explicitly enabled -- see docs/fullA_negative_cache_audit.md
+include(joinpath(@__DIR__, "dual_bank_ab_harness.jl"))   # DualBankABStats type (needed by screened_eval's signature below) + the A/B harness itself -- see docs/fullA_driver_delta5_diagnostics_handoff.md §12
 include(joinpath(@__DIR__, "incumbent_logic.jl"))   # pure, KNITRO-free incumbent seed/compare helpers -- see docs/fullA_driver_delta5_diagnostics_handoff.md §3
 include(joinpath(@__DIR__, "knitro_status.jl"))   # KNITRO termination-status decoder + native per-solve diagnostics -- see docs/fullA_driver_delta5_diagnostics_handoff.md §9-10
 include(joinpath(@__DIR__, "reusable_context.jl"))   # build_fullA_context / set_context_delta! -- see docs/fullA_driver_delta5_diagnostics_handoff.md §5
@@ -243,7 +244,12 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
         n_eval_ref::Ref{Int}; warm::Bool = true, bank::Union{Nothing,DualBank} = nothing,
         zfree::Union{Nothing,AbstractVector{Float64}} = nothing,
         exact_cache::Union{Nothing,SafeExactCache} = nothing,
-        neg_cache::Union{Nothing,SafeNegativeCache} = nothing)
+        neg_cache::Union{Nothing,SafeNegativeCache} = nothing,
+        ab_stats::Union{Nothing,DualBankABStats} = nothing)   # task §12: opt-in instrumentation for
+        # the successful-dual-bank A/B harness (dual_bank_ab_harness.jl) -- captures the
+        # select_warm_start label/candidate-count/scoring-wall-time this function already computes
+        # and previously discarded (`_label` below). nothing (default) = zero overhead, unchanged
+        # behavior.
     # Negative-cache audit (Policy B, opt-in): a CONFIRMED negative (see negative_cache.jl,
     # confirm_and_maybe_cache_negative!) short-circuits here with ZERO KNITRO call, same as an
     # exact_cache positive hit. Checked first (cheap dict lookup) -- default nothing, so every
@@ -275,7 +281,12 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
             e isa TiedWinnerError ? nothing : rethrow()
         end
         if cf_score !== nothing
+            t_score0 = ab_stats === nothing ? NaN : time()
+            n_cands_before = length(bank.history) + 1   # +1 for the always-present :neutral candidate; :actual/:last_accepted/:nearest are conditional, see dual_bank.jl select_warm_start
             x0, _label = select_warm_start(bank, ctx.obj, cf_score, zfree)
+            if ab_stats !== nothing
+                record_ab_selection!(ab_stats, _label, n_cands_before, time() - t_score0)
+            end
             ctx.obj.x .= x0
         end
     end

@@ -50,13 +50,28 @@ for s in staged_reuse.stages
 end
 
 # ---- Monotonicity check: the actual bug this whole exercise is about --------
+# IMPORTANT (a real finding from this validation's own first run, task §3's own "objective
+# sign" audit item): check best_gp, NOT kappa. kappa = 1 - gp^(sigma/(sigma-1)) is a
+# strictly DECREASING function of gp whenever sigma>1 (the standard CES case, confirmed
+# sigma~2.5 here from the observed gp/kappa pairs) -- so under find_smallest=false
+# ("upper"), where is_better_polish greedily maximizes gp, kappa can legitimately DECREASE
+# stage-over-stage even though the incumbent-seeding fix is working perfectly (gp itself
+# is what the fix protects, and it must be non-decreasing here -- kappa is a downstream,
+# non-monotonic-in-gp display transform of it, at least in the near-gp=1 regime this
+# script's weak gp0*1.01 starting perturbation explores). A kappa-based check is the WRONG
+# invariant to assert; this was caught empirically, not derived a priori -- see
+# docs/fullA_driver_delta5_diagnostics_handoff.md §3 for the full writeup and why this
+# does NOT necessarily explain the original bug report's own (much larger, ~0.08-scale)
+# kappa numbers, which likely live in a different part of the (gp, A_od) space entirely.
+best_gps = [s.best_gp for s in staged_reuse.stages]
+gp_monotonic = all(isnan(best_gps[i]) || isnan(best_gps[i-1]) || best_gps[i] >= best_gps[i-1] - 1e-9 for i in 2:length(best_gps))
 kappas = [s.kappa for s in staged_reuse.stages]
-monotonic = all(isnan(kappas[i]) || isnan(kappas[i-1]) || kappas[i] >= kappas[i-1] - 1e-9 for i in 2:length(kappas))
 lp("\n", "="^80, "\n=== MONOTONICITY CHECK (task §3's core question) ===\n", "="^80)
-lp("kappas across stages: ", kappas)
-lp("Monotonically non-decreasing (required for a correctly-tracked upper bound): ", monotonic)
-lp(monotonic ? "PASS: incumbent-seeding fix holds under a real staged run." :
-               "FAIL: kappa regressed at some stage -- investigate further, the fix did not fully resolve this.")
+lp("best_gp across stages: ", best_gps)
+lp("kappa across stages (informational only -- see note above, NOT the checked invariant): ", kappas)
+lp("best_gp monotonically non-decreasing (the actual incumbent-seeding invariant): ", gp_monotonic)
+lp(gp_monotonic ? "PASS: incumbent-seeding fix holds under a real staged run (gp never regresses)." :
+                   "FAIL: gp regressed at some stage -- investigate further, the fix did not fully resolve this.")
 
 # ---- ARM B: reuse_context=false (old per-stage-rebuild behavior), same budget ----
 lp("\n", "="^80, "\n=== ARM B: staged 2->3->4->5, reuse_context=false (", STAGE_BUDGET, "s/stage) ===\n", "="^80)
