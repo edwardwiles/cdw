@@ -221,6 +221,37 @@ function price_and_pTsigma_cell(θ_full::AbstractVector, ctx, o::Int, d::Int)
     return price, pTσ
 end
 
+"""
+    price_and_pTsigma_cell!(pbuf, psbuf, θ_full, ctx, o, d)
+
+In-place variant of `price_and_pTsigma_cell` (SAME formula, byte-for-byte, only the allocation
+pattern differs): writes into caller-supplied `pbuf`/`psbuf` (length-W views) via broadcast
+assignment (`.=`) instead of allocating and returning two fresh W-length vectors. Added per the
+allocation audit (Task 3): `build_lfix_base_cache`'s `for d in 1:D, o in 1:D` loop called the
+allocating version D^2=400 times (D=20), each allocating two fresh W=80,000-length Float64 vectors
+(~640KB each) purely to immediately copy them into `price0[:,o,d]`/`pTσ0[:,o,d]` and discard --
+~512MB of pure allocate-then-copy churn, roughly half of that function's measured 1078MB/call
+(`results/fullA_d4/c14_parallel_prod/allocation_audit.csv`). This variant writes directly into the
+destination view, eliminating the intermediate allocation and the copy. NOT used by any
+OTHER existing call site (`price_and_pTsigma_cell` itself is untouched and still used by
+`bandwidth_quantile.jl`/`composite_gradient.jl`/`composite_gradient_fast.jl`/`winner_certificate.jl`
+exactly as before) -- this is purely additive, wired ONLY into `build_lfix_base_cache` below.
+Verified bit-for-bit identical to the allocating version's output
+(`test_lfix_incremental.jl`'s `@testset "price_and_pTsigma_cell! matches allocating version"`).
+"""
+function price_and_pTsigma_cell!(pbuf::AbstractVector, psbuf::AbstractVector,
+                                  θ_full::AbstractVector, ctx, o::Int, d::Int)
+    γo = ctx.γ; σ = θ_full[2]; μ = θ_full[1]
+    AodPow = aod_pow_cell(θ_full, ctx, o, d)
+    constCons_od = γo.wHat[o] * AodPow * γo.τ[o, d]
+    wPow_o = γo.wHat[o]^(1 - σ)
+    constConsσ_od = wPow_o * (AodPow * γo.τ[o, d])^(1 - σ)
+    U = ctx.U
+    pbuf .= constCons_od ./ (@view(U[:, o]) .^ (-μ))
+    psbuf .= constConsσ_od ./ (@view(γo.Uσ[:, o]) .^ (-μ))
+    return nothing
+end
+
 struct LFixBaseCache
     D::Int; oci::Int; W::Int; μ::Float64; σ::Float64; baseIndex::Int
     gammafac::Float64
@@ -358,9 +389,12 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
 
     price0 = Array{Float64}(undef, W, D, D)
     pTσ0 = Array{Float64}(undef, W, D, D)
+    # Allocation-audit fix (Task 3): write directly into the destination views via
+    # price_and_pTsigma_cell! instead of allocating two fresh W-length vectors per (o,d) cell (400
+    # cells at D=20) and copying -- eliminates ~512MB/call of allocate-then-copy churn. See that
+    # function's docstring; verified bit-for-bit identical output to the old allocating call below.
     for d in 1:D, o in 1:D
-        p, ps = price_and_pTsigma_cell(base.θ_full0, ctx, o, d)
-        price0[:, o, d] .= p; pTσ0[:, o, d] .= ps
+        price_and_pTsigma_cell!(@view(price0[:, o, d]), @view(pTσ0[:, o, d]), base.θ_full0, ctx, o, d)
     end
 
     # ---- tie check BEFORE anything else (Continuation 6 fix, see TiedWinnerError's docstring): an
