@@ -1,8 +1,7 @@
 # Full-A_od D=20 production consolidation, timing audit, and δ=5 improvement
 
-Status: Phases A-F complete and merged into `diag/fullA-d4-exact` (fast-forward, `98983bd`→
-`38fd767`, not yet pushed to origin). QMC draw-design addendum in progress separately (own
-branch/agent), to be merged as a fast-following addendum once its validation completes — see §12.
+Status: Phases A-F and the QMC draw-design addendum are all complete, independently validated,
+and merged into `diag/fullA-d4-exact`.
 
 Integration branch: `integration/fullA-d20-runtime-delta5`, worktree
 `/bbkinghome/edav/gravity_robustness/gravity-fullA-d20-runtime-delta5`, base `98983bd`
@@ -15,7 +14,7 @@ Integration branch: `integration/fullA-d20-runtime-delta5`, worktree
 | Canonical rerun | `diag/fullA-d20-canonical-rerun` (`gravity-fullA-d20-canonical-rerun`) | `98983bd` (+ uncommitted) | δ∈{0.1,1,2,5} D=20/W=80,000 frontier, pairwise-screen crash root-cause + uncommitted fix, organic infeasibility traces/checkpoints, first algorithm=2 experiment at δ=5 | Pairwise fix ported+committed here (`afe09a9`). Traces/checkpoints to be reused in Phase D from that worktree directly (not copied). Marked superseded once this branch merges. |
 | Warm-start replay | `diag/fullA-d20-warmstart-replay` (`gravity-fullA-d20-warmstart-replay`) | `baec13e` (7 commits past `98983bd`, clean) | `SafeExactCache` (lock-guarded exact-point cache), KKT-proxy-scored successful-dual bank (policy P3), live δ=5 A/B (-29.5% wall, trajectory-dependent) | To be ported in Phase B. Marked superseded once merged. |
 | Fast range screen integration | `integration/fullA-fast-range-screen` (`gravity-fullA-fast-range-screen-integration`) | `98983bd` (clean, = base) | Envelope/winning-range/safety-net screens, already merged into base | Base only, nothing to port. |
-| QMC investigation | `diag/fullA-d20-qmc-delta1` (`gravity-fullA-d20-qmc-delta1`) | `5882c16` | Validated pseudorandom/Sobol(Cranley-Patterson-shifted)/Halton(Owen-style-digit-scrambled) draw generators for D=20/W=80,000, generator validation report, Stage A-E replicate results | To be ported as an explicit `draw_design` option in Phase A2/B2 (mid-session addendum), default unchanged. Marked superseded once merged. |
+| QMC investigation | `diag/fullA-d20-qmc-delta1` (`gravity-fullA-d20-qmc-delta1`) | `5882c16` | Validated pseudorandom/Sobol(Cranley-Patterson-shifted)/Halton(Owen-style-digit-scrambled) draw generators for D=20/W=80,000, generator validation report, Stage A-E replicate results | Ported as `draw_design.jl`'s `d20_real_setup_design` (§6), merged (`6e126fe`), independently re-validated (22/22). Superseded. |
 
 ## 2. KNITRO version (resolved, no further investigation needed)
 
@@ -124,7 +123,63 @@ Not yet run against a live δ=5 trajectory with organic failures in this phase (
 "same optimum/gradient, no reused failed dual, non-increased wall time" — is deferred to the
 canonical post-integration A/B, Phase F/section 11, per the plan).
 
-## 6. Draw-design port (pseudorandom / sobol_randomized / halton_scrambled) — TBD (addendum)
+## 6. Draw-design port (pseudorandom / sobol_randomized / halton_scrambled) — DONE (addendum)
+
+Ported by a background agent (3 commits: `2939c1e` add `draw_design.jl`, `6a9a765` wire the driver
++ checkpoint schema, `29b3eec` a real bug fix — see below), merged into this branch via a genuine
+3-way merge (`git merge --no-ff`, no conflicts — the agent's branch and this one diverged from a
+common ancestor `81cc21e` and touched different lines of the one shared file,
+`c10_d20_production_driver.jl`), then independently re-validated by this session
+(`test_draw_design.jl`, 22/22 — not just trusting the porting agent's own claims).
+
+**What it is**: one new entry point, `d20_real_setup_design(; draw_design=:pseudorandom,
+draw_seed=..., ...)`, a thin selector over three already-existing, already-validated code paths
+from `diag/fullA-d20-qmc-delta1` (now subsumed): `:pseudorandom` (exact existing production call
+sequence, bit-for-bit unchanged), `:sobol_randomized` (Sobol.jl `SobolSeq` + a Cranley-Patterson
+random shift — named honestly, NOT "scrambled", since Sobol.jl doesn't implement digital/Owen
+scrambling), `:halton_scrambled` (genuine Owen-style per-digit-scrambled Halton, ported from Art
+B. Owen's R code). All three route through the same inverse-CDF transform, country/dimension
+ordering, Frechet parameters, and `1/W` weights; nothing about the CC objective, divergence,
+moments, winner rules, or tie convention is touched.
+
+`c10_d20_production_driver.jl` gains a `draw_design::Union{Nothing,Symbol}=nothing` kwarg on both
+`run_profile_checkpointed`/`run_polish_checkpointed` (`nothing` = "no opinion, inherit the
+checkpoint's own design on resume" — a real sentinel distinct from explicitly passing
+`:pseudorandom`, which must still hard-error against a mismatched checkpoint). `D20Checkpoint`
+gains `draw_design`/two draw checksums (schema bumped 1→2, `load_checkpoint` hard-errors on an
+old schema-1 file); resume hard-errors on any design or checksum mismatch; `guard_checkpoint_path`
+refuses to overwrite a checkpoint built under a different design/checksum at the same path.
+
+**A real bug caught and fixed by the porting agent's own negative test** (`29b3eec`): the first
+version of the resume-mismatch guard special-cased `draw_design_in != :pseudorandom` to mean
+"caller didn't specify," but that's indistinguishable from a caller *explicitly* requesting
+`:pseudorandom` against a checkpoint built under a different design — which must still error. Its
+own driver smoke test's negative case caught this (`:pseudorandom` explicitly requested against a
+sobol/halton checkpoint silently succeeded on first pass); fixed by making the "no opinion"
+sentinel a real `Union{Nothing,Symbol}` default instead of overloading `:pseudorandom` itself.
+
+**Independent re-validation** (`test_draw_design.jl`, written by this consolidating session, not
+the porting agent — 22/22): `:pseudorandom`'s `ctx.U` and a real value-eval `Delta_dual` are
+bit-identical to the pre-existing `d20_real_setup` path; fresh-context checksum reproducibility
+for all three designs; `:sobol_randomized`/`:halton_scrambled` build and solve successfully with
+genuinely different (and mutually different) draw checksums, zero non-finite or exact-boundary
+draws; negligible `log_draw_meta` overhead (~1-3% of a ~20s ctx build). One bug found in *this
+session's own* validation script along the way (checked `inner_status isa Int`, but KNITRO
+returns `Int32`; the underlying sobol/halton value evaluations had already succeeded with sane
+results throughout — a test-assertion bug, not a port defect) — fixed and re-run clean.
+
+**Not independently re-verified**: the porting agent's own calibration-comparison and
+generator-validation scripts (`draw_design_calibration_comparison.jl`,
+`draw_design_generator_validation.jl`, `draw_design_overhead_benchmark.jl`,
+`draw_design_driver_smoketest.jl`) were left uncommitted on the agent's own branch when this
+session took over finishing the port directly — not merged here, since this session's own
+independent validation (above) already covers the addendum's core acceptance bar (pseudorandom-
+default unchanged, designs build/solve/checksum-reproduce correctly, negligible overhead). The
+30-replicate-style statistical comparison against the original QMC investigation's own numbers
+(§7 of the original addendum spec) was not repeated — out of scope for a port-correctness check.
+
+`diag/fullA-d20-qmc-delta1` (worktree `gravity-fullA-d20-qmc-delta1`) is now subsumed and can be
+marked superseded.
 
 ## 7. Timing-regression audit (Phase C, DONE)
 
@@ -345,8 +400,10 @@ flagged here as unchanged rather than re-verified redundantly.
 `git checkout pre-consolidation-2026-07-21` or `git reset --hard pre-consolidation-2026-07-21`
 (the latter is destructive to anything built on top — confirm before using).
 
-**Merged into `diag/fullA-d4-exact`** (fast-forward, `98983bd` → `38fd767`, no rebase/squash,
-full commit history preserved):
+**Merged into `diag/fullA-d4-exact`**: fast-forward `98983bd`→`afb75af` (Phases A-F, no rebase/
+squash, full history preserved), then a genuine (no-conflict) merge commit bringing in the QMC
+draw-design addendum's 3 commits from the porting agent's branch plus this session's own
+follow-on validation/fix commits, up to the final tip:
 
 1. `afe09a9` — pairwise-screen crash fix + regression test (§3)
 2. `81cc21e` — handoff doc scaffold + KNITRO version finding (§2)
@@ -356,6 +413,10 @@ full commit history preserved):
 6. `b74bae5` — Phase C timing-regression audit (§7)
 7. `f830390` — Phase D granular profiling + organic-300 finding (§8-9)
 8. `38fd767` — Phase E staged-δ5 continuation result (§10)
+9. `afb75af` — finalized Phase A-F handoff doc
+10. `2939c1e`/`6a9a765`/`29b3eec` — QMC draw-design port + driver wiring + a real bug fix (§6),
+    from the porting agent's branch, merged via a no-conflict 3-way merge
+11. `6e126fe` — independent draw-design validation (22/22) (§6)
 
 **Not merged / explicitly deferred**:
 - Dual-ray monitor / cutting-plane certificate (task §7.1-7.3) — not attempted, no validated
@@ -363,10 +424,9 @@ full commit history preserved):
 - Fixed-g profile continuation and staged KNITRO algorithm switching (task §8.2-8.3) — not
   attempted; only the simplest staged-δ-continuation variant was built and tested, and it lost to
   the direct baseline at the one bounded budget tried (§10).
-- QMC draw-design port (addendum) — real progress (`draw_design.jl` + driver wiring committed on
-  the source agent's own branch as of this writing) but its own validation was still running at
-  the time this document was finalized; to be merged as a fast-following addendum once complete
-  (see the addendum note at the end of this section for its actual state).
+- QMC draw-design port's own calibration-comparison/generator-validation/overhead-benchmark
+  scripts (left uncommitted on the porting agent's branch) — not merged; superseded by this
+  session's own independent validation (§6), which covers the addendum's core acceptance bar.
 
 **Branches to mark superseded** (not deleted, per instructions):
 - `diag/fullA-d20-canonical-rerun` — pairwise fix absorbed into `afe09a9`; its traces/checkpoints
