@@ -40,15 +40,25 @@ using Statistics: quantile
 bin_index_dtype(L::Int) = (L + 1) <= typemax(UInt8) ? UInt8 : UInt16
 
 """
-    common_marginals_quantiles(U, refIndex1, L) -> Vector{Float64}
+    common_marginals_quantiles(U, refIndex1, L; probs=nothing) -> Vector{Float64}
 
 IDENTICAL (line-for-line) to the quantile computation inside
 `common_marginals_moments.jl::precalc_common_marginals_cdf` -- reproduced verbatim here (not
 merely "equivalent") so cutpoints are bit-identical between the dense and interval builders
 by construction, not by luck. Checked in the equivalence test script regardless.
+
+`probs=` mirrors `precalc_common_marginals_cdf`'s own kwarg (integration/fullA-common-marginals):
+an explicit probability grid (e.g. `nested_grid_sequence`'s genuinely-nested Q_10/Q_20/Q_50) in
+place of the default evenly-spaced grid. `probs === nothing` is byte-for-byte unchanged.
 """
-common_marginals_quantiles(U::AbstractMatrix{Float64}, refIndex1::Int, L::Int) =
-    quantile(U[:, refIndex1], collect(range(1 / L, (L - 1) / L, length = L)))
+function common_marginals_quantiles(U::AbstractMatrix{Float64}, refIndex1::Int, L::Int;
+                                     probs::Union{Nothing,AbstractVector{Float64}} = nothing)
+    if probs === nothing
+        return quantile(U[:, refIndex1], collect(range(1 / L, (L - 1) / L, length = L)))
+    end
+    @assert length(probs) == L "common_marginals_quantiles: length(probs)=$(length(probs)) != L=$L"
+    return quantile(U[:, refIndex1], probs)
+end
 
 """
     compute_bin_indices(U, z) -> Matrix{<:Unsigned}
@@ -84,13 +94,14 @@ reformulation (noted as a limitation in the report; the dense reference's
 `include_truncated_moment` path is untouched and still available if that block is ever needed).
 """
 function precalc_common_marginals_interval(U::AbstractMatrix{Float64}, refIndex1::Int, L::Int;
-                                            contrasts::Symbol = :anchored)
+                                            contrasts::Symbol = :anchored,
+                                            probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     W, D = size(U)
     @assert 1 <= refIndex1 <= D
     @assert L >= 1
     @assert contrasts in (:anchored, :orthonormal) "contrasts must be :anchored or :orthonormal, got $contrasts"
 
-    z = common_marginals_quantiles(U, refIndex1, L)
+    z = common_marginals_quantiles(U, refIndex1, L; probs = probs)
     bins = compute_bin_indices(U, z)
     origins = [o for o in 1:D if o != refIndex1]
     nO = length(origins)
@@ -177,10 +188,11 @@ byte. Returns the same-shaped NamedTuple as `build_cm_augmented_obj`, plus `bins
 lookup-based evaluators in `cm_lookup_kernels.jl`).
 """
 function build_cm_augmented_obj_interval(ctx, CS; L::Int, contrasts::Symbol = :anchored,
-                                          refIndex1::Int = ctx.γ.refIndex1)
+                                          refIndex1::Int = ctx.γ.refIndex1,
+                                          probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     obj0 = ctx.obj
     ncore = obj0.d
-    CM, z, origins, bins = precalc_common_marginals_interval(ctx.U, refIndex1, L; contrasts = contrasts)
+    CM, z, origins, bins = precalc_common_marginals_interval(ctx.U, refIndex1, L; contrasts = contrasts, probs = probs)
     ncm = size(CM, 2)
     @assert ncm == n_cm_moments(ctx.D, L; include_truncated_moment = false)
 
