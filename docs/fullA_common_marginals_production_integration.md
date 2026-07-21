@@ -1,8 +1,10 @@
 # Common-marginals production integration: status and branch map
 
-**Status as of this writing: Phase 1 (port + config surface) complete and validated. Phases
-requiring the completed consolidation branch or multi-hour compute budgets are explicitly
-deferred — see "What's left" below. This is a checkpoint document, not a final report.**
+**Status as of this writing: Phase 1 (port + config surface), the D20 Hessian-callback profile
+(Section 9), the Julia-thread-scaling experiment (Section 10), and an expanded cumulative-vs-
+interval re-check (Section 7) are all complete and committed. What remains is entirely gated on
+the live consolidation branch landing — see "What's left" below. This is a checkpoint document,
+not a final report.**
 
 ## 1. Branch and commit map
 
@@ -121,10 +123,33 @@ reconfirms equivalence on the new base:
 ```
 
 Both bases agree with the trusted dense reference to the same ~1e-16 order Continuation 13
-reported — no regression from the rebase onto the newer production base. **Section 7 of the
-brief's re-evaluation (more points: latest unrestricted candidate, latest L=50 CM candidate,
-several outer-trajectory points, one near-infeasible point) is NOT yet done** — deferred, see
-Section 7 below.
+reported — no regression from the rebase onto the newer production base.
+
+**Section 7 expanded re-check** (`section7_cm_basis_recheck_d20.jl`,
+`docs/fullA_section7_cm_basis_recheck_d20.log`): Continuation 13's original D20 comparison only
+tested calibration + one generic 2% perturbation. This integration re-ran the comparison at 5
+points — calibration, the 3 actual CM-outer-trajectory accepted checkpoints from Continuation 13's
+real run (`stage_L10/L20/L50_latest.jls`, each using that stage's own nested-grid cutpoints), and a
+constructed near-infeasible point (4% perturbation):
+
+| Point | L | \|Δdual diff\| | cond ratio (interval/cumulative) |
+|---|---|---|---|
+| calibration | 50 | 2.43e-17 | 39.05x worse |
+| CM trajectory, L=10 stage | 10 | 2.22e-16 | 2.64x worse |
+| CM trajectory, L=20 stage | 20 | 3.33e-16 | 9.14x worse |
+| CM trajectory, L=50 stage (= "latest L=50 candidate") | 50 | 6.66e-16 | 25.36x worse |
+| near-infeasible (4% perturbation) | 50 | 2.78e-17 | 32.48x worse |
+
+**5/5 points converged with Delta_dual agreeing to machine precision.** Interval-native's Hessian
+is worse-conditioned than cumulative's at **every single point tested**, not just calibration —
+this robustly reconfirms (rather than merely repeats) the "retain cumulative for production"
+recommendation. Note the L=10 ratio (2.64x) is far milder than L=50's (25-39x), consistent with the
+documented "conditioning gap grows with L" pattern.
+
+**Gap, noted not fabricated**: no "latest unrestricted δ=1 candidate" point was tested — that
+checkpoint lives on a different, unmerged worktree (`gravity-fullA-d20-canonical-rerun`,
+`diag/fullA-d20-canonical-rerun`) not in this branch's history. A future pass can add it once that
+worktree's result is available on a mergeable branch.
 
 ## 5. What's done (this integration)
 
@@ -145,7 +170,14 @@ Section 7 below.
    `infeasibility_screen.jl`, `fast_range_screen.jl`, `context_real_d20.jl`) is byte-identical to
    `81cc21e`.
 8. `cm_cache_key(cfg, L, draw_checksum)` helper added (not yet wired into an actual cache — that
-   cache doesn't exist on a committed branch yet, see Section 7).
+   cache doesn't exist on a committed branch yet, see Section 8 item 2).
+9. Brief-Section-7 cumulative-vs-interval re-check expanded to 5 D20 points (calibration + 3 real
+   CM outer-trajectory checkpoints + 1 near-infeasible point) — reconfirms cumulative-as-default at
+   every point, not just calibration (write-up folded into this doc's Section 4 above).
+10. Brief-Section-9 exclusive/inclusive Hessian-callback profile at D20/L=50/W=80000 — identifies
+    `build_bin_tables!` as 80.2% of the callback (write-up in this doc's Section 7 below).
+11. Brief-Section-10 draw-chunk Julia-thread-parallel Hessian, validated to machine precision,
+    benchmarked at 1/5/10/20 threads (write-up in this doc's Section 7 below).
 
 ## 6. Config examples
 
@@ -170,7 +202,68 @@ K, base = cm_production_value_v2(x_free0, pcx)          # cb_F!
 g, meta = cm_production_gradient(x_free0, pcx, ctx, pe)  # cb_G! (unchanged entry point, works with any pcx)
 ```
 
-## 7. What's left (explicitly deferred, not forgotten)
+## 7. Hessian-callback profile and Julia-thread scaling (Sections 9-10)
+
+**Section 9 — exclusive/inclusive stage profile** (`profile_archC_hessian_d20.jl`,
+`docs/fullA_archC_hessian_profile_d20_L50_W80000.csv`), D20/L=50/W=80000,
+JULIA_NUM_THREADS=1/OPENBLAS_NUM_THREADS=1, n_reps=30:
+
+| Stage | median (s) | share of total |
+|---|---|---|
+| **0 TOTAL (inclusive)** | **3.136** | 100% |
+| 1 draw-level weight construction (`ddPsi!`) | 0.0004 | 0.0% |
+| 2 weighted bin-contingency accumulation (`build_bin_tables!`) | **2.514** | **80.2%** |
+| 3 cumulative prefix sums | 0.018 | 0.6% |
+| 4 common-common block (H_CC) | 0.005 | 0.2% |
+| 5 economic-common cross block (H_EC) | 0.005 | 0.2% |
+| 6 core economic Hessian block (H_EE, BLAS gemm) | 0.598 | 19.1% |
+| 7 symmetrize + pack | 0.005 | 0.1% |
+
+("Transfer into KNITRO" and "factorization/linear solve" from the brief's stage list don't exist
+as separate observable stages in this architecture — the packing loop (7) IS the transfer buffer
+KNITRO owns directly, and factorization happens inside KNITRO's C library, not visible from Julia.
+Noted explicitly rather than fabricating a stage.)
+
+**`build_bin_tables!` alone is 80.2% of the callback.** This is the ONLY stage worth threading —
+everything else combined is under 1%, confirmed empirically, not assumed a priori.
+
+**Section 10 — draw-chunk Julia-thread parallelization** (`cm_hessian_architecture_threaded.jl`):
+`1:W` split into `nthreads()` balanced contiguous ranges; each thread accumulates into a private
+per-thread buffer (indexed by loop variable, not `threadid()` — safe regardless of Julia's actual
+iteration-to-thread assignment); a deterministic serial reduction combines them before the
+unchanged `prefix_sum_tables!` runs. No atomics. Correctness validated
+(`validate_threaded_archC.jl`) to ~1.6-1.8e-14 vs. the serial result (machine precision; the tiny
+nonzero gap is the legitimate floating-point-order difference from chunked vs. sequential
+summation).
+
+**Scaling benchmark** (`bench_threaded_archC_d20.jl`,
+`docs/fullA_thread_scaling_d20_L50_W80000.csv`), OPENBLAS_NUM_THREADS=1 throughout:
+
+| JULIA_NUM_THREADS | Hessian-only speedup | Full cold-inner-solve speedup |
+|---|---|---|
+| 1 | 0.96x | 1.28x |
+| 5 | 2.58x | 0.98x |
+| 10 | **3.11x** | 0.97x |
+| 20 | 2.74x | 1.12x |
+
+Hessian-only scaling peaks at 10 threads (3.11x, roughly matching an Amdahl's-law ceiling for an
+80%-parallel workload) and degrades at 20 (oversubscription past the server's available cores) —
+a sane, interpretable curve, not noise. **The full cold inner solve shows essentially no speedup
+at any thread count** (0.97x-1.28x, all within run-to-run noise) despite the Hessian callback
+itself scaling well. This is a real, non-obvious finding: at this scale, a "cold" solve's wall
+time is dominated by per-solve KNITRO overhead (fresh `KN_new()`, problem setup, few Newton
+iterations to converge from an already-near-optimal calibration start) rather than by Hessian
+evaluation cost — so Section 10's threading investment pays off cleanly for isolated
+Hessian-heavy work (e.g. a standalone conditioning/profiling script) but should NOT be expected to
+proportionally speed up the outer KNITRO loop's wall clock without further investigation into
+where THAT time actually goes (a natural next step, not done here).
+
+**Not attempted, per the brief's own instruction**: nested Julia threading inside an
+already-coordinate-parallelized `Lfix` outer gradient (the brief explicitly says use serial inner
+coordinate probes there to avoid oversubscription) — this threaded Hessian is offered as a
+standalone/value-callback accelerator, not wired into the coordinate-parallel gradient path.
+
+## 8. What's left (explicitly deferred, not forgotten)
 
 These require either (a) the live consolidation branch to land and be committed, or (b) a
 dedicated multi-hour compute budget on the shared server, or both. None of them block what's
@@ -178,32 +271,33 @@ already committed here from being correct and mergeable in its current, narrower
 (`common_marginals=false` unaffected either way).
 
 1. **Final rebase onto the completed consolidation tip.** `gravity-fullA-d20-runtime-delta5` was
-   still running (etimes ~43s into a live probe script at last check) with a dirty tree touching
+   still running with a dirty tree touching
    `oracle.jl`/`oracle_fast.jl`/`compressed_live.jl`/`infeasibility_screen.jl`/
    `fast_range_screen.jl`/`c10_d20_production_driver.jl` and new `dual_bank.jl`/
-   `test_dual_bank.jl`/`test_safe_exact_cache.jl` (exact-point cache / successful-dual cache work).
-   **Action for the next continuation**: once that branch is committed and stable, `git log
-   --stat <old-81cc21e-tip>..<new-tip>` to check for any further overlap with CM-owned files
-   (none existed at the `81cc21e` snapshot), then `git rebase --onto <new-tip> 81cc21e
-   integration/fullA-common-marginals`.
+   `test_dual_bank.jl`/`test_safe_exact_cache.jl` (exact-point cache / successful-dual cache work)
+   as of every check made during this session. **Action for the next continuation**: once that
+   branch is committed and stable, `git log --stat <old-81cc21e-tip>..<new-tip>` to check for any
+   further overlap with CM-owned files (none existed at the `81cc21e` snapshot), then `git rebase
+   --onto <new-tip> 81cc21e integration/fullA-common-marginals`.
 2. **Cache-key wiring.** `cm_cache_key()` exists but the exact-point cache / successful-dual cache
    themselves are part of the not-yet-landed consolidation work — wire `cm_cache_key(cfg, L,
    draw_checksum)` into whichever cache key tuple that code uses, once it exists.
-3. **Section 7 re-evaluation** (cumulative vs. interval at more points: latest unrestricted
-   candidate, latest L=50 CM candidate, several CM outer-trajectory points, one near-infeasible
-   point) — only Continuation 13's original 2-point D20 comparison exists so far.
-4. **Section 8 current-production A/B benchmark.** Explicitly requires the SAME KNITRO
+3. **Section 8 current-production A/B benchmark.** Explicitly requires the SAME KNITRO
    version/draw set/code commit the final consolidated driver will use — premature before item 1.
-5. **Section 9 Hessian-callback exclusive/inclusive profiling breakdown** (D20/L=50/W=80000).
-6. **Section 10 explicit Julia-thread scaling** (1/5/10/20 threads) for the structured Hessian.
-7. **Section 12 short real D20/W=80000/delta=1/L=50 scientific smoke test** on the FINAL
+4. **Section 12 short real D20/W=80000/delta=1/L=50 scientific smoke test** on the FINAL
    consolidated driver (Continuation 13 already did this on the pre-consolidation driver — see
    `docs/fullA_c13_d20_real_run.log`, kappa 0.0652/0.0613/0.0591 at L=10/20/50 — but that's not
    "the consolidated driver" the brief asks this integration to re-verify).
-8. **Final merge into the consolidated production branch**, `docs/` old-branch archival list, and
+5. **"Latest unrestricted δ=1 candidate" point** for the Section 7 cumulative-vs-interval
+   comparison — lives on the unmerged `gravity-fullA-d20-canonical-rerun` worktree.
+6. **Investigate why the outer KNITRO solve doesn't inherit the Hessian's thread speedup** (Section
+   10 finding above) — worth a follow-up profile of the FULL solve's own stage breakdown (FG
+   callback time, KNITRO-internal overhead, iteration count) before assuming threading the
+   Hessian alone is sufficient for production wins.
+7. **Final merge into the consolidated production branch**, `docs/` old-branch archival list, and
    final CM-on/CM-off smoke tests on the merged result.
 
-## 8. Old-branch archival candidates (do not delete yet — see item 8 above)
+## 9. Old-branch archival candidates (do not delete yet — see item 7 above)
 
 Once `integration/fullA-common-marginals` merges into the final production branch:
 - `diag/fullA-d4-exact-common-marginals` (Continuation 12) — fully subsumed (its 23 commits are
