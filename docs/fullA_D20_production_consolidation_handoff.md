@@ -267,7 +267,48 @@ claim. **Recommendation for a follow-up session**: instrument `c10_d20_productio
 `-300` occurs during a live δ=5 (or δ=2) run, then build and validate the dual-ray monitor against
 that real point.
 
-## 10. Staged δ=5 workflow — TBD (Phase E)
+## 10. Staged δ=5 workflow (Phase E, DONE — real negative result with a diagnosed cause)
+
+Implemented `staged_delta5.jl`'s `run_staged_delta5_continuation` (finer δ continuation:
+2→3→4→5, each stage via the existing, unmodified `run_polish_checkpointed`, feeding the
+previous stage's `best_feasible` forward as the next stage's start) and ran ONE bounded real
+comparison (`staged_delta5_comparison.jl`) from the real δ=2 checkpoint's `best_feasible` point
+(§8's own starting point), 60s/stage (240s total budget) for the staged arm vs. 240s for a
+direct δ=5 attempt from the same start:
+
+| | Staged (2→3→4→5) | Direct (δ=5 straight) |
+|---|---|---|
+| final κ | 0.003114 | **0.004550** |
+| total wall | 504.1s | 280.7s |
+| total rejected | 5 | 3 |
+
+**Direct wins** at this budget — staged continuation did not help, and cost nearly 2x the wall
+time doing it.
+
+**Diagnosed root cause, not just the headline number**: each stage pays a full ~65-83s context
+rebuild (`d20_real_setup` — the same real D=20/W=80,000 draw generation + screen setup every
+single call, since `run_polish_checkpointed` always builds its own `ctx` internally and has no
+"reuse an existing ctx" path) *inside* its own 60s wall budget, leaving only ~17-46s of genuine
+optimizer wall-time per stage after that overhead — the staged run's 504.1s total includes
+roughly 4×65s ≈ 260s of pure redundant context-rebuilding, over half its total wall time, doing
+zero optimization work. The direct arm pays this cost exactly once. **This is an implementation
+inefficiency in how the comparison was run, not necessarily evidence against the continuation
+idea itself** — a corrected implementation would build `ctx` once and thread it through every
+stage (requires a `run_polish_checkpointed` signature change to accept a pre-built `ctx` instead
+of always constructing one, which was out of scope to add and re-validate in this pass).
+
+**Not attempted in this pass** (see task §8.2-8.3): the fixed-g profile continuation
+(`min_A Δ*(g,A)` at increasing `g`) and staged KNITRO algorithm switching (Interior/CG
+exploration → Interior-Direct polish) — `run_staged_delta5.jl` currently implements only the
+simplest version of the idea (finer δ continuation alone). The canonical rerun's own §8
+algorithm=2 experiment (already in its handoff doc, not repeated here) showed a real but modest
+δ=5 improvement (κ 0.05761→0.07761 at Start A, still short of the best δ=5 κ found by the direct
+canonical run) — consistent with staged/alternative approaches at δ=5 being a genuinely hard,
+not-yet-solved problem rather than a quick win.
+
+**Recommendation**: do not promote staged δ continuation to the default δ≥2 driver mode based on
+this result. Before re-testing, fix the ctx-rebuild redundancy (thread one `ctx` through all
+stages) so the comparison isolates the continuation idea's real merit from this overhead artifact.
 
 ## 11. Canonical post-integration A/B — TBD (Phase F)
 
