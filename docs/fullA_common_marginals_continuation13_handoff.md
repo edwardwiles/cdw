@@ -1,13 +1,18 @@
 # Continuation 13: production-grade common-marginals full-A solver, D=20/delta=1 upper bound
 
-Status: D4 gate PASSED with a genuine scientific result (kappa now monotone in L, resolving
-Continuation 12's open puzzle). Production bundle (Architecture B moments + Architecture C
-Hessian + CM-aware Lfix gradient) built, validated, and wired into a real KNITRO outer loop.
-Interval-native Architecture C (user-elevated mid-session) implemented and validated; the
-decisive at-scale test recommends AGAINST adopting it for production (conditioning reverses
-badly at D20). Real D20/W=80000/delta=1 outer run launched with a 40-min/stage budget; see
-Section 8 for the result (filled in once the background run completes -- this document is
-being written while that run is still in progress, per the user's "keep going" instruction).
+Status: ALL SECTIONS COMPLETE. D4 gate PASSED with a genuine scientific result (kappa now
+monotone in L, resolving Continuation 12's open puzzle). Production bundle (Architecture B
+moments + Architecture C Hessian + CM-aware Lfix gradient) built, validated, and wired into a
+real KNITRO outer loop. Interval-native Architecture C (user-elevated mid-session) implemented
+and validated; the decisive at-scale test recommends AGAINST adopting it for production
+(conditioning reverses badly at D20). Real D20/W=80000/delta=1 outer run completed (3 stages,
+40 min each): kappa=0.0652/0.0613/0.0591 at L=10/20/50, monotone, +191%-221% above calibration.
+A user-requested fixed-A* comparison (A_od held at its real calibration level, only gamma'_focal
+scanned) shows letting A_od move adds a further ~35-37% on top of that. Final independent
+verification completed on the L=50 candidate: exact-feasible, gravity~0, essentially
+machine-precision KKT residual on the OFFICIAL metric. See Section 9 for full detail and an
+important self-caught reporting bug (not a production bug) in the verification script's own
+supplementary diagnostic.
 
 ## 1. Branch isolation (non-negotiable per the brief)
 
@@ -241,28 +246,96 @@ via `serialize`.
 checkpoints save correctly, kappa monotonically decreasing across L even this far from convergence
 (0.0552->0.0531->0.0502), confirming the wiring is correct before committing to a long run.
 
-**Real run**: launched with a 40-minute/stage budget (2 hours total) in the background.
+**Real run** (40-minute/stage budget, 2 hours total, `docs/fullA_c13_d20_real_run.log`):
 
-<!-- RESULT-PLACEHOLDER: filled in once the background run (PID recorded at launch) completes. -->
+| L | kappa | vs. calibration (0.02031) | wall | evals / grad calls | status |
+|---|---|---|---|---|---|
+| 10 | 0.06515 | +221% | 2416s (hit budget) | 140 / 41 | -401 |
+| 20 | 0.06132 | +202% | 2411s (hit budget) | 105 / 34 | -401 |
+| 50 | 0.05913 | +191% | 2418s (hit budget) | 72 / 22 | -401 |
+
+Same correct monotonically-decreasing-in-L pattern as Section 7's D4 result. `status=-401` at
+every stage means the wall-clock budget was hit, NOT a certified KKT point -- these are
+best-exact-feasible-incumbent-in-budget results, matching this investigation's established D20
+precedent (Continuation 11 repeatedly reported the same "best-feasible-found-in-a-fixed-budget"
+category for the unrestricted problem). **Compute economics** (the user explicitly asked for
+this): ~60-110s per outer evaluation at D20 (inner solve + threaded CM-aware gradient), vs. D4's
+~0.03-0.3s -- roughly 500-2000x slower per evaluation, tracking the free-parameter-count jump
+(400 at D20 vs 16 at D4). At this rate, reaching D4-scale evaluation COUNTS (200-900) at D20
+would need several hours PER STAGE, not minutes.
+
+**User-requested fixed-A* comparison** (`c13_d20_fixed_A_cm_profile.jl`): how much of this comes
+from letting A_od move at all, vs. just the aggregate wedge gamma'_focal? A_od held at its REAL
+calibration level (discovered mid-task that D20's real-data calibration A_od is NOT ~1 like D4's
+synthetic setup -- ranges ~700 to ~4.9e11 in level units; an initial `ones(D^2)` guess gave a
+spurious `nStatus=-300`, traced and fixed in `c13_diag_fixedA_mismatch.jl`). Only gamma'_focal
+scanned, via an 8-step doubling bracket search + 8-step bisection (~16-24 cheap inner solves per
+L, no outer KNITRO loop at all) to find where `Delta_dual~=1`:
+
+| L | fixed-A kappa* | free-A kappa | gap |
+|---|---|---|---|
+| 10 | 0.04805 | 0.06515 | +35.6% |
+| 20 | 0.04550 | 0.06132 | +34.8% |
+| 50 | 0.04304 | 0.05913 | +37.4% |
+
+Letting A_od move adds a consistent **~35-37% relative increase** in the achievable CM-restricted
+kappa beyond what gamma'_focal alone can buy, at every L -- confirms the free-A outer loop is
+doing real economic work, not merely reproducing a gamma'-only adjustment. The fixed-A profile is
+itself monotonically decreasing in L too (0.0480->0.0455->0.0430), consistent with the free-A
+pattern.
 
 ## 10. Final independent verification
 
-`c13_d20_final_verification.jl`: reads a stage checkpoint, and in the SAME (or ideally a fresh)
-process independently reconstructs the full DxD log-A matrix, computes gravity directly, runs a
-fresh COLD dense-reference CM solve, verifies primal/dual divergence and the gap, verifies core
-AND CM-block KKT residuals, checks parameter bounds, runs gravity-tangent secant directional
-checks, and re-evaluates the candidate under every coarser nested grid as a consistency check.
-Classifies the result conservatively (verified local candidate / bandwidth-KKT exact-feasible
-candidate / best exact-feasible stalled point / unresolved) -- never claims global optimality.
+`c13_d20_final_verification.jl`, run against the L=50 checkpoint (`docs/fullA_c13_d20_final_verification.log`):
 
-<!-- RESULT-PLACEHOLDER: run against the real D20 result once Section 9 completes. -->
+- **Gravity**: `6.689e-18` (~0, correctly eliminated by construction).
+- **Fresh cold dense-reference re-solve**: `nStatus=0`, `Delta_dual=0.9954<=1` (feasible).
+- **KKT residual (official metric, `max_abs_moment_kkt_resid`)**: `2.537e-14` -- essentially
+  machine precision. The least-favorable F genuinely satisfies the moment restrictions almost
+  exactly, not merely "close enough."
+- Parameter bounds: `gp=0.9641` within `[0.9307,1.0000]`; all `A_od>0` (min `592.4`).
+- Coarser-grid consistency: the L=50 candidate is feasible under BOTH the L=10 grid
+  (`Delta_dual=0.902`) and the L=20 grid (`Delta_dual=0.940`) -- consistent with nested-restriction
+  theory (a denser-grid-feasible point must be coarser-grid-feasible too).
+- Gravity-tangent secant directional checks: at 3 random gravity-feasible directions, `h=+-0.01`,
+  every perturbed point had `Delta_dual` PUSHED ABOVE 1 (range 1.01-1.11) in BOTH directions --
+  weak, informal evidence the candidate sits very close to the (expected, active-at-the-optimum)
+  `Delta_dual=1` boundary, not a rigorous local-optimality proof.
+
+**Self-caught bug in the verification script itself (not a production-code bug)**: the script's
+own supplementary "core-moment/CM-block KKT residual" breakdown, built from `evaluate_fullA`'s
+`moment_resid` field, initially looked alarming (core resid `~8.6`, CM resid `~6.2e-3` -- nowhere
+near machine precision) and produced a misleadingly cautious "verified local candidate" (rather
+than "bandwidth-KKT exact-feasible candidate") classification. Traced directly to `oracle.jl:178`:
+`moment_resid = vec(sum(G, dims=1)) ./ W` is the UNWEIGHTED/uniform-measure average of the raw
+moments -- a measure of how far uniform reweighting is from satisfying the restrictions (expected
+to be large, that is the whole reason a nontrivial least-favorable F is needed), NOT the
+KKT-at-the-solved-weights residual the script's Section 3-6 comment assumed it was. The genuinely
+trustworthy field is `max_abs_moment_kkt_resid` (`2.537e-14`, above), which was correct the whole
+time. Corrected classification: **bandwidth-KKT exact-feasible candidate** -- exact-feasible, and
+the dual-weighted KKT residual is machine precision; the outer-loop non-convergence (`status=-401`)
+remains the honest caveat, not the inner solve's precision.
 
 ## 11. Commits on `integration/fullA-d20-common-marginals` (base: `02583bc`)
 
-Run `git log --oneline 02583bc..HEAD` on this branch for the authoritative list. As of this
-writing: branch setup (ff-merge of C12), CM-aware Lfix gradient + validation, nested grids,
-production bundle (ArchB+ArchC combined) + validation, CM outer driver, D4 multistart result,
-interval-native Architecture C + D4/D20 validation + comparison + recommendation, D20 smoke test.
+`02583bc..6ee42b6` (23 commits) is the unmodified Continuation 12 merge (fast-forward, zero
+divergence from production -- see Section 1). This continuation's own additive commits,
+`6ee42b6..HEAD` (newest first), all candidates for a future production-merge review:
+
+```
+cc78b15 Section 9 RESULT: real D20/W=80000/delta=1 CM upper bound + fixed-A* comparison
+8284f43 draft handoff doc (interim)
+50b2f52 Section 9 (smoke test): real D20 CM outer loop wiring confirmed
+6d24847 addendum: cumulative-vs-interval-native comparison, D20 -- conditioning REVERSES
+562e465 addendum: cumulative-vs-interval-native comparison, D4
+be9c3af addendum: interval-native Architecture C Hessian, validated at D4
+b33317c Section 7 RESULT: D4 CM upper bound is now monotone in L
+940f456 Section 5 (outer wiring) + Section 7: CM outer KNITRO driver
+39b2059 Sections 3A + 5 (inner bundle): production combined bundle
+21d3fba Section 6: genuinely nested Q10/Q20/Q50 quantile grids
+00b99aa Section 4: CM-aware Lfix/composite-gradient outer path
+```
+
 None of this has been merged into `diag/fullA-d4-exact` -- awaiting user review per the brief.
 
 ## 12. What's exact vs. approximate / what's not done
