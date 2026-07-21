@@ -98,6 +98,7 @@ include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fu
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
 include(joinpath(@__DIR__, "negative_cache.jl"))   # negative-cache audit (integration/fullA-negative-cache-audit): typed ConfirmedNegativeResult + SafeNegativeCache, opt-in via use_neg_cache= below; default OFF, zero behavior change unless explicitly enabled -- see docs/fullA_negative_cache_audit.md
 include(joinpath(@__DIR__, "incumbent_logic.jl"))   # pure, KNITRO-free incumbent seed/compare helpers -- see docs/fullA_driver_delta5_diagnostics_handoff.md §3
+include(joinpath(@__DIR__, "knitro_status.jl"))   # KNITRO termination-status decoder + native per-solve diagnostics -- see docs/fullA_driver_delta5_diagnostics_handoff.md §9-10
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
@@ -536,11 +537,23 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus_code, _, xsol, _ = KNITRO.KN_get_solution(kc)
+    # Native, KNITRO-reported per-solve diagnostics for THIS OUTER kc only, queried before KN_free
+    # (task §9/§10) -- distinct from n_eval/n_grad_calls/sc.* below, which are this driver's own
+    # hand-rolled counters accumulated across every cb_F!/cb_G! call of this one outer solve
+    # (themselves genuinely per-call since sc/n_eval/n_grad_calls are all freshly constructed at
+    # the top of this function, never shared across separate run_profile_checkpointed calls).
+    # Note this reports the OUTER polish/profile NLP's own iteration count, NOT the INNER CC dual
+    # solve's -- each screened_eval call below may trigger its own separate inner KNITRO solve with
+    # its own counters, audited separately (see docs/fullA_driver_delta5_diagnostics_handoff.md §9).
+    native_outer_diag = full_status_record(nStatus_code, kc)
     KNITRO.KN_free(kc)
 
     b = best[]
-    lp("[", label, "] PROFILE DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
+    lp("[", label, "] PROFILE DONE: status=", nStatus_code, " (", native_outer_diag.status_name, "/",
+       native_outer_diag.status_category, ") wall_ext=", round(wall_ext, digits = 1),
        "s n_eval=", n_eval[], " n_grad_calls=", n_grad_calls[],
+       " native_outer_iters=", native_outer_diag.n_iters, " native_outer_fc_evals=", native_outer_diag.n_fc_evals,
+       " native_outer_ga_evals=", native_outer_diag.n_ga_evals,
        " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed)
     if b !== nothing
         lp("  best: Delta=", b.Delta_dual, " gravity=", b.gravity_value, " found_at_eval=", b.n_eval)
@@ -551,7 +564,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, g = g, find_smallest = find_smallest, ctx = ctx, pe = pe,
-            knitro_status = nStatus_code, wall_ext = wall_ext, n_eval = n_eval[], n_grad_calls = n_grad_calls[],
+            knitro_status = nStatus_code, native_outer_diag = native_outer_diag, wall_ext = wall_ext,
+            n_eval = n_eval[], n_grad_calls = n_grad_calls[],
             zfree_terminal = collect(xsol), best = b, trace = trace, screen_counts = as_namedtuple(sc),
             screen_rejections = sc.rejections, final_checkpoint = final_ckpt,
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
@@ -823,6 +837,9 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus_code, _, xsol, _ = KNITRO.KN_get_solution(kc)
+    # See the matching comment in run_profile_checkpointed above (§9/§10): native per-solve
+    # diagnostics for THIS OUTER kc, queried before KN_free.
+    native_outer_diag = full_status_record(nStatus_code, kc)
     KNITRO.KN_free(kc)
 
     b = best_feasible[]
@@ -831,8 +848,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     if b !== nothing
         κ = 1 - b.gp^(σ / (σ - 1))
     end
-    lp("[", label, "] POLISH DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
-       "s n_eval=", n_eval[], " kappa=", κ, " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed,
+    lp("[", label, "] POLISH DONE: status=", nStatus_code, " (", native_outer_diag.status_name, "/",
+       native_outer_diag.status_category, ") wall_ext=", round(wall_ext, digits = 1),
+       "s n_eval=", n_eval[], " kappa=", κ,
+       " native_outer_iters=", native_outer_diag.n_iters, " native_outer_fc_evals=", native_outer_diag.n_fc_evals,
+       " native_outer_ga_evals=", native_outer_diag.n_ga_evals,
+       " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed,
        " n_cold_retries(F)=", n_cold_retries[], " n_rejected(F)=", n_rejected[], " n_g_recompute=", n_g_recompute[],
        neg_cache !== nothing ? " n_neg_confirmed=$(n_neg_confirmed[]) neg_cache_size=$(length(neg_cache))" : "")
 
@@ -841,7 +862,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
 
     return (label = label, find_smallest = find_smallest, ctx = ctx, pe = pe,
-            knitro_status = nStatus_code, wall_ext = wall_ext, n_eval = n_eval[], n_grad_calls = n_grad_calls[],
+            knitro_status = nStatus_code, native_outer_diag = native_outer_diag, wall_ext = wall_ext,
+            n_eval = n_eval[], n_grad_calls = n_grad_calls[],
             best_feasible = b, kappa = κ, trace = trace, screen_counts = as_namedtuple(sc),
             screen_rejections = sc.rejections, final_checkpoint = final_ckpt,
             n_cold_retries = n_cold_retries[], n_rejected = n_rejected[], n_g_recompute = n_g_recompute[],
