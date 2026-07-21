@@ -83,12 +83,18 @@ Every `cache::Union{Nothing,Dict,SafeExactCache}` call site in this file,
 raw `Dict` (legacy, unlocked, still supported for any external caller that
 constructs its own) or a `SafeExactCache` (production's own, from
 `oracle_cache_for`).
+
+Parametric over the key type `K` (was hardcoded to `FullAEvalKey`) so the same
+lock-guarded mechanism serves the CM production path's `CMEvalKey`
+(`cm_config.jl`) without a second cache implementation -- `SafeExactCache()`
+still defaults to `K=FullAEvalKey` for every existing call site.
 """
-struct SafeExactCache
-    d::Dict{FullAEvalKey, NamedTuple}
+struct SafeExactCache{K}
+    d::Dict{K, NamedTuple}
     lock::ReentrantLock
 end
-SafeExactCache() = SafeExactCache(Dict{FullAEvalKey, NamedTuple}(), ReentrantLock())
+SafeExactCache{K}() where {K} = SafeExactCache{K}(Dict{K, NamedTuple}(), ReentrantLock())
+SafeExactCache() = SafeExactCache{FullAEvalKey}()
 Base.length(c::SafeExactCache) = lock(() -> length(c.d), c.lock)
 
 _cache_lookup(cache::Nothing, key) = nothing

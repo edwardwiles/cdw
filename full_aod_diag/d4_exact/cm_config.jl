@@ -167,10 +167,60 @@ function cm_base_state_v2(x_free0::AbstractVector, pcx)
     return BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, copy(obj.arg1), nStatus)
 end
 
-"CMConfig-generalized `cm_production_value`."
-function cm_production_value_v2(x_free0::AbstractVector, pcx)
+"""
+    CMEvalKey
+
+Exact-point cache key for the CM production path -- `FullAEvalKey` (oracle.jl) plus the
+`cm_cache_key(cfg, L, draw_checksum)` fragment, per brief Section 4/11: never let a CM-on point
+collide with an unrestricted (or differently-configured CM) point in the same cache. Uses
+`SafeExactCache{CMEvalKey}` (oracle.jl's genericized cache), NOT `SafeExactCache{FullAEvalKey}` --
+the two must never share a cache instance, since nothing here type-checks that a caller passed
+the wrong dict; keep unrestricted and CM caches as physically separate `SafeExactCache` objects.
+"""
+struct CMEvalKey
+    x_free::Vector{Float64}
+    δ::Float64
+    find_smallest::Bool
+    inner_loop_opt::String
+    cm::NamedTuple
+end
+Base.:(==)(a::CMEvalKey, b::CMEvalKey) = a.x_free == b.x_free && a.δ == b.δ &&
+    a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.cm == b.cm
+Base.hash(k::CMEvalKey, h::UInt) = hash((k.x_free, k.δ, k.find_smallest, k.inner_loop_opt, k.cm), h)
+
+"Fresh, empty CM exact-point cache -- mirrors oracle.jl's `oracle_cache_for`, scoped to CMEvalKey."
+cm_oracle_cache_for(pcx) = SafeExactCache{CMEvalKey}()
+
+"""
+    cm_production_value_v2(x_free0, pcx; cache=nothing, use_cache=true, draw_checksum=nothing, tag="") -> (K, base)
+
+CMConfig-generalized `cm_production_value`. `cache` is a `SafeExactCache{CMEvalKey}`
+(`cm_oracle_cache_for`); when supplied and `use_cache=true`, an exact repeat of
+`(x_free0, δ, find_smallest, inner_loop_opt, cfg, L, draw_checksum)` returns without invoking
+`inner_loop_KNITRO_archgeneric` at all. `cm_base_state_v2` already errors on any non-feasible
+`nStatus` before returning, so every stored entry is a genuine feasible solve (same
+cacheability contract as `oracle.jl`'s `is_cacheable_result`, just enforced upstream by the
+`error()` instead of a post-hoc status check).
+"""
+function cm_production_value_v2(x_free0::AbstractVector, pcx; cache = nothing, use_cache::Bool = true,
+                                 draw_checksum = nothing, tag::String = "")
+    obj = pcx.ctx_cm.obj
+    key = nothing
+    if cache !== nothing && use_cache
+        key = CMEvalKey(collect(x_free0), obj.δ, obj.find_smallest, obj.inner_loop_opt,
+                         cm_cache_key(pcx.cfg, pcx.L, draw_checksum))
+        hit = _cache_lookup(cache, key)
+        if hit !== nothing
+            return hit.K, hit.base
+        end
+    end
+
     base = cm_base_state_v2(x_free0, pcx)
     K = pcx.ctx_cm.obj.H_save
+
+    if key !== nothing
+        _cache_store!(cache, key, (K = K, base = base))
+    end
     return K, base
 end
 

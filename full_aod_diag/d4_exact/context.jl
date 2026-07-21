@@ -10,6 +10,7 @@ const D4X_ROOT = dirname(dirname(@__DIR__))   # repo root (two levels up from d4
 const ADB = joinpath(D4X_ROOT, "full_aod_diag", "ad_benchmark")
 include(joinpath(ADB, "setup_context.jl"))     # -> AD_PARAMS, build_ad_context, CS, EK_moments_gammanorm_directgp! etc.
 CS.include(joinpath(D4X_ROOT, "full_aod_diag", "PsiObjectiveBundleImplicitMethodB_fullA.jl"))
+CS.include(joinpath(@__DIR__, "parallelism_guards.jl"))   # ported from diag/fullA-inner-blas-threading: guard_enter/exit_inner_solve!, guard_enter/exit_coord_pool! -- injected into the CS module namespace so inner_loop_KNITRO (cc_algo/inner_loop_functions.jl) can call them unqualified; Main-scope callers use CS.guard_*
 include(joinpath(D4X_ROOT, "full_aod_diag", "gravity_tariff.jl"))
 include(joinpath(ADB, "derivative_core.jl"))   # -> envelope_scalar_div_ctx, moment_map!
 

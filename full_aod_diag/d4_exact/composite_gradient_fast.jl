@@ -222,8 +222,15 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
     end
 
     if threaded
-        Threads.@threads for k in 2:D2
-            do_coord!(k)
+        # Ported from diag/fullA-inner-blas-threading (parallelism_guards.jl): errors if an
+        # inner KNITRO solve is somehow still active when this pool launches.
+        CS.guard_enter_coord_pool!()
+        try
+            Threads.@threads for k in 2:D2
+                do_coord!(k)
+            end
+        finally
+            CS.guard_exit_coord_pool!()
         end
     else
         for k in 2:D2
@@ -335,8 +342,13 @@ function full_rebuild_gradient_fallback(x_free0::AbstractVector, ctx, pe, base::
         return nothing
     end
     if threaded
-        Threads.@threads for k in 1:D2
-            do_coord!(k)
+        CS.guard_enter_coord_pool!()
+        try
+            Threads.@threads for k in 1:D2
+                do_coord!(k)
+            end
+        finally
+            CS.guard_exit_coord_pool!()
         end
     else
         for k in 1:D2

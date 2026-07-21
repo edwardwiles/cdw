@@ -704,7 +704,12 @@ par_blasnumthreads 0
 #   choose any positive integer, or
 #   0 = value determined by OMP_NUM_THREADS environment variable
 #  -1 = run sequential version of Knitro code
-par_concurrent_evals  yes
+par_concurrent_evals  no
+# Set to no (was yes) per diag/fullA-inner-blas-threading's report: costs nothing measurable
+# (within noise, see docs/fullA_inner_blas_threading_report.md sec 14), removes a latent
+# data-race risk since this codebase's FG/Hessian callbacks mutate shared non-thread-local
+# state (obj.H, obj.x, ...) that concurrent_evals=yes could otherwise let KNITRO evaluate
+# out of order across trial points.
 
 # Number of threads to use in parallel BLAS.
 #   choose any positive integer, or

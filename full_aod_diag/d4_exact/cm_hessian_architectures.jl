@@ -421,35 +421,44 @@ end
 function inner_loop_KNITRO_archgeneric(obj; hess_cb_builder = nothing, hvp::Bool = false)
     _INNER_CALL_COUNTERS[] = InnerCallCounters(0, 0)
 
-    kc = KNITRO.KN_new()
-    KNITRO.KN_add_vars(kc, CS.inner_loop_number_variables(obj))
-    KNITRO.KN_set_var_lobnds_all(kc, CS.inner_loop_lower_bounds(obj))
-    KNITRO.KN_set_var_primal_init_values_all(kc, CS.inner_loop_initial_values(obj))
+    # Ported from diag/fullA-inner-blas-threading (parallelism_guards.jl); see the same note in
+    # oracle_fast.jl::inner_loop_KNITRO_profiled -- this is the CM (Architecture B/C) production
+    # inner solve, reached via cm_production_value_v2 -> cm_base_state_v2 ->
+    # inner_loop_internal_archgeneric.
+    CS.guard_enter_inner_solve!()
+    try
+        kc = KNITRO.KN_new()
+        KNITRO.KN_add_vars(kc, CS.inner_loop_number_variables(obj))
+        KNITRO.KN_set_var_lobnds_all(kc, CS.inner_loop_lower_bounds(obj))
+        KNITRO.KN_set_var_primal_init_values_all(kc, CS.inner_loop_initial_values(obj))
 
-    cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], _callbackEvalFG_inner_profiled!)
-    KNITRO.KN_set_cb_user_params(kc, cb, obj)
-    KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
+        cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], _callbackEvalFG_inner_profiled!)
+        KNITRO.KN_set_cb_user_params(kc, cb, obj)
+        KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
 
-    hessopt = KNITRO.KN_get_int_param(kc, "hessopt")
-    if hvp
-        hessopt == 5 || error("inner_loop_KNITRO_archgeneric(hvp=true): expected hessopt=product(5), got $hessopt -- obj.inner_loop_opt must point at ek_inner_hvp.opt")
-        KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, _callbackEvalHV_inner_dense!)
-    elseif hessopt == 1
-        hess_cb = hess_cb_builder(obj)
-        KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, hess_cb)
+        hessopt = KNITRO.KN_get_int_param(kc, "hessopt")
+        if hvp
+            hessopt == 5 || error("inner_loop_KNITRO_archgeneric(hvp=true): expected hessopt=product(5), got $hessopt -- obj.inner_loop_opt must point at ek_inner_hvp.opt")
+            KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, _callbackEvalHV_inner_dense!)
+        elseif hessopt == 1
+            hess_cb = hess_cb_builder(obj)
+            KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, hess_cb)
+        end
+        if obj.complement_index != [0 0]
+            CS.inner_loop_complementarity_constraints(kc, obj)
+        end
+
+        @prof "inner_knitro_dual_solve_arch" begin
+            KNITRO.KN_solve(kc)
+        end
+        nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
+        CS.INNER_ITERS_TOTAL[] += CS._kn_num_iters(kc)
+        KNITRO.KN_free(kc)
+
+        return nSTatus, objSol, x, lambda_, _INNER_CALL_COUNTERS[].n_fg_calls, _INNER_CALL_COUNTERS[].n_hess_calls
+    finally
+        CS.guard_exit_inner_solve!()
     end
-    if obj.complement_index != [0 0]
-        CS.inner_loop_complementarity_constraints(kc, obj)
-    end
-
-    @prof "inner_knitro_dual_solve_arch" begin
-        KNITRO.KN_solve(kc)
-    end
-    nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
-    CS.INNER_ITERS_TOTAL[] += CS._kn_num_iters(kc)
-    KNITRO.KN_free(kc)
-
-    return nSTatus, objSol, x, lambda_, _INNER_CALL_COUNTERS[].n_fg_calls, _INNER_CALL_COUNTERS[].n_hess_calls
 end
 
 function inner_loop_internal_archgeneric(obj, θ; hess_cb_builder = nothing, hvp::Bool = false)

@@ -46,51 +46,60 @@ end
 # Solve inner program using KNITRO
 function inner_loop_KNITRO(obj)
 
-    kc = KNITRO.KN_new()
+    # Ported from diag/fullA-inner-blas-threading (parallelism_guards.jl): every real inner
+    # KNITRO solve in this codebase funnels through this single function, so this is the one
+    # choke point that needs the guard -- errors fast if a coordinate probe pool is somehow
+    # active when an inner solve is launched (or vice versa), instead of silently racing.
+    guard_enter_inner_solve!()
+    try
+        kc = KNITRO.KN_new()
 
 
-    
 
-    KNITRO.KN_add_vars(kc, inner_loop_number_variables(obj))
 
-            # set lower bounds for inner optimization
-    KNITRO.KN_set_var_lobnds_all(kc, inner_loop_lower_bounds(obj)) #I changed this 13072022
+        KNITRO.KN_add_vars(kc, inner_loop_number_variables(obj))
 
-            # set initial values
-    KNITRO.KN_set_var_primal_init_values_all(kc, inner_loop_initial_values(obj))#I changed this 13072022
-    
-            
-#=
-    # set lower bounds for inner optimization
-    KNITRO.KN_set_var_lobnds(kc, inner_loop_lower_bounds(obj))
+                # set lower bounds for inner optimization
+        KNITRO.KN_set_var_lobnds_all(kc, inner_loop_lower_bounds(obj)) #I changed this 13072022
 
-    # set initial values
-    KNITRO.KN_set_var_primal_init_values(kc, inner_loop_initial_values(obj))
-=#
-    # set objective function and gradient
-    cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], callbackEvalFG_inner!)
-    KNITRO.KN_set_cb_user_params(kc, cb, obj)
+                # set initial values
+        KNITRO.KN_set_var_primal_init_values_all(kc, inner_loop_initial_values(obj))#I changed this 13072022
 
-    # set options
-    KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
 
-    # set Hessian, if required
-    if KNITRO.KN_get_int_param(kc, "hessopt") == 1
-        inner_loop_hessian(kc, cb, obj)
+    #=
+        # set lower bounds for inner optimization
+        KNITRO.KN_set_var_lobnds(kc, inner_loop_lower_bounds(obj))
+
+        # set initial values
+        KNITRO.KN_set_var_primal_init_values(kc, inner_loop_initial_values(obj))
+    =#
+        # set objective function and gradient
+        cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], callbackEvalFG_inner!)
+        KNITRO.KN_set_cb_user_params(kc, cb, obj)
+
+        # set options
+        KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
+
+        # set Hessian, if required
+        if KNITRO.KN_get_int_param(kc, "hessopt") == 1
+            inner_loop_hessian(kc, cb, obj)
+        end
+
+        # set complementarity constraints, if required
+        if obj.complement_index != [0 0]
+            inner_loop_complementarity_constraints(kc, obj)
+        end
+
+        # run
+        KNITRO.KN_solve(kc)
+        nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
+        INNER_ITERS_TOTAL[] += _kn_num_iters(kc)   # EXP instrumentation
+        KNITRO.KN_free(kc)
+
+        return nSTatus, objSol, x, lambda_
+    finally
+        guard_exit_inner_solve!()
     end
-
-    # set complementarity constraints, if required
-    if obj.complement_index != [0 0]
-        inner_loop_complementarity_constraints(kc, obj)
-    end
-
-    # run
-    KNITRO.KN_solve(kc)
-    nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
-    INNER_ITERS_TOTAL[] += _kn_num_iters(kc)   # EXP instrumentation
-    KNITRO.KN_free(kc)
-
-    return nSTatus, objSol, x, lambda_
 
 end
 

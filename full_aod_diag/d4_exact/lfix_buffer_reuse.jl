@@ -187,8 +187,13 @@ function composite_gradient_at_fast_buffered(x_free0::AbstractVector, ctx, pe;
         # threadid()-indexed buffer assignment (a real race, not a theoretical one) -- :static
         # pins each loop chunk to one thread for its entire execution, ruling this out by
         # construction.
-        Threads.@threads :static for k in 2:D2
-            do_coord!(k)
+        CS.guard_enter_coord_pool!()
+        try
+            Threads.@threads :static for k in 2:D2
+                do_coord!(k)
+            end
+        finally
+            CS.guard_exit_coord_pool!()
         end
     else
         for k in 2:D2

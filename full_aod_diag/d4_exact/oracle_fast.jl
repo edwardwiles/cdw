@@ -131,30 +131,39 @@ instead of the production ones. `KN_solve` itself is timed as
 function inner_loop_KNITRO_profiled(obj)
     _INNER_CALL_COUNTERS[] = InnerCallCounters(0, 0)
 
-    kc = KNITRO.KN_new()
-    KNITRO.KN_add_vars(kc, CS.inner_loop_number_variables(obj))
-    KNITRO.KN_set_var_lobnds_all(kc, CS.inner_loop_lower_bounds(obj))
-    KNITRO.KN_set_var_primal_init_values_all(kc, CS.inner_loop_initial_values(obj))
+    # Ported from diag/fullA-inner-blas-threading (parallelism_guards.jl). This is the ACTUAL
+    # production inner solve (evaluate_fullA_screened_ranged's compressed/fast path calls into
+    # this, not cc_algo/inner_loop_functions.jl::inner_loop_KNITRO directly), so it gets the
+    # same guard as that one.
+    CS.guard_enter_inner_solve!()
+    try
+        kc = KNITRO.KN_new()
+        KNITRO.KN_add_vars(kc, CS.inner_loop_number_variables(obj))
+        KNITRO.KN_set_var_lobnds_all(kc, CS.inner_loop_lower_bounds(obj))
+        KNITRO.KN_set_var_primal_init_values_all(kc, CS.inner_loop_initial_values(obj))
 
-    cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], _callbackEvalFG_inner_profiled!)
-    KNITRO.KN_set_cb_user_params(kc, cb, obj)
-    KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
+        cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], _callbackEvalFG_inner_profiled!)
+        KNITRO.KN_set_cb_user_params(kc, cb, obj)
+        KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
 
-    if KNITRO.KN_get_int_param(kc, "hessopt") == 1
-        KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, _callbackEvalH_inner_profiled!)
+        if KNITRO.KN_get_int_param(kc, "hessopt") == 1
+            KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, _callbackEvalH_inner_profiled!)
+        end
+        if obj.complement_index != [0 0]
+            CS.inner_loop_complementarity_constraints(kc, obj)
+        end
+
+        @prof "inner_knitro_dual_solve" begin
+            KNITRO.KN_solve(kc)
+        end
+        nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
+        CS.INNER_ITERS_TOTAL[] += CS._kn_num_iters(kc)
+        KNITRO.KN_free(kc)
+
+        return nSTatus, objSol, x, lambda_, _INNER_CALL_COUNTERS[].n_fg_calls, _INNER_CALL_COUNTERS[].n_hess_calls
+    finally
+        CS.guard_exit_inner_solve!()
     end
-    if obj.complement_index != [0 0]
-        CS.inner_loop_complementarity_constraints(kc, obj)
-    end
-
-    @prof "inner_knitro_dual_solve" begin
-        KNITRO.KN_solve(kc)
-    end
-    nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
-    CS.INNER_ITERS_TOTAL[] += CS._kn_num_iters(kc)
-    KNITRO.KN_free(kc)
-
-    return nSTatus, objSol, x, lambda_, _INNER_CALL_COUNTERS[].n_fg_calls, _INNER_CALL_COUNTERS[].n_hess_calls
 end
 
 """
