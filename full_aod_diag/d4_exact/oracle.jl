@@ -66,8 +66,59 @@ Base.:(==)(a::FullAEvalKey, b::FullAEvalKey) = a.x_free == b.x_free && a.δ == b
     a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.mode == b.mode
 Base.hash(k::FullAEvalKey, h::UInt) = hash((k.x_free, k.δ, k.find_smallest, k.inner_loop_opt, k.mode), h)
 
-"Fresh, empty cache Dict for one (method, bound-direction, draw-set) scope -- never share across those, per task §7.4."
-oracle_cache_for(ctx) = Dict{FullAEvalKey, NamedTuple}()
+"""
+    SafeExactCache
+
+Lock-guarded exact-point cache: production's answer to a real SIGABRT found
+under 20-thread concurrent access on the raw `Dict{FullAEvalKey,NamedTuple}`
+this file used to hand out directly (GC corruption, reproduced synthetically
+and on the real `evaluate_fullA_screened` call in the
+`diag/fullA-d20-warmstart-replay` investigation this was ported from). The
+lock wraps ONLY the O(1) dict get/store -- never the multi-second KNITRO
+solve -- so concurrent misses on different keys are not serialized.
+
+Every `cache::Union{Nothing,Dict,SafeExactCache}` call site in this file,
+`infeasibility_screen.jl`, and `fast_range_screen.jl` goes through
+`_cache_lookup`/`_cache_store!` below, which dispatch correctly for either a
+raw `Dict` (legacy, unlocked, still supported for any external caller that
+constructs its own) or a `SafeExactCache` (production's own, from
+`oracle_cache_for`).
+"""
+struct SafeExactCache
+    d::Dict{FullAEvalKey, NamedTuple}
+    lock::ReentrantLock
+end
+SafeExactCache() = SafeExactCache(Dict{FullAEvalKey, NamedTuple}(), ReentrantLock())
+Base.length(c::SafeExactCache) = lock(() -> length(c.d), c.lock)
+
+_cache_lookup(cache::Nothing, key) = nothing
+_cache_lookup(cache::Dict, key) = get(cache, key, nothing)
+_cache_lookup(cache::SafeExactCache, key) = lock(() -> get(cache.d, key, nothing), cache.lock)
+
+_cache_store!(cache::Nothing, key, result) = nothing
+_cache_store!(cache::Dict, key, result) = (cache[key] = result; nothing)
+_cache_store!(cache::SafeExactCache, key, result) = (lock(() -> (cache.d[key] = result), cache.lock); nothing)
+
+"""
+    is_cacheable_result(result) -> Bool
+
+An exact-point cache must only ever store a genuine feasible solve
+(`inner_status in (0,-100,-101,-103)`) or an exact screen certificate (every
+screen sentinel in `infeasibility_screen.jl`/`fast_range_screen.jl` is
+`inner_status <= -9000`, see `infeasible_result`/`infeasible_result_ranged`).
+A bare unresolved numerical failure (KNITRO `-300`/unbounded-dual, or any
+other non-solved, non-certified status) is NOT a certificate of anything and
+must never be cached as if it were one -- caching it would silently turn a
+transient/point-dependent solver failure into a permanent (and potentially
+wrong, since a nearby retry or different warm start might succeed) answer
+for that exact point for the rest of the run.
+"""
+is_cacheable_result(result)::Bool = let s = get(result, :inner_status, -300)
+    s in (0, -100, -101, -103) || s <= -9000
+end
+
+"Fresh, empty exact-point cache for one (method, bound-direction, draw-set) scope -- never share across those, per task §7.4. Lock-guarded (SafeExactCache), safe under KNITRO-callback-driven concurrent access."
+oracle_cache_for(ctx) = SafeExactCache()
 
 """
     evaluate_fullA(x_free, ctx; cache=nothing, mode=:hard, tag="") -> NamedTuple
@@ -81,16 +132,18 @@ determinism requirement (§7.2) says the two should still agree to solver
 tolerance (checked by `test_oracle.jl`, not assumed here).
 """
 function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
-        cache::Union{Nothing,Dict} = nothing, use_cache::Bool = true,
+        cache = nothing, use_cache::Bool = true,
         mode::Symbol = :hard, warm::Bool = true, tag::String = "")
 
     mode == :hard || error("evaluate_fullA: mode=:$mode not implemented -- only :hard (hFunction!'s MinInd! branch, this codebase's only wired path) exists. See docs/fullA_d4_code_audit.md sec 6.")
 
     obj = ctx.obj
     key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
-    if cache !== nothing && use_cache && haskey(cache, key)
-        hit = cache[key]
-        return merge(hit, (cache_hit = true, tag = tag))
+    if cache !== nothing && use_cache
+        hit = _cache_lookup(cache, key)
+        if hit !== nothing
+            return merge(hit, (cache_hit = true, tag = tag))
+        end
     end
 
     t_total0 = time()
@@ -123,7 +176,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
                   winner_hash = UInt64(0), inner_status = nStatus, inner_iters = inner_iters,
                   primal_dual_gap = NaN, cache_hit = false, warm_started = warm, tag = tag,
                   elapsed = elapsed, error_reason = "inner solve failed: nStatus=$nStatus")
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result
     end
 
@@ -200,6 +253,6 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
               cache_hit = false, warm_started = warm, tag = tag,
               elapsed = elapsed, error_reason = nothing)
 
-    cache !== nothing && (cache[key] = result)
+    cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
     return result
 end

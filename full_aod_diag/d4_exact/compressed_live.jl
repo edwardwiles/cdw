@@ -283,7 +283,7 @@ between the two tails would be caught immediately by
 run after every change to either.
 """
 function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
-        cache::Union{Nothing,Dict} = nothing, use_cache::Bool = true,
+        cache = nothing, use_cache::Bool = true,
         mode::Symbol = :hard, warm::Bool = true, tag::String = "")
 
     mode == :hard || error("evaluate_fullA_fast_compressed: mode=:$mode not implemented (matches oracle.jl)")
@@ -292,9 +292,8 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
 
     if cache !== nothing && use_cache
-        cache_hit = @prof "cache_lookup_compressed" haskey(cache, key)
-        if cache_hit
-            hit = cache[key]
+        hit = @prof "cache_lookup_compressed" _cache_lookup(cache, key)
+        if hit !== nothing
             return merge(hit, (cache_hit = true, tag = tag)), (n_inner_solves = 0, n_inner_infeasible = 0, n_inner_iters = 0, n_fg_calls = 0, n_hess_calls = 0)
         end
     end
@@ -345,7 +344,7 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
                   winner_hash = UInt64(0), inner_status = nStatus, inner_iters = inner_iters,
                   primal_dual_gap = NaN, cache_hit = false, warm_started = warm, tag = tag,
                   elapsed = elapsed, error_reason = "inner solve failed: nStatus=$nStatus")
-        cache !== nothing && @prof("cache_materialize_compressed", cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && @prof("cache_materialize_compressed", _cache_store!(cache, key, result))
         prof_meta = (n_inner_solves = CS.INNER_SOLVE_COUNT[] - solves0,
                      n_inner_infeasible = CS.INNER_INFEAS_COUNT[] - infeas0,
                      n_inner_iters = CS.INNER_ITERS_TOTAL[] - iters0, n_fg_calls = n_fg, n_hess_calls = n_hess)
@@ -429,7 +428,7 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
               cache_hit = false, warm_started = warm, tag = tag,
               elapsed = elapsed, error_reason = nothing)
 
-    cache !== nothing && @prof("cache_materialize_compressed", cache[key] = result)
+    cache !== nothing && is_cacheable_result(result) && @prof("cache_materialize_compressed", _cache_store!(cache, key, result))
     prof_meta = (n_inner_solves = CS.INNER_SOLVE_COUNT[] - solves0,
                  n_inner_infeasible = CS.INNER_INFEAS_COUNT[] - infeas0,
                  n_inner_iters = CS.INNER_ITERS_TOTAL[] - iters0, n_fg_calls = n_fg, n_hess_calls = n_hess)

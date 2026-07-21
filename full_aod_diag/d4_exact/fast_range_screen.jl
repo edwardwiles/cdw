@@ -776,7 +776,7 @@ first):
 """
 function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rsc::RangedScreenContext;
         moment_representation::Symbol = :compressed,
-        cache::Union{Nothing,Dict} = nothing, use_cache::Bool = true,
+        cache = nothing, use_cache::Bool = true,
         use_witness::Bool = false, use_general_range_safety_net::Bool = true,
         mode::Symbol = :hard, warm::Bool = true, tag::String = "",
         pairwise::Union{Nothing,PairwiseCertificate} = nothing,
@@ -787,10 +787,12 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
     obj = ctx.obj
     key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
 
-    if cache !== nothing && use_cache && haskey(cache, key)
-        hit = cache[key]
-        return merge(hit, (cache_hit = true, tag = tag)),
-               (screen_status = get(hit, :screen_status, :cache_hit), elapsed = 0.0)
+    if cache !== nothing && use_cache
+        hit = _cache_lookup(cache, key)
+        if hit !== nothing
+            return merge(hit, (cache_hit = true, tag = tag)),
+                   (screen_status = get(hit, :screen_status, :cache_hit), elapsed = 0.0)
+        end
     end
 
     t0 = time()
@@ -805,7 +807,7 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
         t_screen = time() - t0
         result = infeasible_result(x_free, θ_full, ctx, :pairwise_certified_infeasible,
                                     pres.worst_o, pres.worst_d, 0, t_screen, tag, warm)
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :pairwise_certified_infeasible, worst_o = pres.worst_o,
                          worst_d = pres.worst_d, elapsed = t_screen)
     end
@@ -818,7 +820,7 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
             result = infeasible_result_ranged(x_free, θ_full, ctx, :EXACT_INFEASIBLE_PREWINNER_ENVELOPE,
                                                eres.origin, eres.destination, 0, t_screen, tag, warm;
                                                Hmax_failing = eres.h_upper_bound, target_failing = eres.target)
-            cache !== nothing && (cache[key] = result)
+            cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
             return result, (screen_status = :EXACT_INFEASIBLE_PREWINNER_ENVELOPE, worst_o = eres.origin,
                              worst_d = eres.destination, upper_bound = eres.h_upper_bound, target = eres.target,
                              margin_normalized = eres.margin_normalized, elapsed = t_screen)
@@ -835,7 +837,7 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
             if !exists
                 t_screen = time() - t0
                 result = infeasible_result(x_free, θ_full, ctx, :witness_certified_infeasible, o, d, 0, t_screen, tag, warm)
-                cache !== nothing && (cache[key] = result)
+                cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
                 return result, (screen_status = :witness_certified_infeasible, worst_o = o, worst_d = d, elapsed = t_screen)
             end
         end
@@ -851,7 +853,7 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
             result = infeasible_result_ranged(x_free, θ_full, ctx, status, wres.failing_o, wres.failing_d,
                                                wres.stage, t_screen, tag, warm;
                                                Hmax_failing = wres.Hmax_failing, target_failing = wres.target_failing)
-            cache !== nothing && (cache[key] = result)
+            cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
             return result, (screen_status = status, worst_o = wres.failing_o, worst_d = wres.failing_d,
                              stage = wres.stage, elapsed = t_screen)
         end
@@ -862,7 +864,7 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
             t_screen = time() - t0
             result = infeasible_result(x_free, θ_full, ctx, :winner_scan_infeasible, wres0.failing_o,
                                         wres0.failing_d, wres0.stage, t_screen, tag, warm)
-            cache !== nothing && (cache[key] = result)
+            cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
             return result, (screen_status = :winner_scan_infeasible, worst_o = wres0.failing_o,
                              worst_d = wres0.failing_d, stage = wres0.stage, elapsed = t_screen)
         end
@@ -875,7 +877,7 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
         result, prof_meta = evaluate_fullA_fast(x_free, ctx; cache = nothing, use_cache = false,
                                                   mode = mode, warm = warm, tag = tag)
         result = merge(result, (screen_status = :screen_passed,))
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :screen_passed, screen_elapsed = t_screen_passed, prof_meta...)
     elseif moment_representation === :compressed
         # Build cf EXACTLY ONCE (from the winner/wval the fused screen already computed --
@@ -894,14 +896,14 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
                 result = infeasible_result_ranged(x_free, θ_full, ctx, :EXACT_INFEASIBLE_MOMENT_RANGE,
                                                    safety_hit.origin, safety_hit.destination, ctx.D, t_screen, tag, warm)
                 result = merge(result, (safety_net_certificate = safety_hit,))
-                cache !== nothing && (cache[key] = result)
+                cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
                 return result, (screen_status = :EXACT_INFEASIBLE_MOMENT_RANGE, certificate = safety_hit, elapsed = t_screen)
             end
         end
 
         result, prof_meta = evaluate_fullA_screened_compressed_with_cf(x_free, θ_full, ctx, cf; warm = warm, tag = tag)
         result = merge(result, (screen_status = :screen_passed, safety_net_checked = use_general_range_safety_net))
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :screen_passed, screen_elapsed = t_screen_passed, prof_meta...)
     else
         error("evaluate_fullA_screened_ranged: moment_representation=:$moment_representation not implemented (only :dense, :compressed)")

@@ -549,7 +549,7 @@ across every outer-point evaluation in a run) instead of paying the O(D^2 W)
 """
 function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
         moment_representation::Symbol = :dense,
-        cache::Union{Nothing,Dict} = nothing, use_cache::Bool = true,
+        cache = nothing, use_cache::Bool = true,
         use_witness::Bool = false, mode::Symbol = :hard, warm::Bool = true, tag::String = "",
         pairwise::Union{Nothing,PairwiseCertificate} = nothing,
         witness::Union{Nothing,ExtremeDrawWitness} = nothing)
@@ -558,10 +558,12 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
     obj = ctx.obj
     key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
 
-    if cache !== nothing && use_cache && haskey(cache, key)
-        hit = cache[key]
-        return merge(hit, (cache_hit = true, tag = tag)),
-               (screen_status = get(hit, :screen_status, :cache_hit), elapsed = 0.0)
+    if cache !== nothing && use_cache
+        hit = _cache_lookup(cache, key)
+        if hit !== nothing
+            return merge(hit, (cache_hit = true, tag = tag)),
+                   (screen_status = get(hit, :screen_status, :cache_hit), elapsed = 0.0)
+        end
     end
 
     t0 = time()
@@ -575,7 +577,7 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
         t_screen = time() - t0
         result = infeasible_result(x_free, θ_full, ctx, :pairwise_certified_infeasible,
                                     pres.worst_o, pres.worst_d, 0, t_screen, tag, warm)
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :pairwise_certified_infeasible, worst_o = pres.worst_o,
                          worst_d = pres.worst_d, worst_k = pres.worst_k, worst_slack = pres.worst_slack,
                          elapsed = t_screen)
@@ -591,7 +593,7 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
                 t_screen = time() - t0
                 result = infeasible_result(x_free, θ_full, ctx, :witness_certified_infeasible, o, d, 0,
                                             t_screen, tag, warm)
-                cache !== nothing && (cache[key] = result)
+                cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
                 return result, (screen_status = :witness_certified_infeasible, worst_o = o, worst_d = d,
                                  elapsed = t_screen)
             end
@@ -604,7 +606,7 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
         t_screen = time() - t0
         result = infeasible_result(x_free, θ_full, ctx, :winner_scan_infeasible, wres.failing_o,
                                     wres.failing_d, wres.stage, t_screen, tag, warm)
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :winner_scan_infeasible, worst_o = wres.failing_o,
                          worst_d = wres.failing_d, stage = wres.stage, elapsed = t_screen)
     end
@@ -614,12 +616,12 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
         result, prof_meta = evaluate_fullA_fast(x_free, ctx; cache = nothing, use_cache = false,
                                                   mode = mode, warm = warm, tag = tag)
         result = merge(result, (screen_status = :screen_passed,))
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :screen_passed, screen_elapsed = t_screen_passed, prof_meta...)
     elseif moment_representation === :compressed
         result, prof_meta = evaluate_fullA_screened_compressed(x_free, θ_full, ctx, wres; warm = warm, tag = tag)
         result = merge(result, (screen_status = :screen_passed,))
-        cache !== nothing && (cache[key] = result)
+        cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :screen_passed, screen_elapsed = t_screen_passed, prof_meta...)
     else
         error("evaluate_fullA_screened: moment_representation=:$moment_representation not implemented (only :dense, :compressed)")
