@@ -264,7 +264,10 @@ end
 function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in::Bool, zfree_start_in::Vector{Float64};
         maxtime_real::Float64 = 900.0, hessopt_tag::String = "sr1",
         W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
-        draw_design_in::Symbol = :pseudorandom,
+        draw_design_in::Union{Nothing,Symbol} = nothing,   # nothing = "caller did not specify" (distinct from
+        # explicitly passing :pseudorandom!) -- see the resume block: this sentinel is required to tell
+        # "no opinion, inherit whatever the checkpoint used" apart from "I explicitly want :pseudorandom",
+        # which must still hard-error if the checkpoint was actually built under a different design.
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing)
@@ -273,15 +276,18 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
     g = g_in; find_smallest = find_smallest_in; zfree_start = copy(zfree_start_in)
-    W = W_in; delta = delta_in; draw_seed = draw_seed_in; draw_design = draw_design_in
+    W = W_in; delta = delta_in; draw_seed = draw_seed_in
+    draw_design = draw_design_in === nothing ? :pseudorandom : draw_design_in
     bandwidth_cache = Dict{Int,Float64}()
     if resumed !== nothing
         g = resumed.g; find_smallest = resumed.find_smallest; zfree_start = copy(resumed.zfree)
         W = resumed.W; delta = resumed.delta; draw_seed = resumed.draw_seed
-        # draw_design must match what the caller asked for (or be inherited from the checkpoint if the
-        # caller left it at the function default) -- never silently resume a run under a DIFFERENT design
-        # than it was checkpointed with. See §5 of the draw-design port brief.
-        if draw_design_in != :pseudorandom && draw_design_in != resumed.draw_design
+        # draw_design must match what the caller EXPLICITLY asked for -- if the caller passed nothing
+        # (no opinion), silently inherit the checkpoint's own design; if the caller passed a specific
+        # design (including :pseudorandom) that conflicts with the checkpoint's recorded design, hard-error.
+        # Never silently resume under a DIFFERENT design than the run was checkpointed with. See §5 of the
+        # draw-design port brief.
+        if draw_design_in !== nothing && draw_design_in != resumed.draw_design
             error("run_profile_checkpointed($label): resume draw_design mismatch -- checkpoint has " *
                   ":$(resumed.draw_design), caller requested :$(draw_design_in). Refusing to resume.")
         end
@@ -494,7 +500,9 @@ end
 function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_in::Float64, zfree_start_in::Vector{Float64};
         maxtime_real::Float64 = 450.0, hessopt_tag::String = "sr1",
         W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
-        draw_design_in::Symbol = :pseudorandom,
+        draw_design_in::Union{Nothing,Symbol} = nothing,   # nothing = "caller did not specify" -- see
+        # run_profile_checkpointed's identical parameter for why this sentinel (vs defaulting to
+        # :pseudorandom) is required for the mismatch guard below to work correctly.
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
@@ -508,12 +516,13 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
     find_smallest = find_smallest_in; g_start = g_start_in; zfree_start = copy(zfree_start_in)
-    W = W_in; delta = delta_in; draw_seed = draw_seed_in; draw_design = draw_design_in
+    W = W_in; delta = delta_in; draw_seed = draw_seed_in
+    draw_design = draw_design_in === nothing ? :pseudorandom : draw_design_in
     bandwidth_cache = Dict{Int,Float64}()
     if resumed !== nothing
         find_smallest = resumed.find_smallest; g_start = resumed.g; zfree_start = copy(resumed.zfree)
         W = resumed.W; delta = resumed.delta; draw_seed = resumed.draw_seed
-        if draw_design_in != :pseudorandom && draw_design_in != resumed.draw_design
+        if draw_design_in !== nothing && draw_design_in != resumed.draw_design
             error("run_polish_checkpointed($label): resume draw_design mismatch -- checkpoint has " *
                   ":$(resumed.draw_design), caller requested :$(draw_design_in). Refusing to resume.")
         end
