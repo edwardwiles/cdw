@@ -64,8 +64,23 @@
 # `ctx.pairwise`/`ctx.witness`/every downstream calculation). This is
 # validated directly, not assumed -- see the bottom of this file / the
 # checkpoint-resume report.
+#
+# DRAW DESIGN (added on top of the above, additive, opt-in): every ctx build
+# in this file now goes through `draw_design.jl::d20_real_setup_design`
+# instead of calling `Random.seed!(draw_seed); d20_real_setup(...)` directly.
+# For the default `draw_design=:pseudorandom` this is the EXACT same call
+# sequence (see draw_design.jl's own header) -- zero behavior change, see
+# docs/fullA_D20_draw_design_overhead_report.md for the measured (negligible)
+# overhead of the added metadata/checksum logging. `:sobol_randomized` and
+# `:halton_scrambled` select the two QMC designs ported from
+# `diag/fullA-d20-qmc-delta1` (gravity-fullA-d20-qmc-delta1 worktree, tip
+# 5882c16 -- now subsumed by this file). Every checkpoint records
+# `draw_design` plus both draw checksums (uniform + transformed); resume
+# hard-errors on any mismatch (see `load_checkpoint`/resume blocks below) so a
+# resumed run can never silently continue with a different draw realization
+# than the one it checkpointed against.
 # ============================================================================
-include(joinpath(@__DIR__, "context_real_d20.jl"))   # -> includes infeasibility_screen.jl too (Section 5)
+include(joinpath(@__DIR__, "draw_design.jl"))   # -> d20_real_setup_design (wraps context_real_d20.jl's d20_real_setup + the QMC designs); includes infeasibility_screen.jl transitively (Section 5)
 include(joinpath(@__DIR__, "winners.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
 include(joinpath(@__DIR__, "gravity_elimination.jl"))
@@ -120,7 +135,19 @@ struct D20Checkpoint
     verify_max_abs_moment_kkt_resid::Float64
     verify_moment_resid_norm::Float64
     solver_state_note::String
+    # ---- schema 2 (draw-design port, additive): which of the three validated draw
+    # designs (draw_design.jl) produced ctx.U, plus checksums of both the recovered
+    # raw-uniform draws and the transformed Exp(1) draws (draw_design_meta). A resume
+    # regenerates ctx via the SAME (draw_design, draw_seed) and hard-errors if either
+    # checksum doesn't match -- see the resume blocks in run_profile_checkpointed /
+    # run_polish_checkpointed below. ----
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
 end
+
+"Schema 1 checkpoints (pre-draw-design-port) do not have draw_design/checksum fields; schema must be 2 to resume through this file's draw-design-aware resume validation."
+const CHECKPOINT_SCHEMA = 2
 
 "Atomic-ish checkpoint write: serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint that a resume could load."
 function save_checkpoint(path::AbstractString, ckpt::D20Checkpoint)
@@ -129,7 +156,44 @@ function save_checkpoint(path::AbstractString, ckpt::D20Checkpoint)
     mv(tmp, path; force = true)
     return path
 end
-load_checkpoint(path::AbstractString) = deserialize(path)::D20Checkpoint
+function load_checkpoint(path::AbstractString)
+    ckpt = deserialize(path)::D20Checkpoint
+    ckpt.schema == CHECKPOINT_SCHEMA ||
+        error("load_checkpoint($path): schema=$(ckpt.schema), expected $(CHECKPOINT_SCHEMA) -- " *
+              "this checkpoint predates the draw-design port (draw_design.jl) and has no " *
+              "draw_design/checksum fields to validate a resume against. Start a fresh run instead " *
+              "of resuming from a schema-1 checkpoint.")
+    return ckpt
+end
+
+"""
+    guard_checkpoint_path(path, draw_design, checksum_uniform, checksum_transformed)
+
+Namespacing safety net (§5 of the draw-design port brief): if a checkpoint already
+exists at `path` from a DIFFERENT draw_design or draw checksum, refuse to overwrite
+it. This is deliberately a file-path-level guard, not a change to any cache-key
+struct (oracle.jl's `FullAEvalKey` etc.) -- those are being modified concurrently by
+a sibling workstream, and this driver's own inner-loop calls already run with
+`cache=nothing, use_cache=false` (see `screened_eval`), so there is no shared-cache
+collision risk to fix there. The real collision risk is two different-design runs
+pointed at the SAME `ckpt_dir`/`label`, which would otherwise silently clobber each
+other's checkpoint file; this catches that at every checkpoint write, not just once
+at startup, since `ckpt_dir` is caller-supplied and long-running processes can be
+misconfigured mid-flight.
+"""
+function guard_checkpoint_path(path::AbstractString, draw_design::Symbol, checksum_uniform::AbstractString, checksum_transformed::AbstractString)
+    isfile(path) || return nothing
+    prior = deserialize(path)::D20Checkpoint
+    if prior.draw_design != draw_design || prior.draw_checksum_uniform != checksum_uniform || prior.draw_checksum_transformed != checksum_transformed
+        error("guard_checkpoint_path($path): an existing checkpoint at this path was built under a " *
+              "DIFFERENT draw design/checksum (design=:$(prior.draw_design), " *
+              "checksum=($(prior.draw_checksum_uniform),$(prior.draw_checksum_transformed))) than the " *
+              "current run (design=:$(draw_design), checksum=($(checksum_uniform),$(checksum_transformed))). " *
+              "Refusing to overwrite -- use a design-namespaced ckpt_dir, e.g. " *
+              "results/<draw_design>/seed_<draw_seed>/... (see docs/fullA_D20_draw_design_*.md).")
+    end
+    return nothing
+end
 
 x_free_from_w(w, pe) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
 
@@ -200,6 +264,7 @@ end
 function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in::Bool, zfree_start_in::Vector{Float64};
         maxtime_real::Float64 = 900.0, hessopt_tag::String = "sr1",
         W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
+        draw_design_in::Symbol = :pseudorandom,
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing)
@@ -208,28 +273,48 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
     g = g_in; find_smallest = find_smallest_in; zfree_start = copy(zfree_start_in)
-    W = W_in; delta = delta_in; draw_seed = draw_seed_in
+    W = W_in; delta = delta_in; draw_seed = draw_seed_in; draw_design = draw_design_in
     bandwidth_cache = Dict{Int,Float64}()
     if resumed !== nothing
         g = resumed.g; find_smallest = resumed.find_smallest; zfree_start = copy(resumed.zfree)
         W = resumed.W; delta = resumed.delta; draw_seed = resumed.draw_seed
+        # draw_design must match what the caller asked for (or be inherited from the checkpoint if the
+        # caller left it at the function default) -- never silently resume a run under a DIFFERENT design
+        # than it was checkpointed with. See §5 of the draw-design port brief.
+        if draw_design_in != :pseudorandom && draw_design_in != resumed.draw_design
+            error("run_profile_checkpointed($label): resume draw_design mismatch -- checkpoint has " *
+                  ":$(resumed.draw_design), caller requested :$(draw_design_in). Refusing to resume.")
+        end
+        draw_design = resumed.draw_design
         bandwidth_cache = copy(resumed.bandwidth_cache)
         lp("[", label, "] RESUMING from ", resume_from, " (reason=", resumed.checkpoint_reason,
            " n_eval=", resumed.n_eval, " knitro_iter=", resumed.knitro_iter, " wall_elapsed=", resumed.wall_elapsed, "s)")
     end
 
-    # REQUIRED for reproducibility across processes -- see this file's header comment.
-    Random.seed!(draw_seed)
-    ctx = d20_real_setup(W = W, δ = delta, find_smallest = find_smallest)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
+                                 draw_design = draw_design, draw_seed = draw_seed)
     pe = build_pivot_elimination(ctx)
     D = ctx.D; D2 = D^2; n = D2 - 1
     rsc = build_ranged_screen_context(ctx)
-    lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed,
+    lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
+       " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
        " screen_setup_wall=", ctx.screen_setup_wall,
        " envelope_screen_supported=", rsc.envelope !== nothing,
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
     if resumed !== nothing
+        # Hard reproducibility gate (§4 of the draw-design port brief): the regenerated draws for THIS
+        # process must checksum-match what the checkpoint recorded, or resume is refused outright --
+        # this is stronger than the pre-existing "RESUME VALIDATION" numeric-diff print below (which
+        # only reports differences, it doesn't gate anything).
+        if ctx.draw_meta.checksum_uniform != resumed.draw_checksum_uniform ||
+           ctx.draw_meta.checksum_transformed != resumed.draw_checksum_transformed
+            error("run_profile_checkpointed($label): regenerated draws do not match checkpoint's recorded " *
+                  "checksums -- checkpoint (uniform=$(resumed.draw_checksum_uniform), " *
+                  "transformed=$(resumed.draw_checksum_transformed)) vs regenerated " *
+                  "(uniform=$(ctx.draw_meta.checksum_uniform), transformed=$(ctx.draw_meta.checksum_transformed)). " *
+                  "Refusing to resume with mismatched draws.")
+        end
         ctx.obj.x .= resumed.dual_warm_start
         r_verify, _ = evaluate_fullA_screened_ranged(x_free_from_w(vcat(g, zfree_start), pe), ctx, rsc;
             moment_representation = :compressed, cache = nothing, use_cache = false, warm = true,
@@ -281,12 +366,14 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(1, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
+        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid),
-            SOLVER_STATE_NOTE)
-        save_checkpoint(joinpath(ckpt_dir, "$(label)_latest.jls"), ckpt)
+            SOLVER_STATE_NOTE, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
+        latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
+        guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
+        save_checkpoint(latest_path, ckpt)
         reason in (:new_best, :stage_complete) && save_checkpoint(joinpath(ckpt_dir, "$(label)_$(reason)_neval$(n_eval[]).jls"), ckpt)
         return ckpt
     end
@@ -407,6 +494,7 @@ end
 function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_in::Float64, zfree_start_in::Vector{Float64};
         maxtime_real::Float64 = 450.0, hessopt_tag::String = "sr1",
         W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
+        draw_design_in::Symbol = :pseudorandom,
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
@@ -420,29 +508,44 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
     find_smallest = find_smallest_in; g_start = g_start_in; zfree_start = copy(zfree_start_in)
-    W = W_in; delta = delta_in; draw_seed = draw_seed_in
+    W = W_in; delta = delta_in; draw_seed = draw_seed_in; draw_design = draw_design_in
     bandwidth_cache = Dict{Int,Float64}()
     if resumed !== nothing
         find_smallest = resumed.find_smallest; g_start = resumed.g; zfree_start = copy(resumed.zfree)
         W = resumed.W; delta = resumed.delta; draw_seed = resumed.draw_seed
+        if draw_design_in != :pseudorandom && draw_design_in != resumed.draw_design
+            error("run_polish_checkpointed($label): resume draw_design mismatch -- checkpoint has " *
+                  ":$(resumed.draw_design), caller requested :$(draw_design_in). Refusing to resume.")
+        end
+        draw_design = resumed.draw_design
         bandwidth_cache = copy(resumed.bandwidth_cache)
         lp("[", label, "] RESUMING from ", resume_from, " (reason=", resumed.checkpoint_reason,
            " n_eval=", resumed.n_eval, " knitro_iter=", resumed.knitro_iter, ")")
     end
 
-    Random.seed!(draw_seed)   # see file header -- required for cross-process reproducibility
-    ctx = inner_opt_override === nothing ? d20_real_setup(W = W, δ = delta, find_smallest = find_smallest) :
-                                            d20_real_setup(W = W, δ = delta, find_smallest = find_smallest, inner_loop_opt = inner_opt_override)
+    ctx = inner_opt_override === nothing ?
+        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed) :
+        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_opt_override)
     pe = build_pivot_elimination(ctx)
     D = ctx.D; D2 = D^2
     rsc = build_ranged_screen_context(ctx)
-    lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " screen_setup_wall=", ctx.screen_setup_wall,
+    lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
+       " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
+       " screen_setup_wall=", ctx.screen_setup_wall,
        " inner_opt=", inner_opt_override === nothing ? "default" : inner_opt_override,
        " envelope_screen_supported=", rsc.envelope !== nothing,
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
     w0 = vcat(g_start, zfree_start)
     if resumed !== nothing
+        if ctx.draw_meta.checksum_uniform != resumed.draw_checksum_uniform ||
+           ctx.draw_meta.checksum_transformed != resumed.draw_checksum_transformed
+            error("run_polish_checkpointed($label): regenerated draws do not match checkpoint's recorded " *
+                  "checksums -- checkpoint (uniform=$(resumed.draw_checksum_uniform), " *
+                  "transformed=$(resumed.draw_checksum_transformed)) vs regenerated " *
+                  "(uniform=$(ctx.draw_meta.checksum_uniform), transformed=$(ctx.draw_meta.checksum_transformed)). " *
+                  "Refusing to resume with mismatched draws.")
+        end
         ctx.obj.x .= resumed.dual_warm_start
         r_verify, _ = evaluate_fullA_screened_ranged(x_free_from_w(w0, pe), ctx, rsc; moment_representation = :compressed,
             cache = nothing, use_cache = false, warm = true, pairwise = ctx.pairwise, witness = ctx.witness,
@@ -486,11 +589,14 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(1, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
+        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best_feasible[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
-            r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid), SOLVER_STATE_NOTE)
-        save_checkpoint(joinpath(ckpt_dir, "$(label)_latest.jls"), ckpt)
+            r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid), SOLVER_STATE_NOTE,
+            draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
+        latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
+        guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
+        save_checkpoint(latest_path, ckpt)
         reason in (:new_best, :stage_complete) && save_checkpoint(joinpath(ckpt_dir, "$(label)_$(reason)_neval$(n_eval[]).jls"), ckpt)
         return ckpt
     end
