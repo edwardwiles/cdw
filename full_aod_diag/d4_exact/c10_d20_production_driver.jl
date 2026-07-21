@@ -96,6 +96,7 @@ include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))   # Continuation 11 Section 
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
+include(joinpath(@__DIR__, "negative_cache.jl"))   # negative-cache audit (integration/fullA-negative-cache-audit): typed ConfirmedNegativeResult + SafeNegativeCache, opt-in via use_neg_cache= below; default OFF, zero behavior change unless explicitly enabled -- see docs/fullA_negative_cache_audit.md
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
@@ -237,7 +238,25 @@ as_namedtuple(sc::ScreenCounters) = (pairwise = sc.pairwise, witness = sc.witnes
 function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContext, sc::ScreenCounters,
         n_eval_ref::Ref{Int}; warm::Bool = true, bank::Union{Nothing,DualBank} = nothing,
         zfree::Union{Nothing,AbstractVector{Float64}} = nothing,
-        exact_cache::Union{Nothing,SafeExactCache} = nothing)
+        exact_cache::Union{Nothing,SafeExactCache} = nothing,
+        neg_cache::Union{Nothing,SafeNegativeCache} = nothing)
+    # Negative-cache audit (Policy B, opt-in): a CONFIRMED negative (see negative_cache.jl,
+    # confirm_and_maybe_cache_negative!) short-circuits here with ZERO KNITRO call, same as an
+    # exact_cache positive hit. Checked first (cheap dict lookup) -- default nothing, so every
+    # existing caller that never passes neg_cache= sees IDENTICAL behavior to before this file
+    # existed (this whole block is a no-op when neg_cache === nothing).
+    if neg_cache !== nothing
+        key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+        hit = negcache_lookup(neg_cache, key)
+        if hit !== nothing
+            # template: cheapest available same-shape NamedTuple -- a fresh screen-only infeasible_result
+            # skeleton at this xf (never calls KNITRO; matches oracle.jl's own field set exactly)
+            θ_full_t = CS.reconstruct_full(xf, ctx.m)
+            template = infeasible_result(xf, θ_full_t, ctx, :negative_cache_hit, 0, 0, 0, 0.0, "", warm)
+            result = negative_result_namedtuple(xf, template, hit)
+            return result, (screen_status = :negative_cache_hit, elapsed = 0.0)
+        end
+    end
     # Successful-dual/KKT-scored bank (dual_bank.jl): only engages on warm calls (a cold call
     # resets obj.x .= NaN itself downstream, making any assignment here moot) and only when the
     # caller supplied both a bank and the reduced (zfree) coordinates it's indexed on. Falls back
@@ -428,7 +447,10 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = zfree, exact_cache = exact_cache)
         if !(r.inner_status in FEASIBLE_CODES)
             n_cold_retries[] += 1
-            r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
+            # BUGFIX (negative-cache audit): pass exact_cache through on the cold retry -- previously
+            # omitted, so a cold-retry SUCCESS was never written to the positive cache (see
+            # docs/fullA_negative_cache_audit.md). Same fix applied to run_polish_checkpointed's cb_F!/cb_G!.
+            r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
@@ -472,7 +494,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
             n_g_recompute[] += 1
             r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = zfree, exact_cache = exact_cache)
             if !(r_g.inner_status in FEASIBLE_CODES)
-                r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
+                r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)   # BUGFIX, see cb_F! above
             end
             r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_profile_checkpointed($label): cb_G! could not recompute a feasible base state"))
             base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
@@ -544,7 +566,14 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         logio::Union{Nothing,IO} = nothing,
         inner_opt_override::Union{Nothing,AbstractString} = nothing,
         skip_cold_retry::Bool = true,   # validated 2026-07-20: cold retry rescued 0/30 warm failures (all genuine
-        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true)
+        use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
+        use_neg_cache::Bool = false, neg_cache_code_version::String = "unknown")   # negative-cache audit,
+        # Policy B (docs/fullA_negative_cache_audit.md): opt-in, default OFF (byte-identical behavior to
+        # before this kwarg existed when omitted). Requires skip_cold_retry=false to ever have a
+        # confirmation attempt to promote from -- with skip_cold_retry=true (this function's own
+        # default) there is only ever a single (warm) attempt per point, which is NEVER cached here
+        # regardless of use_neg_cache (a lone failure is a TransientFailureResult by construction, see
+        # negative_cache.jl -- only a CONFIRMED compatible second failure is eligible).
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
@@ -606,6 +635,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
     exact_cache = use_exact_cache ? SafeExactCache() : nothing
+    neg_cache = use_neg_cache ? SafeNegativeCache{FullAEvalKey}() : nothing
+    n_neg_confirmed = Ref(0)
     r0, _ = screened_eval(x_free_from_w(w0, pe), ctx, rsc, sc, n_eval; warm = false)
     lp("[", label, "] polish start point: inner_status=", r0.inner_status, " Delta=", r0.Delta_dual)
     r0.inner_status in FEASIBLE_CODES || error("run_polish_checkpointed($label): start point not inner-feasible, cannot proceed")
@@ -656,7 +687,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
         t_warm0 = time()
-        r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache)
+        r_warm_result, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache, neg_cache = neg_cache)
+        r = r_warm_result
         t_warm = time() - t_warm0
         cold_time = NaN; cold_status = missing
         if !(r.inner_status in FEASIBLE_CODES)
@@ -664,9 +696,28 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             warm_status = r.inner_status
             if !skip_cold_retry
                 t_cold0 = time()
-                r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
+                # BUGFIX (negative-cache audit): this retry previously omitted `exact_cache=exact_cache`,
+                # meaning a cold-retry SUCCESS (a real, feasible answer) was silently never written to the
+                # positive exact-point cache -- every future revisit of the same point re-paid the full
+                # cold-solve cost even though the point itself is genuinely feasible and cacheable per
+                # oracle.jl's own `is_cacheable_result`. Fixed by passing it through, matching every other
+                # screened_eval call site in this file.
+                r, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
                 cold_time = time() - t_cold0
                 cold_status = r.inner_status
+                # Negative-cache audit (Policy B, opt-in via use_neg_cache=): a confirmed compatible
+                # failure (both warm and cold attempts are the same unbounded-family KNITRO code) is
+                # promoted to the negative cache here -- this is the ONLY place in this driver a negative
+                # entry is ever written, and only after two materially different starts (warm-started from
+                # whatever ctx.obj.x/bank held, vs a genuinely cold zeros start) agree.
+                if neg_cache !== nothing && !(cold_status in FEASIBLE_CODES) && compatible_failure(warm_status, cold_status)
+                    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+                    entry = ConfirmedNegativeResult(warm_status, :warm_production_slot, cold_status, :cold_neutral,
+                        (first_Delta = NaN, confirm_Delta = NaN, warm_time = t_warm, cold_time = cold_time),
+                        neg_cache_code_version, now())
+                    negcache_store!(neg_cache, key, entry)
+                    n_neg_confirmed[] += 1
+                end
             end
             push!(warm_cold_trace, (n_eval = n_eval[], gp = w[1], warm_time = t_warm, warm_status = warm_status,
                                      cold_time = cold_time, cold_status = cold_status,
@@ -712,9 +763,20 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         base = shared !== nothing && shared.w == w ? shared.base : nothing
         if base === nothing
             n_g_recompute[] += 1
-            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache)
+            r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w[2:end], exact_cache = exact_cache, neg_cache = neg_cache)
+            g_warm_status = r_g.inner_status
             if !(r_g.inner_status in FEASIBLE_CODES)
-                r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false)
+                # BUGFIX (negative-cache audit, same as cb_F! above): pass exact_cache through so a
+                # cold-retry success here is cacheable too, not silently recomputed every time.
+                r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
+                if neg_cache !== nothing && !(r_g.inner_status in FEASIBLE_CODES) && compatible_failure(g_warm_status, r_g.inner_status)
+                    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+                    entry = ConfirmedNegativeResult(g_warm_status, :warm_production_slot, r_g.inner_status, :cold_neutral,
+                        (first_Delta = NaN, confirm_Delta = NaN, warm_time = NaN, cold_time = NaN),
+                        neg_cache_code_version, now())
+                    negcache_store!(neg_cache, key, entry)
+                    n_neg_confirmed[] += 1
+                end
             end
             r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_polish_checkpointed($label): cb_G! could not recompute a feasible base state"))
             base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
@@ -755,7 +817,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     end
     lp("[", label, "] POLISH DONE: status=", nStatus_code, " wall_ext=", round(wall_ext, digits = 1),
        "s n_eval=", n_eval[], " kappa=", κ, " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed,
-       " n_cold_retries(F)=", n_cold_retries[], " n_rejected(F)=", n_rejected[], " n_g_recompute=", n_g_recompute[])
+       " n_cold_retries(F)=", n_cold_retries[], " n_rejected(F)=", n_rejected[], " n_g_recompute=", n_g_recompute[],
+       neg_cache !== nothing ? " n_neg_confirmed=$(n_neg_confirmed[]) neg_cache_size=$(length(neg_cache))" : "")
 
     w_final = collect(xsol)
     r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w_final[2:end], exact_cache = exact_cache)
@@ -767,5 +830,6 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             screen_rejections = sc.rejections, final_checkpoint = final_ckpt,
             n_cold_retries = n_cold_retries[], n_rejected = n_rejected[], n_g_recompute = n_g_recompute[],
             warm_cold_trace = warm_cold_trace,
+            n_neg_confirmed = n_neg_confirmed[], neg_cache_size = neg_cache !== nothing ? length(neg_cache) : 0,
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
 end
