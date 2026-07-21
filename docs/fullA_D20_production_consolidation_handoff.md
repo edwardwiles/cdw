@@ -202,9 +202,70 @@ own already-built-in instrumentation (`screen_elapsed`, `n_inner_solves`, `n_inn
 machinery this and prior sessions built (pairwise/envelope/winner-scan) is a small, fixed
 ~0.3s overhead on an *accepted* point, not the bottleneck.
 
-## 8. Granular δ=1/2/5 profiling — TBD (Phase D)
+## 8. Granular δ=1/2/5 profiling (Phase D, DONE)
 
-## 9. Organic -300 certification — TBD (Phase D)
+Used REAL saved checkpoints from `diag/fullA-d20-canonical-rerun`'s own δ-frontier run (Start A,
+copied into `organic_pathology/`) rather than freshly-generated points: an accepted δ=1 boundary
+point (`n_eval=93`), an accepted δ=2 boundary point (`n_eval=158`), an accepted δ=5 interior point
+(`n_eval=16`). `phase_d_profile.jl`:
+
+| | δ=1 | δ=2 | δ=5 |
+|---|---|---|---|
+| cold solve wall | 8.315s | 8.417s | 24.694s |
+| cold solve status | 0 (fully converged) | 0 | **-100** (weaker convergence criterion, not full optimality) |
+| cold solve inner iterations | 27 | 56 | 112 |
+| cold solve FG calls | 13 | 15 | **85** |
+| cold solve Hessian calls | 12 | 14 | 41 |
+| exact same-point warm re-solve wall | 0.68s | 0.624s | **6.98s** |
+| warm re-solve iterations | 27 (1 FG call — dual didn't need to move) | 56 (1 FG call) | **123** (20 FG, 11 Hessian — genuinely re-worked) |
+
+**Answers task closing question 5 directly.** Inner iterations roughly double from δ=1→δ=2
+(27→56) and again to δ=5 (→112-138 depending on start), but FG-call count jumps far more
+sharply at δ=5 (13-15 at δ=1/2 → 85 at δ=5 cold) — each δ=5 iteration is doing more expensive
+work per step (more line-search/backtracking), not just more of them. δ=5 also never reaches
+KNITRO's full-optimality status (0) here, settling for `-100` in every condition tried
+(cold/warm/checkpoint-restart) — consistent with the divergence budget forcing a genuinely more
+extreme reweighting (larger, more extreme implied `A_od` departures from calibration, matching
+this repo's own prior finding of "~41-122× calibration" `A_od` entries near δ=5 candidates,
+`docs/fullA_next_handoff.md`). **A real, non-obvious second finding**: warm-starting provides much
+less benefit at δ=5 than at δ=1/2 — the "exact same-point warm re-solve" takes 6.98s (not the
+~0.6s pattern seen at δ=1/2, or elsewhere in this report at δ=1), because neither the cold nor the
+warm re-solve reaches clean optimality; re-solving from an already-not-fully-converged dual still
+requires substantial further Newton work near the `-100` tolerance boundary.
+
+## 9. Organic -300 certification (Phase D, partial — real finding, scope-limited)
+
+**Real, unplanned finding**: the one available saved "organic pathology" candidate
+(`nonzero_winner_infeasible_delta5_candidate1.json`, independently reproduced by the canonical
+rerun on 2026-07-20 as genuinely `inner_status=-300` via the *older* `evaluate_fullA_screened`
+path) does **NOT** reproduce `-300` in this worktree's current code. Instead it is caught
+instantly (0.061s, vs. its previously-reported ~20-31s wait) by the already-merged pre-winner
+envelope screen (`screen_status=EXACT_INFEASIBLE_PREWINNER_ENVELOPE`). This is genuine evidence
+that the envelope screen (`fast_range_screen.jl`, merged into production before this session)
+already resolves at least this instance of the exact organic-infeasibility problem the task asked
+this phase to build new certification machinery for — the point simply predates that screen (its
+own provenance says it was verified via the *pre-range-screen* `evaluate_fullA_screened`, which
+has no envelope check at all).
+
+**Scope limitation, reported honestly rather than worked around**: this means the only
+readily-available "organic" test point is not representative of the *current* code's remaining
+`-300` population. The canonical rerun's own real δ=5 trace (`d5_startA_canon_trace.csv`) shows
+40 genuine `-300` events at THIS session's actual production code (envelope screen included,
+per that worktree's own report: pairwise/envelope/witness/winner/winning-range/safety-net screens
+all show **zero** rejections at δ=5 — every one of those 40 events passes every current screen
+and still hits `-300`), so genuine current-generation organic infeasibility unquestionably still
+exists — this session simply did not have one materialized as a reusable standalone point (the
+trace CSV logs summary stats per eval, not the full `zfree` vector, and reconstructing one would
+require re-running a real δ=5 continuation from scratch to capture a live `-300` event's full
+outer vector, which this phase's time budget did not include).
+
+**Consequence for the dual-ray monitor / cutting-plane work (task §7.1-7.3)**: not attempted.
+Building novel infeasibility-certificate machinery and claiming "zero false positives" without a
+genuine, current-architecture failing point to validate it against would not be a responsible
+claim. **Recommendation for a follow-up session**: instrument `c10_d20_production_driver.jl`'s
+`cb_F!` to dump the full `(g, zfree)` vector (not just summary stats) the *first* time an organic
+`-300` occurs during a live δ=5 (or δ=2) run, then build and validate the dual-ray monitor against
+that real point.
 
 ## 10. Staged δ=5 workflow — TBD (Phase E)
 
