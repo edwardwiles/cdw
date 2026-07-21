@@ -38,8 +38,8 @@ KNITRO only licenses on **`demand.mit.edu`** (see the Claude memory note for why
 
 ```bash
 export ZIENA_LICENSE=/etc/sharedsw_licenses/ziena.txt
-export KNITRODIR=/opt/shared_sw/knitro/14.2.0
-export LD_LIBRARY_PATH=/opt/shared_sw/knitro/14.2.0/lib:$LD_LIBRARY_PATH
+export KNITRODIR=/opt/shared_sw/knitro/13.0.1
+export LD_LIBRARY_PATH=/opt/shared_sw/knitro/13.0.1/lib:$LD_LIBRARY_PATH
 export PATH="$HOME/.juliaup/bin:$PATH"   # julia 1.12.6
 cd /bbkinghome/edav/gravity_robustness/trade_robustness_modular
 julia --project=. master.jl
@@ -48,6 +48,28 @@ julia --project=. master.jl
 Output CSVs land in the repo root: the main one `NoJacob_..._DR_1_<date>.csv` holds
 `δ, κ_lower, κ_upper`; `Theta_*` and `LFD_*` hold the bound-achieving parameters and
 least-favorable distributions. (KNITRO prints harmless `mip_*_gap` deprecation warnings.)
+
+**KNITRO version, investigated + pinned 2026-07-21:** `KNITRODIR`/`LD_LIBRARY_PATH` above only
+take effect if `KNITRO.jl` is *rebuilt* against them — its `deps/deps.jl` (in the shared,
+per-account Julia depot, not per-worktree) hardcodes an absolute native-library path at
+`Pkg.build` time and does not re-resolve it at runtime. For a long stretch this repo's
+`.knitro_env.sh` claimed 14.2.0 while every process actually loaded 13.0.1, silently, because
+`deps.jl` had been built under a shell with the `knitro/13.0.1` environment module loaded.
+Rebuilding *does* work mechanically (source `.knitro_env.sh`, `export
+KNITRO_JL_USE_KNITRO_JLL=false`, `julia --project=. -e 'import Pkg; Pkg.build("KNITRO")'`) — but
+attempting to actually migrate to 14.2.0 surfaced a second, independent problem: **14.2.0 (and
+14.0.0) are installed on this host but are not covered by the current site license.** `KN_new()`
+returns -520 "Could not find a valid license" on both, confirmed live against
+`/etc/sharedsw_licenses/ziena.txt` (dated 2022-05-02, predating both releases), while 13.0.1
+succeeds under that identical license file. **13.0.1 is therefore pinned as the declared
+production version**; migrating to 14.x needs a license renewal from Artelys
+(licensing@artelys.com) first, independent of any further code or config change.
+`full_aod_diag/d4_exact/c10_d20_production_driver.jl` calls `verify_knitro_version()`
+(`knitro_version_check.jl`) at include time, which prints the loaded library path/version and
+`error()`s on any mismatch against the declared production version (`13.0.1`) — treat that error
+as load-bearing, not a warning to suppress. Because `deps.jl` is global to the user account, a
+rebuild changes the loaded version for every concurrent Julia process for this user on this
+host — check for other running `julia` processes before rebuilding.
 
 ### Example vs. paper-scale config (`master.jl` params)
 

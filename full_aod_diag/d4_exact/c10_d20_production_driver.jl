@@ -99,6 +99,9 @@ include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
+include(joinpath(@__DIR__, "knitro_version_check.jl"))
+const LOADED_KNITRO_RELEASE = verify_knitro_version()
+
 const FEASIBLE_CODES = (0, -100, -101, -103)
 const SOLVER_STATE_NOTE = "KNITRO's internal quasi-Newton (SR1/BFGS/L-BFGS) Hessian-approximation " *
     "state is NOT exposed by the KNITRO.jl/C API for extraction+reinjection across separate " *
@@ -145,10 +148,14 @@ struct D20Checkpoint
     draw_design::Symbol
     draw_checksum_uniform::String
     draw_checksum_transformed::String
+    # ---- schema 3 (KNITRO version-check addition, additive): the native KN_get_release() string
+    # active when this checkpoint was written, so a resume can be checked against (or at least
+    # reported against) the solver version that produced it. ----
+    knitro_version::String
 end
 
-"Schema 1 checkpoints (pre-draw-design-port) do not have draw_design/checksum fields; schema must be 2 to resume through this file's draw-design-aware resume validation."
-const CHECKPOINT_SCHEMA = 2
+"Schema 1 checkpoints (pre-draw-design-port) do not have draw_design/checksum fields; schema 2 checkpoints do not have knitro_version. Schema must be 3 to resume through this file's resume validation."
+const CHECKPOINT_SCHEMA = 3
 
 "Atomic-ish checkpoint write: serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint that a resume could load."
 function save_checkpoint(path::AbstractString, ckpt::D20Checkpoint)
@@ -161,9 +168,10 @@ function load_checkpoint(path::AbstractString)
     ckpt = deserialize(path)::D20Checkpoint
     ckpt.schema == CHECKPOINT_SCHEMA ||
         error("load_checkpoint($path): schema=$(ckpt.schema), expected $(CHECKPOINT_SCHEMA) -- " *
-              "this checkpoint predates the draw-design port (draw_design.jl) and has no " *
-              "draw_design/checksum fields to validate a resume against. Start a fresh run instead " *
-              "of resuming from a schema-1 checkpoint.")
+              "this checkpoint predates either the draw-design port (schema 1, no " *
+              "draw_design/checksum fields) or the KNITRO version-check addition (schema 2, no " *
+              "knitro_version field). Start a fresh run instead of resuming from an older-schema " *
+              "checkpoint.")
     return ckpt
 end
 
@@ -403,7 +411,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid),
-            SOLVER_STATE_NOTE, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
+            SOLVER_STATE_NOTE, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
+            LOADED_KNITRO_RELEASE)
         latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
         guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
         save_checkpoint(latest_path, ckpt)
@@ -632,7 +641,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best_feasible[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid), SOLVER_STATE_NOTE,
-            draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
+            draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
+            LOADED_KNITRO_RELEASE)
         latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
         guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
         save_checkpoint(latest_path, ckpt)
