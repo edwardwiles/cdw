@@ -1,0 +1,8 @@
+label,wall,cache_hit,iters_delta,inner_status
+iter1_cbF_xf0_MISS,14.970000982284546,false,0,0
+iter1_cbG_xf0_expect_HIT,0.02514481544494629,true,0,0
+iter1_newpt_xf0_expect_HIT,3.910064697265625e-5,true,0,0
+iter2_cbF_xfnear_MISS,0.6774687767028809,false,0,0
+iter2_cbG_xfnear_expect_HIT,2.9087066650390625e-5,true,0,0
+iter3_revisit_xf0_expect_HIT,1.5974044799804688e-5,true,0,0
+diffdelta_samexfree_keymismatch_MISS,0.0,false,0,0

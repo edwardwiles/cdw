@@ -1,0 +1,6 @@
+label,wall,iters_delta,cache_hit,inner_status
+cm_iter1_cbF_xf0_MISS,40.775070905685425,11,false,0
+cm_iter1_cbG_xf0_expect_HIT,0.015180826187133789,0,false,0
+cm_iter1_newpt_xf0_expect_HIT,5.698204040527344e-5,0,true,0
+cm_diffchecksum_xf0_MISS_bydesign,38.35993790626526,11,false,0
+cm_backto_orig_checksum_xf0_HIT,6.699562072753906e-5,0,true,0
