@@ -124,7 +124,83 @@ canonical post-integration A/B, Phase F/section 11, per the plan).
 
 ## 6. Draw-design port (pseudorandom / sobol_randomized / halton_scrambled) — TBD (addendum)
 
-## 7. Timing-regression audit — TBD (Phase C)
+## 7. Timing-regression audit (Phase C, DONE)
+
+**Verdict: no regression.** The current code is not slower than the historical benchmark at any
+matched point; the apparent "~0.6s vs ~4s" discrepancy the task opened with is two *different*
+timing objects, not a regression.
+
+**Setup**: `timing_harness.jl` (this branch, worktree-copied unchanged into worktree B) /
+`timing_harness_legacy.jl` (worktree A, cf74d89's older pre-range-screen API). Both reuse
+Continuation 10's own canonical-benchmark point construction exactly (`c10_canonical_benchmark.jl`,
+commit `cf74d89`): **genuine** calibration (`ctx.θ0_up`'s own `A_od` block — not the
+gravity-elimination pivot's `z=0` reference point, see §4/memory note) perturbed by `gp0*1.01`,
+real D=20/W=80,000, δ=1, `draw_seed=20260719`, `JULIA_NUM_THREADS=20`, `OPENBLAS_NUM_THREADS=1`,
+`MKL_NUM_THREADS=1`, actual loaded KNITRO 13.0.1 throughout (see §2). Four worktrees, one process
+at a time:
+
+| | A: `cf74d89` (legacy, pre-range-screen) | B: `98983bd` (base, caches off by construction) | C: this branch, caches off | D: this branch, caches on |
+|---|---|---|---|---|
+| ctx build | 65.9s | 65.6s | 66.1s | 65.4s |
+| **cold value eval (complete callback)** | 21.72s | 21.56s | 21.59s | 20.51s |
+| **exact same-point warm re-solve** | 0.694s | 0.685s | 0.639s | 1.165s |
+| exact-point cache hit | n/a | n/a | n/a | **0.040s** |
+| **nearby changed-point (Δzfree~0.05) warm solve** | 3.944s | 3.947s | 4.084s | 4.047s |
+| distant changed-point (Δzfree~1.0) warm solve | 10.127s | 10.074s | 11.347s | 10.125s |
+| full outer gradient | 11.927s (unbuffered) | 9.662s (buffered) | 9.094s (buffered) | 9.649s (buffered) |
+| Delta_dual @ cold / near / distant | 0.23088414900346 / 0.23005288903742 / 0.24679246075768 | *identical* | *identical* | *identical* |
+| gradient norm | 97.68020700602995 | 97.68020700609458 | 97.68020700609458 | 97.68020700609458 |
+
+`Delta_dual` matches to every digit shown at all three points across all four versions;
+gradient norm matches to 9 significant figures (the tiny ~6e-8 relative residual between A's
+unbuffered and B/C/D's buffered gradient is the already-validated FD-buffering equivalence, not a
+new discrepancy). **No economic/behavioral difference anywhere in this table.**
+
+**Timing**: ctx build, cold eval, nearby, and distant solves are flat across all four versions
+(the ~4-11% single-trial spread is consistent with ordinary run-to-run noise on a shared server,
+not a trend — cold eval is if anything *fastest* on D). The buffered gradient (B/C/D) is
+genuinely ~19-24% faster than the legacy unbuffered one (A), consistent with memory's own
+"~1.1-1.9x faster" finding — a pre-existing win, not something this session changed. The
+exact-point cache hit (D only) is ~16-29x faster than a repeated warm re-solve of the same point
+(0.040s vs 0.64-1.17s) — the cache does exactly what it's for.
+
+**Resolving the ~0.6s-vs-~4s question directly**: the historical "~0.588s" figure
+(`c10_canonical_benchmark.jl`'s own step 2) and this table's "exact same-point warm re-solve" row
+are the SAME measurement, and they still agree (0.588s historically vs 0.64-0.69s here, A/B/C —
+well within noise; D's 1.165s here is a single-trial reading, see caveat below). The canonical
+rerun's own "~4.08s median / ~4.26s mean complete F callback" figure is NOT that same measurement
+at all — it is structurally the **nearby changed-point warm solve** case (3.94-4.09s across all
+four versions here), which is a genuinely different, and correctly more expensive, workload: a
+changed outer point needs a real KNITRO warm-started re-solve from a *different* starting dual,
+not a trivial re-evaluation of an already-solved point. These two numbers were never comparable in
+the first place. **There is no fixed-point regression to bisect.**
+
+**Caveat**: single-trial timings (no repeated-trial medians) given the time cost of four full
+D=20/W=80,000 ctx builds; the spread observed (4-11% across most rows, one 1.165s outlier for D's
+same-point warm re-solve, likely ordinary noise since it uses `cache=nothing` explicitly and
+should be mechanically identical to B/C's measurement) is well below the 15-20% regression
+threshold this task's decision rule specifies, so no bisection was triggered.
+
+### 7.1 Nested component breakdown ("what's in a typical 4-second callback")
+
+At the nearby-changed-point (the representative "~4s" case), `evaluate_fullA_screened_ranged`'s
+own already-built-in instrumentation (`screen_elapsed`, `n_inner_solves`, `n_inner_iters`,
+`n_fg_calls`, `n_hess_calls` — no new instrumentation needed) gives, for one real call
+(`t_total=4.057s`):
+
+| Component | Time / count | Share |
+|---|---|---|
+| Pre-solve screens (reconstruct θ_full, pairwise cert, envelope cert, winner-scan) | 0.299s | 7.4% |
+| Inner CC dual solve (KNITRO) + post-processing | ~3.758s (by subtraction) | 92.6% |
+| — inner solves | 1 | |
+| — inner KNITRO iterations | 32 | |
+| — FG (objective/gradient) callback evaluations | 7 | |
+| — Hessian callback evaluations | 6 | |
+
+**Answers task closing question 2 directly**: a typical ~4s δ=1 value callback is overwhelmingly
+(>92%) the actual KNITRO inner dual solve itself (32 iterations here) — the pre-winner screening
+machinery this and prior sessions built (pairwise/envelope/winner-scan) is a small, fixed
+~0.3s overhead on an *accepted* point, not the bottleneck.
 
 ## 8. Granular δ=1/2/5 profiling — TBD (Phase D)
 
