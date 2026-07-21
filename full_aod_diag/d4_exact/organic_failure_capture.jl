@@ -67,7 +67,7 @@ function maybe_capture_organic_failure!(collector::OrganicFailureCollector, labe
         point_hash = ph, config_hash = ch,
         draw_checksum_uniform = ctx.draw_meta.checksum_uniform,
         draw_checksum_transformed = ctx.draw_meta.checksum_transformed,
-        δ = δ, find_smallest = find_smallest, direction = find_smallest ? :lower : :upper,
+        δ = δ, find_smallest = find_smallest, direction = find_smallest ? :upper : :lower,
         W = ctx.W, draw_design = draw_design, draw_seed = draw_seed,
         screen_counts = as_namedtuple(sc),
         inner_status = r.inner_status, status_name = status_info.name, status_category = status_info.category,
@@ -97,7 +97,7 @@ function maybe_capture_organic_failure!(collector::OrganicFailureCollector, labe
         println(io, "  \"point_hash\": \"", ph, "\",")
         println(io, "  \"config_hash\": \"", ch, "\",")
         println(io, "  \"delta\": ", δ, ",")
-        println(io, "  \"direction\": \"", find_smallest ? "lower" : "upper", "\",")
+        println(io, "  \"direction\": \"", find_smallest ? "upper" : "lower", "\",")
         println(io, "  \"inner_status\": ", r.inner_status, ",")
         println(io, "  \"status_name\": \"", status_info.name, "\",")
         println(io, "  \"status_meaning\": \"", replace(status_info.meaning, "\"" => "'"), "\",")
