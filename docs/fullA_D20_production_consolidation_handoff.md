@@ -1,6 +1,8 @@
 # Full-A_od D=20 production consolidation, timing audit, and δ=5 improvement
 
-Status: IN PROGRESS (written incrementally as phases complete)
+Status: Phases A-F complete and merged into `diag/fullA-d4-exact` (fast-forward, `98983bd`→
+`38fd767`, not yet pushed to origin). QMC draw-design addendum in progress separately (own
+branch/agent), to be merged as a fast-following addendum once its validation completes — see §12.
 
 Integration branch: `integration/fullA-d20-runtime-delta5`, worktree
 `/bbkinghome/edav/gravity_robustness/gravity-fullA-d20-runtime-delta5`, base `98983bd`
@@ -310,6 +312,128 @@ not-yet-solved problem rather than a quick win.
 this result. Before re-testing, fix the ctx-rebuild redundancy (thread one `ctx` through all
 stages) so the comparison isolates the continuation idea's real merit from this overhead artifact.
 
-## 11. Canonical post-integration A/B — TBD (Phase F)
+## 11. Canonical post-integration A/B (Phase F, synthesized from Phases C-E's real runs)
 
-## 12. Final merge / rollback — TBD (Phase F)
+Per the plan, this reuses the real runs already completed rather than repeating the full
+four-point frontier:
+
+- **δ=1** (values/gradients/candidate unchanged): §7's 4-way benchmark — `Delta_dual` identical
+  to every digit shown (`0.23088414900346...`) across legacy/base/this-branch-off/this-branch-on,
+  gradient norm matching to 9 significant figures. No behavior change from any of this session's
+  integrations.
+- **δ=2** (cache benefit + organic failures): §7's exact-point cache hit (0.040s) vs. a repeated
+  warm re-solve (0.64-1.17s) — a real ~16-29x speedup on an exact-repeat point; §8's δ=2 accepted-
+  boundary profile (8.417s cold / 0.624s warm, 56 inner iterations) shows the cache/bank additions
+  add no measurable overhead at this δ (matches §7's B-vs-C timing parity).
+- **δ=5** (staged workflow vs. canonical baseline): §10's real comparison — direct beats the
+  staged continuation at a matched 240s budget (κ=0.004550 vs 0.003114), with the shortfall
+  diagnosed as a redundant per-stage context-rebuild overhead in the staged implementation, not
+  necessarily a verdict on the continuation idea itself.
+
+**Cold-verification of the best reported candidate**: the δ=1 upper candidate (κ=0.0786007120,
+`docs/provenance/fullA_delta1_round4_independent_verification.md`) is unchanged by anything in
+this consolidation (no code path touching its calculation was modified in a way that changes
+output — confirmed structurally, since §7's Delta_dual/gradient-norm parity check is exactly this
+kind of regression test at a *different* point with the same code paths). Not independently
+re-solved from scratch in this phase (would duplicate the already-extensive Round4 verification);
+flagged here as unchanged rather than re-verified redundantly.
+
+## 12. Final merge / rollback
+
+**Rollback point**: tag `pre-consolidation-2026-07-21` on `98983bd` (the pre-consolidation
+`diag/fullA-d4-exact` head), created in the `gravity-fullA-d4` worktree. To roll back:
+`git checkout pre-consolidation-2026-07-21` or `git reset --hard pre-consolidation-2026-07-21`
+(the latter is destructive to anything built on top — confirm before using).
+
+**Merged into `diag/fullA-d4-exact`** (fast-forward, `98983bd` → `38fd767`, no rebase/squash,
+full commit history preserved):
+
+1. `afe09a9` — pairwise-screen crash fix + regression test (§3)
+2. `81cc21e` — handoff doc scaffold + KNITRO version finding (§2)
+3. `43928e3` — lock-guarded exact-point cache, SafeExactCache (§4)
+4. `9f11643` — successful-dual/KKT-scored bank + driver wiring for both (§5)
+5. `76f240b` — handoff doc update
+6. `b74bae5` — Phase C timing-regression audit (§7)
+7. `f830390` — Phase D granular profiling + organic-300 finding (§8-9)
+8. `38fd767` — Phase E staged-δ5 continuation result (§10)
+
+**Not merged / explicitly deferred**:
+- Dual-ray monitor / cutting-plane certificate (task §7.1-7.3) — not attempted, no validated
+  current-architecture organic failing point available this session (§9).
+- Fixed-g profile continuation and staged KNITRO algorithm switching (task §8.2-8.3) — not
+  attempted; only the simplest staged-δ-continuation variant was built and tested, and it lost to
+  the direct baseline at the one bounded budget tried (§10).
+- QMC draw-design port (addendum) — real progress (`draw_design.jl` + driver wiring committed on
+  the source agent's own branch as of this writing) but its own validation was still running at
+  the time this document was finalized; to be merged as a fast-following addendum once complete
+  (see the addendum note at the end of this section for its actual state).
+
+**Branches to mark superseded** (not deleted, per instructions):
+- `diag/fullA-d20-canonical-rerun` — pairwise fix absorbed into `afe09a9`; its traces/checkpoints
+  were reused directly (not copied wholesale) in §8-9.
+- `diag/fullA-d20-warmstart-replay` — SafeExactCache design and KKT-bank policy P3 absorbed into
+  `43928e3`/`9f11643`.
+- `integration/fullA-fast-range-screen` — was already the base (`98983bd`), nothing further to
+  supersede.
+- `diag/fullA-d20-qmc-delta1` — generator/validation methodology absorbed into the QMC addendum
+  port (once merged).
+
+**Push**: not yet pushed to `origin` — confirm with the user before pushing, per standing git
+safety practice for this session.
+
+---
+
+### Answers to the task's 9 closing questions
+
+1. **Did the current code regress relative to the known historical fixed-point benchmarks? No.**
+   §7's 4-way benchmark shows `Delta_dual` and gradient norm identical across the historical
+   (`cf74d89`), pre-consolidation (`98983bd`), and both cache-off/cache-on variants of this
+   session's code, at every timing point measured. All timings are flat within ordinary
+   run-to-run noise on this shared server.
+
+2. **What precisely does a typical 4-second δ=1 value callback contain?** ~7.4% pre-solve
+   screening (θ_full reconstruction, pairwise/envelope/winner-scan certificates), ~92.6% the
+   actual KNITRO inner CC-dual solve itself (32 iterations, 7 FG calls, 6 Hessian calls in the
+   measured instance) — §7.1.
+
+3. **How much do exact caching and successful-dual selection save at δ=1,2,5?** The exact-point
+   cache saves ~16-29x on a literal repeated point (0.040s vs 0.64-1.17s, §7) — essentially free
+   money whenever the exact same point is re-evaluated (which happens routinely across
+   `cb_F!`/`cb_G!`/`cb_newpt!` in one KNITRO iterate). The successful-dual/KKT bank was validated
+   for mechanism correctness (9/9, §5) but not benchmarked on a live multi-iterate δ=1/2/5
+   trajectory in this session — deferred, see §11.
+
+4. **Does an organic inner -300 erase the single warm slot, and does the new successful-dual bank
+   prevent the resulting cold start?** Yes to the first (confirmed by code inspection: `obj.x .=
+   NaN` on `!warm`, and `inner_loop_initial_values`'s NaN→zeros fallback) — this was the original
+   motivation for the bank. The bank mechanism is built and unit-validated to never store a failed
+   point and to fall back correctly (§5), but a live-trajectory demonstration that it actually
+   rescues a real organic `-300` was not run this session.
+
+5. **Why do successful inner solves become slower at larger δ?** Inner iterations roughly double
+   at each step (27→56→112+); FG-call count jumps far more sharply at δ=5 (13-15→85) — each
+   iteration does more work, not just more iterations; δ=5 never reaches full KNITRO optimality
+   (status `-100` throughout) because the divergence budget forces a genuinely more extreme
+   reweighting; warm-starting itself provides much less benefit at δ=5 (§8).
+
+6. **Can organic joint infeasibility be certified materially before KNITRO's original -300
+   termination?** Not established this session. The one available saved "organic" point no longer
+   reproduces `-300` in current code (caught in 0.061s by the already-merged envelope screen
+   instead) — real evidence that screen improvements already resolved this specific instance, but
+   it leaves no current-architecture failing point to validate new certificate machinery against.
+   Real, current `-300` events do exist (40 at δ=5, confirmed passing every current screen) but
+   weren't captured as reusable standalone points this session (§9).
+
+7. **Does fixed-g/finer-δ continuation reduce the δ=5 rejection rate?** Only the finer-δ
+   continuation variant was tried (not fixed-g); at the one bounded (240s) budget tested, it did
+   NOT beat a direct δ=5 attempt (κ 0.003114 vs 0.004550), but the shortfall is diagnosed as a
+   redundant per-stage context-rebuild overhead (over half the staged run's wall time), not
+   necessarily a verdict on the continuation idea itself (§10).
+
+8. **Which KNITRO exploration/polish sequence gives the best exact-feasible κ per wall time?**
+   Not established beyond what the canonical rerun's own §8 already found (algorithm=2 gave a
+   real but modest δ=5 improvement, still short of the best δ=5 κ) — not independently re-tested
+   or extended this session.
+
+9. **Which changes were merged into production, at what commits, and how can they be rolled
+   back?** See the merge list and rollback tag above.
