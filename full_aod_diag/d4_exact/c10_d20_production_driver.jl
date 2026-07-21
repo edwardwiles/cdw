@@ -97,6 +97,7 @@ include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
 include(joinpath(@__DIR__, "negative_cache.jl"))   # negative-cache audit (integration/fullA-negative-cache-audit): typed ConfirmedNegativeResult + SafeNegativeCache, opt-in via use_neg_cache= below; default OFF, zero behavior change unless explicitly enabled -- see docs/fullA_negative_cache_audit.md
+include(joinpath(@__DIR__, "incumbent_logic.jl"))   # pure, KNITRO-free incumbent seed/compare helpers -- see docs/fullA_driver_delta5_diagnostics_handoff.md §3
 using KNITRO, Printf, Dates, Random, Statistics, Serialization
 using LinearAlgebra: norm, dot
 
@@ -413,7 +414,14 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     KNITRO.KN_set_var_primal_init_values_all(kc, zfree_start)
 
     last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)
-    best = Ref{Union{Nothing,NamedTuple}}(resumed !== nothing ? resumed.best_feasible : nothing)
+    # See incumbent_logic.jl / docs/fullA_driver_delta5_diagnostics_handoff.md §3: seed the
+    # incumbent from the already-cold-verified start point (r_seed) rather than `nothing`.
+    seed_cand_feasible = r_seed.inner_status in FEASIBLE_CODES && isfinite(r_seed.Delta_dual)
+    seed_cand = (zfree = copy(zfree_start), Delta_dual = r_seed.Delta_dual, gravity_value = r_seed.gravity_value,
+                 max_abs_moment_kkt_resid = r_seed.max_abs_moment_kkt_resid, inner_status = r_seed.inner_status,
+                 t_elapsed = 0.0, n_eval = n_eval[])
+    best = Ref{Union{Nothing,NamedTuple}}(seed_incumbent(resumed !== nothing ? resumed.best_feasible : nothing,
+                                                           seed_cand_feasible, seed_cand))
     n_grad_calls = Ref(0)
     policy = BandwidthCachePolicy()
     policy.cache = bandwidth_cache
@@ -462,7 +470,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         t_el = time() - t_start
         base = BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base)
-        is_new_best = best[] === nothing || Δ < best[].Delta_dual
+        is_new_best = is_better_profile(Δ, best[] === nothing ? nothing : best[].Delta_dual)
         if is_new_best
             best[] = (zfree = copy(zfree), Delta_dual = Δ, gravity_value = r.gravity_value,
                       max_abs_moment_kkt_resid = r.max_abs_moment_kkt_resid, inner_status = r.inner_status,
@@ -657,7 +665,15 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     KNITRO.KN_set_con_upbnd(kc, cIndices[1], ctx.δ)
 
     last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)
-    best_feasible = Ref{Any}(resumed !== nothing ? resumed.best_feasible : nothing)
+    # See incumbent_logic.jl / docs/fullA_driver_delta5_diagnostics_handoff.md §3: seed the
+    # incumbent from the already-cold-verified start point (r0), gated on the SAME delta-budget
+    # feasibility test (`feasible = Δ <= ctx.δ + 1e-6`) cb_F! uses below, rather than `nothing`.
+    seed_cand_feasible = r0.inner_status in FEASIBLE_CODES && isfinite(r0.Delta_dual) && r0.Delta_dual <= ctx.δ + 1e-6
+    seed_cand = (gp = w0[1], w = copy(w0), Delta = r0.Delta_dual, gravity = r0.gravity_value,
+                 kkt = r0.max_abs_moment_kkt_resid, inner_status = r0.inner_status, t_elapsed = 0.0,
+                 n_eval = n_eval[])
+    best_feasible = Ref{Any}(seed_incumbent(resumed !== nothing ? resumed.best_feasible : nothing,
+                                             seed_cand_feasible, seed_cand))
     n_grad_calls = Ref(0)
     policy = BandwidthCachePolicy(); policy.cache = bandwidth_cache
     trace = NamedTuple[]
@@ -735,7 +751,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         feasible = Δ <= ctx.δ + 1e-6
         base = BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base)
-        is_new_best = feasible && (best_feasible[] === nothing || (find_smallest ? w[1] < best_feasible[].gp : w[1] > best_feasible[].gp))
+        is_new_best = feasible && is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, gravity = r.gravity_value,
                                 kkt = r.max_abs_moment_kkt_resid, inner_status = r.inner_status,
