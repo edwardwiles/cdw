@@ -15,7 +15,12 @@ rm(CKPT_DIR; recursive = true, force = true)
 mkpath(CKPT_DIR)
 
 println("=== ORIGINAL RUN: run_profile_checkpointed, short budget ===")
-res = run_profile_checkpointed("smoke_upper", gp0 * 1.01, false, zfree0;
+# addendum finding: this call passes find_smallest=false (the real LOWER/smaller-kappa
+# direction per direction_bounds.jl) with g=gp0*1.01 (above the Frechet benchmark, a
+# valid lower-direction start) -- the label was "smoke_upper" pre-fix, which was
+# mislabeled (find_smallest=false is "lower", not "upper"); relabeled here to match its
+# actual, unchanged runtime behavior rather than changing the smoke test's own semantics.
+res = run_profile_checkpointed("smoke_lower", gp0 * 1.01, false, zfree0;
     maxtime_real = 90.0, W_in = 80000, delta_in = 1.0, draw_seed_in = 20260719,
     ckpt_dir = CKPT_DIR, checkpoint_interval_s = 15.0)
 

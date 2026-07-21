@@ -24,7 +24,13 @@ DIRECT_BUDGET = 240.0 # same total budget, single direct delta=5 attempt
 
 lp("\n", "="^80, "\n=== ARM A: staged continuation (delta 2->3->4->5, ", STAGE_BUDGET, "s/stage) ===\n", "="^80)
 t0 = time()
-staged = run_staged_delta5_continuation("cmp", g0, zfree0;
+staged = run_staged_delta5_continuation("cmp", g0, zfree0; find_smallest = true,   # addendum
+    # fix: find_smallest is now REQUIRED (no silent default). true = the real upper/
+    # larger-kappa direction (direction_bounds.jl), matching this script's own "upper"
+    # narrative and the source checkpoint's own provenance (d2_startA_canon, produced
+    # under c_canon_run_one.jl's find_smallest=true). The pre-fix call here omitted the
+    # argument entirely and (via run_staged_delta5_continuation's own then-hardcoded
+    # `false`) silently ran the opposite, lower-kappa direction regardless.
     delta_stages = [2.0, 3.0, 4.0, 5.0], stage_maxtime_real = STAGE_BUDGET,
     ckpt_root = joinpath(CKPT_ROOT, "staged"))
 t_staged_total = time() - t0
@@ -39,7 +45,7 @@ lp("\n", "="^80, "\n=== ARM B: direct baseline (delta=5 straight, ", DIRECT_BUDG
 CKPT_DIRECT = joinpath(CKPT_ROOT, "direct")
 mkpath(CKPT_DIRECT)
 t0 = time()
-direct = run_polish_checkpointed("cmp_direct", false, g0, zfree0;
+direct = run_polish_checkpointed("cmp_direct", true, g0, zfree0;   # addendum fix: true = upper, matches staged's own direction above (was hardcoded `false` -- the wrong, lower-kappa direction -- pre-fix)
     maxtime_real = DIRECT_BUDGET, hessopt_tag = "sr1", W_in = 80000, delta_in = 5.0,
     draw_seed_in = 20260719, ckpt_dir = CKPT_DIRECT, checkpoint_interval_s = 30.0)
 t_direct_total = time() - t0

@@ -21,14 +21,26 @@ using Random, Printf, Dates
 lp(xs...) = (println(xs...); flush(stdout))
 
 """
-    run_staged_delta5_continuation(label, g_start, zfree_start; delta_stages=[2.0,3.0,4.0,5.0],
-        stage_maxtime_real=90.0, W_in=80000, draw_seed_in=20260719, ckpt_root, kwargs...)
+    run_staged_delta5_continuation(label, g_start, zfree_start; find_smallest,
+        delta_stages=[2.0,3.0,4.0,5.0], stage_maxtime_real=90.0, W_in=80000,
+        draw_seed_in=20260719, ckpt_root, kwargs...)
 
 Runs `run_polish_checkpointed` once per stage in `delta_stages` (assumed already sorted
 ascending), feeding the previous stage's terminal `(g, zfree)` forward as the next stage's
 start. Returns the final stage's result plus a per-stage summary Vector.
+
+`find_smallest` is REQUIRED (no default) -- addendum fix: the pre-fix version of this
+function hardcoded `false` unconditionally regardless of which direction the caller
+wanted, silently always running the real LOWER-kappa branch (maximize gp) while being
+used/labeled as an "upper" continuation throughout this repo's own history. Per the
+EVIDENCED direction convention (see direction_bounds.jl: `find_smallest=true` is the
+real upper/larger-kappa branch, confirmed by this repo's own explicitly-calibrated
+`run_d4_optimized_fd.jl`/`c_canon_run_one.jl` conventions, real established multi-
+session numbers, and the algebraic kappa(gp) relationship), callers wanting the upper
+continuation must now pass `find_smallest=true` explicitly.
 """
 function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_start::Vector{Float64};
+        find_smallest::Bool,
         delta_stages::Vector{Float64} = [2.0, 3.0, 4.0, 5.0],
         stage_maxtime_real::Float64 = 90.0, hessopt_tag::String = "sr1",
         W_in::Int = 80000, draw_seed_in::Int = 20260719, ckpt_root::AbstractString,
@@ -39,15 +51,17 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
         # earlier staged-vs-direct comparison's staged arm losing on wall time -- see
         # docs/fullA_driver_delta5_diagnostics_handoff.md §5-6). Set false to reproduce the old
         # per-stage-rebuild behavior exactly (e.g. for an A/B wall-time comparison).
-        draw_design_in::Symbol = :pseudorandom, inner_opt_override::Union{Nothing,AbstractString} = nothing)
+        draw_design_in::Symbol = :pseudorandom, inner_opt_override::Union{Nothing,AbstractString} = nothing,
+        allow_direction_box_migration::Bool = false)
     g = g_start; zfree = copy(zfree_start)
     stage_summaries = NamedTuple[]
     res = nothing
     reuse = nothing
     if reuse_context
-        lp("=== building reusable context ONCE (task §5), delta_stages[1]=", delta_stages[1], " === ", Dates.now())
+        lp("=== building reusable context ONCE (task §5), delta_stages[1]=", delta_stages[1],
+           " find_smallest=", find_smallest, " (", find_smallest ? "upper" : "lower", ") === ", Dates.now())
         t0 = time()
-        reuse = build_fullA_context(W = W_in, δ = delta_stages[1], find_smallest = false,
+        reuse = build_fullA_context(W = W_in, δ = delta_stages[1], find_smallest = find_smallest,
             draw_design = draw_design_in, draw_seed = draw_seed_in, inner_loop_opt = inner_opt_override)
         lp("  context build: ", round(time() - t0, digits = 1), "s")
     end
@@ -58,12 +72,12 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
         lp("=== STAGED CONTINUATION stage ", i, "/", length(delta_stages), ": delta=", delta,
            " (start g=", g, ") ===", "  ", Dates.now())
         t0 = time()
-        res = run_polish_checkpointed(stage_label, false, g, zfree;
+        res = run_polish_checkpointed(stage_label, find_smallest, g, zfree;
             maxtime_real = stage_maxtime_real, hessopt_tag = hessopt_tag,
             W_in = W_in, delta_in = delta, draw_seed_in = draw_seed_in,
             ckpt_dir = ckpt_dir, checkpoint_interval_s = 30.0,
             use_dual_bank = use_dual_bank, use_exact_cache = use_exact_cache,
-            reuse = reuse)
+            reuse = reuse, allow_direction_box_migration = allow_direction_box_migration)
         t_stage = time() - t0
         b = res.best_feasible
         if b !== nothing

@@ -99,6 +99,7 @@ include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small
 include(joinpath(@__DIR__, "negative_cache.jl"))   # negative-cache audit (integration/fullA-negative-cache-audit): typed ConfirmedNegativeResult + SafeNegativeCache, opt-in via use_neg_cache= below; default OFF, zero behavior change unless explicitly enabled -- see docs/fullA_negative_cache_audit.md
 include(joinpath(@__DIR__, "dual_bank_ab_harness.jl"))   # DualBankABStats type (needed by screened_eval's signature below) + the A/B harness itself -- see docs/fullA_driver_delta5_diagnostics_handoff.md §12
 include(joinpath(@__DIR__, "incumbent_logic.jl"))   # pure, KNITRO-free incumbent seed/compare helpers -- see docs/fullA_driver_delta5_diagnostics_handoff.md §3
+include(joinpath(@__DIR__, "direction_bounds.jl"))   # direction-aware gp box split at the Frechet benchmark -- see docs/fullA_driver_delta5_diagnostics_handoff.md's gamma-bounds addendum section
 include(joinpath(@__DIR__, "knitro_status.jl"))   # KNITRO termination-status decoder + native per-solve diagnostics -- see docs/fullA_driver_delta5_diagnostics_handoff.md §9-10
 include(joinpath(@__DIR__, "reusable_context.jl"))   # build_fullA_context / set_context_delta! -- see docs/fullA_driver_delta5_diagnostics_handoff.md §5
 include(joinpath(@__DIR__, "organic_failure_capture.jl"))   # organic -300 failure archive + replay -- see docs/fullA_driver_delta5_diagnostics_handoff.md §7-8
@@ -338,8 +339,12 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
         use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
-        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing)   # opt-in archive of the
+        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
         # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no capture.
+        allow_direction_box_migration::Bool = false)   # addendum: by default, a fixed g (fresh or
+        # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
+        # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
+        # a validity gate on the caller's own g). See direction_bounds.jl.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
 
     mkpath(ckpt_dir)
@@ -376,6 +381,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
        " screen_setup_wall=", ctx.screen_setup_wall,
        " envelope_screen_supported=", rsc.envelope !== nothing,
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
+
+    # Direction-aware validity gate on the fixed g (addendum): reject -- do not clamp -- a
+    # g (fresh or resumed) on the wrong side of the Frechet benchmark for its own direction.
+    if !allow_direction_box_migration
+        validate_gp_in_direction_box(g, ctx, find_smallest; label = label,
+            what = resumed !== nothing ? "resumed checkpoint's fixed g" : "supplied fixed g")
+    end
 
     if resumed !== nothing
         # Hard reproducibility gate (§4 of the draw-design port brief): the regenerated draws for THIS
@@ -450,7 +462,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
+        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid),
@@ -624,9 +636,13 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         # existing context (set_context_delta!, reusable_context.jl). Ignored (with a warning) when
         # resuming, since a resumed checkpoint's own W/find_smallest/draw_design/draw_seed take
         # precedence and must still be validated against whatever context is actually used.
-        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing)   # opt-in archive of the
+        organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
         # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no
         # capture, zero overhead beyond one is_organic_failure check per evaluation.
+        allow_direction_box_migration::Bool = false)   # addendum: by default, a start point (fresh or
+        # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
+        # hard error, not silently clamped. Set true only for an explicit, deliberate migration of a
+        # pre-fix checkpoint/start point -- see direction_bounds.jl.
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
@@ -685,6 +701,14 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
     w0 = vcat(g_start, zfree_start)
+    # Direction-aware gp box (addendum, "correct the outer gamma bounds for upper and
+    # lower runs"): reject -- do not clamp -- a start point (fresh or resumed) that lies
+    # on the wrong side of the Frechet benchmark for its own declared direction. See
+    # direction_bounds.jl for the full derivation/evidence.
+    if !allow_direction_box_migration
+        validate_gp_in_direction_box(w0[1], ctx, find_smallest; label = label,
+            what = resumed !== nothing ? "resumed checkpoint's (g, zfree)" : "supplied start point")
+    end
     if resumed !== nothing
         if ctx.draw_meta.checksum_uniform != resumed.draw_checksum_uniform ||
            ctx.draw_meta.checksum_transformed != resumed.draw_checksum_transformed
@@ -715,8 +739,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     r0.inner_status in FEASIBLE_CODES || error("run_polish_checkpointed($label): start point not inner-feasible, cannot proceed")
 
     z_halfwidth = 30.0
-    w_lo = vcat(ctx.bounds.γp_lo, zfree_start .- z_halfwidth)
-    w_hi = vcat(ctx.bounds.γp_hi, zfree_start .+ z_halfwidth)
+    # Direction-aware gp box, split at the Frechet benchmark (addendum) -- replaces the old
+    # full-range [ctx.bounds.γp_lo, ctx.bounds.γp_hi] box, which let the "upper" and "lower"
+    # searches cross into each other's territory. See direction_bounds.jl.
+    gp_dir_lo, gp_dir_hi = direction_gamma_bounds(ctx, find_smallest)
+    w_lo = vcat(gp_dir_lo, zfree_start .- z_halfwidth)
+    w_hi = vcat(gp_dir_hi, zfree_start .+ z_halfwidth)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
@@ -749,7 +777,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :lower : :upper, find_smallest, delta, W, draw_seed,
+        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best_feasible[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid), SOLVER_STATE_NOTE,
