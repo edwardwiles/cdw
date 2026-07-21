@@ -2,19 +2,22 @@
 
 **Status as of this writing: Phase 1 (port + config surface), the D20 Hessian-callback profile
 (Section 9), the Julia-thread-scaling experiment (Section 10), and an expanded cumulative-vs-
-interval re-check (Section 7) are all complete and committed. What remains is entirely gated on
-the live consolidation branch landing — see "What's left" below. This is a checkpoint document,
+interval re-check (Section 7) are all complete and committed. The integration branch has been
+rebased TWICE onto the live consolidation branch's advancing tip (`81cc21e` then `76f240b`), both
+times with zero conflicts and byte-identical CM content, confirmed via `validate_cm_config.jl`
+re-run. What remains is entirely gated on the live consolidation branch finishing its remaining
+phases (C-F per its own handoff doc) — see "What's left" below. This is a checkpoint document,
 not a final report.**
 
 ## 1. Branch and commit map
 
-| Branch | Worktree | Tip (at port time) | Role |
+| Branch | Worktree | Tip | Role |
 |---|---|---|---|
-| `integration/fullA-d20-runtime-delta5` | `gravity-fullA-d20-runtime-delta5` | `81cc21e` (dirty tree, actively running) | **Live consolidation branch** (a separate session): infeasibility screens, exact-point cache, successful-dual cache, checkpointing, selectable QMC draw designs. NOT touched by this integration. |
-| `diag/fullA-d4-exact` | `gravity-fullA-d4` | `98983bd` | Prior stable production tip (fast-range-screen + driver-wiring merged); ancestor of `81cc21e`. |
+| `integration/fullA-d20-runtime-delta5` | `gravity-fullA-d20-runtime-delta5` | `76f240b` (clean tree at last check; own handoff doc shows Phase B done, Phases C-F still TBD) | **Live consolidation branch** (a separate session): infeasibility screens, exact-point cache (`SafeExactCache`), successful-dual bank (`dual_bank.jl`), checkpointing, selectable QMC draw designs. NOT touched by this integration. |
+| `diag/fullA-d4-exact` | `gravity-fullA-d4` | `98983bd` | Prior stable production tip (fast-range-screen + driver-wiring merged); ancestor of `81cc21e`/`76f240b`. |
 | `diag/fullA-d4-exact-common-marginals` | `gravity-fullA-d4-c12-common-marginals` | `6ee42b6` | Continuation 12: first dense/Architecture-B/C common-marginals work, D4+D20. |
 | `integration/fullA-d20-common-marginals` | `gravity-fullA-d20-cm-integration` | `17c55c1` | Continuation 13: production bundle, CM-aware Lfix gradient, nested grids, interval-native Hessian, real D20/delta=1 CM upper bound. Based on `02583bc` (stale relative to the consolidation lineage). **Left untouched, not merged wholesale** — see Section 2. |
-| **`integration/fullA-common-marginals`** | **`gravity-fullA-common-marginals-integration`** | **`75ab6da`** | **This integration.** Base: `81cc21e` (latest committed consolidation point). Contains the full ported CM lineage (`02583bc..17c55c1`, 28 commits, rebased) plus a new `CMConfig` production option surface. |
+| **`integration/fullA-common-marginals`** | **`gravity-fullA-common-marginals-integration`** | **`e2e5372`** | **This integration.** Rebase history: `02583bc..17c55c1` (28 CM commits) replayed onto `81cc21e`, then this integration's own work, then the WHOLE thing replayed a second time onto `76f240b` when the consolidation branch advanced mid-session (zero conflicts both times). Contains the full ported CM lineage plus the `CMConfig` production option surface, D20 Hessian profile, threaded Hessian, and expanded basis re-check. |
 
 Merge-base fact (established by a prior session, re-confirmed here): `diag/fullA-d4-exact-common-marginals`'s merge-base with `diag/fullA-d4-exact` is `02583bc` itself — i.e. the C12 CM lineage forked with zero prior divergence. The divergence that matters for THIS integration is entirely `02583bc..81cc21e` (the consolidation lineage) vs `02583bc..17c55c1` (the CM lineage).
 
@@ -270,15 +273,17 @@ dedicated multi-hour compute budget on the shared server, or both. None of them 
 already committed here from being correct and mergeable in its current, narrower scope
 (`common_marginals=false` unaffected either way).
 
-1. **Final rebase onto the completed consolidation tip.** `gravity-fullA-d20-runtime-delta5` was
-   still running with a dirty tree touching
-   `oracle.jl`/`oracle_fast.jl`/`compressed_live.jl`/`infeasibility_screen.jl`/
-   `fast_range_screen.jl`/`c10_d20_production_driver.jl` and new `dual_bank.jl`/
-   `test_dual_bank.jl`/`test_safe_exact_cache.jl` (exact-point cache / successful-dual cache work)
-   as of every check made during this session. **Action for the next continuation**: once that
-   branch is committed and stable, `git log --stat <old-81cc21e-tip>..<new-tip>` to check for any
-   further overlap with CM-owned files (none existed at the `81cc21e` snapshot), then `git rebase
-   --onto <new-tip> 81cc21e integration/fullA-common-marginals`.
+1. **One more (final) rebase once the consolidation branch actually finishes.** This integration
+   has already been kept current through Phase B (rebased onto `76f240b`, zero conflicts both
+   times — see Section 1). The consolidation branch's OWN handoff doc
+   (`docs/fullA_D20_production_consolidation_handoff.md` on that branch) lists Phases C
+   (timing-regression audit), D (granular δ profiling + organic -300 certification), E (staged δ=5
+   workflow), and F (canonical post-integration A/B + final merge/rollback) as still `TBD` — so
+   `76f240b` is a good, low-risk waypoint, not the finish line. **Action for the next
+   continuation**: repeat the same procedure (`git log --stat 76f240b..<new-tip>` to confirm
+   continued zero file overlap with CM-owned files, then `git rebase --onto <new-tip> 76f240b
+   integration/fullA-common-marginals`, then re-run `validate_cm_config.jl` as the regression
+   gate) once Phase F actually completes there.
 2. **Cache-key wiring.** `cm_cache_key()` exists but the exact-point cache / successful-dual cache
    themselves are part of the not-yet-landed consolidation work — wire `cm_cache_key(cfg, L,
    draw_checksum)` into whichever cache key tuple that code uses, once it exists.
