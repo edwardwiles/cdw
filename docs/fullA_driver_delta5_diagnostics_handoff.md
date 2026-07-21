@@ -1,5 +1,18 @@
 # Full-A_od driver consolidation + δ≥2 continuation diagnostics
 
+**⚠ READ §17 FIRST if you only read one section.** A follow-up addendum asked for the
+outer γ'_focal bounds to be split at the Frechet benchmark for upper vs. lower runs. The
+audit that fix required surfaced a **real, substantive direction-label bug**:
+`run_staged_delta5_continuation` (the function at the center of this entire
+investigation) hardcoded `find_smallest=false` on every call regardless of which
+direction the caller wanted, and `c10_d20_production_driver.jl`'s own
+`direction = find_smallest ? :lower : :upper` checkpoint-labeling convention was
+backwards relative to this repo's own established, explicitly-calibrated convention.
+**§17 also flags an explicit, unresolved disagreement between the addendum's own literal
+bound formulas and the evidence found in this repo's own code/data — implemented the
+evidenced direction, not the addendum's literal text, and this needs the user's own
+review before any production merge.**
+
 Branch: `diag/fullA-driver-delta5`, worktree `gravity-fullA-driver-delta5`, based off
 `diag/fullA-d4-exact @ f6ae01e` (the latest reviewed/stable production-consolidation
 commit at session start). **Not merged into production.** This session ran alongside a
@@ -492,3 +505,202 @@ through its existing `_cache_lookup`/`_cache_store!`/`SafeExactCache` interface)
     finishes?** All four commits on this branch (§14) are independent of that
     integration's own changes (different lines in the one shared file) and should merge
     cleanly after a rebase — see §15 for the exact sequence.
+
+## 17. Addendum: outer γ'_focal bounds corrected for upper/lower runs
+
+A follow-up instruction asked to tighten the outer γ'_focal (`gp`) box: instead of the
+full theoretical range for both directions, split it at the Frechet-benchmark/
+calibration value `γ_f^F`, with upper and lower runs each confined to their own half.
+The addendum specified exact box formulas and asked for a direction/label audit
+alongside the bounds fix (its own items 1-5). That audit is what surfaced §17.2 below.
+
+### 17.1 What γ_f^F is, and where the box endpoints come from
+
+`γ_f^F = ctx.θ0_up[3+D]` (post-clamp) — the same quantity this repo's own gamma-profile
+investigation already computed and named `g_F`/`gF_ctx`
+(`c8_gammainterp_benchmark_check.jl`, Continuation 8: *"What is g_F (the calibration/
+factual gamma'_focal value), exactly?"*). It is the model's own calibrated value, at
+which the divergence Δ* needed is (near-)zero by construction ("a correctly-specified
+benchmark should have near-zero divergence at its own calibration point",
+`fullA_continuation8_handoff.md` §1) — confirmed again this session:
+`δ_star_initial = 0.00259...` at `γ_f^F` in the real D=20 run (§17.4).
+
+`theoretical_gammaprime_bounds` (`moments_gammanorm.jl`, pre-existing, **unchanged**)
+already documents the model's own theoretical extremes:
+
+```
+(κ_min, κ_max) = (0, 1 − λ_dd^(1/(σ−1)));  implied γ'_focal bounds (λ_dd^(1/σ), 1)
+```
+
+i.e. `κ = 1 − gp^(σ/(σ−1))`, with `κ=0` at `gp=1` and `κ=κ_max` at `gp=λ_dd^(1/σ)`. This
+session's fix reuses these pre-existing, already-validated endpoints (`ctx.bounds.γp_lo`,
+`ctx.bounds.γp_hi`) rather than introducing a new formula — γ_f^F only needs to *cut* the
+box, not redefine its outer edges (see §17.2 for why a new formula would in fact have
+been wrong here anyway).
+
+### 17.2 The direction audit found a real, substantive bug — not just a bounds question
+
+The transformation `κ = 1 − gp^(σ/(σ−1))` is **strictly decreasing in `gp`** for σ>1
+(the standard CES case; this repo's own real calibrations run σ≈2.5–2.9). Three
+independent lines of evidence, cross-checked against each other, establish which
+`find_smallest` value is the real "upper" (larger-κ) direction:
+
+1. **Algebra**: `d(κ)/d(gp) = −(σ/(σ−1))·gp^(σ/(σ−1)−1) < 0` for `gp>0, σ>1`.
+2. **Real, established, multi-session numbers**: Continuation 8's own registered
+   incumbents — "upper" `κ=0.17245688540655113` has `gp=0.8926359584642946`; "lower"
+   `κ=0.004387827651021192` has `gp=0.9973649883022927`. Upper's `gp` is *below* the
+   Frechet benchmark (`g_F≈0.960965` at D=4); lower's is *above* it. Both cross-checked
+   algebraically: `1 − 0.8926^1.667 ≈ 0.1725` ✓ (σ=2.5, matching `σ/(σ−1)=5/3`).
+3. **This repo's own explicit, deliberately-calibrated code comments**:
+   `run_d4_optimized_fd.jl:70`: `` `const FIND_SMALLEST = DIRECTION == "upper"   #
+   calibrated post-hoc against which gives larger kappa` ``, and the real D=20
+   canonical-rerun frontier's own launcher (`c_canon_run_one.jl:53`, the script that
+   produced the establishment κ≈0.0786 δ=1 upper candidate cited throughout this
+   project): `` `find_smallest = true   # kappa-UPPER-bound branch (minimize gp)` ``.
+
+**All three agree: `find_smallest=true` (minimize gp) is the real upper/larger-κ
+direction; `find_smallest=false` (maximize gp) is the real lower/smaller-κ direction.**
+
+**This is the OPPOSITE of two things found in this driver's own code**:
+
+- `c10_d20_production_driver.jl`'s `direction = find_smallest ? :lower : :upper` line
+  (both `do_checkpoint` closures) — a cosmetic/informational checkpoint field, but
+  backwards relative to the established convention above. **Fixed**:
+  `find_smallest ? :upper : :lower`.
+- `run_staged_delta5_continuation` (`staged_delta5.jl`) **hardcoded
+  `find_smallest=false` unconditionally** in its calls to both `build_fullA_context`
+  and `run_polish_checkpointed`, regardless of which direction the caller actually
+  wanted. This is the function at the center of the ENTIRE original investigation
+  (the staged 2→3→4→5 continuation the task opened with). **Every prior staged
+  continuation run through this function — including, plausibly, the one behind the
+  task's own originally-reported κ 0.0806→0.0031 pathology — silently always ran the
+  real lower/smaller-κ direction while being used and labeled "upper" throughout this
+  repo's history of this feature.** Systematically walking `gp` UP (toward `gp_hi=1`,
+  `κ→0`) at every stage, independent of and *in addition to* the incumbent-seeding bug
+  already fixed on this branch (§3), would by itself produce a monotonically shrinking
+  reported κ across a nominally-"upper" staged run. **Fixed**: `find_smallest` is now a
+  REQUIRED keyword argument (no default) on `run_staged_delta5_continuation`, forcing
+  every caller to be explicit rather than silently inheriting a wrong default.
+
+Downstream callers audited and fixed to match: `staged_delta5_comparison.jl` (was
+either missing `find_smallest` entirely or hardcoded `false`; now explicit `true`,
+matching its own "upper" narrative and its source checkpoint's real provenance under
+`c_canon_run_one.jl`'s own `find_smallest=true`), `c10_prod_driver_smoke_original.jl`
+(relabeled `"smoke_upper"`→`"smoke_lower"` to match its actual, *unchanged*
+`find_smallest=false` runtime behavior — a real but harmless pre-existing mislabeling,
+not a logic bug, since its own starting `gp=gp0*1.01` was already correctly positioned
+for the lower direction), `c10_prod_driver_smoke_resume.jl` (checkpoint filename updated
+to match the rename). `c10_canonical_benchmark.jl` and `smoke_test_driver_wiring.jl`
+were checked and found already directionally consistent (their own `find_smallest`/`g`
+pairs sit on the correct side of `γ_f^F`) — not modified.
+
+**Not found to be a problem, but worth stating explicitly**: `theoretical_gammaprime_bounds`
+itself, `ctx.bounds.γp_lo`/`γp_hi`, and the `κ = 1 − gp^(σ/(σ−1))` formula used
+everywhere to report κ from a converged `gp` are all **unchanged and correct** — this
+was purely a *box-and-label* bug in the driver's own orchestration layer, not an error
+in the underlying economic-model formulas.
+
+### 17.3 A significant, unresolved divergence from the addendum's own literal text
+
+**Flagged explicitly, not silently resolved.** The addendum's own stated box formulas —
+`` `Upper: γ_f^F ≤ γ_f' ≤ λ_ff^{1/(σ−1)}` `` and `` `Lower: 0 ≤ γ_f' ≤ γ_f^F` `` — put the
+upper run *above* γ_f^F and the lower run *below* it. Given §17.2's three-way evidence
+(κ strictly decreasing in `gp`; real established numbers; this repo's own explicit
+calibration comments), this is **backwards**: the real upper (larger-κ) run needs
+`gp` *below* γ_f^F (toward `gp_lo`), and the real lower (smaller-κ) run needs `gp`
+*above* γ_f^F (toward `gp_hi=1`). Additionally, the addendum's stated upper endpoint
+`λ_ff^{1/(σ−1))}` does not match `theoretical_gammaprime_bounds`' own documented
+`gp_lo=λ_dd^{1/σ}` (different exponent, `1/(σ−1)` vs. `1/σ`) — algebraically,
+`λ^{1/(σ−1)} < λ^{1/σ}` for `λ<1, σ>1`, so the addendum's literal upper-bound value is
+actually *smaller* than this code's own `gp_lo` (the *lower* endpoint), which cannot be
+a self-consistent box.
+
+This implementation uses the **evidenced** direction and the **pre-existing, internally
+self-consistent** `theoretical_gammaprime_bounds` endpoints, not the addendum's literal
+formulas. Plausible explanations for the discrepancy (not independently confirmed):
+`λ_ff` written from memory/notation without checking this specific codebase's own
+variable names; the upper/lower direction assumption inherited from the *very same*
+now-fixed `:lower`/`:upper` labeling bug this audit uncovered (§17.2) — i.e. the
+addendum's author may have been describing the code's own, now-known-backwards,
+pre-fix convention. **This needs the user's own confirmation before any production
+merge** — if there is paper-level context (a different `γ'` gauge, a different `λ_ff`
+definition) this session's derivation is missing, the direction/formula should be
+revisited.
+
+### 17.4 Real D=20 validation
+
+Real D=20/W=80,000, `draw_seed=20260719`, 45s/stage, genuine calibration start
+(`g_start = γ_f^F` exactly — `gp0` unperturbed, the same "Start A" convention
+`c_canon_run_one.jl` uses — with `find_smallest=true`, the corrected real upper
+direction). Two arms, same start/budget/draws: `reuse_context=true` vs. `=false`.
+
+`γ_f^F` at this real D=20 configuration: `0.9877618976237339` (cold-verified feasible
+immediately, `Delta_dual=0.00259...`, consistent with the "near-zero divergence at the
+calibration point" structural expectation, §17.1).
+
+**Incumbent-seeding + direction fix, both confirmed live**:
+
+| Stage (δ) | `best_gp` | κ |
+|---|---|---|
+| 1 (δ=2) | 0.9877618976237339 | 0.0203135174923732 |
+| 2 (δ=3) | 0.9877618976237339 | 0.0203135174923732 |
+| 3 (δ=4) | 0.9877618976237339 | 0.0203135174923732 |
+| 4 (δ=5) | 0.9877618976237339 | 0.0203135174923732 |
+
+Every stage terminated `-411` (`KN_RC_TIME_LIMIT_INFEAS`: the outer KNITRO search itself
+found no FEASIBLE point better than the seed within the 45s budget — genuinely difficult,
+consistent with this repo's own well-documented large-δ inner-solve difficulty, §11, not
+a driver bug). **The incumbent held exactly at its own cold-verified-feasible seed value
+at every single stage transition — never regressed, never went to `NaN`, never crashed —
+directly demonstrating the incumbent-seeding fix (§3-4) doing its job under genuinely
+adverse conditions** (an outer search that cannot improve on the start at all). `best_gp`
+is trivially non-increasing (exactly flat) and κ trivially non-decreasing (exactly flat)
+— both hold. **PASS** (script's own automated verdict, matching manual verification).
+
+**Numerical equivalence, reuse_context=true vs. false**: bit-identical κ at all 4 stages
+in both arms — confirmed by the script's own explicit equality check: `MATCH`.
+
+**Wall-time savings**: 11.8% (comparable to the pre-addendum session's 10.1%, §6) — total
+wall not separately re-quoted here since the per-stage pattern and caveat (shared-process
+JIT costs understating the isolated per-rebuild figure) are identical to §6's own finding.
+
+**Honest limitation of this specific run**: because the outer search could not find
+anything feasible better than the seed at ANY stage (all four `-411`), this run does
+**not** exercise the case where `is_new_best` fires mid-run (a genuine improvement over
+the seed) — that path remains covered only by `test_incumbent_seeding.jl`'s toy tests
+(§4), not by this live run. A longer per-stage budget or a start point with more slack
+relative to `γ_f^F` (rather than exactly at it) would be needed to observe live
+improvement over the seed; not attempted this pass given time budget.
+
+### 17.5 Toy tests (`test_direction_bounds.jl`, 26/26 passing)
+
+Deterministic, no KNITRO, no real context — a minimal mock `ctx` (only the fields
+`direction_bounds.jl` reads) exercises `direction_gamma_bounds`/
+`validate_gp_in_direction_box` directly. Covers the addendum's own item-5 asks, rewritten
+to match the evidenced (not literal-addendum) direction: an upper run cannot cross
+*above* γ_f^F; a lower run cannot cross *below* γ_f^F; γ_f^F itself is feasible in both
+closed boxes (shared boundary point); closed-interval endpoints are feasible, not just
+interior points; reported κ moves in the economically correct direction (upper's box
+achieves strictly higher κ than lower's, at every matched pair of endpoints); and
+`is_better_polish`'s own comparison direction is cross-checked against this convention
+(not just tested in isolation, as the pre-existing `test_incumbent_seeding.jl` did).
+
+### 17.6 Scope not covered this pass
+
+- **Multistart construction**: `c10_d20_production_driver.jl` (the actual production
+  D=20 driver this task is about) has no multistart mechanism at all — nothing to fix
+  there. The addendum's "multistart construction" item most likely refers to the older
+  D=4-scale exploratory scripts (`gamma_profile_multistart.jl`, `c8_gammabranch_*.jl`,
+  `analyze_multistart.jl`, etc.) — numerous, exploratory, and outside this task's own
+  charter ("the staged-δ continuation driver"). Not audited or modified this pass.
+- **Checkpoint-resume validation**: implemented as a single check on the resumed
+  `(g, zfree)`'s `gp` value against the direction box (§3's existing resume path already
+  routes through the same `w0`/`g` variables the new validation reads) — not a separate,
+  bespoke resume-specific code path. Not independently stress-tested against a
+  deliberately-incompatible real checkpoint this session (the same schema-mismatch issue
+  from §6 blocks constructing one easily); the toy tests (§17.5) cover the underlying
+  validation logic directly instead.
+- **Fixed-g profiling**: `run_profile_checkpointed`'s fixed `g` is now validated against
+  the direction box (§17.2), but since `g` is fixed (not searched) in that stage, this is
+  a validity gate on the caller's input, not a new search-space restriction — no separate
+  test beyond the toy suite's direct coverage of `validate_gp_in_direction_box`.
