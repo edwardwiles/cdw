@@ -259,21 +259,30 @@ probe's inner reconstruction is non-finite (mirrors
 `run_d4_optimized_fd.jl::eval_grad_central_fd`'s own documented fallback
 discipline for the SAME reason: a NaN silently propagating into a KNITRO
 Jacobian callback is fatal, not merely wrong).
+
+AUD-12 fix (twin of lfix_buffer_reuse.jl::a_block_fd_component!): both +/-h nonfinite no longer
+silently returns 0.0. See that function's docstring for the full rationale -- geometric h
+shrink-and-retry first, a one-sided secant if only one side is finite (checked at every h,
+matching the original discipline before retries were added), NaN (explicit
+derivative-unavailable, never a value indistinguishable from a genuine zero) only once every h
+and the base value itself are exhausted.
 """
-function a_block_fd_component(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64; multi_method::Symbol = :top3)
-    Lp = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h; tier = :incremental_o1, multi_method = multi_method)
-    Lm = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h; tier = :incremental_o1, multi_method = multi_method)
-    if isfinite(Lp) && isfinite(Lm)
-        return (Lp - Lm) / (2h)
-    elseif isfinite(Lp)
-        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1, multi_method = multi_method)
-        return (Lp - L0) / h
-    elseif isfinite(Lm)
-        L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1, multi_method = multi_method)
-        return (L0 - Lm) / h
-    else
-        return 0.0
+function a_block_fd_component(cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64;
+        multi_method::Symbol = :top3, max_h_shrinks::Int = 4)
+    h_try = h
+    for attempt in 1:(max_h_shrinks + 1)
+        Lp = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h_try; tier = :incremental_o1, multi_method = multi_method)
+        Lm = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h_try; tier = :incremental_o1, multi_method = multi_method)
+        if isfinite(Lp) && isfinite(Lm)
+            return (Lp - Lm) / (2h_try)
+        elseif isfinite(Lp) || isfinite(Lm)
+            L0 = lfix_incremental_at(cache, ctx, pe, w0, coord_idx, w0[coord_idx]; tier = :incremental_o1, multi_method = multi_method)
+            isfinite(L0) || break
+            return isfinite(Lp) ? (Lp - L0) / h_try : (L0 - Lm) / h_try
+        end
+        h_try /= 4
     end
+    return NaN
 end
 
 """

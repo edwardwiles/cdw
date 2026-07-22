@@ -87,22 +87,36 @@ are never interleaved with another coordinate's on the SAME buffer pair
 (callers must supply a distinct buffer pair per concurrent thread, matching
 `composite_gradient_at_fast`'s existing `bandwidth_cache_lock`-style
 per-call-not-per-coordinate-shared discipline).
+
+AUD-12 fix: when both +/-h probes are nonfinite, the old code silently `return 0.0`'d -- a
+domain/boundary failure disguised as a genuine flat (zero) gradient, which can make an outer
+optimizer accept a spurious stationary point instead of navigating around the infeasible
+boundary. This now (1) geometrically shrinks h and retries (a domain-boundary crossing at h may
+clear at a smaller step -- see docs/fullA_independent_audit_remediation.md AUD-12); (2) falls
+back to a verified one-sided secant using the finite base value the instant only ONE side is
+finite (unchanged from before, just no longer reachable only after exhausting retries -- checked
+first at every h, since a one-sided secant at the ORIGINAL h is preferable to one at an
+artificially-shrunk h); (3) if every h and the base value itself are all nonfinite, returns NaN
+-- an explicit "derivative unavailable" signal the outer callback must check for (never a value
+indistinguishable from a genuine zero derivative).
 """
 function a_block_fd_component!(q_buf::AbstractVector, psi_buf::AbstractVector,
-        cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64; multi_method::Symbol = :top3)
-    Lp = lfix_incremental_at!(q_buf, psi_buf, cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h; multi_method = multi_method)
-    Lm = lfix_incremental_at!(q_buf, psi_buf, cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h; multi_method = multi_method)
-    if isfinite(Lp) && isfinite(Lm)
-        return (Lp - Lm) / (2h)
-    elseif isfinite(Lp)
-        L0 = lfix_incremental_at!(q_buf, psi_buf, cache, ctx, pe, w0, coord_idx, w0[coord_idx]; multi_method = multi_method)
-        return (Lp - L0) / h
-    elseif isfinite(Lm)
-        L0 = lfix_incremental_at!(q_buf, psi_buf, cache, ctx, pe, w0, coord_idx, w0[coord_idx]; multi_method = multi_method)
-        return (L0 - Lm) / h
-    else
-        return 0.0
+        cache::LFixBaseCache, ctx, pe, w0::AbstractVector, coord_idx::Int, h::Float64;
+        multi_method::Symbol = :top3, max_h_shrinks::Int = 4)
+    h_try = h
+    for attempt in 1:(max_h_shrinks + 1)
+        Lp = lfix_incremental_at!(q_buf, psi_buf, cache, ctx, pe, w0, coord_idx, w0[coord_idx] + h_try; multi_method = multi_method)
+        Lm = lfix_incremental_at!(q_buf, psi_buf, cache, ctx, pe, w0, coord_idx, w0[coord_idx] - h_try; multi_method = multi_method)
+        if isfinite(Lp) && isfinite(Lm)
+            return (Lp - Lm) / (2h_try)
+        elseif isfinite(Lp) || isfinite(Lm)
+            L0 = lfix_incremental_at!(q_buf, psi_buf, cache, ctx, pe, w0, coord_idx, w0[coord_idx]; multi_method = multi_method)
+            isfinite(L0) || break   # base itself nonfinite -- cannot form a one-sided secant either
+            return isfinite(Lp) ? (Lp - L0) / h_try : (L0 - Lm) / h_try
+        end
+        h_try /= 4   # both probes nonfinite at this h: geometric shrink, retry (AUD-12 step 1)
     end
+    return NaN   # AUD-12 step 3: explicit derivative-unavailable status, never a silent 0.0
 end
 
 """
