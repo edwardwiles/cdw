@@ -46,6 +46,7 @@
 include(joinpath(@__DIR__, "qmc_context_real_d20.jl"))   # -> d20_real_setup, d20_real_setup_qmc, context_real_d20.jl, exp_from_uniform01
 include(joinpath(@__DIR__, "qmc_draws.jl"))               # -> pseudorandom_U, halton_U, sobol_U
 using Sobol
+using SHA   # AUD-11 fix: stable cross-process/cross-version checksums (stdlib, no Project.toml entry needed)
 
 const VALID_DRAW_DESIGNS = (:pseudorandom, :sobol_randomized, :halton_scrambled)
 
@@ -54,6 +55,28 @@ const DRAW_DESIGN_DESCRIPTIONS = Dict(
     :sobol_randomized => "Sobol.jl SobolSeq deterministic base sequence + an independent Cranley-Patterson random shift (mod 1) per seed -- a plain randomized-QMC shift, NOT Owen/digital scrambling (Sobol.jl does not implement digital scrambling)",
     :halton_scrambled => "cc_algo/rhalton.jl scrambled Halton sequence -- genuine Owen-style per-digit scrambling (independent random digit permutation per radix digit, per dimension), ported from Art B. Owen's R code",
 )
+
+"""
+    sha256_of_matrix(M::AbstractMatrix{Float64}) -> String
+
+AUD-11 fix: a stable, cross-process/cross-Julia-version content digest. Julia's built-in
+`hash()` (previously used here) is explicitly NOT a content digest -- the Julia manual documents
+that `hash` values are only guaranteed stable within one Julia process/version, not across
+processes or versions, which is exactly what draw/checkpoint reproducibility needs to detect
+(AUD-11: "Persistent draw/checkpoint checksums use Julia hash"). This instead hashes canonical
+little-endian Float64 bytes PLUS the matrix's own shape (so two same-byte-count but
+differently-shaped matrices cannot collide), independent of host endianness or Julia version.
+"""
+function sha256_of_matrix(M::AbstractMatrix{Float64})::String
+    Md = Matrix{Float64}(M)   # materialize (handles views/reshapes/Adjoint), canonical column-major order
+    buf = IOBuffer()
+    write(buf, htol(Int64(size(Md, 1))))
+    write(buf, htol(Int64(size(Md, 2))))
+    @inbounds for x in Md
+        write(buf, htol(reinterpret(UInt64, x)))
+    end
+    return bytes2hex(SHA.sha256(take!(buf)))
+end
 
 """
     draw_design_meta(design, seed, D, W, U; timing=NamedTuple()) -> NamedTuple
@@ -71,6 +94,7 @@ raw U01 is overwritten in place by genExpRands! and never separately
 returned) gets the same checksum treatment as the QMC paths with no change to
 genExpRands!/drawU.jl.
 """
+
 function draw_design_meta(design::Symbol, seed::Int, D::Int, W::Int, Uexp::AbstractMatrix{Float64};
         timing::NamedTuple = NamedTuple())
     U01_recovered = 1.0 .- exp.(-Uexp)
@@ -83,8 +107,8 @@ function draw_design_meta(design::Symbol, seed::Int, D::Int, W::Int, Uexp::Abstr
         transform_convention = "Exp(1) via U[i] = -log(1 - U01[i]) (prepare_cc/genRands.jl::genExpRands!'s elementwise transform, applied identically to all three designs)",
         sobol_jl_version = design == :sobol_randomized ? string(pkgversion(Sobol)) : missing,
         julia_version = string(VERSION),
-        checksum_uniform = string(hash(U01_recovered)),
-        checksum_transformed = string(hash(Uexp)),
+        checksum_uniform = sha256_of_matrix(U01_recovered),
+        checksum_transformed = sha256_of_matrix(Uexp),
         n_at_boundary = count(x -> x <= 0.0 || x >= 1.0, U01_recovered),
         n_inf_transformed = count(!isfinite, Uexp),
         timing = timing,
