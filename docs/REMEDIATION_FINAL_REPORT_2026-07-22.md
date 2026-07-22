@@ -218,20 +218,34 @@ nothing lost, only de-duplicated.
 
 Commit: `b6abcd5`.
 
-## 4. Phase-1 directional diagnostic rerun (post-fix)
+## 4. Phase-1 directional diagnostic rerun (post-fix) -- COMPLETE
 
-Rerunning `c24_phase1_directional_broad.jl` after both 1b and 1c's fixes. As of this report:
+Reran `c24_phase1_directional_broad.jl` after both 1b and 1c's fixes, to completion.
 
-- Base point A (near δ=1 frontier): constructs cleanly, `FeasError=0.000e+00` throughout, 6 real
-  outer iterations, `KN_RC_TIME_LIMIT_FEAS` (normal stop) — contrast with the original run's
+- Base point A (near δ=1 frontier): constructed cleanly, `FeasError=0.000e+00` throughout, 6 real
+  outer iterations, `KN_RC_TIME_LIMIT_FEAS` (normal stop) -- contrast with the original run's
   0-iteration `KN_RC_TIME_LIMIT_INFEAS` stall.
 - Base point B (near δ=2 frontier): likewise, 4 real outer iterations, `FeasError=0.000e+00`,
   normal stop.
-- The directional coordinate sweep (up to ~24 coordinates × 3 step scales, each a cold reoptimized
-  secant + two backend secants) was still running as of this report. [UPDATE_PENDING — see
-  addendum below if this section says so; otherwise treat the sweep as not yet completed and
-  the sign-fix verification as resting on the CSV-level analysis in 1b plus the two clean
-  base-point constructions above.]
+- Directional coordinate sweep: **54/54 cases completed (0 infeasible skips), 162/162 checks
+  passed, 0 failed** -- a materially healthier run than the original (which hit its 30-minute
+  budget partway through base B's high-switch class and needed CSV reconstruction from raw
+  stdout because the process was killed by timeout before its own CSV-write step).
+- Sign-convention fix confirmed at scale: `true_secant` vs. `ref_secant` agree in sign on 51/54
+  rows, vs. 4/50 in the original (buggy) run -- a near-total reversal, exactly as the extraneous
+  negation predicted. The 3 remaining sign disagreements are small-magnitude coordinates (two
+  near a genuine zero-crossing, ~1e-4 to 5e-4 in true_secant) or a large-step/high-switch
+  coordinate (233+ winner flips at 2×h) -- both are instances of the already-documented AUD-05
+  fixed-dual-secant approximation gap (the report's own "true reoptimized secant vs. fixed-dual
+  approximation" caveat), not a new defect; all three still passed under the test's own
+  documented tolerance scheme (the "C+'s error vs. true reoptimized secant no worse than
+  Reference's own" check, which is approximation-gap-aware by construction).
+- No case relied on the loose 1e-6 fallback tolerance; C+ matched Reference to at or near machine
+  precision throughout (typically 1e-15 to 1e-16, occasionally exactly 0.00e+00).
+
+Full CSV and log available at
+`/tmp/claude-181517/-bbkinghome-edav-gravity-robustness/7978bbf6-5144-4658-bdd0-fdc9b0211270/scratchpad/phase1/phase1_directional_cases.csv`
+(session-scoped scratch path -- copy out if you want it retained).
 
 ## 5. Deferred, with rationale (per the task's own conditional gates)
 
