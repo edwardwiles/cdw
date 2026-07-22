@@ -148,7 +148,21 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         z_halfwidth::Float64 = 30.0,
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
-        verbose::Bool = true)
+        verbose::Bool = true,
+        heartbeat_interval_s::Union{Nothing,Float64} = nothing)   # remediation task Part B:
+        # opt-in liveness watchdog (nothing = off, zero overhead, the default). When set, a
+        # background Timer logs, every heartbeat_interval_s, how long it has been since the last
+        # cb_F!/cb_G! callback RETURNED. Purpose: distinguish, with real evidence, "ordinary long
+        # callback" (heartbeats show a callback in flight, but n_eval/n_grad keep advancing
+        # release-over-release) from "stuck inside a single callback" (one callback's wall time
+        # alone exceeds several heartbeat intervals with nothing else changing) from "process
+        # killed externally" (log simply stops -- see `signal 15: Terminated`, which is Julia's
+        # own SIGTERM handler dumping a backtrace, NOT evidence of an uncaught exception or an
+        # internal crash; a genuine uncaught Julia exception self-terminates with an ERROR/
+        # nonzero exit code and needs no external signal -- confirmed live in
+        # test_threaded_exception_propagation.jl). Does NOT attempt to time individual
+        # sub-phases (moment construction / Hessian / BLAS / GC) -- that finer breakdown is Part
+        # D's scope (full production timing instrumentation), not duplicated here.
     lp(xs...) = (println(xs...); flush(stdout))
     mkpath(ckpt_dir)
 
@@ -217,6 +231,21 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     t_start = time()
     prior_wall = resumed !== nothing ? resumed.wall_elapsed : 0.0
     last_ckpt_t = Ref(time())
+    last_activity_t = Ref(time())   # updated at the END of every cb_F!/cb_G! call
+    last_activity_kind = Ref(:none)
+    heartbeat_timer = nothing
+    if heartbeat_interval_s !== nothing
+        heartbeat_timer = Timer(heartbeat_interval_s; interval = heartbeat_interval_s) do _
+            since = time() - last_activity_t[]
+            lp("[", label, "] HEARTBEAT t=", round(time() - t_start, digits = 1),
+               "s  last_callback=", last_activity_kind[], "  ", round(since, digits = 1),
+               "s since last callback RETURNED  n_eval=", n_eval[], " n_grad=", n_grad[],
+               since > 4 * heartbeat_interval_s ?
+                   "  ** no callback has returned for >4 heartbeat intervals -- either an ordinary" *
+                   " long single callback (e.g. a slow/near-infeasible inner solve) or a stall;" *
+                   " this heartbeat cannot distinguish those two without per-phase timers (Part D)" : "")
+        end
+    end
     knitro_version = try
         KNITRO.KN_get_release()
     catch
@@ -279,6 +308,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         if verbose && (n_eval[] <= 3 || n_eval[] % 20 == 0)
             lp("  eval ", n_eval[], " t=", round(time() - t_start, digits = 1), "s gp=", w[1], " Delta=", Δ, " feasible=", feasible, " verified=", verified)
         end
+        last_activity_t[] = time(); last_activity_kind[] = :cb_F!
         return 0
     end
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
@@ -291,13 +321,18 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
         evalResult.jac .= gfull
+        last_activity_t[] = time(); last_activity_kind[] = :cb_G!
         return 0
     end
 
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
 
-    KNITRO.KN_solve(kc)
+    try
+        KNITRO.KN_solve(kc)
+    finally
+        heartbeat_timer !== nothing && close(heartbeat_timer)
+    end
     wall_ext = time() - t_start
     nStatus, _, xsol, _ = KNITRO.KN_get_solution(kc)
     KNITRO.KN_free(kc)
