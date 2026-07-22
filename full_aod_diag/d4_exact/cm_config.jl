@@ -177,16 +177,19 @@ collide with an unrestricted (or differently-configured CM) point in the same ca
 the two must never share a cache instance, since nothing here type-checks that a caller passed
 the wrong dict; keep unrestricted and CM caches as physically separate `SafeExactCache` objects.
 """
+"AUD-08 fix: carries ctx_fingerprint (context_fingerprint(ctx), oracle.jl) for the same reason FullAEvalKey does -- see that struct's docstring."
 struct CMEvalKey
     x_free::Vector{Float64}
     δ::Float64
     find_smallest::Bool
     inner_loop_opt::String
     cm::NamedTuple
+    ctx_fingerprint::String
 end
 Base.:(==)(a::CMEvalKey, b::CMEvalKey) = a.x_free == b.x_free && a.δ == b.δ &&
-    a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.cm == b.cm
-Base.hash(k::CMEvalKey, h::UInt) = hash((k.x_free, k.δ, k.find_smallest, k.inner_loop_opt, k.cm), h)
+    a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.cm == b.cm &&
+    a.ctx_fingerprint == b.ctx_fingerprint
+Base.hash(k::CMEvalKey, h::UInt) = hash((k.x_free, k.δ, k.find_smallest, k.inner_loop_opt, k.cm, k.ctx_fingerprint), h)
 
 "Fresh, empty CM exact-point cache -- mirrors oracle.jl's `oracle_cache_for`, scoped to CMEvalKey."
 cm_oracle_cache_for(pcx) = SafeExactCache{CMEvalKey}()
@@ -208,7 +211,7 @@ function cm_production_value_v2(x_free0::AbstractVector, pcx; cache = nothing, u
     key = nothing
     if cache !== nothing && use_cache
         key = CMEvalKey(collect(x_free0), obj.δ, obj.find_smallest, obj.inner_loop_opt,
-                         cm_cache_key(pcx.cfg, pcx.L, draw_checksum))
+                         cm_cache_key(pcx.cfg, pcx.L, draw_checksum), context_fingerprint(pcx.ctx_cm))
         hit = _cache_lookup(cache, key)
         if hit !== nothing
             return hit.K, hit.base

@@ -228,7 +228,7 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
     mode == :hard || error("evaluate_fullA_fast: mode=:$mode not implemented (matches oracle.jl)")
 
     obj = ctx.obj
-    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
+    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode, context_fingerprint(ctx))
 
     cache_hit = false
     hit = nothing
@@ -270,7 +270,7 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
                   gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
-                  gravity_R_beta = NaN, moment_resid = Float64[], max_abs_moment_resid = NaN,
+                  gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
                   zeta = NaN, lambda = Float64[], m_mean = NaN, m_min = NaN, m_max = NaN,
                   weight_norm_resid = NaN, mean_m_resid = NaN, max_abs_moment_kkt_resid = NaN,
                   winner_hash = UInt64(0), inner_status = nStatus, inner_iters = inner_iters,
@@ -327,8 +327,8 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
     # Phase 1C fix: preallocated reduction instead of sum(G,dims=1) (a full temp-array allocation).
     # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --
     # see docs/fullA_D20_blas_audit_report.md, ~2.1x.
-    moment_resid = @prof "moment_resid_compute" moment_resid_blas(G, d, W)
-    max_abs_moment_resid = isempty(moment_resid) ? NaN : maximum(abs.(moment_resid))
+    benchmark_unweighted_moment_mean = @prof "moment_resid_compute" moment_resid_blas(G, d, W)
+    max_abs_moment_resid = isempty(benchmark_unweighted_moment_mean) ? NaN : maximum(abs.(benchmark_unweighted_moment_mean))
 
     # Phase 1B fix: allocation-free two-pass min/second-min instead of per-column sort().
     winner, price_, gap_ = @prof "winner_compute" compute_winners_fast(θ_full, ctx)
@@ -343,7 +343,7 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
               Delta_minus_delta = Delta_dual - obj.δ,
               gravity_raw = gravity_raw, gravity_value = gravity_val,
               gravity_R_sum = R_sum, gravity_R_mean = R_mean, gravity_R_beta = R_beta,
-              moment_resid = moment_resid, max_abs_moment_resid = max_abs_moment_resid,
+              benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
               weight_norm_resid = abs(sum(p_weights) - 1.0),

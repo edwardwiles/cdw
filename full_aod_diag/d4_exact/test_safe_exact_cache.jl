@@ -98,12 +98,37 @@ println("\n== 2. A genuine unresolved failure (-300-class) must NOT be cached ==
 # Force a cold, deliberately-bad-guess evaluation path is hard to trigger deterministically
 # without a real -300; instead directly test the is_cacheable_result predicate that gates
 # every store site (unit-level, exact per production's own sentinel/status conventions).
-check("solved status (0) is cacheable", is_cacheable_result((inner_status = 0,)))
-check("solved status (-100) is cacheable", is_cacheable_result((inner_status = -100,)))
-check("solved status (-101) is cacheable", is_cacheable_result((inner_status = -101,)))
-check("solved status (-103) is cacheable", is_cacheable_result((inner_status = -103,)))
-check("screen sentinel (-9001, pairwise) IS cacheable (exact certificate)", is_cacheable_result((inner_status = -9001,)))
-check("screen sentinel (-9006, moment range) IS cacheable (exact certificate)", is_cacheable_result((inner_status = -9006,)))
+#
+# AUD-04 UPDATE: is_cacheable_result no longer accepts a solved status code alone -- it also
+# requires classify_inner_result's independent residual/gap checks to pass (see oracle.jl,
+# docs/fullA_independent_audit_remediation.md AUD-04). A bare `(inner_status = 0,)` record with
+# no residual/gap fields at all is therefore CORRECTLY no longer cacheable (get() on the missing
+# fields returns NaN, which fails isfinite) -- that used to be exactly the pre-fix bug (status
+# alone treated as a certificate). This section now tests both sides of the new contract: a
+# FULLY VERIFIED record (status + passing residuals/gap) is cacheable; a solved-status record
+# that fails even one residual/gap check is not.
+verified_rec(status; Delta_dual = 0.05) = (inner_status = status, Delta_dual = Delta_dual,
+    primal_dual_gap = 0.0, weight_norm_resid = 0.0, mean_m_resid = 0.0,
+    max_abs_moment_kkt_resid = 0.0, m_min = 1.0)
+sloppy_rec(status) = (inner_status = status, Delta_dual = 0.05,
+    primal_dual_gap = 10.0, weight_norm_resid = 0.0, mean_m_resid = 0.0,
+    max_abs_moment_kkt_resid = 0.0, m_min = 1.0)   # gap fails tol, everything else passes
+check("VERIFIED solved status (0) is cacheable", is_cacheable_result(verified_rec(0)))
+check("VERIFIED solved status (-100) is cacheable", is_cacheable_result(verified_rec(-100)))
+check("VERIFIED solved status (-101) is cacheable", is_cacheable_result(verified_rec(-101)))
+check("VERIFIED solved status (-103) is cacheable", is_cacheable_result(verified_rec(-103)))
+check("solved status (0) but bare (no residual fields) is classified ApproximateSolved, NOT cacheable",
+      !is_cacheable_result((inner_status = 0,)))
+check("solved status (0) with a residual/gap tolerance failure (ApproximateSolved) is NOT cacheable",
+      !is_cacheable_result(sloppy_rec(0)))
+check("classify_inner_result agrees: verified_rec(0) == VerifiedSolved",
+      classify_inner_result(verified_rec(0)) == VerifiedSolved)
+check("classify_inner_result agrees: sloppy_rec(0) == ApproximateSolved",
+      classify_inner_result(sloppy_rec(0)) == ApproximateSolved)
+check("screen sentinel (-9001, pairwise) IS cacheable (exact certificate, no residual check needed)",
+      is_cacheable_result((inner_status = -9001,)))
+check("screen sentinel (-9006, moment range) IS cacheable (exact certificate, no residual check needed)",
+      is_cacheable_result((inner_status = -9006,)))
 check("genuine -300 (unbounded dual) is NOT cacheable", !is_cacheable_result((inner_status = -300,)))
 check("any other unhandled status is NOT cacheable", !is_cacheable_result((inner_status = -410,)))
 

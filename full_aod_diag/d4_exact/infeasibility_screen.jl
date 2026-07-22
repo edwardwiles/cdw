@@ -510,7 +510,7 @@ function infeasible_result(x_free, θ_full, ctx, screen_status::Symbol, failing_
             gamma_focal_prime = θ_full[3+D], logA = fill(NaN, D, D),
             K_hard = NaN, Delta_dual = Inf, Delta_primal = Inf, Delta_minus_delta = Inf,
             gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
-            gravity_R_beta = NaN, moment_resid = Float64[], max_abs_moment_resid = NaN,
+            gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
             zeta = NaN, lambda = Float64[], m_mean = NaN, m_min = NaN, m_max = NaN,
             weight_norm_resid = NaN, mean_m_resid = NaN, max_abs_moment_kkt_resid = NaN,
             winner_hash = UInt64(0), inner_status = sentinel, inner_iters = missing,
@@ -556,7 +556,7 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
 
     mode == :hard || error("evaluate_fullA_screened: mode=:$mode not implemented (matches oracle.jl)")
     obj = ctx.obj
-    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
+    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode, context_fingerprint(ctx))
 
     if cache !== nothing && use_cache
         hit = _cache_lookup(cache, key)
@@ -759,7 +759,7 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
                   gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
-                  gravity_R_beta = NaN, moment_resid = Float64[], max_abs_moment_resid = NaN,
+                  gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
                   zeta = NaN, lambda = Float64[], m_mean = NaN, m_min = NaN, m_max = NaN,
                   weight_norm_resid = NaN, mean_m_resid = NaN, max_abs_moment_kkt_resid = NaN,
                   winner_hash = UInt64(0), inner_status = nStatus, inner_iters = inner_iters,
@@ -813,8 +813,8 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
 
     # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --
     # see docs/fullA_D20_blas_audit_report.md, ~2.1x.
-    moment_resid = moment_resid_blas(G, d, W)
-    max_abs_moment_resid = isempty(moment_resid) ? NaN : maximum(abs.(moment_resid))
+    benchmark_unweighted_moment_mean = moment_resid_blas(G, d, W)
+    max_abs_moment_resid = isempty(benchmark_unweighted_moment_mean) ? NaN : maximum(abs.(benchmark_unweighted_moment_mean))
 
     winner_hash = hash(wres.winner)   # REUSED, not recomputed -- the screen's own winner IS the answer
 
@@ -827,7 +827,7 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
               Delta_minus_delta = Delta_dual - obj.δ,
               gravity_raw = gravity_raw, gravity_value = gravity_val,
               gravity_R_sum = R_sum, gravity_R_mean = R_mean, gravity_R_beta = R_beta,
-              moment_resid = moment_resid, max_abs_moment_resid = max_abs_moment_resid,
+              benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
               weight_norm_resid = abs(sum(p_weights) - 1.0),

@@ -63,7 +63,7 @@ function stress_distinct_keys(cache, n_keys::Int)
     keys_used = Vector{FullAEvalKey}(undef, n_keys); vals_used = Vector{NamedTuple}(undef, n_keys)
     Threads.@threads for i in 1:n_keys
         try
-            k = FullAEvalKey(fill(Float64(i), 5), 5.0, false, "ek_inner.opt", :hard)
+            k = FullAEvalKey(fill(Float64(i), 5), 5.0, false, "ek_inner.opt", :hard, "stress_test_fingerprint")
             v = (x_free = fill(Float64(i), 5), tag = "k$i", cache_hit = false, inner_status = 0)
             keys_used[i] = k; vals_used[i] = v
             _cache_store!(cache, k, v)
@@ -86,7 +86,7 @@ same_bad_total = 0; same_crash_total = 0; lost_total = 0; wrong_total = 0; disti
 for trial in 1:n_trials
     global same_bad_total, same_crash_total, lost_total, wrong_total, distinct_crash_total
     c1 = SafeExactCache()
-    key = FullAEvalKey([1.0, 2.0, 3.0], 5.0, false, "ek_inner.opt", :hard)
+    key = FullAEvalKey([1.0, 2.0, 3.0], 5.0, false, "ek_inner.opt", :hard, "stress_test_fingerprint")
     value = (x_free = [1.0, 2.0, 3.0], tag = "same", cache_hit = false, inner_status = 0)
     r1 = stress_same_key(c1, key, value, n_threads)
     same_bad_total += r1.n_bad; same_crash_total += r1.n_crashed

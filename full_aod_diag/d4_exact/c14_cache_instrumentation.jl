@@ -93,7 +93,7 @@ probe_ur("iter3_revisit_xf0_expect_HIT", xf0)
 lp("-- key-field-mismatch miss: SAME x_free but a different delta -- construct the key directly")
 lp("   (FullAEvalKey's own fields: x_free, δ, find_smallest, inner_loop_opt, mode) and confirm")
 lp("   _cache_lookup correctly returns nothing even though x_free is byte-identical to a stored hit --")
-key_same_xfree_diff_delta = FullAEvalKey(collect(xf0), 2.0, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+key_same_xfree_diff_delta = FullAEvalKey(collect(xf0), 2.0, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard, context_fingerprint(ctx))
 miss_by_key_mismatch = _cache_lookup(cache_ur, key_same_xfree_diff_delta)
 lp(@sprintf("  [%-28s] lookup result = %s  (must be `nothing` -- a real cache entry exists at this x_free under delta=%.1f, NOT delta=2.0)",
     "diffdelta_samexfree_MISS", string(miss_by_key_mismatch), DELTA))

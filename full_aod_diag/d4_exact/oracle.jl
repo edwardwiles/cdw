@@ -40,6 +40,63 @@ function primal_divergence(m_weights::AbstractVector)
     return sum(phi(W * mi / total) for mi in m_weights) / W
 end
 
+const CONTEXT_FINGERPRINT_SCHEMA = 1
+
+# AUD-08 fix: memoized per-ctx SHA-256 fingerprint, keyed by objectid(ctx.U) (uniquely identifies
+# one ctx's draw set/instance -- cheap identity lookup, avoids re-hashing large W x D draw
+# matrices on every single evaluation call, which would otherwise be prohibitively expensive at
+# W=80,000).
+const _CTX_FINGERPRINT_CACHE = IdDict{Any,String}()
+const _CTX_FINGERPRINT_LOCK = ReentrantLock()
+
+"""
+    context_fingerprint(ctx) -> String
+
+AUD-08 fix: a versioned SHA-256 digest of everything that changes the MATHEMATICAL answer of an
+inner solve at a fixed exact theta -- draws (via ctx.draw_meta's own checksums when present,
+falling back to hashing ctx.U/ctx.γ.Uσ directly for older/test ctx shapes that predate
+draw_meta), draw design/seed, shapes (D, W), fixed trade/model data (wHat, L, LPrime, τ, τPrime),
+CM config (if any), option-file CONTENTS (not just the path string, which the old FullAEvalKey
+already included -- two paths with the same name but different contents must not alias), and the
+actually-loaded KNITRO release. Explicitly does NOT include δ or find_smallest -- neither
+changes the inner CC dual problem at a fixed theta (see FullAEvalKey's own docstring on why δ
+does not belong in the key either); direction/delta remain separate outer-run metadata (AUD-08).
+"""
+function context_fingerprint(ctx)::String
+    lock(_CTX_FINGERPRINT_LOCK) do
+        get!(_CTX_FINGERPRINT_CACHE, ctx.U) do
+            buf = IOBuffer()
+            write(buf, htol(Int64(CONTEXT_FINGERPRINT_SCHEMA)))
+            write(buf, htol(Int64(ctx.D)))
+            write(buf, htol(Int64(size(ctx.U, 1))))   # W
+            if hasproperty(ctx, :draw_meta)
+                write(buf, ctx.draw_meta.checksum_uniform)
+                write(buf, ctx.draw_meta.checksum_transformed)
+                write(buf, string(ctx.draw_meta.draw_design))
+                write(buf, htol(Int64(ctx.draw_meta.draw_seed)))
+            else
+                write(buf, sha256_of_matrix(ctx.U))
+                hasproperty(ctx.γ, :Uσ) && write(buf, sha256_of_matrix(ctx.γ.Uσ))
+            end
+            for fld in (:wHat, :L, :LPrime, :τ, :τPrime)
+                if hasproperty(ctx.γ, fld)
+                    v = getproperty(ctx.γ, fld)
+                    M = v isa AbstractMatrix ? Matrix{Float64}(v) : reshape(Vector{Float64}(v), :, 1)
+                    write(buf, sha256_of_matrix(M))
+                end
+            end
+            write(buf, hasproperty(ctx, :cm) && ctx.cm !== nothing ? string(ctx.cm) : "no_cm")
+            write(buf, isdefined(Main, :LOADED_KNITRO_RELEASE) ? Main.LOADED_KNITRO_RELEASE : "unknown_knitro_release")
+            opt_paths = (hasproperty(ctx.obj, :inner_loop_opt) ? ctx.obj.inner_loop_opt : nothing,
+                         hasproperty(ctx.obj, :outer_loop_opt) ? ctx.obj.outer_loop_opt : nothing)
+            for optpath in unique(filter(p -> p isa AbstractString && isfile(p), opt_paths))
+                write(buf, read(optpath))
+            end
+            bytes2hex(SHA.sha256(take!(buf)))
+        end
+    end
+end
+
 """
     FullAEvalKey
 
@@ -54,6 +111,12 @@ than silently falling back to :hard). W and the draw seed are NOT part of the
 key because they are baked into `ctx.U` at construction (one ctx = one fixed
 draw set); a genuinely different W/seed requires a different `ctx`, which
 naturally produces a different cache (see `oracle_cache_for`).
+
+AUD-08 fix: also carries `ctx_fingerprint` (see `context_fingerprint` above) so a cache accidentally
+shared across two DIFFERENT contexts that happen to agree on x_free/delta/find_smallest/option-path/
+mode (e.g. differing only in their draw set, CM config, or fixed trade data) can no longer alias --
+the old key omitted any context-identifying information at all, a confirmed latent cross-context
+aliasing risk (AUD-08).
 """
 struct FullAEvalKey
     x_free::Vector{Float64}
@@ -61,10 +124,12 @@ struct FullAEvalKey
     find_smallest::Bool
     inner_loop_opt::String
     mode::Symbol
+    ctx_fingerprint::String
 end
 Base.:(==)(a::FullAEvalKey, b::FullAEvalKey) = a.x_free == b.x_free && a.δ == b.δ &&
-    a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.mode == b.mode
-Base.hash(k::FullAEvalKey, h::UInt) = hash((k.x_free, k.δ, k.find_smallest, k.inner_loop_opt, k.mode), h)
+    a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.mode == b.mode &&
+    a.ctx_fingerprint == b.ctx_fingerprint
+Base.hash(k::FullAEvalKey, h::UInt) = hash((k.x_free, k.δ, k.find_smallest, k.inner_loop_opt, k.mode, k.ctx_fingerprint), h)
 
 """
     SafeExactCache
@@ -106,22 +171,95 @@ _cache_store!(cache::Dict, key, result) = (cache[key] = result; nothing)
 _cache_store!(cache::SafeExactCache, key, result) = (lock(() -> (cache.d[key] = result), cache.lock); nothing)
 
 """
+    VerifiedSuccessTolerances
+
+AUD-04 fix. Provisional default tolerances for `classify_inner_result`'s independent
+residual/gap gate -- KNITRO's own statuses 0/-100/-101/-103 are NOT themselves an optimality
+certificate (KNITRO documents -101/-103 as tolerance-based approximate stops), so a result must
+also pass these checks before it is treated as scientifically verified.
+
+NOT empirically calibrated against real D=20/W=80,000 production solves in this remediation pass
+-- `test_oracle.jl`'s own D=4 assertion (`primal_dual_gap < 1e-6`) is the only existing empirical
+anchor in this codebase, and D=4/small-W convergence is characteristically tighter than
+D=20/W=80,000 will achieve. `primal_dual_gap_tol`/`max_abs_moment_kkt_resid_tol` are deliberately
+looser than the D=4 anchor for that reason; `weight_norm_resid_tol`/`mean_m_resid_tol` are exact
+algebraic KKT identities (mean(m)=1) that should hold near machine precision at ANY converged
+point regardless of D/W, so they are left tight. Treat all four as a starting point to be
+tightened/loosened once the matched cache-disabled cold D=20 runs (task §15) establish what a
+genuinely well-converged large-W solve's residuals actually look like -- not yet a validated
+scientific standard. See docs/fullA_independent_audit_remediation.md AUD-04.
+"""
+Base.@kwdef struct VerifiedSuccessTolerances
+    primal_dual_gap_tol::Float64 = 1e-3
+    weight_norm_resid_tol::Float64 = 1e-6
+    mean_m_resid_tol::Float64 = 1e-6
+    max_abs_moment_kkt_resid_tol::Float64 = 1e-3
+    m_min_floor::Float64 = 0.0   # conjugate-domain guard: phi/Psi! require m>0
+end
+const DEFAULT_VERIFIED_SUCCESS_TOL = VerifiedSuccessTolerances()
+
+"""
+    InnerResultClass
+
+AUD-04 typed inner-solve outcome (replaces a bare status-code membership check). Coordinates
+with, and does not erase, the separate negative-cache audit's typed distinction
+(`negative_cache.jl`'s `SolvedInnerResult`/`CertifiedInfeasibleResult`/`ConfirmedNegativeResult`):
+this enum classifies the POSITIVE side (was the status a real, residual-verified solve?) that the
+negative-cache module's confirmation policy assumed but never itself checked.
+"""
+@enum InnerResultClass VerifiedSolved ApproximateSolved ExactInfeasible ConfirmedNumericalNegative TransientFailure
+
+"""
+    classify_inner_result(result; tol=DEFAULT_VERIFIED_SUCCESS_TOL) -> InnerResultClass
+
+  - `VerifiedSolved` -- status feasible AND every independent check (finite Delta_dual, primal
+    normalization, weighted moment/KKT residual, primal-dual gap, conjugate-domain m>0) passes
+    `tol`. Only these may enter the exact-result cache or become the final reported incumbent.
+  - `ApproximateSolved` -- status feasible but at least one residual/gap check failed `tol` (or is
+    non-finite). May seed the successful-dual bank, trigger a tighter retry, or be logged as
+    provisional -- never cached as exact, never the final incumbent.
+  - `ExactInfeasible` -- `inner_status <= -9000`, a screen certificate (never touched KNITRO).
+  - `ConfirmedNumericalNegative` -- status not feasible and not a screen certificate. This
+    classifier cannot itself distinguish confirmed-vs-transient (that needs the second-start
+    confirmation `negative_cache.jl`'s Policy B already implements); callers doing that
+    confirmation should treat this return value as "not solved," not as a final disposition.
+"""
+function classify_inner_result(result; tol::VerifiedSuccessTolerances = DEFAULT_VERIFIED_SUCCESS_TOL)::InnerResultClass
+    s = get(result, :inner_status, -300)
+    s <= -9000 && return ExactInfeasible
+    s in (0, -100, -101, -103) || return ConfirmedNumericalNegative
+
+    Δ = get(result, :Delta_dual, NaN)
+    gap = get(result, :primal_dual_gap, NaN)
+    wnr = get(result, :weight_norm_resid, NaN)
+    mmr = get(result, :mean_m_resid, NaN)
+    kkt = get(result, :max_abs_moment_kkt_resid, NaN)
+    mmin = get(result, :m_min, NaN)
+
+    ok = isfinite(Δ) && isfinite(gap) && isfinite(wnr) && isfinite(mmr) && isfinite(kkt) &&
+         isfinite(mmin) && mmin > tol.m_min_floor &&
+         gap <= tol.primal_dual_gap_tol && wnr <= tol.weight_norm_resid_tol &&
+         mmr <= tol.mean_m_resid_tol && kkt <= tol.max_abs_moment_kkt_resid_tol
+
+    return ok ? VerifiedSolved : ApproximateSolved
+end
+
+"Convenience predicate: classify_inner_result(result) == VerifiedSolved."
+is_verified_success(result; tol::VerifiedSuccessTolerances = DEFAULT_VERIFIED_SUCCESS_TOL) =
+    classify_inner_result(result; tol = tol) == VerifiedSolved
+
+"""
     is_cacheable_result(result) -> Bool
 
-An exact-point cache must only ever store a genuine feasible solve
-(`inner_status in (0,-100,-101,-103)`) or an exact screen certificate (every
-screen sentinel in `infeasibility_screen.jl`/`fast_range_screen.jl` is
-`inner_status <= -9000`, see `infeasible_result`/`infeasible_result_ranged`).
-A bare unresolved numerical failure (KNITRO `-300`/unbounded-dual, or any
-other non-solved, non-certified status) is NOT a certificate of anything and
-must never be cached as if it were one -- caching it would silently turn a
-transient/point-dependent solver failure into a permanent (and potentially
-wrong, since a nearby retry or different warm start might succeed) answer
-for that exact point for the rest of the run.
+AUD-04 fix: an exact-point cache must only ever store a scientifically VERIFIED solve
+(`classify_inner_result(result) == VerifiedSolved` -- status feasible AND residual/gap tolerances
+pass, not status alone) or an exact screen certificate (`ExactInfeasible`). An `ApproximateSolved`
+result (feasible status but a failed residual/gap check) or an unresolved numerical failure
+(`ConfirmedNumericalNegative`) is NOT a certificate of anything and must never be cached as if it
+were one -- caching it would silently turn a transient/tolerance-marginal solver outcome into a
+permanent (and potentially wrong) answer for that exact point for the rest of the run.
 """
-is_cacheable_result(result)::Bool = let s = get(result, :inner_status, -300)
-    s in (0, -100, -101, -103) || s <= -9000
-end
+is_cacheable_result(result)::Bool = classify_inner_result(result) in (VerifiedSolved, ExactInfeasible)
 
 "Fresh, empty exact-point cache for one (method, bound-direction, draw-set) scope -- never share across those, per task §7.4. Lock-guarded (SafeExactCache), safe under KNITRO-callback-driven concurrent access."
 oracle_cache_for(ctx) = SafeExactCache()
@@ -144,7 +282,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
     mode == :hard || error("evaluate_fullA: mode=:$mode not implemented -- only :hard (hFunction!'s MinInd! branch, this codebase's only wired path) exists. See docs/fullA_d4_code_audit.md sec 6.")
 
     obj = ctx.obj
-    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
+    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode, context_fingerprint(ctx))
     if cache !== nothing && use_cache
         hit = _cache_lookup(cache, key)
         if hit !== nothing
@@ -176,7 +314,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
                   gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
-                  gravity_R_beta = NaN, moment_resid = Float64[], max_abs_moment_resid = NaN,
+                  gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
                   zeta = NaN, lambda = Float64[], m_mean = NaN, m_min = NaN, m_max = NaN,
                   weight_norm_resid = NaN, mean_m_resid = NaN, max_abs_moment_kkt_resid = NaN,
                   winner_hash = UInt64(0), inner_status = nStatus, inner_iters = inner_iters,
@@ -234,8 +372,8 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
     R_mean = R_sum / ctx.D^2
     R_beta = R_sum / sum(ctx.q_tilde .^ 2)
 
-    moment_resid = vec(sum(G, dims=1)) ./ W
-    max_abs_moment_resid = isempty(moment_resid) ? NaN : maximum(abs.(moment_resid))
+    benchmark_unweighted_moment_mean = vec(sum(G, dims=1)) ./ W
+    max_abs_moment_resid = isempty(benchmark_unweighted_moment_mean) ? NaN : maximum(abs.(benchmark_unweighted_moment_mean))
 
     winner, price_, gap_ = compute_winners(θ_full, ctx)
     winner_hash = hash(winner)
@@ -249,7 +387,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
               Delta_minus_delta = Delta_dual - obj.δ,
               gravity_raw = gravity_raw, gravity_value = gravity_val,
               gravity_R_sum = R_sum, gravity_R_mean = R_mean, gravity_R_beta = R_beta,
-              moment_resid = moment_resid, max_abs_moment_resid = max_abs_moment_resid,
+              benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
               weight_norm_resid = abs(sum(p_weights) - 1.0),
