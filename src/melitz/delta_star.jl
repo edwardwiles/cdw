@@ -50,7 +50,7 @@ Adapter matching the `(K, G, theta, U, obj) -> nothing` contract required by
 `PsiObjectiveBundleDelta` (docs Section 11). `obj.gamma` is a `NamedTuple` holding
 everything besides `(A, f)` needed to reconstruct the model: `theta_layout, sigma,
 theta_star, target_country, tau, w, f_entry, N, expenditure, moment_layout, X_data,
-entry_target, scale_trade`. See the module docstring above for the scope limitation
+entry_target`. See the module docstring above for the scope limitation
 (only valid at theta == theta*, not a general re-equilibration).
 """
 function melitz_moments_adapter!(K, G, theta, U, obj)
@@ -71,50 +71,33 @@ function melitz_moments_adapter!(K, G, theta, U, obj)
     cf = ctx.counterfactual
 
     melitz_moments!(K, G, primitives, eq, cf, U, ctx.moment_layout;
-                     X_data=ctx.X_data, entry_target=ctx.entry_target, scale_trade=ctx.scale_trade)
+                     X_data=ctx.X_data, entry_target=ctx.entry_target)
     return nothing
 end
 
 """
-    build_melitz_psi_bundle(data::MelitzSyntheticData; X_data=nothing, entry_target=nothing,
-                             scale_trade=false, inner_loop_opt=..., outer_loop_opt=...)
+    build_melitz_psi_bundle(data::MelitzSyntheticData; X_data=data.equilibrium.trade_flow,
+                             entry_target=data.primitives.w .* data.primitives.f_entry,
+                             inner_loop_opt=..., outer_loop_opt=...)
         -> (obj::PsiObjectiveBundleDelta, theta_star::Vector{Float64})
 
 Builds a `PsiObjectiveBundleDelta` wired to the Melitz moments and the packed
 `theta* = vcat(vec(A*), vec(f*))` from a `MelitzSyntheticData` fixture. `X_data`/
-`entry_target` default to the EXACT-SAMPLE targets built from `data.z_draws` (docs
-"Mode 1" -- i.e. Delta(theta*) should come out ~0, not just small).
+`entry_target` default to the CLOSED-FORM population values (matching
+`setup/createFakeData.jl`'s own convention -- `moments.jl`'s docstring has the full
+justification), NOT a sample average over `data.z_draws` -- `Delta(theta*)` is therefore
+expected to be small but not exactly zero, and requires `W` large enough that every
+`(o,d)` cell has multiple ACTIVE draws in the sample (see the module docstring on this
+point; `min_active_draw_count` below is a diagnostic for checking this before calling).
 """
 function build_melitz_psi_bundle(data::MelitzSyntheticData;
-                                  X_data::Union{Nothing,Matrix{Float64}}=nothing,
-                                  entry_target::Union{Nothing,Vector{Float64}}=nothing,
-                                  scale_trade::Bool=false,
+                                  X_data::Matrix{Float64}=data.equilibrium.trade_flow,
+                                  entry_target::Vector{Float64}=data.primitives.w .* data.primitives.f_entry,
                                   inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
                                   outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"))
     p, eq = data.primitives, data.equilibrium
     D = p.D
     z_draws = data.z_draws
-    W = size(z_draws, 1)
-
-    if X_data === nothing || entry_target === nothing
-        X_sample = zeros(D, D)
-        entry_sample = zeros(D)
-        for o in 1:D
-            for w in 1:W
-                z = z_draws[w, o]
-                profit_sum = 0.0
-                for d in 1:D
-                    firm = melitz_firm(p.w[o], p.tau[o, d], p.A[o, d], p.f[o, d], p.sigma,
-                                        eq.expenditure[d], 1.0, z)
-                    X_sample[o, d] += eq.entrant_mass[o] * firm.realized_revenue / W
-                    profit_sum += firm.realized_operating_profit
-                end
-                entry_sample[o] += profit_sum / W
-            end
-        end
-        X_data = something(X_data, X_sample)
-        entry_target = something(entry_target, entry_sample)
-    end
 
     theta_layout = melitz_theta_layout(D)
     moment_layout = MelitzMomentLayout(D)
@@ -124,7 +107,7 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
            target_country=p.target_country, tau=p.tau, w=p.w, f_entry=p.f_entry,
            N=eq.entrant_mass, expenditure=eq.expenditure, cutoff=eq.cutoff,
            counterfactual=data.counterfactual, moment_layout=moment_layout,
-           X_data=X_data, entry_target=entry_target, scale_trade=scale_trade, L=L)
+           X_data=X_data, entry_target=entry_target, L=L)
 
     theta = melitz_pack_theta(p.A, p.f)
 

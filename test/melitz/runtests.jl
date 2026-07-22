@@ -375,7 +375,7 @@ end
 
     K = zeros(W)
     G = zeros(W, LAYOUT.num_moments)
-    melitz_moments!(K, G, p, eq, cf, z_draws, LAYOUT; X_data=X_sample, entry_target=entry_sample, scale_trade=false)
+    melitz_moments!(K, G, p, eq, cf, z_draws, LAYOUT; X_data=X_sample, entry_target=entry_sample)
 
     @testset "max scaled trade-moment residual at equal weights" begin
         max_resid = maximum(abs.(vec(sum(G[:, vec(LAYOUT.trade_index)], dims=1)) ./ W))
@@ -420,7 +420,7 @@ end
 
     K = zeros(W)
     G = zeros(W, LAYOUT.num_moments)
-    melitz_moments!(K, G, p, eq, cf, z_draws, LAYOUT; X_data=X_perturbed, scale_trade=false)
+    melitz_moments!(K, G, p, eq, cf, z_draws, LAYOUT; X_data=X_perturbed)
     perturbed_col = LAYOUT.trade_index[2, 3]
     mean_resid_perturbed = abs(mean(G[:, perturbed_col]))
 
@@ -512,6 +512,32 @@ if KNITRO_AVAILABLE
         @testset "negative control: perturbed data gives detectably positive Delta" begin
             @test status1 == 0
             @test val1 > val0 + 1e-5
+        end
+    end
+
+    @testset "CC inner loop against the CLOSED-FORM population target (not a sample tautology)" begin
+        # The tautological Mode-1 test above always gives Delta==0 by construction (X_data
+        # IS the sample mean over the same draws) -- this is a real code-correctness check,
+        # but not a believable validation with real (or even population-level) data. This
+        # testset instead uses the CLOSED-FORM population target (build_melitz_psi_bundle's
+        # default, matching setup/createFakeData.jl's own convention -- see moments.jl's
+        # docstring), which requires large enough W that every cell has multiple active
+        # (participating) draws -- min_active_draw_count is the diagnostic for that
+        # requirement (docs Section "Reproducing the D=4 test").
+        big_data = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=1234, W=80_000)
+        min_active, worst_cell = min_active_draw_count(big_data.primitives, big_data.equilibrium, big_data.z_draws)
+
+        @testset "W=80,000 gives every cell multiple active draws" begin
+            @test min_active >= 10
+        end
+
+        val2, x2, status2, = run_melitz_inner_delta(big_data;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+
+        @testset "Delta(theta*) is small, nonzero, and KNITRO converges cleanly" begin
+            @test status2 == 0
+            @test 0 < val2 < 1e-2
         end
     end
 end

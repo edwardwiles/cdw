@@ -10,13 +10,22 @@
 """
     melitz_moments!(K, G, p::MelitzPrimitives, eq::MelitzEquilibrium,
                      cf::MelitzCounterfactual, z_draws, layout::MelitzMomentLayout;
-                     X_data=eq.trade_flow, entry_target=p.w .* p.f_entry, scale_trade=true)
+                     X_data=eq.trade_flow, entry_target=p.w .* p.f_entry)
 
 Fills `K` (`W`-vector) and `G` (`W x layout.num_moments`) in place.
 
-- `G[:, layout.trade_index[o,d]] = entrant_mass[o]*realized_revenue_od(z) - X_data[o,d]`
-  (optionally divided by `X_data[o,d]` for conditioning when `scale_trade=true` -- the
-  economic zero set is unchanged either way).
+- `G[:, layout.trade_index[o,d]] = entrant_mass[o]*realized_revenue_od(z)/expenditure_d -
+  lambda_od`, where `lambda_od = X_data[o,d]/expenditure_d` -- i.e. the trade moment
+  matches SHARES, not flow levels. This mirrors the Ricardian repo's own convention:
+  `moments/hFunction.jl`'s trade-share moment (`G[ω,d1] = pricesTemp[o] -
+  P[d1]*denom[d]`) compares a simulated per-draw object against `P[d1]` (`lambda_od`,
+  confirmed by reading `prepare_cc/buildObjectsForMoments.jl` -- `P` is literally the
+  vectorized trade-SHARE data) times a destination-level rescaling constant `denom[d]` --
+  the fundamental data object matched is the share, and `setup/createFakeData.jl`
+  constructs exactly that (`lambda`) via the closed-form Frechet gravity equation, never a
+  Monte-Carlo sample average. Matching shares (dividing by `expenditure_d`, the natural
+  destination-wide normalization) also puts every cell's residual on a comparable ~O(1)
+  scale, unlike raw flow levels which can span orders of magnitude across cells.
 - `G[:, layout.entry_index[o]] = sum_d realized_operating_profit_od(z) - entry_target[o]`
   (never multiplied by `entrant_mass[o]`, docs Section 4B/7).
 - `K[:] .= price_power_prime[target] - 1` (the raw counterfactual scalar; the GT
@@ -26,20 +35,20 @@ Fills `K` (`W`-vector) and `G` (`W x layout.num_moments`) in place.
   `(p, eq)`, exactly as production's `counterExplicit==0` branch.
 
 `X_data` defaults to `eq.trade_flow` and `entry_target` defaults to the analytical
-`w.*f_entry` (the model's *population* values -- appropriate for Mode 2, evaluating a
-finite-`W` sample against the population target, docs "Mode 2"). For the Mode 1
-exact-sample smoke test, both `X_data` AND `entry_target` must be recomputed as SAMPLE
-AVERAGES over the SAME `z_draws` (see `scripts/run_melitz_delta_star_fake.jl`) -- passing
-the analytical population values in Mode 1 mixes a finite-sample realization against its
-own (slightly different) population moment and would show spurious O(1/sqrt(W)) residuals
-that are pure Monte Carlo noise, not a modeling error.
+`w.*f_entry` (the model's *population*, CLOSED-FORM values -- matching how
+`setup/createFakeData.jl` builds its own "data" via closed form, not Monte Carlo
+simulation; this is therefore the PRIMARY validation target, not a sample average over
+`z_draws`). Under this target, `Delta(theta*)` is generally small but NOT exactly zero
+even at the true parameters -- machine-precision zero would only be expected if `X_data`
+were itself defined as the sample mean over the SAME `z_draws` used to evaluate the
+moments (a tautological construction the brief also describes as "Mode 1", useful only as
+a code-correctness check, not a believable validation with real or even closed-form data).
 """
 function melitz_moments!(K::AbstractVector, G::AbstractMatrix, p::MelitzPrimitives,
                           eq::MelitzEquilibrium, cf::MelitzCounterfactual,
                           z_draws::AbstractMatrix, layout::MelitzMomentLayout;
                           X_data::AbstractMatrix=eq.trade_flow,
-                          entry_target::AbstractVector=p.w .* p.f_entry,
-                          scale_trade::Bool=true)
+                          entry_target::AbstractVector=p.w .* p.f_entry)
     D = p.D
     W = size(z_draws, 1)
     size(z_draws, 2) == D || throw(ArgumentError("z_draws must be W x D (one draw per origin)"))
@@ -54,15 +63,13 @@ function melitz_moments!(K::AbstractVector, G::AbstractMatrix, p::MelitzPrimitiv
         entry_col = layout.entry_index[o]
         for d in 1:D
             trade_col = layout.trade_index[o, d]
+            lambda_od = X_data[o, d] / eq.expenditure[d]
             for w in 1:W
                 z = z_draws[w, o]
                 firm = melitz_firm(p.w[o], p.tau[o, d], p.A[o, d], p.f[o, d], p.sigma,
                                     eq.expenditure[d], price_power_d, z)
-                g_trade = eq.entrant_mass[o] * firm.realized_revenue - X_data[o, d]
-                if scale_trade
-                    g_trade /= X_data[o, d]
-                end
-                G[w, trade_col] = g_trade
+                model_share = eq.entrant_mass[o] * firm.realized_revenue / eq.expenditure[d]
+                G[w, trade_col] = model_share - lambda_od
                 G[w, entry_col] += firm.realized_operating_profit
             end
         end
@@ -121,4 +128,36 @@ function entry_residuals(p::MelitzPrimitives, eq::MelitzEquilibrium, z_draws::Ab
         resid[o] = s / W - p.w[o] * p.f_entry[o]
     end
     return resid
+end
+
+"""
+    min_active_draw_count(p::MelitzPrimitives, eq::MelitzEquilibrium, z_draws) -> (count, cell)
+
+Diagnostic: the minimum, across all `D^2` cells, of the number of draws in `z_draws` with
+`z_draws[w,o] > eq.cutoff[o,d]` (i.e. an ACTIVE/participating firm for that cell), and
+which cell attains it.
+
+Matters because a cell with **zero** active draws has a perfectly constant (never-zero)
+share/level residual across every single draw -- no reweighting of a Psi-divergence dual
+problem can bring that to zero, so the CC inner KNITRO solve genuinely diverges (dual
+variables blow up, not a graceful "large but finite" answer). This is not a bug: bilateral
+participation probability under Pareto is `Pr(active) = zhat_od^(-theta_star)`, which can
+be very small for high-cutoff (especially export) cells, so a MUCH larger `W` than one
+might naively expect can be required before every cell has even a handful of active draws
+-- discovered live while validating `Delta(theta*)` against a closed-form (non-tautological)
+population target: `W` in the low thousands to tens of thousands reliably left at least one
+cell with zero active draws for the D=4 benchmark fixture; `W>=100_000` did not.
+"""
+function min_active_draw_count(p::MelitzPrimitives, eq::MelitzEquilibrium, z_draws::AbstractMatrix)
+    D = p.D
+    min_count = size(z_draws, 1)
+    worst_cell = (0, 0)
+    for o in 1:D, d in 1:D
+        n_active = count(>(eq.cutoff[o, d]), @view(z_draws[:, o]))
+        if n_active < min_count
+            min_count = n_active
+            worst_cell = (o, d)
+        end
+    end
+    return min_count, worst_cell
 end
