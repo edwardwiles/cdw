@@ -58,21 +58,40 @@ never assumed correct because it was new or because a test file existed for it:
 
 ## 4. What remains (honest gaps, not attempted or not completed this session)
 
-- **Full end-to-end KNITRO smoke runs for both new wirings STILL have not finished, across
-  THREE separate attempts now (this session's original two + a continuation session's retry
-  of both)** — all hang at the identical point (right after the KNITRO license banner prints,
-  before any real solve output), confirmed via stale log timestamps (38+ minutes with zero new
-  output on the continuation session's retry) rather than assumed from a bare timeout. This
-  is a MUCH stronger signal than "first-JIT-compile is slow" — three consecutive hangs at the
-  exact same spot points to a real, reproducible issue (matching this repo's own documented
-  KNITRO+Julia-threading hang pattern, see memory `gravity-robustness-knitro-hang-past-timeout.md`),
-  not merely an underbudgeted timeout. The continuation session's retries happened on an
-  EXTREMELY heavily loaded shared host (load average 42-56, one user's persistent 48-thread
-  job) — a real confound, not yet ruled out, but also not yet confirmed as sufficient
-  explanation on its own given the pattern's exact reproducibility. **Do not flip either
-  default (`use_pooled_gradient`/`cross_delta`) until ONE of these completes cleanly.**
-  Underlying *function-level* correctness remains independently proven either way
-  (`test_gradient_workspace.jl` 9/9; `test_cm_verified_success.jl` steps 1-2).
+- ~~Full end-to-end KNITRO smoke runs for both new wirings STILL have not finished... Do not
+  flip either default until ONE of these completes cleanly.~~ **RESOLVED, root cause found —
+  this was never actually about `use_pooled_gradient`/`cross_delta` themselves.** The repeated
+  hang (4 occurrences total across sessions) was a real regression: commit `62dde8f` ("AUD-02:
+  disable concurrent KNITRO evals") changed `par_concurrent_evals` from `yes`→`no` on the outer
+  solve's `.opt` files, which deadlocks this codebase's always-used nested-`KN_solve` pattern
+  (outer solve's callback synchronously invokes the inner dual solve) via a non-reentrant KNITRO
+  lock — confirmed via `SIGQUIT` stack traces and a direct A/B against a historical
+  known-working commit. **Fixed** by reverting that one setting (kept AUD-02's *other*
+  deliverable, the thread-aware `PsiObjectiveBundle.jl` guard, which already correctly handles
+  the legitimate same-thread nesting). Full writeup: `docs/fullA_nested_knitro_solve_hang_rootcause.md`.
+
+  **With the fix applied**, both originally-hung tests now complete:
+  - `test_driver_pooled_gradient_wiring.jl`: both `use_pooled_gradient=false` and `=true` runs
+    complete in ~90s total with real KNITRO iterations and gradient evaluations, and — the
+    directly relevant check for this decision — **both arms reached the identical
+    `kappa=0.0203135174923732`** (bit-for-bit the same outer-solve outcome regardless of which
+    gradient path was used). Combined with the pre-existing function-level proof
+    (`test_gradient_workspace.jl` 9/9, bit-identical, 4.88x lower allocation), this is now solid
+    evidence for flipping `use_pooled_gradient`'s default to `true`.
+  - `test_cm_verified_success.jl`: 11/11 passed cleanly (`checkpoint_reason=stage_complete`,
+    `classify_inner_result => VerifiedSolved`) — validates the AUD-04 CM verified-success gate
+    end-to-end, not `cross_delta`/`CrossDeltaExactCache` specifically.
+  - **`cross_delta`/`CrossDeltaExactCache` was NOT independently re-run post-fix this session** —
+    a real, disclosed gap. Its own function-level tests (`test_cross_delta_cache.jl`, 36/36) are
+    unaffected by any of this (they don't hit the driver's outer `KN_solve` at all), but no
+    driver-level staged δ-continuation with `cross_delta=true` has been observed to complete
+    cleanly. Do not flip `cross_delta`'s default without that run.
+
+  **Recommendation**: `use_pooled_gradient` has enough evidence now (function-level + fixed
+  driver-level, matching outer-solve outcome) to default to `true`. `cross_delta` needs one more
+  real run before its default should change — this is a small, bounded follow-up (one
+  `run_staged_delta5_continuation(...; cross_delta=true)` call), not a re-opening of the whole
+  investigation.
 - ~~Persistent `LFixBaseWorkspace` for `build_lfix_base_cache`'s ~590-650 MB/gradient
   (price0/pTσ0 tensors) — not started.~~ **DONE** (continuation session, addendum): built,
   tested (D=4 62/62, D=20 real-data cross-check), and benchmarked — 0 bytes allocated on warm
