@@ -842,10 +842,17 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         use_pooled_gradient::Union{Nothing,Bool} = nothing,   # see run_profile_checkpointed's identical kwarg
         price_cache_backend::Union{Nothing,Symbol} = nothing,   # see run_profile_checkpointed's identical kwarg
         maxit_override::Union{Nothing,Int} = nothing,   # see run_profile_checkpointed's identical kwarg
-        allow_direction_box_migration::Bool = false)   # addendum: by default, a start point (fresh or
+        allow_direction_box_migration::Bool = false,   # addendum: by default, a start point (fresh or
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error, not silently clamped. Set true only for an explicit, deliberate migration of a
         # pre-fix checkpoint/start point -- see direction_bounds.jl.
+        full_trace_ref::Union{Nothing,Ref{Vector{NamedTuple}}} = nothing)   # remediation task Part B:
+        # instrumentation for the corrected Phase-1 directional diagnostic (c24_phase1_directional_broad.jl):
+        # when given, every cb_F! eval additionally pushes (w=copy(w), accepted=is_new_best) into this
+        # Ref'd vector so a caller can reconstruct full outer-loop step DIRECTIONS (not just the scalar
+        # gp the existing `trace` NamedTuple records) from a real short production trajectory. Purely
+        # additive -- nothing is read here unless a caller explicitly passes a Ref; zero behavior/
+        # allocation change otherwise.
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
@@ -1089,6 +1096,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                                 t_elapsed = t_el, n_eval = n_eval[])
         end
         push!(trace, (idx = n_eval[], t_elapsed = t_el, gp = w[1], Delta_dual = Δ, inner_status = r.inner_status, feasible = feasible))
+        full_trace_ref !== nothing && push!(full_trace_ref[], (idx = n_eval[], w = copy(w), accepted = is_new_best, feasible = feasible))
         if n_eval[] <= 5 || n_eval[] % 10 == 0
             lp("  [", label, "] eval ", n_eval[], " t=", round(t_el, digits = 1), "s gp=", w[1], " Delta=", Δ,
                " screens(pw/wt/wn/env/wr/sn/pass)=", sc.pairwise, "/", sc.witness, "/", sc.winner, "/", sc.envelope, "/", sc.winning_range, "/", sc.safety_net, "/", sc.passed)
