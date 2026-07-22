@@ -307,10 +307,24 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
     wval = Matrix{Float64}(undef, W, D)
     win_counts = zeros(Int, D, D)
     Hmax = fill(-Inf, D, D)
+    # AUD-06 fix: win_counts credits EVERY exact-price tie for the win (p<=best, non-strict), but
+    # the single-pass Hmax fusion below only ever updates the STRICT-first minimizer bo's own
+    # entry -- a tied origin o'!=bo gets a win credited but its Hmax_d[o'] stays -Inf (or whatever
+    # a DIFFERENT draw last set it to) unless o' also strictly wins some other draw. That made the
+    # winning-range certificate capable of firing on a genuinely feasible tied origin (D=2,W=1
+    # equal-price minimal repro, docs/fullA_independent_audit_remediation.md AUD-06). Rather than
+    # recomputing each tied origin's own h-value in the hot loop (a real algorithmic fix, higher
+    # risk without extensive re-validation against the dense reference), this tracks WHICH
+    # (o,d) cells had any tie and refuses to issue a :winning_range certificate for them -- the
+    # audit's own "preferred safe policy": fall back to the trusted (real solve) path instead of a
+    # false exact certificate. zero_winner is unaffected (ties can only ADD win credit, never
+    # remove it, so they cannot cause a spurious wc[o]==0).
+    tie = falses(D, D)
 
     for (stage, d) in enumerate(order)
         wc = zeros(Int, D)
         Hmax_d = fill(-Inf, D)
+        tie_d = falses(D)
         @inbounds for s in 1:W
             best = constCons[1, d] / UPow[s, 1]; bo = 1
             for o in 2:D
@@ -327,11 +341,15 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
             hval > Hmax_d[bo] && (Hmax_d[bo] = hval)
             for o in 1:D
                 p = constCons[o, d] / UPow[s, o]
-                p <= best && (wc[o] += 1)
+                if p <= best
+                    wc[o] += 1
+                    o != bo && (tie_d[o] = true)
+                end
             end
         end
         win_counts[:, d] .= wc
         Hmax[:, d] .= Hmax_d
+        tie[:, d] .= tie_d
 
         if !full_scan
             # 1) zero-winner rejection (same as screen_hard_winners)
@@ -351,7 +369,7 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
                 j = d + (o - 1) * D
                 colscale = max(Hmax_d[o], b_od, 1.0)
                 tol = safety_mult * eps(Float64) * colscale
-                if Hmax_d[o] < b_od - tol
+                if Hmax_d[o] < b_od - tol && !tie_d[o]
                     return WinnerRangeScreenResult(false, :winning_range, stage, o, d, Hmax_d[o], b_od,
                                                     collect(order), nothing, nothing, win_counts, Hmax)
                 end
@@ -371,7 +389,7 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
             b_od = denom[d] * Pmat[o, d]
             colscale = max(Hmax[o, d], b_od, 1.0)
             tol = safety_mult * eps(Float64) * colscale
-            if Hmax[o, d] < b_od - tol
+            if Hmax[o, d] < b_od - tol && !tie[o, d]   # AUD-06: don't certify off a tie-corrupted Hmax
                 return WinnerRangeScreenResult(false, :winning_range, D, o, d, Hmax[o, d], b_od,
                                                 collect(order), winner, wval, win_counts, Hmax)
             end
@@ -579,7 +597,7 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
                   gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
-                  gravity_R_beta = NaN, moment_resid = Float64[], max_abs_moment_resid = NaN,
+                  gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
                   zeta = NaN, lambda = Float64[], m_mean = NaN, m_min = NaN, m_max = NaN,
                   weight_norm_resid = NaN, mean_m_resid = NaN, max_abs_moment_kkt_resid = NaN,
                   winner_hash = UInt64(0), inner_status = nStatus, inner_iters = inner_iters,
@@ -624,8 +642,8 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
     R_mean = R_sum / ctx.D^2
     R_beta = R_sum / sum(ctx.q_tilde .^ 2)
 
-    moment_resid = moment_resid_blas(G, obj.d, W)
-    max_abs_moment_resid = isempty(moment_resid) ? NaN : maximum(abs.(moment_resid))
+    benchmark_unweighted_moment_mean = moment_resid_blas(G, obj.d, W)
+    max_abs_moment_resid = isempty(benchmark_unweighted_moment_mean) ? NaN : maximum(abs.(benchmark_unweighted_moment_mean))
 
     winner_hash = hash(cf.winner)
 
@@ -638,7 +656,7 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
               Delta_minus_delta = Delta_dual - obj.δ,
               gravity_raw = gravity_raw, gravity_value = gravity_val,
               gravity_R_sum = R_sum, gravity_R_mean = R_mean, gravity_R_beta = R_beta,
-              moment_resid = moment_resid, max_abs_moment_resid = max_abs_moment_resid,
+              benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
               weight_norm_resid = abs(sum(p_weights) - 1.0),
@@ -732,7 +750,7 @@ function infeasible_result_ranged(x_free, θ_full, ctx, screen_status::Symbol, f
             gamma_focal_prime = θ_full[3+D], logA = fill(NaN, D, D),
             K_hard = NaN, Delta_dual = Inf, Delta_primal = Inf, Delta_minus_delta = Inf,
             gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
-            gravity_R_beta = NaN, moment_resid = Float64[], max_abs_moment_resid = NaN,
+            gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
             zeta = NaN, lambda = Float64[], m_mean = NaN, m_min = NaN, m_max = NaN,
             weight_norm_resid = NaN, mean_m_resid = NaN, max_abs_moment_kkt_resid = NaN,
             winner_hash = UInt64(0), inner_status = sentinel, inner_iters = missing,
@@ -785,7 +803,7 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
 
     mode == :hard || error("evaluate_fullA_screened_ranged: mode=:$mode not implemented (matches infeasibility_screen.jl)")
     obj = ctx.obj
-    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode)
+    key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode, context_fingerprint(ctx))
 
     if cache !== nothing && use_cache
         hit = _cache_lookup(cache, key)
