@@ -88,6 +88,7 @@ feasible || error("cm_cold_verify($ckpt_path): cold-verified Delta_dual=$(cold_D
 
 result = (w = copy(w), Delta_dual = cold_Delta, reported_Delta = reported_Delta, diff = diff,
           delta = ckpt.delta, W = ckpt.W, draw_design = ckpt.draw_design, draw_seed = ckpt.draw_seed,
-          cm_L = ckpt.cm_L, source_ckpt = ckpt_path, verified_at = string(now()))
+          cm_L = ckpt.cm_L, contrasts = ckpt.cm_contrasts, schema = ckpt.schema, bi = ctx.bi,
+          source_ckpt = ckpt_path, verified_at = string(now()))
 serialize(out_path, result)
 lp(">>> wrote cold-verified seed vector to ", out_path)

@@ -24,17 +24,50 @@
 #   - every restart is appended to $RESTART_LOG with timestamp + reason
 #   - never launches two stage-runner processes against the same CKPT_DIR
 #
+# State machine (four distinct terminal/transient outcomes per stage attempt --
+# see docs/CM_PRODUCTION_LAUNCHER_2026-07-22.md for the full rationale):
+#   clean_solver_completion    -- STAGE_DONE sentinel seen in THIS attempt's own log
+#                                  region; stage is done, do not restart.
+#   wall_budget_exhausted      -- the stage's inclusive wall budget ran out (whether the
+#                                  process was still running or had just been resumed);
+#                                  terminated safely, NOT restarted (budget is gone), and
+#                                  treated as a normal (non-fatal) ending as long as a
+#                                  schema-2 checkpoint exists -- the caller cold-verifies
+#                                  best_feasible and only fails the stage if that fails.
+#   probable_stall             -- >=STALL_THRESHOLD_S with no log growth/checkpoint
+#                                  advance, budget NOT yet exhausted; terminated and
+#                                  RESUMED from the latest checkpoint against the SAME
+#                                  original stage deadline (no fresh budget granted).
+#   unexpected_process_failure -- nonzero exit, no STAGE_DONE sentinel, not caused by a
+#                                  deliberate wall/stall termination; fails the stage
+#                                  outright, no automatic restart loop.
+#
+# stdout of run_stage_with_watchdog is reserved EXCLUSIVELY for its single return value
+# (the checkpoint path), so it can be safely captured via command substitution. All
+# logging (slog) goes to stderr (and is still appended to $SUPERVISOR_LOG) -- this is a
+# structural fix, not a formatting one: before this fix, `ckpt_path=$(run_stage_with_watchdog ...)`
+# captured EVERY slog line printed during the call (tee'd to stdout), not just the final
+# checkpoint path. See scripts/test_cm_production_supervisor_return_path.sh for a
+# shell-level regression test of exactly this.
+#
 # Usage:
 #   scripts/cm_production_supervisor.sh <chain_id 1|2|3> <ckpt_root_dir>
 #
 # Independent directories per chain are the CALLER's responsibility (pass a distinct
 # ckpt_root_dir per chain, e.g. production_runs/cm_campaign_2026-07-22/chain{1,2,3});
 # this script never assumes or constructs a shared path across chains.
+#
+# Env overrides (production launches must use the defaults -- see the tunables block
+# below for which ones are smoke-test-only):
+#   RESUME_CAMPAIGN=1   required to launch into an already-nonempty ckpt_root_dir; the
+#                        script refuses to start (exit 1, no side effects) into a
+#                        nonempty directory otherwise, since a stale checkpoint or a
+#                        stale STAGE_DONE sentinel from a PRIOR campaign could otherwise
+#                        make a fresh failed attempt look like it inherited a completed
+#                        stage.
 # ============================================================================
 set -uo pipefail
 
-CHAIN_ID="${1:?usage: cm_production_supervisor.sh <chain_id> <ckpt_root_dir>}"
-CKPT_ROOT="${2:?usage: cm_production_supervisor.sh <chain_id> <ckpt_root_dir>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 D4X_DIR="$(cd "$SCRIPT_DIR/../full_aod_diag/d4_exact" && pwd)"
 REPO_ROOT="$(cd "$D4X_DIR/../.." && pwd)"
@@ -61,20 +94,70 @@ if [ -n "$DELTAS_OVERRIDE" ]; then
 else
   DELTAS=(0.1 0.5 1.0 2.0)
 fi
+EXPECTED_CKPT_SUFFIX="_latest.jls"   # every CMCheckpoint (schema-2) is written as "<label>_latest.jls"
 
-mkdir -p "$CKPT_ROOT"
-RESTART_LOG="$CKPT_ROOT/restarts.log"
-SUPERVISOR_LOG="$CKPT_ROOT/supervisor.log"
-COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+# slog: ALL output goes to stderr (and $SUPERVISOR_LOG, once it is set) -- NEVER stdout.
+# This is what keeps `ckpt_path=$(run_stage_with_watchdog ...)` safe: stdout is reserved
+# exclusively for run_stage_with_watchdog's single final `echo "$ckpt_latest"`.
+slog() {
+  local line="[$(date '+%Y-%m-%d %H:%M:%S')] [chain ${CHAIN_ID:-?}] $*"
+  if [ -n "${SUPERVISOR_LOG:-}" ]; then
+    echo "$line" | tee -a "$SUPERVISOR_LOG" >&2
+  else
+    echo "$line" >&2
+  fi
+}
 
-slog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [chain $CHAIN_ID] $*" | tee -a "$SUPERVISOR_LOG"; }
+# Validates a checkpoint path returned by run_stage_with_watchdog before it is trusted for
+# anything (cold-verification, seeding the next stage). Checks, in order: nonempty, exactly
+# one line (no embedded newline -- the structural signature of log contamination), an
+# existing regular file, located inside the expected stage directory, and named like a
+# schema-2 CMCheckpoint ("<label>_latest.jls").
+validate_ckpt_path() {
+  local path="$1" expect_dir="$2"
+  if [ -z "$path" ]; then
+    slog "VALIDATION FAILED: empty checkpoint path returned"
+    return 1
+  fi
+  case "$path" in
+    *$'\n'*)
+      slog "VALIDATION FAILED: checkpoint path return value contains multiple lines (possible log contamination): [$path]"
+      return 1
+      ;;
+  esac
+  if [ ! -f "$path" ]; then
+    slog "VALIDATION FAILED: returned checkpoint path is not an existing regular file: $path"
+    return 1
+  fi
+  local real_path real_dir
+  real_path="$(readlink -f "$path" 2>/dev/null || echo "$path")"
+  real_dir="$(readlink -f "$expect_dir" 2>/dev/null || echo "$expect_dir")"
+  case "$real_path" in
+    "$real_dir"/*) : ;;
+    *)
+      slog "VALIDATION FAILED: returned checkpoint path is not inside the expected stage directory ($expect_dir): $path"
+      return 1
+      ;;
+  esac
+  case "$path" in
+    *"$EXPECTED_CKPT_SUFFIX") : ;;
+    *)
+      slog "VALIDATION FAILED: returned checkpoint path does not end with the expected schema-2 checkpoint filename ($EXPECTED_CKPT_SUFFIX): $path"
+      return 1
+      ;;
+  esac
+  return 0
+}
 
-slog "=== supervisor starting === commit=$COMMIT ckpt_root=$CKPT_ROOT julia_threads=$JULIA_NUM_THREADS"
-
-# Runs one stage to completion (STAGE_WALL_S inclusive across restarts), handling hang
-# detection/restart internally. Args: delta stage_dir mode seed_arg [chain_perturb_seed]
-# On success, prints the path to the stage's own "<label>_latest.jls" checkpoint on stdout
-# (last line) so the caller can cold-verify it.
+# Runs one stage to completion (STAGE_WALL_S inclusive across restarts), handling
+# stall detection/restart internally. Args: delta stage_dir mode seed_arg [chain_perturb_seed]
+#
+# Return contract: on success (clean_solver_completion OR wall_budget_exhausted with a
+# checkpoint on disk), prints EXACTLY the checkpoint path -- one line, nothing else -- to
+# stdout and returns 0. On failure (unexpected_process_failure, or wall-budget-exhausted /
+# hung-with-no-checkpoint-ever-written), prints NOTHING to stdout and returns 1. Every
+# other message this function produces (progress, stall detection, restarts) goes through
+# slog (stderr + $SUPERVISOR_LOG), never stdout.
 run_stage_with_watchdog() {
   local delta="$1" stage_dir="$2" mode="$3" seed_arg="$4" perturb_seed="${5:-0}"
   mkdir -p "$stage_dir"
@@ -82,12 +165,17 @@ run_stage_with_watchdog() {
   local ckpt_latest="$stage_dir/stage_latest.jls"
   local stage_deadline=$(( $(date +%s) + STAGE_WALL_S ))
   local cur_mode="$mode" cur_seed="$seed_arg"
+  local exit_reason=""
 
   while true; do
     local now; now=$(date +%s)
     local remaining=$(( stage_deadline - now ))
     if [ "$remaining" -le 0 ]; then
-      slog "delta=$delta: stage wall budget ($STAGE_WALL_S s) exhausted, not restarting again"
+      # Budget was exhausted between restarts (e.g. a prior stall's grace period consumed
+      # the last of it) rather than while a process was actively running -- same
+      # wall_budget_exhausted classification as the in-loop case below.
+      exit_reason="wall_budget_exhausted"
+      slog "delta=$delta: stage wall budget (${STAGE_WALL_S}s) exhausted before a new attempt could launch"
       break
     fi
 
@@ -100,6 +188,16 @@ run_stage_with_watchdog() {
       echo "start_time=$(date '+%Y-%m-%d %H:%M:%S')"
       echo "remaining_budget_s=$remaining"
     } >> "$stage_dir/run_meta.txt"
+
+    # Per-attempt sentinel scoping (item 3): record the log's byte size BEFORE this
+    # attempt's own output is appended, so a STAGE_DONE sentinel left behind by an
+    # EARLIER (possibly stalled/killed) attempt at this same stage_dir can never be
+    # mistaken for THIS attempt's own completion. The log file itself stays one
+    # cumulative file per stage (matches "resume" mode's own expectation of appending
+    # to the same stage.log across restarts, for a single continuous narrative of the
+    # stage), but STAGE_DONE is only ever searched for after this offset.
+    local log_offset_before=0
+    [ -f "$log_file" ] && log_offset_before=$(stat -c %s "$log_file" 2>/dev/null || echo 0)
 
     slog "delta=$delta: launching stage runner (mode=$cur_mode remaining=${remaining}s)"
     # NOTE: --project=. must resolve to REPO_ROOT's Project.toml (where SpecialFunctions etc.
@@ -116,15 +214,17 @@ run_stage_with_watchdog() {
 
     local last_size=-1 last_progress_t
     last_progress_t=$(date +%s)
-    local hung=0 exited_clean=0
+    local hung=0 wall_exhausted=0
     while kill -0 "$pid" 2>/dev/null; do
       sleep "$POLL_INTERVAL_S"
       now=$(date +%s)
       if [ "$now" -ge "$stage_deadline" ]; then
         slog "delta=$delta: stage wall budget hit while pid=$pid still running -- terminating for wall-limit, not stall"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta pid=$pid reason=wall_budget_exhausted" >> "$RESTART_LOG"
         kill -TERM "$pid" 2>/dev/null
         sleep "$GRACE_TERM_S"
         kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+        wall_exhausted=1
         break
       fi
 
@@ -169,67 +269,116 @@ run_stage_with_watchdog() {
 
     wait "$pid" 2>/dev/null
     local exit_code=$?
-    if [ "$hung" -eq 0 ]; then
-      if grep -q "STAGE_DONE" "$log_file" 2>/dev/null; then
-        exited_clean=1
-        slog "delta=$delta: stage runner completed cleanly (exit=$exit_code)"
-      else
-        slog "delta=$delta: stage runner exited (exit=$exit_code) WITHOUT the STAGE_DONE sentinel -- treating as a non-hang failure, not restarting automatically. Check $log_file."
-        echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta pid=$pid action=exited_no_sentinel exit_code=$exit_code" >> "$RESTART_LOG"
+
+    local sentinel_found=0
+    if [ "$hung" -eq 0 ] && [ "$wall_exhausted" -eq 0 ]; then
+      if [ -f "$log_file" ] && tail -c "+$((log_offset_before + 1))" "$log_file" 2>/dev/null | grep -q "STAGE_DONE"; then
+        sentinel_found=1
       fi
     fi
 
-    if [ "$exited_clean" -eq 1 ]; then
+    if [ "$wall_exhausted" -eq 1 ]; then
+      exit_reason="wall_budget_exhausted"
+      slog "delta=$delta: exit_reason=wall_budget_exhausted (terminated for wall-limit, not restarting -- inclusive stage budget is gone)"
+      echo "exit_reason=wall_budget_exhausted" >> "$stage_dir/run_meta.txt"
       break
-    fi
-    if [ "$hung" -eq 1 ]; then
+    elif [ "$sentinel_found" -eq 1 ]; then
+      exit_reason="clean_solver_completion"
+      slog "delta=$delta: exit_reason=clean_solver_completion (exit=$exit_code, STAGE_DONE sentinel confirmed in this attempt's own log region)"
+      echo "exit_reason=clean_solver_completion" >> "$stage_dir/run_meta.txt"
+      break
+    elif [ "$hung" -eq 1 ]; then
       if [ ! -f "$ckpt_latest" ]; then
-        slog "delta=$delta: hung with NO checkpoint ever written -- cannot resume, aborting this stage. Manual intervention required."
+        exit_reason="probable_stall_no_checkpoint"
+        slog "delta=$delta: exit_reason=probable_stall_no_checkpoint (hung with NO checkpoint ever written -- cannot resume, aborting this stage; manual intervention required)"
+        echo "exit_reason=probable_stall_no_checkpoint" >> "$stage_dir/run_meta.txt"
         return 1
       fi
-      slog "delta=$delta: restarting from latest checkpoint $ckpt_latest"
+      slog "delta=$delta: exit_reason=probable_stall -- restarting from latest checkpoint $ckpt_latest (same original deadline, no fresh budget)"
+      echo "exit_reason=probable_stall" >> "$stage_dir/run_meta.txt"
       cur_mode="resume"
       cur_seed="$ckpt_latest"
       continue
+    else
+      # Nonzero/zero exit, no STAGE_DONE sentinel in THIS attempt's own log region, not
+      # caused by a deliberate wall/stall termination -- a real, unexpected process
+      # failure (Julia exception, KNITRO hard error, etc). Do not loop forever.
+      exit_reason="unexpected_process_failure"
+      slog "delta=$delta: exit_reason=unexpected_process_failure (exit=$exit_code) -- exited WITHOUT the STAGE_DONE sentinel and without a deliberate wall/stall termination. Check $log_file."
+      echo "exit_reason=unexpected_process_failure exit_code=$exit_code" >> "$stage_dir/run_meta.txt"
+      echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta pid=$pid action=exited_no_sentinel exit_code=$exit_code reason=unexpected_process_failure" >> "$RESTART_LOG"
+      return 1
     fi
-    # Non-hang, non-clean exit (a real error) -- do not loop forever.
-    return 1
   done
 
+  # Reached only via `break` above -- clean_solver_completion or wall_budget_exhausted.
   if [ -f "$ckpt_latest" ]; then
     echo "$ckpt_latest"
     return 0
   else
-    slog "delta=$delta: no checkpoint produced -- stage failed"
+    slog "delta=$delta: exit_reason=$exit_reason but no checkpoint exists at $ckpt_latest -- stage failed"
+    echo "exit_reason=${exit_reason}_no_checkpoint" >> "$stage_dir/run_meta.txt"
     return 1
   fi
 }
 
 # ---- chain state machine: walk the delta ladder, cold-verifying between stages ----
-prev_seed_file=""
-mode="calibration"
-seed_arg=""
+main() {
+  CHAIN_ID="${1:?usage: cm_production_supervisor.sh <chain_id> <ckpt_root_dir>}"
+  CKPT_ROOT="${2:?usage: cm_production_supervisor.sh <chain_id> <ckpt_root_dir>}"
 
-for delta in "${DELTAS[@]}"; do
-  stage_dir="$CKPT_ROOT/delta_${delta}"
-  ckpt_path=$(run_stage_with_watchdog "$delta" "$stage_dir" "$mode" "$seed_arg" "$CHAIN_ID")
-  status=$?
-  if [ "$status" -ne 0 ] || [ -z "$ckpt_path" ]; then
-    slog "delta=$delta: FAILED -- aborting chain $CHAIN_ID (no further deltas will run)"
-    exit 1
+  RESUME_CAMPAIGN="${RESUME_CAMPAIGN:-0}"
+  if [ -d "$CKPT_ROOT" ] && [ -n "$(ls -A "$CKPT_ROOT" 2>/dev/null)" ] && [ "$RESUME_CAMPAIGN" != "1" ]; then
+    echo "ERROR: $CKPT_ROOT already exists and is nonempty. Refusing to launch a fresh campaign" \
+         "into it -- a stale checkpoint or a stale STAGE_DONE sentinel from a prior campaign" \
+         "could otherwise make a fresh failed attempt look like it inherited a completed stage." \
+         "Pass RESUME_CAMPAIGN=1 if you explicitly intend to resume/continue this exact" \
+         "campaign directory." >&2
+    return 1
   fi
 
-  slog "delta=$delta: cold-verifying $ckpt_path"
-  verify_out="$stage_dir/cold_verified_seed.jls"
-  if ! ( cd "$REPO_ROOT" && "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_cold_verify.jl "$ckpt_path" "$verify_out" \
-        >> "$stage_dir/coldverify.log" 2>&1 ); then
-    slog "delta=$delta: COLD VERIFICATION FAILED -- see $stage_dir/coldverify.log -- aborting chain $CHAIN_ID"
-    exit 1
-  fi
-  slog "delta=$delta: cold verification passed -> $verify_out"
+  mkdir -p "$CKPT_ROOT"
+  RESTART_LOG="$CKPT_ROOT/restarts.log"
+  SUPERVISOR_LOG="$CKPT_ROOT/supervisor.log"
+  COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 
-  mode="seed_w0"
-  seed_arg="$verify_out"
-done
+  slog "=== supervisor starting === commit=$COMMIT ckpt_root=$CKPT_ROOT julia_threads=$JULIA_NUM_THREADS resume_campaign=$RESUME_CAMPAIGN"
 
-slog "=== chain $CHAIN_ID complete: all deltas (${DELTAS[*]}) finished and cold-verified ==="
+  local mode="calibration"
+  local seed_arg=""
+
+  for delta in "${DELTAS[@]}"; do
+    local stage_dir="$CKPT_ROOT/delta_${delta}"
+    local ckpt_path
+    ckpt_path=$(run_stage_with_watchdog "$delta" "$stage_dir" "$mode" "$seed_arg" "$CHAIN_ID")
+    local status=$?
+    if [ "$status" -ne 0 ]; then
+      slog "delta=$delta: FAILED -- aborting chain $CHAIN_ID (no further deltas will run)"
+      return 1
+    fi
+    if ! validate_ckpt_path "$ckpt_path" "$stage_dir"; then
+      slog "delta=$delta: FAILED -- returned checkpoint path failed validation -- aborting chain $CHAIN_ID"
+      return 1
+    fi
+
+    slog "delta=$delta: cold-verifying $ckpt_path"
+    local verify_out="$stage_dir/cold_verified_seed.jls"
+    if ! ( cd "$REPO_ROOT" && "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_cold_verify.jl "$ckpt_path" "$verify_out" \
+          >> "$stage_dir/coldverify.log" 2>&1 ); then
+      slog "delta=$delta: COLD VERIFICATION FAILED (no verified feasible incumbent exists) -- see $stage_dir/coldverify.log -- aborting chain $CHAIN_ID"
+      return 1
+    fi
+    slog "delta=$delta: cold verification passed -> $verify_out"
+
+    mode="seed_w0"
+    seed_arg="$verify_out"
+  done
+
+  slog "=== chain $CHAIN_ID complete: all deltas (${DELTAS[*]}) finished and cold-verified ==="
+  return 0
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+  exit $?
+fi
