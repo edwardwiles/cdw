@@ -51,12 +51,24 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
         # earlier staged-vs-direct comparison's staged arm losing on wall time -- see
         # docs/fullA_driver_delta5_diagnostics_handoff.md §5-6). Set false to reproduce the old
         # per-stage-rebuild behavior exactly (e.g. for an A/B wall-time comparison).
+        cross_delta::Bool = false,   # allocation/cache-cleanup task §12: when true (and
+        # use_exact_cache=true), construct ONE CrossDeltaExactCache before the stage loop and
+        # thread it through every stage's run_polish_checkpointed call via exact_cache_override=,
+        # instead of each stage building its own throwaway SafeExactCache(). An exact hit from a
+        # DIFFERENT delta-stage at the SAME x_free/find_smallest/context is served without a
+        # re-solve, with Delta_minus_delta patched to the current stage's own delta. Requires
+        # reuse_context=true (the cache is only valid across stages that share ONE ctx -- see
+        # CrossDeltaExactCache's own docstring); errors if reuse_context=false. Default false:
+        # zero behavior change unless explicitly requested, per AUD-08's own "only after
+        # cache-state and fingerprint work passes" gate (already satisfied on this branch).
         draw_design_in::Symbol = :pseudorandom, inner_opt_override::Union{Nothing,AbstractString} = nothing,
         allow_direction_box_migration::Bool = false)
+    cross_delta && !reuse_context && error("run_staged_delta5_continuation($label): cross_delta=true requires reuse_context=true -- a CrossDeltaExactCache is only valid across stages that share one ctx.")
     g = g_start; zfree = copy(zfree_start)
     stage_summaries = NamedTuple[]
     res = nothing
     reuse = nothing
+    cross_delta_cache_obj = (cross_delta && use_exact_cache) ? CrossDeltaExactCache() : nothing
     if reuse_context
         lp("=== building reusable context ONCE (task §5), delta_stages[1]=", delta_stages[1],
            " find_smallest=", find_smallest, " (", find_smallest ? "upper" : "lower", ") === ", Dates.now())
@@ -72,20 +84,30 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
         lp("=== STAGED CONTINUATION stage ", i, "/", length(delta_stages), ": delta=", delta,
            " (start g=", g, ") ===", "  ", Dates.now())
         t0 = time()
+        cache_size_before = cross_delta_cache_obj === nothing ? 0 : length(cross_delta_cache_obj)
         res = run_polish_checkpointed(stage_label, find_smallest, g, zfree;
             maxtime_real = stage_maxtime_real, hessopt_tag = hessopt_tag,
             W_in = W_in, delta_in = delta, draw_seed_in = draw_seed_in,
             ckpt_dir = ckpt_dir, checkpoint_interval_s = 30.0,
             use_dual_bank = use_dual_bank, use_exact_cache = use_exact_cache,
+            exact_cache_override = cross_delta_cache_obj,
             reuse = reuse, allow_direction_box_migration = allow_direction_box_migration)
         t_stage = time() - t0
+        cache_size_after = cross_delta_cache_obj === nothing ? 0 : length(cross_delta_cache_obj)
         b = res.best_feasible
         if b !== nothing
             g = b.gp; zfree = copy(b.w[2:end])
         end
+        if cross_delta_cache_obj !== nothing
+            lp("  stage ", i, " cross-delta cache: ", cache_size_before, " -> ", cache_size_after,
+               " entries (", res.n_eval, " evals this stage; entries unchanged from before this stage ",
+               "were served WITHOUT a re-solve -- an exact size-growth-vs-n_eval gap is the inter-stage ",
+               "hit signal, see docs/fullA_postmerge_allocation_productionization.md for the full benchmark)")
+        end
         push!(stage_summaries, (stage = i, delta = delta, wall = t_stage, n_eval = res.n_eval,
             kappa = res.kappa, n_rejected = res.n_rejected, knitro_status = res.knitro_status,
-            best_gp = b === nothing ? NaN : b.gp))
+            best_gp = b === nothing ? NaN : b.gp,
+            cross_delta_cache_size_before = cache_size_before, cross_delta_cache_size_after = cache_size_after))
         lp("  stage ", i, " done: wall=", round(t_stage, digits=1), "s kappa=", res.kappa,
            " n_eval=", res.n_eval, " n_rejected=", res.n_rejected, " knitro_status=", res.knitro_status)
     end
