@@ -738,7 +738,7 @@ par_blasnumthreads 0
 # Whether to allow simultaneous evaluations in parallel.
 #   no   = 0 = only one thread can perform an evaluation at a time
 #   yes  = 1 = allow multi-threaded simultaneous evaluations
-par_concurrent_evals  no
+par_concurrent_evals  yes
 
 # Number of threads to use in parallel linear solver.
 #   choose any positive integer, or
