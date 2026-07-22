@@ -74,13 +74,13 @@ function compare(label, x_free; warm = true, cache_a = nothing, cache_b = nothin
         end
     end
     dlogA = maximum(abs.(collect(ra.logA) .- collect(rb.logA)))
-    dmr = isempty(ra.moment_resid) ? 0.0 : maximum(abs.(ra.moment_resid .- rb.moment_resid))
+    dmr = isempty(ra.benchmark_unweighted_moment_mean) ? 0.0 : maximum(abs.(ra.benchmark_unweighted_moment_mean .- rb.benchmark_unweighted_moment_mean))
     dlam = isempty(ra.lambda) ? 0.0 : maximum(abs.(ra.lambda .- rb.lambda))
     MAXDIFF_SEEN[:logA] = max(get(MAXDIFF_SEEN, :logA, 0.0), dlogA)
-    MAXDIFF_SEEN[:moment_resid] = max(get(MAXDIFF_SEEN, :moment_resid, 0.0), dmr)
+    MAXDIFF_SEEN[:benchmark_unweighted_moment_mean] = max(get(MAXDIFF_SEEN, :benchmark_unweighted_moment_mean, 0.0), dmr)
     MAXDIFF_SEEN[:lambda] = max(get(MAXDIFF_SEEN, :lambda, 0.0), dlam)
     if dlogA > 1e-7; println("  MISMATCH field=logA diff=$dlogA"); ok = false; end
-    if dmr > 1e-7; println("  MISMATCH field=moment_resid diff=$dmr"); ok = false; end
+    if dmr > 1e-7; println("  MISMATCH field=benchmark_unweighted_moment_mean diff=$dmr"); ok = false; end
     if dlam > 1e-7; println("  MISMATCH field=lambda diff=$dlam"); ok = false; end
     if verbose
         println(rpad(label, 40), " warm=", warm, "  maxdiff=", @sprintf("%.3e", maxdiff),

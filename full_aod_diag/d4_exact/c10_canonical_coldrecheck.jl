@@ -43,12 +43,12 @@ t_cold = time() - t0
 d_delta = abs(r_cold.Delta_dual - latest.verify_Delta_dual)
 d_grav = abs(r_cold.gravity_value - latest.verify_gravity_value)
 d_kkt = abs(r_cold.max_abs_moment_kkt_resid - latest.verify_max_abs_moment_kkt_resid)
-d_mr = abs(norm(r_cold.moment_resid) - latest.verify_moment_resid_norm)
+d_mr = abs(norm(r_cold.benchmark_unweighted_moment_mean) - latest.verify_moment_resid_norm)
 
 @printf("[COLD RECHECK] wall=%.3fs inner_status=%d screen_status=%s\n", t_cold, r_cold.inner_status, string(meta_cold.screen_status))
-@printf("[COLD RECHECK] recomputed: Delta_dual=%.15f gravity=%.15e kkt=%.15e |moment_resid|=%.15e\n",
-        r_cold.Delta_dual, r_cold.gravity_value, r_cold.max_abs_moment_kkt_resid, norm(r_cold.moment_resid))
-@printf("[COLD RECHECK] checkpoint:  Delta_dual=%.15f gravity=%.15e kkt=%.15e |moment_resid|=%.15e\n",
+@printf("[COLD RECHECK] recomputed: Delta_dual=%.15f gravity=%.15e kkt=%.15e |benchmark_unweighted_moment_mean|=%.15e\n",
+        r_cold.Delta_dual, r_cold.gravity_value, r_cold.max_abs_moment_kkt_resid, norm(r_cold.benchmark_unweighted_moment_mean))
+@printf("[COLD RECHECK] checkpoint:  Delta_dual=%.15f gravity=%.15e kkt=%.15e |benchmark_unweighted_moment_mean|=%.15e\n",
         latest.verify_Delta_dual, latest.verify_gravity_value, latest.verify_max_abs_moment_kkt_resid, latest.verify_moment_resid_norm)
 @printf("[COLD RECHECK] |diff|: Delta_dual=%.3e gravity=%.3e kkt=%.3e moment_resid_norm=%.3e\n", d_delta, d_grav, d_kkt, d_mr)
 

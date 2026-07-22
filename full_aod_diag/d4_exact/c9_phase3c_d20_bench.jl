@@ -106,7 +106,7 @@ function run_variant(label, opt_path, variant_sym; n_extra_starts::Int = 2, seed
     mresid_c = compressed_moment_resid(st_c.cf, ones(size(obj.U,1))) ./ size(obj.U,1)
     max_mresid_c = maximum(abs.(mresid_c))
     dzeta_c = abs(x_c[1] - x_ref[1]); dlambda_c = maximum(abs.(x_c[2:end] .- x_ref[2:end]))
-    logprint(@sprintf("  cold: status=%d n_fg=%d n_hess=%d n_iters=%d wall=%.3fs Delta_dual=%.10f max|moment_resid|=%.3e |dζ vs ref|=%.3e max|dλ vs ref|=%.3e",
+    logprint(@sprintf("  cold: status=%d n_fg=%d n_hess=%d n_iters=%d wall=%.3fs Delta_dual=%.10f max|benchmark_unweighted_moment_mean|=%.3e |dζ vs ref|=%.3e max|dλ vs ref|=%.3e",
               status_c, nfg_c, nhess_c, iters_c, t_cold, Delta_dual_c, max_mresid_c, dzeta_c, dlambda_c))
 
     # warm (re-solve from the just-converged point -- obj.x already holds x_c via inner_loop_internal_compressed_variant's own obj.x .= x assignment)

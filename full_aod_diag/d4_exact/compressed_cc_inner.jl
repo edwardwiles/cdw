@@ -153,12 +153,12 @@ end
 
 MOMENT-RESIDUAL formula (mean_s w_s*G_s over the inner-dual columns), from
 compressed moments only. `weights` is typically `ones(W)` (unweighted mean,
-matching `evaluate_fullA_fast`'s `moment_resid` diagnostic) or `m_weights`
+matching `evaluate_fullA_fast`'s `benchmark_unweighted_moment_mean` diagnostic) or `m_weights`
 (the recovered LFD primal weights, matching its `max_abs_moment_kkt_resid`
 diagnostic). This is EXACTLY `compressed_transpose_contraction(weights, cf) /
 sum-normalization` depending on which mean convention the caller wants -- see
 `compressed_live.jl` callers for the exact normalization used at each call
-site (mirrors `oracle_fast.jl`'s own `moment_resid` (divide by W) vs
+site (mirrors `oracle_fast.jl`'s own `benchmark_unweighted_moment_mean` (divide by W) vs
 `max_abs_moment_kkt_resid` (divide by W, using primal weights) conventions).
 Provided here as a thin, explicitly-named wrapper around
 `compressed_transpose_contraction` (no new math) so a caller doesn't have to

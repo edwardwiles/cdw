@@ -101,7 +101,7 @@ for (label, w) in (("lfixcomposite_sr1_best_feasible", W_CAND), ("maxit40_best_f
                 mean_m_resid = r.mean_m_resid, weight_norm_resid = r.weight_norm_resid,
                 inner_status = r.inner_status, winner_hash = r.winner_hash,
                 m_min = r.m_min, m_max = r.m_max, m_mean = r.m_mean))
-            @printf("  [%s | %s | %s] kappa=%.10f Delta-delta=%.3e gravity=%.3e moment_resid=%.3e kkt=%.3e mean_m=%.3e status=%d winner_hash=%s\n",
+            @printf("  [%s | %s | %s] kappa=%.10f Delta-delta=%.3e gravity=%.3e benchmark_unweighted_moment_mean=%.3e kkt=%.3e mean_m=%.3e status=%d winner_hash=%s\n",
                 label, tol_label, warm_label, κ, r.Delta_minus_delta, r.gravity_value,
                 r.max_abs_moment_resid, r.max_abs_moment_kkt_resid, r.mean_m_resid, r.inner_status, r.winner_hash)
         end
@@ -123,8 +123,8 @@ let xf = x_free_from_w(W_CAND)
         println(io, "\nlogA (structural, from oracle):")
         show(io, MIME"text/plain"(), r.logA)
         println(io)
-        println(io, "\nfull moment_resid vector (all $(length(r.moment_resid)) moments):")
-        show(io, MIME"text/plain"(), r.moment_resid)
+        println(io, "\nfull benchmark_unweighted_moment_mean vector (all $(length(r.benchmark_unweighted_moment_mean)) moments):")
+        show(io, MIME"text/plain"(), r.benchmark_unweighted_moment_mean)
         println(io)
     end
 end

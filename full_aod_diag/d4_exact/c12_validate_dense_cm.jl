@@ -1,7 +1,7 @@
 # Continuation 12, section 2/12: validate the dense cumulative-CDF common-marginals reference
 # at D=4, fixed outer parameters. Checks moment count, inner KNITRO dual solve status, CM-block
 # KKT residuals (the quantity that should be ~0 at a converged LFD solve -- sum(m*G_j)/W, m the
-# LFD weight -- not the raw unweighted moment_resid, which need not vanish), and timing, for
+# LFD weight -- not the raw unweighted benchmark_unweighted_moment_mean, which need not vanish), and timing, for
 # L in {10, 20, 50} at the calibration point (A_od=1).
 #
 # Layout note (see common_marginals_moments.jl docstrings): the augmented G has columns

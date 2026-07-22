@@ -99,7 +99,7 @@ function reconstruct_and_verify(label::String, best; δ::Real = 1.0, find_smalle
     @printf("    kappa (exact full-A oracle) = %.10f\n", κ_exact)
     @printf("    gravity_R_mean = %.6e   gravity_R_sum = %.6e   gravity_R_beta = %.6e\n",
             result.gravity_R_mean, result.gravity_R_sum, result.gravity_R_beta)
-    @printf("    max_abs_moment_resid = %.6e  (over %d moments)\n", result.max_abs_moment_resid, length(result.moment_resid))
+    @printf("    max_abs_moment_resid = %.6e  (over %d moments)\n", result.max_abs_moment_resid, length(result.benchmark_unweighted_moment_mean))
     @printf("    Delta_dual = %.8f   Delta_primal = %.8f   primal_dual_gap = %.3e   Delta - delta = %.6e  (delta=%.4g)\n",
             result.Delta_dual, result.Delta_primal, result.primal_dual_gap, result.Delta_minus_delta, δ)
     @printf("    mean_m_resid = %.3e   max_abs_moment_kkt_resid = %.3e\n", result.mean_m_resid, result.max_abs_moment_kkt_resid)
@@ -111,7 +111,7 @@ function reconstruct_and_verify(label::String, best; δ::Real = 1.0, find_smalle
                       abs(result.gravity_R_mean) < 5e-4 &&
                       result.Delta_dual <= δ * (1 + 1e-6) + 1e-10 &&
                       result.max_abs_moment_resid < 1e-3
-    @printf("\n  EXACT_FEASIBLE (full-A oracle, hard gates: solved status, |R_mean|<5e-4, Delta<=delta, max|moment_resid|<1e-3): %s\n", exact_feasible)
+    @printf("\n  EXACT_FEASIBLE (full-A oracle, hard gates: solved status, |R_mean|<5e-4, Delta<=delta, max|benchmark_unweighted_moment_mean|<1e-3): %s\n", exact_feasible)
 
     return (label = label, x_free = x_free, diag = diag, result = result, κ_exact = κ_exact, exact_feasible = exact_feasible, start_id = best.start_id)
 end

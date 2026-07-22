@@ -39,7 +39,7 @@ t_cold = time() - t0
 @printf("[cold] Delta_dual=%.15f\n", r_cold.Delta_dual)
 @printf("[cold] gravity_value=%.15e\n", r_cold.gravity_value)
 @printf("[cold] max_abs_moment_kkt_resid=%.15e\n", r_cold.max_abs_moment_kkt_resid)
-@printf("[cold] norm_moment_resid=%.15e\n", norm(r_cold.moment_resid))
+@printf("[cold] norm_moment_resid=%.15e\n", norm(r_cold.benchmark_unweighted_moment_mean))
 @printf("[cold] zeta=%.15f\n", r_cold.zeta)
 @printf("[cold] norm_lambda=%.15e\n", norm(r_cold.lambda))
 @printf("[cold] winner_hash=%s\n", string(r_cold.winner_hash))
@@ -54,7 +54,7 @@ t_warm = time() - t0
 @printf("[warm] Delta_dual=%.15f\n", r_warm.Delta_dual)
 @printf("[warm] gravity_value=%.15e\n", r_warm.gravity_value)
 @printf("[warm] max_abs_moment_kkt_resid=%.15e\n", r_warm.max_abs_moment_kkt_resid)
-@printf("[warm] norm_moment_resid=%.15e\n", norm(r_warm.moment_resid))
+@printf("[warm] norm_moment_resid=%.15e\n", norm(r_warm.benchmark_unweighted_moment_mean))
 
 # --- 3. outer composite gradient at the same point (base built fresh compressed) ---
 base = compressed_base_state(xf0, ctx)
@@ -103,6 +103,6 @@ kkt_blas = kkt_residual_blas(G_old, m_w, nkkt, cf0.W)
 
 mr_loop = mr_loop_ref(G_old, ncolI, cf0.W)
 mr_blas = moment_resid_blas(G_old, ncolI, cf0.W)
-@printf("[isolated] moment_resid: |diff|=%.3e\n", maximum(abs.(mr_loop .- mr_blas)))
+@printf("[isolated] benchmark_unweighted_moment_mean: |diff|=%.3e\n", maximum(abs.(mr_loop .- mr_blas)))
 
 println("DONE_EQUIVALENCE_PROBE")

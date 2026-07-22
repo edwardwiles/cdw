@@ -54,8 +54,8 @@ function compare(label, x_free; warm = true, cache_a = nothing, cache_b = nothin
     if !isapprox(collect(ra.logA), collect(rb.logA); atol = 1e-9, nans = true)
         println("  MISMATCH field=logA"); ok = false
     end
-    if !isapprox(ra.moment_resid, rb.moment_resid; atol = 1e-9)
-        println("  MISMATCH field=moment_resid"); ok = false
+    if !isapprox(ra.benchmark_unweighted_moment_mean, rb.benchmark_unweighted_moment_mean; atol = 1e-9)
+        println("  MISMATCH field=benchmark_unweighted_moment_mean"); ok = false
     end
     if !isapprox(ra.lambda, rb.lambda; atol = 1e-9)
         println("  MISMATCH field=lambda"); ok = false

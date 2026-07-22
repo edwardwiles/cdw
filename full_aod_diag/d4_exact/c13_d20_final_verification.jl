@@ -61,11 +61,11 @@ aug_ref = build_cm_augmented_obj(ctx, CS; L = L, contrasts = :anchored, probs = 
 ctx_ref = merge(ctx, (obj = aug_ref.obj_cm,))
 r_ref = evaluate_fullA(xf_final, ctx_ref; use_cache = false, warm = false)
 @printf "  dense nStatus=%d  Delta_dual=%.10f  (<=%.2f? %s)\n" r_ref.inner_status (-r_ref.zeta) DELTA ((-r_ref.zeta) <= DELTA + 1e-6)
-@printf "  max_abs_moment_kkt_resid=%.3e  ||moment_resid||=%.3e  gravity(from r_ref)=%.3e\n" r_ref.max_abs_moment_kkt_resid norm(r_ref.moment_resid) r_ref.gravity_value
+@printf "  max_abs_moment_kkt_resid=%.3e  ||benchmark_unweighted_moment_mean||=%.3e  gravity(from r_ref)=%.3e\n" r_ref.max_abs_moment_kkt_resid norm(r_ref.benchmark_unweighted_moment_mean) r_ref.gravity_value
 
 ncore = aug_ref.ncore
-kkt_core = maximum(abs.(r_ref.moment_resid[1:ncore-1]))
-kkt_cm = maximum(abs.(r_ref.moment_resid[ncore:ncore-1+aug_ref.ncm]))
+kkt_core = maximum(abs.(r_ref.benchmark_unweighted_moment_mean[1:ncore-1]))
+kkt_cm = maximum(abs.(r_ref.benchmark_unweighted_moment_mean[ncore:ncore-1+aug_ref.ncm]))
 @printf "  core-moment max KKT resid=%.3e  |  CM-block max KKT resid=%.3e\n" kkt_core kkt_cm
 
 println()

@@ -173,8 +173,8 @@ for cand in CANDIDATES
     @printf("  gravity_value=%.3e  gravity_raw=%.3e  max_abs_moment_resid=%.3e  max_abs_moment_kkt_resid=%.3e  mean_m_resid=%.3e  inner_status=%d\n",
         r_cold.gravity_value, r_cold.gravity_raw, r_cold.max_abs_moment_resid, r_cold.max_abs_moment_kkt_resid, r_cold.mean_m_resid, r_cold.inner_status)
 
-    for (j, mr) in enumerate(r_cold.moment_resid)
-        push!(moment_resid_rows, (label = label, moment_idx = j, moment_resid = mr))
+    for (j, mr) in enumerate(r_cold.benchmark_unweighted_moment_mean)
+        push!(moment_resid_rows, (label = label, moment_idx = j, benchmark_unweighted_moment_mean = mr))
     end
 
     # ---- 2. bounds check (original economic bound: gamma'_focal; numerical-safeguard box: z_free) ----
@@ -349,7 +349,7 @@ write_csv_rows(joinpath(OUTDIR, "secant_sweep.csv"), secant_rows)
 write_csv_rows(joinpath(OUTDIR, "gravity_tangent_directions.csv"), tangent_rows)
 write_csv_rows(joinpath(OUTDIR, "poll.csv"), poll_rows)
 write_csv_rows(joinpath(OUTDIR, "kkt_scaled_hgrid.csv"), kkt_scaled_hgrid_rows)
-write_csv_rows(joinpath(OUTDIR, "moment_resid.csv"), moment_resid_rows)
+write_csv_rows(joinpath(OUTDIR, "benchmark_unweighted_moment_mean.csv"), moment_resid_rows)
 
 println("\n" * "="^78); println("FINAL SUMMARY"); println("="^78)
 for r in summary_rows

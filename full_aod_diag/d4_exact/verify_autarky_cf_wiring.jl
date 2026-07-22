@@ -52,7 +52,7 @@ function compare(rr, rc, label; tol = 0.0)   # tol=0.0: require BIT-IDENTICAL
     for f in fields_int
         getfield(rr, f) == getfield(rc, f) || (ok = false)
     end
-    for f in (:lambda, :moment_resid, :logA)
+    for f in (:lambda, :benchmark_unweighted_moment_mean, :logA)
         a = vec(collect(getfield(rr, f))); b = vec(collect(getfield(rc, f)))
         if length(a) == length(b) && !isempty(a)
             d = maximum(abs.(a .- b)); (d > worst) && (worst = d; worst_f = f)

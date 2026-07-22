@@ -55,7 +55,7 @@ function compare(rr, rc, label; tol = 1e-13)
         getfield(rr, f) == getfield(rc, f) || (ok = false)
     end
     # vector fields
-    for f in (:lambda, :moment_resid, :logA)
+    for f in (:lambda, :benchmark_unweighted_moment_mean, :logA)
         a = vec(collect(getfield(rr, f))); b = vec(collect(getfield(rc, f)))
         if length(a) == length(b) && !isempty(a)
             d = maximum(abs.(a .- b))
