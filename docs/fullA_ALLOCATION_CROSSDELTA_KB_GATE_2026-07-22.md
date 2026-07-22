@@ -113,18 +113,37 @@ Real D=20/W=80,000, δ=1, **12/12 PASS**:
 
 **C+'s two previously-disclosed gaps** (`docs/fullA_factorized_price_production_gate.md` §12/14
 -- independent optimized-value directional checks, and cache/concurrency/checkpoint tests with
-C+ active through the real driver): the selector wiring above closes the "wired into the real
-driver" half of gap §14 (C+ is now reachable via `price_cache_backend=:cplus` in both entry
-points, exercised in the smoke test above). The full cache/concurrency/checkpoint re-run
-specifically targeting C+ (vs. this session's :kbplus-focused equivalent, §4 below) and the
-independent directional check for C+ specifically were **not separately re-run this session**
--- :kbplus's own versions of these checks (§4/§5) exercise the same selector/dispatch code path
-C+ shares, but do not substitute for a C+-specific directional-check campaign. **Disclosed gap,
-not silently assumed closed.**
+C+ active through the real driver) -- **closed this session** by `c23_cplus_gate.jl`, run after
+`c22_phase6_fair_benchmark.jl` showed C+ to be the fastest backend (making it the actual
+adoption candidate, not `:kbplus` -- see §6):
 
-**Verdict**: selector wiring gate PASSES (12/12, real driver). C+'s §12 directional-check gap
-remains open specifically for C+ (though the analogous check for :kbplus, which shares the same
-ranking machinery, was run -- see §5).
+Command: `JULIA_NUM_THREADS=20 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 julia --project=. full_aod_diag/d4_exact/c23_cplus_gate.jl`
+
+Real D=20/W=80,000, **8/8 PASS** (one real bug found and fixed en route: `run_staged_delta5_continuation`
+had no `price_cache_backend` kwarg at all -- `cross_delta` combined with a non-default gradient
+backend had never been reachable through the staged-continuation entry point; fixed by threading
+it through, matching the existing `maxit_override` pattern):
+- **Section 1** (independent optimized-value directional check, C+ specifically, same
+  true-re-optimized-secant-vs-fixed-dual-secant methodology as `:kbplus`'s own §5 check):
+  C+'s fixed-dual secant matches the Reference's own fixed-dual secant at the tested
+  coordinate/bandwidths, same caveat as `:kbplus` (both are the known AUD-05 approximation, not
+  the true secant, and agreement here shows C+'s approximation error is no worse than the
+  Reference's own).
+- **Section 2** (`cross_delta=true` + `price_cache_backend=:cplus` together, real staged
+  2-stage continuation): both stages complete cleanly, final kappa finite -- confirms no wiring
+  conflict between the two independent systems (exact-cache at the `screened_eval` level,
+  gradient backend at the `cb_G!` level) when both are active simultaneously.
+- **Section 3** (checkpoint/resume equivalence with C+ active): an interrupted run (8s budget)
+  resumed from its own checkpoint (with the expected AUD-10 `:stage_complete_unverified` warning
+  on the interrupted checkpoint, correctly handled -- `best_feasible[]` remains the trusted
+  incumbent per that gate's own design) completes cleanly with a finite kappa.
+- **Section 4** (D=20/W=80,000 short driver trajectory, C+, δ=2 -- δ=1 already covered by
+  `c20_backend_selector_driver_smoke.jl`'s own C+ arm): completes cleanly, gradient path
+  exercised.
+
+**Verdict**: selector wiring gate PASSES (12/12, real driver, §3 above). C+'s own two
+previously-disclosed gaps are now CLOSED (8/8, `c23_cplus_gate.jl`). C+ has no remaining open
+gates blocking adoption.
 
 ## 4. Phase 4 -- Backend :kbplus implementation
 
@@ -248,16 +267,36 @@ checkpoint tests with C+ specifically active) before it could be adopted as defa
 
 <!-- PHASE6_RESULTS_PLACEHOLDER -->
 
-## 7. Remaining gaps (explicit, not hidden)
+## 7. Default-dispatch verification
 
-- C+'s own independent optimized-value directional check (§3) not separately re-run this
-  session (the analogous :kbplus check was run, §5).
-- Cache/concurrency/checkpoint-resume tests with C+ (as opposed to :kbplus) specifically active
-  were not re-run this session.
-- :kbplus's D=4 exhaustive sweep is a reduced (2-point/6-coordinate) pattern, not the full
-  136-case sweep A+/C+ received.
+Required by the brief: "Every default change must be covered by a test that asserts the default
+dispatch reaches the intended function." `test_default_backend_dispatch.jl`:
+
+- Unit-tests `resolve_price_cache_backend`'s full resolution matrix: neither kwarg given -> new
+  default `:cplus`; explicit `use_pooled_gradient=false` (old API) still means `:buffered`
+  literally, NOT silently reinterpreted as the new default (backward compatibility preserved
+  exactly); explicit `use_pooled_gradient=true` still means `:pooled`; explicit
+  `price_cache_backend=` overrides always win; the contradiction guard still fires.
+- Real driver call (`run_polish_checkpointed`, neither kwarg given): asserts the driver's own
+  startup log (not a special test hook) shows `price_cache_backend=cplus`, and that the run
+  completes with the gradient path actually exercised.
+
+Command: `JULIA_NUM_THREADS=20 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 julia --project=. full_aod_diag/d4_exact/test_default_backend_dispatch.jl`
+
+Result: **9/9 PASS**. Full resolution matrix confirmed (new default reached with neither kwarg
+given; old-API `use_pooled_gradient=false`/`=true` preserved exactly, not reinterpreted;
+explicit overrides win; contradiction guard still fires). Real driver call with neither kwarg
+given: startup log shows `price_cache_backend=cplus`, run completes, gradient path exercised.
+
+## 8. Remaining gaps (explicit, not hidden)
+
+- `:kbplus`'s D=4 exhaustive sweep is a reduced (2-point/6-coordinate) pattern, not the full
+  136-case sweep A+/C+ received in their own original session.
 - `cross_delta`'s real hit-rate evidence (§2) is from one short staged run; a longer/more
   realistic campaign would give a more representative hit-rate/wall-savings number.
 - The CM interrupted/resume production campaign (D=20/W=80,000/L=50/δ=1) specified in the
   original productionization brief was not run this session (was already an open item before
   this session started).
+- The independent optimized-value directional checks (both C+'s, §3, and `:kbplus`'s, §5) each
+  tested a small number of coordinates/bandwidths (constrained by real per-point KNITRO
+  cold-solve cost), not an exhaustive sweep -- real, but bounded, evidence.

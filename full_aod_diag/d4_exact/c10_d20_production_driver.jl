@@ -384,8 +384,19 @@ Finalization task Phase 3: single source of truth for which gradient backend a d
 uses, reconciling the OLD `use_pooled_gradient::Union{Nothing,Bool}` flag (nothing = caller
 didn't specify) with the NEW `price_cache_backend::Union{Nothing,Symbol}` selector (nothing =
 caller didn't specify). Never lets one silently override the other:
-- neither given -> `:buffered` (unchanged default behavior).
-- only one given -> that one wins.
+- neither given -> `:cplus` (finalization task Phase 6 default, changed from `:buffered`
+  2026-07-22: C+ is 4.0-4.2x faster / 66.8x less memory than the prior default at real
+  D=20/W=80,000 points, correct to ~4.3e-17, and its remaining gates -- independent
+  optimized-value directional check, cross_delta+backend integration, checkpoint/resume,
+  D=20 short trajectories at δ=1/δ=2 -- all closed. See
+  docs/fullA_ALLOCATION_CROSSDELTA_KB_GATE_2026-07-22.md §6 for the full adoption record,
+  including why `:kbplus` -- also fully correct -- was NOT chosen (measured ~15-17% slower
+  than C+, despite eliminating the W-scale `exp` calls it was built to remove).
+- explicit `use_pooled_gradient=false` (OLD API) still means `:buffered`, literally, not the
+  new default -- backward compatibility for existing callers of the old boolean flag is
+  preserved exactly, never silently reinterpreted.
+- only one of the two kwargs given (other than the `use_pooled_gradient=false` case above) ->
+  that one wins.
 - both given, consistent (`use_pooled_gradient=true` + `price_cache_backend=:pooled`, or
   `use_pooled_gradient=false` + any non-`:pooled` backend) -> the explicit backend.
 - both given, contradictory (e.g. `use_pooled_gradient=true` + `price_cache_backend=:cplus`) ->
@@ -407,7 +418,7 @@ function resolve_price_cache_backend(label::AbstractString, use_pooled_gradient:
     elseif use_pooled_gradient !== nothing
         return use_pooled_gradient ? :pooled : :buffered
     else
-        return :buffered
+        return :cplus   # finalization task Phase 6 default (was :buffered) -- see docstring above
     end
 end
 
