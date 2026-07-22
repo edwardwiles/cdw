@@ -20,9 +20,9 @@ additive files, zero conflicts with the correctness fixes).
 
 | Feature | Source present | Called by production driver | Persistent across callbacks/stages | Tests |
 |---|---:|---:|---:|---|
-| `composite_gradient_at_fast_pooled` / `GradWorkspacePool` | Yes (`gradient_workspace.jl`, now merged) | **No** — `c10_d20_production_driver.jl` still calls `composite_gradient_at_fast_buffered` in both `cb_G!`s | N/A (not constructed anywhere in the driver) | Only `test_gradient_workspace.jl` (own file); production-driver wiring test does not exist yet |
-| `CrossDeltaExactCache` | Yes (`cross_delta_cache.jl`, now merged) | **No** — `staged_delta5.jl`/`run_polish_checkpointed` still pass `exact_cache::SafeExactCache` | N/A | Only `test_cross_delta_cache.jl` (own file) |
-| `run_cm_upper_checkpointed` | Yes (`cm_checkpoint.jl`, now merged) | **No** — no caller anywhere references it outside its own test files | N/A | `test_cm_checkpoint_original.jl`, `test_cm_checkpoint_resume.jl` |
+| `composite_gradient_at_fast_pooled` / `GradWorkspacePool` | Yes | **Wired** — `run_profile_checkpointed`/`run_polish_checkpointed` both accept `use_pooled_gradient::Bool=false`; `cb_G!` dispatches to it when true, old buffered path unchanged when omitted (default) | Yes — one `GradWorkspacePool` built per `ctx` (`grad_pool = use_pooled_gradient ? build_grad_workspace_pool(W) : nothing`), not per gradient call | `test_gradient_workspace.jl` (9/9, function-level bit-identity + allocation) + new `test_driver_pooled_gradient_wiring.jl` (driver-level, real KNITRO outer solve both ways) |
+| `CrossDeltaExactCache` | Yes | **Wired** — `run_profile_checkpointed`/`run_polish_checkpointed` accept `exact_cache_override`; `run_staged_delta5_continuation` accepts `cross_delta::Bool=false` and threads ONE `CrossDeltaExactCache` through every stage when true (requires `reuse_context=true`, hard-errors otherwise) | Yes — one cache per staged continuation, by construction | `test_cross_delta_cache.jl` (36/36, function-level) — driver-level staged-continuation benchmark not yet run (queued) |
+| `run_cm_upper_checkpointed` | Yes | **No** — still no caller outside its own tests; see the unresolved verified-success gap below | N/A | `test_cm_checkpoint_original.jl`, `test_cm_checkpoint_resume.jl` pass; verified-success gate work delegated to a parallel subagent, in progress |
 
 **Bugs found in the newly-merged code before any wiring was attempted** (both are exactly the
 class of defect the independent audit's AUD-04/AUD-08 findings describe — found by applying the
@@ -51,6 +51,27 @@ same scrutiny, not assumed absent because the code is new):
    production CM campaigns through `run_cm_upper_checkpointed` until this gate exists** — per the
    brief's own standard ("After this passes, route production CM campaigns through the
    checkpointed wrapper"), it has not yet passed.
+
+## 1b. Integration bugs found in the merged branch's own tests (found + fixed)
+
+Running the 4 newly-merged tests (`test_gradient_workspace.jl`, `test_cross_delta_cache.jl`,
+`test_cm_checkpoint_{original,resume}.jl`) combined with this branch's own correctness fixes
+surfaced 3 real integration bugs, all fixed (commit "Fix 3 real integration bugs surfaced by the
+merged branch's own tests"):
+
+1. `sha256_of_matrix` (AUD-11) lived only in `draw_design.jl`, but `oracle.jl`'s
+   `context_fingerprint` (AUD-08) calls it unconditionally. `test_cross_delta_cache.jl` includes
+   `oracle.jl` but not `draw_design.jl` — a real `UndefVarError` at runtime. Moved the canonical
+   definition into `oracle.jl`; `draw_design.jl` now has a defensive `isdefined`-guarded include.
+2. `test_cross_delta_cache.jl`'s own `FullAEvalKey(...)` construction calls predated this
+   session's AUD-08 fix (5-arg, no `ctx_fingerprint`) — updated to 6-arg.
+3. `test_cross_delta_cache.jl` referenced the pre-AUD-13 field name `:moment_resid` — updated to
+   `:benchmark_unweighted_moment_mean`.
+
+After these fixes: `test_gradient_workspace.jl` 9/9 (and independently reconfirms
+**pooled 756.5 MB vs buffered 3690.0 MB, 4.88x** allocation reduction on THIS branch, not just
+carried over from the prior session's own claim), `test_cross_delta_cache.jl` 36/36,
+`test_cm_checkpoint_original.jl`/`test_cm_checkpoint_resume.jl` both clean.
 
 ## 2. Remaining work (not yet done)
 
