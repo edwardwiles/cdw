@@ -16,6 +16,28 @@
 # ============================================================================
 
 """
+    CMExpectedSolveFailure <: Exception
+
+Closure task Phase 3B: `archC_base_state`/`archC_verified_state`'s inner-solve failure
+(`nStatus` outside `(0,-100,-101,-103)`, i.e. a genuinely infeasible/unbounded/failed KNITRO
+inner dual solve -- the ONE documented, expected failure mode every caller in this file already
+guards against) previously raised via a bare `error(...)`, i.e. a plain `ErrorException`. Every
+`cb_F!`/`run_cm_upper` catch site then did `e isa ErrorException || rethrow()` -- correct in
+intent, but `ErrorException` is also what an ordinary programming bug (`error("oops, forgot a
+case")`, a typo'd `@assert`, etc.) raises, so that catch could silently swallow a genuine
+invariant violation as "reject this point" instead of aborting visibly.
+
+Use this dedicated type for the ONE expected failure class instead: every catch site now does
+`e isa CMExpectedSolveFailure || rethrow()`, so any *other* exception (bare `ErrorException`,
+`MethodError`, `BoundsError`, a task failure, ...) propagates instead of being silently
+reinterpreted as an infeasible point. See `test_cm_expected_solve_failure_typed.jl`.
+"""
+struct CMExpectedSolveFailure <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::CMExpectedSolveFailure) = print(io, "CMExpectedSolveFailure: ", e.msg)
+
+"""
     build_cm_production_context(ctx, CS; L, contrasts=:anchored, probs=nothing, use_archB_moments=true)
         -> (ctx_cm, aug, bins, cctx)
 
@@ -103,7 +125,7 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx)
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     K, x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
         hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
-    nStatus in (0, -100, -101, -103) || error("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)")
+    nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, copy(obj.arg1), nStatus)
 end
@@ -139,7 +161,7 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
         hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
-    nStatus in (0, -100, -101, -103) || error("archC_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)")
+    nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
     W = size(obj.U, 1)

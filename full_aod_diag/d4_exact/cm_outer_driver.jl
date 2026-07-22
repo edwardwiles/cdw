@@ -87,13 +87,17 @@ function run_cm_upper(pcx, ctx, pe, w0::Vector{Float64};
             # (Delta<=delta) alone.
             _, base, verify = cm_production_value_verified(xf, pcx)
         catch e
-            # Remediation task Part C (finding F3): narrowed from a blanket `catch e` -- the only
-            # EXPECTED failure mode here is archC_base_state's own `nStatus in (...) || error(...)`
-            # (a plain ErrorException) for a genuinely infeasible/unbounded inner solve. Anything
-            # else (MethodError, BoundsError, TypeError, a leaked TiedWinnerError, ...) is a real
-            # programming bug and must propagate, not be silently reinterpreted as "reject this
-            # point."
-            e isa ErrorException || rethrow()
+            # Closure task Phase 3B: narrowed further from `e isa ErrorException` (remediation
+            # task Part C, finding F3) to the dedicated `CMExpectedSolveFailure` type
+            # (cm_production_bundle.jl) -- the only EXPECTED failure mode here is
+            # archC_base_state's own inner-solve-failed signal for a genuinely
+            # infeasible/unbounded inner solve. `ErrorException` alone was still too broad: a
+            # bare `error(...)` from an ordinary programming bug is ALSO an ErrorException and
+            # would have been silently swallowed as "reject this point." Anything that is not
+            # CMExpectedSolveFailure (MethodError, BoundsError, TypeError, a bare ErrorException
+            # from a real bug, a leaked TiedWinnerError, ...) now propagates instead. See
+            # test_cm_expected_solve_failure_typed.jl.
+            e isa CMExpectedSolveFailure || rethrow()
             reject_point(w[1], "run_cm_upper: infeasible/failed inner solve at this point")
         end
         # Remediation fix (task Part A, finding F1): verify.Delta_dual is already canonical
