@@ -63,6 +63,20 @@ melitz_K1(w_o::Real, tau_od::Real, A_od::Real, sigma::Real) =
     (melitz_markup(sigma) * w_o * tau_od / A_od)^(1 - sigma)
 
 """
+    gravity_residuals(p::MelitzPrimitives) -> (residual_A, residual_f)
+
+The two F-independent gravity restrictions (docs Section 4C), evaluated directly from
+`(A, f, tau)` -- never a column of `G`, never duplicated as both a moment and an outer
+constraint.
+"""
+function gravity_residuals(p::MelitzPrimitives)
+    T = doubleDiff(p.tau)
+    residual_A = sum(T .* doubleDiff(p.A))
+    residual_f = sum(T .* doubleDiff(p.f))
+    return residual_A, residual_f
+end
+
+"""
     cell_from_cutoff(X_od, N_o, w_o, tau_od, expenditure_d, zhat_od, sigma, theta_star)
         -> (C_od, A_od, f_od)
 
