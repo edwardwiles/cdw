@@ -97,6 +97,28 @@ function entry_cost_from_free_entry(C_row::AbstractVector, zhat_row::AbstractVec
 end
 
 """
+    entrant_mass_from_labor(L_o, f_entry_o, sigma, theta_star) -> N_o
+
+Closed form for the mass of potential entrants (docs Section 1.4, revised after a live
+cross-check against Melitz & Redding 2014): combining the free-entry identity
+`f_entry_o = S_o*(sigma-1)/(sigma*theta_star*w_o)` (`S_o = sum_d C_od*M_od`, from
+`entry_cost_from_free_entry`) with the labor/income constraint `N_o = w_o*L_o/S_o` and
+eliminating `S_o` gives
+
+    N_o = (sigma-1)/(sigma*theta_star) * L_o/f_entry_o
+
+-- exactly Melitz & Redding (2014)'s closed-economy eq. (22),
+`M_Ei=(sigma-1)/(k*sigma)*L_i/f_Ei`, extended unchanged to the bilateral-`A_od` case (the
+cutoff/`A`/`tau` dependence cancels algebraically, exactly as it does in their
+Pareto-specific result -- verified numerically to match the construction's own
+`entry_cost_from_free_entry` to 1e-8). `N_o` is therefore **not** a free scale; `f_entry_o`
+and `L_o` are the primitives, and `N_o` is derived.
+"""
+function entrant_mass_from_labor(L_o::Real, f_entry_o::Real, sigma::Real, theta_star::Real)
+    return (sigma - 1) / (sigma * theta_star) * L_o / f_entry_o
+end
+
+"""
     autarky_fixed_cost(f_entry_target, sigma, theta_star) -> f[target,target]
 
 Closed form (docs Section 1.7): combining the autarky free-entry condition with the

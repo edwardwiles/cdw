@@ -93,37 +93,51 @@ and expected per-entrant operating profit (derivation in §1.5) collapses to
 E_F[operating_profit_od(z)] = C_od·(σ-1)/(σ·(θ*-σ+1)) · ẑ_od^(σ-1-θ*)
 ```
 
-### 1.4 `N_o` is a genuinely free scale; free entry instead pins `f_entry_o`
+### 1.4 `N_o` is derived, closed form, from `L_o` and `f_entry_o` — matching Melitz-Redding eq. (22)
 
-An earlier pass at this derivation tried to use free entry to *solve for* `N_o` — this
-was wrong, caught two ways in the same session: (a) empirically, a first `equilibrium.jl`
-built a D-dimensional NLsolve system on that premise and it would not reliably converge
-even after homotopy/continuation; (b) conceptually, cross-checking against Melitz &
-Redding (2014, *Handbook of International Economics* ch. 1) shows their closed-economy
-free-entry condition `f·J(φ*) = f_E` (their eq. 5) pins the cutoff **independent of the
-mass of entrants/market size** — entrant mass is a separate object, determined only via
-the aggregate-trade/market-demand equations (their eq. 11), which are linear in `M_E`
-given the data and cutoffs.
+This derivation went through three passes in one session, worth recording because the
+final answer is a genuine reconciliation of two seemingly conflicting facts, not a
+correction of one by the other.
 
-Redoing the algebra with that lesson: summing the profit expression over `d` and
-imposing `Σ_d E_F[operating_profit_od] = w_o·f_entry_o`, and substituting the identity
-`C_od·M_od = X_od/N_o` (from solving `(*)` for that product) gives
+**Pass 1** tried to use free entry to *solve for* `N_o` directly and failed (a
+D-dimensional NLsolve system that would not converge even after homotopy).
+
+**Pass 2** found that `N_o` cancels out of the free-entry condition entirely once `C_od`
+is expressed the "structural" way (`C_od = expenditure_d·(markup·w_o·τ_od/A_od)^(1-σ)`,
+no `N_o`), concluding `N_o` is a free scale like the Ricardian repo's `L` — this is true,
+but only as a statement about the *data-inversion* parameterization of §1.6 (`C_od` built
+from `X_od/N_o`): for **that specific parameterization**, `N_o` and `A_od` trade off
+against each other holding `X_od` fixed, so `N_o` is not separately identified from
+*aggregate trade data alone*. This is a real, defensible econometric point (§1.7) — but it
+does not mean `N_o` is unconstrained by the *model's own primitives*.
+
+**Pass 3**, prompted by checking Melitz & Redding's own closed-form mass-of-entrants
+result (their eq. 22, `M_Ei=(σ-1)/(kσ)·L_i/f_Ei`, derived from a genuine labor
+income/resource identity, `w_i·L_i` = revenue = mass-of-entrants × average revenue per
+potential entrant), found the same identity holds here: combining
+`f_entry_o = S_o·(σ-1)/(σ·θ*·w_o)` (`S_o = Σ_d C_od·M_od`, from §1.6's `entry_cost_from_free_entry`,
+still valid regardless of parameterization) with `N_o = w_o·L_o/S_o` (the income/sales
+identity, already enforced by `melitz_solve_wages`, §1.5) and eliminating `S_o` gives
 
 ```
-f_entry_o = [ Σ_d C_od·(σ-1)/(σ·(θ*-σ+1))·ẑ_od^(σ-1-θ*) ] / w_o
+N_o = (σ-1)/(σ·θ*) · L_o/f_entry_o
 ```
 
-This is a genuine, closed-form, **exact** result for `f_entry_o` **given `C_od` (hence
-given `N_o`, already chosen)** — it is not an equation that determines `N_o`; `N_o`
-cancels out of the free-entry condition entirely once `C_od` is expressed the "structural"
-way (`C_od = expenditure_d·(markup·w_o·τ_od/A_od)^(1-σ)`, no `N_o`), and only reappears
-once we *choose* to express `C_od` via the data-based inversion `(X_od/N_o)·(...)` (§1.5)
-— at which point `f_entry_o`'s formula literally has an `N_o` in the denominator of every
-term, that is **exactly cancelled** by the same `N_o` implicit in `X_od/N_o`. **`N_o` is
-therefore a genuinely free scale choice, exactly analogous to the Ricardian repo's `L`**
-— confirmed numerically (`test_equilibrium.jl`, this session): re-running the full
-construction with `N[target]` changed from `1.5` to `7.3` leaves every downstream
-object (`A`, `f`, cutoffs, `GT`, the ACR cross-check) unchanged to machine precision.
+— exactly Melitz-Redding's eq. (22), extended unchanged to the bilateral-`A_od` case (the
+cutoff/`A`/`τ` dependence cancels algebraically, exactly as in their result). **Verified
+numerically** (`verify_closed_form_N.jl`, this session) against the already-working
+Pass-2 construction: computing `N` this way from the *already-derived* `f_entry`
+reproduces the *already-chosen* `N` to 1e-9 — confirming Pass 2 and Pass 3 are the same
+system of equations, just solved in opposite directions (Pass 2: choose `N`, derive
+`f_entry`; Pass 3: choose `f_entry`, derive `N`).
+
+**Resolution:** `f_entry_o` (with `L_o`) is the primitive; `N_o` is derived via the
+closed form above — matching Melitz-Redding, matching the brief's original parameter
+table, and matching standard Melitz practice. Pass 2's non-identification point is not
+wrong, it is simply about a *different* question (§1.7: what can be recovered from
+*aggregate trade data alone*, without knowing `L_o`/`f_entry_o` — relevant to the
+eventual F\* *solver*, §9) than what this section answers (what pins `N_o` in the
+*forward, deep-primitives* construction of the synthetic fixture).
 
 ### 1.5 Data, not deep primitives: mirroring the Ricardian repo's actual architecture
 
@@ -146,7 +160,7 @@ form and satisfy **both** row and column balance by construction.
 
 ### 1.6 Profiling the D² trade-flow equations analytically (the addendum's parameterization)
 
-Given `N_o` (§1.4, freely chosen) and *any* candidate cutoff `ẑ_od ≥ 1` (with `ẑ_od ≥
+Given `N_o` (§1.4, derived from `L_o`/`f_entry_o`) and *any* candidate cutoff `ẑ_od ≥ 1` (with `ẑ_od ≥
 ẑ_oo` for `d≠o`, per the export-selection restriction), `(*)` can be solved for `C_od`
 directly:
 
@@ -172,9 +186,11 @@ cutoff parameterization as the practical implementation device in `fake_data.jl`
 
 ### 1.7 Non-identification of `A_od`/`f_od` individually (why this must not be oversold)
 
-Because `price_power_d ≡ 1` removes `N_o` from firm-level revenue, and because §1.4 shows
-`N_o` is a free scale untouched by free entry, the object that aggregate F\*-Melitz trade
-actually identifies, once double-differenced, is the composite the addendum derives:
+Because `price_power_d ≡ 1` removes `N_o` from firm-level revenue, and because the
+data-inversion parameterization of §1.6 shows `N_o` and `A_od`'s level trade off against
+each other holding *aggregate trade data* fixed (§1.4's Pass 2), the object that
+aggregate F\*-Melitz trade **data alone** identifies, once double-differenced, is the
+composite the addendum derives:
 
 ```
 r = θ*·a + β·h,     a = ΔΔ log A,  h = ΔΔ log f,  β = 1 - θ*/(σ-1)
@@ -350,11 +366,11 @@ existing architecture's own precedent.
 | `τ[o,d]` | D×D | fixed (data) | — | diag = 1 | trade cost | `fake_data.jl` |
 | `expenditure[d]` | D | derived, closed form: `w_d·L_d` | — | `expenditure_d = Σ_o X_od` (holds automatically given the wage solve) | destination spend | `equilibrium.jl` |
 | `X[o,d]` | D×D | derived, closed form: `λ_od·expenditure_d` | — | `Σ_d X_od = w_o·L_o` (income=sales, holds automatically) | trade flow (data level) | `equilibrium.jl` |
-| `entrant_mass[o]` (`N_o`) | D | **genuinely free choice** (§1.4 — not pinned by free entry; verified numerically) | `log N` | `N'_o=N_o` (shared object) | mass of potential entrants | `fake_data.jl` |
+| `f_entry[o]` | D | **primitive (chosen/calibrated)** | `log f_entry` | none | entry cost | `fake_data.jl` |
+| `entrant_mass[o]` (`N_o`) | D | **derived, closed form**: `(σ-1)/(σθ*)·L_o/f_entry_o` (§1.4 — matches Melitz-Redding eq. 22) | — | `N'_o=N_o` (shared object) | mass of potential entrants | `equilibrium.jl` |
 | `ẑ[o,d]` | D×D | free computational parameterization (§1.6), not economically identified — **except** `ẑ[target,target]` | — | `ẑ_od≥1`; `ẑ_od≥ẑ_oo` (d≠o); `ẑ[target,target]` **derived** (§1.8) | baseline cutoff | `fake_data.jl` |
 | `A[o,d]` | D×D | derived, closed form from `(X,N,w,τ,expenditure,ẑ)` (§1.6), non-identified split (§1.7) | `log A` | `price_power_d≡1` holds automatically given the closure above | efficiency shifter | `equilibrium.jl` |
 | `f[o,d]` | D×D | derived, closed form (§1.6) | `log f` | none beyond `ẑ[target,target]`'s own normalization | fixed market-access cost | `equilibrium.jl` |
-| `f_entry[o]` | D | derived, closed form from free entry (§1.4) | `log f_entry` | none | entry cost | `equilibrium.jl` |
 | `price_power[d]` | D | derived diagnostic | — | `≡1` by construction (§1.2/1.5) | CES price-power aggregate | `equilibrium.jl` |
 | `price_power'[target]` | scalar | derived (autarky, closed form) | — | none (endogenous) | counterfactual price-power | `equilibrium.jl` |
 | `ẑ'[target,target]` | scalar | normalized | — | `=1` exactly (Pareto lower support) | autarky cutoff | `equilibrium.jl` |
@@ -377,10 +393,10 @@ realized_revenue/realized_operating_profit`, exactly the formulas in §1.1.
 operating_profit_od(z)] = w_o f_entry_o` says a representative potential entrant expects
 zero net profit from paying the entry cost and then discovering `z` and choosing where to
 sell. Multiplying by `N_o` would conflate "zero expected profit per entrant" with "zero
-*aggregate* profit across the whole mass of entrants" — a different condition. See §1.4:
-`N_o` in fact cancels out of the free-entry condition algebraically (confirmed both
-symbolically and numerically) once `C_od` is written the structural way — multiplying by
-`N_o` here would reintroduce a dependence that isn't economically there.
+*aggregate* profit across the whole mass of entrants" — a different condition, and it is
+precisely because this equation is `N_o`-free that combining it with the labor/income
+identity yields `N_o`'s own closed form (§1.4) — multiplying by `N_o` here would corrupt
+that derivation, not just be economically wrong on its own terms.
 
 ---
 

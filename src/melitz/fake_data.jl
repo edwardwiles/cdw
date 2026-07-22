@@ -14,9 +14,10 @@
 #   4. Fix zhat[target,target] at its Sec 1.8 value; project the *other* D^2-1 raw
 #      cutoffs so <T, DDlogzhat> hits the value the f-gravity-restriction requires
 #      (equivalently, given step 2, the A-restriction too -- verified, not assumed).
-#   5. Build A, f, entrant-mass-consistent moments via `build_equilibrium` +
-#      `entry_cost_from_free_entry` (all closed form, no iteration beyond step 3's
-#      wage solve).
+#   5. Choose f_entry (primitive); derive entrant mass N via `entrant_mass_from_labor`
+#      (docs Sec 1.4, revised: N is NOT free -- matches Melitz & Redding 2014 eq. 22).
+#   6. Build A, f via `build_equilibrium` (closed form, no iteration beyond step 3's
+#      wage solve); cross-check the free-entry identity reproduces the chosen f_entry.
 
 using Random: MersenneTwister, randn!, rand!
 using LinearAlgebra: diag
@@ -36,7 +37,7 @@ function generate_fake_melitz_data(; D::Int=4, sigma::Float64=2.5, theta_star::F
                                     target_country::Int=1, seed::Int=1234, W::Int=20_000,
                                     tau_offdiag_range::Tuple{Float64,Float64}=(0.15, 0.55),
                                     L_range::Tuple{Float64,Float64}=(0.8, 2.5),
-                                    N_range::Tuple{Float64,Float64}=(0.6, 2.2),
+                                    f_entry_range::Tuple{Float64,Float64}=(0.10, 0.30),
                                     zhat_base::Float64=2.2, zhat_noise_sd::Float64=0.12,
                                     lambda_noise_sd::Float64=0.18, lambda_diag_bonus::Float64=0.6,
                                     lambda_effect_sd::Float64=0.35)
@@ -91,9 +92,10 @@ function generate_fake_melitz_data(; D::Int=4, sigma::Float64=2.5, theta_star::F
     gravity_composite_residual = sum(T .* DDlogX) + theta_star * TT
     @assert abs(gravity_composite_residual) < 1e-6 * max(1.0, abs(theta_star * TT)) "composite gravity condition failed to construct"
 
-    # entrant mass: genuinely free (docs Sec 1.4); target_country's value is free too
-    # (Sec 1.8 pins the CUTOFF, not N) -- chosen like every other origin.
-    N = N_range[1] .+ (N_range[2] - N_range[1]) .* rand(rng, D)
+    # entrant mass: NOT free -- derived in closed form from L and f_entry (docs Sec 1.4,
+    # revised; matches Melitz & Redding 2014 eq. 22). f_entry is the chosen primitive.
+    f_entry = f_entry_range[1] .+ (f_entry_range[2] - f_entry_range[1]) .* rand(rng, D)
+    N = [entrant_mass_from_labor(L[o], f_entry[o], sigma, theta_star) for o in 1:D]
 
     # 4. cutoffs: target_country's own cell is derived (Sec 1.8); every other cell is a
     # free computational parameterization, projected to satisfy the (now-consistent)
@@ -122,7 +124,12 @@ function generate_fake_melitz_data(; D::Int=4, sigma::Float64=2.5, theta_star::F
 
     # 5. assemble A, f, entrant-mass-consistent equilibrium (closed form)
     A, f, C, eq = build_equilibrium(X, N, w, tau, expenditure, zhat, sigma, theta_star)
-    f_entry = [entry_cost_from_free_entry(C[o, :], zhat[o, :], w[o], sigma, theta_star) for o in 1:D]
+
+    # sanity check: the free-entry identity, evaluated independently from (C, zhat), must
+    # reproduce the CHOSEN f_entry exactly (this is the same equation as
+    # entrant_mass_from_labor, just solved in the other direction -- see docs Sec 1.4).
+    f_entry_check = [entry_cost_from_free_entry(C[o, :], zhat[o, :], w[o], sigma, theta_star) for o in 1:D]
+    @assert isapprox(f_entry_check, f_entry; rtol=1e-6) "free-entry identity inconsistent with entrant_mass_from_labor: $f_entry_check vs $f_entry"
 
     primitives = MelitzPrimitives(D, sigma, theta_star, target_country, tau, w, A, f, f_entry)
     counterfactual = solve_autarky_counterfactual(primitives, eq)
