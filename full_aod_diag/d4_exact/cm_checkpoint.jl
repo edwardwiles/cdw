@@ -274,6 +274,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         try
             _, base, verify = cm_production_value_verified(xf, pcx)
         catch e
+            # Remediation task Part C (finding F3): narrowed from a blanket `catch e` -- see
+            # cm_outer_driver.jl's identical fix for the full rationale.
+            e isa ErrorException || rethrow()
             reject_point(w[1], "run_cm_upper_checkpointed($label): infeasible/failed inner solve at this point")
         end
         # Remediation fix (task Part A, finding F1): this used to read `Δ = -base.ζstar`, which
@@ -352,6 +355,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     try
         _, _, verify_final = cm_production_value_verified(xf_final, pcx)
     catch e
+        # Remediation task Part C (finding F3): narrowed from a blanket `catch e` -- see
+        # cm_outer_driver.jl's identical fix for the full rationale. A genuine programming bug
+        # here must propagate (this is post-solve diagnostic verification, not a KNITRO callback,
+        # so there is no DomainError-vs-KN_RC_CALLBACK_ERR contract to preserve by catching
+        # broadly).
+        e isa ErrorException || rethrow()
         verify_final = (inner_status = -300,)   # inner solve failed outright at the terminal point -- unverified by construction
     end
     if is_verified_success(verify_final)
