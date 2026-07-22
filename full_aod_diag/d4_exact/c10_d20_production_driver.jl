@@ -164,6 +164,37 @@ end
 "Schema 1 checkpoints (pre-draw-design-port) do not have draw_design/checksum fields; schema 2 checkpoints do not have knitro_version. Schema must be 3 to resume through this file's resume validation."
 const CHECKPOINT_SCHEMA = 3
 
+# AUD-09 fix: a cold-recomputed check at the checkpoint's own recorded point must be a HARD
+# resume gate, not merely a logged discrepancy. Since context/draws are already separately
+# hard-gated to match exactly (draw checksums above), a cold re-evaluation at the SAME point
+# under the SAME context should reproduce the checkpoint's recorded Delta/gravity/KKT-residual/
+# moment-mean to near machine precision -- these tolerances are tighter than
+# VerifiedSuccessTolerances (oracle.jl), which governs a NEW point's own internal consistency,
+# not a same-point reproducibility check.
+Base.@kwdef struct ResumeTolerances
+    delta_tol::Float64 = 1e-6
+    gravity_tol::Float64 = 1e-6
+    kkt_tol::Float64 = 1e-6
+    moment_mean_norm_tol::Float64 = 1e-6
+end
+const DEFAULT_RESUME_TOL = ResumeTolerances()
+
+"AUD-09 fix: hard-reject a resume whose cold-recomputed verification point disagrees with the
+checkpoint's own recorded values beyond tolerance, instead of only logging the discrepancy.
+`label`/`fn` are for the error message only."
+function check_resume_tolerances!(label::AbstractString, fn::AbstractString,
+        d_delta::Float64, d_grav::Float64, d_kkt::Float64, d_mr::Float64;
+        tol::ResumeTolerances = DEFAULT_RESUME_TOL)
+    bad = String[]
+    d_delta <= tol.delta_tol || push!(bad, "|ΔDelta_dual|=$(d_delta) > $(tol.delta_tol)")
+    d_grav <= tol.gravity_tol || push!(bad, "|Δgravity_value|=$(d_grav) > $(tol.gravity_tol)")
+    d_kkt <= tol.kkt_tol || push!(bad, "|Δmax_abs_moment_kkt_resid|=$(d_kkt) > $(tol.kkt_tol)")
+    d_mr <= tol.moment_mean_norm_tol || push!(bad, "|Δ||benchmark_unweighted_moment_mean|||=$(d_mr) > $(tol.moment_mean_norm_tol)")
+    isempty(bad) || error("$(fn)($(label)): cold-recomputed resume verification exceeds tolerance " *
+        "-- refusing to resume (AUD-09; docs/fullA_independent_audit_remediation.md): " * join(bad, "; "))
+    return nothing
+end
+
 "Atomic-ish checkpoint write: serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint that a resume could load."
 function save_checkpoint(path::AbstractString, ckpt::D20Checkpoint)
     tmp = path * ".tmp"
@@ -257,7 +288,7 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
     # existing caller that never passes neg_cache= sees IDENTICAL behavior to before this file
     # existed (this whole block is a no-op when neg_cache === nothing).
     if neg_cache !== nothing
-        key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+        key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard, context_fingerprint(ctx))
         hit = negcache_lookup(neg_cache, key)
         if hit !== nothing
             # template: cheapest available same-shape NamedTuple -- a fresh screen-only infeasible_result
@@ -349,6 +380,12 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
+    if resumed !== nothing && resumed.checkpoint_reason == :stage_complete_unverified
+        println("WARNING: resuming from a checkpoint whose terminal point FAILED verification at write ",
+                "time (checkpoint_reason=:stage_complete_unverified, AUD-10) -- best[]/best_feasible[] ",
+                "inside this checkpoint is still the correct scientific incumbent; only the raw terminal ",
+                "solver-state fields are suspect.")
+    end
     g = g_in; find_smallest = find_smallest_in; zfree_start = copy(zfree_start_in)
     W = W_in; delta = delta_in; draw_seed = draw_seed_in
     draw_design = draw_design_in === nothing ? :pseudorandom : draw_design_in
@@ -409,12 +446,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         d_delta = abs(r_verify.Delta_dual - resumed.verify_Delta_dual)
         d_grav = abs(r_verify.gravity_value - resumed.verify_gravity_value)
         d_kkt = abs(r_verify.max_abs_moment_kkt_resid - resumed.verify_max_abs_moment_kkt_resid)
-        d_mr = abs(norm(r_verify.moment_resid) - resumed.verify_moment_resid_norm)
+        d_mr = abs(norm(r_verify.benchmark_unweighted_moment_mean) - resumed.verify_moment_resid_norm)
         lp("[", label, "] RESUME VALIDATION at checkpoint's own point: ",
            "|ΔDelta_dual|=", d_delta, " |Δgravity_value|=", d_grav,
-           " |Δmax_abs_moment_kkt_resid|=", d_kkt, " |Δ||moment_resid|||=", d_mr)
+           " |Δmax_abs_moment_kkt_resid|=", d_kkt, " |Δ||benchmark_unweighted_moment_mean|||=", d_mr)
         lp("[", label, "]   original: Delta_dual=", resumed.verify_Delta_dual, " gravity=", resumed.verify_gravity_value)
         lp("[", label, "]   resumed:  Delta_dual=", r_verify.Delta_dual, " gravity=", r_verify.gravity_value)
+        check_resume_tolerances!(label, "run_profile_checkpointed", d_delta, d_grav, d_kkt, d_mr)   # AUD-09
     end
 
     sc = ScreenCounters()
@@ -465,13 +503,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
-            r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid),
+            r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.benchmark_unweighted_moment_mean),
             SOLVER_STATE_NOTE, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             LOADED_KNITRO_RELEASE)
         latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
         guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
         save_checkpoint(latest_path, ckpt)
-        reason in (:new_best, :stage_complete) && save_checkpoint(joinpath(ckpt_dir, "$(label)_$(reason)_neval$(n_eval[]).jls"), ckpt)
+        reason in (:new_best, :stage_complete, :stage_complete_unverified) && save_checkpoint(joinpath(ckpt_dir, "$(label)_$(reason)_neval$(n_eval[]).jls"), ckpt)
         return ckpt
     end
 
@@ -503,9 +541,21 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         evalResult.obj[1] = Δ
         n_eval[] += 1
         t_el = time() - t_start
-        base = BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
+        # AUD-03 fix: on a cache hit, screened_eval never re-solved, so ctx.obj.arg1 (m_star) can
+        # still hold a DIFFERENT point's state (whatever the last real inner solve left behind).
+        # solve_base_state always performs a fresh solve, so it is the only way to guarantee
+        # correct m_star here; the non-cache-hit branch keeps the fast hand-built path since
+        # ctx.obj.arg1 genuinely is fresh for that case (populated by the primal_weight_recovery
+        # call inside screened_eval moments ago). See docs/fullA_independent_audit_remediation.md
+        # AUD-03 and its A/B/A regression test.
+        base = r.cache_hit ? solve_base_state(xf, ctx) :
+            BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base)
-        is_new_best = is_better_profile(Δ, best[] === nothing ? nothing : best[].Delta_dual)
+        # AUD-04 fix: a candidate incumbent must be a scientifically VERIFIED solve (residual/gap
+        # tolerances pass, not merely inner_status in FEASIBLE_CODES) before it can replace the
+        # best-known point.
+        is_new_best = is_verified_success(r) &&
+            is_better_profile(Δ, best[] === nothing ? nothing : best[].Delta_dual)
         if is_new_best
             best[] = (zfree = copy(zfree), Delta_dual = Δ, gravity_value = r.gravity_value,
                       max_abs_moment_kkt_resid = r.max_abs_moment_kkt_resid, inner_status = r.inner_status,
@@ -540,7 +590,9 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
                 r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)   # BUGFIX, see cb_F! above
             end
             r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_profile_checkpointed($label): cb_G! could not recompute a feasible base state"))
-            base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
+            # AUD-03 fix: same reasoning as cb_F! above -- do not trust ctx.obj.arg1 on a cache hit.
+            base = r_g.cache_hit ? solve_base_state(xf, ctx) :
+                BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
         gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
@@ -595,7 +647,20 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     # final stage-complete checkpoint at the terminal point
     w_final = vcat(g, collect(xsol))
     r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w_final[2:end], exact_cache = exact_cache)
-    final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
+    # AUD-10 fix: the terminal evaluation is not itself gated by anything upstream (unlike
+    # is_new_best, which already requires is_verified_success). Flag -- do not silently
+    # checkpoint as an ordinary :stage_complete -- a terminal point that fails verification, so a
+    # human/resume caller cannot mistake it for a scientifically usable stopping point. best[] (the
+    # separately, correctly gated incumbent) is unaffected either way.
+    if !(r_final.inner_status in FEASIBLE_CODES) || !is_verified_success(r_final)
+        lp("[", label, "] WARNING: terminal point failed verification (inner_status=", r_final.inner_status,
+           ", class=", classify_inner_result(r_final), ") -- checkpointing as :stage_complete_unverified, ",
+           "NOT :stage_complete. best[]=", best[] === nothing ? "nothing" : "Delta=$(best[].Delta_dual)",
+           " remains the correct resume/incumbent state (AUD-10).")
+        final_ckpt = do_checkpoint(:stage_complete_unverified, w_final, r_final)
+    else
+        final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
+    end
 
     return (label = label, g = g, find_smallest = find_smallest, ctx = ctx, pe = pe,
             knitro_status = nStatus_code, native_outer_diag = native_outer_diag, wall_ext = wall_ext,
@@ -650,6 +715,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
+    if resumed !== nothing && resumed.checkpoint_reason == :stage_complete_unverified
+        println("WARNING: resuming from a checkpoint whose terminal point FAILED verification at write ",
+                "time (checkpoint_reason=:stage_complete_unverified, AUD-10) -- best[]/best_feasible[] ",
+                "inside this checkpoint is still the correct scientific incumbent; only the raw terminal ",
+                "solver-state fields are suspect.")
+    end
     find_smallest = find_smallest_in; g_start = g_start_in; zfree_start = copy(zfree_start_in)
     W = W_in; delta = delta_in; draw_seed = draw_seed_in
     draw_design = draw_design_in === nothing ? :pseudorandom : draw_design_in
@@ -722,10 +793,14 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         r_verify, _ = evaluate_fullA_screened_ranged(x_free_from_w(w0, pe), ctx, rsc; moment_representation = :compressed,
             cache = nothing, use_cache = false, warm = true, pairwise = ctx.pairwise, witness = ctx.witness,
             use_witness = ctx.witness !== nothing)
-        lp("[", label, "] RESUME VALIDATION: |ΔDelta_dual|=", abs(r_verify.Delta_dual - resumed.verify_Delta_dual),
-           " |Δgravity_value|=", abs(r_verify.gravity_value - resumed.verify_gravity_value),
-           " |Δmax_abs_moment_kkt_resid|=", abs(r_verify.max_abs_moment_kkt_resid - resumed.verify_max_abs_moment_kkt_resid),
-           " |Δ||moment_resid|||=", abs(norm(r_verify.moment_resid) - resumed.verify_moment_resid_norm))
+        d_delta = abs(r_verify.Delta_dual - resumed.verify_Delta_dual)
+        d_grav = abs(r_verify.gravity_value - resumed.verify_gravity_value)
+        d_kkt = abs(r_verify.max_abs_moment_kkt_resid - resumed.verify_max_abs_moment_kkt_resid)
+        d_mr = abs(norm(r_verify.benchmark_unweighted_moment_mean) - resumed.verify_moment_resid_norm)
+        lp("[", label, "] RESUME VALIDATION: |ΔDelta_dual|=", d_delta,
+           " |Δgravity_value|=", d_grav, " |Δmax_abs_moment_kkt_resid|=", d_kkt,
+           " |Δ||benchmark_unweighted_moment_mean|||=", d_mr)
+        check_resume_tolerances!(label, "run_polish_checkpointed", d_delta, d_grav, d_kkt, d_mr)   # AUD-09
     end
 
     sc = ScreenCounters()
@@ -780,13 +855,13 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best_feasible[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
-            r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.moment_resid), SOLVER_STATE_NOTE,
+            r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.benchmark_unweighted_moment_mean), SOLVER_STATE_NOTE,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             LOADED_KNITRO_RELEASE)
         latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
         guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
         save_checkpoint(latest_path, ckpt)
-        reason in (:new_best, :stage_complete) && save_checkpoint(joinpath(ckpt_dir, "$(label)_$(reason)_neval$(n_eval[]).jls"), ckpt)
+        reason in (:new_best, :stage_complete, :stage_complete_unverified) && save_checkpoint(joinpath(ckpt_dir, "$(label)_$(reason)_neval$(n_eval[]).jls"), ckpt)
         return ckpt
     end
 
@@ -821,7 +896,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                 # entry is ever written, and only after two materially different starts (warm-started from
                 # whatever ctx.obj.x/bank held, vs a genuinely cold zeros start) agree.
                 if neg_cache !== nothing && !(cold_status in FEASIBLE_CODES) && compatible_failure(warm_status, cold_status)
-                    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+                    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard, context_fingerprint(ctx))
                     entry = ConfirmedNegativeResult(warm_status, :warm_production_slot, cold_status, :cold_neutral,
                         (first_Delta = NaN, confirm_Delta = NaN, warm_time = t_warm, cold_time = cold_time),
                         neg_cache_code_version, now())
@@ -848,9 +923,20 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         n_eval[] += 1
         t_el = time() - t_start
         feasible = Δ <= ctx.δ + 1e-6
-        base = BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
+        # AUD-03 fix: on a cache hit, screened_eval never re-solved, so ctx.obj.arg1 (m_star) can
+        # still hold a DIFFERENT point's state (whatever the last real inner solve left behind).
+        # solve_base_state always performs a fresh solve, so it is the only way to guarantee
+        # correct m_star here; the non-cache-hit branch keeps the fast hand-built path since
+        # ctx.obj.arg1 genuinely is fresh for that case (populated by the primal_weight_recovery
+        # call inside screened_eval moments ago). See docs/fullA_independent_audit_remediation.md
+        # AUD-03 and its A/B/A regression test.
+        base = r.cache_hit ? solve_base_state(xf, ctx) :
+            BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base)
-        is_new_best = feasible && is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
+        # AUD-04 fix: same reasoning as cb_F! above -- feasibility (Delta<=delta) alone is not a
+        # verified solve.
+        is_new_best = feasible && is_verified_success(r) &&
+            is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, gravity = r.gravity_value,
                                 kkt = r.max_abs_moment_kkt_resid, inner_status = r.inner_status,
@@ -885,7 +971,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                 # cold-retry success here is cacheable too, not silently recomputed every time.
                 r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
                 if neg_cache !== nothing && !(r_g.inner_status in FEASIBLE_CODES) && compatible_failure(g_warm_status, r_g.inner_status)
-                    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+                    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard, context_fingerprint(ctx))
                     entry = ConfirmedNegativeResult(g_warm_status, :warm_production_slot, r_g.inner_status, :cold_neutral,
                         (first_Delta = NaN, confirm_Delta = NaN, warm_time = NaN, cold_time = NaN),
                         neg_cache_code_version, now())
@@ -894,7 +980,9 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                 end
             end
             r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_polish_checkpointed($label): cb_G! could not recompute a feasible base state"))
-            base = BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
+            # AUD-03 fix: same reasoning as cb_F! above -- do not trust ctx.obj.arg1 on a cache hit.
+            base = r_g.cache_hit ? solve_base_state(xf, ctx) :
+                BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
         gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
@@ -944,7 +1032,16 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
 
     w_final = collect(xsol)
     r_final, _ = screened_eval(x_free_from_w(w_final, pe), ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = w_final[2:end], exact_cache = exact_cache)
-    final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
+    # AUD-10 fix: see run_profile_checkpointed's identical fix above for the full rationale.
+    if !(r_final.inner_status in FEASIBLE_CODES) || !is_verified_success(r_final)
+        lp("[", label, "] WARNING: terminal point failed verification (inner_status=", r_final.inner_status,
+           ", class=", classify_inner_result(r_final), ") -- checkpointing as :stage_complete_unverified, ",
+           "NOT :stage_complete. best_feasible[]=", best_feasible[] === nothing ? "nothing" : "gp=$(best_feasible[].gp) Delta=$(best_feasible[].Delta)",
+           " remains the correct resume/incumbent state (AUD-10).")
+        final_ckpt = do_checkpoint(:stage_complete_unverified, w_final, r_final)
+    else
+        final_ckpt = do_checkpoint(:stage_complete, w_final, r_final)
+    end
 
     return (label = label, find_smallest = find_smallest, ctx = ctx, pe = pe,
             knitro_status = nStatus_code, native_outer_diag = native_outer_diag, wall_ext = wall_ext,
