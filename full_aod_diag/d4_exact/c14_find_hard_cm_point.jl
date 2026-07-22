@@ -90,8 +90,9 @@ function eval_point(label, w; catch_errors = true)
     end
     wall = time() - t0
     counters = _INNER_CALL_COUNTERS[]
+    # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
+    Delta_dual = ok ? delta_dual_from_base(pcx.ctx_cm.obj, base) : NaN
     if ok
-        Delta_dual = -base.ζstar
         lp(@sprintf("[%s] wall=%.3fs  n_fg=%d  n_hess=%d  Delta_dual=%.10f  nStatus=%d",
             label, wall, counters.n_fg_calls, counters.n_hess_calls, Delta_dual, base.inner_status))
     else
@@ -100,7 +101,7 @@ function eval_point(label, w; catch_errors = true)
     end
     return (label = label, w = copy(w), xf = xf, wall = wall, n_fg = counters.n_fg_calls,
             n_hess = counters.n_hess_calls, ok = ok, K = K, base = base,
-            Delta_dual = ok ? -base.ζstar : NaN, errmsg = errmsg)
+            Delta_dual = Delta_dual, errmsg = errmsg)
 end
 
 results = NamedTuple[]

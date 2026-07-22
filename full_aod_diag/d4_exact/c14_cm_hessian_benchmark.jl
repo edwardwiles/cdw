@@ -129,7 +129,8 @@ function run_cell(label, xf; threaded_bins, blas_threads, use_syrk, tls)
     hess_total_s = hess_row === nothing ? NaN : rows[hess_row].n * rows[hess_row].mean_s
     hess_alloc = hess_row === nothing ? NaN : rows[hess_row].total_alloc_bytes
     hess_gc_s = hess_row === nothing ? NaN : rows[hess_row].total_gc_s
-    Delta_dual = -base.ζstar
+    # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
+    Delta_dual = delta_dual_from_base(pcx.ctx_cm.obj, base)
     lp(@sprintf("  [%s] threaded=%-5s blas=%-2d syrk=%-5s  wall=%8.3fs  hess_cb_total=%7.3fs(n=%d)  n_fg=%3d iters=%3d  alloc=%.2eB  gc=%.3fs  status=%d  Delta_dual=%.12f",
         label, string(threaded_bins), blas_threads, string(use_syrk), stats.time, hess_total_s, n_hess, n_fg, iters,
         stats.bytes, stats.gctime, base.inner_status, Delta_dual))

@@ -64,7 +64,10 @@ for L in (10, 20, 50)
     aug_ref = build_cm_augmented_obj(ctx, CS; L = L, contrasts = :anchored, probs = snaps[L])
     ctx_ref = merge(ctx, (obj = aug_ref.obj_cm,))
     t_dense = @elapsed r_ref = evaluate_fullA(x_free_calib, ctx_ref; use_cache = false, warm = false)
-    @printf "  dense reference: %.2fs  Delta_dual=%.8f | production: Delta_dual=%.8f | diff=%.2e | speedup=%.2fx\n" t_dense (-r_ref.zeta) (-base1.ζstar) abs((-r_ref.zeta)-(-base1.ζstar)) (t_dense/t_cold)
+    # Remediation fix (task Part A, F1): was `-r_ref.zeta`/`-base1.ζstar` (mislabeled as
+    # Delta_dual -- omits mean(Psi(q*))). evaluate_fullA already returns the canonical
+    # r_ref.Delta_dual directly; use delta_dual_from_base for the production-bundle side.
+    @printf "  dense reference: %.2fs  Delta_dual=%.8f | production: Delta_dual=%.8f | diff=%.2e | speedup=%.2fx\n" t_dense r_ref.Delta_dual delta_dual_from_base(pcx.ctx_cm.obj, base1) abs(r_ref.Delta_dual - delta_dual_from_base(pcx.ctx_cm.obj, base1)) (t_dense/t_cold)
     GC.gc()
 end
 
@@ -75,7 +78,8 @@ println("="^110)
 pcx50 = build_cm_production_context(ctx, CS; L = 50, contrasts = :anchored, probs = snaps[50])
 t_p = @elapsed (Kp, basep) = cm_production_value(x_free_perturbed, pcx50)
 t_gp = @elapsed (gp_full, _) = cm_production_gradient(x_free_perturbed, pcx50, ctx, pe; base = basep, threaded = true)
-@printf "  perturbed: inner solve=%.3fs (nStatus=%d, Delta=%.6f)  gradient=%.3fs  ||g||=%.4e\n" t_p basep.inner_status (-basep.ζstar) t_gp norm(gp_full)
+# Remediation fix (task Part A, F1): was `-basep.ζstar`, which omits mean(Psi(q*)).
+@printf "  perturbed: inner solve=%.3fs (nStatus=%d, Delta=%.6f)  gradient=%.3fs  ||g||=%.4e\n" t_p basep.inner_status delta_dual_from_base(pcx50.ctx_cm.obj, basep) t_gp norm(gp_full)
 
 println()
 println("="^110)

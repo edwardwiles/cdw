@@ -52,7 +52,8 @@ function delta_at_gp_fixed_A(pcx, gp::Float64, A_calib::Vector{Float64})
     x_free = vcat(gp, A_calib)
     try
         K, base = cm_production_value(x_free, pcx)
-        return -base.ζstar, base.inner_status
+        # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
+        return delta_dual_from_base(pcx.ctx_cm.obj, base), base.inner_status
     catch
         return Inf, -300
     end

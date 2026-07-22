@@ -27,7 +27,14 @@
 # ============================================================================
 using Serialization, Dates
 
-const CM_CHECKPOINT_SCHEMA = 1
+const CM_CHECKPOINT_SCHEMA = 2
+# Bumped 1 -> 2 (remediation task Part A, finding F1): schema-1 checkpoints computed cb_F!'s
+# reported/constrained Delta as `-base.ζstar`, which silently omits mean(Psi(q*)) and overstates
+# the divergence at tail-active points (any draw with recovered weight m* > e). A schema-1
+# checkpoint's `best_feasible.Delta` and `feasible` flags are NOT trustworthy -- do not resume
+# from one. Use `migrate_cm_checkpoint_v1_candidate` to recover just the incumbent vector as a
+# fresh start point, then cold-re-evaluate it with `cm_production_value_verified` before trusting
+# any Delta/feasibility for it.
 
 """
     CMCheckpoint
@@ -82,12 +89,43 @@ end
 
 function load_cm_checkpoint(path::AbstractString)
     ckpt = deserialize(path)::CMCheckpoint
+    if ckpt.schema == 1
+        error("load_cm_checkpoint($path): schema=1, expected $(CM_CHECKPOINT_SCHEMA) -- schema-1 " *
+              "checkpoints stored Delta as `-zeta_star` (remediation task Part A, finding F1), NOT the " *
+              "canonical Delta_dual = -(mean(Psi(q*))+zeta*); their best_feasible.Delta/feasible flags " *
+              "are NOT trustworthy and must not be resumed from directly. Call " *
+              "`migrate_cm_checkpoint_v1_candidate($path)` to recover the incumbent w-vector as a fresh " *
+              "START POINT only, then cold-re-evaluate it with cm_production_value_verified before " *
+              "trusting any Delta/feasibility for it.")
+    end
     ckpt.schema == CM_CHECKPOINT_SCHEMA ||
         error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected $(CM_CHECKPOINT_SCHEMA) -- " *
               "this checkpoint predates the CM checkpoint-schema unification (task §11), e.g. a bare " *
               "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
               "run instead of resuming from an incompatible checkpoint.")
     return ckpt
+end
+
+"""
+    migrate_cm_checkpoint_v1_candidate(path) -> (w_candidate, provenance)
+
+Recover ONLY the incumbent w-vector (`g`, `zfree`) from a pre-remediation schema-1 `CMCheckpoint`
+as a possible fresh start point -- per task Part A, a schema-1 checkpoint's `best_feasible.Delta`
+and `feasible` flag were computed via the F1-buggy `-zeta_star` shorthand and must NOT be trusted.
+`provenance.stored_Delta_DO_NOT_TRUST` is returned only for audit/comparison logging; callers must
+cold-re-evaluate `w_candidate` with `cm_production_value_verified` (or
+`run_cm_upper_checkpointed`'s own cb_F!, which now does this correctly) before treating it as
+feasible or as an incumbent. The `CMCheckpoint` struct layout is unchanged between schema 1 and 2
+(only the semantics of the stored Delta changed), so plain `deserialize` reconstructs it directly.
+"""
+function migrate_cm_checkpoint_v1_candidate(path::AbstractString)
+    raw = deserialize(path)::CMCheckpoint
+    raw.schema == 1 || error("migrate_cm_checkpoint_v1_candidate($path): expected schema=1, got $(raw.schema)")
+    w_candidate = vcat(raw.g, raw.zfree)
+    stored_Delta = raw.best_feasible === nothing ? NaN : raw.best_feasible.Delta
+    provenance = (run_id = raw.run_id, label = raw.label, n_eval = raw.n_eval,
+                  checkpoint_reason = raw.checkpoint_reason, stored_Delta_DO_NOT_TRUST = stored_Delta)
+    return (w_candidate = w_candidate, provenance = provenance)
 end
 
 """
@@ -209,7 +247,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         catch e
             throw(DomainError(w[1], "run_cm_upper_checkpointed($label): infeasible/failed inner solve at this point"))
         end
-        Δ = -base.ζstar
+        # Remediation fix (task Part A, finding F1): this used to read `Δ = -base.ζstar`, which
+        # silently omits mean(Psi(q*)) and overstates the divergence whenever any recovered
+        # weight m* exceeds e (the hybrid divergence's quadratic-branch threshold). `verify`
+        # (returned by cm_production_value_verified, computed in archC_verified_state) already
+        # carries the canonical Delta_dual = -(mean(Psi(q*))+zeta*) == cbuf[1]/1e10 -- use it
+        # directly rather than recomputing or re-deriving. Verified live at real D=20/W=80,000/
+        # L=50 points (remediation_a1_verify_delta_dual_identity.jl): the identity holds to
+        # machine precision, and the two diverge (by a real, if usually small, amount) at
+        # tail-active points.
+        Δ = verify.Delta_dual
         evalResult.obj[1] = w[1]
         evalResult.c[1] = Δ
         n_eval[] += 1

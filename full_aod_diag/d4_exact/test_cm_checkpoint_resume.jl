@@ -58,7 +58,7 @@ res = run_cm_upper_checkpointed(; ckpt_dir = CKPT_DIR, run_id = "smoke", label =
     res.knitro_status, res.n_eval, res.n_grad, res.wall, string(res.kappa))
 println("resumed best: ", res.best === nothing ? "nothing" : (gp = res.best.gp, Delta = res.best.Delta))
 
-@testset "CM checkpoint schema-1 resume" begin
+@testset "CM checkpoint schema-2 resume" begin
     @test res.n_eval > n_eval_before_resume   # eval counter CONTINUED, was not reset to 0/1
     @test res.knitro_status in (0, -401, -410)   # solved or a benign wall/iteration-limit stop, not a crash
 
@@ -73,7 +73,10 @@ println("resumed best: ", res.best === nothing ? "nothing" : (gp = res.best.gp, 
     pcx_check = build_cm_production_context(ctx_check, CS; L = latest.cm_L, contrasts = latest.cm_contrasts, probs = latest.cm_probs)
     xf_check = x_free_from_w(latest.best_feasible.w, build_pivot_elimination(ctx_check))
     _, base_check = cm_production_value(xf_check, pcx_check)
-    Delta_check = -base_check.ζstar
+    # Remediation fix (task Part A, F1): checkpoints are now schema=2 and store the canonical
+    # Delta_dual (was `-base_check.ζstar`, which omits mean(Psi(q*))) -- the re-verification must
+    # use the SAME convention the checkpoint's own best_feasible.Delta now uses.
+    Delta_check = delta_dual_from_base(pcx_check.ctx_cm.obj, base_check)
     @printf("  re-verified Delta at checkpoint's best_feasible.w: %.15f  (checkpoint recorded: %.15f, diff=%.2e)\n",
         Delta_check, latest.best_feasible.Delta, abs(Delta_check - latest.best_feasible.Delta))
     @test abs(Delta_check - latest.best_feasible.Delta) < 1e-9

@@ -51,13 +51,15 @@ println("="^100)
 for L in (10, 20, 50)
     pcx_old = build_cm_production_context(ctx, CS; L = L, contrasts = :anchored, probs = cm_equal_grid_probs(L))
     K_old, base_old = cm_production_value(x_free_calib, pcx_old)
-    Dd_old = -base_old.ζstar
+    # Remediation fix (task Part A, F1): was `-base_old.ζstar`/`-base_new.ζstar` (mislabeled
+    # Delta_dual -- omits mean(Psi(q*))).
+    Dd_old = delta_dual_from_base(pcx_old.ctx_cm.obj, base_old)
 
     cfg = CMConfig(common_marginals = true, cm_grid_rule = :equal, cm_grid_size = L,
                     cm_basis = :cumulative, cm_hessian_backend = :structured)
     pcx_new = build_cm_production_context_v2(ctx, CS, cfg)
     K_new, base_new = cm_production_value_v2(x_free_calib, pcx_new)
-    Dd_new = -base_new.ζstar
+    Dd_new = delta_dual_from_base(pcx_new.ctx_cm.obj, base_new)
 
     println("[L=$L] old Delta_dual=", Dd_old, " new Delta_dual=", Dd_new, " diff=", abs(Dd_old - Dd_new),
             " nStatus_old=", base_old.inner_status, " nStatus_new=", base_new.inner_status)
@@ -76,7 +78,8 @@ for basis in (:cumulative, :interval)
     pcx_d = build_cm_production_context_v2(ctx, CS, cfg_dense)
     _, base_s = cm_production_value_v2(x_free_calib, pcx_s)
     _, base_d = cm_production_value_v2(x_free_calib, pcx_d)
-    Ks, Kd = -base_s.ζstar, -base_d.ζstar
+    # Remediation fix (task Part A, F1): was `-base_s.ζstar`/`-base_d.ζstar`.
+    Ks, Kd = delta_dual_from_base(pcx_s.ctx_cm.obj, base_s), delta_dual_from_base(pcx_d.ctx_cm.obj, base_d)
     println("[basis=$basis] structured Delta_dual=", Ks, " dense_reference Delta_dual=", Kd, " diff=", abs(Ks - Kd))
 end
 

@@ -192,8 +192,10 @@ function cm_scenario(label, scenario, xf; cache = nothing, use_cache = false)
     end
     wall = time() - t0
     if ok
-        lp(@sprintf("  [%-16s] wall=%9.4fs  Delta_dual=%12.6f  inner_status=%d", scenario, wall, -base.ζstar, base.inner_status))
-        push!(all_rows, (representation = "CM_L50", point = label, scenario = scenario, wall = wall, Delta_dual = -base.ζstar, inner_status = base.inner_status))
+        # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
+        Delta_dual = delta_dual_from_base(pcx.ctx_cm.obj, base)
+        lp(@sprintf("  [%-16s] wall=%9.4fs  Delta_dual=%12.6f  inner_status=%d", scenario, wall, Delta_dual, base.inner_status))
+        push!(all_rows, (representation = "CM_L50", point = label, scenario = scenario, wall = wall, Delta_dual = Delta_dual, inner_status = base.inner_status))
     else
         lp(@sprintf("  [%-16s] wall=%9.4fs  CM-INFEASIBLE (inner solve failed): %s", scenario, wall, first(errmsg, 120)))
         push!(all_rows, (representation = "CM_L50", point = label, scenario = scenario, wall = wall, Delta_dual = NaN, inner_status = -300))

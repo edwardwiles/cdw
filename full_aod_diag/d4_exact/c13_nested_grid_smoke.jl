@@ -38,7 +38,8 @@ ctx_cm10 = merge(ctx, (obj = aug_nested.obj_cm,))
 base10 = solve_base_state(x_free_calib, ctx_cm10)
 cache10 = build_lfix_base_cache_cm(x_free_calib, ctx_cm10, base10, ctx, aug_nested, bins10)
 g10, _ = composite_gradient_at_fast_cm(x_free_calib, ctx_cm10, pe, ctx, aug_nested, bins10; base = base10, cache = cache10)
-@printf "  nStatus=%d  Delta_dual=-zeta*=%.6f  ||g||=%.6e  gamma_component=%.6e\n" base10.inner_status (-base10.ζstar) norm(g10) g10[1]
+# Remediation fix (task Part A, F1): was `-zeta*` (mislabeled Delta_dual -- omits mean(Psi(q*))).
+@printf "  nStatus=%d  Delta_dual=%.6f  ||g||=%.6e  gamma_component=%.6e\n" base10.inner_status delta_dual_from_base(ctx_cm10.obj, base10) norm(g10) g10[1]
 
 println()
 println("=== nesting sanity: L=10 nested set IS a subset of L=20 nested set's induced z's index positions ===")

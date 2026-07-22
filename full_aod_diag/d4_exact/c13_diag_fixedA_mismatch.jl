@@ -40,7 +40,8 @@ pcx = build_cm_production_context(ctx, CS; L = 10, contrasts = :anchored, probs 
 println("\n=== eval at x_free_calib (real calibration A_od) ===")
 try
     K, base = cm_production_value(x_free_calib, pcx)
-    @printf "  SUCCESS  nStatus=%d  Delta=%.6f\n" base.inner_status (-base.ζstar)
+    # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
+    @printf "  SUCCESS  nStatus=%d  Delta=%.6f\n" base.inner_status delta_dual_from_base(pcx.ctx_cm.obj, base)
 catch e
     println("  FAILED: ", sprint(showerror, e)[1:min(150,end)])
 end
@@ -50,7 +51,8 @@ x_free_ones = vcat(gp_calib, ones(D^2))
 @printf "  max|x_free_calib - x_free_ones| = %.3e\n" maximum(abs.(x_free_calib .- x_free_ones))
 try
     K, base = cm_production_value(x_free_ones, pcx)
-    @printf "  SUCCESS  nStatus=%d  Delta=%.6f\n" base.inner_status (-base.ζstar)
+    # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
+    @printf "  SUCCESS  nStatus=%d  Delta=%.6f\n" base.inner_status delta_dual_from_base(pcx.ctx_cm.obj, base)
 catch e
     println("  FAILED: ", sprint(showerror, e)[1:min(150,end)])
 end

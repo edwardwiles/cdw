@@ -123,8 +123,9 @@ function probe_cm(label, xf; draw_checksum = hash(ctx.U))
     wall = time() - t0
     iters = CS.INNER_ITERS_TOTAL[] - iters0
     hit = iters == 0 && wall < 0.01   # a real miss always does >=1 KN_solve iteration; a hit is a pure dict lookup
+    # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
     lp(@sprintf("  [%-28s] wall=%9.5fs  iters_delta=%3d  (hit-if-both-~0: %-5s)  inner_status=%d  Delta_dual=%.10f",
-        label, wall, iters, string(hit), base.inner_status, -base.ζstar))
+        label, wall, iters, string(hit), base.inner_status, delta_dual_from_base(pcx.ctx_cm.obj, base)))
     push!(results_cm, (label = label, wall = wall, iters_delta = iters, cache_hit = hit, inner_status = base.inner_status))
     return K, base
 end

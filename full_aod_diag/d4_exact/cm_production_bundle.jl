@@ -60,6 +60,32 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
 end
 
 """
+    delta_dual_from_base(obj, base::BaseDualState) -> Float64
+
+Canonical `Delta_dual = -(mean(Psi(q*)) + zeta*)` (== `cbuf[1]/1e10`, oracle.jl's own
+convention -- see `evaluate_fullA`/`three_way_derivatives.jl`'s `fixed_dual_L`), recomputed at
+the SAME converged `(zeta*, lambda*)` `base` already holds, via one explicit
+`obj(inner_x, constr=...)` call (matches `archC_verified_state`'s own recompute pattern below --
+does NOT trust `obj.arg1`/KN_solve's last FG callback as-is, an independent check should not rely
+on the same assumption it exists to catch a violation of).
+
+Use this, NOT `-base.ζstar`, anywhere a caller needs the divergence value from an
+already-solved `BaseDualState` -- see remediation task Part A / finding F1: `-zeta*` silently
+omits `mean(Psi(q*))`, which is nonzero whenever any recovered weight `m*` exceeds `e` in the
+quadratic branch of the hybrid KL/quadratic divergence (`cc_algo/Psi.jl`). At a converged
+solution this identity holds to machine precision; it is exactly zero only when no draw's
+weight exceeds `e` (verified live at real D=20/W=80,000/L=50 points, both near-calibration and
+under perturbation -- see `remediation_a1_verify_delta_dual_identity.jl`).
+"""
+function delta_dual_from_base(obj, base::BaseDualState)
+    ncon = obj.d - obj.outer_constr_index + 2
+    cbuf = zeros(ncon)
+    inner_x = vcat(base.ζstar, base.λstar)
+    obj(inner_x, constr = @view(cbuf[1:ncon]))
+    return cbuf[1] / 1e10
+end
+
+"""
     archC_base_state(x_free0, ctx_cm, cctx) -> BaseDualState
 
 Architecture-C-accelerated drop-in replacement for `solve_base_state` (which

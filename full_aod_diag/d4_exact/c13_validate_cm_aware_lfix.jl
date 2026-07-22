@@ -64,7 +64,15 @@ base = solve_base_state(x_free_calib, ctx_cm)
 cache_cm = build_lfix_base_cache_cm(x_free_calib, ctx_cm, base, ctx, aug, bins)
 lfix0 = lfix_from_q(cache_cm.q0, cache_cm.ζstar)
 truth0 = delta_star_cm(x_free_calib)
-@printf "  lfix_full(calib) reproduces base zeta:  lfix0=%.10f  -zeta*=%.10f  diff=%.3e\n" lfix0 (-base.ζstar) abs(lfix0 - (-base.ζstar))
+# NOTE (remediation task Part A, finding F1): `lfix0` IS the canonical Delta_dual =
+# -(mean(Psi(q*))+zeta*) (lfix_from_q follows the same convention as three_way_derivatives.jl's
+# fixed_dual_L). `-base.ζstar` is the F1-buggy proxy that omits mean(Psi(q*)) -- the two agree
+# here ONLY because the calibration point has ~zero tail mass (no m*>e draws), NOT because they
+# are the same quantity in general. This check is intentionally about cache correctness at a
+# near-benchmark point, not a general identity -- see remediation_a1_verify_delta_dual_identity.jl
+# and test_cm_delta_dual_tail_active.jl for the general (tail-active) case, where they diverge by
+# exactly mean(Psi(q*)) > 0.
+@printf "  lfix_full(calib) reproduces base zeta (near-benchmark, ~zero tail mass only):  lfix0=%.10f  -zeta*=%.10f  diff=%.3e\n" lfix0 (-base.ζstar) abs(lfix0 - (-base.ζstar))
 @printf "  delta_star_cm(calib) [independent solve]: %.10f  (should match lfix0 at the anchor point)\n" truth0
 println()
 

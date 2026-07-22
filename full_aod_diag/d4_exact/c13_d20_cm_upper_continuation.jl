@@ -75,7 +75,9 @@ for L in (10, 20, 50)
     catch
         (nothing, nothing)
     end
-    if base_check === nothing || !isfinite(-base_check.ζstar) || -base_check.ζstar > DELTA + 1e-6
+    # Remediation fix (task Part A, F1): was `-base_check.ζstar`, which omits mean(Psi(q*)).
+    Delta_check = base_check === nothing ? Inf : delta_dual_from_base(pcx.ctx_cm.obj, base_check)
+    if base_check === nothing || !isfinite(Delta_check) || Delta_check > DELTA + 1e-6
         lp("  ** start point infeasible/failed under L=$L grid, falling back to calibration **")
         w_current = copy(w_calib)
     end

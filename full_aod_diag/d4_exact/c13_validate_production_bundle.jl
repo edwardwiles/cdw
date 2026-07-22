@@ -39,7 +39,10 @@ for L in (10, 20, 50)
     pcx = build_cm_production_context(ctx, CS; L = L, contrasts = :anchored)
     K_prod, base_prod = cm_production_value(x_free_calib, pcx)
 
-    @printf "[L=%2d] dense: nStatus=%d Delta_dual=%.8f | production(B+C): nStatus=%d Delta_dual=%.8f | diff=%.3e\n" L r_ref.inner_status (-r_ref.zeta) base_prod.inner_status (-base_prod.ζstar) abs((-r_ref.zeta) - (-base_prod.ζstar))
+    # Remediation fix (task Part A, F1): was `-r_ref.zeta`/`-base_prod.ζstar` (mislabeled as
+    # Delta_dual -- omits mean(Psi(q*))). r_ref.Delta_dual is already canonical.
+    Delta_dual_prod = delta_dual_from_base(pcx.ctx_cm.obj, base_prod)
+    @printf "[L=%2d] dense: nStatus=%d Delta_dual=%.8f | production(B+C): nStatus=%d Delta_dual=%.8f | diff=%.3e\n" L r_ref.inner_status r_ref.Delta_dual base_prod.inner_status Delta_dual_prod abs(r_ref.Delta_dual - Delta_dual_prod)
 end
 println()
 
@@ -68,7 +71,8 @@ println("="^100)
 snaps = nested_grid_sequence([10, 20, 50])
 pcx10 = build_cm_production_context(ctx, CS; L = 10, contrasts = :anchored, probs = snaps[10])
 K10, base10 = cm_production_value(x_free_calib, pcx10)
-@printf "  nested-L10 production: nStatus=%d Delta_dual=%.8f\n" base10.inner_status (-base10.ζstar)
+# Remediation fix (task Part A, F1): was `-base10.ζstar`, which omits mean(Psi(q*)).
+@printf "  nested-L10 production: nStatus=%d Delta_dual=%.8f\n" base10.inner_status delta_dual_from_base(pcx10.ctx_cm.obj, base10)
 println()
 
 println("="^100)

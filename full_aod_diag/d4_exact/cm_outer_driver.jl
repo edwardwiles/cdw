@@ -70,7 +70,13 @@ function run_cm_upper(pcx, ctx, pe, w0::Vector{Float64};
         catch e
             throw(DomainError(w[1], "run_cm_upper: infeasible/failed inner solve at this point"))
         end
-        Δ = -base.ζstar
+        # Remediation fix (task Part A, finding F1): `-base.ζstar` silently omits mean(Psi(q*))
+        # and overstates the divergence at tail-active points (m* > e) -- see cm_checkpoint.jl's
+        # identical fix and cm_production_bundle.jl's delta_dual_from_base docstring. This plain
+        # (un-checkpointed) driver has no `verify` tuple available cheaply from
+        # cm_production_value, so recompute the canonical Delta_dual directly (one extra
+        # obj(...) call, same recompute pattern archC_verified_state uses).
+        Δ = delta_dual_from_base(pcx.ctx_cm.obj, base)
         evalResult.obj[1] = w[1]
         evalResult.c[1] = Δ
         n_eval[] += 1

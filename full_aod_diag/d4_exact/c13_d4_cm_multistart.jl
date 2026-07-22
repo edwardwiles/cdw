@@ -93,7 +93,8 @@ for Lden in (20, 50)
         pcx_coarse = results[Lcoarse].pcx
         try
             _, base = cm_production_value(x_free_from_w(wden, pe), pcx_coarse)
-            Delta_at_coarse = -base.ζstar
+            # Remediation fix (task Part A, F1): was `-base.ζstar`, which omits mean(Psi(q*)).
+            Delta_at_coarse = delta_dual_from_base(pcx_coarse.ctx_cm.obj, base)
             feasible_at_coarse = Delta_at_coarse <= DELTA + 1e-6
             kappa_den = results[Lden].best_run.res.kappa
             kappa_coarse = results[Lcoarse].best_run.res.kappa
