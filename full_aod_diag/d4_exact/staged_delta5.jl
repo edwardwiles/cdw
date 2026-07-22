@@ -65,6 +65,7 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
         maxit_override::Union{Nothing,Int} = nothing,   # finalization task Phase 2B: threaded to every
         # stage's run_polish_checkpointed call, for an eval-count-matched (not just wall-clock-matched)
         # cross_delta on/off comparison. Default nothing: unchanged behavior.
+        use_pooled_gradient::Union{Nothing,Bool} = nothing, price_cache_backend::Union{Nothing,Symbol} = nothing,   # finalization task Phase 3: threaded through to every stage's run_polish_checkpointed call
         allow_direction_box_migration::Bool = false)
     cross_delta && !reuse_context && error("run_staged_delta5_continuation($label): cross_delta=true requires reuse_context=true -- a CrossDeltaExactCache is only valid across stages that share one ctx.")
     g = g_start; zfree = copy(zfree_start)
@@ -95,6 +96,7 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
             use_dual_bank = use_dual_bank, use_exact_cache = use_exact_cache,
             exact_cache_override = cross_delta_cache_obj,
             reuse = reuse, maxit_override = maxit_override,
+            use_pooled_gradient = use_pooled_gradient, price_cache_backend = price_cache_backend,
             allow_direction_box_migration = allow_direction_box_migration)
         t_stage = time() - t0
         cache_size_after = cross_delta_cache_obj === nothing ? 0 : length(cross_delta_cache_obj)
