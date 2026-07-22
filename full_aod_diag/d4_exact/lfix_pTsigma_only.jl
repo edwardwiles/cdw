@@ -394,7 +394,11 @@ function dest_contrib_incremental_top3_B(cache::LFixBaseCacheB, ctx, θ_full::Ab
         bo = best_o; bpTσ = best_pTσ
         for o in Cd
             v = new_pTσ[o][ω]
-            if v > bpTσ
+            # Remediation task Part E (finding F5): canonical exact-tie convention -- lowest
+            # origin index wins, matching every generic-rescan tier (note the direction here is
+            # `>` since higher pTsigma wins, not lower price -- the tie-break itself is still
+            # "lowest index"). See lfix_factorized.jl's identical fix for the full rationale.
+            if v > bpTσ || (v == bpTσ && o < bo)
                 bpTσ = v; bo = o
             end
         end
@@ -518,7 +522,11 @@ function count_winner_flips_multi_top3_B(cache::LFixBaseCacheB, ctx, θ_full::Ab
         bo = best_o; bpTσ = best_pTσ
         for o in Cd
             v = new_pTσ[o][ω]
-            if v > bpTσ
+            # Remediation task Part E (finding F5): canonical exact-tie convention -- lowest
+            # origin index wins, matching every generic-rescan tier (note the direction here is
+            # `>` since higher pTsigma wins, not lower price -- the tie-break itself is still
+            # "lowest index"). See lfix_factorized.jl's identical fix for the full rationale.
+            if v > bpTσ || (v == bpTσ && o < bo)
                 bpTσ = v; bo = o
             end
         end

@@ -43,9 +43,16 @@ end
     is_better_polish(candidate_gp, best_gp_or_nothing, find_smallest::Bool)
 
 Upper/lower-direction comparison used by `run_polish_checkpointed`'s `cb_F!`:
-`find_smallest=true` (lower-bound search) prefers a SMALLER `gp`; `find_smallest=false`
-(upper-bound search) prefers a LARGER `gp`. `best_gp_or_nothing === nothing` (no
+`find_smallest=true` (minimize gamma'_focal, which MAXIMIZES kappa -- the UPPER-bound search;
+see direction_bounds.jl's three-way evidence and c10_d20_production_driver.jl's own
+`find_smallest=true ⇔ :upper` convention) prefers a SMALLER `gp`; `find_smallest=false`
+(the LOWER-bound search) prefers a LARGER `gp`. `best_gp_or_nothing === nothing` (no
 incumbent yet) always accepts the candidate.
+
+Remediation task Part E (finding F8): this docstring previously labeled `find_smallest=true` as
+"lower-bound search" -- inverted. The LOGIC below was always correct (smaller gp preferred when
+find_smallest=true); only the docstring's direction label was wrong, reproducing the exact
+historical label-swap confusion the direction-box addendum (git 5fbfada) fixed elsewhere.
 """
 function is_better_polish(candidate_gp::Real, best_gp_or_nothing, find_smallest::Bool)
     best_gp_or_nothing === nothing && return true

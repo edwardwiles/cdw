@@ -60,8 +60,13 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
     include_truncated_moment && @assert(μHat !== nothing && σHat !== nothing,
         "include_truncated_moment=true requires μHat and σHat (the fixed baseline-calibrated values)")
     # Continuation 13, Section 6: `probs=` lets a caller supply an EXPLICIT probability grid (e.g.
-    # nested_quantile_grids.jl's genuinely-nested Q_10/Q_20/Q_50) in place of the default evenly-
-    # spaced `k/L` grid -- the default path (`probs === nothing`) is byte-for-byte unchanged.
+    # nested_quantile_grids.jl's genuinely-nested Q_10/Q_20/Q_50) in place of the default grid --
+    # the default path (`probs === nothing`) is byte-for-byte unchanged. Remediation task Part E
+    # (finding F13): the default is NOT literally `k/L for k=1:L` -- it is `L` points evenly
+    # spaced over [1/L, (L-1)/L] (`range(1/L, (L-1)/L, length=L)`), which at L=50 runs
+    # 0.02..0.98 with spacing ~=0.0196 (not exactly 1/L), deliberately excluding p=0 and p=1.
+    # This is correct/intended behavior (a CDF contrast at p=1 would be degenerate); only the
+    # comment previously mislabeled it "the evenly-spaced k/L grid."
     if probs === nothing
         z = quantile(U[:, refIndex1], collect(range(1 / L, (L - 1) / L, length = L)))
     else

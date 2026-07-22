@@ -15,6 +15,23 @@ using SpecialFunctions: gamma as spgamma
 using SHA
 
 """
+    reject_point(x, msg) -> never returns
+
+Remediation task Part E (finding F6): named helper making explicit a hidden type contract every
+KNITRO outer-loop callback (`cb_F!`/`cb_G!` in c10_d20_production_driver.jl, cm_checkpoint.jl,
+cm_outer_driver.jl) relies on: KNITRO.jl v1.2.1's `_try_catch_handler`
+(`~/.julia/packages/KNITRO/*/src/C_wrapper.jl`) maps a caught `DomainError` specifically to
+`KN_RC_EVAL_ERR` (a graceful "reject this point, try another" backtrack) and maps ANY OTHER
+exception type to `KN_RC_CALLBACK_ERR`, which ABORTS the outer solve. A future refactor that
+replaces `DomainError` with `ErrorException` (or lets a different exception type -- e.g. a leaked
+`TiedWinnerError` -- escape a callback) silently changes "reject this point" into "abort the
+run," with no compile-time or type-system signal that anything changed. Use this helper at every
+callback reject site instead of a bare `throw(DomainError(...))`, so the contract is named once
+and grep-able, not re-derived at each of the ~6 call sites.
+"""
+reject_point(x, msg::AbstractString) = throw(DomainError(x, msg))
+
+"""
     sha256_of_matrix(M::AbstractMatrix{Float64}) -> String
 
 AUD-11 fix: a stable, cross-process/cross-Julia-version content digest. Julia's built-in
@@ -220,11 +237,17 @@ scientific standard. See docs/fullA_independent_audit_remediation.md AUD-04.
 """
 Base.@kwdef struct VerifiedSuccessTolerances
     primal_dual_gap_tol::Float64 = 1e-3
-    weight_norm_resid_tol::Float64 = 1e-6
     mean_m_resid_tol::Float64 = 1e-6
     max_abs_moment_kkt_resid_tol::Float64 = 1e-3
     m_min_floor::Float64 = 0.0   # conjugate-domain guard: phi/Psi! require m>0
 end
+# Remediation task Part E: removed weight_norm_resid_tol -- `weight_norm_resid =
+# abs(sum(m ./ sum(m)) - 1)` is ~1e-16 by floating-point construction (sum(p) for a normalized
+# p=m/sum(m) is a tautology, not an independent check) and gates nothing. `mean_m_resid =
+# abs(mean(m)-1)` is the real normalization check (an actual KKT identity at a converged
+# solution, not true by construction) and remains gated. `weight_norm_resid` itself is still
+# computed and returned by archC_verified_state/evaluate_fullA for diagnostic visibility; it is
+# just no longer part of the acceptance gate below.
 const DEFAULT_VERIFIED_SUCCESS_TOL = VerifiedSuccessTolerances()
 
 """
@@ -260,14 +283,13 @@ function classify_inner_result(result; tol::VerifiedSuccessTolerances = DEFAULT_
 
     Δ = get(result, :Delta_dual, NaN)
     gap = get(result, :primal_dual_gap, NaN)
-    wnr = get(result, :weight_norm_resid, NaN)
     mmr = get(result, :mean_m_resid, NaN)
     kkt = get(result, :max_abs_moment_kkt_resid, NaN)
     mmin = get(result, :m_min, NaN)
 
-    ok = isfinite(Δ) && isfinite(gap) && isfinite(wnr) && isfinite(mmr) && isfinite(kkt) &&
+    ok = isfinite(Δ) && isfinite(gap) && isfinite(mmr) && isfinite(kkt) &&
          isfinite(mmin) && mmin > tol.m_min_floor &&
-         gap <= tol.primal_dual_gap_tol && wnr <= tol.weight_norm_resid_tol &&
+         gap <= tol.primal_dual_gap_tol &&
          mmr <= tol.mean_m_resid_tol && kkt <= tol.max_abs_moment_kkt_resid_tol
 
     return ok ? VerifiedSolved : ApproximateSolved

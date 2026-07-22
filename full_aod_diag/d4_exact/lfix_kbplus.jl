@@ -205,7 +205,15 @@ function dest_contrib_incremental_top3_KB(cache::LFixBaseCacheKB, ctx, θ_full::
         bo = best_o; bs = best_s
         for o in Cd
             v = logCC′[o, d] + ref.mulU[ω, o]
-            if v < bs
+            # Remediation task Part E (finding F5): canonical exact-tie convention --
+            # lowest origin index wins (matches every generic-rescan tier's own natural
+            # behavior, which scans o=1..D with strict `<`). Previously `if v < bs` alone,
+            # which on an exact tie kept whichever candidate was considered FIRST (the
+            # cached top-3 survivor, regardless of its index vs the tying changed origin's)
+            # -- disagreed with the generic-rescan tiers whenever the survivor's index
+            # exceeded the tying origin's. Measure-zero in exact arithmetic; see
+            # test_winner_forced_tie.jl.
+            if v < bs || (v == bs && o < bo)
                 bs = v; bo = o
             end
         end
@@ -281,7 +289,15 @@ function count_winner_flips_KB(cache::LFixBaseCacheKB, ctx, θ_full::AbstractVec
         bo = best_o; bs = best_s
         for o in Cd
             v = logCC′[o, d] + ref.mulU[ω, o]
-            if v < bs
+            # Remediation task Part E (finding F5): canonical exact-tie convention --
+            # lowest origin index wins (matches every generic-rescan tier's own natural
+            # behavior, which scans o=1..D with strict `<`). Previously `if v < bs` alone,
+            # which on an exact tie kept whichever candidate was considered FIRST (the
+            # cached top-3 survivor, regardless of its index vs the tying changed origin's)
+            # -- disagreed with the generic-rescan tiers whenever the survivor's index
+            # exceeded the tying origin's. Measure-zero in exact arithmetic; see
+            # test_winner_forced_tie.jl.
+            if v < bs || (v == bs && o < bo)
                 bs = v; bo = o
             end
         end

@@ -274,7 +274,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         try
             _, base, verify = cm_production_value_verified(xf, pcx)
         catch e
-            throw(DomainError(w[1], "run_cm_upper_checkpointed($label): infeasible/failed inner solve at this point"))
+            reject_point(w[1], "run_cm_upper_checkpointed($label): infeasible/failed inner solve at this point")
         end
         # Remediation fix (task Part A, finding F1): this used to read `Δ = -base.ζstar`, which
         # silently omits mean(Psi(q*)) and overstates the divergence whenever any recovered

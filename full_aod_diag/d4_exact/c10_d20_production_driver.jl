@@ -235,7 +235,19 @@ misconfigured mid-flight.
 """
 function guard_checkpoint_path(path::AbstractString, draw_design::Symbol, checksum_uniform::AbstractString, checksum_transformed::AbstractString)
     isfile(path) || return nothing
-    prior = deserialize(path)::D20Checkpoint
+    # Remediation task Part E (finding F12): a pre-schema-3 file at `path` makes
+    # `deserialize(path)::D20Checkpoint` throw a raw type/field-mismatch error instead of the
+    # informative schema message `load_checkpoint` gives -- wrap with the same guidance.
+    local prior
+    try
+        prior = deserialize(path)::D20Checkpoint
+    catch e
+        error("guard_checkpoint_path($path): could not deserialize an existing file at this path " *
+              "as the current D20Checkpoint schema (schema=$CHECKPOINT_SCHEMA) -- it likely " *
+              "predates a schema change (see load_checkpoint's error message for the schema " *
+              "history). Underlying error: $(sprint(showerror, e)). Start a fresh run with a " *
+              "different ckpt_dir/label instead of resuming from an incompatible checkpoint.")
+    end
     if prior.draw_design != draw_design || prior.draw_checksum_uniform != checksum_uniform || prior.draw_checksum_transformed != checksum_transformed
         error("guard_checkpoint_path($path): an existing checkpoint at this path was built under a " *
               "DIFFERENT draw design/checksum (design=:$(prior.draw_design), " *
@@ -642,7 +654,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
-            throw(DomainError(w[1], "run_profile_checkpointed($label): infeasible/non-finite point (inner_status=$(r.inner_status)), rejecting"))
+            reject_point(w[1], "run_profile_checkpointed($label): infeasible/non-finite point (inner_status=$(r.inner_status)), rejecting")
         end
         Δ = r.Delta_dual
         evalResult.obj[1] = Δ
@@ -696,7 +708,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
             if !(r_g.inner_status in FEASIBLE_CODES)
                 r_g, _ = screened_eval(xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)   # BUGFIX, see cb_F! above
             end
-            r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_profile_checkpointed($label): cb_G! could not recompute a feasible base state"))
+            r_g.inner_status in FEASIBLE_CODES || reject_point(w[1], "run_profile_checkpointed($label): cb_G! could not recompute a feasible base state")
             # AUD-03 fix: same reasoning as cb_F! above -- do not trust ctx.obj.arg1 on a cache hit.
             base = r_g.cache_hit ? solve_base_state(xf, ctx) :
                 BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
@@ -1068,7 +1080,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         end
         if !(r.inner_status in FEASIBLE_CODES) || !isfinite(r.Delta_dual)
             n_rejected[] += 1
-            throw(DomainError(w[1], "run_polish_checkpointed($label): infeasible/non-finite point (inner_status=$(r.inner_status)), rejecting"))
+            reject_point(w[1], "run_polish_checkpointed($label): infeasible/non-finite point (inner_status=$(r.inner_status)), rejecting")
         end
         Δ = r.Delta_dual
         evalResult.obj[1] = find_smallest ? w[1] : -w[1]
@@ -1133,7 +1145,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                     n_neg_confirmed[] += 1
                 end
             end
-            r_g.inner_status in FEASIBLE_CODES || throw(DomainError(w[1], "run_polish_checkpointed($label): cb_G! could not recompute a feasible base state"))
+            r_g.inner_status in FEASIBLE_CODES || reject_point(w[1], "run_polish_checkpointed($label): cb_G! could not recompute a feasible base state")
             # AUD-03 fix: same reasoning as cb_F! above -- do not trust ctx.obj.arg1 on a cache hit.
             base = r_g.cache_hit ? solve_base_state(xf, ctx) :
                 BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)

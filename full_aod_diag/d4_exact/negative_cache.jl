@@ -139,8 +139,13 @@ TransientFailureResult so the caller retries with a larger budget rather than
 trusting an inconclusive timeout as a mathematical certificate.
 """
 function compatible_failure(first_status::Int, confirm_status::Int)::Bool
-    unbounded_family = (-300, -301)
-    return first_status in unbounded_family && confirm_status in unbounded_family
+    # Remediation task Part E (finding F11): renamed from `unbounded_family` -- (-300, -301) are
+    # KNITRO INFEASIBILITY codes (KN_RC_INFEASIBLE / KN_RC_INFEAS_XTOL), not "unbounded" codes;
+    # the old name recreated the exact -300-vocabulary confusion this codebase's own methodology
+    # doc warns about elsewhere. The policy itself (two independent-start confirmed failures with
+    # matching status) is unchanged.
+    infeasible_family = (-300, -301)
+    return first_status in infeasible_family && confirm_status in infeasible_family
 end
 
 """

@@ -171,7 +171,10 @@ function count_winner_flips_multi_top3(cache::LFixBaseCache, ctx, θ_full::Abstr
         bo = best_o; bp = best_p
         for o in Cd
             v = new_price[o][ω]
-            if v < bp
+            # Remediation task Part E (finding F5): canonical exact-tie convention -- lowest
+            # origin index wins, matching every generic-rescan tier. See lfix_factorized.jl's
+            # identical fix for the full rationale.
+            if v < bp || (v == bp && o < bo)
                 bp = v; bo = o
             end
         end

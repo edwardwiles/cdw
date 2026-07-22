@@ -68,7 +68,7 @@ function run_cm_upper(pcx, ctx, pe, w0::Vector{Float64};
         try
             _, base = cm_production_value(xf, pcx)
         catch e
-            throw(DomainError(w[1], "run_cm_upper: infeasible/failed inner solve at this point"))
+            reject_point(w[1], "run_cm_upper: infeasible/failed inner solve at this point")
         end
         # Remediation fix (task Part A, finding F1): `-base.ζstar` silently omits mean(Psi(q*))
         # and overstates the divergence at tail-active points (m* > e) -- see cm_checkpoint.jl's
