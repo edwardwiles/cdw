@@ -681,7 +681,11 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # AUD-03 and its A/B/A regression test.
         base = r.cache_hit ? solve_base_state(xf, ctx) :
             BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
-        last_F_state[] = (w = copy(w), base = base)
+        # Remediation task Part C (accepted-point checkpoint reuse, OP2): also store the full
+        # screened_eval result `r` (not just `base`) so cb_newpt! below can reuse it directly
+        # when KNITRO's just-accepted iterate is exactly this same point, instead of paying a
+        # second (redundant) warm inner solve purely to checkpoint.
+        last_F_state[] = (w = copy(w), base = base, r = r)
         # AUD-04 fix: a candidate incumbent must be a scientifically VERIFIED solve (residual/gap
         # tolerances pass, not merely inner_status in FEASIBLE_CODES) before it can replace the
         # best-known point.
@@ -757,8 +761,19 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     function cb_newpt!(kc2, x, lambda, user_data)
         knitro_iter[] += 1
         w_now = vcat(g, x)
-        xf_now = x_free_from_w(w_now, pe)
-        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x), exact_cache = exact_cache)
+        # Remediation task Part C (accepted-point checkpoint reuse, OP2): when the just-accepted
+        # iterate `x` is EXACTLY the point cb_F! most recently evaluated (the common case -- an
+        # accepted KNITRO iterate is, by construction, the point cb_F!/cb_G! were just called
+        # at), reuse that already-computed result instead of paying a second warm inner solve
+        # purely to checkpoint. Falls back to a fresh solve (the original behavior) whenever the
+        # points don't match (e.g. a rejected-then-different-accepted sequence) or no prior
+        # cb_F! call exists yet.
+        shared = last_F_state[]
+        r_now = (shared !== nothing && shared.w == w_now) ? shared.r : nothing
+        if r_now === nothing
+            xf_now = x_free_from_w(w_now, pe)
+            r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x), exact_cache = exact_cache)
+        end
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, w_now, r_now)
         end
@@ -1111,7 +1126,9 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         # AUD-03 and its A/B/A regression test.
         base = r.cache_hit ? solve_base_state(xf, ctx) :
             BaseDualState(collect(xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
-        last_F_state[] = (w = copy(w), base = base)
+        # Remediation task Part C (accepted-point checkpoint reuse, OP2): see the matching change
+        # in run_profile_checkpointed's cb_F!/cb_newpt! for the full rationale.
+        last_F_state[] = (w = copy(w), base = base, r = r)
         # AUD-04 fix: same reasoning as cb_F! above -- feasibility (Delta<=delta) alone is not a
         # verified solve.
         is_new_best = feasible && is_verified_success(r) &&
@@ -1193,8 +1210,14 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     end
     function cb_newpt!(kc2, x, lambda, user_data)
         knitro_iter[] += 1
-        xf_now = x_free_from_w(x, pe)
-        r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x[2:end]), exact_cache = exact_cache)
+        # Remediation task Part C (accepted-point checkpoint reuse, OP2): see the matching change
+        # in run_profile_checkpointed's cb_F!/cb_newpt! for the full rationale.
+        shared = last_F_state[]
+        r_now = (shared !== nothing && shared.w == x) ? shared.r : nothing
+        if r_now === nothing
+            xf_now = x_free_from_w(x, pe)
+            r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x[2:end]), exact_cache = exact_cache)
+        end
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, collect(x), r_now)
         end
