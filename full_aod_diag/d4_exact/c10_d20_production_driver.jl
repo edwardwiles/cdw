@@ -83,6 +83,7 @@
 include(joinpath(@__DIR__, "draw_design.jl"))   # -> d20_real_setup_design (wraps context_real_d20.jl's d20_real_setup + the QMC designs); includes infeasibility_screen.jl transitively (Section 5)
 include(joinpath(@__DIR__, "winners.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
+include(joinpath(@__DIR__, "cross_delta_cache.jl"))   # allocation/cache-cleanup task §12: CrossDeltaExactCache -- opt-in via exact_cache_override= (run_profile_checkpointed/run_polish_checkpointed) or cross_delta= (run_staged_delta5_continuation, staged_delta5.jl); default off, unused unless explicitly passed
 include(joinpath(@__DIR__, "gravity_elimination.jl"))
 include(joinpath(@__DIR__, "three_way_derivatives.jl"))
 include(joinpath(@__DIR__, "lfix_incremental.jl"))
@@ -93,6 +94,7 @@ include(joinpath(@__DIR__, "oracle_fast.jl"))
 include(joinpath(@__DIR__, "compressed_live.jl"))
 include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
 include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))   # Continuation 11 Section 2: validated bit-identical vs composite_gradient_at_fast (0.0 diff, 5 points incl. trajectory test), ~1.1-1.9x faster; now the default gradient below
+include(joinpath(@__DIR__, "gradient_workspace.jl"))   # allocation/cache-cleanup task §7: GradWorkspacePool + composite_gradient_at_fast_pooled -- opt-in via use_pooled_gradient= below, verified bit-identical to composite_gradient_at_fast_buffered (test_gradient_workspace.jl, 9/9) and ~4.9x lower allocation (756.5 MB vs 3690.0 MB at a real D=20/W=80000 point); default OFF, old buffered path unchanged when omitted
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
@@ -370,8 +372,24 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
         use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
+        exact_cache_override::Union{Nothing,SafeExactCache,CrossDeltaExactCache} = nothing,   # allocation/
+        # cache-cleanup task §12: when given, USE THIS cache instead of constructing a fresh
+        # SafeExactCache() internally -- lets a caller (e.g. run_staged_delta5_continuation) thread
+        # ONE CrossDeltaExactCache across every stage of a staged continuation so an exact hit from
+        # a DIFFERENT delta-stage (same x_free/find_smallest/context) is served without a re-solve.
+        # Default nothing: zero behavior change (falls back to use_exact_cache ? SafeExactCache() :
+        # nothing, exactly as before this kwarg existed) -- CrossDeltaExactCache's own correctness
+        # (context-fingerprinted key, AUD-08) is a precondition for safely enabling this; see
+        # docs/fullA_independent_audit_remediation.md AUD-08 and docs/fullA_postmerge_allocation_
+        # productionization.md.
         organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
         # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no capture.
+        use_pooled_gradient::Bool = false,   # allocation/cache-cleanup task §7: opt-in
+        # composite_gradient_at_fast_pooled (GradWorkspacePool) instead of composite_gradient_
+        # at_fast_buffered. Verified bit-identical (test_gradient_workspace.jl, 9/9) and ~4.9x
+        # lower allocation (756.5 MB vs 3690.0 MB at a real D=20/W=80000 point) on this branch.
+        # Default false: reference/old buffered path unchanged when omitted, per the brief's own
+        # "retain the old buffered gradient behind a reference flag" requirement.
         allow_direction_box_migration::Bool = false)   # addendum: by default, a fixed g (fresh or
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
@@ -413,6 +431,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     pe = build_pivot_elimination(ctx)
     D = ctx.D; D2 = D^2; n = D2 - 1
     rsc = build_ranged_screen_context(ctx)
+    grad_pool = use_pooled_gradient ? build_grad_workspace_pool(W) : nothing   # one pool per ctx, not per gradient call
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
        " screen_setup_wall=", ctx.screen_setup_wall,
@@ -458,7 +477,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     sc = ScreenCounters()
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
-    exact_cache = use_exact_cache ? SafeExactCache() : nothing
+    exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)
 
     # seed the compressed warm-start cache with a cold solve first (same fix c9_phase8_d20_pilot.jl
     # found necessary -- a fresh ctx's very first warm=true call has no prior state to warm-start
@@ -595,9 +614,15 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
                 BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
-        gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
-                                                   h_mode = :cached, bandwidth_cache = policy.cache)
-        meta.tie_fallback || record_hits!(policy, meta.cache_hits[2:end])
+        if use_pooled_gradient
+            gfull, meta = composite_gradient_at_fast_pooled(xf, ctx, pe, grad_pool; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])   # pooled path has no tie_fallback branch (unlike lfix_buffer_reuse.jl's meta, which always reports tie_fallback=false anyway)
+        else
+            gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            meta.tie_fallback || record_hits!(policy, meta.cache_hits[2:end])
+        end
         n_grad_calls[] += 1
         evalResult.objGrad .= gfull[2:end]
         return 0
@@ -688,6 +713,16 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         inner_opt_override::Union{Nothing,AbstractString} = nothing,
         skip_cold_retry::Bool = true,   # validated 2026-07-20: cold retry rescued 0/30 warm failures (all genuine
         use_dual_bank::Bool = true, dual_bank_size::Int = 8, use_exact_cache::Bool = true,
+        exact_cache_override::Union{Nothing,SafeExactCache,CrossDeltaExactCache} = nothing,   # allocation/
+        # cache-cleanup task §12: when given, USE THIS cache instead of constructing a fresh
+        # SafeExactCache() internally -- lets a caller (e.g. run_staged_delta5_continuation) thread
+        # ONE CrossDeltaExactCache across every stage of a staged continuation so an exact hit from
+        # a DIFFERENT delta-stage (same x_free/find_smallest/context) is served without a re-solve.
+        # Default nothing: zero behavior change (falls back to use_exact_cache ? SafeExactCache() :
+        # nothing, exactly as before this kwarg existed) -- CrossDeltaExactCache's own correctness
+        # (context-fingerprinted key, AUD-08) is a precondition for safely enabling this; see
+        # docs/fullA_independent_audit_remediation.md AUD-08 and docs/fullA_postmerge_allocation_
+        # productionization.md.
         use_neg_cache::Bool = false, neg_cache_code_version::String = "unknown",   # negative-cache audit,
         # Policy B (docs/fullA_negative_cache_audit.md): opt-in, default OFF (byte-identical behavior to
         # before this kwarg existed when omitted). Requires skip_cold_retry=false to ever have a
@@ -704,6 +739,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
         # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no
         # capture, zero overhead beyond one is_organic_failure check per evaluation.
+        use_pooled_gradient::Bool = false,   # see run_profile_checkpointed's identical kwarg
         allow_direction_box_migration::Bool = false)   # addendum: by default, a start point (fresh or
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error, not silently clamped. Set true only for an explicit, deliberate migration of a
@@ -764,6 +800,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         rsc = build_ranged_screen_context(ctx)
     end
     D = ctx.D; D2 = D^2
+    grad_pool = use_pooled_gradient ? build_grad_workspace_pool(W) : nothing   # one pool per ctx, not per gradient call
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
        " screen_setup_wall=", ctx.screen_setup_wall,
@@ -806,7 +843,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     sc = ScreenCounters()
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
-    exact_cache = use_exact_cache ? SafeExactCache() : nothing
+    exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)
     neg_cache = use_neg_cache ? SafeNegativeCache{FullAEvalKey}() : nothing
     n_neg_confirmed = Ref(0)
     r0, _ = screened_eval(x_free_from_w(w0, pe), ctx, rsc, sc, n_eval; warm = false)
@@ -985,9 +1022,15 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                 BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
-        gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
-                                                   h_mode = :cached, bandwidth_cache = policy.cache)
-        meta.tie_fallback || record_hits!(policy, meta.cache_hits[2:end])
+        if use_pooled_gradient
+            gfull, meta = composite_gradient_at_fast_pooled(xf, ctx, pe, grad_pool; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])   # pooled path has no tie_fallback branch (unlike lfix_buffer_reuse.jl's meta, which always reports tie_fallback=false anyway)
+        else
+            gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            meta.tie_fallback || record_hits!(policy, meta.cache_hits[2:end])
+        end
         n_grad_calls[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
         evalResult.jac .= gfull
