@@ -83,16 +83,58 @@ served without a re-solve, with `Delta_minus_delta` patched to reflect the CALLE
 `oracle_cache_for`'s `SafeExactCache` -- never share across a genuinely different
 draw-set/(method,bound-direction) scope) and thread it through every stage via the same
 `cache=`/`exact_cache=` keyword every existing call site already accepts.
+
+Counters (Phase 2 gate, task §2B): observed at the two dispatch points every existing call
+site already goes through (`_cache_lookup`/`_cache_store!`), so no production call site needed
+to change. `n_hit_verified`/`n_hit_infeasible` classify hits by the STORED result's own class
+(only `VerifiedSolved`/`ExactInfeasible` are ever stored, per `is_cacheable_result` -- enforced
+at the call site, not by this struct). `n_store_skipped_unverified` is NOT tracked here: the
+`is_cacheable_result(result) && _cache_store!(...)` gate that filters unverified/failed results
+lives at each of the (several) shared call sites in `oracle.jl`/`oracle_fast.jl`, common to
+EVERY cache backend (`Dict`/`SafeExactCache`/`CrossDeltaExactCache`); adding a counter there
+would mean touching already-audited, already-passing shared code for an observability nicety.
+Instead: `n_lookups - n_hit_verified - n_hit_infeasible - n_miss_stored_after` (see below) is
+zero by construction, and the per-stage `n_eval` in `staged_delta5.jl`'s summary already gives
+the denominator needed to derive "how many evals this stage did NOT produce a cacheable
+result" (n_eval minus the growth in cache size). `n_context_mismatch` is likewise not a
+separate code path: `ctx_fingerprint` is part of `FullAInnerKey`, so a context mismatch is
+simply a different key -- i.e. a normal miss under the intended one-ctx-per-continuation usage
+this cache is scoped to (see struct docstring). Counted as `n_miss` like any other miss; the
+distinguishing evidence for "no cross-context aliasing occurred" is the AUD-08 key design
+itself (see `docs/fullA_independent_audit_remediation.md`), not a runtime counter.
 """
-struct CrossDeltaExactCache
+mutable struct CrossDeltaExactCache
     d::Dict{FullAInnerKey, NamedTuple}
     lock::ReentrantLock
+    n_lookups::Int
+    n_hit_verified::Int
+    n_hit_infeasible::Int
+    n_miss::Int
+    n_store::Int
 end
-CrossDeltaExactCache() = CrossDeltaExactCache(Dict{FullAInnerKey, NamedTuple}(), ReentrantLock())
+CrossDeltaExactCache() = CrossDeltaExactCache(Dict{FullAInnerKey, NamedTuple}(), ReentrantLock(), 0, 0, 0, 0, 0)
 Base.length(c::CrossDeltaExactCache) = lock(() -> length(c.d), c.lock)
 
+"Snapshot of the counters, for reporting -- not itself locked (read after the run, not concurrently)."
+cache_counters(c::CrossDeltaExactCache) = (lookups = c.n_lookups, hit_verified = c.n_hit_verified,
+    hit_infeasible = c.n_hit_infeasible, miss = c.n_miss, store = c.n_store,
+    hit_total = c.n_hit_verified + c.n_hit_infeasible)
+
 function _cache_lookup(cache::CrossDeltaExactCache, key::FullAEvalKey)
-    hit = lock(() -> get(cache.d, _inner_key(key), nothing), cache.lock)
+    hit = lock(cache.lock) do
+        cache.n_lookups += 1
+        v = get(cache.d, _inner_key(key), nothing)
+        if v !== nothing
+            if v.inner_status in (0, -100, -101, -103)
+                cache.n_hit_verified += 1
+            else
+                cache.n_hit_infeasible += 1
+            end
+        else
+            cache.n_miss += 1
+        end
+        v
+    end
     hit === nothing && return nothing
     # Delta_dual/θ_full/zeta/lambda/moment_resid/gravity_value are δ-independent (module
     # docstring) -- returned verbatim. Delta_minus_delta is NOT -- patched to the CALLER's δ,
@@ -101,6 +143,9 @@ function _cache_lookup(cache::CrossDeltaExactCache, key::FullAEvalKey)
 end
 
 function _cache_store!(cache::CrossDeltaExactCache, key::FullAEvalKey, result)
-    lock(() -> (cache.d[_inner_key(key)] = result), cache.lock)
+    lock(cache.lock) do
+        cache.d[_inner_key(key)] = result
+        cache.n_store += 1
+    end
     return nothing
 end

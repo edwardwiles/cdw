@@ -390,6 +390,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # lower allocation (756.5 MB vs 3690.0 MB at a real D=20/W=80000 point) on this branch.
         # Default false: reference/old buffered path unchanged when omitted, per the brief's own
         # "retain the old buffered gradient behind a reference flag" requirement.
+        maxit_override::Union{Nothing,Int} = nothing,   # finalization task Phase 2B: override the
+        # hardcoded maxit=1_000_000 outer-iteration cap so two arms of an A/B comparison (e.g.
+        # cross_delta on/off) can be capped at an IDENTICAL iteration count, not just an identical
+        # wall-clock budget -- otherwise a faster arm could simply get more iterations for free in
+        # a wall-clock-limited comparison, confounding "cache helped" with "cache left more time".
+        # Default nothing: behavior unchanged (maxit=1_000_000, effectively unbounded, terminated
+        # by maxtime_real as before this kwarg existed).
         allow_direction_box_migration::Bool = false)   # addendum: by default, a fixed g (fresh or
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
@@ -490,7 +497,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
-    KNITRO.KN_set_param_by_name(kc, "maxit", 1_000_000)
+    KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
     KNITRO.KN_set_param_by_name(kc, "algorithm", 3)
     xIndices = KNITRO.KN_add_vars(kc, n)
     z_halfwidth = 30.0   # see c9_phase8_d20_pilot.jl's box-bounds root-cause comment
@@ -740,6 +747,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no
         # capture, zero overhead beyond one is_organic_failure check per evaluation.
         use_pooled_gradient::Bool = false,   # see run_profile_checkpointed's identical kwarg
+        maxit_override::Union{Nothing,Int} = nothing,   # see run_profile_checkpointed's identical kwarg
         allow_direction_box_migration::Bool = false)   # addendum: by default, a start point (fresh or
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error, not silently clamped. Set true only for an explicit, deliberate migration of a
@@ -861,7 +869,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
-    KNITRO.KN_set_param_by_name(kc, "maxit", 1_000_000)
+    KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
     xIndices = KNITRO.KN_add_vars(kc, D2)
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
     KNITRO.KN_set_var_upbnds_all(kc, w_hi)

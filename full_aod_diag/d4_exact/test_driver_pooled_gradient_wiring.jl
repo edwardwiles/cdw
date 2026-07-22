@@ -49,7 +49,7 @@ res_pooled = run_polish_checkpointed("wiretest_pooled", true, g0, zfree0;
     ckpt_dir = joinpath(ckpt_root, "pooled"), checkpoint_interval_s = 5.0,
     use_pooled_gradient = true)
 
-check("both runs completed (knitro_status recorded)", res_buffered.knitro_status isa Int && res_pooled.knitro_status isa Int)
+check("both runs completed (knitro_status recorded)", res_buffered.knitro_status isa Integer && res_pooled.knitro_status isa Integer)
 check("n_grad_calls > 0 for both (gradient path actually exercised)", res_buffered.n_grad_calls > 0 && res_pooled.n_grad_calls > 0)
 check("pooled run's incumbent (if any) has a finite Delta", res_pooled.best_feasible === nothing || isfinite(res_pooled.best_feasible.Delta))
 check("buffered run's incumbent (if any) has a finite Delta", res_buffered.best_feasible === nothing || isfinite(res_buffered.best_feasible.Delta))

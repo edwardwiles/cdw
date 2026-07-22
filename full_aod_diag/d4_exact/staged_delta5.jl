@@ -62,6 +62,9 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
         # zero behavior change unless explicitly requested, per AUD-08's own "only after
         # cache-state and fingerprint work passes" gate (already satisfied on this branch).
         draw_design_in::Symbol = :pseudorandom, inner_opt_override::Union{Nothing,AbstractString} = nothing,
+        maxit_override::Union{Nothing,Int} = nothing,   # finalization task Phase 2B: threaded to every
+        # stage's run_polish_checkpointed call, for an eval-count-matched (not just wall-clock-matched)
+        # cross_delta on/off comparison. Default nothing: unchanged behavior.
         allow_direction_box_migration::Bool = false)
     cross_delta && !reuse_context && error("run_staged_delta5_continuation($label): cross_delta=true requires reuse_context=true -- a CrossDeltaExactCache is only valid across stages that share one ctx.")
     g = g_start; zfree = copy(zfree_start)
@@ -91,23 +94,33 @@ function run_staged_delta5_continuation(label::String, g_start::Float64, zfree_s
             ckpt_dir = ckpt_dir, checkpoint_interval_s = 30.0,
             use_dual_bank = use_dual_bank, use_exact_cache = use_exact_cache,
             exact_cache_override = cross_delta_cache_obj,
-            reuse = reuse, allow_direction_box_migration = allow_direction_box_migration)
+            reuse = reuse, maxit_override = maxit_override,
+            allow_direction_box_migration = allow_direction_box_migration)
         t_stage = time() - t0
         cache_size_after = cross_delta_cache_obj === nothing ? 0 : length(cross_delta_cache_obj)
         b = res.best_feasible
         if b !== nothing
             g = b.gp; zfree = copy(b.w[2:end])
         end
+        cnt = cross_delta_cache_obj === nothing ? nothing : cache_counters(cross_delta_cache_obj)
         if cross_delta_cache_obj !== nothing
             lp("  stage ", i, " cross-delta cache: ", cache_size_before, " -> ", cache_size_after,
                " entries (", res.n_eval, " evals this stage; entries unchanged from before this stage ",
                "were served WITHOUT a re-solve -- an exact size-growth-vs-n_eval gap is the inter-stage ",
                "hit signal, see docs/fullA_postmerge_allocation_productionization.md for the full benchmark)")
+            lp("  stage ", i, " cumulative cache counters: lookups=", cnt.lookups,
+               " hit_verified=", cnt.hit_verified, " hit_infeasible=", cnt.hit_infeasible,
+               " miss=", cnt.miss, " store=", cnt.store)
         end
         push!(stage_summaries, (stage = i, delta = delta, wall = t_stage, n_eval = res.n_eval,
             kappa = res.kappa, n_rejected = res.n_rejected, knitro_status = res.knitro_status,
             best_gp = b === nothing ? NaN : b.gp,
-            cross_delta_cache_size_before = cache_size_before, cross_delta_cache_size_after = cache_size_after))
+            cross_delta_cache_size_before = cache_size_before, cross_delta_cache_size_after = cache_size_after,
+            cache_lookups = cnt === nothing ? 0 : cnt.lookups,
+            cache_hit_verified = cnt === nothing ? 0 : cnt.hit_verified,
+            cache_hit_infeasible = cnt === nothing ? 0 : cnt.hit_infeasible,
+            cache_miss = cnt === nothing ? 0 : cnt.miss,
+            cache_store = cnt === nothing ? 0 : cnt.store))
         lp("  stage ", i, " done: wall=", round(t_stage, digits=1), "s kappa=", res.kappa,
            " n_eval=", res.n_eval, " n_rejected=", res.n_rejected, " knitro_status=", res.knitro_status)
     end
