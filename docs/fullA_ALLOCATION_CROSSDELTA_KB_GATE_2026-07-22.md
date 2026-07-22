@@ -170,7 +170,79 @@ coverage A+/C+ themselves received.
 
 ### D=20 (`c21_kbplus_d20_gate.jl`)
 
-<!-- PHASE5_D20_RESULTS_PLACEHOLDER -->
+Command: `JULIA_NUM_THREADS=20 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 julia --project=. full_aod_diag/d4_exact/c21_kbplus_d20_gate.jl`
+
+Real D=20/W=80,000, **11/11 PASS**:
+- **Section 1** (fixed-point comparison, δ=1 and δ=5): `:kbplus`'s `winner0` matches the
+  Reference's `winner0` exactly at both points; gradient matches Reference and C+ to <1e-8 abs
+  (independently reconfirms the ~7e-17 machine-precision agreement `c22`'s own cross-check
+  found). Wall-clock numbers printed here are **not** the authoritative benchmark (single
+  uncontrolled calls, JIT-order-dependent -- see §6's warm/median-of-3 numbers instead).
+- **Section 2** (real driver trajectory, `price_cache_backend=:kbplus`, δ=1): completes cleanly,
+  `kappa=0.0203135174923732`, identical to `:buffered` on the same trajectory.
+- **Section 3** (independent optimized-value directional check -- re-solving the inner CC dual
+  problem at DISPLACED points, real KNITRO cold solves, not just the fixed-dual FD secant any
+  backend's gradient is built from): at coordinate 2 (`h=0.02` and `h=0.1`), `:kbplus`'s
+  fixed-dual secant matches the Reference's own fixed-dual secant to the stated tolerance. (The
+  remaining candidate coordinates were skipped because the displaced points were genuinely
+  infeasible at that step size -- not a backend-specific failure, the same infeasibility would
+  reject any backend's evaluation at that point.) Both fixed-dual secants remain, as expected
+  and as documented for every existing backend (AUD-05), approximations to the true
+  re-optimized secant, not equal to it -- the check's purpose is confirming `:kbplus`'s
+  approximation error is no worse than the Reference's own, which it is.
+
+**Verdict**: `:kbplus` D=20 evidence is solid across fixed-point, real-trajectory, and
+independent-directional-check gates.
+
+## 6. Phase 6 -- fair benchmark and adoption decision
+
+Command: `JULIA_NUM_THREADS=20 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 julia --project=. full_aod_diag/d4_exact/c22_phase6_fair_benchmark.jl`
+(extends `c17_production_gate_benchmark_d20.jl`'s own harness -- warm call first, median of 3,
+`threaded=true`, real D=20/W=80,000, correctness cross-check against the ACTUAL production
+default `composite_gradient_at_fast_buffered` before every timing run, not the obsolete
+unbuffered `composite_gradient_at`.)
+
+**Correctness** (both δ=1 and δ=5, gradient maxabsdiff vs Reference): `pooled`=0.0 (bit-exact),
+`A+`=0.0 (bit-exact), `C+`=4.337e-17, `:kbplus`=7.069e-17 (both machine-epsilon-class, `:kbplus`
+about 1.6x the ULP noise of C+ -- immaterial next to KNITRO's own convergence tolerances).
+
+**Performance** (median of 3, warm-compiled):
+
+| δ | Reference | pooled | A+ | C+ | kbplus |
+|---|---:|---:|---:|---:|---:|
+| 1 (typical) | 3.163s / 3556.3MB | 2.988s / 721.5MB | 2.734s / 131.9MB | **0.753s / 53.3MB** | 0.883s / 58.2MB |
+| 5 (difficult) | 3.088s / 3556.3MB | 2.969s / 721.5MB | 2.854s / 131.9MB | **0.770s / 53.3MB** | 0.831s / 58.2MB |
+| **speedup vs Ref** | 1.0x | 1.04-1.06x | 1.08-1.16x | **4.01-4.20x** | 3.58-3.71x |
+| **memory vs Ref** | 1.0x | 4.93x less | 26.96x less | **66.77x less** | 61.13x less |
+
+**Real, honest negative result**: `:kbplus` is **~15-17% SLOWER than C+** (0.88s vs 0.75s at
+δ=1; 0.83s vs 0.77s at δ=5), despite eliminating every W-scale `exp` call from the coordinate-
+probe hot path. Root cause, by inspection: `:kbplus`'s per-probe reconstruction
+(`constConsσ′ = constCons′.^(1-σ)`, a fresh D×D power operation every probe) costs more than the
+single `exp(bs)` scalar call C+'s log-score reconstruction already has in hand from the ranking
+scan it performs anyway -- eliminating the W-scale `exp` didn't eliminate a bottleneck, because
+`exp` on a modern glibc/Julia libm was apparently never the dominant cost at this problem's W=
+80,000 scale relative to memory traffic and the top-3-cache winner-resolution loop itself.
+`:kbplus` still allocates slightly more per gradient (58.2MB vs 53.3MB) for the same reason.
+**Measured, not assumed** -- the brief's own instruction ("measure rather than assume") is
+exactly why this alternative was worth building and benchmarking even though the outcome
+favors the already-existing backend.
+
+### Adoption decision, applying the brief's own stated rule
+
+> "If :kbplus passes all correctness/cache/checkpoint gates and is materially faster than C+,
+> make :kbplus the default... If C+ passes but :kbplus does not, make C+ the default."
+
+`:kbplus` **passes every correctness gate run against it** (D=4: 116/116; D=20 fixed-point:
+<1e-8 vs both Reference and C+; real trajectory: identical kappa; independent directional
+check: passes) but is **not materially faster than C+ -- it is slower**. Per the brief's own
+rule, this is decisive: **C+ is the adoption candidate, not `:kbplus`.** `:kbplus` remains
+available (`price_cache_backend=:kbplus`), fully correct and documented, as a validated-but-
+not-selected alternative -- not rejected on correctness grounds, simply not the fastest.
+
+C+ itself had two disclosed open gates (independent directional check; cache/concurrency/
+checkpoint tests with C+ specifically active) before it could be adopted as default -- closed in
+`c23_cplus_gate.jl`, see §3 (updated) for results.
 
 ## 6. Phase 6 -- fair benchmark and adoption decision
 
