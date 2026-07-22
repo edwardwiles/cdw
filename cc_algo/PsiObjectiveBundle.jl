@@ -1,5 +1,94 @@
 abstract type PsiObjectiveBundle <: ObjectiveBundle end
 
+# AUD-02 runtime guard (independent-audit remediation): each Psi*Bundle instance owns mutable
+# shared scratch (H, H_copy, arg0/1/2, ...) that every objective/gradient/Hessian callback
+# mutates in place. KNITRO's own par_concurrent_evals is now set to "no" in every active
+# production option file (the primary fix), but this guard is defense-in-depth: it detects --
+# rather than silently corrupts state under -- any genuine CROSS-THREAD overlapping entry into
+# the SAME bundle instance's callbacks, whether from a misconfigured option file, two solves
+# sharing one context, or a future caller that parallelizes across outer points.
+#
+# Thread-AWARE, not a plain non-reentrant flag: a first cut at this guard (plain
+# compare-and-swap Bool) false-positived on a real, legitimate call pattern discovered live
+# during validation -- prepare_cc/PMM.jl's delta-star-initial computation calls a bundle's own
+# functor from WITHIN a sequential outer solve that already holds it (same thread, nested, no
+# race). That pattern is safe: nothing runs concurrently, the inner call completes and its
+# buffer writes are fully consumed before the outer call resumes. Tracking the OWNING THREAD ID
+# (not just "is someone in here") lets the guard tell the two apart: same-thread nesting
+# increments a depth counter and is allowed; a DIFFERENT thread trying to enter while the first
+# thread's chain is still active is the actual AUD-02 violation (genuine concurrent mutation of
+# shared H/H_copy/arg buffers) and errors immediately.
+#
+# Not a lock: it does not serialize legitimate concurrent use of DIFFERENT bundle instances
+# (those have independent guard-state entries), only flags cross-thread overlapping use of ONE
+# instance. Keyed by objectid() via a global IdDict rather than a struct field so it applies
+# uniformly to all three bundle types without changing their (widely, positionally-free but
+# kwarg-constructed) definitions.
+mutable struct _PsiCallbackGuardState
+    owner::Int   # Threads.threadid() of the thread currently holding this instance; 0 = free
+    depth::Int   # reentrancy depth for `owner` (same-thread nested calls)
+end
+_PsiCallbackGuardState() = _PsiCallbackGuardState(0, 0)
+
+const _PSI_CALLBACK_ACTIVE = IdDict{Any,_PsiCallbackGuardState}()
+const _PSI_CALLBACK_ACTIVE_LOCK = ReentrantLock()
+const PSI_CALLBACK_GUARD_ENABLED = Ref(true)
+const PSI_CALLBACK_GUARD_VIOLATIONS = Ref(0)
+
+"Call as the first statement of every PsiObjectiveBundle{Explicit,Implicit,Delta} functor and
+every hessian! method, before any shared buffer (H, H_copy, arg0/1/2, jac_h, ...) is touched.
+Errors immediately on detecting a DIFFERENT thread already active on this SAME bundle instance
+(AUD-02: 'concurrent KNITRO evaluations... mutate shared arrays... callback time... races').
+Same-thread nested entry (sequential, no race) is allowed and just bumps a depth counter."
+function _enter_callback!(obj)
+    PSI_CALLBACK_GUARD_ENABLED[] || return nothing
+    tid = Threads.threadid()
+    lock(_PSI_CALLBACK_ACTIVE_LOCK) do
+        st = get!(() -> _PsiCallbackGuardState(), _PSI_CALLBACK_ACTIVE, obj)
+        if st.owner == 0
+            st.owner = tid
+            st.depth = 1
+        elseif st.owner == tid
+            st.depth += 1
+        else
+            PSI_CALLBACK_GUARD_VIOLATIONS[] += 1
+            error("PsiObjectiveBundle AUD-02 guard: thread $(tid) entered a callback " *
+                  "(objective/gradient/Hessian) on a bundle instance while thread $(st.owner) " *
+                  "was still active on the SAME instance. This means par_concurrent_evals was " *
+                  "effectively enabled for this solve, or two solves/threads share one inner " *
+                  "context -- both are unsafe (shared mutable H/H_copy/arg buffers, cache/bank " *
+                  "slots). See docs/fullA_independent_audit_remediation.md AUD-02.")
+        end
+    end
+    return nothing
+end
+
+"Call in a `finally` clause paired with every `_enter_callback!` call, so the depth counter
+clears even if the callback body throws."
+function _exit_callback!(obj)
+    PSI_CALLBACK_GUARD_ENABLED[] || return nothing
+    lock(_PSI_CALLBACK_ACTIVE_LOCK) do
+        st = get(_PSI_CALLBACK_ACTIVE, obj, nothing)
+        if st !== nothing && st.owner == Threads.threadid()
+            st.depth -= 1
+            if st.depth <= 0
+                st.owner = 0
+                st.depth = 0
+            end
+        end
+    end
+    return nothing
+end
+
+"Reset guard state between independent test runs (mirrors parallelism_guards.jl's guard_reset!)."
+function psi_callback_guard_reset!()
+    lock(_PSI_CALLBACK_ACTIVE_LOCK) do
+        empty!(_PSI_CALLBACK_ACTIVE)
+    end
+    PSI_CALLBACK_GUARD_VIOLATIONS[] = 0
+    return nothing
+end
+
 # Objective bundle for the explicit-dependence case
 @with_kw mutable struct PsiObjectiveBundleExplicit{T} <: PsiObjectiveBundle
     δ                   ::Float64
@@ -49,6 +138,8 @@ end
 
 # Inner-loop objective function, gradient, and Jacobian of constraints for K program, explicit-dependence case
 function (Q::PsiObjectiveBundleExplicit)(x, g = Float64[], θ = Float64[]; h = Float64[], constr = Float64[], jac = Array{Float64}(undef, 0, 0))
+	_enter_callback!(Q)
+	try
 
 	@unpack δ, H, arg0, arg1, M, d, find_smallest, outer_constr_index, lower_limit, Psi!, dPsi!, ddPsi! = Q
 	η = x[1]
@@ -122,6 +213,9 @@ function (Q::PsiObjectiveBundleExplicit)(x, g = Float64[], θ = Float64[]; h = F
 		return f
 	end
 
+	finally
+		_exit_callback!(Q)
+	end
 end
 
 # Objective bundle for the implicit-dependence case
@@ -179,6 +273,8 @@ end
 
 # Inner-loop objective function, gradient, and Jacobian of constraints for K program, implicit-dependence case
 function (Q::PsiObjectiveBundleImplicit)(x, g = Float64[], θ = Float64[]; h = Float64[], constr = Float64[], jac = Array{Float64}(undef, 0, 0))
+	_enter_callback!(Q)
+	try
 
 	@unpack H, arg0, arg1, M, d, outer_constr_index, lower_limit, Psi!, dPsi!, ddPsi! = Q
 	ζ = x[1]
@@ -259,6 +355,9 @@ function (Q::PsiObjectiveBundleImplicit)(x, g = Float64[], θ = Float64[]; h = F
 		return f
 	end
 
+	finally
+		_exit_callback!(Q)
+	end
 end
 
 # Objective bundle for the minimum-divergence problem
@@ -307,6 +406,8 @@ end
 
 # Inner-loop objective function, gradient, and Jacobian of constraints for Δ^* program
 function (Q::PsiObjectiveBundleDelta)(x, g = Float64[], θ = Float64[]; h = Float64[], constr = Float64[], jac = Array{Float64}(undef, 0, 0))
+	_enter_callback!(Q)
+	try
 
 	@unpack H, arg0, arg1, M, d, outer_constr_index, lower_limit, Psi!, dPsi!, ddPsi! = Q
 	ζ = x[1]
@@ -378,6 +479,9 @@ function (Q::PsiObjectiveBundleDelta)(x, g = Float64[], θ = Float64[]; h = Floa
 		return f
 	end
 
+	finally
+		_exit_callback!(Q)
+	end
 end
 
 # Implicit function theorem to calculate ∂x_∂θ and update jac_h and H_copy
@@ -458,6 +562,8 @@ end
 
 # Hessian w.r.t. (η, ζ, λ)
 function hessian!(h, η, obj::PsiObjectiveBundleExplicit)
+    _enter_callback!(obj)
+    try
 
     @unpack H, H_copy, M, arg0, arg2, ddPsi!, outer_constr_index, ∂∂f_∂∂x = obj
 
@@ -476,10 +582,15 @@ function hessian!(h, η, obj::PsiObjectiveBundleExplicit)
         end
     end
 
+    finally
+    	_exit_callback!(obj)
+    end
 end
 
 # Hessian w.r.t. (ζ, λ)
 function hessian!(h, obj::Union{PsiObjectiveBundleImplicit, PsiObjectiveBundleDelta})
+    _enter_callback!(obj)
+    try
 
     @unpack H, H_copy, M, arg0, arg2, ddPsi!, outer_constr_index, ∂∂f_∂∂x = obj
 
@@ -497,6 +608,9 @@ function hessian!(h, obj::Union{PsiObjectiveBundleImplicit, PsiObjectiveBundleDe
         end
     end
 
+    finally
+    	_exit_callback!(obj)
+    end
 end
 
 # Wrapper to evaluate moments! to H
