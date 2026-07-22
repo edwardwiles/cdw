@@ -500,8 +500,8 @@ directional/exception/reuse/portability fixes are all live-verified.
 | Ref | Commit |
 |---|---|
 | `safety/fullA-exact-pre-remediation-2026-07-22` | `670eac47c2517789002387df403369e222078065` |
-| `remediation/fullA-exact-2026-07-22` (verified tip) | `70409be53b3e2520a2bc33e678598be1643303db` |
-| `production/fullA-exact` (post fast-forward) | `70409be53b3e2520a2bc33e678598be1643303db` |
+| `remediation/fullA-exact-2026-07-22` (verified tip) | `b79ad7a` |
+| `production/fullA-exact` (post fast-forward) | `b79ad7a` |
 | `safety/sequential-linearized-pre-remediation-2026-07-22` | `6b349946a8f0aca89366f421d532805ffb34d2e1` |
 | `remediation/sequential-linearized-2026-07-22` (verified tip) | `9ec3e46b5c37e8d5c0c1342883c8df7f82e8e7c6` |
 | `production/sequential-linearized` (post fast-forward) | `9ec3e46b5c37e8d5c0c1342883c8df7f82e8e7c6` |
