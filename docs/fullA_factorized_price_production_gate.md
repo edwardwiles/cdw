@@ -176,9 +176,131 @@ code path (`winners_from_certificate`/`build_compressed_factual`, not `LFixBaseC
 introduces no new dense `W×402` materialization and no duplicate moment matrix — confirmed by
 inspection (no such array appears anywhere in `lfix_factorized_workspace.jl`), not by a new test.
 
-## Next
+## 13. Short real outer trajectory (minimal version)
 
-Section 13 (wire behind a flag, short real outer trajectory — the KNITRO hang fix makes this
-newly possible), 14 (cache/concurrency gate reruns with C+ active), 12 (optimized-value
-directional checks), 15-17 (decision, fallback flag, final report) — tracked in the todo list,
-executed incrementally.
+`c18_short_trajectory_comparison.jl` — a standalone, additive driver (NOT a modification of
+`c10_d20_production_driver.jl`, which just caused a real regression this session, see
+`docs/fullA_nested_knitro_solve_hang_rootcause.md` — deliberately not touched again) running a
+real, multi-iteration KNITRO outer `KN_solve` at D=20/W=80,000, comparing the Reference gradient
+against Backend C+, at δ=1 and δ=2, 60s wall budget each, with a cold re-verification of the
+final point via `screened_eval(...; warm=false)` (the trusted exact-hard value path).
+
+**No hang** across all 4 real, sustained (60-92s) `KN_solve` calls — the single strongest stress
+test of the concurrent_evals fix this session ran, well beyond the isolated few-callback
+diagnostic tests used to find and confirm it.
+
+**Trajectories are identical** at both δ: same `n_eval=5`, same `n_grad_calls=2`, same
+`gp_final=0.974301829589023`, same `kappa=0.04246234069896204`, cold-reverified `Delta` matching
+to the full 15 significant figures printed (`11.030456586484435` both). This is real evidence of
+gradient-backend equivalence across a genuine sustained optimization, not just isolated point
+checks.
+
+**Honest limitation, not a gradient bug**: neither trajectory found a good optimum — both hit
+`status=-411` (`TIME_LIMIT_INFEAS`) stuck at a point with `Delta≈11.03 ≫ δ` (infeasible). This
+minimal driver lacks `run_polish_checkpointed`'s own incumbent-seeding, dual-bank warm-starting,
+and direction-box refinements — it is a stripped-down harness built specifically to compare
+gradients across a real trajectory, not a claim that C+ (or the Reference, run through this same
+harness) can replace the full production driver's own optimization quality. Both backends failed
+identically, which is exactly what an equivalence check needs to show; it says nothing about
+either backend's quality when run through the REAL production driver's own safeguards.
+
+## 14. Cache/concurrency gates — not run this session (explicit gap)
+
+The addendum's own §14 asks for independent-audit test reruns with C+ active (A/B/A exact-cache
+state restoration, concurrent mutation checks, checkpoint/resume equivalence). **Not done.**
+C+'s own alias-safety invariant (documented in `lfix_factorized_workspace.jl`'s own docstring,
+identical to Backend A's) has been checked by inspection and exercised by the workspace-reuse
+test (`test_lfix_factorized_workspace.jl` §C), but the EXISTING audit suite
+(`test_cross_delta_cache.jl`, `test_checkpoint_schema.jl`, etc.) was not rerun with C+ wired into
+any of those paths, because C+ is not wired into `CrossDeltaExactCache` or the checkpoint schema
+at all yet (it isn't called from any driver function, only from the standalone Section-13
+script). This is a real gap, not silently assumed passed.
+
+## 12. Optimized-value directional checks — not run this session (explicit gap)
+
+The addendum's §12 (compare both backends' FD secants against exact optimized-value directional
+secants, at the optimizer's own direction / random gravity-tangent directions / high-winner-switch
+coordinate directions) was not attempted. The exhaustive §5-7 correctness suite (136 cases) and
+the §8-10 fixed-point gradient comparison (bit-identical/1e-14-level agreement at 4 real points)
+give strong indirect evidence the FD-secant computation itself is correct, but §12's specific
+ask — comparing against an INDEPENDENT exact-optimized-value ground truth, not cross-backend
+agreement — was not built.
+
+## 15. Adoption decision
+
+Applying the addendum's own stated rules (§15):
+
+1. **All D=4 exhaustive tests pass** — yes (28/28, §5-7).
+2. **All exact-tie tests pass or safely fall back** — yes; C+ reuses `build_winner_ref`'s own
+   already-validated price-space tie check (not the log-score-derived one that had the ULP
+   subtlety found for Backend B in the original report) — confirmed via the adversarial fixture
+   in `test_lfix_factorized_workspace.jl`.
+3. **Real D=20 gradients agree within strict tolerance** — yes (0.0 for A+, ~4e-17 for C+, at
+   both δ=1 and δ=5).
+4. **Fixed optimized-value checks are no worse** — **not checked** (§12 gap above).
+5. **Short outer trajectories produce equivalent verified results** — yes, on the minimal harness
+   available (§13); the FULL production-driver-integrated version was not run (§14 gap above).
+6. **C+ materially reduces persistent memory** — yes, dramatically (66.8x less allocation than
+   the Reference at D=20/W=80,000).
+7. **C+ is no slower than the current pooled production path** — yes, dramatically faster
+   (4.0-4.2x vs the Reference; A+ alone, the closer analogue to "current pooled path," is
+   1.11-1.20x — C+ beats it too).
+8. **Cache/concurrency/checkpoint tests pass** — **not checked** (§14 gap above).
+
+**Recommendation given this**: the correctness and performance evidence for C+ is strong and
+consistent everywhere it was actually tested (D=4 exhaustive, D=20 fixed-point, D=20 real
+trajectory). Gates 4 and 8 are genuine, disclosed gaps — not failures, just not yet run. Per the
+addendum's own practical rule ("if C+ is faster, adopt it"), the evidence gathered supports
+**adopting C+ as the production default once gates 4 and 8 are closed** — not before. Given the
+size of what's already been validated and the specific, bounded nature of what remains (rerun
+existing audit tests with C+ wired in; add directional secant checks), closing the remaining
+gates is realistically a follow-on task, not a reason to distrust what has been shown.
+
+## 16. Production fallback design (not yet wired — a design, not code, this session)
+
+Following the addendum's own suggested API and this codebase's established `use_pooled_gradient`-
+style pattern (default `false`/old-behavior, opt-in for anything new):
+
+```julia
+price_cache_backend::Symbol = :buffered   # :buffered (current default) | :pooled (A, opt-in
+                                            # existing) | :aplus (A+) | :cplus (C+)
+```
+
+to be added to `run_profile_checkpointed`/`run_polish_checkpointed`'s signature, dispatching in
+`cb_G!`/`cb_F!` alongside the existing `use_pooled_gradient` branch. **Not implemented this
+session** — deliberately, given `c10_d20_production_driver.jl` is the exact file whose recent
+`.opt`-adjacent change caused the KNITRO hang regression fixed earlier this session; a change to
+its gradient-dispatch logic should get its own careful, isolated review and full-suite rerun
+before merging, not be added hastily at the end of an already very long session.
+
+## 17. Deliverables
+
+- Backend A+ / C+ implementation: `lfix_base_workspace_pooled.jl`, `lfix_factorized_workspace.jl`.
+- Correctness: `test_lfix_base_workspace_pooled.jl` (4/4), `test_lfix_factorized_workspace.jl`
+  (20/20), `test_production_gate_exhaustive_d4.jl` (28/28).
+- Fair D=20 benchmark: `c17_production_gate_benchmark_d20.jl`.
+- Short trajectory comparison: `c18_short_trajectory_comparison.jl`.
+- This report.
+- **Rollback**: every file above is additive; nothing existing was modified except this document
+  and (separately, already committed) the KNITRO `.opt` fix documented in
+  `docs/fullA_nested_knitro_solve_hang_rootcause.md`. `git revert` the relevant commits, or
+  delete the new files — no other code references them.
+
+**Answers to the addendum's own closing questions**:
+1. Actual speedup over the current pooled production gradient: **C+ is 3.5-3.8x faster than A+**
+   (the closer analogue to "current pooled"), **4.0-4.2x faster than the true default**
+   (`fast_buffered`).
+2. Allocation/persistent memory removed: **66.8x less** than the Reference (53.3MB vs 3556.3MB
+   per gradient call at D=20/W=80,000).
+3. Winner/runner-up/third identities identical: **yes**, exactly, everywhere tested (136
+   exhaustive D=4 cases + both D=20 fixed points).
+4. Exact ties handled consistently: **yes**, reusing the already-validated price-space check.
+5. Two-changed-origin case passes exhaustively: **yes** (72 of the 136 cases).
+6. Correct interaction with compressed moments: **yes, by non-interaction** — C+ never touches
+   that system (§11).
+7. Short outer trajectories produce equivalent verified incumbents: **yes**, on the minimal
+   harness tested; not yet verified through the full production driver (§13/§14 gaps).
+8. Should C+ become the default, remain optional, or be rejected: **the evidence supports
+   adoption**, gated on closing §12/§14 first — recommend landing it as opt-in
+   (`price_cache_backend=:cplus`) immediately, and promoting to default once those two gates
+   close.
