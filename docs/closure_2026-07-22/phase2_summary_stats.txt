@@ -1,0 +1,33 @@
+n_cases=54
+
+== C+ vs trusted Reference (fixed-dual secant, identical bandwidth) ==
+median=5.551e-16 p90=5.551e-15 max=2.180e-13
+sign agreement: 54/54
+correlation=1.0000000000 cosine=1.0000000000
+cases relying on the 1e-6 fallback tolerance: 0
+
+== fixed-dual (Reference) finite-bandwidth secant vs independently reoptimized hard-objective secant ==
+median=5.203e-04 p90=8.140e-03 max=1.619e-01
+sign agreement: 51/54  (NOT a systematic reversal -- documented small-magnitude/near-zero-crossing/high-switch cases, see report)
+correlation=0.997912 cosine=0.997882
+magnitude-relative error (excludes 13 cases with |true_secant|<1e-3): n=41 median=0.0531 p90=0.4624 max=55.8753
+
+== by bandwidth (step_scale relative to production select_bandwidth_C) ==
+  step_scale=0.5: n=18 median=3.545e-04 max=1.619e-01
+  step_scale=1.0: n=18 median=5.203e-04 max=7.912e-02
+  step_scale=2.0: n=18 median=7.252e-04 max=7.749e-02
+
+== by winner-switch count (flips at production bandwidth) ==
+  flips in [0,0]: n=2 median=1.231e-06 max=2.331e-06
+  flips in [1,10]: n=6 median=2.300e-04 max=1.455e-03
+  flips in [11,100]: n=21 median=2.817e-04 max=1.672e-03
+  flips in [101,2000]: n=25 median=1.575e-03 max=1.619e-01
+
+== by direction class (coordinate source) ==
+  high_switch: n=24 median=4.543e-04 max=1.619e-01
+  optimizer: n=6 median=1.746e-03 max=7.749e-02
+  random_tangent: n=24 median=3.732e-04 max=2.619e-03
+
+== by sign of true_secant (positive/negative direction) ==
+  positive: n=36 median=5.794e-04
+  negative: n=18 median=3.098e-04
