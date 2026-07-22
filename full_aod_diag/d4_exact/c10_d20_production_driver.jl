@@ -95,6 +95,9 @@ include(joinpath(@__DIR__, "compressed_live.jl"))
 include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
 include(joinpath(@__DIR__, "lfix_buffer_reuse.jl"))   # Continuation 11 Section 2: validated bit-identical vs composite_gradient_at_fast (0.0 diff, 5 points incl. trajectory test), ~1.1-1.9x faster; now the default gradient below
 include(joinpath(@__DIR__, "gradient_workspace.jl"))   # allocation/cache-cleanup task §7: GradWorkspacePool + composite_gradient_at_fast_pooled -- opt-in via use_pooled_gradient= below, verified bit-identical to composite_gradient_at_fast_buffered (test_gradient_workspace.jl, 9/9) and ~4.9x lower allocation (756.5 MB vs 3690.0 MB at a real D=20/W=80000 point); default OFF, old buffered path unchanged when omitted
+include(joinpath(@__DIR__, "lfix_base_workspace_pooled.jl"))   # finalization task Phase 3: Backend A+ (composite_gradient_at_Aplus) -- opt-in via price_cache_backend=:aplus
+include(joinpath(@__DIR__, "lfix_factorized_workspace.jl"))   # finalization task Phase 3: Backend C+ (composite_gradient_at_Cplus) -- opt-in via price_cache_backend=:cplus
+include(joinpath(@__DIR__, "lfix_kbplus_workspace.jl"))   # finalization task Phase 4: Backend :kbplus (composite_gradient_at_KBplus, ratio-based no-W-scale-exp reconstruction) -- opt-in via price_cache_backend=:kbplus
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
@@ -277,7 +280,18 @@ as_namedtuple(sc::ScreenCounters) = (pairwise = sc.pairwise, witness = sc.witnes
 function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContext, sc::ScreenCounters,
         n_eval_ref::Ref{Int}; warm::Bool = true, bank::Union{Nothing,DualBank} = nothing,
         zfree::Union{Nothing,AbstractVector{Float64}} = nothing,
-        exact_cache::Union{Nothing,SafeExactCache} = nothing,
+        exact_cache::Union{Nothing,SafeExactCache,CrossDeltaExactCache} = nothing,   # BUGFIX
+        # (finalization task Phase 2B, found live): this was Union{Nothing,SafeExactCache} only.
+        # Julia enforces keyword-argument type annotations at the call site (confirmed: a
+        # minimal repro throws TypeError, not silently widening) -- so every cb_F!/cb_G! call in
+        # run_profile_checkpointed/run_polish_checkpointed that forwards exact_cache=exact_cache
+        # would TypeError the instant exact_cache held a CrossDeltaExactCache, i.e. the instant
+        # cross_delta=true was actually used through the real driver. evaluate_fullA_screened_
+        # ranged's own `cache` parameter (fast_range_screen.jl) is untyped and always accepted
+        # CrossDeltaExactCache fine via the generic _cache_lookup/_cache_store! dispatch -- this
+        # wrapper's narrower annotation was the only thing blocking it. This is why no staged
+        # cross_delta=true continuation had ever been observed to complete through the production
+        # driver: it could not have, it TypeErrors on the first callback.
         neg_cache::Union{Nothing,SafeNegativeCache} = nothing,
         ab_stats::Union{Nothing,DualBankABStats} = nothing)   # task §12: opt-in instrumentation for
         # the successful-dual-bank A/B harness (dual_bank_ab_harness.jl) -- captures the
@@ -361,6 +375,42 @@ end
 # Direct extension of c9_phase8_d20_pilot.jl::profile_minimize with
 # screening (Section 5) + checkpointing (Section 6) wired in.
 # ============================================================================
+const VALID_PRICE_CACHE_BACKENDS = (:buffered, :pooled, :aplus, :cplus, :kbplus)
+
+"""
+    resolve_price_cache_backend(label, use_pooled_gradient, price_cache_backend) -> Symbol
+
+Finalization task Phase 3: single source of truth for which gradient backend a driver call
+uses, reconciling the OLD `use_pooled_gradient::Union{Nothing,Bool}` flag (nothing = caller
+didn't specify) with the NEW `price_cache_backend::Union{Nothing,Symbol}` selector (nothing =
+caller didn't specify). Never lets one silently override the other:
+- neither given -> `:buffered` (unchanged default behavior).
+- only one given -> that one wins.
+- both given, consistent (`use_pooled_gradient=true` + `price_cache_backend=:pooled`, or
+  `use_pooled_gradient=false` + any non-`:pooled` backend) -> the explicit backend.
+- both given, contradictory (e.g. `use_pooled_gradient=true` + `price_cache_backend=:cplus`) ->
+  hard error, not a silent pick.
+"""
+function resolve_price_cache_backend(label::AbstractString, use_pooled_gradient::Union{Nothing,Bool},
+        price_cache_backend::Union{Nothing,Symbol})
+    if price_cache_backend !== nothing
+        price_cache_backend in VALID_PRICE_CACHE_BACKENDS ||
+            error("$label: price_cache_backend=:$price_cache_backend not recognized -- must be one of $VALID_PRICE_CACHE_BACKENDS")
+        if use_pooled_gradient !== nothing
+            implied = use_pooled_gradient ? :pooled : :buffered
+            (implied == price_cache_backend || (!use_pooled_gradient && price_cache_backend != :pooled)) ||
+                error("$label: contradictory gradient-backend selection -- use_pooled_gradient=$use_pooled_gradient " *
+                      "(implies :$implied) but price_cache_backend=:$price_cache_backend was also given explicitly. " *
+                      "Pass only one of these two kwargs.")
+        end
+        return price_cache_backend
+    elseif use_pooled_gradient !== nothing
+        return use_pooled_gradient ? :pooled : :buffered
+    else
+        return :buffered
+    end
+end
+
 function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in::Bool, zfree_start_in::Vector{Float64};
         maxtime_real::Float64 = 900.0, hessopt_tag::String = "sr1",
         W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
@@ -384,12 +434,25 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # productionization.md.
         organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
         # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no capture.
-        use_pooled_gradient::Bool = false,   # allocation/cache-cleanup task §7: opt-in
+        use_pooled_gradient::Union{Nothing,Bool} = nothing,   # allocation/cache-cleanup task §7: opt-in
         # composite_gradient_at_fast_pooled (GradWorkspacePool) instead of composite_gradient_
         # at_fast_buffered. Verified bit-identical (test_gradient_workspace.jl, 9/9) and ~4.9x
         # lower allocation (756.5 MB vs 3690.0 MB at a real D=20/W=80000 point) on this branch.
-        # Default false: reference/old buffered path unchanged when omitted, per the brief's own
-        # "retain the old buffered gradient behind a reference flag" requirement.
+        # Default nothing (finalization task Phase 3: was `false`; widened to a nothing-sentinel
+        # so resolve_price_cache_backend can tell "not specified" from "explicitly false" and
+        # reconcile this OLD flag with the NEW price_cache_backend= selector below without one
+        # silently overriding the other). nothing behaves exactly like the old `false` default
+        # when price_cache_backend is also omitted.
+        price_cache_backend::Union{Nothing,Symbol} = nothing,   # finalization task Phase 3: single
+        # selector for which gradient backend to use -- :buffered (default) | :pooled (=
+        # composite_gradient_at_fast_pooled, GradWorkspacePool only) | :aplus (persistent two-
+        # tensor LFixBaseWorkspace + GradWorkspacePool, bit-identical to :pooled, ~1.1-1.2x
+        # faster) | :cplus (factorized O(W*D) LFixFactorizedWorkspace + GradWorkspacePool,
+        # ~4x faster / ~67x less allocation than :buffered at D=20/W=80000, correct to ~1e-17;
+        # see docs/fullA_factorized_price_production_gate.md). Reconciled with the older
+        # use_pooled_gradient kwarg via resolve_price_cache_backend -- see that function's
+        # docstring for the exact precedence/contradiction rules. nothing (default): behavior
+        # governed entirely by use_pooled_gradient, i.e. zero change for existing callers.
         maxit_override::Union{Nothing,Int} = nothing,   # finalization task Phase 2B: override the
         # hardcoded maxit=1_000_000 outer-iteration cap so two arms of an A/B comparison (e.g.
         # cross_delta on/off) can be capped at an IDENTICAL iteration count, not just an identical
@@ -438,8 +501,15 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     pe = build_pivot_elimination(ctx)
     D = ctx.D; D2 = D^2; n = D2 - 1
     rsc = build_ranged_screen_context(ctx)
-    grad_pool = use_pooled_gradient ? build_grad_workspace_pool(W) : nothing   # one pool per ctx, not per gradient call
+    resolved_backend = resolve_price_cache_backend(label, use_pooled_gradient, price_cache_backend)
+    # one pool/workspace per ctx (built ONCE here), not per gradient call -- see docs/
+    # fullA_factorized_price_production_gate.md for A+/C+'s own persistence/aliasing design.
+    grad_pool = resolved_backend in (:pooled, :aplus, :cplus, :kbplus) ? build_grad_workspace_pool(W) : nothing
+    lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, W) : nothing
+    lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, W) : nothing
+    lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
+       " price_cache_backend=", resolved_backend,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
        " screen_setup_wall=", ctx.screen_setup_wall,
        " envelope_screen_supported=", rsc.envelope !== nothing,
@@ -621,10 +691,22 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
                 BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
-        if use_pooled_gradient
+        if resolved_backend == :pooled
             gfull, meta = composite_gradient_at_fast_pooled(xf, ctx, pe, grad_pool; base = base, threaded = true,
                                                        h_mode = :cached, bandwidth_cache = policy.cache)
-            record_hits!(policy, meta.cache_hits[2:end])   # pooled path has no tie_fallback branch (unlike lfix_buffer_reuse.jl's meta, which always reports tie_fallback=false anyway)
+            record_hits!(policy, meta.cache_hits[2:end])   # pooled/A+/C+ paths have no tie_fallback branch (unlike lfix_buffer_reuse.jl's meta, which always reports tie_fallback=false anyway)
+        elseif resolved_backend == :aplus
+            gfull, meta = composite_gradient_at_Aplus(xf, ctx, pe, grad_pool, lfix_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
+        elseif resolved_backend == :cplus
+            gfull, meta = composite_gradient_at_Cplus(xf, ctx, pe, grad_pool, lfix_c_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
+        elseif resolved_backend == :kbplus
+            gfull, meta = composite_gradient_at_KBplus(xf, ctx, pe, grad_pool, lfix_kb_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
         else
             gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
                                                        h_mode = :cached, bandwidth_cache = policy.cache)
@@ -746,7 +828,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         organic_failures::Union{Nothing,OrganicFailureCollector} = nothing,   # opt-in archive of the
         # first N genuine (post-screen, real KNITRO) inner failures (task §7); nothing (default) = no
         # capture, zero overhead beyond one is_organic_failure check per evaluation.
-        use_pooled_gradient::Bool = false,   # see run_profile_checkpointed's identical kwarg
+        use_pooled_gradient::Union{Nothing,Bool} = nothing,   # see run_profile_checkpointed's identical kwarg
+        price_cache_backend::Union{Nothing,Symbol} = nothing,   # see run_profile_checkpointed's identical kwarg
         maxit_override::Union{Nothing,Int} = nothing,   # see run_profile_checkpointed's identical kwarg
         allow_direction_box_migration::Bool = false)   # addendum: by default, a start point (fresh or
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
@@ -808,8 +891,15 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         rsc = build_ranged_screen_context(ctx)
     end
     D = ctx.D; D2 = D^2
-    grad_pool = use_pooled_gradient ? build_grad_workspace_pool(W) : nothing   # one pool per ctx, not per gradient call
+    resolved_backend = resolve_price_cache_backend(label, use_pooled_gradient, price_cache_backend)
+    # one pool/workspace per ctx (built ONCE here), not per gradient call -- see docs/
+    # fullA_factorized_price_production_gate.md for A+/C+'s own persistence/aliasing design.
+    grad_pool = resolved_backend in (:pooled, :aplus, :cplus, :kbplus) ? build_grad_workspace_pool(W) : nothing
+    lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, W) : nothing
+    lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, W) : nothing
+    lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
+       " price_cache_backend=", resolved_backend,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
        " screen_setup_wall=", ctx.screen_setup_wall,
        " inner_opt=", inner_opt_override === nothing ? "default" : inner_opt_override,
@@ -1030,10 +1120,22 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
                 BaseDualState(collect(xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
         invalidated, reason = maybe_invalidate!(policy, w)
-        if use_pooled_gradient
+        if resolved_backend == :pooled
             gfull, meta = composite_gradient_at_fast_pooled(xf, ctx, pe, grad_pool; base = base, threaded = true,
                                                        h_mode = :cached, bandwidth_cache = policy.cache)
-            record_hits!(policy, meta.cache_hits[2:end])   # pooled path has no tie_fallback branch (unlike lfix_buffer_reuse.jl's meta, which always reports tie_fallback=false anyway)
+            record_hits!(policy, meta.cache_hits[2:end])   # pooled/A+/C+ paths have no tie_fallback branch (unlike lfix_buffer_reuse.jl's meta, which always reports tie_fallback=false anyway)
+        elseif resolved_backend == :aplus
+            gfull, meta = composite_gradient_at_Aplus(xf, ctx, pe, grad_pool, lfix_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
+        elseif resolved_backend == :cplus
+            gfull, meta = composite_gradient_at_Cplus(xf, ctx, pe, grad_pool, lfix_c_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
+        elseif resolved_backend == :kbplus
+            gfull, meta = composite_gradient_at_KBplus(xf, ctx, pe, grad_pool, lfix_kb_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
         else
             gfull, meta = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true,
                                                        h_mode = :cached, bandwidth_cache = policy.cache)
