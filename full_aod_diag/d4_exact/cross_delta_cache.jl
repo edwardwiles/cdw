@@ -44,18 +44,34 @@
 # stored δ=2), across BOTH scenario_result (accept + reject, i.e. Delta_dual<=delta`/`>).
 # ============================================================================
 
-"Inner-problem cache key (task §12): everything Delta*(θ) actually depends on -- x_free, the bound direction (kept in-key, see module docstring's scope decision), the inner-solve numerical formulation, and mode. Deliberately excludes δ."
+"""
+Inner-problem cache key (task §12): everything Delta*(θ) actually depends on -- x_free, the bound
+direction (kept in-key, see module docstring's scope decision), the inner-solve numerical
+formulation, mode, and (AUD-08 postmerge-correctness fix) the context fingerprint. Deliberately
+excludes δ.
+
+Without ctx_fingerprint here, this key would reintroduce exactly the cross-context aliasing risk
+AUD-08 fixed on FullAEvalKey: two DIFFERENT contexts that happen to agree on
+x_free/find_smallest/inner_loop_opt/mode (e.g. differing only in draw set) would alias in this
+cache even though FullAEvalKey itself now prevents that. The module's own documented lifetime
+discipline ("never share across a genuinely different draw-set/... scope") makes this a
+should-never-happen case in the intended one-ctx-per-staged-continuation usage
+(staged_delta5.jl's reuse_context=true), but the AUD-08 fix's whole point is not to rely on
+caller discipline alone for this.
+"""
 struct FullAInnerKey
     x_free::Vector{Float64}
     find_smallest::Bool
     inner_loop_opt::String
     mode::Symbol
+    ctx_fingerprint::String
 end
 Base.:(==)(a::FullAInnerKey, b::FullAInnerKey) = a.x_free == b.x_free &&
-    a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.mode == b.mode
-Base.hash(k::FullAInnerKey, h::UInt) = hash((k.x_free, k.find_smallest, k.inner_loop_opt, k.mode), h)
+    a.find_smallest == b.find_smallest && a.inner_loop_opt == b.inner_loop_opt && a.mode == b.mode &&
+    a.ctx_fingerprint == b.ctx_fingerprint
+Base.hash(k::FullAInnerKey, h::UInt) = hash((k.x_free, k.find_smallest, k.inner_loop_opt, k.mode, k.ctx_fingerprint), h)
 
-_inner_key(key::FullAEvalKey) = FullAInnerKey(key.x_free, key.find_smallest, key.inner_loop_opt, key.mode)
+_inner_key(key::FullAEvalKey) = FullAInnerKey(key.x_free, key.find_smallest, key.inner_loop_opt, key.mode, key.ctx_fingerprint)
 
 """
     CrossDeltaExactCache
