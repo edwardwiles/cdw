@@ -84,10 +84,32 @@ if MODE == "calibration"
         # Small, bounded perturbation of the FREE z-coordinates only (gp left at the calibration
         # value) -- large enough to give genuinely different KNITRO trajectories across chains,
         # small enough to stay well inside the z +/- 30 box run_cm_upper_checkpointed itself sets.
+        # NOTE (found live this session): an earlier version of this used scale=0.5, which
+        # produced a start point KNITRO's own presolver could not evaluate at all
+        # (knitro_status=-502 "Could not evaluate objective or constraints at the initial
+        # point", n_eval=0 -- confirmed via a real chain_perturb_seed=1 run,
+        # smoke_test_2026-07-22/interrupt/stage.log). 0.02 is conservative enough to stay in the
+        # well-defined region while still giving each chain a genuinely different trajectory.
         w0 = copy(w_calib)
-        w0[2:end] .+= 0.5 .* randn(rng, length(w0) - 1)
+        w0[2:end] .+= 0.02 .* randn(rng, length(w0) - 1)
     end
     lp(">>> calibration start: g=", w0[1], " ||zfree||=", norm(w0[2:end]))
+
+    # Feasibility pre-check (found necessary live, see NOTE above): never hand KNITRO a start
+    # point that cannot even be evaluated -- fail fast with an actionable message instead of
+    # burning the stage's wall budget on an instant KN_solve presolve error.
+    let xf0 = x_free_from_w(w0, pe0), pcx0 = build_cm_production_context(ctx0, CS; L = L, contrasts = :anchored, probs = probs)
+        try
+            _, _, verify0 = cm_production_value_verified(xf0, pcx0)
+            isfinite(verify0.Delta_dual) || error("Delta_dual is not finite at the (possibly perturbed) start point")
+            lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
+        catch e
+            e isa CMExpectedSolveFailure || rethrow()
+            error("cm_production_stage_runner: perturbed calibration start (chain_perturb_seed=$(CHAIN_PERTURB_SEED)) " *
+                  "is not evaluable ($e) -- refusing to launch KNITRO on a point its own presolver would reject. " *
+                  "Reduce the perturbation scale or use a different chain_perturb_seed.")
+        end
+    end
 elseif MODE == "seed_w0"
     seed = deserialize(SEED_ARG)
     seed.delta == DELTA || lp(">>> NOTE: seed vector was cold-verified at delta=", seed.delta,
