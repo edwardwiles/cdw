@@ -141,9 +141,44 @@ faster, 27x less allocation — mostly reduces GC pressure over a sustained run 
 wall-clock); **C+ is the substantial win** (a real 4x wall-clock speedup, 67x less memory,
 correct to machine precision at both a typical and a difficult point).
 
+## 5-7. Exhaustive D=4 correctness
+
+`test_production_gate_exhaustive_d4.jl`, 28/28 passed:
+- **Every origin pair, every destination, 4 step sizes, single-changed-origin** (64 cases at 2
+  fixed points): A+ exactly 0 (bit-identical, as expected — it's the same computation, just
+  persistent-buffer-backed); C+ within 5.7e-14 to 2.3e-13 (still machine precision, slightly
+  larger than the earlier ~1e-14/1e-17 numbers at smaller perturbations, since larger h probes
+  accumulate marginally more floating-point drift along the log-sum-exp path — not a correctness
+  concern).
+- **Every origin pair as a genuine simultaneous 2-changed-origin case, every destination, 3 step
+  sizes** (72 cases): A+ exactly 0; C+ within 1.1e-13 to 2.8e-13.
+- **Winner-transition sweep**: an honest gap, not overclaimed — the h-sweep on the specific draw
+  probed only exercised "winner stays" within the tested range for that draw/destination, not an
+  actual winner→runner-up switch. Values matched to <1e-8 at every h regardless, but this does
+  not itself prove all four listed transition scenarios (incumbent stays / challenger wins /
+  runner-up takes over / third-place relevant) — the earlier exhaustive-pair sweep (72+64 cases)
+  almost certainly DOES include real winner switches incidentally (large step sizes like h=1.0
+  routinely flip winners at D=4), but this was not explicitly isolated/labeled per-transition-type.
+- **Numerical range**: 12/12 extreme cases (`h` up to ±20, i.e. `Aod_theta` from `e^-20` to
+  `e^20`) stayed finite and matched between Reference and C+ — no NaN/Inf triggered in the tested
+  range, so the "both backends agree on which entries are non-finite" fallback path was not
+  actually exercised (not a gap in the backends, just means the tested range wasn't extreme
+  enough to reach an actual overflow/underflow boundary at D=4/this context's data).
+
+## 11. Compressed-moment interaction
+
+Not a new integration point — `lfix_factorized.jl`/`lfix_factorized_workspace.jl` never import
+or call anything in `compressed_moments.jl`/`compressed_live.jl`. Backend C+ is scoped entirely
+to the `L_fix` gradient's own base cache (the same scope `LFixBaseCache`/Backend A already have);
+the compressed-moment machinery is a separate system (dense/compressed moment-MATRIX construction
+for the Hessian callback), consuming `winner`/`wval`-shaped outputs from an entirely different
+code path (`winners_from_certificate`/`build_compressed_factual`, not `LFixBaseCacheC`). C+
+introduces no new dense `W×402` materialization and no duplicate moment matrix — confirmed by
+inspection (no such array appears anywhere in `lfix_factorized_workspace.jl`), not by a new test.
+
 ## Next
 
-Sections 5-7 (exhaustive D=4 correctness beyond the basic suite already run), 11-14 (compressed-
-moment interaction, directional checks, a short real outer trajectory — needs the
-now-fixed KNITRO hang to stay fixed), 15-17 (decision, fallback flag, final report) — tracked in
-the todo list, executed incrementally.
+Section 13 (wire behind a flag, short real outer trajectory — the KNITRO hang fix makes this
+newly possible), 14 (cache/concurrency gate reruns with C+ active), 12 (optimized-value
+directional checks), 15-17 (decision, fallback flag, final report) — tracked in the todo list,
+executed incrementally.
