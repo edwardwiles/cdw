@@ -890,13 +890,18 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error, not silently clamped. Set true only for an explicit, deliberate migration of a
         # pre-fix checkpoint/start point -- see direction_bounds.jl.
-        full_trace_ref::Union{Nothing,Ref{Vector{NamedTuple}}} = nothing)   # remediation task Part B:
+        full_trace_ref::Union{Nothing,Ref{Vector{NamedTuple}}} = nothing,   # remediation task Part B:
         # instrumentation for the corrected Phase-1 directional diagnostic (c24_phase1_directional_broad.jl):
         # when given, every cb_F! eval additionally pushes (w=copy(w), accepted=is_new_best) into this
         # Ref'd vector so a caller can reconstruct full outer-loop step DIRECTIONS (not just the scalar
         # gp the existing `trace` NamedTuple records) from a real short production trajectory. Purely
         # additive -- nothing is read here unless a caller explicitly passes a Ref; zero behavior/
         # allocation change otherwise.
+        grad_trace_ref::Union{Nothing,Ref{Vector{Vector{Float64}}}} = nothing)   # closure task Phase 5:
+        # same pattern as full_trace_ref, one level down -- when given, every cb_G! call additionally
+        # pushes copy(xf) (the exact free-parameter vector the gradient backend is dispatched on) into
+        # this Ref'd vector, for a same-trajectory backend replay (c34_phase5_same_trajectory_replay.jl).
+        # Purely additive; nothing read here unless explicitly passed.
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
@@ -1164,6 +1169,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
+        grad_trace_ref !== nothing && push!(grad_trace_ref[], copy(xf))
         shared = last_F_state[]
         base = shared !== nothing && shared.w == w ? shared.base : nothing
         if base === nothing
