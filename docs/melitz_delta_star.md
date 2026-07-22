@@ -93,28 +93,62 @@ and expected per-entrant operating profit (derivation in §1.5) collapses to
 E_F[operating_profit_od(z)] = C_od·(σ-1)/(σ·(θ*-σ+1)) · ẑ_od^(σ-1-θ*)
 ```
 
-### 1.4 Free entry pins `N_o` in closed form — independent of the `A_od`/`f_od` split
+### 1.4 `N_o` is a genuinely free scale; free entry instead pins `f_entry_o`
 
-Summing the profit expression over `d` and imposing `Σ_d E_F[operating_profit_od] =
-w_o·f_entry_o` (the free-entry condition, §1.6), and using `(*)` to substitute
-`C_od·ẑ_od^(σ-1-θ*) = X_od·(θ*-σ+1)/(N_o·θ*)` (an *identity*, obtained by solving `(*)` for
-that product — it does **not** depend on `ẑ_od` separately), gives, after cancellation:
+An earlier pass at this derivation tried to use free entry to *solve for* `N_o` — this
+was wrong, caught two ways in the same session: (a) empirically, a first `equilibrium.jl`
+built a D-dimensional NLsolve system on that premise and it would not reliably converge
+even after homotopy/continuation; (b) conceptually, cross-checking against Melitz &
+Redding (2014, *Handbook of International Economics* ch. 1) shows their closed-economy
+free-entry condition `f·J(φ*) = f_E` (their eq. 5) pins the cutoff **independent of the
+mass of entrants/market size** — entrant mass is a separate object, determined only via
+the aggregate-trade/market-demand equations (their eq. 11), which are linear in `M_E`
+given the data and cutoffs.
+
+Redoing the algebra with that lesson: summing the profit expression over `d` and
+imposing `Σ_d E_F[operating_profit_od] = w_o·f_entry_o`, and substituting the identity
+`C_od·M_od = X_od/N_o` (from solving `(*)` for that product) gives
 
 ```
-N_o = (σ-1) / (θ*·σ·w_o·f_entry_o) · Σ_d X_od
+f_entry_o = [ Σ_d C_od·(σ-1)/(σ·(θ*-σ+1))·ẑ_od^(σ-1-θ*) ] / w_o
 ```
 
-This is a genuine, closed-form, **exact** result: `N_o` depends only on total exports of
-origin `o`, `f_entry_o`, `w_o`, `σ`, `θ*` — not on how origin `o`'s exports split across
-destinations, not on `A_od`/`f_od` individually. It is the reason §1.6's decomposition
-result (that aggregate Melitz trade under Pareto identifies only a composite of `A`/`f`)
-does not "leak" into `N_o`: **the entrant mass is fully identified even though the
-bilateral productivity/fixed-cost split is not.**
+This is a genuine, closed-form, **exact** result for `f_entry_o` **given `C_od` (hence
+given `N_o`, already chosen)** — it is not an equation that determines `N_o`; `N_o`
+cancels out of the free-entry condition entirely once `C_od` is expressed the "structural"
+way (`C_od = expenditure_d·(markup·w_o·τ_od/A_od)^(1-σ)`, no `N_o`), and only reappears
+once we *choose* to express `C_od` via the data-based inversion `(X_od/N_o)·(...)` (§1.5)
+— at which point `f_entry_o`'s formula literally has an `N_o` in the denominator of every
+term, that is **exactly cancelled** by the same `N_o` implicit in `X_od/N_o`. **`N_o` is
+therefore a genuinely free scale choice, exactly analogous to the Ricardian repo's `L`**
+— confirmed numerically (`test_equilibrium.jl`, this session): re-running the full
+construction with `N[target]` changed from `1.5` to `7.3` leaves every downstream
+object (`A`, `f`, cutoffs, `GT`, the ACR cross-check) unchanged to machine precision.
 
-### 1.5 Profiling the D² trade-flow equations analytically (the addendum's parameterization)
+### 1.5 Data, not deep primitives: mirroring the Ricardian repo's actual architecture
 
-Given `N_o` (§1.4) and *any* candidate cutoff `ẑ_od ≥ 1` (with `ẑ_od ≥ ẑ_oo` for `d≠o`,
-per the export-selection restriction), `(*)` can be solved for `C_od` directly:
+A second, related correction (also caught mid-session): the Ricardian repo's data object
+is trade **shares** `λ_od`, not trade-flow **levels** `X_od`. Shares alone under-determine
+levels — levels require `expenditure_d = w_d·L_d`, and wages must be *solved* so that
+income (`w_o·L_o`) equals sales (`Σ_d X_od`) for every country *simultaneously* (no
+deficits). An earlier draft of this file chose `X_od` levels directly and only impose
+`expenditure_d = Σ_o X_od` (destination-side balance) — that silently drops the
+origin-side balance (`w_o·L_o = Σ_d X_od`) and can run an undetected trade deficit.
+
+The fix reuses `prestep/iterWagesPreStep!.jl`'s exact damped-Jacobi fixed point verbatim
+(`melitz_solve_wages` in `equilibrium.jl`): `w1 = λ·(w0.*L)./L`, iterated to convergence,
+normalized `w[1]=1`. Given `λ` (data, columns sum to 1), `L` (chosen labor endowment),
+this is the **only** numerical fixed point in the entire construction — well-behaved
+(effectively finding the stationary vector of a column-stochastic-weighted system),
+nothing like the abandoned steep power-law system of §1.4's first attempt. Given the
+solved `w`, `expenditure_d := w_d·L_d` and `X_od := λ_od·expenditure_d` follow in closed
+form and satisfy **both** row and column balance by construction.
+
+### 1.6 Profiling the D² trade-flow equations analytically (the addendum's parameterization)
+
+Given `N_o` (§1.4, freely chosen) and *any* candidate cutoff `ẑ_od ≥ 1` (with `ẑ_od ≥
+ẑ_oo` for `d≠o`, per the export-selection restriction), `(*)` can be solved for `C_od`
+directly:
 
 ```
 C_od = (X_od/N_o) · (θ*-σ+1)/θ* · ẑ_od^(θ*-σ+1)
@@ -136,59 +170,62 @@ two gravity restrictions and the support/export-selection inequalities. We use t
 cutoff parameterization as the practical implementation device in `fake_data.jl`, but
 **do not claim it is the economically identified object** — see §9 and the addendum §1.3.
 
-### 1.6 Non-identification of `A_od`/`f_od` individually (why this must not be oversold)
+### 1.7 Non-identification of `A_od`/`f_od` individually (why this must not be oversold)
 
 Because `price_power_d ≡ 1` removes `N_o` from firm-level revenue, and because §1.4 shows
-`N_o` is *separately* pinned by free entry, the object that aggregate F\*-Melitz trade
+`N_o` is a free scale untouched by free entry, the object that aggregate F\*-Melitz trade
 actually identifies, once double-differenced, is the composite the addendum derives:
 
 ```
 r = θ*·a + β·h,     a = ΔΔ log A,  h = ΔΔ log f,  β = 1 - θ*/(σ-1)
 ```
 
-not `a` and `h` separately. §1.5's cutoff parameterization is one convenient *computational*
+not `a` and `h` separately. §1.6's cutoff parameterization is one convenient *computational*
 way to pick a point in the affine set of decompositions consistent with `r`; it is not a
 claim that `ẑ_od` (or the implied `A_od`/`f_od` split) is identified by the data. The
 acceptance tests (§13) check the identified composite and the two orthogonality
 restrictions, never elementwise recovery of `A`/`f`.
 
-### 1.7 Autarky: `f[target,target]` is derived, not chosen
+### 1.8 Autarky: the target country's own baseline cutoff is derived, not chosen
 
 The brief requires `ẑ'_{target,target} = 1` (the autarky cutoff sits exactly at the Pareto
-lower support). At `ẑ=1`, `Pr(active)=1` for every firm, so both the autarky operating-
-profit expectation and the zero-profit-at-cutoff condition (`C'_{tt}·1^(σ-1) = σ·w'_t·f_tt`,
-`w'_t=1` by the counterfactual numeraire) can be combined directly (full derivation
-verified symbolically in this session, cross-checked against the legacy file's — otherwise
-rejected — `Melitz_transform_θ` formula, which reduces to the same expression once
-isolated from its surrounding hybrid logic):
+lower support) while *also* holding the target country's resources fixed across baseline
+and autarky (same labor endowment, same wage numeraire `w'=w=1`) — necessary for the
+ACR/Chaney cross-check to be a meaningful comparison at all (ACR compares two equilibria
+with the *same* endowment; if `expenditure_prime` were allowed to differ from the
+baseline's own `expenditure[target]`, the price-index ratio would reflect a scale change,
+not a pure market-access change, and would have no reason to match `1-λ_dd^(1/θ*)`).
+
+An earlier pass at this derivation got the *direction* backwards — it tried to derive
+`f[target,target]` from `f_entry[target]` and treat `N[target]`/`expenditure_prime` as
+free. Redone correctly (holding `expenditure_prime[target] = expenditure[target]`,
+`w'=1`, `τ'_tt=1`, and combining the baseline and autarky zero-profit conditions with the
+price-power definitions for cell `(target,target)`), the algebra shows the *baseline*
+cutoff for that one cell, not `f_entry` or `N`, is what must be pinned:
 
 ```
-f[target,target] = f_entry[target] · (θ* - σ + 1) / (σ - 1)
+ẑ[target,target] = (expenditure[target]·w[target] / X[target,target])^(1/θ*)
+                  = (w[target] / λ_tt)^(1/θ*)
 ```
 
-This is a genuine **normalization-by-construction**: `f[target,target]` is *derived* from
-`f_entry[target]` (not independently drawn/projected like the other `D²-1` cells of `f`),
-documented here exactly because the brief requires every normalization to state why it is
-necessary. It does not conflict with the gravity restriction on `f` because the projection
-step (§10) treats `f[target,target]` as a fixed constant and solves the free cells' raw
-values so the *overall* `⟨T, ΔΔ log f⟩ = 0` restriction holds including that fixed cell's
-contribution.
+(`λ_tt = X[target,target]/expenditure[target]`, the baseline domestic trade share — the
+resemblance to the ACR formula `1-λ_tt^(1/θ*)` is exactly why the cross-check below comes
+out exact). This was verified two ways: symbolically, and numerically (re-deriving it by
+substitution gave an apparently different, `N`-dependent formula on a first pass; a direct
+numeric probe in `test_equilibrium.jl` showed the `N`-dependent formula is an identity that
+holds automatically once this cutoff value is used, for *any* `N[target]` — confirming
+`N[target]` is free (§1.4) and this cutoff is the one genuine normalization). `f_entry` and
+`f[target,target]` are then computed by the *same* closed-form formulas as every other
+cell (§1.6) — no special-casing beyond fixing this one cutoff rather than letting it be
+gravity-projected like the other `D²-1` cells (§10's projection step treats it as a fixed
+constant, exactly as it already treated the old, now-superseded, `f[target,target]`
+formula).
 
-### 1.8 Baseline general equilibrium: one non-degenerate NLsolve system
-
-Unlike `N_o`, the baseline `expenditure_d` cannot be solved for in closed form ahead of
-`A_od`/`f_od`, because `ẑ_od` (hence `C_od` and the price-power aggregate) depends on
-`expenditure_d`, which we also want to satisfy `expenditure_d = Σ_o X_od` (so that
-`price_power_d ≡ 1`, §4) and `Σ_d E_F[operating_profit_od(z)] = w_o f_entry_o` (free
-entry) simultaneously. Given `A`, `f`, `τ`, `w`, `f_entry`, `σ`, `θ*` fixed, the baseline
-equilibrium is the joint fixed point in `(N_o, expenditure_d)_{o,d=1}^D` (2D unknowns, 2D
-equations: D price-power-normalization residuals + D free-entry residuals), solved with
-**`NLsolve.nlsolve`** (canned solver, matching the user's stated preference — no hand-rolled
-Newton code) using the analytical Pareto tail expectations of §1.3 (no Monte Carlo needed
-for the equilibrium solve itself — matching the brief's preference for analytical
-expectations in the F\* pre-step). This mirrors the Ricardian repo's own
-`iterWagesPreStep!`/`iterWagesTheory!` fixed-point pattern (§11) — a small, well-posed
-system solved with a canned iterative method — rather than a bespoke closed-form chain.
+**Validated end-to-end** (`test_equilibrium.jl`, this session): with this cutoff fixed,
+`price_power_d≡1` for all `d`, the autarky cutoff comes out at exactly `1`, and
+`GT_model` (via the price-power ratio) matches `GT_ACR = 1-λ_tt^(1/θ*)` to **2.2e-16**
+— including after changing `N[target]` from `1.5` to `7.3`, confirming free entry data
+matches to machine precision independent of the free `N` choice.
 
 ---
 
@@ -306,17 +343,20 @@ existing architecture's own precedent.
 |---|---|---|---|---|---|---|
 | `σ` | scalar | fixed/calibrated | `log σ` internally if ever searched | `σ>1` required | CES elasticity | `types.jl` |
 | `θ*` | scalar | fixed/calibrated | `log θ*` internally if ever searched | `θ*>σ-1` required | Pareto shape | `types.jl` |
-| `w[o]` | D | fixed (baseline), solved (autarky wage of non-target n/a — only target reweighted) | `log w` | `w[target]=1` (baseline numeraire) | wage | `fake_data.jl` |
+| `λ[o,d]` | D×D | **data** (chosen for the synthetic fixture; columns sum to 1) | — | none | trade share (mirrors Ricardian's own data object) | `fake_data.jl` |
+| `L[o]` | D | fixed/chosen (labor endowment) | `log L` | none | endowment | `fake_data.jl` |
+| `w[o]` | D | **solved** via `melitz_solve_wages` (reuses `iterWagesPreStep!`'s exact fixed point, given `λ`, `L`) | — | `w[1]=1` (numeraire) | wage | `equilibrium.jl` |
 | `w'[target]` | scalar | fixed | — | `w'[target]=1` (counterfactual numeraire) | autarky wage | `equilibrium.jl` |
 | `τ[o,d]` | D×D | fixed (data) | — | diag = 1 | trade cost | `fake_data.jl` |
-| `A[o,d]` | D×D | constructed (gravity-projected), non-identified split (§1.6) | `log A` | `price_power_d≡1` via `A_od` level (§1.2); autarky uses the *same* `A[target,target]` | efficiency shifter | `fake_data.jl` |
-| `f[o,d]` | D×D | constructed (gravity-projected) except `f[target,target]` | `log f` | `f[target,target]` **derived** (§1.7), not projected | fixed market-access cost | `fake_data.jl` |
-| `f_entry[o]` | D | fixed/calibrated | `log f_entry` | none | entry cost | `fake_data.jl` |
-| `entrant_mass[o]` (`N_o`) | D | derived, closed form (§1.4) | — | `N'_o=N_o` (shared object) | mass of potential entrants | `equilibrium.jl` |
-| `expenditure[d]` | D | derived, NLsolve joint w/ `N` (§1.8) | — | `expenditure_d = Σ_o X_od` | destination spend | `equilibrium.jl` |
-| `price_power[d]` | D | derived diagnostic | — | `≡1` by construction (§1.2) | CES price-power aggregate | `equilibrium.jl` |
-| `price_power'[target]` | scalar | derived (autarky GE) | — | none (endogenous) | counterfactual price-power | `equilibrium.jl` |
-| `ẑ[o,d]` | D×D | free computational parameterization (§1.5), not economically identified | — | `ẑ_od≥1`; `ẑ_od≥ẑ_oo` (d≠o) | baseline cutoff | `fake_data.jl` |
+| `expenditure[d]` | D | derived, closed form: `w_d·L_d` | — | `expenditure_d = Σ_o X_od` (holds automatically given the wage solve) | destination spend | `equilibrium.jl` |
+| `X[o,d]` | D×D | derived, closed form: `λ_od·expenditure_d` | — | `Σ_d X_od = w_o·L_o` (income=sales, holds automatically) | trade flow (data level) | `equilibrium.jl` |
+| `entrant_mass[o]` (`N_o`) | D | **genuinely free choice** (§1.4 — not pinned by free entry; verified numerically) | `log N` | `N'_o=N_o` (shared object) | mass of potential entrants | `fake_data.jl` |
+| `ẑ[o,d]` | D×D | free computational parameterization (§1.6), not economically identified — **except** `ẑ[target,target]` | — | `ẑ_od≥1`; `ẑ_od≥ẑ_oo` (d≠o); `ẑ[target,target]` **derived** (§1.8) | baseline cutoff | `fake_data.jl` |
+| `A[o,d]` | D×D | derived, closed form from `(X,N,w,τ,expenditure,ẑ)` (§1.6), non-identified split (§1.7) | `log A` | `price_power_d≡1` holds automatically given the closure above | efficiency shifter | `equilibrium.jl` |
+| `f[o,d]` | D×D | derived, closed form (§1.6) | `log f` | none beyond `ẑ[target,target]`'s own normalization | fixed market-access cost | `equilibrium.jl` |
+| `f_entry[o]` | D | derived, closed form from free entry (§1.4) | `log f_entry` | none | entry cost | `equilibrium.jl` |
+| `price_power[d]` | D | derived diagnostic | — | `≡1` by construction (§1.2/1.5) | CES price-power aggregate | `equilibrium.jl` |
+| `price_power'[target]` | scalar | derived (autarky, closed form) | — | none (endogenous) | counterfactual price-power | `equilibrium.jl` |
 | `ẑ'[target,target]` | scalar | normalized | — | `=1` exactly (Pareto lower support) | autarky cutoff | `equilibrium.jl` |
 | Pareto lower support | scalar | fixed | — | `=1` | F\* primitive | `pareto.jl` |
 
@@ -337,20 +377,22 @@ realized_revenue/realized_operating_profit`, exactly the formulas in §1.1.
 operating_profit_od(z)] = w_o f_entry_o` says a representative potential entrant expects
 zero net profit from paying the entry cost and then discovering `z` and choosing where to
 sell. Multiplying by `N_o` would conflate "zero expected profit per entrant" with "zero
-*aggregate* profit across the whole mass of entrants" — a different (and, given `N_o` is
-otherwise determined by §1.4's closed form, circular) condition. See §1.4 for why this
-matters mechanically: multiplying by `N_o` here would make `N_o` cancel out of its own
-determining equation.
+*aggregate* profit across the whole mass of entrants" — a different condition. See §1.4:
+`N_o` in fact cancels out of the free-entry condition algebraically (confirmed both
+symbolically and numerically) once `C_od` is written the structural way — multiplying by
+`N_o` here would reintroduce a dependence that isn't economically there.
 
 ---
 
 ## 8. Baseline cutoffs and autarky cutoff normalization
 
-Baseline cutoffs `ẑ[o,d]` are the free computational parameterization of §1.5 (chosen
-subject to `ẑ≥1`, `ẑ_od≥ẑ_oo`). The autarky cutoff `ẑ'[target,target]=1` is imposed by
-**deriving** `f[target,target]` from `f_entry[target]` (§1.7's closed form) rather than by
-an overwrite of a previously-computed value — the cell is simply never included in the
-gravity-projection step that produces the other `D²-1` cells of `f` (§10).
+Baseline cutoffs `ẑ[o,d]` are the free computational parameterization of §1.6 (chosen
+subject to `ẑ≥1`, `ẑ_od≥ẑ_oo`) — **except** `ẑ[target,target]`, which is **derived**
+(§1.8's closed form) rather than freely projected, so that the autarky cutoff
+`ẑ'[target,target]=1` holds exactly while holding the target country's resources fixed.
+The cell is simply excluded from the gravity-projection step (§10) that produces the
+other `D²-1` cells of `ẑ` (equivalently `A`/`f`), with its known, fixed contribution to
+the restriction's inner product netted out of that projection.
 
 ---
 
@@ -366,17 +408,20 @@ via an `impose_M_Mprime_equality` flag, is explicitly rejected).
 
 ## 10. Full-D gravity restrictions (construction)
 
-`fake_data.jl` generates raw `log A`, `log f` with heterogeneous cell-specific noise plus
-origin/destination fixed effects (which vanish under `doubleDiff`, so don't affect the
-restriction and are free to use for e.g. enforcing sensible cutoff rankings). It then
-projects the *free* cells' double-differenced component off `doubleDiff(log τ)`
-(Gram-Schmidt: subtract the component along `doubleDiff(logτ)` from `doubleDiff(logA_raw)`,
-similarly for `f`), with `f[target,target]` held fixed at its §1.7 value throughout the
-projection (the projection coefficient is solved treating that one cell's contribution to
-`⟨doubleDiff(τ), doubloDiff(f)⟩` as a constant offset, so the *other* free cells absorb the
-correction). Both restrictions are verified numerically to machine precision as part of
-fixture construction, and `std(log A) > 0`, `std(log f) > 0`, `std(doubleDiff(log A)) > 0`,
-`std(doubleDiff(log f)) > 0` are asserted (never trivially-all-ones matrices).
+`fake_data.jl` generates raw `log ẑ` (the cutoff parameterization, §1.6) with
+heterogeneous cell-specific noise plus origin/destination fixed effects (which vanish
+under `doubleDiff`). Because `log A_od` and `log f_od` are each *affine* in `log ẑ_od`
+given the other data fixed (coefficients `(θ*-σ+1)/(σ-1)` and `θ*` respectively — derived
+this session, §1.6), the two gravity restrictions reduce to a single linear requirement
+on `⟨doubleDiff(τ), doubleDiff(log ẑ)⟩`, itself pinned by requiring the trade-flow data's
+own composite restriction `⟨T, ΔΔlogX + θ*T⟩ = 0` to hold (§1.7's identified-composite
+condition). `fake_data.jl` projects the *free* cells' double-differenced `log ẑ`
+component onto that required value (Gram-Schmidt-style), with `ẑ[target,target]` excluded
+and held at its §1.8 value throughout (its known, fixed contribution to the inner product
+is netted out so the free cells absorb the correction). Both restrictions are verified
+numerically to machine precision as part of fixture construction, and `std(log A) > 0`,
+`std(log f) > 0`, `std(doubleDiff(log A)) > 0`, `std(doubleDiff(log f)) > 0` are asserted
+(never trivially-all-ones matrices).
 
 ---
 
@@ -384,9 +429,11 @@ fixture construction, and `std(log A) > 0`, `std(log f) > 0`, `std(doubleDiff(lo
 
 **Reused as-is:** `misc/doubleDiff.jl`'s `doubleDiff` (§2, §10); the general "seed once,
 draw once" discipline of `prepare_cc/drawU.jl`/`genRands.jl` (adapted to Pareto inverse-CDF
-instead of Exp(1)+Fréchet transform, §3); the `NLsolve`-based fixed-point pattern of
-`prestep/iterWagesPreStep!.jl`/`setup/iterWagesTheory!.jl` (§1.8 — same "small system,
-canned solver" shape, new equations); the CC minimum-divergence inner loop
+instead of Exp(1)+Fréchet transform, §3); `prestep/iterWagesPreStep!.jl`'s damped-Jacobi
+fixed point `w1 = λ·(w0.*L)./L` reused **verbatim** as `melitz_solve_wages` (§1.5 — not
+just "the same pattern": this is the one and only numerical fixed point anywhere in the
+Melitz construction, taking trade *shares* as data exactly as the Ricardian repo does);
+the CC minimum-divergence inner loop
 (`cc_algo/ccInner.jl`, `cc_algo/inner_loop_functions.jl`, `PsiObjectiveBundleDelta` from
 `cc_algo/PsiObjectiveBundle.jl`) — the Melitz module supplies its own `moments!(K,G,θ,U,obj)`
 function and plugs it into an unmodified `PsiObjectiveBundleDelta`; the outer Δ\*
