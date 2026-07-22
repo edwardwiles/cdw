@@ -58,27 +58,43 @@ never assumed correct because it was new or because a test file existed for it:
 
 ## 4. What remains (honest gaps, not attempted or not completed this session)
 
-- **Full end-to-end KNITRO smoke runs for both new wirings did not finish within budget.**
-  `test_driver_pooled_gradient_wiring.jl` (1500s) and `test_cm_verified_success.jl`'s step 3
-  (900s) both got through context construction and into the real KNITRO outer solve before their
-  timeouts, consistent with a first-time-JIT-compilation-of-a-never-before-run-code-path pattern
-  (3+ sequential real-data context builds alone cost ~250s+ before any solving starts). The
-  underlying *function-level* correctness of both features is independently proven
-  (`test_gradient_workspace.jl` 9/9; `test_cm_verified_success.jl` steps 1-2) — what's unconfirmed
-  is only the full driver-level integration completing within a reasonable wall-clock budget, not
-  its correctness. Re-run with a 30-45 minute budget and no other burden on this shared host to
-  get a clean completion.
-- Persistent `LFixBaseWorkspace` for `build_lfix_base_cache`'s ~590-650 MB/gradient (price0/pTσ0
-  tensors) — not started.
+- **Full end-to-end KNITRO smoke runs for both new wirings STILL have not finished, across
+  THREE separate attempts now (this session's original two + a continuation session's retry
+  of both)** — all hang at the identical point (right after the KNITRO license banner prints,
+  before any real solve output), confirmed via stale log timestamps (38+ minutes with zero new
+  output on the continuation session's retry) rather than assumed from a bare timeout. This
+  is a MUCH stronger signal than "first-JIT-compile is slow" — three consecutive hangs at the
+  exact same spot points to a real, reproducible issue (matching this repo's own documented
+  KNITRO+Julia-threading hang pattern, see memory `gravity-robustness-knitro-hang-past-timeout.md`),
+  not merely an underbudgeted timeout. The continuation session's retries happened on an
+  EXTREMELY heavily loaded shared host (load average 42-56, one user's persistent 48-thread
+  job) — a real confound, not yet ruled out, but also not yet confirmed as sufficient
+  explanation on its own given the pattern's exact reproducibility. **Do not flip either
+  default (`use_pooled_gradient`/`cross_delta`) until ONE of these completes cleanly.**
+  Underlying *function-level* correctness remains independently proven either way
+  (`test_gradient_workspace.jl` 9/9; `test_cm_verified_success.jl` steps 1-2).
+- ~~Persistent `LFixBaseWorkspace` for `build_lfix_base_cache`'s ~590-650 MB/gradient
+  (price0/pTσ0 tensors) — not started.~~ **DONE** (continuation session, addendum): built,
+  tested (D=4 62/62, D=20 real-data cross-check), and benchmarked — 0 bytes allocated on warm
+  reuse vs 589.6MB/call. See `docs/fullA_price_tensor_elimination_report.md`. **Not yet wired
+  into `composite_gradient_at_fast_buffered`/`_pooled`** — the workspace/builder exist and are
+  proven safe to use, but no driver calls them yet.
 - `CrossDeltaExactCache` stage-transition hit-rate / end-to-end wall-savings benchmark — wiring is
   done (cache size before/after is logged per stage) but no real staged δ=2→3→4→5 run has been
   executed to produce numbers.
 - The CM interrupted/resume production campaign the brief specifies (D=20, W=80,000, L=50, δ=1) —
   not run. `run_cm_upper_checkpointed` should not be treated as *the* production CM path until it
   is.
-- Fresh line-level `Profile.Allocs` audit, two-tensor representation experiment (A-D), dense
+- ~~Fresh line-level `Profile.Allocs` audit, two-tensor representation experiment (A-D), dense
   post-solve materialization audit, final matched benchmarks (unrestricted δ=1/δ=2/δ=5, CM L=50)
-  — none started.
+  — none started.~~ **The two-tensor representation experiment is DONE** (addendum, this
+  continuation session) — went further than a simple A-D sketch: full call-site audit, THREE
+  working+validated backends (persistent workspace / pTσ-only / factorized log-score), each
+  benchmarked at real D=20/W=80,000 against the current allocating reference. Headline: the
+  factorized backend is 6.75x faster and uses 6x less memory for a full 400-coordinate gradient
+  call, to machine precision. See `docs/fullA_price_tensor_elimination_report.md` for the full
+  writeup, numbers, and decision. Fresh `Profile.Allocs` line-level audit and dense
+  post-solve-materialization audit remain NOT started.
 
 ## 5. What this document does NOT claim
 
