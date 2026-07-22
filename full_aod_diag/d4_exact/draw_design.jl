@@ -47,6 +47,14 @@ include(joinpath(@__DIR__, "qmc_context_real_d20.jl"))   # -> d20_real_setup, d2
 include(joinpath(@__DIR__, "qmc_draws.jl"))               # -> pseudorandom_U, halton_U, sobol_U
 using Sobol
 using SHA   # AUD-11 fix: stable cross-process/cross-version checksums (stdlib, no Project.toml entry needed)
+# sha256_of_matrix now lives in oracle.jl (context_fingerprint, the AUD-08 fix, is its primary
+# unconditional consumer and oracle.jl is the more universally-included file); guard include so
+# draw_design_meta works even if this file is used in isolation from oracle.jl (found live: a
+# pre-existing test that includes oracle.jl but not draw_design.jl needs the reverse guard too --
+# see oracle.jl's own top-of-file include of this pattern is NOT added there to avoid a real
+# circular include, since production always includes draw_design.jl before oracle.jl anyway;
+# this guard only helps the draw_design.jl-in-isolation direction).
+isdefined(Main, :sha256_of_matrix) || include(joinpath(@__DIR__, "oracle.jl"))
 
 const VALID_DRAW_DESIGNS = (:pseudorandom, :sobol_randomized, :halton_scrambled)
 
@@ -55,28 +63,6 @@ const DRAW_DESIGN_DESCRIPTIONS = Dict(
     :sobol_randomized => "Sobol.jl SobolSeq deterministic base sequence + an independent Cranley-Patterson random shift (mod 1) per seed -- a plain randomized-QMC shift, NOT Owen/digital scrambling (Sobol.jl does not implement digital scrambling)",
     :halton_scrambled => "cc_algo/rhalton.jl scrambled Halton sequence -- genuine Owen-style per-digit scrambling (independent random digit permutation per radix digit, per dimension), ported from Art B. Owen's R code",
 )
-
-"""
-    sha256_of_matrix(M::AbstractMatrix{Float64}) -> String
-
-AUD-11 fix: a stable, cross-process/cross-Julia-version content digest. Julia's built-in
-`hash()` (previously used here) is explicitly NOT a content digest -- the Julia manual documents
-that `hash` values are only guaranteed stable within one Julia process/version, not across
-processes or versions, which is exactly what draw/checkpoint reproducibility needs to detect
-(AUD-11: "Persistent draw/checkpoint checksums use Julia hash"). This instead hashes canonical
-little-endian Float64 bytes PLUS the matrix's own shape (so two same-byte-count but
-differently-shaped matrices cannot collide), independent of host endianness or Julia version.
-"""
-function sha256_of_matrix(M::AbstractMatrix{Float64})::String
-    Md = Matrix{Float64}(M)   # materialize (handles views/reshapes/Adjoint), canonical column-major order
-    buf = IOBuffer()
-    write(buf, htol(Int64(size(Md, 1))))
-    write(buf, htol(Int64(size(Md, 2))))
-    @inbounds for x in Md
-        write(buf, htol(reinterpret(UInt64, x)))
-    end
-    return bytes2hex(SHA.sha256(take!(buf)))
-end
 
 """
     draw_design_meta(design, seed, D, W, U; timing=NamedTuple()) -> NamedTuple

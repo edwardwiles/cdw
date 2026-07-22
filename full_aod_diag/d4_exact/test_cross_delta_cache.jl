@@ -21,7 +21,7 @@ x_free_from_w(w) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
 
 DELTA_INDEPENDENT_FIELDS = (:gamma_focal_prime, :K_hard, :Delta_dual, :Delta_primal,
     :gravity_raw, :gravity_value, :gravity_R_sum, :gravity_R_mean, :gravity_R_beta,
-    :max_abs_moment_resid, :zeta, :lambda, :moment_resid, :m_mean, :m_min, :m_max,
+    :max_abs_moment_resid, :zeta, :lambda, :benchmark_unweighted_moment_mean, :m_mean, :m_min, :m_max,
     :weight_norm_resid, :mean_m_resid, :max_abs_moment_kkt_resid, :primal_dual_gap,
     :winner_hash, :inner_status, :θ_full, :logA)
 
@@ -40,7 +40,7 @@ DELTA_INDEPENDENT_FIELDS = (:gamma_focal_prime, :K_hard, :Delta_dual, :Delta_pri
 
     # look up at a DIFFERENT delta (the staged-continuation scenario, task §12's own example)
     ctx.obj.δ = 5.0
-    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+    key = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard, context_fingerprint(ctx))
     hit = _cache_lookup(cache, key)
     @test hit !== nothing
     @test hit.Delta_minus_delta == hit.Delta_dual - 5.0
@@ -67,7 +67,7 @@ DELTA_INDEPENDENT_FIELDS = (:gamma_focal_prime, :K_hard, :Delta_dual, :Delta_pri
 
     # a THIRD delta (3.0) also hits, still delta-independent-consistent, and stays a single entry
     ctx.obj.δ = 3.0
-    key3 = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+    key3 = FullAEvalKey(collect(xf), ctx.obj.δ, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard, context_fingerprint(ctx))
     hit3 = _cache_lookup(cache, key3)
     @test hit3 !== nothing
     @test hit3.Delta_dual == r_store.Delta_dual
@@ -76,7 +76,7 @@ DELTA_INDEPENDENT_FIELDS = (:gamma_focal_prime, :K_hard, :Delta_dual, :Delta_pri
 
     # a genuinely different x_free must still miss (the cache must not become trivially permissive)
     xf2 = calib_x .+ 0.03 .* dir
-    key_miss = FullAEvalKey(collect(xf2), 3.0, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard)
+    key_miss = FullAEvalKey(collect(xf2), 3.0, ctx.obj.find_smallest, ctx.obj.inner_loop_opt, :hard, context_fingerprint(ctx))
     @test _cache_lookup(cache, key_miss) === nothing
 end
 

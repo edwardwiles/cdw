@@ -12,6 +12,35 @@
 # cache; key must include every option that changes the MATHEMATICAL value).
 # ============================================================================
 using SpecialFunctions: gamma as spgamma
+using SHA
+
+"""
+    sha256_of_matrix(M::AbstractMatrix{Float64}) -> String
+
+AUD-11 fix: a stable, cross-process/cross-Julia-version content digest. Julia's built-in
+`hash()` is explicitly NOT a content digest -- the Julia manual documents that `hash` values are
+only guaranteed stable within one Julia process/version, not across processes or versions, which
+is exactly what draw/checkpoint reproducibility (draw_design.jl) and context-fingerprinting
+(`context_fingerprint` below, AUD-08) both need to detect. Hashes canonical little-endian Float64
+bytes PLUS the matrix's own shape (so two same-byte-count but differently-shaped matrices cannot
+collide), independent of host endianness or Julia version.
+
+Lives here (not in draw_design.jl, where the AUD-11 fix first introduced it) because
+`context_fingerprint`'s dependency on it is UNCONDITIONAL and oracle.jl is the more universally-
+included file across this codebase -- a real UndefVarError was caught live in
+test_cross_delta_cache.jl (includes oracle.jl but not draw_design.jl) before this move.
+draw_design.jl now guards its own use of this function with an include-if-needed fallback.
+"""
+function sha256_of_matrix(M::AbstractMatrix{Float64})::String
+    Md = Matrix{Float64}(M)   # materialize (handles views/reshapes/Adjoint), canonical column-major order
+    buf = IOBuffer()
+    write(buf, htol(Int64(size(Md, 1))))
+    write(buf, htol(Int64(size(Md, 2))))
+    @inbounds for x in Md
+        write(buf, htol(reinterpret(UInt64, x)))
+    end
+    return bytes2hex(SHA.sha256(take!(buf)))
+end
 
 """
     phi(m)
