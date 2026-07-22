@@ -30,17 +30,47 @@
 using Random
 include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "rhalton.jl"))
 
+# AUD-14 fix: all three generators below still reseed/consume Julia's GLOBAL default RNG
+# internally (pseudorandom_U/sobol_U directly; halton_U indirectly via cc_algo/rhalton.jl's own
+# per-dimension Random.seed! + bare shuffle()). Rather than rewrite rhalton.jl/randradinv to
+# thread an explicit local RNG through every scramble/permutation call -- a real but higher-risk
+# refactor that could silently change the exact scrambling permutations production has already
+# validated/checksummed draw designs against -- this wraps each entry point with a save/restore
+# of the CALLER-VISIBLE global RNG state (`copy(Random.default_rng())` / `copy!`). The internal
+# sequence of Random.seed!/rand/shuffle calls, and therefore every returned draw value, is
+# UNCHANGED bit-for-bit; what changes is that draw-design construction no longer leaks a global
+# RNG state mutation to whatever code runs after it (AUD-14's actual complaint: "harder replay,
+# test-order dependence"). This does NOT make concurrent construction of DIFFERENT contexts on
+# DIFFERENT threads race-free (two threads could still interleave mid-construction and observe
+# each other's transient reseeds) -- that would require the full local-RNG-threading refactor;
+# flagged as a known remaining gap in docs/fullA_independent_audit_remediation.md AUD-14, not
+# silently claimed as fixed.
+"Run `f()` with the global default RNG saved before and unconditionally restored after, so `f`'s
+internal Random.seed!/rand/shuffle calls cannot leak a state change to the caller."
+function _with_saved_global_rng(f::Function)
+    saved = copy(Random.default_rng())
+    try
+        return f()
+    finally
+        copy!(Random.default_rng(), saved)
+    end
+end
+
 "Exactly prepare_cc/drawU.jl's genExpRands! path (UoModel=1 => sizeU=D), with an explicit, variable seed for replicate control."
 function pseudorandom_U(W::Int, D::Int; seed::Int)
-    Random.seed!(seed)
-    U01 = rand(W, D)
-    return exp_from_uniform01(U01)
+    return _with_saved_global_rng() do
+        Random.seed!(seed)
+        U01 = rand(W, D)
+        exp_from_uniform01(U01)
+    end
 end
 
 "Scrambled Halton via cc_algo/rhalton.jl, transformed through the model's real Exp(1) inverse-CDF."
 function halton_U(W::Int, D::Int; seed::Int)
-    U01 = rhalton(W, D; singleseed = seed)
-    return exp_from_uniform01(U01)
+    return _with_saved_global_rng() do
+        U01 = rhalton(W, D; singleseed = seed)
+        exp_from_uniform01(U01)
+    end
 end
 
 "Sobol' (Sobol.jl SobolSeq) + Cranley-Patterson random shift (mod 1) for replicate randomization, transformed through the model's real Exp(1) inverse-CDF."
@@ -50,8 +80,10 @@ function sobol_U(W::Int, D::Int; seed::Int)
     for i in 1:W
         base[i, :] = next!(s)
     end
-    Random.seed!(seed)
-    shift = rand(D)
-    U01 = mod.(base .+ reshape(shift, 1, D), 1.0)
-    return exp_from_uniform01(U01)
+    return _with_saved_global_rng() do
+        Random.seed!(seed)
+        shift = rand(D)
+        U01 = mod.(base .+ reshape(shift, 1, D), 1.0)
+        exp_from_uniform01(U01)
+    end
 end
