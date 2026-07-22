@@ -462,6 +462,60 @@ end
     end
 end
 
+# ============================================================================
+# CC inner minimum-divergence loop (real KNITRO, unmodified cc_algo machinery)
+# ============================================================================
+const KNITRO_AVAILABLE = try
+    include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "include_cc_algo.jl"))
+    @eval using .CounterfactualSensitivity
+    true
+catch e
+    @warn "Skipping CC inner-loop testset: cc_algo/KNITRO not available in this environment" exception = e
+    false
+end
+
+if KNITRO_AVAILABLE
+    include(joinpath(MELITZ_DIR, "delta_star.jl"))
+
+    @testset "CC inner minimum-divergence loop (real KNITRO)" begin
+        p, eq = FIXTURE.primitives, FIXTURE.equilibrium
+        D = p.D
+        z_draws = FIXTURE.z_draws
+        W = size(z_draws, 1)
+
+        X_sample = zeros(D, D)
+        entry_sample = zeros(D)
+        for o in 1:D, w in 1:W
+            z = z_draws[w, o]
+            profit_sum = 0.0
+            for d in 1:D
+                firm = melitz_firm(p.w[o], p.tau[o, d], p.A[o, d], p.f[o, d], p.sigma,
+                    eq.expenditure[d], 1.0, z)
+                X_sample[o, d] += eq.entrant_mass[o] * firm.realized_revenue / W
+                profit_sum += firm.realized_operating_profit
+            end
+            entry_sample[o] += profit_sum / W
+        end
+
+        val0, x0, status0, = run_melitz_inner_delta(FIXTURE; X_data=X_sample, entry_target=entry_sample)
+
+        @testset "Delta(theta*) ~ 0 with equal reference weights feasible" begin
+            @test status0 == 0
+            @test abs(val0) < 1e-6
+            @test maximum(abs.(x0)) < 1e-6
+        end
+
+        X_perturbed = copy(X_sample)
+        X_perturbed[2, 3] *= 1.5
+        val1, _, status1, = run_melitz_inner_delta(FIXTURE; X_data=X_perturbed, entry_target=entry_sample)
+
+        @testset "negative control: perturbed data gives detectably positive Delta" begin
+            @test status1 == 0
+            @test val1 > val0 + 1e-5
+        end
+    end
+end
+
 println("\n" * "="^70)
 println("Melitz Delta-star test suite complete.")
 println("="^70)
