@@ -611,6 +611,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     KNITRO.KN_set_var_primal_init_values_all(kc, zfree_start)
 
     last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)
+    n_checkpoint_reuse_hits = Ref(0)   # closure task Phase 3F: counts avoided checkpoint-only
+    # inner solves (cb_newpt! reusing cb_F!'s exact-match result instead of a fresh screened_eval)
     # See incumbent_logic.jl / docs/fullA_driver_delta5_diagnostics_handoff.md §3: seed the
     # incumbent from the already-cold-verified start point (r_seed) rather than `nothing`.
     seed_cand_feasible = r_seed.inner_status in FEASIBLE_CODES && isfinite(r_seed.Delta_dual)
@@ -773,6 +775,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         if r_now === nothing
             xf_now = x_free_from_w(w_now, pe)
             r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x), exact_cache = exact_cache)
+        else
+            n_checkpoint_reuse_hits[] += 1
         end
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, w_now, r_now)
@@ -831,6 +835,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
             n_eval = n_eval[], n_grad_calls = n_grad_calls[],
             zfree_terminal = collect(xsol), best = b, trace = trace, screen_counts = as_namedtuple(sc),
             screen_rejections = sc.rejections, final_checkpoint = final_ckpt,
+            n_checkpoint_reuse_hits = n_checkpoint_reuse_hits[],
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
 end
 
@@ -1027,6 +1032,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     KNITRO.KN_set_con_upbnd(kc, cIndices[1], ctx.δ)
 
     last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)
+    n_checkpoint_reuse_hits = Ref(0)   # closure task Phase 3F: counts avoided checkpoint-only
+    # inner solves (cb_newpt! reusing cb_F!'s exact-match result instead of a fresh screened_eval)
     # See incumbent_logic.jl / docs/fullA_driver_delta5_diagnostics_handoff.md §3: seed the
     # incumbent from the already-cold-verified start point (r0), gated on the SAME delta-budget
     # feasibility test (`feasible = Δ <= ctx.δ + 1e-6`) cb_F! uses below, rather than `nothing`.
@@ -1217,6 +1224,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         if r_now === nothing
             xf_now = x_free_from_w(x, pe)
             r_now, _ = screened_eval(xf_now, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = collect(x[2:end]), exact_cache = exact_cache)
+        else
+            n_checkpoint_reuse_hits[] += 1
         end
         if r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual)
             do_checkpoint(:iteration, collect(x), r_now)
@@ -1272,5 +1281,6 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             n_cold_retries = n_cold_retries[], n_rejected = n_rejected[], n_g_recompute = n_g_recompute[],
             warm_cold_trace = warm_cold_trace,
             n_neg_confirmed = n_neg_confirmed[], neg_cache_size = neg_cache !== nothing ? length(neg_cache) : 0,
+            n_checkpoint_reuse_hits = n_checkpoint_reuse_hits[],
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
 end
