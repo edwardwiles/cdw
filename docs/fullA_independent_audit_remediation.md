@@ -1,5 +1,14 @@
 # Full-A_od independent-audit remediation
 
+> **SUPERSEDED (partial), 2026-07-22**: the AUD-02 row below describes the *original* fix
+> (`par_concurrent_evals: yes→no` + thread-aware guard). The `.opt`-file half of that fix was
+> itself a real regression — it deadlocks this codebase's always-used same-thread nested
+> `KN_solve` pattern — found and reverted at commit `dc3196c`. Current correct state: outer
+> `par_concurrent_evals=yes`, thread-aware `PsiObjectiveBundle` guard retained. Full root-cause:
+> `docs/fullA_nested_knitro_solve_hang_rootcause.md`. Current defaults/state:
+> `docs/fullA_CURRENT_STATE_2026-07-22.md`. Every other row in this document (AUD-01, 03-14) is
+> still current.
+
 Branch: `audit/fullA-postmerge-correctness`, forked from `integration/fullA-final-production-merge` @ `2620097`.
 Audit reviewed: `FullA_od_Independent_Audit_2026-07-21.pdf` (stable commit `f6ae01e`, pending branches `6d5eb67e`/`5b8b38bc`).
 

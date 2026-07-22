@@ -1,5 +1,13 @@
 # Persistent preallocation + price-tensor elimination: final report
 
+> **SUPERSEDED (partial), 2026-07-22**: the D=20 benchmark numbers in this report (§0 TL;DR
+> table and §5's "6.75x/6x" headline) compare Backend C against the obsolete unbuffered
+> `composite_gradient_at`, not the real production gradient
+> (`composite_gradient_at_fast_buffered`). `docs/fullA_factorized_price_production_gate.md`
+> redoes the comparison fairly (4.0-4.2x / 66.8x against the actual default) and is the
+> authoritative benchmark. This report's correctness findings (Backends A/B/C algebra, call-site
+> audit, `winner_certificate.jl` reuse) are unaffected and still current.
+
 Written 2026-07-21/22, autonomous overnight session, addendum to the postmerge
 correctness/productionization brief. Read `docs/fullA_price_tensor_audit.md` first (Step 1
 call-site audit) — this report covers Steps 2-10.
