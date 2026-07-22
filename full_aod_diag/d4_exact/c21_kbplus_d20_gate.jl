@@ -38,7 +38,8 @@ for δ in (1.0, 5.0)
     base = solve_base_state(xf, ctx)
     D = ctx.D; W = size(ctx.obj.U, 1)
 
-    t0 = time(); g_ref, meta_ref = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true); t_ref = time() - t0
+    bwc_ref = Dict{Int,Float64}()
+    t0 = time(); g_ref, meta_ref = composite_gradient_at_fast_buffered(xf, ctx, pe; base = base, threaded = true, h_mode = :cached, bandwidth_cache = bwc_ref); t_ref = time() - t0
     t0 = time(); g_C, meta_C = composite_gradient_at_C(xf, ctx, pe; base = base); t_C = time() - t0
 
     grad_pool = build_grad_workspace_pool(W)
