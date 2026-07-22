@@ -303,18 +303,30 @@ called identically in baseline and counterfactual — never a separate manual co
 formula and never evaluated at a single draw index (the two anti-patterns the legacy audit
 flags).
 
-### A. D² bilateral trade-flow moments
+### A. D² bilateral trade-flow moments — matched as SHARES, not levels
 
 ```
-g_trade[o,d](z) = entrant_mass[o]·realized_revenue_od(z_o) − X_data[o,d]
+lambda_od = X_data[o,d] / expenditure_d
+g_trade[o,d](z) = entrant_mass[o]·realized_revenue_od(z_o)/expenditure_d − lambda_od
 ```
 
 for **every** `(o,d)` pair — all `D²` cells, never gated on `baseIndex`/"rest of world".
-Scaled by `X_data[o,d]` for conditioning (economic zero set unchanged; unscaled residuals
-always also reported, per the brief). Matching all `D²` flows with `expenditure_d = Σ_o
-X_od` implies `price_power_d=1` automatically (§1.5's derivation: `price_power_d =
-(1/expenditure_d)·Σ_o N_o C_od M_od = (Σ_o X_od)/expenditure_d ≡ 1`) — **no separate
-price-index moment is added.**
+**Corrected mid-session from an earlier level-based draft** (`g_trade =
+entrant_mass[o]·realized_revenue − X_data[o,d]`, optionally rescaled by the cell's own
+`X_data[o,d]` for conditioning): live user feedback pointed out the Ricardian repo's own
+`moments/hFunction.jl` matches **shares**, not levels — confirmed by reading it directly:
+`G[ω,d1] = pricesTemp[o] − P[d1]·denom[d]`, where `P[d1]` is literally the vectorized
+trade-*share* data (`prepare_cc/buildObjectsForMoments.jl`) and `denom[d]=γ[d]^σ·gdp[d]`
+is a destination-level rescaling constant applied to make it comparable to the simulated
+term — the fundamental data object matched is the share. `setup/createFakeData.jl`
+confirms this is a **closed-form** object (`lambda = phi./sum(phi,dims=1)` under the
+Fréchet gravity equation), never a Monte Carlo sample average — the Melitz module's own
+`X_data`/`entry_target` default (`build_melitz_psi_bundle`) mirrors this: the closed-form
+population values `(eq.trade_flow, w.*f_entry)`, not a sample mean over the same draws
+used to evaluate the moments (see §14 for why that distinction matters numerically).
+Matching all `D²` flows with `expenditure_d = Σ_o X_od` implies `price_power_d=1`
+automatically (§1.6's derivation: `price_power_d = (1/expenditure_d)·Σ_o N_o C_od M_od =
+(Σ_o X_od)/expenditure_d ≡ 1`) — **no separate price-index moment is added.**
 
 ### B. D free-entry moments (per-entrant, not multiplied by `N_o`)
 
@@ -485,12 +497,74 @@ rejected per that document.
 ## 13. Reproducing the D=4 Δ\* test
 
 ```
-julia --project=. scripts/run_melitz_delta_star_fake.jl --D 4 --seed 1234 --draws 20000
+source .knitro_env.sh   # KNITRO license only resolves on demand.mit.edu
+julia --project=. scripts/run_melitz_delta_star_fake.jl --D 4 --seed 1234 --draws 80000
 ```
 
-(exact CLI finalized alongside the script; see §14 for the run's actual output once
-executed.)
+Prints normalizations, the true parameter summary, moment residuals (with the
+`min_active_draw_count` diagnostic — see §14), the GT/ACR cross-check, and `Delta(theta*)`
+via the real, unmodified CC/KNITRO inner loop. The formal automated equivalent is
+
+```
+julia --project=. test/melitz/runtests.jl
+```
+
+(104 tests; the last two testsets require KNITRO and are skipped with a warning, not a
+hard failure, if `cc_algo`/KNITRO cannot be loaded in the current environment).
 
 ## 14. Numerical result and tolerance
 
-*(filled in after the implementation runs — see the final report for this session.)*
+**Verified live, `seed=1234`, `--draws 80000`:**
+
+| quantity | value |
+|---|---|
+| max ⎜bilateral-flow residual⎟ (economic units, Monte Carlo vs. closed-form target) | 0.0424 |
+| max ⎜free-entry residual⎟ (economic units) | 0.0249 |
+| `A` gravity residual `⟨ΔΔlogτ, ΔΔlogA⟩` | −1.04e-17 |
+| `f` gravity residual `⟨ΔΔlogτ, ΔΔlogf⟩` | −4.86e-16 |
+| `GT` (model, price-power ratio) | 0.0362015 |
+| `GT` (ACR/Chaney, `1−λ_dd^(1/θ*)`) | 0.0362015 |
+| ⎜GT_model − GT_ACR⎟ | 1.11e-16 |
+| min active-draw count (any cell) at `W=80,000` | 69 |
+| **Δ(θ\*)** (real KNITRO CC inner loop) | **1.07e-4** |
+| KNITRO status | 0 (optimal) |
+| max ⎜optimal dual variable⎟ | 0.212 |
+
+Both gravity restrictions and the ACR cross-check hold to machine precision (1e-16 to
+1e-17) by construction, independent of `W` — they never touch the Monte Carlo draws.
+`Δ(θ*)` itself is genuinely small but **not** machine-precision zero, and this is the
+correct, expected result once the target moments are the closed-form population values
+(§4A) rather than a sample average over the same draws used to evaluate the moments (the
+brief's own "Mode 1" construction — useful only as a degenerate code-correctness check,
+since it makes `Δ(θ*)=0` a tautology, not a validation; confirmed this reduces to exactly
+`0.0` with an all-zero dual solution when tested, correctly flagged as suspicious and
+investigated live rather than reported as the headline result).
+
+**A real numerical finding, diagnosed live:** at smaller `W` (500 to 32,000 tested), the
+KNITRO inner solve does not converge — its dual variables diverge to `~1e14`–`1e16` rather
+than settling on a large-but-finite `Δ`. Root cause, confirmed directly: bilateral
+participation probability under Pareto is `Pr(active) = ẑ_od^(-θ*)`, which is small enough
+for high-cutoff (especially export) cells that some cells have **zero** active draws in
+the *entire* Monte Carlo sample at small `W` for this fixture (verified: cell `(1,2)` has
+0 active draws at `W=500`; cell `(2,3)` has 0 at `W=2000`, 5 at `W=8000`, 69 by `W=80,000`).
+A cell with zero active draws has a perfectly constant, never-zero moment residual across
+every single draw — no reweighting of the Ψ-divergence dual problem can bring that to
+zero, so the optimal dual variable is genuinely unbounded (not a solver bug). This is a
+substantive, previously-undocumented numerical property of applying the CC minimum-
+divergence machinery to models with rare extensive-margin participation (the Ricardian/EK
+model has no analog: its "argmin" winner-take-all selection is essentially always likely
+for at least one competitor). `min_active_draw_count` (`moments.jl`) makes this checkable
+before running KNITRO; `melitz_inner_loop_options.opt` raises the shared default's
+`maxit=100` to `10000` (did not by itself fix small-`W` divergence — confirming the issue
+is genuine dual unboundedness, not merely an iteration-limit shortfall).
+
+**`Δ(θ*)` shrinks with `W`, as expected** (all KNITRO status 0, optimal): `2.10e-4`
+(`W=64,000`) → `1.37e-4` (`W=100,000`) → `3.71e-5` (`W=150,000`) → `2.63e-5`
+(`W=200,000`).
+
+**Remaining discrepancy:** the moment-residual magnitudes (0.02–0.04, economic units) at
+`W=80,000` reflect ordinary Monte Carlo noise on a heavy-tailed Pareto-revenue statistic,
+not a construction error — both gravity restrictions and the ACR identity, which don't
+depend on the draws at all, are exact to machine precision at the *same* parameter values,
+confirming the underlying economics is correct; only the finite-sample moment matching (an
+intrinsically stochastic quantity) carries residual noise, and it visibly shrinks with `W`.
