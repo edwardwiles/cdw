@@ -4,7 +4,11 @@
 # maxtime_real (simulating an interruption), writing a CMCheckpoint. Run
 # test_cm_checkpoint_resume.jl next, in a SEPARATE process, to verify the resume path.
 # ============================================================================
-const D4X = "/bbkinghome/edav/gravity_robustness/gravity-fullA-alloc-cache-cleanup/full_aod_diag/d4_exact"
+# NOTE: was hardcoded to a DIFFERENT worktree's path (gravity-fullA-alloc-cache-cleanup) --
+# fixed to @__DIR__ so this test exercises the files actually present in THIS worktree/checkout
+# (found while verifying the AUD-04 cm_checkpoint.jl gate fix; see
+# docs/fullA_independent_audit_remediation.md AUD-04 CM follow-up).
+const D4X = @__DIR__
 include(joinpath(D4X, "draw_design.jl"))
 include(joinpath(D4X, "winners.jl"))
 include(joinpath(D4X, "oracle.jl"))

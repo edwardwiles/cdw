@@ -68,7 +68,7 @@ struct CMCheckpoint
     n_grad::Int
     wall_elapsed::Float64
     wall_budget_remaining::Float64
-    checkpoint_reason::Symbol       # :new_best | :wall_interval | :stage_complete
+    checkpoint_reason::Symbol       # :new_best | :wall_interval | :stage_complete | :stage_complete_unverified
     knitro_version::String
 end
 
@@ -123,6 +123,17 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         cm_hessian_backend = resumed.cm_hessian_backend; cm_grid_rule = resumed.cm_grid_rule
         lp("[", label, "] RESUMING from ", resume_from, " (n_eval=", resumed.n_eval, " n_grad=", resumed.n_grad,
            " wall_elapsed=", round(resumed.wall_elapsed, digits = 1), "s)")
+        # AUD-10 fix (matches c10_d20_production_driver.jl's identical resume warning): the
+        # checkpoint's own best_feasible[] was already gated by is_verified_success in cb_F!
+        # above (or is nothing) -- it remains the correct scientific incumbent regardless of
+        # whether the RAW terminal solver state that triggered :stage_complete_unverified was
+        # itself verified.
+        if resumed.checkpoint_reason == :stage_complete_unverified
+            lp("WARNING: resuming from a checkpoint whose terminal point FAILED verification at write ",
+               "time (checkpoint_reason=:stage_complete_unverified, AUD-04/AUD-10) -- best_feasible[] ",
+               "inside this checkpoint is still the correct scientific incumbent; only the raw terminal ",
+               "solver-state fields are suspect.")
+        end
     end
 
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed)
@@ -192,9 +203,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         xf = x_free_from_w(w, pe)
-        local base
+        local base, verify
         try
-            _, base = cm_production_value(xf, pcx)
+            _, base, verify = cm_production_value_verified(xf, pcx)
         catch e
             throw(DomainError(w[1], "run_cm_upper_checkpointed($label): infeasible/failed inner solve at this point"))
         end
@@ -204,16 +215,22 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         n_eval[] += 1
         last_F_state[] = (w = copy(w), base = base)
         feasible = isfinite(Δ) && Δ <= delta + 1e-6
-        is_new_best = feasible && (best_feasible[] === nothing || w[1] < best_feasible[].gp)
+        # AUD-04 gate (matches c10_d20_production_driver.jl's cb_F! pattern): feasibility
+        # (Delta<=delta) alone is not a verified solve -- KNITRO's own statuses 0/-100/-101/-103
+        # are tolerance-based stops, not an optimality certificate. Require
+        # classify_inner_result(verify) == VerifiedSolved before this point may become the
+        # incumbent -- see docs/fullA_independent_audit_remediation.md AUD-04.
+        verified = is_verified_success(verify)
+        is_new_best = feasible && verified && (best_feasible[] === nothing || w[1] < best_feasible[].gp)
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, n_eval = n_eval[], t = prior_wall + (time() - t_start))
             do_checkpoint(:new_best, collect(w))
         elseif time() - last_ckpt_t[] >= checkpoint_interval_s
             do_checkpoint(:wall_interval, collect(w))
         end
-        push!(trace, (idx = n_eval[], t = time() - t_start, gp = w[1], Delta = Δ, feasible = feasible))
+        push!(trace, (idx = n_eval[], t = time() - t_start, gp = w[1], Delta = Δ, feasible = feasible, verified = verified))
         if verbose && (n_eval[] <= 3 || n_eval[] % 20 == 0)
-            lp("  eval ", n_eval[], " t=", round(time() - t_start, digits = 1), "s gp=", w[1], " Delta=", Δ, " feasible=", feasible)
+            lp("  eval ", n_eval[], " t=", round(time() - t_start, digits = 1), "s gp=", w[1], " Delta=", Δ, " feasible=", feasible, " verified=", verified)
         end
         return 0
     end
@@ -241,7 +258,29 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     σ = ctx.σ
     b = best_feasible[]
     κ = b === nothing ? NaN : 1 - b.gp^(σ / (σ - 1))
-    final_ckpt = do_checkpoint(:stage_complete, collect(xsol))
+
+    # AUD-04/AUD-10 fix (matches c10_d20_production_driver.jl's run_profile_checkpointed/
+    # run_polish_checkpointed final-checkpoint gate): re-verify the terminal point independently
+    # before checkpointing it as a normal :stage_complete -- KNITRO's own reported outer status
+    # says nothing about whether the INNER dual solve at that point passed the AUD-04
+    # residual/gap checks. best_feasible[] (already gated by is_verified_success in cb_F! above)
+    # remains the correct resume/incumbent state regardless of this outcome.
+    xf_final = x_free_from_w(collect(xsol), pe)
+    local verify_final
+    try
+        _, _, verify_final = cm_production_value_verified(xf_final, pcx)
+    catch e
+        verify_final = (inner_status = -300,)   # inner solve failed outright at the terminal point -- unverified by construction
+    end
+    if is_verified_success(verify_final)
+        final_ckpt = do_checkpoint(:stage_complete, collect(xsol))
+    else
+        lp("[", label, "] WARNING: terminal point failed verification (class=", classify_inner_result(verify_final),
+           ") -- checkpointing as :stage_complete_unverified, NOT :stage_complete. best_feasible[]=",
+           best_feasible[] === nothing ? "nothing" : "gp=$(best_feasible[].gp) Delta=$(best_feasible[].Delta)",
+           " remains the correct resume/incumbent state (AUD-10).")
+        final_ckpt = do_checkpoint(:stage_complete_unverified, collect(xsol))
+    end
     return (knitro_status = nStatus, wall = wall_ext, n_eval = n_eval[], n_grad = n_grad[],
             best = b, kappa = κ, xsol = collect(xsol), trace = trace, final_checkpoint = final_ckpt,
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))

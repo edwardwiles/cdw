@@ -83,6 +83,67 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx)
 end
 
 """
+    archC_verified_state(x_free0, ctx_cm, cctx) -> (base::BaseDualState, verify::NamedTuple)
+
+AUD-04 gap fix (docs/fullA_independent_audit_remediation.md, "known follow-ups" ->
+`cm_checkpoint.jl` had no equivalent of `oracle.jl`'s `classify_inner_result`/
+`is_verified_success` gate). Same Architecture-C inner solve as `archC_base_state` (kept
+unchanged, still the cheap `base`-only path every existing caller uses), PLUS the independent
+residual/gap diagnostics `classify_inner_result` needs (`:inner_status`, `:Delta_dual`,
+`:primal_dual_gap`, `:weight_norm_resid`, `:mean_m_resid`, `:max_abs_moment_kkt_resid`,
+`:m_min`) -- computed with the SAME explicit-recompute pattern `solve_base_state`
+(three_way_derivatives.jl) / `evaluate_fullA`/`evaluate_fullA_fast` (oracle.jl/oracle_fast.jl)
+already use: an `obj(inner_x, constr=...)` call to freshly repopulate `obj.arg1` (dPsi at the
+converged (zeta*,lambda*)) and the constraint buffer (`Delta_dual`), NOT `archC_base_state`'s
+own "trust KNITRO's last FG callback" shortcut -- an independent verification check should not
+rely on the same assumption it exists to catch a violation of. Reuses `primal_divergence`
+(oracle.jl) and `kkt_residual_blas` (oracle_fast.jl) rather than re-deriving either formula;
+`G` itself is `obj.H`'s own moments!-output columns, already built once inside
+`inner_loop_internal_archgeneric` above (same Phase-1A "no second moments! call" pattern
+oracle_fast.jl uses), read via `CS.select_G_from_H`.
+
+Returns `(base, verify)`: `base` is byte-identical in construction to what `archC_base_state`
+returns (same inner solve, same fields); `verify` is a plain NamedTuple directly consumable by
+`classify_inner_result`/`is_verified_success` (oracle.jl) via `get(verify, :field, default)`.
+Callers that need the AUD-04 gate (e.g. `cm_checkpoint.jl`'s `cb_F!`/final `:stage_complete`
+decision, via `cm_production_value_verified` below) should call this, not `archC_base_state`.
+"""
+function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx)
+    obj = ctx_cm.obj
+    θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
+    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
+        hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+    nStatus in (0, -100, -101, -103) || error("archC_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)")
+
+    ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
+    W = size(obj.U, 1)
+    G = CS.select_G_from_H(obj, obj.H)   # already built once by inner_loop_internal_archgeneric above
+
+    # Explicit recompute at the converged point (solve_base_state/oracle.jl's own pattern, not
+    # archC_base_state's KN_solve-last-call trust) -- populates obj.arg1 = m(s) fresh and yields
+    # the constraint buffer needed for Delta_dual.
+    ncon = obj.d - obj.outer_constr_index + 2
+    cbuf = zeros(ncon)
+    obj(inner_x, constr = @view(cbuf[1:ncon]))
+    Delta_dual = cbuf[1] / 1e10
+    m_weights = copy(obj.arg1)
+    p_weights = m_weights ./ sum(m_weights)
+    Delta_primal = primal_divergence(m_weights)   # oracle.jl, reused not re-derived
+
+    mean_m_resid = abs(sum(m_weights) / W - 1.0)
+    nkkt = min(length(λstar), size(G, 2))
+    max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)   # oracle_fast.jl, reused not re-derived
+
+    base = BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, m_weights, nStatus)
+    verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
+              primal_dual_gap = abs(Delta_dual - Delta_primal),
+              weight_norm_resid = abs(sum(p_weights) - 1.0),
+              mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
+              m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+    return base, verify
+end
+
+"""
     cm_production_gradient(x_free0, pcx, ctx, pe; kwargs...) -> (g, meta)
 
 `pcx = build_cm_production_context(...)`'s return value. One-call entry
@@ -107,4 +168,20 @@ function cm_production_value(x_free0::AbstractVector, pcx)
     base = archC_base_state(x_free0, pcx.ctx_cm, pcx.cctx)
     K = pcx.ctx_cm.obj.H_save
     return K, base
+end
+
+"""
+    cm_production_value_verified(x_free0, pcx) -> (K, base, verify)
+
+AUD-04-aware analogue of `cm_production_value` -- same Architecture-C inner solve, plus the
+`verify` NamedTuple (`archC_verified_state`) needed to gate a result through
+`classify_inner_result`/`is_verified_success` (oracle.jl) before it may become an incumbent or a
+`:stage_complete` checkpoint. Costs one extra `obj(...)` recompute call over `cm_production_value`
+(see `archC_verified_state`'s docstring) -- use this, not `cm_production_value`, at any call site
+that needs the AUD-04 gate (currently: `cm_checkpoint.jl`'s `run_cm_upper_checkpointed`).
+"""
+function cm_production_value_verified(x_free0::AbstractVector, pcx)
+    base, verify = archC_verified_state(x_free0, pcx.ctx_cm, pcx.cctx)
+    K = pcx.ctx_cm.obj.H_save
+    return K, base, verify
 end
