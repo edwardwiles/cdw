@@ -38,7 +38,10 @@ function run_short_trajectory(label::String, gradient_kind::Symbol, g0::Float64,
     r0.inner_status in FEASIBLE_CODES || error("run_short_trajectory($label): start point not inner-feasible")
 
     z_halfwidth = 30.0
-    gp_dir_lo, gp_dir_hi = direction_gamma_bounds(ctx, find_smallest)
+    # Remediation fix: matches c10_d20_production_driver.jl's own removal of the direction-split
+    # gp box (found to put the calibration start point exactly on the box boundary, forcing a
+    # KNITRO presolve shift and spurious infeasibility at the very first evaluation).
+    gp_dir_lo, gp_dir_hi = ctx.bounds.γp_lo, ctx.bounds.γp_hi
     w_lo = vcat(gp_dir_lo, zfree0 .- z_halfwidth)
     w_hi = vcat(gp_dir_hi, zfree0 .+ z_halfwidth)
 

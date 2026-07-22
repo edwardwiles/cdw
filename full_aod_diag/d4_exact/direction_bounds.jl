@@ -2,6 +2,24 @@
 # Direction-aware outer gamma'_focal (gp) box constraints (addendum, task §"correct
 # the outer gamma bounds for upper and lower runs").
 #
+# REMEDIATION UPDATE (live production-run finding, 2026-07-22): `direction_gamma_bounds` and
+# `validate_gp_in_direction_box` are NO LONGER called by c10_d20_production_driver.jl's
+# run_profile_checkpointed/run_polish_checkpointed (or c18_short_trajectory_comparison.jl) to
+# construct the outer KNITRO gp box or to gate a start point. `frechet_benchmark_gp(ctx)` is
+# exactly the model's own calibration gp value, i.e. exactly the value the natural start point
+# (g_start) normally IS -- splitting the box there put the start point on the box's own boundary,
+# forcing KNITRO's interior-point/barrier presolve to shift away from it before it could even
+# evaluate; live-confirmed that Delta* is extremely sensitive to gp near calibration (a 1%
+# deviation inflates Delta* from ~0.0026 to ~0.13, a ~50x jump), so the forced shift alone spikes
+# the constraint violation and produces spurious "could not evaluate objective/constraints at
+# initial point" warnings/stalls before real solving happens. There was no real correctness
+# upside to the split either: the objective gradient in gp has an unambiguous sign, so the
+# solver was never at risk of wandering into the "wrong" direction regardless of the box.
+# Both functions are KEPT (used only by test_direction_bounds.jl and
+# staged_delta5_realdata_validation.jl's informational logging) since deleting them would need
+# touching those non-production callers for no behavioral benefit -- but do not wire either
+# function back into a production KNITRO box/gate without re-litigating this finding.
+#
 # ============================================================================
 # THE TRANSFORMATION AND ITS DIRECTION (addendum's audit items 1-2)
 # ============================================================================

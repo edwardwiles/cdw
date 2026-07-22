@@ -538,12 +538,24 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
        " envelope_screen_supported=", rsc.envelope !== nothing,
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
-    # Direction-aware validity gate on the fixed g (addendum): reject -- do not clamp -- a
-    # g (fresh or resumed) on the wrong side of the Frechet benchmark for its own direction.
-    if !allow_direction_box_migration
-        validate_gp_in_direction_box(g, ctx, find_smallest; label = label,
-            what = resumed !== nothing ? "resumed checkpoint's fixed g" : "supplied fixed g")
-    end
+    # Remediation task Part C-adjacent fix (live production-run finding, 2026-07-22): the
+    # direction-split gp box/gate below was REMOVED. It split the outer gp range at the Frechet
+    # benchmark g_F=frechet_benchmark_gp(ctx), which is exactly the model's own calibration
+    # value -- i.e. exactly the value g_start/w0[1] normally IS. That put the natural starting
+    # point on the box's own boundary, forcing KNITRO's interior-point/barrier presolve to shift
+    # away from it before it could even evaluate; confirmed live that Delta* is extremely
+    # sensitive to gp near calibration (a 1% deviation inflates Delta* from ~0.0026 to ~0.13, a
+    # ~50x jump), so that forced shift alone spikes the constraint violation and triggers
+    # "could not evaluate objective/constraints at initial point" warnings before the solver has
+    # done any real work -- independently reproduced in this remediation session (c24's base-
+    # point-B construction stalled for 28+ minutes exhibiting the identical symptom). There is no
+    # real upside to the split-box restriction either: the objective gradient in gp has an
+    # unambiguous sign, so the solver has no incentive to wander into the "wrong" direction
+    # regardless of the box. `allow_direction_box_migration` is kept as a accepted-but-unused
+    # kwarg for caller compatibility (e.g. staged_delta5.jl) -- there is no longer a "wrong side"
+    # to migrate past. See direction_bounds.jl for the (now production-unused, kept only for
+    # diagnostic/comparison callers) direction_gamma_bounds/validate_gp_in_direction_box functions
+    # this fix stops calling.
 
     if resumed !== nothing
         # Hard reproducibility gate (§4 of the draw-design port brief): the regenerated draws for THIS
@@ -937,14 +949,9 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
        rsc.envelope === nothing ? " (reason: $(rsc.unsupported_reason))" : "")
 
     w0 = vcat(g_start, zfree_start)
-    # Direction-aware gp box (addendum, "correct the outer gamma bounds for upper and
-    # lower runs"): reject -- do not clamp -- a start point (fresh or resumed) that lies
-    # on the wrong side of the Frechet benchmark for its own declared direction. See
-    # direction_bounds.jl for the full derivation/evidence.
-    if !allow_direction_box_migration
-        validate_gp_in_direction_box(w0[1], ctx, find_smallest; label = label,
-            what = resumed !== nothing ? "resumed checkpoint's (g, zfree)" : "supplied start point")
-    end
+    # Direction-split gp validity gate REMOVED here too -- see the matching removal/rationale
+    # above (run_profile_checkpointed) for the full explanation. `allow_direction_box_migration`
+    # kept as an accepted-but-unused kwarg for caller compatibility.
     if resumed !== nothing
         if ctx.draw_meta.checksum_uniform != resumed.draw_checksum_uniform ||
            ctx.draw_meta.checksum_transformed != resumed.draw_checksum_transformed
@@ -979,10 +986,17 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     r0.inner_status in FEASIBLE_CODES || error("run_polish_checkpointed($label): start point not inner-feasible, cannot proceed")
 
     z_halfwidth = 30.0
-    # Direction-aware gp box, split at the Frechet benchmark (addendum) -- replaces the old
-    # full-range [ctx.bounds.γp_lo, ctx.bounds.γp_hi] box, which let the "upper" and "lower"
-    # searches cross into each other's territory. See direction_bounds.jl.
-    gp_dir_lo, gp_dir_hi = direction_gamma_bounds(ctx, find_smallest)
+    # Remediation fix (live production-run finding, 2026-07-22): reverted to the full-range
+    # [ctx.bounds.γp_lo, ctx.bounds.γp_hi] box, unconditionally, for both directions. The
+    # direction-split box (split at the Frechet benchmark g_F = the model's own calibration gp
+    # value) put the natural start point exactly on the box boundary, forcing a KNITRO presolve
+    # shift that spikes the constraint violation before any real solving happens -- see the
+    # removal note above run_profile_checkpointed's own validate_gp_in_direction_box call for the
+    # full evidence (live 50x Delta* sensitivity measurement; independently reproduced here as a
+    # 28+ minute stall). No correctness upside is lost: the objective gradient in gp has an
+    # unambiguous sign, so the solver has no incentive to cross into the "wrong" direction
+    # regardless of which box it's given.
+    gp_dir_lo, gp_dir_hi = ctx.bounds.γp_lo, ctx.bounds.γp_hi
     w_lo = vcat(gp_dir_lo, zfree_start .- z_halfwidth)
     w_hi = vcat(gp_dir_hi, zfree_start .+ z_halfwidth)
 
