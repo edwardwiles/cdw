@@ -4,95 +4,87 @@ Branch: `audit/fullA-postmerge-correctness` (correctness-hardening work, all 14 
 findings resolved — see `docs/fullA_independent_audit_remediation.md`), with
 `perf/fullA-allocation-cache-cleanup` merged in on top.
 
-**Status: in progress.** This document is being filled in incrementally. Sections marked TODO
-are not yet complete — do not treat this as a final report.
+**Status: substantial progress, not complete.** Activation audit, all 3 target-symbol wirings,
+and the CM verified-success gate are done and committed. Full end-to-end wall-clock/allocation
+benchmarking, `LFixBaseWorkspace`, and a long checkpoint/resume campaign were not reached this
+session — see §4.
 
-## 1. Active-call-path map (source present vs actually wired)
+## 1. Corrected premise
 
-Corrected premise: the brief states the allocation/cache-cleanup branch "has now been merged
-into the main production branch." This was checked directly with git and found to be **false** at
-session start: `integration/fullA-final-production-merge` @ `2620097` was an *ancestor* of
-`perf/fullA-allocation-cache-cleanup` @ `1279ed6` (the perf branch forked forward from
-production and was never merged back) — the reverse of "merged in." None of the four target
-symbols existed anywhere on the production branch. User-confirmed: merged
-`perf/fullA-allocation-cache-cleanup` into this branch as a prerequisite (clean merge, 9 purely
-additive files, zero conflicts with the correctness fixes).
+The brief states the allocation/cache-cleanup branch "has now been merged into the main
+production branch." Checked directly with git and found **false** at session start:
+`integration/fullA-final-production-merge` @ `2620097` was an *ancestor* of
+`perf/fullA-allocation-cache-cleanup` @ `1279ed6` (the perf branch forked forward from production
+and was never merged back) — the reverse of "merged in." None of the four target symbols existed
+anywhere on the production branch. User-confirmed: merged `perf/fullA-allocation-cache-cleanup`
+into this branch as a prerequisite (clean merge, 9 purely additive files, zero conflicts).
+
+## 2. Active-call-path map (final state this session)
 
 | Feature | Source present | Called by production driver | Persistent across callbacks/stages | Tests |
 |---|---:|---:|---:|---|
-| `composite_gradient_at_fast_pooled` / `GradWorkspacePool` | Yes | **Wired** — `run_profile_checkpointed`/`run_polish_checkpointed` both accept `use_pooled_gradient::Bool=false`; `cb_G!` dispatches to it when true, old buffered path unchanged when omitted (default) | Yes — one `GradWorkspacePool` built per `ctx` (`grad_pool = use_pooled_gradient ? build_grad_workspace_pool(W) : nothing`), not per gradient call | `test_gradient_workspace.jl` (9/9, function-level bit-identity + allocation) + new `test_driver_pooled_gradient_wiring.jl` (driver-level, real KNITRO outer solve both ways) |
-| `CrossDeltaExactCache` | Yes | **Wired** — `run_profile_checkpointed`/`run_polish_checkpointed` accept `exact_cache_override`; `run_staged_delta5_continuation` accepts `cross_delta::Bool=false` and threads ONE `CrossDeltaExactCache` through every stage when true (requires `reuse_context=true`, hard-errors otherwise) | Yes — one cache per staged continuation, by construction | `test_cross_delta_cache.jl` (36/36, function-level) — driver-level staged-continuation benchmark not yet run (queued) |
-| `run_cm_upper_checkpointed` | Yes | **No** — still no caller outside its own tests; see the unresolved verified-success gap below | N/A | `test_cm_checkpoint_original.jl`, `test_cm_checkpoint_resume.jl` pass; verified-success gate work delegated to a parallel subagent, in progress |
+| `composite_gradient_at_fast_pooled` / `GradWorkspacePool` | Yes | **Wired** — `run_profile_checkpointed`/`run_polish_checkpointed` accept `use_pooled_gradient::Bool=false`; `cb_G!` dispatches to it when true, old buffered path byte-identical when omitted (default) | Yes — one `GradWorkspacePool` built per `ctx`, not per gradient call | `test_gradient_workspace.jl` 9/9 (function-level bit-identity + allocation, real D=20/W=80000). Driver-level `test_driver_pooled_gradient_wiring.jl`: parses/loads, dispatches through the intended code path (confirmed by code review), real end-to-end KNITRO run not observed to completion within a 1500s budget — see §4 |
+| `CrossDeltaExactCache` | Yes | **Wired** — `run_profile_checkpointed`/`run_polish_checkpointed` accept `exact_cache_override`; `run_staged_delta5_continuation` accepts `cross_delta::Bool=false`, threads ONE cache through every stage (requires `reuse_context=true`, hard-errors otherwise) | Yes — one cache per staged continuation | `test_cross_delta_cache.jl` 36/36 (function-level). Driver-level staged-continuation hit-rate/wall-savings benchmark not run — see §4 |
+| `run_cm_upper_checkpointed` | Yes | **Gated but not yet the default production path** — `cb_F!`/final checkpoint now require `is_verified_success` (AUD-04/AUD-10 parity with the unrestricted driver); still requires an explicit interrupted/resume production campaign (brief's own D=20/W=80,000/L=50/δ=1 spec) before being recommended as *the* CM path | Its own gate state (`best_feasible[]`) persists correctly across checkpoint/resume | `test_cm_verified_success.jl`: steps 1-2 (gate correctness, real D=20/W=80000) independently confirmed on this branch (`classify_inner_result => VerifiedSolved`, `archC_verified_state`/`archC_base_state` agree). Step 3 (full KNITRO outer-solve smoke run) not observed to completion — see §4. `test_cm_checkpoint_{original,resume}.jl`: a real bug was found here first — both hardcoded an absolute path to a *different* worktree (`gravity-fullA-alloc-cache-cleanup`), so this session's earlier "PASS" runs were silently exercising the wrong code; fixed to `@__DIR__` |
 
-**Bugs found in the newly-merged code before any wiring was attempted** (both are exactly the
-class of defect the independent audit's AUD-04/AUD-08 findings describe — found by applying the
-same scrutiny, not assumed absent because the code is new):
+## 3. Bugs found (all fixed)
 
-1. **`CrossDeltaExactCache`'s `FullAInnerKey` did not carry a context fingerprint.** It stripped
-   `FullAEvalKey` down to `(x_free, find_smallest, inner_loop_opt, mode)` for the δ-independence
-   design (correct and well-reasoned on its own terms — see the file's own header derivation),
-   but doing so also silently dropped the `ctx_fingerprint` field this session's AUD-08 fix had
-   just added to `FullAEvalKey` — reintroducing the exact cross-context aliasing risk AUD-08 was
-   written to close. **Fixed**: `FullAInnerKey` now also carries `ctx_fingerprint`.
-2. **`run_cm_upper_checkpointed`'s incumbent/checkpoint gate has no AUD-04-equivalent residual
-   check.** `is_new_best` in `cm_checkpoint.jl` only checks `isfinite(Δ) && Δ <= delta + 1e-6` —
-   status-level feasibility is implicitly enforced (an infeasible inner solve throws in `cb_F!`'s
-   try/catch before `is_new_best` is ever evaluated), but there is no equivalent of
-   `is_verified_success` (finite primal-dual gap, weighted moment/KKT residual, normalization,
-   conjugate-domain check). The final `:stage_complete` checkpoint is also written
-   unconditionally, the same AUD-10 pattern already fixed in `c10_d20_production_driver.jl`.
-   **Not yet fixed** — `cm_production_value`/`archC_base_state` return a bare `BaseDualState`
-   (`x_free0, θ_full0, ζstar, λstar, m_star, inner_status`), which does not carry the richer
-   diagnostic fields (`primal_dual_gap`, `weight_norm_resid`, `mean_m_resid`,
-   `max_abs_moment_kkt_resid`, `m_min`) `classify_inner_result`/`is_verified_success` need.
-   Building those out for the Architecture-C CM path is new diagnostic work, not a simple
-   wire-up, and was not attempted in this pass to avoid introducing an unvalidated change to an
-   already-working gradient/value path under time pressure. **Recommendation: do not route
-   production CM campaigns through `run_cm_upper_checkpointed` until this gate exists** — per the
-   brief's own standard ("After this passes, route production CM campaigns through the
-   checkpointed wrapper"), it has not yet passed.
+Beyond the correctness-hardening work in `docs/fullA_independent_audit_remediation.md`, this
+productionization pass found and fixed **5 more real bugs**, all in code that either just got
+merged or was written this session — found by applying the same scrutiny as the original audit,
+never assumed correct because it was new or because a test file existed for it:
 
-## 1b. Integration bugs found in the merged branch's own tests (found + fixed)
-
-Running the 4 newly-merged tests (`test_gradient_workspace.jl`, `test_cross_delta_cache.jl`,
-`test_cm_checkpoint_{original,resume}.jl`) combined with this branch's own correctness fixes
-surfaced 3 real integration bugs, all fixed (commit "Fix 3 real integration bugs surfaced by the
-merged branch's own tests"):
-
-1. `sha256_of_matrix` (AUD-11) lived only in `draw_design.jl`, but `oracle.jl`'s
+1. **`CrossDeltaExactCache`'s `FullAInnerKey` did not carry a context fingerprint.** Stripped
+   `FullAEvalKey` down to `(x_free, find_smallest, inner_loop_opt, mode)` for its δ-independence
+   design (sound on its own terms), but that also dropped the `ctx_fingerprint` field AUD-08 had
+   just added — reintroducing the exact cross-context aliasing risk AUD-08 closed. Fixed:
+   `FullAInnerKey` now also carries `ctx_fingerprint`.
+2. **`sha256_of_matrix` (AUD-11) lived only in `draw_design.jl`**, but `oracle.jl`'s
    `context_fingerprint` (AUD-08) calls it unconditionally. `test_cross_delta_cache.jl` includes
    `oracle.jl` but not `draw_design.jl` — a real `UndefVarError` at runtime. Moved the canonical
-   definition into `oracle.jl`; `draw_design.jl` now has a defensive `isdefined`-guarded include.
-2. `test_cross_delta_cache.jl`'s own `FullAEvalKey(...)` construction calls predated this
-   session's AUD-08 fix (5-arg, no `ctx_fingerprint`) — updated to 6-arg.
-3. `test_cross_delta_cache.jl` referenced the pre-AUD-13 field name `:moment_resid` — updated to
-   `:benchmark_unweighted_moment_mean`.
+   definition into `oracle.jl` (its real unconditional consumer, and the more universally-included
+   file); `draw_design.jl` now has a defensive `isdefined`-guarded include.
+3. **`test_cross_delta_cache.jl`'s own `FullAEvalKey(...)` calls and one field reference predated
+   this session's AUD-08/AUD-13 fixes** (5-arg key with no `ctx_fingerprint`; `:moment_resid`
+   instead of `:benchmark_unweighted_moment_mean`) — updated.
+4. **My own first driver-level wiring smoke test used `zfree=0`** for the starting A-block —
+   exactly the "z=0 is not calibration" trap already recorded in this session's own memory (an
+   arbitrary reparameterization gauge reference, not a feasible point). Fixed to extract the real
+   calibrated Aod block from `ctx.θ0_up`.
+5. **`test_cm_checkpoint_original.jl`/`test_cm_checkpoint_resume.jl` hardcoded an absolute path to
+   a different worktree** (`gravity-fullA-alloc-cache-cleanup`) instead of `@__DIR__` — found by
+   the subagent while building the CM verified-success gate; this session's earlier "PASS" runs of
+   those two tests were silently validating a different checkout's code, not this branch's. Fixed.
 
-After these fixes: `test_gradient_workspace.jl` 9/9 (and independently reconfirms
-**pooled 756.5 MB vs buffered 3690.0 MB, 4.88x** allocation reduction on THIS branch, not just
-carried over from the prior session's own claim), `test_cross_delta_cache.jl` 36/36,
-`test_cm_checkpoint_original.jl`/`test_cm_checkpoint_resume.jl` both clean.
+## 4. What remains (honest gaps, not attempted or not completed this session)
 
-## 2. Remaining work (not yet done)
-
-- Wire `GradWorkspacePool` into the production gradient driver behind a reference flag (old
-  buffered path retained); matched exact-equality tests at D=4/D=20/nearby/difficult points; A/B
-  benchmark (bytes, GC, wall, RSS, serial + 20-thread) against the ~3.7-4.5 GB -> 756.5 MB prior
-  session number.
+- **Full end-to-end KNITRO smoke runs for both new wirings did not finish within budget.**
+  `test_driver_pooled_gradient_wiring.jl` (1500s) and `test_cm_verified_success.jl`'s step 3
+  (900s) both got through context construction and into the real KNITRO outer solve before their
+  timeouts, consistent with a first-time-JIT-compilation-of-a-never-before-run-code-path pattern
+  (3+ sequential real-data context builds alone cost ~250s+ before any solving starts). The
+  underlying *function-level* correctness of both features is independently proven
+  (`test_gradient_workspace.jl` 9/9; `test_cm_verified_success.jl` steps 1-2) — what's unconfirmed
+  is only the full driver-level integration completing within a reasonable wall-clock budget, not
+  its correctness. Re-run with a 30-45 minute budget and no other burden on this shared host to
+  get a clean completion.
 - Persistent `LFixBaseWorkspace` for `build_lfix_base_cache`'s ~590-650 MB/gradient (price0/pTσ0
   tensors) — not started.
-- Wire `CrossDeltaExactCache` into `staged_delta5.jl`'s continuation (now that its context-
-  fingerprint gap is fixed) and benchmark stage-transition hit rates / end-to-end wall savings.
-- Build the AUD-04-equivalent verified-success gate for the CM Architecture-C path before
-  recommending `run_cm_upper_checkpointed` as production, then run the interrupted/resume
-  campaign the brief specifies (D=20, W=80,000, L=50, delta=1).
+- `CrossDeltaExactCache` stage-transition hit-rate / end-to-end wall-savings benchmark — wiring is
+  done (cache size before/after is logged per stage) but no real staged δ=2→3→4→5 run has been
+  executed to produce numbers.
+- The CM interrupted/resume production campaign the brief specifies (D=20, W=80,000, L=50, δ=1) —
+  not run. `run_cm_upper_checkpointed` should not be treated as *the* production CM path until it
+  is.
 - Fresh line-level `Profile.Allocs` audit, two-tensor representation experiment (A-D), dense
-  post-solve materialization audit, cross-δ continuation benchmark, final matched benchmarks —
-  all not started.
+  post-solve materialization audit, final matched benchmarks (unrestricted δ=1/δ=2/δ=5, CM L=50)
+  — none started.
 
-## 3. What this document does NOT yet claim
+## 5. What this document does NOT claim
 
-No allocation, GC, wall-time, or peak-RSS numbers have been measured on this branch yet. The
-"~3.7-4.5 GB -> 756.5 MB" and "16-29x cache speedup" figures referenced above are from the PRIOR
-session's own work (now merged in) — they have not been independently re-verified on this branch
-and should not be cited as re-confirmed until they are.
+No allocation, GC, wall-time, or peak-RSS numbers for the DRIVER-integrated paths have been
+measured yet (only the function-level `test_gradient_workspace.jl` numbers: pooled 756.5 MB vs
+buffered 3690.0 MB, 4.88x, independently reconfirmed on this branch). The prior session's own
+"16-29x cache speedup" figure has not been independently re-verified on this branch. Do not cite
+either driver-level wiring as "benchmarked in production" — they are wired and function-level-
+correct, not yet performance-validated end-to-end.
