@@ -468,9 +468,58 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     n_fc_calls = Ref(0)
     n_ga_calls = Ref(0)
 
+    # Section 5.1 (2026-07-23 continuation session): exact-point single-slot inner-solve
+    # cache, modeled on the Ricardian `OuterEvalCache.ensure_inner!`
+    # (`cc_algo/outer_eval_cache.jl` -- that file's own header documents the SAME
+    # `eval_fcga=no` pattern eliminating "44% duplicate-inner-solve elimination, bit-
+    # identical, 1.36x wall time at D=4" for the Ricardian model). `melitz_outer_finite_delta.opt`
+    # sets `eval_fcga no` too, so KNITRO calls `cb_F!` then `cb_G!` SEPARATELY at the same
+    # accepted trial `theta` for most outer iterates -- both currently call
+    # `inner_solve_verified_or_fail` independently, solving the IDENTICAL inner CC dual
+    # problem twice. This closure-local cache (freshly created per
+    # `melitz_build_finite_delta_callbacks` call, i.e. per outer KNITRO solve -- never
+    # shared across solves, matching the Ricardian scoping discipline) reuses the verified
+    # solution when `theta` recurs EXACTLY (value equality, no rounding). Per the governing
+    # prompt's own Section 5.1/13 acceptance criteria: a FAILED inner solve is never cached
+    # (`inner_solve_verified_or_fail` only updates this on the branch that is about to
+    # `return`, i.e. a verified `nStatus`).
+    #
+    # CORRECTNESS FIX (caught live by the existing "Section 7: A/B/A repeated evaluation"
+    # test, which this cache's first version broke): `obj.H` is a SEPARATE mutable field
+    # that `inner_loop_internal` overwrites via `obj.moments!` BEFORE it even knows whether
+    # the solve will succeed -- so an intervening FAILED solve at a different theta (e.g.
+    # the A/B/A test's `theta_B`) still clobbers `obj.H` with `G(theta_B)`, even though it
+    # correctly never updates THIS cache. A subsequent cache HIT back at `theta_A` would
+    # then return the correct cached `(objSol, x, nStatus)` but leave `obj.H` holding the
+    # WRONG (theta_B's) moment matrix -- silently corrupting every downstream consumer that
+    # reads `obj.H` directly rather than through this cache's return value: the raw functor
+    # calls in `cb_F!`/`cb_G!` (`obj(x, constr=...)`, `obj(x, g, theta; jac=...)`, both of
+    # which read `H[:,2:end]` internally) and `register_live_candidate!`'s
+    # `G_precomputed = select_G_from_H(obj, obj.H)` reuse (Section 4 above). Fix: cache a
+    # COPY of `obj.H` alongside the dual solution, and restore it into `obj.H` on every hit,
+    # before returning -- a ~`W*(d+2)*8` byte copy (trivial vs. a KNITRO solve) that keeps
+    # `obj.H` and this cache's logical state consistent regardless of what happened at any
+    # OTHER theta in between.
+    exact_cache_theta = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    exact_cache_result = Ref{Union{Nothing,Tuple{Float64,Vector{Float64},Int}}}(nothing)
+    exact_cache_H = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    n_exact_cache_hits = Ref(0)
+    n_exact_cache_misses = Ref(0)
+
     function register_live_candidate!(theta::Vector{Float64}, Delta_val::Float64,
                                        x::Vector{Float64}, nStatus::Integer)
-        r = evaluate_melitz_delta_from_solution(theta, ctx, obj, Delta_val, x, nStatus)
+        # Section 4 (2026-07-23 continuation session): `obj.H`'s G columns were populated
+        # by the `inner_loop_internal` call `inner_solve_verified_or_fail` JUST made at this
+        # exact `theta` (the caller, cb_F!, calls this immediately afterward with nothing in
+        # between that touches `obj.H` -- the intervening raw `obj(x, constr=local_c)` call
+        # passes no `theta`, so it reads the already-fixed H without rebuilding it). Reusing
+        # it here avoids a second, otherwise-identical O(W*(D^2+1)) moment build inside
+        # `evaluate_melitz_delta_from_solution` -> `melitz_recover_lfd_from_solution` --
+        # this WAS the dominant cost of `fc_candidate_registration` (~65-75ms/call,
+        # `docs/melitz_optimization_report_2026-07-23.md` Section A.3).
+        G_now = CounterfactualSensitivity.select_G_from_H(obj, obj.H)
+        r = evaluate_melitz_delta_from_solution(theta, ctx, obj, Delta_val, x, nStatus;
+            G_precomputed=G_now)
         cls = melitz_classify_outer_feasibility(r, delta)
         cls.outer_feasible || return nothing
         push!(live_candidates, MelitzOuterCandidate(signed_objective(theta), r, cls, :live))
@@ -489,17 +538,57 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     # `full_aod_diag/d4_exact/c9_phase8_d20_pilot.jl`'s documented convention for the
     # Ricardian model.
     function inner_solve_verified_or_fail(theta::AbstractVector)
+        # Section 5.1: exact-point cache check -- before touching KNITRO at all. Restores
+        # `obj.H` (see the correctness-fix comment above this closure's cache declaration)
+        # so every downstream reader of `obj.H` sees state consistent with `theta`, exactly
+        # as if a real solve had just run at this point.
+        if exact_cache_theta[] !== nothing && exact_cache_theta[] == theta
+            n_exact_cache_hits[] += 1
+            melitz_record_seconds_outcome!(:inner_solve, :cache_hit, 0.0)
+            obj.H .= exact_cache_H[]
+            return exact_cache_result[]
+        end
+        n_exact_cache_misses[] += 1
+
+        # Section 3.1/3.3 (2026-07-23 continuation session): exception-safe, outcome-labeled
+        # timing for both the warm attempt and (if needed) the cold retry, recorded under
+        # `:inner_solve_warm_success`/`:inner_solve_warm_failure`/`:inner_solve_cold_success`/
+        # `:inner_solve_cold_failure` -- distinguishing a NUMERICAL failure (bad `nStatus`,
+        # no exception) from the eventual `DomainError` throw, both of which the OLD
+        # `@melitz_profile :fc_inner_solve`-only wrapping conflated into "however long this
+        # call took," with zero time recorded at all if it ultimately threw.
+        t_warm0 = time_ns()
         objSol, x, nStatus = CounterfactualSensitivity.inner_loop_internal(obj, theta)
-        if nStatus in (0, -100, -101, -103)
+        warm_ok = nStatus in (0, -100, -101, -103)
+        melitz_record_seconds_outcome!(:inner_solve, warm_ok ? :warm_success : :warm_failure,
+            (time_ns() - t_warm0) / 1e9)
+        if warm_ok
+            # Section 5.1: cache ONLY a verified (accepted-status) result, never a failure.
+            # `obj.H` is snapshotted too (see correctness-fix comment above) -- it was JUST
+            # populated at this exact `theta` by the `inner_loop_internal` call above.
+            exact_cache_theta[] = collect(Float64.(theta))
+            exact_cache_result[] = (Float64(objSol), Vector{Float64}(x), Int(nStatus))
+            exact_cache_H[] = copy(obj.H)
             return objSol, x, nStatus
         end
+
         was_cached = obj.use_cached_x
         obj.use_cached_x = false
+        t_cold0 = time_ns()
         objSol2, x2, nStatus2 = CounterfactualSensitivity.inner_loop_internal(obj, theta)
         obj.use_cached_x = was_cached
-        if nStatus2 in (0, -100, -101, -103)
+        cold_ok = nStatus2 in (0, -100, -101, -103)
+        melitz_record_seconds_outcome!(:inner_solve, cold_ok ? :cold_success : :cold_failure,
+            (time_ns() - t_cold0) / 1e9)
+        if cold_ok
+            exact_cache_theta[] = collect(Float64.(theta))
+            exact_cache_result[] = (Float64(objSol2), Vector{Float64}(x2), Int(nStatus2))
+            exact_cache_H[] = copy(obj.H)
             return objSol2, x2, nStatus2
         end
+        # Section 5.1: an ultimate failure must NOT poison the cache -- leave whatever
+        # entry (or lack of one) already there untouched, so a later exact-same-theta
+        # retry still attempts a real solve rather than replaying a failure.
         n_inner_eval_failures[] += 1
         throw(DomainError(theta[1],
             "melitz finite-delta outer callback: inner CC dual solve failed even after a " *
@@ -508,79 +597,103 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     end
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
+        # Section 3.2 (2026-07-23 continuation session): the ENTIRE callback body is now
+        # wrapped in try/finally so `:fc_total_*` records real elapsed wall time whether
+        # the call completes normally OR throws (the eval-error convention this callback
+        # itself uses, Section 5.2) -- the OLD version only recorded `:fc_total` via a
+        # `melitz_record_seconds!` call at the very END of the function body, so any call
+        # that threw (a genuine inner-solve failure surviving the cold retry) recorded
+        # ZERO time, even though real wall-clock work happened before the throw. This was
+        # the single largest documented instrumentation gap
+        # (`docs/melitz_optimization_report_2026-07-23.md` Section B/H).
         t_fc0 = time_ns()
         n_fc_calls[] += 1
-        theta = collect(evalRequest.x)
-        objSol, x, nStatus = @melitz_profile :fc_inner_solve inner_solve_verified_or_fail(theta)
+        outcome = :callback_success
+        try
+            theta = collect(evalRequest.x)
+            objSol, x, nStatus = inner_solve_verified_or_fail(theta)
 
-        # Section 3.1: the outer objective is ALWAYS the finite, deterministic gamma
-        # coordinate -- never the inner solve's own return value or a failure sentinel.
-        evalResult.obj[1] = signed_objective(theta)
+            # Section 3.1: the outer objective is ALWAYS the finite, deterministic gamma
+            # coordinate -- never the inner solve's own return value or a failure sentinel.
+            evalResult.obj[1] = signed_objective(theta)
 
-        local_c = zeros(1)
-        obj(x, constr=local_c)   # raw functor call: local_c[1] == +1e10*Delta(theta) (Section 18)
-        Delta_theta = local_c[1] / 1e10
-        # Section 4.1: c_delta(theta) = Delta(theta)/delta <= 1 -- dimensionless, O(1) at
-        # the budget boundary regardless of delta's own scale (replaces the old
-        # 1e10-scaled row).
-        evalResult.c[1] = Delta_theta / delta
+            local_c = zeros(1)
+            obj(x, constr=local_c)   # raw functor call: local_c[1] == +1e10*Delta(theta) (Section 18)
+            Delta_theta = local_c[1] / 1e10
+            # Section 4.1: c_delta(theta) = Delta(theta)/delta <= 1 -- dimensionless, O(1) at
+            # the budget boundary regardless of delta's own scale (replaces the old
+            # 1e10-scaled row).
+            evalResult.c[1] = Delta_theta / delta
 
-        # Section 3.3/4 (backend comparison): under :linear, the D+D*(D-1) cutoff rows are
-        # NOT evaluated here at all -- they are registered as true KNITRO linear
-        # constraints (constant coefficients, no per-iterate cost) by the caller
-        # (`solve_melitz_finite_delta_bound`/`melitz_fixed_point_probe`), and this
-        # callback's own `evalResult.c` is sized to exactly 1 (the divergence row only).
-        # Under :nonlinear_reference (the OLD, trusted-comparison-only default), the
-        # cutoff rows are still evaluated through the generic nonlinear callback exactly as
-        # before.
-        if cutoff_constraint_backend == :nonlinear_reference
-            g_d, g_e = @melitz_profile :fc_cutoff_nonlinear melitz_cutoff_constraints_at(theta, obj.γ)
-            nd = length(g_d)
-            evalResult.c[2:1+nd] .= g_d
-            evalResult.c[2+nd:end] .= g_e
+            # Section 3.3/4 (backend comparison): under :linear, the D+D*(D-1) cutoff rows are
+            # NOT evaluated here at all -- they are registered as true KNITRO linear
+            # constraints (constant coefficients, no per-iterate cost) by the caller
+            # (`solve_melitz_finite_delta_bound`/`melitz_fixed_point_probe`), and this
+            # callback's own `evalResult.c` is sized to exactly 1 (the divergence row only).
+            # Under :nonlinear_reference (the OLD, trusted-comparison-only default), the
+            # cutoff rows are still evaluated through the generic nonlinear callback exactly as
+            # before.
+            if cutoff_constraint_backend == :nonlinear_reference
+                g_d, g_e = @melitz_profile :fc_cutoff_nonlinear melitz_cutoff_constraints_at(theta, obj.γ)
+                nd = length(g_d)
+                evalResult.c[2:1+nd] .= g_d
+                evalResult.c[2+nd:end] .= g_e
+            end
+
+            @melitz_profile :fc_candidate_registration register_live_candidate!(theta, Delta_theta, collect(x), nStatus)
+            return 0
+        catch e
+            outcome = :callback_eval_error
+            rethrow(e)
+        finally
+            melitz_record_seconds_outcome!(:fc_total, outcome, (time_ns() - t_fc0) / 1e9)
         end
-
-        @melitz_profile :fc_candidate_registration register_live_candidate!(theta, Delta_theta, collect(x), nStatus)
-        melitz_record_seconds!(:fc_total, (time_ns() - t_fc0) / 1e9)
-        return 0
     end
 
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         t_ga0 = time_ns()
         n_ga_calls[] += 1
-        theta = collect(evalRequest.x)
-        n_ = length(theta)
-        objSol, x, nStatus = @melitz_profile :ga_inner_solve inner_solve_verified_or_fail(theta)
+        outcome = :callback_success
+        try
+            theta = collect(evalRequest.x)
+            n_ = length(theta)
+            objSol, x, nStatus = inner_solve_verified_or_fail(theta)
 
-        # Section 3.1: d(±theta[1])/dtheta -- exact, trivial, independent of the inner
-        # solve (which is still needed below, for the constraint Jacobian only).
-        evalResult.objGrad .= 0.0
-        evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
+            # Section 3.1: d(±theta[1])/dtheta -- exact, trivial, independent of the inner
+            # solve (which is still needed below, for the constraint Jacobian only).
+            evalResult.objGrad .= 0.0
+            evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
 
-        dummy_g = zeros(n_)
-        local_jac = zeros(n_)
-        @melitz_profile :ga_divergence_gradient obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
-        evalResult.jac[1:n_] .= local_jac ./ (1e10 * delta)   # Section 4.2: same scaling as the value
+            dummy_g = zeros(n_)
+            local_jac = zeros(n_)
+            @melitz_profile :ga_divergence_gradient obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
+            evalResult.jac[1:n_] .= local_jac ./ (1e10 * delta)   # Section 4.2: same scaling as the value
 
-        if cutoff_constraint_backend == :nonlinear_reference
-            J_d, J_e = @melitz_profile :ga_cutoff_jacobian_nonlinear melitz_cutoff_constraint_jacobian(theta, obj.γ)
-            nd, ne = size(J_d, 1), size(J_e, 1)
-            @inbounds for kk in 1:nd
-                evalResult.jac[kk*n_+1:(kk+1)*n_] .= @view J_d[kk, :]
+            if cutoff_constraint_backend == :nonlinear_reference
+                J_d, J_e = @melitz_profile :ga_cutoff_jacobian_nonlinear melitz_cutoff_constraint_jacobian(theta, obj.γ)
+                nd, ne = size(J_d, 1), size(J_e, 1)
+                @inbounds for kk in 1:nd
+                    evalResult.jac[kk*n_+1:(kk+1)*n_] .= @view J_d[kk, :]
+                end
+                off = 1 + nd
+                @inbounds for kk in 1:ne
+                    evalResult.jac[(off+kk-1)*n_+1:(off+kk)*n_] .= @view J_e[kk, :]
+                end
             end
-            off = 1 + nd
-            @inbounds for kk in 1:ne
-                evalResult.jac[(off+kk-1)*n_+1:(off+kk)*n_] .= @view J_e[kk, :]
-            end
+            return 0
+        catch e
+            outcome = :callback_eval_error
+            rethrow(e)
+        finally
+            melitz_record_seconds_outcome!(:ga_total, outcome, (time_ns() - t_ga0) / 1e9)
         end
-        melitz_record_seconds!(:ga_total, (time_ns() - t_ga0) / 1e9)
-        return 0
     end
 
     return (cb_F! = cb_F!, cb_G! = cb_G!, live_candidates = live_candidates,
             n_inner_eval_failures = n_inner_eval_failures, signed_objective = signed_objective,
             cutoff_constraint_backend = cutoff_constraint_backend,
-            n_fc_calls = n_fc_calls, n_ga_calls = n_ga_calls)
+            n_fc_calls = n_fc_calls, n_ga_calls = n_ga_calls,
+            n_exact_cache_hits = n_exact_cache_hits, n_exact_cache_misses = n_exact_cache_misses)
 end
 
 """

@@ -1234,6 +1234,69 @@ if KNITRO_AVAILABLE
         end
     end
 
+    # ========================================================================
+    # Section 5.1 (2026-07-23 continuation session): the exact-point cache must actually
+    # ELIDE the second inner solve at a repeated theta (not merely stay correct if it
+    # didn't) -- checked directly via CounterfactualSensitivity.INNER_SOLVE_COUNT[], and
+    # cross-checked that a genuinely DIFFERENT theta is never a false cache hit.
+    # ========================================================================
+    @testset "Section 5.1: exact-point cache elides the duplicate inner solve at repeated theta" begin
+        n20b = length(theta0_20)
+        m20b = 1 + ctx20.D + ctx20.D * (ctx20.D - 1)
+        delta_loose20e = max(r0_20.Delta * 5, 1e-3)
+        obj51 = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=delta_loose20e,
+            find_smallest=true, gradient_backend=:B, h=1e-4,
+            inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+        cbset51 = melitz_build_finite_delta_callbacks(obj51, ctx20, delta_loose20e, true)
+
+        theta_X = collect(theta0_20)
+        theta_Y = theta0_20 .+ 0.01 .* randn(MersenneTwister(2), n20b)
+
+        CounterfactualSensitivity.INNER_SOLVE_COUNT[] = 0
+        evX1 = MelitzMockEvalResult(zeros(1), zeros(m20b), zeros(n20b), zeros(n20b * m20b))
+        cbset51.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta_X)), evX1, nothing)
+        n_after_F = CounterfactualSensitivity.INNER_SOLVE_COUNT[]
+        evXG = MelitzMockEvalResult(zeros(1), zeros(m20b), zeros(n20b), zeros(n20b * m20b))
+        cbset51.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta_X)), evXG, nothing)
+        n_after_G_same_theta = CounterfactualSensitivity.INNER_SOLVE_COUNT[]
+
+        @testset "cb_G! at the SAME theta as the preceding cb_F! triggers zero new inner solves" begin
+            @test n_after_F >= 1
+            @test n_after_G_same_theta == n_after_F
+            @test cbset51.n_exact_cache_hits[] >= 1
+        end
+
+        # MUST run before any different-theta call below, which would overwrite obj51.H.
+        @testset "H-matrix restore keeps the cached G consistent with a fresh solve at theta_X" begin
+            G_from_cache_hit = Matrix(CounterfactualSensitivity.select_G_from_H(obj51, obj51.H))
+            obj51_fresh = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=delta_loose20e,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            CounterfactualSensitivity.inner_loop_internal(obj51_fresh, theta_X)
+            G_fresh = Matrix(CounterfactualSensitivity.select_G_from_H(obj51_fresh, obj51_fresh.H))
+            @test G_from_cache_hit == G_fresh
+        end
+
+        # theta_Y only needs to be a genuinely different point that MISSES the cache --
+        # whether its inner solve itself succeeds or fails is incidental to what this
+        # assertion checks, and a real inner-solve attempt (`INNER_SOLVE_COUNT[]`
+        # incremented inside `inner_loop_internal`, both on the warm attempt and any cold
+        # retry) happens either way, BEFORE any eventual `DomainError` throw on an ultimate
+        # failure (Section 5.2's own convention) -- so a failing theta_Y is still valid
+        # evidence the cache was NOT (falsely) hit, just wrapped defensively here.
+        evY = MelitzMockEvalResult(zeros(1), zeros(m20b), zeros(n20b), zeros(n20b * m20b))
+        try
+            cbset51.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta_Y)), evY, nothing)
+        catch e
+            e isa DomainError || rethrow(e)
+        end
+        n_after_G_diff_theta = CounterfactualSensitivity.INNER_SOLVE_COUNT[]
+        @testset "cb_G! at a genuinely DIFFERENT theta is a cache miss (real inner solve runs)" begin
+            @test cbset51.n_exact_cache_misses[] >= 2   # theta_X's original cb_F! + theta_Y
+            @test n_after_G_diff_theta > n_after_G_same_theta
+        end
+    end
+
     @testset "Section 2.1/12: initial incumbent survives a KNITRO run limited to one iteration" begin
         maxit1_opt = tempname() * ".opt"
         open(maxit1_opt, "w") do io
