@@ -15,6 +15,15 @@
 # a few dozen PER ITERATION -- decisive at production scale (task brief
 # Section 6: "measure rather than assume" the cost of the enlarged outer
 # loop, and don't let the profiling harness itself be the bottleneck).
+#
+# DIAGNOSTIC-ONLY (release note, 2026-07-23): Optim.jl is deliberately NOT a
+# Project.toml/Manifest.toml dependency of this repo -- the production joint
+# solver (run_originzc_upper_checkpointed, cm_originzc_checkpoint.jl) never
+# needs this helper and does not include this file. Only
+# d20_originzc_fixedpoint_gates.jl (a diagnostic gate script, not part of any
+# production entry point) includes it. To run that script or anything else
+# that loads this file, `] add Optim` in this project's environment locally
+# first; do not add Optim to the committed Project.toml for that purpose.
 # ============================================================================
 using Optim
 
