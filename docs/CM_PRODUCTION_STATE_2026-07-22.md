@@ -1,9 +1,15 @@
 # CM production state — 2026-07-22
 
 Snapshot taken ahead of the internal D=20 common-marginal (CM) production campaign.
-Companion to tag `cm-production-ready-2026-07-22`.
 
-## Canonical commit
+**Superseded pointer, updated by the launcher-closure session**: the canonical commit/tag below
+are now stale. See `docs/SESSION_SUMMARY_2026-07-22_cm_production_readiness.md` for the current
+canonical commit hash and tag (`cm-production-ready-2026-07-22-r3`) — that document is the single
+source of truth for "what commit/tag do I launch from," reconciled directly against
+`git rev-parse`/`git ls-remote` output, not carried forward by hand. Everything else on this page
+(driver, schema, cache behavior, checkpoint semantics) is unchanged and still accurate.
+
+## Canonical commit (as of the ORIGINAL 2026-07-22 CM-closure session — see note above for current)
 
 - Exact commit: `ac710bc346eadf3c5adf60d483c4afe51846a367`
 - = local `production/fullA-exact`
@@ -117,3 +123,21 @@ against the current `ac710bc` tree.
 
 See `docs/CM_PRODUCTION_LAUNCHER_2026-07-22.md` for the full supervisor/launcher and exact
 3-chain launch commands.
+
+## Launcher-closure update (same day, later session)
+
+A follow-on session closed several launcher/bookkeeping gaps found in the supervisor built above
+(not the CM mathematics, which this document's "Active value and gradient functions" /
+"Active cache behavior" sections above are still the correct description of, unchanged):
+return-path safety (`slog` moved to stderr so log lines cannot contaminate the checkpoint path
+returned via command substitution), a proper 4-way stage outcome classification
+(`clean_solver_completion` / `wall_budget_exhausted` / `probable_stall` /
+`unexpected_process_failure` — wall-budget exhaustion is no longer misclassified as a fatal
+failure), per-attempt `STAGE_DONE` sentinel scoping (a stale sentinel from an earlier restart or
+campaign can no longer be mistaken for the current attempt's own completion), a nonempty-campaign-
+directory guard, a reproducible (non-`hash()`-based) chain-perturbation seed, cross-delta
+seed-provenance assertions, and a contrast-basis decision (`:orthonormal`, not `:anchored` —
+see `docs/fullA_cm_conditioning_and_adaptive_grid_report.md` and
+`docs/fullA_cm_hessian_architecture_report.md`). Full detail, exact final commit/tag, and the
+supervisor smoke-test results are in
+`docs/SESSION_SUMMARY_2026-07-22_cm_production_readiness.md`.

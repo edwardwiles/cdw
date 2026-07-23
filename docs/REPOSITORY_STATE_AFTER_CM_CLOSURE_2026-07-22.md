@@ -1,5 +1,14 @@
 # Repository state after CM closure — 2026-07-22
 
+**Superseded by a later same-day session**: `production/fullA-exact` has since moved past the
+`8e51d0a`/`cm-production-ready-2026-07-22`(-r2) state described below (launcher return-path/
+state-machine/seed-provenance/contrast-basis fixes, new tag `-r3`), and
+`perf/fullA-cm-postclosure-2026-07-22` (listed below as "the one current performance
+branch/worktree") has been removed (worktree + local + `cdw` branch) after being confirmed fully
+incorporated. See `docs/SESSION_SUMMARY_2026-07-22_cm_production_readiness.md` for the current
+canonical commit/tag and the exact `git rev-parse`/`git status` reconciliation. Everything else
+below (branch/worktree classification, retained safety tags) is still accurate.
+
 Git-common-dir: `trade_robustness_modular/.git`. Remotes: `cdw`
 (`github.com/edwardwiles/cdw`, canonical) and `origin`
 (`github.com/habibiscoding/Trade-Model-Robustness`, retired/stale — 20+ commits behind on
