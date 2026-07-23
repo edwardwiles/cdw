@@ -31,6 +31,8 @@ include(joinpath(MELITZ_DIR, "firm_quantities.jl"))
 include(joinpath(MELITZ_DIR, "equilibrium.jl"))
 include(joinpath(MELITZ_DIR, "moments.jl"))
 include(joinpath(MELITZ_DIR, "delta_star.jl"))
+include(joinpath(MELITZ_DIR, "affine_cutoff.jl"))
+include(joinpath(MELITZ_DIR, "log_cutoff_param.jl"))
 include(joinpath(MELITZ_DIR, "fake_data.jl"))
 include(joinpath(MELITZ_DIR, "fstar_solver.jl"))
 include(joinpath(MELITZ_DIR, "fstar_direct.jl"))
@@ -1196,6 +1198,70 @@ if KNITRO_AVAILABLE
         @test res_lim.cold_verified_incumbent !== nothing
         @test res_lim.cold_verified_incumbent.eval.Delta <= delta_loose20c
     end
+
+    # ========================================================================
+    # Session prompt Section 3.3/3.4: real KNITRO integration test for the :linear cutoff-
+    # constraint backend, registered through the ACTUAL production
+    # `melitz_register_finite_delta_knitro_problem!`/`melitz_build_finite_delta_callbacks`
+    # path (not a bypass). Also pins the KNITRO nested-KN-instance post-solve reporting
+    # limitation found this session (see finite_delta_outer.jl's
+    # `melitz_fixed_point_probe` docstring/comments) and its fix.
+    # ========================================================================
+    @testset "Section 3.3/3.4: real KNITRO :linear cutoff-constraint backend" begin
+        sys20 = build_melitz_affine_cutoff_system(ctx20)
+        delta_loose20d = max(r0_20.Delta * 5, 1e-3)
+
+        @testset "feasible point: :linear backend matches :nonlinear_reference (obj, divergence row, and RECOVERED cutoff slacks)" begin
+            p_lin = melitz_fixed_point_probe(ctx20, obj20, theta0_20; delta=delta_loose20d,
+                direction=:upper, gradient_backend=:B, h=1e-4, cutoff_constraint_backend=:linear,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            p_nl = melitz_fixed_point_probe(ctx20, obj20, theta0_20; delta=delta_loose20d,
+                direction=:upper, gradient_backend=:B, h=1e-4, cutoff_constraint_backend=:nonlinear_reference,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            @test !p_lin.eval_failed && !p_nl.eval_failed
+            @test p_lin.nStatus == 0 && p_nl.nStatus == 0
+            @test isapprox(p_lin.obj_value, p_nl.obj_value; atol=1e-10)
+            @test isapprox(p_lin.c[1], p_nl.c[1]; rtol=1e-6)
+            # p_lin.c[2:end] is the Julia-recomputed (not KNITRO-reported) SCALED cutoff
+            # slack; unscale and compare against the exact nonlinear evaluator directly.
+            gd_true, ge_true = melitz_cutoff_constraints_at(theta0_20, ctx20)
+            g_true = vcat(gd_true, ge_true)
+            c_unscaled = p_lin.c[2:end] .* sys20.row_scale
+            @test isapprox(c_unscaled, g_true; atol=1e-8, rtol=1e-8)
+            @test all(>=(-1e-8), p_lin.c[2:end])
+            @test length(p_lin.live_candidates) == 1
+            @test p_lin.live_candidates[1].classification.outer_feasible
+        end
+
+        @testset "constructed domestic-infeasible point: real KNITRO reports infeasibility" begin
+            dom_row = 1
+            Crow = sys20.C_raw[dom_row, :]
+            slack0 = dot(Crow, theta0_20) + sys20.b_raw[dom_row]
+            margin = 0.02
+            theta_bad_dom = theta0_20 .- (slack0 + margin) .* Crow ./ dot(Crow, Crow)
+            p_bad = melitz_fixed_point_probe(ctx20, obj20, theta_bad_dom; delta=1.0,
+                direction=:upper, gradient_backend=:B, h=1e-4, cutoff_constraint_backend=:linear,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            if !p_bad.eval_failed
+                @test p_bad.nStatus != 0
+                @test p_bad.c[1+dom_row] < 0
+            end
+        end
+
+        @testset "solve_melitz_finite_delta_bound runs end to end under :linear (structural, loose budget)" begin
+            res_lin = solve_melitz_finite_delta_bound(ctx20, obj20, theta0_20; delta=delta_loose20d,
+                direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                cutoff_constraint_backend=:linear,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            @test res_lin.cutoff_constraint_backend == :linear
+            @test res_lin.nStatus != -500
+            @test res_lin.cold_verified_incumbent !== nothing
+            @test res_lin.cold_verified_incumbent.classification.outer_feasible
+            @test res_lin.cold_verified_incumbent.eval.Delta <= delta_loose20d + 1e-6
+            @test res_lin.n_fc_calls > 0
+            @test res_lin.n_ga_calls > 0
+        end
+    end
 end
 
 # ============================================================================
@@ -1343,6 +1409,228 @@ end
             @test isapprox(Jd, Jd_fd; rtol=1e-4, atol=1e-6)
             @test isapprox(Je, Je_fd; rtol=1e-4, atol=1e-6)
         end
+    end
+end
+
+# ============================================================================
+# Session prompt Section 3: the affine cutoff constraint map q(theta_free)=q0+Q*theta_free
+# and the resulting C*theta_free+b>=0 deterministic system (affine_cutoff.jl).
+# ============================================================================
+@testset "Session prompt Section 3: affine cutoff constraint map" begin
+    p = FIXTURE.primitives
+    D, j = p.D, p.target_country
+    c_full, A_pivot = build_gravity_pivots(p.tau, j)
+    outer_layout = melitz_outer_layout(D, j)
+    moment_layout = MelitzMomentLayout(D)
+    ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
+           w_prime=FIXTURE.counterfactual.w_prime, L=FIXTURE.L, expenditure=FIXTURE.equilibrium.expenditure,
+           benchmark_cutoff=FIXTURE.equilibrium.cutoff, moment_layout=moment_layout,
+           X_data=FIXTURE.equilibrium.trade_flow, c_full=c_full, A_pivot=A_pivot,
+           jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           inner_loop_opt="unused", outer_loop_opt="unused")
+    theta0 = reduce_to_free_theta(p, ctx)
+    n = length(theta0)
+    @test n == 2D^2 - 2
+
+    @testset "3.1: basis-probe construction agrees with the independent analytical construction (machine precision)" begin
+        Qb, q0b = affine_cutoff_map_basis(ctx)
+        Qa, q0a = affine_cutoff_map_analytical(ctx)
+        @test isapprox(Qb, Qa; atol=1e-9, rtol=1e-9)
+        @test isapprox(q0b, q0a; atol=1e-9, rtol=1e-9)
+    end
+
+    @testset "3.1: basis map is independent of the probe origin" begin
+        rng = MersenneTwister(3)
+        base2 = 0.3 .* randn(rng, n)
+        Q1, q01 = affine_cutoff_map_basis(ctx; base=zeros(n))
+        Q2, q02 = affine_cutoff_map_basis(ctx; base=base2)
+        @test isapprox(Q1, Q2; atol=1e-8, rtol=1e-8)
+        @test isapprox(q01, q02; atol=1e-8, rtol=1e-8)
+    end
+
+    @testset "3.1: q0+Q*theta reproduces melitz_log_cutoff_vec exactly at random points" begin
+        rng = MersenneTwister(5)
+        Q, q0 = affine_cutoff_map_basis(ctx)
+        for _ in 1:20
+            th = 0.3 .* randn(rng, n)
+            @test isapprox(melitz_log_cutoff_vec(th, ctx), q0 .+ Q * th; atol=1e-8, rtol=1e-8)
+        end
+    end
+
+    sys = build_melitz_affine_cutoff_system(ctx)
+    @testset "3.2: exactly D domestic-support rows + D*(D-1) export-selection rows" begin
+        @test sys.n_domestic == D == 4
+        @test sys.n_export == D * (D - 1) == 12
+        @test size(sys.C, 1) == 16
+        @test size(sys.C, 2) == n
+    end
+
+    @testset "3.4: 1000 random free vectors -- C*theta+b matches melitz_cutoff_constraints_at" begin
+        rng = MersenneTwister(7)
+        maxdiff = 0.0
+        for _ in 1:1000
+            th = 0.5 .* randn(rng, n)
+            gd_true, ge_true = melitz_cutoff_constraints_at(th, ctx)
+            gd_aff, ge_aff = affine_cutoff_slacks_unscaled(sys, th)
+            maxdiff = max(maxdiff, maximum(abs.(gd_true .- gd_aff)), maximum(abs.(ge_true .- ge_aff)))
+        end
+        @test maxdiff < 1e-8
+    end
+
+    @testset "3.4: C_raw matches the exact nonlinear Jacobian (melitz_cutoff_constraint_jacobian)" begin
+        rng = MersenneTwister(9)
+        th = 0.1 .* randn(rng, n)
+        Jd, Je = melitz_cutoff_constraint_jacobian(th, ctx)
+        @test isapprox(Jd, sys.C_raw[1:sys.n_domestic, :]; atol=1e-6, rtol=1e-6)
+        @test isapprox(Je, sys.C_raw[sys.n_domestic+1:end, :]; atol=1e-6, rtol=1e-6)
+    end
+
+    @testset "3.3: row scaling preserves feasibility sign" begin
+        rng = MersenneTwister(11)
+        for _ in 1:50
+            th = 0.5 .* randn(rng, n)
+            gd_s, ge_s = affine_cutoff_slacks(sys, th)
+            gd_u, ge_u = affine_cutoff_slacks_unscaled(sys, th)
+            @test all(sign.(gd_s) .== sign.(gd_u))
+            @test all(sign.(ge_s) .== sign.(ge_u))
+        end
+    end
+
+    @testset "3.4: constructed cutoff-feasible / domestic-infeasible / export-infeasible truth table" begin
+        gd0, ge0 = affine_cutoff_slacks_unscaled(sys, theta0)
+        @test all(>=(-1e-8), gd0)
+        @test all(>=(-1e-8), ge0)
+
+        margin = 0.01
+        dom_row = 1
+        Crow_d = sys.C_raw[dom_row, :]
+        slack0_d = dot(Crow_d, theta0) + sys.b_raw[dom_row]
+        theta_bad_dom = theta0 .- (slack0_d + margin) .* Crow_d ./ dot(Crow_d, Crow_d)
+        gd_bad, _ = affine_cutoff_slacks_unscaled(sys, theta_bad_dom)
+        @test gd_bad[dom_row] < 0
+        @test isapprox(gd_bad[dom_row], -margin; atol=1e-6)
+        gd_true_dom, _ = melitz_cutoff_constraints_at(theta_bad_dom, ctx)
+        @test gd_true_dom[dom_row] < 0
+
+        exp_row = sys.n_domestic + 1
+        Crow_e = sys.C_raw[exp_row, :]
+        slack0_e = dot(Crow_e, theta0) + sys.b_raw[exp_row]
+        theta_bad_exp = theta0 .- (slack0_e + margin) .* Crow_e ./ dot(Crow_e, Crow_e)
+        _, ge_bad = affine_cutoff_slacks_unscaled(sys, theta_bad_exp)
+        @test ge_bad[1] < 0
+        @test isapprox(ge_bad[1], -margin; atol=1e-6)
+        _, ge_true_exp = melitz_cutoff_constraints_at(theta_bad_exp, ctx)
+        @test ge_true_exp[1] < 0
+    end
+end
+
+# ============================================================================
+# Session prompt Section 5: the experimental :logcutoff outer parameterization
+# (log_cutoff_param.jl), cross-validated against :logf.
+# ============================================================================
+@testset "Session prompt Section 5: log-cutoff parameterization" begin
+    p = FIXTURE.primitives
+    D, j = p.D, p.target_country
+    c_full, A_pivot = build_gravity_pivots(p.tau, j)
+    outer_layout = melitz_outer_layout(D, j)
+    moment_layout = MelitzMomentLayout(D)
+    ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
+           w_prime=FIXTURE.counterfactual.w_prime, L=FIXTURE.L, expenditure=FIXTURE.equilibrium.expenditure,
+           benchmark_cutoff=FIXTURE.equilibrium.cutoff, moment_layout=moment_layout,
+           X_data=FIXTURE.equilibrium.trade_flow, c_full=c_full, A_pivot=A_pivot,
+           jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           inner_loop_opt="unused", outer_loop_opt="unused")
+    theta0_f = reduce_to_free_theta(p, ctx)
+    n = length(theta0_f)
+    @test n == 2D^2 - 2
+
+    @testset "5.1: f[j,j] via expand_free_theta_logcutoff matches derive_fjj_from_autarky_cutoff at random points" begin
+        rng = MersenneTwister(2)
+        for _ in 1:10
+            gamma_test = 0.7 + 0.6 * rand(rng)
+            theta_test = vcat(log(gamma_test), 0.2 .* randn(rng, n - 1))
+            A, f, gamma_prime_j, f_jj, q = expand_free_theta_logcutoff(theta_test, ctx)
+            f_jj_direct = derive_fjj_from_autarky_cutoff(gamma_prime_j, ctx.w_prime, 1.0, A[j, j],
+                                                            ctx.w_prime * ctx.L[j], ctx.sigma)
+            @test isapprox(f_jj, f_jj_direct; atol=1e-10, rtol=1e-10)
+        end
+    end
+
+    @testset "5.2/5.3: A- and f-gravity both hold exactly at random logcutoff free points" begin
+        rng = MersenneTwister(3)
+        for _ in 1:10
+            gamma_test = 0.7 + 0.6 * rand(rng)
+            theta_test = vcat(log(gamma_test), 0.2 .* randn(rng, n - 1))
+            A, f, gamma_prime_j, f_jj, q = expand_free_theta_logcutoff(theta_test, ctx)
+            prim_test = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, j, ctx.tau, ctx.w, A, f, gamma_prime_j)
+            gA, gf = gravity_residuals(prim_test)
+            @test abs(gA) < 1e-8
+            @test abs(gf) < 1e-8
+        end
+    end
+
+    @testset "q matches log.(melitz_baseline_cutoff(A,f,...)) exactly" begin
+        rng = MersenneTwister(4)
+        for _ in 1:10
+            gamma_test = 0.7 + 0.6 * rand(rng)
+            theta_test = vcat(log(gamma_test), 0.2 .* randn(rng, n - 1))
+            A, f, gamma_prime_j, f_jj, q = expand_free_theta_logcutoff(theta_test, ctx)
+            zhat_true = melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
+            @test isapprox(q, log.(zhat_true); atol=1e-8, rtol=1e-8)
+        end
+    end
+
+    @testset "round-trip: reduce(expand(theta_q)) == theta_q" begin
+        rng = MersenneTwister(5)
+        for _ in 1:10
+            gamma_test = 0.7 + 0.6 * rand(rng)
+            theta_test = vcat(log(gamma_test), 0.2 .* randn(rng, n - 1))
+            A, f, gamma_prime_j, f_jj, q = expand_free_theta_logcutoff(theta_test, ctx)
+            theta_rt = reduce_to_free_theta_logcutoff(A, f, gamma_prime_j, ctx)
+            @test isapprox(theta_rt, theta_test; atol=1e-8, rtol=1e-8)
+        end
+    end
+
+    @testset "round-trip: expand(reduce(A,f,gamma)) reconstructs the :logf fixture exactly" begin
+        theta_q0 = reduce_to_free_theta_logcutoff(p.A, p.f, p.gamma_prime_target, ctx)
+        @test length(theta_q0) == n
+        A_rt, f_rt, gamma_rt, f_jj_rt, q_rt = expand_free_theta_logcutoff(theta_q0, ctx)
+        @test isapprox(A_rt, p.A; atol=1e-8, rtol=1e-8)
+        @test isapprox(f_rt, p.f; atol=1e-8, rtol=1e-8)
+        @test isapprox(gamma_rt, p.gamma_prime_target; atol=1e-10, rtol=1e-10)
+    end
+
+    @testset "5.5: full cross-parameterization equivalence (:logf <-> :logcutoff): A, f, gamma, cutoff, gravity, moment matrix G" begin
+        A_f, f_f, gamma_f, f_jj_f = expand_free_theta(theta0_f, ctx)
+        theta0_q = reduce_to_free_theta_logcutoff(A_f, f_f, gamma_f, ctx)
+        A_q, f_q, gamma_q, f_jj_q, q_q = expand_free_theta_logcutoff(theta0_q, ctx)
+        @test isapprox(A_f, A_q; atol=1e-8, rtol=1e-8)
+        @test isapprox(f_f, f_q; atol=1e-8, rtol=1e-8)
+        @test isapprox(gamma_f, gamma_q; atol=1e-10, rtol=1e-10)
+        @test isapprox(f_jj_f, f_jj_q; atol=1e-8, rtol=1e-8)
+
+        prim_q = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, j, ctx.tau, ctx.w, A_q, f_q, gamma_q)
+        gA_q, gf_q = gravity_residuals(prim_q)
+        @test abs(gA_q) < 1e-8
+        @test abs(gf_q) < 1e-8
+
+        zhat_f = melitz_baseline_cutoff(A_f, f_f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
+        zhat_q = melitz_baseline_cutoff(A_q, f_q, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
+        @test isapprox(zhat_f, zhat_q; atol=1e-8, rtol=1e-8)
+
+        z_draws = FIXTURE.z_draws
+        prim_f = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, j, ctx.tau, ctx.w, A_f, f_f, gamma_f)
+        eq_f = MelitzEquilibrium(ctx.expenditure, ones(D), zhat_f, ctx.X_data)
+        eq_q = MelitzEquilibrium(ctx.expenditure, ones(D), zhat_q, ctx.X_data)
+        expenditure_prime = ctx.w_prime * ctx.L[j]
+        cf_f = MelitzCounterfactual(j, ctx.w_prime, expenditure_prime, 1.0, expenditure_prime)
+        cf_q = MelitzCounterfactual(j, ctx.w_prime, expenditure_prime, 1.0, expenditure_prime)
+        W = size(z_draws, 1)
+        K_f, G_f = zeros(W), zeros(W, moment_layout.num_moments)
+        K_q, G_q = zeros(W), zeros(W, moment_layout.num_moments)
+        melitz_moments!(K_f, G_f, prim_f, eq_f, cf_f, z_draws, moment_layout; X_data=ctx.X_data)
+        melitz_moments!(K_q, G_q, prim_q, eq_q, cf_q, z_draws, moment_layout; X_data=ctx.X_data)
+        @test isapprox(G_f, G_q; atol=1e-8, rtol=1e-8)
     end
 end
 

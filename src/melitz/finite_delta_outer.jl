@@ -415,6 +415,9 @@ struct MelitzFiniteDeltaOuterResult
     inner_infeas_count::Int
     inner_eval_failures::Int
     wall_time::Float64
+    cutoff_constraint_backend::Symbol   # Section 3.3/4: :linear or :nonlinear_reference
+    n_fc_calls::Int                     # Section 4 benchmark: total cb_F! invocations
+    n_ga_calls::Int                     # Section 4 benchmark: total cb_G! invocations
 end
 
 """
@@ -436,10 +439,15 @@ signed_objective)`. `live_candidates`/`n_inner_eval_failures` are mutated in pla
 callbacks as KNITRO calls them -- the caller reads them AFTER `KN_solve` returns.
 """
 function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smallest::Bool;
-                                              n_live_candidates_tracked::Int=5)
+                                              n_live_candidates_tracked::Int=5,
+                                              cutoff_constraint_backend::Symbol=:nonlinear_reference)
+    cutoff_constraint_backend in (:linear, :nonlinear_reference) || throw(ArgumentError(
+        "cutoff_constraint_backend must be :linear or :nonlinear_reference, got $cutoff_constraint_backend"))
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
     live_candidates = MelitzOuterCandidate[]
     n_inner_eval_failures = Ref(0)
+    n_fc_calls = Ref(0)
+    n_ga_calls = Ref(0)
 
     function register_live_candidate!(theta::Vector{Float64}, Delta_val::Float64,
                                        x::Vector{Float64}, nStatus::Integer)
@@ -481,6 +489,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     end
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
+        n_fc_calls[] += 1
         theta = collect(evalRequest.x)
         objSol, x, nStatus = inner_solve_verified_or_fail(theta)
 
@@ -496,16 +505,27 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         # 1e10-scaled row).
         evalResult.c[1] = Delta_theta / delta
 
-        g_d, g_e = melitz_cutoff_constraints_at(theta, obj.γ)
-        nd = length(g_d)
-        evalResult.c[2:1+nd] .= g_d
-        evalResult.c[2+nd:end] .= g_e
+        # Section 3.3/4 (backend comparison): under :linear, the D+D*(D-1) cutoff rows are
+        # NOT evaluated here at all -- they are registered as true KNITRO linear
+        # constraints (constant coefficients, no per-iterate cost) by the caller
+        # (`solve_melitz_finite_delta_bound`/`melitz_fixed_point_probe`), and this
+        # callback's own `evalResult.c` is sized to exactly 1 (the divergence row only).
+        # Under :nonlinear_reference (the OLD, trusted-comparison-only default), the
+        # cutoff rows are still evaluated through the generic nonlinear callback exactly as
+        # before.
+        if cutoff_constraint_backend == :nonlinear_reference
+            g_d, g_e = melitz_cutoff_constraints_at(theta, obj.γ)
+            nd = length(g_d)
+            evalResult.c[2:1+nd] .= g_d
+            evalResult.c[2+nd:end] .= g_e
+        end
 
         register_live_candidate!(theta, Delta_theta, collect(x), nStatus)
         return 0
     end
 
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
+        n_ga_calls[] += 1
         theta = collect(evalRequest.x)
         n_ = length(theta)
         objSol, x, nStatus = inner_solve_verified_or_fail(theta)
@@ -520,20 +540,90 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
         evalResult.jac[1:n_] .= local_jac ./ (1e10 * delta)   # Section 4.2: same scaling as the value
 
-        J_d, J_e = melitz_cutoff_constraint_jacobian(theta, obj.γ)
-        nd, ne = size(J_d, 1), size(J_e, 1)
-        @inbounds for kk in 1:nd
-            evalResult.jac[kk*n_+1:(kk+1)*n_] .= @view J_d[kk, :]
-        end
-        off = 1 + nd
-        @inbounds for kk in 1:ne
-            evalResult.jac[(off+kk-1)*n_+1:(off+kk)*n_] .= @view J_e[kk, :]
+        if cutoff_constraint_backend == :nonlinear_reference
+            J_d, J_e = melitz_cutoff_constraint_jacobian(theta, obj.γ)
+            nd, ne = size(J_d, 1), size(J_e, 1)
+            @inbounds for kk in 1:nd
+                evalResult.jac[kk*n_+1:(kk+1)*n_] .= @view J_d[kk, :]
+            end
+            off = 1 + nd
+            @inbounds for kk in 1:ne
+                evalResult.jac[(off+kk-1)*n_+1:(off+kk)*n_] .= @view J_e[kk, :]
+            end
         end
         return 0
     end
 
     return (cb_F! = cb_F!, cb_G! = cb_G!, live_candidates = live_candidates,
-            n_inner_eval_failures = n_inner_eval_failures, signed_objective = signed_objective)
+            n_inner_eval_failures = n_inner_eval_failures, signed_objective = signed_objective,
+            cutoff_constraint_backend = cutoff_constraint_backend,
+            n_fc_calls = n_fc_calls, n_ga_calls = n_ga_calls)
+end
+
+"""
+    melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, n, D;
+        cutoff_constraint_backend=:nonlinear_reference) -> cIndices
+
+Section 3.3/4: registers the `m = 1 + D + D*(D-1)` constraint block on an already-created
+KNITRO problem `kc` (variables already added via `xIndices`), branching on
+`cutoff_constraint_backend`:
+
+  - `:nonlinear_reference` (the OLD, trusted-comparison-only path): every one of the `m`
+    rows is registered against ONE combined eval callback (`cbset.cb_F!`/`cbset.cb_G!`),
+    exactly as before this session -- the generic nonlinear FC/GA machinery evaluates the
+    D+D*(D-1) deterministic cutoff rows fresh at every KNITRO iterate, even though they are
+    affine in `theta_free` and never change value/Jacobian shape.
+  - `:linear` (Section 3.3's fix): ONLY the divergence-budget row (`c_delta(theta) =
+    Delta(theta)/delta <= 1`, genuinely nonlinear) is registered against the eval
+    callback (`cIndices[1:1]`, so `evalResult.c`/`.jac` inside `cbset.cb_F!`/`cb_G!` are
+    sized to exactly 1 row -- see that function's own `cutoff_constraint_backend` branch).
+    The D+D*(D-1) cutoff rows are registered as TRUE KNITRO linear constraints
+    (`KN_add_con_linear_struct`, constant coefficients from
+    `build_melitz_affine_cutoff_system`) -- evaluated natively by KNITRO with NO per-
+    iterate callback cost at all, not merely a cheaper callback. Uses the SAME single eval-
+    callback CONTEXT as the old combined callback did (only now covering 1 row instead of
+    `m`) -- deliberately avoiding Section 17.C's documented "two separate callback
+    contexts" KNITRO crash, since linear constraints registered via
+    `KN_add_con_linear_struct` are not a second callback context at all.
+
+Returns `cIndices` (length `m`, row 1 = divergence, rows `2:end` = domestic/export cutoff
+rows in `melitz_deterministic_cutoff_constraints`'s own order) and, when
+`cutoff_constraint_backend==:linear`, also returns the `MelitzAffineCutoffSystem` used
+(`nothing` under `:nonlinear_reference`) so a caller can report row-scaling diagnostics.
+"""
+function melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, n::Int, D::Int,
+                                                        obj_for_user_params;
+                                                        cutoff_constraint_backend::Symbol=:nonlinear_reference)
+    D2 = D * (D - 1)
+    n_cutoff = D + D2
+    m = 1 + n_cutoff
+    cIndices = KNITRO.KN_add_cons(kc, m)
+    # Section 4.1: c_delta <= 1 -- dimensionless, replaces the old 1e10*delta magnitude.
+    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1.0)
+
+    cutoff_sys = nothing
+    if cutoff_constraint_backend == :nonlinear_reference
+        KNITRO.KN_set_con_lobnds(kc, n_cutoff, cIndices[2:end], zeros(n_cutoff))
+        cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cbset.cb_F!)
+        KNITRO.KN_set_cb_grad(kc, cb, cbset.cb_G!,
+            jacIndexCons=repeat(cIndices, inner=n), jacIndexVars=repeat(xIndices, outer=m))
+    else   # :linear
+        cutoff_sys = build_melitz_affine_cutoff_system(ctx)
+        # C*theta_free + b >= 0  <=>  C*theta_free >= -b  -- lower bound -b (scaled), no
+        # upper bound (default +infinity, matching the old row's own one-sided sense).
+        KNITRO.KN_set_con_lobnds(kc, n_cutoff, cIndices[2:end], -cutoff_sys.b)
+        nnz = n_cutoff * n
+        indexCons_lin = repeat(cIndices[2:end], inner=n)
+        indexVars_lin = repeat(xIndices, outer=n_cutoff)
+        coefs_lin = vec(permutedims(cutoff_sys.C))   # row-major flatten of C, matching (con,var) pair order
+        KNITRO.KN_add_con_linear_struct(kc, nnz, indexCons_lin, indexVars_lin, coefs_lin)
+
+        cb = KNITRO.KN_add_eval_callback(kc, true, [cIndices[1]], cbset.cb_F!)
+        KNITRO.KN_set_cb_grad(kc, cb, cbset.cb_G!,
+            jacIndexCons=fill(cIndices[1], n), jacIndexVars=xIndices)
+    end
+    KNITRO.KN_set_cb_user_params(kc, cb, obj_for_user_params)
+    return cIndices, cutoff_sys
 end
 
 """
@@ -588,6 +678,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           gradient_backend::Symbol=:B, h::Real=1e-4,
                                           theta_box::Real=2.0,
                                           n_live_candidates_tracked::Int=5,
+                                          cutoff_constraint_backend::Symbol=:nonlinear_reference,
                                           inner_loop_opt::AbstractString,
                                           outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"))
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
@@ -617,7 +708,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
 
     # Section 6/7: the SAME callback pair a fixed-point test would register directly.
     cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
-        n_live_candidates_tracked=n_live_candidates_tracked)
+        n_live_candidates_tracked=n_live_candidates_tracked,
+        cutoff_constraint_backend=cutoff_constraint_backend)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -627,18 +719,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     KNITRO.KN_set_var_upbnds_all(kc, collect(theta_init) .+ theta_box)
     KNITRO.KN_set_var_primal_init_values_all(kc, collect(theta_init))
 
-    D2 = D * (D - 1)
-    n_cutoff = D + D2
-    m = 1 + n_cutoff
-    cIndices = KNITRO.KN_add_cons(kc, m)
-    # Section 4.1: c_delta <= 1 -- dimensionless, replaces the old 1e10*delta magnitude.
-    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1.0)
-    KNITRO.KN_set_con_lobnds(kc, n_cutoff, cIndices[2:end], zeros(n_cutoff))
-
-    cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cbset.cb_F!)
-    KNITRO.KN_set_cb_grad(kc, cb, cbset.cb_G!,
-        jacIndexCons=repeat(cIndices, inner=n), jacIndexVars=repeat(xIndices, outer=m))
-    KNITRO.KN_set_cb_user_params(kc, cb, obj)
+    cIndices, cutoff_sys = melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, n, D, obj;
+        cutoff_constraint_backend=cutoff_constraint_backend)
 
     CS = CounterfactualSensitivity
     CS.INNER_SOLVE_COUNT[] = 0; CS.INNER_INFEAS_COUNT[] = 0; CS.INNER_ITERS_TOTAL[] = 0
@@ -678,7 +760,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     return MelitzFiniteDeltaOuterResult(collect(theta_init), delta, direction,
         gradient_backend, theta_final, terminal_eval, terminal_classification,
         initial_incumbent, best_live_incumbent, cold_verified_incumbent,
-        nStatus, solve_inner_count, solve_infeas_count, cbset.n_inner_eval_failures[], time() - t0)
+        nStatus, solve_inner_count, solve_infeas_count, cbset.n_inner_eval_failures[], time() - t0,
+        cutoff_constraint_backend, cbset.n_fc_calls[], cbset.n_ga_calls[])
 end
 
 # ============================================================================
@@ -702,8 +785,14 @@ that case `obj_value`/`c` are `NaN`/empty, since KNITRO never recorded a real ev
 When `!eval_failed`, `obj_value` is the registered objective (Section 3.1: `±theta[1]`
 exactly) and `c` is the full `m`-vector of registered constraint values (`c[1]` = the
 Section 4.1 normalized `Delta(theta)/delta` divergence row, `c[2:end]` = the Section 1.3
-deterministic cutoff rows), both read directly off KNITRO
-(`KN_get_obj_value`/`KN_get_con_values_all`) rather than recomputed independently.
+deterministic cutoff rows). `c[1]`/`obj_value` are read directly off KNITRO
+(`KN_get_obj_value`/`KN_get_con_values_all`). Under `cutoff_constraint_backend=:linear`,
+`c[2:end]` is instead RECOMPUTED directly in Julia from `cutoff_sys.C*theta+cutoff_sys.b`
+-- KNITRO's own post-solve `KN_get_con_values_all` for natively-registered linear rows was
+found (Section 3.4) to be unreliable once this problem's callback has triggered a nested
+KN_new/KN_solve/KN_free cycle (as it always does here, for the real CC inner solve), even
+though solve-time constraint enforcement itself is unaffected (cross-checked against
+KNITRO's own presolve-deduced-infeasibility message, which matched the true slack exactly).
 `live_candidates` holds whatever the shared incumbent-tracking logic recorded for this one
 evaluation (0 or 1 entries).
 """
@@ -730,6 +819,7 @@ production combined callback (`melitz_build_finite_delta_callbacks`) exactly onc
 function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
                                    delta::Real, direction::Symbol,
                                    gradient_backend::Symbol=:B, h::Real=1e-4,
+                                   cutoff_constraint_backend::Symbol=:nonlinear_reference,
                                    inner_loop_opt::AbstractString,
                                    outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"))
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
@@ -743,7 +833,8 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
         find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
 
-    cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest)
+    cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
+        cutoff_constraint_backend=cutoff_constraint_backend)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -753,17 +844,9 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
     KNITRO.KN_set_var_upbnds_all(kc, theta_probe_v)
     KNITRO.KN_set_var_primal_init_values_all(kc, theta_probe_v)
 
-    D2 = D * (D - 1)
-    n_cutoff = D + D2
-    m = 1 + n_cutoff
-    cIndices = KNITRO.KN_add_cons(kc, m)
-    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1.0)
-    KNITRO.KN_set_con_lobnds(kc, n_cutoff, cIndices[2:end], zeros(n_cutoff))
-
-    cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cbset.cb_F!)
-    KNITRO.KN_set_cb_grad(kc, cb, cbset.cb_G!,
-        jacIndexCons=repeat(cIndices, inner=n), jacIndexVars=repeat(xIndices, outer=m))
-    KNITRO.KN_set_cb_user_params(kc, cb, obj)
+    cIndices, cutoff_sys = melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, n, D, obj;
+        cutoff_constraint_backend=cutoff_constraint_backend)
+    m = length(cIndices)
 
     KNITRO.KN_solve(kc)
     nStatus, objVal, _, _ = KNITRO.KN_get_solution(kc)
@@ -773,6 +856,27 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
     if !eval_failed
         c = zeros(m)
         KNITRO.KN_get_con_values_all(kc, c)
+        # KNOWN KNITRO LIMITATION (found+documented this session, Section 3.4): once this
+        # problem's own eval callback has triggered >=1 NESTED KN_new/KN_solve/KN_free
+        # cycle (exactly what happens here -- every cb_F!/cb_G! call runs the real CC inner
+        # solve as its own separate KNITRO instance), a POST-SOLVE `KN_get_con_values_all`
+        # query for NATIVELY-registered linear constraints (no eval callback at all) comes
+        # back corrupted/stale -- verified via a minimal 2-constraint reproduction outside
+        # Melitz entirely (nesting a trivial second KN instance inside the SAME callback
+        # reproduces the corruption; without nesting, the identical linear-registration code
+        # reports exact values). The callback-computed divergence row (`c[1]`, written
+        # directly into `evalResult.c[1]` during the SAME callback call) is UNAFFECTED --
+        # only the natively-computed rows are. Cross-checked against KNITRO's own
+        # presolve-deduced infeasibility message for a constructed infeasible point: the
+        # DEDUCED value there (computed DURING solve/presolve, not via this post-solve
+        # query) matched the true slack exactly, confirming solve-time enforcement is
+        # correct and ONLY the post-hoc reporting call is unreliable. Fix: recompute the
+        # cutoff rows directly in Julia (`cutoff_sys.C*theta+cutoff_sys.b`, exact, and the
+        # authoritative source of truth per Section 3.4's own equivalence tests) rather than
+        # trusting KNITRO's post-solve report for them.
+        if cutoff_constraint_backend == :linear && cutoff_sys !== nothing
+            c[2:end] .= cutoff_sys.C * theta_probe_v .+ cutoff_sys.b
+        end
     end
     KNITRO.KN_free(kc)
 
