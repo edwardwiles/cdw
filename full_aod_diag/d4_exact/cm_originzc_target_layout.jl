@@ -9,6 +9,9 @@
 # touching any existing cm_meanzc_*.jl code. Every subtype is a plain
 # immutable struct; no mutable Ref, no closed-over state. Every function that
 # consumes a layout takes the complete eta/nu vector as an explicit argument.
+#
+# Include order: this file must be included AFTER cm_meanzc_moments.jl
+# (`pair_targets` below calls that file's `packed_pair_index`).
 # ============================================================================
 
 abstract type MeanZCTargetLayout end
@@ -71,18 +74,30 @@ target_index(layout::SharedByPowerLayout, o::Int, k::Int) = k
 target_index(layout::OriginByPowerLayout, o::Int, k::Int) = (k - 1) * layout.D + o
 
 """
-    nu_at_level(layout, νfull, k) -> AbstractVector{Float64}  (length D)
+    mean_targets(layout, νfull, k, D) -> Vector{Float64}   (length D)
 
-Per-origin target vector at level `k`, sliced from the full length-`n_eta`
-nu vector (already exponentiated from eta -- callers pass `νfull = exp.(η)`).
-`SharedByPowerLayout` broadcasts the single shared scalar to a length-D
-vector; `OriginByPowerLayout` returns a `@view` into the packed layout (no
-copy).
+Mean-column targets: `nu_{o,k}` for every origin `o=1:D` at level `k`,
+dispatched entirely through `target_index` -- one implementation for BOTH
+layouts (`SharedByPowerLayout` returns the same shared value `D` times since
+`target_index` ignores `o`; `OriginByPowerLayout` returns each origin's own
+value).
 """
-nu_at_level(layout::SharedByPowerLayout, νfull::AbstractVector{Float64}, k::Int, D::Int) =
-    fill(νfull[k], D)
-nu_at_level(layout::OriginByPowerLayout, νfull::AbstractVector{Float64}, k::Int, D::Int) =
-    @view νfull[(k-1)*layout.D+1 : k*layout.D]
+mean_targets(layout::MeanZCTargetLayout, νfull::AbstractVector{Float64}, k::Int, D::Int) =
+    [νfull[target_index(layout, o, k)] for o in 1:D]
+
+"""
+    pair_targets(layout, νfull, k, D) -> Vector{Float64}   (length D*(D-1)/2)
+
+Pair-column targets: `nu_{o,k} * nu_{p,k}` for every unordered pair `o<p`
+(`packed_pair_index` ordering), dispatched through `target_index` -- again
+one implementation for both layouts (reduces to `nu_k^2` under
+`SharedByPowerLayout`). Requires `packed_pair_index` (`cm_meanzc_moments.jl`,
+included before this file).
+"""
+function pair_targets(layout::MeanZCTargetLayout, νfull::AbstractVector{Float64}, k::Int, D::Int)
+    pairs = packed_pair_index(D)
+    return [νfull[target_index(layout, o, k)] * νfull[target_index(layout, p, k)] for (o, p) in pairs]
+end
 
 """
     layout_name(layout) -> Symbol
