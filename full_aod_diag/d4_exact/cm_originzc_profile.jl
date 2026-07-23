@@ -23,16 +23,39 @@ using Optim
 
 Minimizes `Delta_dual(x_free0, exp.(η))` over `η` via `Optim.LBFGS`, using
 the analytic gradient at every trial point (no finite differences). Returns
-the Optim result object and `last = (base, verify, νfull)` at the terminal
-point (so callers can immediately compute residuals/derivatives there
-without a redundant extra inner solve).
+the Optim result object and `last = (base, verify, νfull)` at the LAST
+SUCCESSFUL inner solve (so callers can immediately compute residuals/
+derivatives there without a redundant extra inner solve).
+
+A line-search trial `η` can push some `nu = exp(eta)` outside the region
+where the inner CC dual problem is feasible (e.g. a large first LBFGS step
+at an economic point far from where `eta0` was calibrated -- observed live
+at the D=20 fixed-point gate's economic Point B, a large-magnitude
+production incumbent very different in scale from the calibration point).
+`archOZ_verified_state` signals this via `CMExpectedSolveFailure` (the same
+expected-failure type the production KNITRO callback already handles via
+`reject_point` -- cm_checkpoint.jl/cm_originzc_checkpoint.jl's `cb_F!`).
+This function catches it the same way: returns `Inf` for `F` (a standard
+"reject this point" signal most line searches, including Optim's default
+HagerZhang, back off from) and an all-zero `G` (never used to accept a
+step, only to satisfy `only_fg!`'s contract), WITHOUT updating
+`last_state[]` -- the returned `last` is always a genuinely converged inner
+solve, never a rejected probe.
 """
 function profile_eta_originzc(x_free0::AbstractVector, η0::AbstractVector{Float64}, pcx;
                                iterations::Int = 50, g_tol::Float64 = 1e-8, show_trace::Bool = false)
     last_state = Ref{Any}(nothing)
     function fg!(F, G, η)
         νfull = exp.(η)
-        base, verify = archOZ_verified_state(x_free0, νfull, pcx.ctx_cm)
+        local base, verify
+        try
+            base, verify = archOZ_verified_state(x_free0, νfull, pcx.ctx_cm)
+        catch e
+            e isa CMExpectedSolveFailure || rethrow()
+            G !== nothing && fill!(G, 0.0)
+            F !== nothing && return Inf
+            return nothing
+        end
         last_state[] = (base = base, verify = verify, νfull = νfull)
         if G !== nothing
             G .= d_delta_dual_d_eta_origin_vec(base.λstar, pcx.aug, νfull; mean_m = verify.m_mean)
@@ -42,5 +65,6 @@ function profile_eta_originzc(x_free0::AbstractVector, η0::AbstractVector{Float
     end
     res = Optim.optimize(Optim.only_fg!(fg!), η0, Optim.LBFGS(),
                           Optim.Options(iterations = iterations, g_tol = g_tol, show_trace = show_trace))
+    last_state[] === nothing && error("profile_eta_originzc: every probed eta was infeasible -- no successful inner solve to report (eta0 itself may be a bad start for this economic point)")
     return res, last_state[]
 end

@@ -44,8 +44,32 @@ include(joinpath(@__DIR__, "cm_originzc_config.jl"))
 include(joinpath(@__DIR__, "cm_originzc_checkpoint.jl"))
 include(joinpath(@__DIR__, "cm_originzc_profile.jl"))
 include(joinpath(@__DIR__, "direction_bounds.jl"))
-include(joinpath(@__DIR__, "c10_d20_production_driver.jl"))
-using Printf, LinearAlgebra, Statistics, Dates
+using Printf, LinearAlgebra, Statistics, Dates, Serialization
+
+# Minimal local copy of D20Checkpoint (c10_d20_production_driver.jl:128-166) + load_checkpoint
+# (c10_d20_production_driver.jl:210-213) -- NOT the full file, which pulls in a
+# PsiObjectiveBundleDelta binding that conflicts with this script's own CM/meanzc/originzc
+# include chain (confirmed live: including the whole driver file throws an ambiguity
+# UndefVarError inside master_prepare_cc/PMM.jl). Only the read-only struct layout + loader are
+# needed here (to read one existing checkpoint's incumbent vector); everything else in that
+# file (the actual unrestricted D=20 outer-loop driver) is unused by this gate script.
+struct D20Checkpoint
+    schema::Int; run_id::String; label::String; branch::Symbol; find_smallest::Bool; delta::Float64
+    W::Int; draw_seed::Int; g::Float64; zfree::Vector{Float64}; logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}; bandwidth_cache::Dict{Int,Float64}; best_feasible::Any
+    n_eval::Int; knitro_iter::Int; wall_elapsed::Float64; checkpoint_reason::Symbol
+    screen_counts::Any
+    verify_Delta_dual::Float64; verify_gravity_value::Float64; verify_max_abs_moment_kkt_resid::Float64
+    verify_moment_resid_norm::Float64; solver_state_note::String
+    draw_design::Symbol; draw_checksum_uniform::String; draw_checksum_transformed::String
+    knitro_version::String
+end
+const CHECKPOINT_SCHEMA = 3
+function load_checkpoint(path::AbstractString)
+    ckpt = deserialize(path)::D20Checkpoint
+    ckpt.schema == CHECKPOINT_SCHEMA || error("load_checkpoint($path): schema=$(ckpt.schema), expected $(CHECKPOINT_SCHEMA)")
+    return ckpt
+end
 
 lp(xs...) = (println(xs...); flush(stdout))
 
@@ -101,7 +125,8 @@ lp()
 lp("-- cold-verifying both economic points under the UNRESTRICTED (no-restriction) problem --")
 for (label, xf) in [("A (benchmark)", xfA), ("B (incumbent)", xfB)]
     obj0 = ctx.obj
-    _, xu, nStatusU, _, _ = inner_loop_internal_archgeneric(obj0, xf; hess_cb_builder = archA_hess_cb_builder)
+    θ_full = CS.reconstruct_full(xf, ctx.m)
+    _, xu, nStatusU, _, _ = inner_loop_internal_archgeneric(obj0, θ_full; hess_cb_builder = archA_hess_cb_builder)
     G = CS.select_G_from_H(obj0, obj0.H)
     ncon = obj0.d - obj0.outer_constr_index + 2
     cbuf = zeros(ncon)
@@ -112,7 +137,7 @@ end
 
 results = Dict{Tuple{String,Int},Any}()
 
-for (label, xf) in [("A", xfA), ("B", xfB)], K in (1, 2)
+for (label, xf) in [("B", xfB)], K in (1, 2)
     lp()
     lp("="^100)
     lp("Point ", label, "  K_mean=K_pair=", K)
@@ -200,7 +225,7 @@ lp()
 lp("="^100)
 lp("SUMMARY")
 lp("="^100)
-for (label, K) in [("A", 1), ("A", 2), ("B", 1), ("B", 2)]
+for (label, K) in [("B", 1), ("B", 2)]
     r = results[(label, K)]
     @printf "  point=%s K=%d  n_inner=%d n_eta=%d  Delta=%.6f  pcx_wall=%.1fs profile_wall=%.1fs(%d iters) grad_wall=%.1fs  peak_rss=%.0fMB  C+vsRef: cos=%.10f maxdiff_econ=%.2e maxdiff_eta=%.2e\n" label K r.n_inner r.n_eta r.Delta_dual r.pcx_wall r.profile_wall r.profile_iterations r.grad_wall r.peak_rss_mb r.cossim_econ r.maxdiff_econ r.maxdiff_eta
 end
