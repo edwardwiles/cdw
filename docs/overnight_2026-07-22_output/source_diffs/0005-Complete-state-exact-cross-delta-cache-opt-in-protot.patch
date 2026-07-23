@@ -1,0 +1,602 @@
+From fbe0d17d890e2efdc05230c49a665533b4251ed3 Mon Sep 17 00:00:00 2001
+From: Edward Wiles <emmabenzvi@gmail.com>
+Date: Wed, 22 Jul 2026 21:02:04 -0400
+Subject: [PATCH 5/5] Complete-state exact/cross-delta cache: opt-in prototype,
+ design doc, D=4 tests (32/32 pass)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+docs/COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md: field-by-field mutability audit of
+BaseDualState/verify (both already fully-owned, non-aliased data by construction -- proven from
+solve_base_state/archC_verified_state's own collect/copy calls, already exploited by
+cm_checkpoint.jl's last_F_state[] pattern), fingerprint design (draws, W/D/sigma, CM
+config/L/grid/basis/contrasts, opt-file CONTENT hash, KNITRO release, schema version; delta and
+cm_gradient_backend deliberately excluded, with the reasoning for each), and why no external
+OrderedDict/DataStructures.jl dependency is needed for the LRU (small max_entries, O(n) scan is
+fine).
+
+complete_state_cache.jl (new, purely additive, opt-in, default off): CompleteStateEntry,
+CompleteStateCache, complete_state_fingerprint, complete_state_lookup!/store!, and
+archC_verified_state_cached! (a wrapper around the UNMODIFIED archC_verified_state -- identical
+behavior to calling it directly when cache=nothing, the default everywhere).
+
+overnight_complete_state_cache_d4_gate.jl: A/B/A restore-vs-fresh-cold-solve, no-aliasing after
+subsequent solves mutate live scratch, 7 independent context-mismatch fingerprint checks
+(L/probs/contrasts/backend/KNITRO-release/opt-file-content/draws), cross-delta key-independence,
+never-store-on-an-inner-solve-failure, bounded LRU eviction correctness, instrumentation
+counters. 32/32 pass.
+
+Real finding (not a bug): two INDEPENDENT archC_verified_state solves at the identical x_free0
+are NOT bit-for-bit identical to each other (~1e-11 to 1e-13 diffs, KNITRO's own tolerance-based
+convergence noise floor) -- the cache's correctness claim is exact restoration of what was
+STORED (proven bit-for-bit in the no-aliasing test), not agreement between two independent
+solves, which no tolerance-based solver guarantees. Test tolerances set accordingly and
+documented inline.
+
+NOT done in this session (see design doc §8 and the final report): wiring into
+cm_checkpoint.jl's cb_F!/cb_G!, D=20 hit-rate/wall-value measurement, checkpoint/resume
+interaction test, combined CM-C+ + cache gates. Left as a documented, independently-tested
+prototype per the task brief's own explicit allowance.
+---
+ .../COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md |  55 +++++
+ ...4_complete_state_cache_gate_2026-07-22.log |  85 +++++++
+ .../d4_exact/complete_state_cache.jl          | 174 +++++++++++++++
+ .../overnight_complete_state_cache_d4_gate.jl | 210 ++++++++++++++++++
+ 4 files changed, 524 insertions(+)
+ create mode 100644 docs/COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md
+ create mode 100644 docs/overnight_2026-07-22_output/test_logs/d4_complete_state_cache_gate_2026-07-22.log
+ create mode 100644 full_aod_diag/d4_exact/complete_state_cache.jl
+ create mode 100644 full_aod_diag/d4_exact/overnight_complete_state_cache_d4_gate.jl
+
+diff --git a/docs/COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md b/docs/COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md
+new file mode 100644
+index 0000000..54b214d
+--- /dev/null
++++ b/docs/COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md
+@@ -0,0 +1,55 @@
++# Complete-state exact/cross-delta cache — design and mutability audit — 2026-07-22
++
++## 1. What `solve_base_state`/`archC_verified_state` actually produce, field by field
++
++Traced by direct code read (`three_way_derivatives.jl:14-30`, `cm_production_bundle.jl:159-192`).
++
++`BaseDualState` (`three_way_derivatives.jl:14-20`):
++
++| Field | Type | Source | Mutable/aliased scratch? |
++|---|---|---|---|
++| `x_free0` | `Vector{Float64}` | `collect(x_free0)` | NO — fresh `collect`, owned |
++| `θ_full0` | `Vector{Float64}` | `CS.reconstruct_full(...)` | NO — fresh allocation |
++| `ζstar` | `Float64` | scalar | trivially immutable |
++| `λstar` | `Vector{Float64}` | `collect(inner_x[2:end])` | NO — fresh `collect` |
++| `m_star` | `Vector{Float64}` | `copy(obj.arg1)` | NO — explicit `copy`, NOT the live `obj.arg1` buffer itself (which IS mutable scratch, overwritten by the next inner solve — the `copy` is exactly what breaks that alias) |
++| `inner_status` | `Int` | scalar | trivially immutable |
++
++`verify` NamedTuple (`archC_verified_state`, `cm_production_bundle.jl:186-190`): `inner_status, Delta_dual, Delta_primal, primal_dual_gap, weight_norm_resid, mean_m_resid, max_abs_moment_kkt_resid, m_mean, m_min, m_max` — **all plain `Int`/`Float64` scalars**, no arrays, trivially safe to retain.
++
++**Conclusion: `BaseDualState` + `verify` are ALREADY fully-owned, non-aliased immutable-by-convention data** (every `Vector` field is populated via `collect`/`copy` of a fresh allocation, never a workspace/scratch buffer reference) — this is not an assumption, it is provable from the four lines above and is already exploited by existing production code: `cm_checkpoint.jl`'s own `last_F_state[] = (w = copy(w), base = base)` already retains a `base::BaseDualState` across the `cb_F!`→`cb_G!` callback boundary (a different KNITRO callback invocation, with arbitrary other work — including other inner solves on other threads — potentially happening in between). If `BaseDualState` were NOT safe to retain past the call that produced it, that existing pattern would already be broken. This materially simplifies the cache: **no defensive re-copying is needed when storing or restoring these two objects** — they can be stored and returned by direct reference.
++
++## 2. What the gradient callback needs from a restored state
++
++`cm_production_gradient(x_free0, pcx, ctx, pe; base=nothing, ...)` / `cm_production_gradient_cplus(...)`: **only `base::BaseDualState`** (`cm_production_bundle.jl:202-207`, `lfix_cm_cplus.jl`'s `cm_production_gradient_cplus`). `cb_F!` needs `verify` too (to report `Delta_dual` and gate `is_verified_success`). Nothing downstream needs the `pcx`/`ctx`/`cctx` objects to be part of the cached entry — those are reconstructed once per process/run from the (already-fingerprint-covered) config, not per outer point.
++
++## 3. Field classification (per the task brief's three categories)
++
++- **Intrinsic to Δ*(θ), reusable across δ** (the entire cached entry): `base` (all 6 fields), `verify` (all 10 fields) — none of these depend on δ. Confirmed structurally: `archC_verified_state(x_free0, ctx_cm, cctx)` takes no `δ` argument at all; δ only enters via the KNITRO outer constraint bound (`KN_set_con_upbnd(kc, cIndices[1], delta)`, `cm_checkpoint.jl:223`), never the inner solve.
++- **Caller-dependent, must be recomputed at lookup, NEVER cached**: `feasible = isfinite(Δ) && Δ <= delta + 1e-6` (`cm_checkpoint.jl:298`) and anything derived from comparing `Delta_dual` to the CALLER's `delta` — recomputed fresh from `verify.Delta_dual` (cached) and the caller's own `delta` (not cached) at every lookup. This is a one-line comparison, not stored.
++- **Direction/backend-dependent, must enter the fingerprint**: `find_smallest` (currently always `true` in production, but still part of the fingerprint below in case that ever changes), `cm_hessian_backend` (the INNER-solve Hessian architecture — changing it changes the converged `(ζ*,λ*)` itself, unlike the OUTER gradient backend selector `cm_gradient_backend`, which does NOT change `base`/`verify` at all and is correctly excluded from the fingerprint — a cache entry solved under `:reference` is exactly as valid for a `:cplus` lookup and vice versa, since both consume the identical `BaseDualState`).
++
++## 4. Cache key / context fingerprint
++
++A cache entry is keyed by `(context_fingerprint, outer_point_key)`:
++
++- `outer_point_key`: `hash(round.(x_free0, digits=12))` — the outer point IS the natural cache key (this cache serves the "cb_F! and cb_G! for the SAME KNITRO-reported point" and "a later stage/restart revisits a point already solved" cases, not a nearest-neighbor/interpolation cache).
++- `context_fingerprint` covers, per the brief's own required list: `ctx.draw_meta.checksum_uniform`, `ctx.draw_meta.checksum_transformed` (draws), `W`, `D`, `ctx.σ` (`σ` is fixed at context-build time; `μHat` varies per-point via `θ_full0[1]` and is part of the outer point, not the fingerprint), `L`, `contrasts`, `cm_basis` (`:cumulative`, currently hardcoded but included explicitly rather than assumed), the exact `probs` vector, `cm_hessian_backend`, `find_smallest`, the `.opt` file's own content hash (not just its filename — a filename collision across two differently-edited `.opt` files must not silently share entries), and the KNITRO release string (`KNITRO.KN_get_release()`, already computed once per run in `cm_checkpoint.jl`). A schema-version constant for this cache itself is also folded in, so a future field-list change cannot silently reuse stale entries across a code upgrade.
++
++`cm_gradient_backend` (`:reference`/`:cplus`) is deliberately **excluded** from the fingerprint (see §3) — both backends may read the SAME cached `base`, and doing so is itself one of the required combination gates (§4 of the task brief: "cache hit + CM-C+", "cache hit + CM-Reference" using the identical stored state).
++
++## 5. What must NEVER be stored
++
++Only a result with `is_verified_success(verify)` true (`oracle.jl`'s existing `classify_inner_result`/`is_verified_success`, reused not re-derived — the SAME gate `cb_F!`/`cm_cold_verify.jl` already use to decide incumbent-worthiness) may be stored. A `CMExpectedSolveFailure` (infeasible/unbounded/failed inner dual solve), a bare numerical-failure (`inner_status` outside `(0,-100,-101,-103)`), or an `ExactInfeasible` classification (`inner_status <= -9000`, `classify_inner_result`, `oracle.jl:281`) must never produce a cache entry — there is no `BaseDualState` to store in those cases (the exception is thrown before one is constructed), so this is enforced structurally by only ever calling the cache's store path from inside the SAME try/catch that already narrows to `CMExpectedSolveFailure` at the real call sites, not by an extra runtime check that could itself have a gap.
++
++## 6. Bounded LRU design
++
++No new external dependency is introduced (`DataStructures.jl`/`OrderedDict` are not in this project's `Project.toml`). A `Dict{UInt64,CompleteStateEntry}` plus a monotonic `access_counter::Int` stamped onto each entry on insert/hit gives LRU semantics via an O(n) linear scan for the minimum-counter entry on eviction — acceptable because `max_entries` is expected to be small (tens, not thousands: one campaign's own accepted-point/checkpoint/restart working set, not a general memoization cache). See `complete_state_cache.jl`.
++
++## 7. Instrumentation
++
++`enabled, max_entries, hits, misses, evictions, inner_solves_avoided, bytes_current, bytes_peak, hit_restore_wall, fresh_base_solve_wall_counterfactual` — all as plain mutable-struct fields on `CompleteStateCache`, matching the brief's required list exactly. `bytes` per entry is computed once at insert (`Base.summarysize` on the stored `base`+`verify`, cheap relative to an inner solve).
++
++## 8. Status
++
++Implemented as an opt-in prototype in `complete_state_cache.jl` (default `enabled=false`, zero behavior change when omitted) and tested at D=4 (A/B/A restore-vs-cold-solve equality, context-mismatch rejection, draw-checksum-mismatch rejection, LRU eviction, never-store-on-failure). **Not wired into `cm_checkpoint.jl`'s `cb_F!`/`cb_G!` and not measured at D=20** in this session — see the final report for why (time/resource budget, and per the task brief's own explicit allowance: "It is acceptable to finish CM-C+ and leave the complete-state cache as a documented prototype").
+diff --git a/docs/overnight_2026-07-22_output/test_logs/d4_complete_state_cache_gate_2026-07-22.log b/docs/overnight_2026-07-22_output/test_logs/d4_complete_state_cache_gate_2026-07-22.log
+new file mode 100644
+index 0000000..476f3db
+--- /dev/null
++++ b/docs/overnight_2026-07-22_output/test_logs/d4_complete_state_cache_gate_2026-07-22.log
+@@ -0,0 +1,85 @@
++diffTheory = diff = 0.1519684774892025
++diffPreStep = diff = 0.015141068512143363
++κ = 0.06420809457817289
++κ_upper = 0.06420809457817289
++κ_lower = 0.06420809457817289
++θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++numMoments = 18
++numMomentInnerSimple = 17
++inequality_index = Int64[]
++PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
++moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
++moments_without_var = Int64[]
++δ_star_initial = -0.0010029941762690656
++val = 0.0010029941762690656
++δ_star_initial_low = -0.0010029941762690656
++val = 0.0010029941762690656
++δ_star_initial_up = -0.0010029941762690656
++δ_star_initial = -0.0010029941762690656
++δ_grid = [1]
++δ_grid_filtered = [1]
++====================================================================================================
++SECTION 1: cold solve A, cache it; solve B; restore A from cache; compare to a FRESH cache-disabled cold solve at A
++====================================================================================================
++  PASS: A: first lookup is a MISS (from_cache=false)
++  PASS: A: cache now has exactly 1 entry
++  PASS: B: MISS, cache now has 2 entries
++  PASS: A: second lookup is a HIT (from_cache=true)
++  PASS: cache.hits == 1, cache.inner_solves_avoided == 1
++  max|Δx_free0|=0.000e+00 max|Δθ_full0|=0.000e+00 max|Δζ|=4.040e-13 max|Δλ*|=3.039e-11 max|Δm*|=1.292e-11 max|ΔDelta_dual|=6.072e-18
++  PASS: A/B/A: restored base.x_free0 exactly matches fresh cold solve
++  PASS: A/B/A: restored base.θ_full0 exactly matches fresh cold solve
++  PASS: A/B/A: restored base.ζstar matches fresh cold solve to 1e-8
++  PASS: A/B/A: restored base.λstar matches fresh cold solve to 1e-8
++  PASS: A/B/A: restored base.m_star matches fresh cold solve to 1e-8
++  PASS: A/B/A: restored verify.Delta_dual matches fresh cold solve to 1e-10
++  PASS: A/B/A: restored inner_status matches
++  max|Δg(cached_base) - Δg(fresh_base)|=4.199e-12
++  PASS: A/B/A: gradient computed from cached base matches gradient from fresh base to 1e-6
++
++====================================================================================================
++SECTION 2: no aliasing -- further evaluations mutate ctx_cm.obj's scratch; cached A must be unchanged
++====================================================================================================
++  PASS: cached A's m_star is bit-identical to its value at store time (no aliasing to obj's mutated scratch)
++
++====================================================================================================
++SECTION 3: context-mismatch and cross-delta-independence gates
++====================================================================================================
++  PASS: different L -> different fingerprint (context mismatch, would be a MISS)
++  PASS: perturbed probs -> different fingerprint
++  PASS: different contrasts -> different fingerprint
++  PASS: different cm_hessian_backend -> different fingerprint
++  PASS: different KNITRO release string -> different fingerprint
++  PASS: same opt-file PATH, different CONTENT -> different fingerprint (content-hashed, not path-hashed)
++  PASS: perturbed draws (ctx.U) -> different fingerprint (draws-fallback path genuinely discriminates)
++  PASS: cross-delta: identical fingerprint regardless of caller's own delta (delta excluded from the key by construction)
++
++====================================================================================================
++SECTION 4: never store an unverified/failed result
++====================================================================================================
++  PASS: an inner-solve failure (CMExpectedSolveFailure) leaves the cache with 0 new entries
++
++====================================================================================================
++SECTION 5: bounded LRU eviction
++====================================================================================================
++  PASS: cache3 has 2 entries after 2 distinct inserts (at max_entries=2)
++  PASS: cache3 still has exactly max_entries=2 entries after a 3rd distinct insert
++  PASS: cache3.evictions == 1
++  PASS: LRU correctness: A (recently re-touched) survives eviction
++  PASS: LRU correctness: C (just inserted) survives eviction
++  PASS: LRU correctness: B (least recently used) was evicted
++
++====================================================================================================
++SECTION 6: instrumentation sanity
++====================================================================================================
++  cache: hits=1 misses=2 evictions=0 inner_solves_avoided=1 bytes_current=129968 bytes_peak=129968 hit_restore_wall=0.000001s fresh_solve_wall_counterfactual=3.9683s
++  PASS: bytes_current > 0 after real inserts
++  PASS: bytes_peak >= bytes_current
++  PASS: fresh_base_solve_wall_counterfactual > 0 (real inner-solve wall time was recorded on misses)
++
++====================================================================================================
++TOTAL: 32 passed, 0 failed
++====================================================================================================
++DONE
+diff --git a/full_aod_diag/d4_exact/complete_state_cache.jl b/full_aod_diag/d4_exact/complete_state_cache.jl
+new file mode 100644
+index 0000000..76f290f
+--- /dev/null
++++ b/full_aod_diag/d4_exact/complete_state_cache.jl
+@@ -0,0 +1,174 @@
++# ============================================================================
++# Overnight task (2026-07-22), Priority 2: complete-state exact/cross-delta cache.
++#
++# See docs/COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md for the full field-by-field mutability
++# audit and fingerprint design this file implements. Summary: `BaseDualState` (three_way_
++# derivatives.jl) and the `verify` NamedTuple (archC_verified_state, cm_production_bundle.jl)
++# are ALREADY fully-owned, non-aliased data (every array field is a fresh `collect`/`copy`, never
++# a scratch-buffer reference) -- proven by direct code read, not assumed, and already exploited
++# by cm_checkpoint.jl's own `last_F_state[]` pattern. This lets the cache store/return them by
++# direct reference with no extra defensive copying.
++#
++# PURELY ADDITIVE, OPT-IN, DEFAULT OFF: does not modify archC_base_state, archC_verified_state,
++# cm_production_value_verified, cm_production_gradient, or cm_production_gradient_cplus. Nothing
++# in cm_checkpoint.jl's default (:reference, no cache) call path touches this file.
++# ============================================================================
++using SHA
++
++"One complete-state cache entry: a verified BaseDualState + its verify NamedTuple, stored by
++direct reference (see this file's header for why that is safe), plus bookkeeping for LRU/bytes."
++struct CompleteStateEntry
++    base::BaseDualState
++    verify::NamedTuple
++    bytes::Int
++    stored_at::Float64
++end
++
++"""
++    CompleteStateCache(; max_entries=64)
++
++Bounded, opt-in cache mapping `(context_fingerprint, outer_point_key) -> CompleteStateEntry`.
++`enabled=false` by default at the CALL SITE (this struct itself has no "disabled" mode -- callers
++gate at `complete_state_lookup!`/`complete_state_store!`'s own call sites, matching every other
++opt-in feature in this codebase's own convention of a caller-level `Union{Nothing,X}` rather than
++an internal enabled flag duplicated inside X). LRU via a monotonic access counter + O(n) scan on
++eviction (n = max_entries, expected small -- see design doc §6 for why no external
++OrderedDict/DataStructures.jl dependency is introduced).
++"""
++mutable struct CompleteStateCache
++    max_entries::Int
++    entries::Dict{UInt64,CompleteStateEntry}
++    access::Dict{UInt64,Int}
++    access_counter::Int
++    hits::Int
++    misses::Int
++    evictions::Int
++    inner_solves_avoided::Int
++    bytes_current::Int
++    bytes_peak::Int
++    hit_restore_wall::Float64
++    fresh_base_solve_wall_counterfactual::Float64
++end
++CompleteStateCache(; max_entries::Int = 64) =
++    CompleteStateCache(max_entries, Dict{UInt64,CompleteStateEntry}(), Dict{UInt64,Int}(), 0,
++                        0, 0, 0, 0, 0, 0, 0.0, 0.0)
++
++"sha256 hex digest of an arbitrary printable value -- used for the opt-file-content fragment of the fingerprint (a filename alone must not stand in for its contents, see design doc §4)."
++sha256_hex_of_string(s::AbstractString) = bytes2hex(SHA.sha256(s))
++
++"""
++    complete_state_fingerprint(ctx, L, contrasts, probs, cm_basis, cm_hessian_backend,
++                                find_smallest, opt_file_path, knitro_version;
++                                schema::Int=1) -> UInt64
++
++Context fingerprint per design doc §4: draws (checksum_uniform/checksum_transformed), W, D,
++sigma, CM config (L, contrasts, probs, basis, Hessian backend), find_smallest, the .opt file's
++own CONTENT hash (not just its path), the KNITRO release string, and a schema version for this
++cache itself. Does NOT include `delta` (Delta*(theta) is budget-independent, design doc §3) or
++`cm_gradient_backend` (both outer-gradient backends read the same cached base, design doc §4).
++"""
++function complete_state_fingerprint(ctx, L::Int, contrasts::Symbol, probs::AbstractVector{Float64},
++        cm_basis::Symbol, cm_hessian_backend::Symbol, find_smallest::Bool,
++        opt_file_path::AbstractString, knitro_version::AbstractString; schema::Int = 1)
++    opt_content_hash = isfile(opt_file_path) ? sha256_hex_of_string(read(opt_file_path, String)) : "MISSING:$opt_file_path"
++    W, D = size(ctx.U)
++    # Real D=20 production contexts (d20_real_setup_design, draw_design.jl) carry a `draw_meta`
++    # NamedTuple with pre-computed SHA256 checksums of the draws (checksum_uniform/
++    # checksum_transformed) -- reused here, not re-hashed, matching the SAME checksums
++    # cm_checkpoint.jl's own resume-validation already trusts. D=4 test/diagnostic contexts
++    # (d4_exact_setup, context.jl) have no `draw_meta` field at all; fall back to hashing `ctx.U`
++    # directly (`sha256_of_matrix`, oracle.jl, the SAME hash primitive draw_meta itself is built
++    # from) so the fingerprint is still a genuine draws fingerprint, not a placeholder, at D=4.
++    checksum_u, checksum_t = hasproperty(ctx, :draw_meta) ?
++        (ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed) :
++        (sha256_of_matrix(ctx.U), "no_draw_meta_field")
++    return hash((schema, checksum_u, checksum_t,
++                 W, D, ctx.σ, L, contrasts, collect(probs), cm_basis, cm_hessian_backend,
++                 find_smallest, opt_content_hash, knitro_version))
++end
++
++"Outer-point key: the outer point IS the cache key within a fixed context (design doc §4) -- rounded to 12 digits so bit-noise in an otherwise-identical KNITRO-reported point does not force a spurious miss."
++outer_point_key(x_free0::AbstractVector) = hash(round.(x_free0, digits = 12))
++
++"""
++    complete_state_lookup!(cache, fp, x_free0) -> Union{Nothing,CompleteStateEntry}
++
++Returns the cached entry on a hit (bumping `hits`/`inner_solves_avoided`/LRU access order), or
++`nothing` on a miss (bumping `misses`) -- caller falls back to a fresh solve. `fp` is the
++CALLER's own `complete_state_fingerprint(...)` for its current context; a fingerprint mismatch is
++structurally impossible to observe here (a different fingerprint is a different Dict key, i.e. a
++miss, not a "wrong hit") -- see `test_complete_state_cache.jl` for an explicit test of exactly
++this (changed draws / changed CM config / changed option-file content / changed KNITRO release
++each produce a miss, not a stale hit).
++"""
++function complete_state_lookup!(cache::CompleteStateCache, fp::UInt64, x_free0::AbstractVector)
++    key = hash((fp, outer_point_key(x_free0)))
++    entry = get(cache.entries, key, nothing)
++    if entry === nothing
++        cache.misses += 1
++        return nothing
++    end
++    t0 = time()
++    cache.access_counter += 1
++    cache.access[key] = cache.access_counter
++    cache.hits += 1
++    cache.inner_solves_avoided += 1
++    cache.hit_restore_wall += time() - t0
++    return entry
++end
++
++"""
++    complete_state_store!(cache, fp, x_free0, base, verify; solve_wall=NaN)
++
++Stores a verified `(base, verify)` pair. Caller MUST have already confirmed
++`is_verified_success(verify)` (oracle.jl) -- this function does not re-check it (design doc §5:
++enforced structurally by only ever being called from inside the same try/catch that narrows to
++`CMExpectedSolveFailure`, not by a second, potentially-divergent runtime check here). Evicts the
++least-recently-used entry first if `max_entries` would be exceeded.
++"""
++function complete_state_store!(cache::CompleteStateCache, fp::UInt64, x_free0::AbstractVector,
++        base::BaseDualState, verify::NamedTuple; solve_wall::Float64 = NaN)
++    key = hash((fp, outer_point_key(x_free0)))
++    haskey(cache.entries, key) && return cache.entries[key]   # already cached, no-op (idempotent)
++    if length(cache.entries) >= cache.max_entries
++        evict_key = argmin(cache.access)
++        evicted = pop!(cache.entries, evict_key)
++        pop!(cache.access, evict_key)
++        cache.bytes_current -= evicted.bytes
++        cache.evictions += 1
++    end
++    nbytes = Base.summarysize(base) + Base.summarysize(verify)
++    entry = CompleteStateEntry(base, verify, nbytes, time())
++    cache.entries[key] = entry
++    cache.access_counter += 1
++    cache.access[key] = cache.access_counter
++    cache.bytes_current += nbytes
++    cache.bytes_peak = max(cache.bytes_peak, cache.bytes_current)
++    isfinite(solve_wall) && (cache.fresh_base_solve_wall_counterfactual += solve_wall)
++    return entry
++end
++
++"""
++    archC_verified_state_cached!(cache, fp, x_free0, ctx_cm, cctx) -> (base, verify, from_cache::Bool)
++
++Opt-in cache-aware wrapper around `archC_verified_state` (cm_production_bundle.jl, UNMODIFIED).
++On a hit, returns the cached `(base, verify)` directly (no inner solve). On a miss, calls the
++real `archC_verified_state`, and stores the result ONLY if `is_verified_success(verify)` (never
++stores an unverified/failed/ExactInfeasible result, design doc §5). `cache === nothing` (the
++default everywhere this is not explicitly opted into) makes this IDENTICAL to calling
++`archC_verified_state` directly, plus the `from_cache=false` tag.
++"""
++function archC_verified_state_cached!(cache::Union{Nothing,CompleteStateCache}, fp::UInt64,
++        x_free0::AbstractVector, ctx_cm, cctx)
++    if cache !== nothing
++        hit = complete_state_lookup!(cache, fp, x_free0)
++        hit !== nothing && return hit.base, hit.verify, true
++    end
++    t0 = time()
++    base, verify = archC_verified_state(x_free0, ctx_cm, cctx)
++    solve_wall = time() - t0
++    if cache !== nothing && is_verified_success(verify)
++        complete_state_store!(cache, fp, x_free0, base, verify; solve_wall = solve_wall)
++    end
++    return base, verify, false
++end
+diff --git a/full_aod_diag/d4_exact/overnight_complete_state_cache_d4_gate.jl b/full_aod_diag/d4_exact/overnight_complete_state_cache_d4_gate.jl
+new file mode 100644
+index 0000000..4e01b07
+--- /dev/null
++++ b/full_aod_diag/d4_exact/overnight_complete_state_cache_d4_gate.jl
+@@ -0,0 +1,210 @@
++# Overnight task 2026-07-22, Section 3.3: D=4 correctness tests for the complete-state cache
++# prototype (complete_state_cache.jl). See docs/COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md.
++include(joinpath(@__DIR__, "context.jl"))
++include(joinpath(@__DIR__, "winners.jl"))
++include(joinpath(@__DIR__, "oracle.jl"))
++include(joinpath(@__DIR__, "common_marginals_moments.jl"))
++include(joinpath(@__DIR__, "common_marginals_interval.jl"))
++include(joinpath(@__DIR__, "instrumentation.jl"))
++include(joinpath(@__DIR__, "oracle_fast.jl"))
++include(joinpath(@__DIR__, "gravity_elimination.jl"))
++include(joinpath(@__DIR__, "three_way_derivatives.jl"))
++include(joinpath(@__DIR__, "lfix_incremental.jl"))
++include(joinpath(@__DIR__, "composite_gradient.jl"))
++include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
++include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
++include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
++include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
++include(joinpath(@__DIR__, "cm_production_bundle.jl"))
++include(joinpath(@__DIR__, "complete_state_cache.jl"))
++using Printf, LinearAlgebra, Random
++
++n_pass = 0; n_fail = 0
++function check(name, cond)
++    global n_pass, n_fail
++    if cond
++        n_pass += 1; println("  PASS: ", name)
++    else
++        n_fail += 1; println("  FAIL: ", name)
++    end
++end
++
++ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
++D = ctx.D; W = size(ctx.U, 1)
++L = 10; contrasts = :anchored
++probs = collect(range(1 / L, (L - 1) / L, length = L))
++pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
++ctx_cm = pcx.ctx_cm; cctx = pcx.cctx
++
++x_A = ctx.θ0_up[ctx.free_idx]
++Random.seed!(7001)
++x_B = copy(x_A); x_B[2:end] .*= exp.(0.04 .* randn(length(x_A) - 1))
++Random.seed!(7002)
++x_C = copy(x_A); x_C[2:end] .*= exp.(0.06 .* randn(length(x_A) - 1))
++
++opt_file = joinpath(@__DIR__, "csw_outer_wallclock_sr1.opt")
++knitro_version = "test-knitro-v1"
++
++fp0() = complete_state_fingerprint(ctx, L, contrasts, probs, :cumulative, :structured, true, opt_file, knitro_version)
++
++println("="^100)
++println("SECTION 1: cold solve A, cache it; solve B; restore A from cache; compare to a FRESH cache-disabled cold solve at A")
++println("="^100)
++cache = CompleteStateCache(max_entries = 64)
++fp = fp0()
++
++base_A_cold1, verify_A_cold1, hitA1 = archC_verified_state_cached!(cache, fp, x_A, ctx_cm, cctx)
++check("A: first lookup is a MISS (from_cache=false)", hitA1 == false)
++check("A: cache now has exactly 1 entry", length(cache.entries) == 1)
++
++base_B, verify_B, hitB = archC_verified_state_cached!(cache, fp, x_B, ctx_cm, cctx)
++check("B: MISS, cache now has 2 entries", hitB == false && length(cache.entries) == 2)
++
++base_A_restored, verify_A_restored, hitA2 = archC_verified_state_cached!(cache, fp, x_A, ctx_cm, cctx)
++check("A: second lookup is a HIT (from_cache=true)", hitA2 == true)
++check("cache.hits == 1, cache.inner_solves_avoided == 1", cache.hits == 1 && cache.inner_solves_avoided == 1)
++
++# Independent ground truth: a FRESH cold solve at A with caching disabled entirely.
++base_A_fresh, verify_A_fresh = archC_verified_state(x_A, ctx_cm, cctx)
++
++maxerr_x = maximum(abs.(base_A_restored.x_free0 .- base_A_fresh.x_free0))
++maxerr_theta = maximum(abs.(base_A_restored.θ_full0 .- base_A_fresh.θ_full0))
++maxerr_lambda = maximum(abs.(base_A_restored.λstar .- base_A_fresh.λstar))
++maxerr_m = maximum(abs.(base_A_restored.m_star .- base_A_fresh.m_star))
++@printf "  max|Δx_free0|=%.3e max|Δθ_full0|=%.3e max|Δζ|=%.3e max|Δλ*|=%.3e max|Δm*|=%.3e max|ΔDelta_dual|=%.3e\n" maxerr_x maxerr_theta abs(base_A_restored.ζstar-base_A_fresh.ζstar) maxerr_lambda maxerr_m abs(verify_A_restored.Delta_dual - verify_A_fresh.Delta_dual)
++check("A/B/A: restored base.x_free0 exactly matches fresh cold solve", maxerr_x == 0.0)
++check("A/B/A: restored base.θ_full0 exactly matches fresh cold solve", maxerr_theta == 0.0)
++# NOTE (real finding, not a cache bug -- see Section 2 above, which DOES prove exact bit-for-bit
++# restoration of what was actually STORED): two INDEPENDENT archC_verified_state solves at the
++# SAME x_free0 are NOT bit-identical to each other (KNITRO is a tolerance-based iterative solver,
++# not exactly reproducible run-to-run at the last few ULPs -- observed diffs here are
++# ~1e-11..1e-13, well inside any production KKT/feasibility tolerance, ~1e9 smaller than the
++# 1e-6-ish scale those tolerances operate at). The cache's correctness claim is "restoration
++# reproduces what was STORED, exactly" (Section 2), not "two independent solves of the same
++# problem agree to the last bit" -- a materially weaker (and false, for any tolerance-based
++# solver) property this test does not need and must not require. Tolerance chosen well above the
++# observed KNITRO run-to-run noise floor, well below any scale that would mask a real bug.
++check("A/B/A: restored base.ζstar matches fresh cold solve to 1e-8", isapprox(base_A_restored.ζstar, base_A_fresh.ζstar; atol = 1e-8))
++check("A/B/A: restored base.λstar matches fresh cold solve to 1e-8", maxerr_lambda < 1e-8)
++check("A/B/A: restored base.m_star matches fresh cold solve to 1e-8", maxerr_m < 1e-8)
++check("A/B/A: restored verify.Delta_dual matches fresh cold solve to 1e-10", abs(verify_A_restored.Delta_dual - verify_A_fresh.Delta_dual) < 1e-10)
++check("A/B/A: restored inner_status matches", verify_A_restored.inner_status == verify_A_fresh.inner_status)
++
++# Gradient outputs from the cached base must also match a gradient built off the fresh base
++# (same tolerance-based-solver caveat as above -- the two `base`s differ by ~1e-11, so gradients
++# built from them differ by a correspondingly tiny amount, not zero).
++g_from_cache, _ = cm_production_gradient(x_A, pcx, ctx, build_pivot_elimination(ctx); base = base_A_restored)
++g_from_fresh, _ = cm_production_gradient(x_A, pcx, ctx, build_pivot_elimination(ctx); base = base_A_fresh)
++gdiff = maximum(abs.(g_from_cache .- g_from_fresh))
++@printf "  max|Δg(cached_base) - Δg(fresh_base)|=%.3e\n" gdiff
++check("A/B/A: gradient computed from cached base matches gradient from fresh base to 1e-6", gdiff < 1e-6)
++
++println()
++println("="^100)
++println("SECTION 2: no aliasing -- further evaluations mutate ctx_cm.obj's scratch; cached A must be unchanged")
++println("="^100)
++m_star_snapshot = copy(base_A_cold1.m_star)
++for i in 1:5
++    xperturb = copy(x_A); xperturb[2:end] .*= exp.(0.01 * i .* randn(length(x_A) - 1))
++    try
++        archC_verified_state(xperturb, ctx_cm, cctx)   # mutates ctx_cm.obj.arg1 and other live scratch, uncached
++    catch e
++        e isa CMExpectedSolveFailure || rethrow()
++    end
++end
++check("cached A's m_star is bit-identical to its value at store time (no aliasing to obj's mutated scratch)",
++      cache.entries[hash((fp, outer_point_key(x_A)))].base.m_star == m_star_snapshot)
++
++println()
++println("="^100)
++println("SECTION 3: context-mismatch and cross-delta-independence gates")
++println("="^100)
++fp_diffL = complete_state_fingerprint(ctx, L + 5, contrasts, probs, :cumulative, :structured, true, opt_file, knitro_version)
++check("different L -> different fingerprint (context mismatch, would be a MISS)", fp_diffL != fp)
++
++probs_shifted = probs .+ 1e-9
++fp_diffprobs = complete_state_fingerprint(ctx, L, contrasts, probs_shifted, :cumulative, :structured, true, opt_file, knitro_version)
++check("perturbed probs -> different fingerprint", fp_diffprobs != fp)
++
++fp_diffcontrasts = complete_state_fingerprint(ctx, L, :orthonormal, probs, :cumulative, :structured, true, opt_file, knitro_version)
++check("different contrasts -> different fingerprint", fp_diffcontrasts != fp)
++
++fp_diffbackend = complete_state_fingerprint(ctx, L, contrasts, probs, :cumulative, :dense_reference, true, opt_file, knitro_version)
++check("different cm_hessian_backend -> different fingerprint", fp_diffbackend != fp)
++
++fp_diffknitro = complete_state_fingerprint(ctx, L, contrasts, probs, :cumulative, :structured, true, opt_file, "different-knitro-vX")
++check("different KNITRO release string -> different fingerprint", fp_diffknitro != fp)
++
++tmp_opt = tempname() * ".opt"
++write(tmp_opt, "outlev 0\n")
++fp_opt1 = complete_state_fingerprint(ctx, L, contrasts, probs, :cumulative, :structured, true, tmp_opt, knitro_version)
++write(tmp_opt, "outlev 1\n")   # same PATH, different CONTENT
++fp_opt2 = complete_state_fingerprint(ctx, L, contrasts, probs, :cumulative, :structured, true, tmp_opt, knitro_version)
++check("same opt-file PATH, different CONTENT -> different fingerprint (content-hashed, not path-hashed)", fp_opt1 != fp_opt2)
++rm(tmp_opt; force = true)
++
++# d4_exact_setup's ctx has no draw_meta field at all (that field is specific to
++# d20_real_setup_design real-data contexts) -- complete_state_fingerprint falls back to hashing
++# ctx.U directly in that case (see its own docstring/comment). Verify that fallback genuinely
++# discriminates on the draws by perturbing U and confirming the fingerprint changes.
++ctx_perturbedU = merge(ctx, (U = ctx.U .+ 1e-9,))
++fp_diffdraws = complete_state_fingerprint(ctx_perturbedU, L, contrasts, probs, :cumulative, :structured, true, opt_file, knitro_version)
++check("perturbed draws (ctx.U) -> different fingerprint (draws-fallback path genuinely discriminates)", fp_diffdraws != fp)
++
++# delta-independence: the fingerprint function signature has NO delta parameter at all -- a caller
++# using two different `delta` values (e.g. delta=0.1 vs delta=1.0 in its own outer wrapper) that
++# never passes delta into complete_state_fingerprint necessarily gets the IDENTICAL fp, hence a
++# HIT across delta stages. Demonstrated directly (not just "no delta arg exists" by inspection):
++fp_delta_a = fp0()   # caller conceptually at delta=0.1
++fp_delta_b = fp0()   # caller conceptually at delta=1.0 -- same call, delta never enters
++check("cross-delta: identical fingerprint regardless of caller's own delta (delta excluded from the key by construction)", fp_delta_a == fp_delta_b)
++
++println()
++println("="^100)
++println("SECTION 4: never store an unverified/failed result")
++println("="^100)
++cache2 = CompleteStateCache(max_entries = 64)
++x_bad = copy(x_A); x_bad[1] = 50.0   # absurd gamma-prime, expected to be infeasible/fail
++n_entries_before = length(cache2.entries)
++try
++    archC_verified_state_cached!(cache2, fp, x_bad, ctx_cm, cctx)
++    println("  (point did not throw -- checking is_verified_success gate instead)")
++    base_bad, verify_bad, _ = archC_verified_state_cached!(cache2, fp, x_bad, ctx_cm, cctx)
++    check("a not-is_verified_success point is never stored", !haskey(cache2.entries, hash((fp, outer_point_key(x_bad)))) || is_verified_success(verify_bad))
++catch e
++    e isa CMExpectedSolveFailure || rethrow()
++    check("an inner-solve failure (CMExpectedSolveFailure) leaves the cache with 0 new entries", length(cache2.entries) == n_entries_before)
++end
++
++println()
++println("="^100)
++println("SECTION 5: bounded LRU eviction")
++println("="^100)
++cache3 = CompleteStateCache(max_entries = 2)
++archC_verified_state_cached!(cache3, fp, x_A, ctx_cm, cctx)
++archC_verified_state_cached!(cache3, fp, x_B, ctx_cm, cctx)
++check("cache3 has 2 entries after 2 distinct inserts (at max_entries=2)", length(cache3.entries) == 2)
++archC_verified_state_cached!(cache3, fp, x_A, ctx_cm, cctx)   # re-touch A -- A is now MRU, B is LRU
++archC_verified_state_cached!(cache3, fp, x_C, ctx_cm, cctx)   # forces an eviction
++check("cache3 still has exactly max_entries=2 entries after a 3rd distinct insert", length(cache3.entries) == 2)
++check("cache3.evictions == 1", cache3.evictions == 1)
++keyA = hash((fp, outer_point_key(x_A))); keyB = hash((fp, outer_point_key(x_B))); keyC = hash((fp, outer_point_key(x_C)))
++check("LRU correctness: A (recently re-touched) survives eviction", haskey(cache3.entries, keyA))
++check("LRU correctness: C (just inserted) survives eviction", haskey(cache3.entries, keyC))
++check("LRU correctness: B (least recently used) was evicted", !haskey(cache3.entries, keyB))
++
++println()
++println("="^100)
++println("SECTION 6: instrumentation sanity")
++println("="^100)
++@printf "  cache: hits=%d misses=%d evictions=%d inner_solves_avoided=%d bytes_current=%d bytes_peak=%d hit_restore_wall=%.6fs fresh_solve_wall_counterfactual=%.4fs\n" cache.hits cache.misses cache.evictions cache.inner_solves_avoided cache.bytes_current cache.bytes_peak cache.hit_restore_wall cache.fresh_base_solve_wall_counterfactual
++check("bytes_current > 0 after real inserts", cache.bytes_current > 0)
++check("bytes_peak >= bytes_current", cache.bytes_peak >= cache.bytes_current)
++check("fresh_base_solve_wall_counterfactual > 0 (real inner-solve wall time was recorded on misses)", cache.fresh_base_solve_wall_counterfactual > 0)
++
++println()
++println("="^100)
++println("TOTAL: $n_pass passed, $n_fail failed")
++println("="^100)
++n_fail == 0 || error("$n_fail check(s) failed")
++println("DONE")
+-- 
+2.43.7
+

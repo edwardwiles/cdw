@@ -1,0 +1,72 @@
+diff --git a/full_aod_diag/d4_exact/cm_checkpoint.jl b/full_aod_diag/d4_exact/cm_checkpoint.jl
+index c385cac..6272b0f 100644
+--- a/full_aod_diag/d4_exact/cm_checkpoint.jl
++++ b/full_aod_diag/d4_exact/cm_checkpoint.jl
+@@ -149,6 +149,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
+         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
+         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
+         verbose::Bool = true,
++        cm_gradient_backend::Symbol = :reference,   # overnight task 2026-07-22 (docs/CM_GRADIENT_ALGEBRA_TRACE_2026-07-22.md):
++        # :reference (production default, UNCHANGED behavior -- cm_production_gradient/
++        # composite_gradient_at_fast, byte-identical to every run before this kwarg existed) |
++        # :cplus (experimental -- cm_production_gradient_cplus/composite_gradient_at_Cplus_from_cache,
++        # lfix_cm_cplus.jl). Fresh-per-launch, like maxtime_real/checkpoint_interval_s/verbose --
++        # NOT carried forward from a resumed checkpoint (CMCheckpoint's persisted problem identity
++        # is unchanged by this kwarg; see docs for why this is intentional).
+         heartbeat_interval_s::Union{Nothing,Float64} = nothing)   # remediation task Part B:
+         # opt-in liveness watchdog (nothing = off, zero overhead, the default). When set, a
+         # background Timer logs, every heartbeat_interval_s, how long it has been since the last
+@@ -166,6 +173,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
+     lp(xs...) = (println(xs...); flush(stdout))
+     mkpath(ckpt_dir)
+ 
++    cm_gradient_backend in (:reference, :cplus) ||
++        error("run_cm_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
++    lp("[", label, "] cm_gradient_backend=", cm_gradient_backend,
++       cm_gradient_backend == :cplus ? " (EXPERIMENTAL -- overnight task 2026-07-22, opt-in)" : " (production default)")
++    write(joinpath(ckpt_dir, "$(label)_gradient_backend.txt"),
++          "cm_gradient_backend=$(cm_gradient_backend)\nrun_id=$(run_id)\nrecorded_at=$(Dates.now())\n")
++
+     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
+     find_smallest = true   # :cm_upper is the only wired direction today, matches run_cm_upper's own docstring
+ 
+@@ -206,6 +220,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
+     probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
+     pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+ 
++    # overnight task 2026-07-22: pool/workspace for cm_gradient_backend=:cplus only -- zero cost
++    # (nothing allocated) when the default :reference backend is in effect.
++    cplus_pool = cm_gradient_backend == :cplus ? build_grad_workspace_pool(size(ctx.obj.U, 1)) : nothing
++    cplus_ws = cm_gradient_backend == :cplus ? build_lfix_factorized_workspace(ctx.D, size(ctx.obj.U, 1)) : nothing
++
+     D2 = length(w0)
+     gp_lo, gp_hi = ctx.bounds.γp_lo, ctx.bounds.γp_hi
+     w_lo = vcat(gp_lo, w0[2:end] .- z_halfwidth)
+@@ -321,8 +340,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
+         xf = x_free_from_w(w, pe)
+         shared = last_F_state[]
+         base = (shared !== nothing && shared.w == w) ? shared.base : nothing
+-        gfull, meta = cm_production_gradient(xf, pcx, ctx, pe; base = base, threaded = true,
+-            h_mode = :cached, bandwidth_cache = bandwidth_cache)
++        gfull, meta = if cm_gradient_backend == :cplus
++            cm_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, threaded = true,
++                h_mode = :cached, bandwidth_cache = bandwidth_cache)
++        else
++            cm_production_gradient(xf, pcx, ctx, pe; base = base, threaded = true,
++                h_mode = :cached, bandwidth_cache = bandwidth_cache)
++        end
+         n_grad[] += 1
+         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
+         evalResult.jac .= gfull
+diff --git a/full_aod_diag/d4_exact/cm_production_stage_runner.jl b/full_aod_diag/d4_exact/cm_production_stage_runner.jl
+index f877544..f586f25 100644
+--- a/full_aod_diag/d4_exact/cm_production_stage_runner.jl
++++ b/full_aod_diag/d4_exact/cm_production_stage_runner.jl
+@@ -39,6 +39,7 @@ include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
+ include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
+ include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
+ include(joinpath(@__DIR__, "cm_production_bundle.jl"))
++include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))   # overnight task 2026-07-22: CM-aware C+ backend, opt-in via cm_gradient_backend=:cplus
+ include(joinpath(@__DIR__, "nested_quantile_grids.jl"))
+ include(joinpath(@__DIR__, "cm_outer_driver.jl"))
+ include(joinpath(@__DIR__, "cm_checkpoint.jl"))

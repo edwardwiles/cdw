@@ -1,0 +1,362 @@
+From 6da8a938fca4c5221a198509b04276d36be65031 Mon Sep 17 00:00:00 2001
+From: Edward Wiles <emmabenzvi@gmail.com>
+Date: Wed, 22 Jul 2026 20:50:36 -0400
+Subject: [PATCH 3/5] CM-C+ D=4 correctness battery: 48/48 pass vs the trusted
+ CM reference path
+
+overnight_cm_cplus_d4_gate.jl exercises the REAL production wiring (cm_production_gradient vs
+cm_production_gradient_cplus, both off build_cm_production_context/archC_base_state) at
+D=4/L=10, both contrasts (:anchored, :orthonormal), 3 points (calibration + two perturbation
+scales chosen to exercise different winner configurations):
+
+  Section 1: base-point q0 agreement (CM-Reference builder vs CM-C+ builder) -- max diff
+             5.7e-14 to 8.9e-16 (machine precision).
+  Section 2: full production-wiring gradient agreement at matched h=0.01 -- max|dg| 1.4e-15 to
+             2.0e-13, cosine 1.0 to 1e-10, zero A-block sign mismatches, across all 3 points x
+             2 contrast bases (PRIMARY gate, per the task brief -- CM-C+ must agree with
+             CM-reference, not merely with unrestricted C+).
+  Section 3: independent bandwidth bisections (select_bandwidth vs select_bandwidth_C, each
+             backend choosing its own h) still agree to cosine 1.0 - 5e-14.
+  Section 4: fixed-dual secant (Reference) == fixed-dual secant (C+) exactly, both differing
+             from the true reoptimized central-FD secant by the SAME known AUD-05 approximation
+             gap (shared, not a C+-specific error) -- the two gates (2.3 vs 2.4 in the task
+             brief) are kept separate, not conflated.
+
+48/48 checks pass. One pre-existing gotcha found and documented inline: build_lfix_base_cache_C!'s
+own validate_dense=true self-check is incompatible with a CM-augmented ctx (compares against the
+FULL obj.moments! dot product over 1:oci-1, which includes the CM tail columns q0 intentionally
+omits pre-correction) -- same reason the existing Reference CM test
+(c13_validate_cm_aware_lfix.jl) never passes validate_dense=true against ctx_cm either. Not a bug
+in this session's new code; documented so a future caller doesn't rediscover it the hard way.
+---
+ .../test_logs/d4_cm_cplus_gate_2026-07-22.log | 137 ++++++++++++++
+ .../d4_exact/overnight_cm_cplus_d4_gate.jl    | 173 ++++++++++++++++++
+ 2 files changed, 310 insertions(+)
+ create mode 100644 docs/overnight_2026-07-22_output/test_logs/d4_cm_cplus_gate_2026-07-22.log
+ create mode 100644 full_aod_diag/d4_exact/overnight_cm_cplus_d4_gate.jl
+
+diff --git a/docs/overnight_2026-07-22_output/test_logs/d4_cm_cplus_gate_2026-07-22.log b/docs/overnight_2026-07-22_output/test_logs/d4_cm_cplus_gate_2026-07-22.log
+new file mode 100644
+index 0000000..08431cb
+--- /dev/null
++++ b/docs/overnight_2026-07-22_output/test_logs/d4_cm_cplus_gate_2026-07-22.log
+@@ -0,0 +1,137 @@
++diffTheory = diff = 0.1519684774892025
++diffPreStep = diff = 0.015141068512143363
++κ = 0.06420809457817289
++κ_upper = 0.06420809457817289
++κ_lower = 0.06420809457817289
++θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++numMoments = 18
++numMomentInnerSimple = 17
++inequality_index = Int64[]
++PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
++moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
++moments_without_var = Int64[]
++δ_star_initial = -0.0010029941762690656
++val = 0.0010029941762690656
++δ_star_initial_low = -0.0010029941762690656
++val = 0.0010029941762690656
++δ_star_initial_up = -0.0010029941762690656
++δ_star_initial = -0.0010029941762690656
++δ_grid = [1]
++δ_grid_filtered = [1]
++
++####################################################################################################
++# contrasts = :anchored  (L=10, D=4, W=8000)
++####################################################################################################
++====================================================================================================
++SECTION 1: base-point q0 agreement (CM-Reference builder vs CM-C+ builder), shared base
++====================================================================================================
++  [calibration] max|q0_ref - q0_cplus| = 8.882e-16
++  PASS: [calibration/anchored] q0 agreement (CM-Reference vs CM-C+) < 1e-8
++  PASS: [calibration/anchored] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
++  [perturbed_0.03] max|q0_ref - q0_cplus| = 5.662e-14
++  PASS: [perturbed_0.03/anchored] q0 agreement (CM-Reference vs CM-C+) < 1e-8
++  PASS: [perturbed_0.03/anchored] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
++  [perturbed_0.08] max|q0_ref - q0_cplus| = 7.017e-14
++  PASS: [perturbed_0.08/anchored] q0 agreement (CM-Reference vs CM-C+) < 1e-8
++  PASS: [perturbed_0.08/anchored] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
++
++====================================================================================================
++SECTION 2: full production-wiring gradient agreement, cm_production_gradient vs cm_production_gradient_cplus (PRIMARY gate, matched h_mode=:fixed)
++====================================================================================================
++  [calibration] gamma: ref=1.369544e-01 cplus=1.369544e-01 diff=0.000e+00 | max|Δg|=1.450e-15 relerr=1.059e-14 cos=1.0000000000 sign-mismatches=0/15
++  PASS: [calibration/anchored] gamma-component agreement < 1e-6
++  PASS: [calibration/anchored] A-block max abs diff < 1e-6 (matched h=0.01)
++  PASS: [calibration/anchored] A-block cosine > 1 - 1e-8
++  PASS: [calibration/anchored] zero sign mismatches
++  [perturbed_0.03] gamma: ref=9.463338e-01 cplus=9.463338e-01 diff=0.000e+00 | max|Δg|=1.408e-13 relerr=5.917e-14 cos=1.0000000000 sign-mismatches=0/15
++  PASS: [perturbed_0.03/anchored] gamma-component agreement < 1e-6
++  PASS: [perturbed_0.03/anchored] A-block max abs diff < 1e-6 (matched h=0.01)
++  PASS: [perturbed_0.03/anchored] A-block cosine > 1 - 1e-8
++  PASS: [perturbed_0.03/anchored] zero sign mismatches
++  [perturbed_0.08] gamma: ref=3.694449e+00 cplus=3.694449e+00 diff=0.000e+00 | max|Δg|=2.047e-13 relerr=5.541e-14 cos=1.0000000000 sign-mismatches=0/15
++  PASS: [perturbed_0.08/anchored] gamma-component agreement < 1e-6
++  PASS: [perturbed_0.08/anchored] A-block max abs diff < 1e-6 (matched h=0.01)
++  PASS: [perturbed_0.08/anchored] A-block cosine > 1 - 1e-8
++  PASS: [perturbed_0.08/anchored] zero sign mismatches
++
++====================================================================================================
++SECTION 3: bandwidth-selected (h_mode=:adaptive/:cached) agreement -- exercises select_bandwidth vs select_bandwidth_C independently, own bisections
++====================================================================================================
++  [calibration] own-bandwidth cosine=1.00000000  relative A-block norm diff=6.451e-15
++  PASS: [calibration/anchored] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
++  [perturbed_0.03] own-bandwidth cosine=1.00000000  relative A-block norm diff=4.711e-14
++  PASS: [perturbed_0.03/anchored] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
++  [perturbed_0.08] own-bandwidth cosine=1.00000000  relative A-block norm diff=5.249e-14
++  PASS: [perturbed_0.08/anchored] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
++
++====================================================================================================
++SECTION 4: independently reoptimized directional check -- fixed-dual secant (Reference AND C+) vs true reoptimized central-FD secant of Delta_dual, anchored to the SAME sign evalResult.jac uses
++====================================================================================================
++  [k=2] true_reoptimized=2.282090e-02  fixed_dual(Reference)=-2.021805e-02  fixed_dual(C+)=-2.021805e-02
++  PASS: [k=2/anchored] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
++  [k=3] true_reoptimized=5.327738e-03  fixed_dual(Reference)=-8.863793e-03  fixed_dual(C+)=-8.863793e-03
++  PASS: [k=3/anchored] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
++  [k=5] true_reoptimized=1.857935e-02  fixed_dual(Reference)=-1.826432e-02  fixed_dual(C+)=-1.826432e-02
++  PASS: [k=5/anchored] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
++
++####################################################################################################
++# contrasts = :orthonormal  (L=10, D=4, W=8000)
++####################################################################################################
++====================================================================================================
++SECTION 1: base-point q0 agreement (CM-Reference builder vs CM-C+ builder), shared base
++====================================================================================================
++  [calibration] max|q0_ref - q0_cplus| = 8.327e-16
++  PASS: [calibration/orthonormal] q0 agreement (CM-Reference vs CM-C+) < 1e-8
++  PASS: [calibration/orthonormal] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
++  [perturbed_0.03] max|q0_ref - q0_cplus| = 5.673e-14
++  PASS: [perturbed_0.03/orthonormal] q0 agreement (CM-Reference vs CM-C+) < 1e-8
++  PASS: [perturbed_0.03/orthonormal] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
++  [perturbed_0.08] max|q0_ref - q0_cplus| = 6.972e-14
++  PASS: [perturbed_0.08/orthonormal] q0 agreement (CM-Reference vs CM-C+) < 1e-8
++  PASS: [perturbed_0.08/orthonormal] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
++
++====================================================================================================
++SECTION 2: full production-wiring gradient agreement, cm_production_gradient vs cm_production_gradient_cplus (PRIMARY gate, matched h_mode=:fixed)
++====================================================================================================
++  [calibration] gamma: ref=1.369544e-01 cplus=1.369544e-01 diff=0.000e+00 | max|Δg|=1.582e-15 relerr=1.155e-14 cos=1.0000000000 sign-mismatches=0/15
++  PASS: [calibration/orthonormal] gamma-component agreement < 1e-6
++  PASS: [calibration/orthonormal] A-block max abs diff < 1e-6 (matched h=0.01)
++  PASS: [calibration/orthonormal] A-block cosine > 1 - 1e-8
++  PASS: [calibration/orthonormal] zero sign mismatches
++  [perturbed_0.03] gamma: ref=9.463338e-01 cplus=9.463338e-01 diff=0.000e+00 | max|Δg|=1.410e-13 relerr=5.926e-14 cos=1.0000000000 sign-mismatches=0/15
++  PASS: [perturbed_0.03/orthonormal] gamma-component agreement < 1e-6
++  PASS: [perturbed_0.03/orthonormal] A-block max abs diff < 1e-6 (matched h=0.01)
++  PASS: [perturbed_0.03/orthonormal] A-block cosine > 1 - 1e-8
++  PASS: [perturbed_0.03/orthonormal] zero sign mismatches
++  [perturbed_0.08] gamma: ref=3.694449e+00 cplus=3.694449e+00 diff=0.000e+00 | max|Δg|=2.025e-13 relerr=5.481e-14 cos=1.0000000000 sign-mismatches=0/15
++  PASS: [perturbed_0.08/orthonormal] gamma-component agreement < 1e-6
++  PASS: [perturbed_0.08/orthonormal] A-block max abs diff < 1e-6 (matched h=0.01)
++  PASS: [perturbed_0.08/orthonormal] A-block cosine > 1 - 1e-8
++  PASS: [perturbed_0.08/orthonormal] zero sign mismatches
++
++====================================================================================================
++SECTION 3: bandwidth-selected (h_mode=:adaptive/:cached) agreement -- exercises select_bandwidth vs select_bandwidth_C independently, own bisections
++====================================================================================================
++  [calibration] own-bandwidth cosine=1.00000000  relative A-block norm diff=7.016e-15
++  PASS: [calibration/orthonormal] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
++  [perturbed_0.03] own-bandwidth cosine=1.00000000  relative A-block norm diff=4.767e-14
++  PASS: [perturbed_0.03/orthonormal] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
++  [perturbed_0.08] own-bandwidth cosine=1.00000000  relative A-block norm diff=5.239e-14
++  PASS: [perturbed_0.08/orthonormal] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
++
++====================================================================================================
++SECTION 4: independently reoptimized directional check -- fixed-dual secant (Reference AND C+) vs true reoptimized central-FD secant of Delta_dual, anchored to the SAME sign evalResult.jac uses
++====================================================================================================
++  [k=2] true_reoptimized=2.282090e-02  fixed_dual(Reference)=-2.021805e-02  fixed_dual(C+)=-2.021805e-02
++  PASS: [k=2/orthonormal] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
++  [k=3] true_reoptimized=5.327738e-03  fixed_dual(Reference)=-8.863793e-03  fixed_dual(C+)=-8.863793e-03
++  PASS: [k=3/orthonormal] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
++  [k=5] true_reoptimized=1.857935e-02  fixed_dual(Reference)=-1.826432e-02  fixed_dual(C+)=-1.826432e-02
++  PASS: [k=5/orthonormal] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
++
++====================================================================================================
++TOTAL: 48 passed, 0 failed
++====================================================================================================
++DONE
+diff --git a/full_aod_diag/d4_exact/overnight_cm_cplus_d4_gate.jl b/full_aod_diag/d4_exact/overnight_cm_cplus_d4_gate.jl
+new file mode 100644
+index 0000000..53638a3
+--- /dev/null
++++ b/full_aod_diag/d4_exact/overnight_cm_cplus_d4_gate.jl
+@@ -0,0 +1,173 @@
++# Overnight task 2026-07-22, Section 2.3/2.4: D=4 correctness battery for the CM-aware C+
++# gradient backend (lfix_cm_cplus.jl) against the TRUSTED CM reference path
++# (lfix_cm_aware.jl::build_lfix_base_cache_cm / composite_gradient_at_fast_cm /
++# cm_production_bundle.jl::cm_production_gradient), NOT merely against the unrestricted C+
++# backend. See docs/CM_GRADIENT_ALGEBRA_TRACE_2026-07-22.md for the decomposition this test
++# verifies. Exercises the REAL production wiring: cm_production_gradient vs
++# cm_production_gradient_cplus, both driven off the same pcx = build_cm_production_context(...)
++# and the same archC_base_state (inner solve is orthogonal to the outer-gradient-backend
++# question this test targets -- both backends receive the identical base).
++include(joinpath(@__DIR__, "context.jl"))
++include(joinpath(@__DIR__, "winners.jl"))
++include(joinpath(@__DIR__, "oracle.jl"))
++include(joinpath(@__DIR__, "common_marginals_moments.jl"))
++include(joinpath(@__DIR__, "common_marginals_interval.jl"))
++include(joinpath(@__DIR__, "instrumentation.jl"))
++include(joinpath(@__DIR__, "oracle_fast.jl"))
++include(joinpath(@__DIR__, "gravity_elimination.jl"))
++include(joinpath(@__DIR__, "three_way_derivatives.jl"))
++include(joinpath(@__DIR__, "lfix_incremental.jl"))
++include(joinpath(@__DIR__, "composite_gradient.jl"))
++include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
++include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
++include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
++include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
++include(joinpath(@__DIR__, "cm_production_bundle.jl"))
++include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))
++using Printf, LinearAlgebra, Random
++
++n_pass = 0; n_fail = 0
++function check(name, cond)
++    global n_pass, n_fail
++    if cond
++        n_pass += 1; println("  PASS: ", name)
++    else
++        n_fail += 1; println("  FAIL: ", name)
++    end
++end
++
++ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
++pe = build_pivot_elimination(ctx)
++D = ctx.D; D2 = D^2; W = size(ctx.U, 1)
++const L = 10
++
++x_free_calib = ctx.θ0_up[ctx.free_idx]
++Random.seed!(9013)
++x_free_perturbed = copy(x_free_calib)
++x_free_perturbed[2:end] .*= exp.(0.03 .* randn(length(x_free_perturbed) - 1))
++
++Random.seed!(90131)
++x_free_perturbed2 = copy(x_free_calib)
++x_free_perturbed2[2:end] .*= exp.(0.08 .* randn(length(x_free_perturbed2) - 1))   # larger perturbation, more likely to shift winners
++
++test_points = [("calibration", x_free_calib), ("perturbed_0.03", x_free_perturbed), ("perturbed_0.08", x_free_perturbed2)]
++
++for contrasts in (:anchored, :orthonormal)
++    println()
++    println("#"^100)
++    println("# contrasts = :", contrasts, "  (L=$L, D=$D, W=$W)")
++    println("#"^100)
++
++    pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts)
++    ctx_cm = pcx.ctx_cm; aug = pcx.aug; bins = pcx.bins; cctx = pcx.cctx
++    pool = build_grad_workspace_pool(W)
++    ws = build_lfix_factorized_workspace(D, W)
++
++    println("="^100)
++    println("SECTION 1: base-point q0 agreement (CM-Reference builder vs CM-C+ builder), shared base")
++    println("="^100)
++    for (label, xf) in test_points
++        local base = archC_base_state(xf, ctx_cm, cctx)
++        cache_ref = build_lfix_base_cache_cm(xf, ctx_cm, base, ctx, aug, bins)
++        # NOTE: validate_dense=true is deliberately NOT used here -- build_lfix_base_cache_C!'s
++        # own internal self-check compares q0 against a full obj.moments! dot product over
++        # 1:oci-1, which for a CM-augmented ctx_cm INCLUDES the CM tail columns; q0 at this point
++        # intentionally omits them (that's exactly the gap cm_fixed_contribution below closes),
++        # so validate_dense=true would spuriously "fail" on a correct cache -- same reason
++        # build_lfix_base_cache_cm (lfix_cm_aware.jl) never passes validate_dense=true against
++        # ctx_cm either (c13_validate_cm_aware_lfix.jl, the existing Reference CM test, never
++        # does so). The REAL validation is the explicit q0-vs-Reference comparison below.
++        cache_cp = build_lfix_base_cache_cm_C!(ws, xf, ctx_cm, base, ctx, aug, bins; validate_dense = false)
++        maxerr_q0 = maximum(abs.(cache_ref.q0 .- cache_cp.q0))
++        @printf "  [%s] max|q0_ref - q0_cplus| = %.3e\n" label maxerr_q0
++        check("[$label/$contrasts] q0 agreement (CM-Reference vs CM-C+) < 1e-8", maxerr_q0 < 1e-8)
++
++        lfix_ref0 = lfix_from_q(cache_ref.q0, cache_ref.ζstar)
++        lfix_cp0 = lfix_from_q(cache_cp.q0, cache_cp.ζstar)
++        check("[$label/$contrasts] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10",
++              abs(lfix_ref0 - lfix_cp0) < 1e-10)
++    end
++
++    println()
++    println("="^100)
++    println("SECTION 2: full production-wiring gradient agreement, cm_production_gradient vs cm_production_gradient_cplus (PRIMARY gate, matched h_mode=:fixed)")
++    println("="^100)
++    for (label, xf) in test_points
++        local base = archC_base_state(xf, ctx_cm, cctx)
++        g_ref, meta_ref = cm_production_gradient(xf, pcx, ctx, pe; base = base, threaded = false, h_mode = :fixed, h0 = 0.01)
++        g_cp, meta_cp = cm_production_gradient_cplus(xf, pcx, ctx, pe, pool, ws; base = base, threaded = false, h_mode = :fixed, h0 = 0.01)
++
++        maxerr = maximum(abs.(g_ref .- g_cp))
++        relerr = maxerr / max(maximum(abs.(g_ref)), 1e-12)
++        cosang = dot(g_ref, g_cp) / (norm(g_ref) * norm(g_cp) + 1e-300)
++        nflip = count(sign.(g_ref[2:end]) .!= sign.(g_cp[2:end]))
++        @printf "  [%s] gamma: ref=%.6e cplus=%.6e diff=%.3e | max|Δg|=%.3e relerr=%.3e cos=%.10f sign-mismatches=%d/%d\n" label g_ref[1] g_cp[1] abs(g_ref[1]-g_cp[1]) maxerr relerr cosang nflip D2-1
++        check("[$label/$contrasts] gamma-component agreement < 1e-6", abs(g_ref[1] - g_cp[1]) < 1e-6)
++        check("[$label/$contrasts] A-block max abs diff < 1e-6 (matched h=0.01)", maxerr < 1e-6)
++        check("[$label/$contrasts] A-block cosine > 1 - 1e-8", cosang > 1 - 1e-8)
++        check("[$label/$contrasts] zero sign mismatches", nflip == 0)
++    end
++
++    println()
++    println("="^100)
++    println("SECTION 3: bandwidth-selected (h_mode=:adaptive/:cached) agreement -- exercises select_bandwidth vs select_bandwidth_C independently, own bisections")
++    println("="^100)
++    for (label, xf) in test_points
++        local base = archC_base_state(xf, ctx_cm, cctx)
++        g_ref, _ = cm_production_gradient(xf, pcx, ctx, pe; base = base, threaded = false, h_mode = :adaptive)
++        bwcache = Dict{Int,Float64}()
++        g_cp, _ = cm_production_gradient_cplus(xf, pcx, ctx, pe, pool, ws; base = base, threaded = false, h_mode = :cached, bandwidth_cache = bwcache)
++
++        cosang = dot(g_ref, g_cp) / (norm(g_ref) * norm(g_cp) + 1e-300)
++        relnorm = norm(g_ref[2:end] .- g_cp[2:end]) / (norm(g_ref[2:end]) + 1e-300)
++        @printf "  [%s] own-bandwidth cosine=%.8f  relative A-block norm diff=%.3e\n" label cosang relnorm
++        check("[$label/$contrasts] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)", cosang > 1 - 1e-4)
++    end
++
++    println()
++    println("="^100)
++    println("SECTION 4: independently reoptimized directional check -- fixed-dual secant (Reference AND C+) vs true reoptimized central-FD secant of Delta_dual, anchored to the SAME sign evalResult.jac uses")
++    println("="^100)
++    "True reoptimized Delta_dual at x_free (fresh archC solve+recompute every call -- the independent ground truth)."
++    function delta_dual_true(x_free)
++        base_here = archC_base_state(x_free, ctx_cm, cctx)
++        obj = ctx_cm.obj
++        ncon = obj.d - obj.outer_constr_index + 2
++        cbuf = zeros(ncon)
++        inner_x = vcat(base_here.ζstar, base_here.λstar)
++        obj(inner_x, constr = @view(cbuf[1:ncon]))
++        return cbuf[1] / 1e10
++    end
++    xf0 = x_free_calib
++    local base0 = archC_base_state(xf0, ctx_cm, cctx)
++    z0 = log.(reshape(xf0[2:end], D, D))
++    w0 = vcat(xf0[1], pivot_reduce(z0, pe))
++    cache_ref0 = build_lfix_base_cache_cm(xf0, ctx_cm, base0, ctx, aug, bins)
++    cache_cp0 = build_lfix_base_cache_cm_C!(ws, xf0, ctx_cm, base0, ctx, aug, bins)
++    for k in unique([2, 3, min(5, D2)])
++        h = 0.02
++        wp = copy(w0); wp[k] += h; wm = copy(w0); wm[k] -= h
++        zp = pivot_expand(wp[2:end], pe); zm = pivot_expand(wm[2:end], pe)
++        xfp = vcat(wp[1], vec(exp.(zp))); xfm = vcat(wm[1], vec(exp.(zm)))
++        true_secant = -(delta_dual_true(xfp) - delta_dual_true(xfm)) / (2h)   # sign matches evalResult.jac / g[k] convention, see algebra trace Section 6
++
++        Lp_ref = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] + h)
++        Lm_ref = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] - h)
++        secant_ref = (Lp_ref - Lm_ref) / (2h)
++
++        Lp_cp = lfix_incremental_at_C(cache_cp0, ctx_cm, pe, w0, k, w0[k] + h)
++        Lm_cp = lfix_incremental_at_C(cache_cp0, ctx_cm, pe, w0, k, w0[k] - h)
++        secant_cp = (Lp_cp - Lm_cp) / (2h)
++
++        @printf "  [k=%d] true_reoptimized=%.6e  fixed_dual(Reference)=%.6e  fixed_dual(C+)=%.6e\n" k true_secant secant_ref secant_cp
++        check("[k=$k/$contrasts] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)",
++              isapprox(secant_cp, secant_ref; atol = 1e-6, rtol = 1e-6))
++    end
++end
++
++println()
++println("="^100)
++println("TOTAL: $n_pass passed, $n_fail failed")
++println("="^100)
++n_fail == 0 || error("$n_fail check(s) failed")
++println("DONE")
+-- 
+2.43.7
+

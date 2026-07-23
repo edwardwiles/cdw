@@ -1,0 +1,8 @@
+fbe0d17d890e2efdc05230c49a665533b4251ed3 2026-07-22 21:02:04 -0400 Complete-state exact/cross-delta cache: opt-in prototype, design doc, D=4 tests (32/32 pass)
+b9c4e33daf2c9e3f0298fff9f1908a58c4f1ca97 2026-07-22 20:56:25 -0400 CM-C+ real D=20/W=80000/L=50 fixed-point gate: PASS, 2.79x wall speedup, ~46x less alloc
+6da8a938fca4c5221a198509b04276d36be65031 2026-07-22 20:50:36 -0400 CM-C+ D=4 correctness battery: 48/48 pass vs the trusted CM reference path
+a61af6662cbba8aa33d2075fb077147bf56134f2 2026-07-22 20:44:38 -0400 Implement CM-aware C+ gradient backend behind explicit cm_gradient_backend selector
+f0b3d3627c234df71469263c4d1276f027bce28d 2026-07-22 20:42:34 -0400 Overnight CM-C+/state-cache task: baseline record + CM gradient algebra trace
+base_commit=22683016b5a927d4952e52049145ad8d1f5a2b87
+base_tag=cm-production-ready-2026-07-22-r3
+branch=perf/fullA-cm-cplus-statecache-overnight-2026-07-22
