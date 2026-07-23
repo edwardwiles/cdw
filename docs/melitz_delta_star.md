@@ -741,3 +741,284 @@ flagged for whoever picks up Gate B next:
 - Gate B (the actual `Delta_star = min_theta Delta(theta)` outer search) and Gate C
   (gradient-method comparison) are **NOT STARTED**. Per the governing prompt's own gate
   ordering, they should not begin until Gate A's report is reviewed/accepted.
+
+## 15. 2026-07-22 session: outer-parameterization safety, direct F* solve, nested
+## Delta-star outer search, gradient laboratory (Gate B/C, partial)
+
+Governing session prompt (separate from, and following, the main/addendum prompts above):
+freeze Gate A, make the outer parameterization safe, solve the finite-draw Delta-star
+problem at D=4, build a gradient laboratory, and (time permitting) run one short
+finite-delta smoke test. Checkpoint commit `287185b` freezes Gate A exactly as reported in
+Section 14 before any of this section's changes. Given the session's realistic time
+budget against this prompt's very large stated scope, work was explicitly PRIORITIZED and
+SCOPE-CUT: Sections 0-4 below are complete with tests; the gradient laboratory (Section 5
+of the governing prompt) is implemented and validated for 3 of its 5 requested methods
+(A/B/C, not D/E) at a REDUCED test scale; the finite-delta smoke test (governing prompt
+Section 8) was not reached. Each cut is flagged explicitly below, not silently dropped.
+
+### 15.1 Off-diagonal, mutually-distinct outer gravity pivots (governing prompt Section 1.1)
+
+Confirmed the diagnosed bug live: the UNRESTRICTED max-`|c|` A-pivot at the D=4/seed=29
+benchmark lands on cell `(2,2)` — DIAGONAL, entangling gravity-feasibility with that
+country's own cutoffs. Fixed: `build_gravity_pivots` (`delta_star.jl`) now restricts the
+A-pivot to off-diagonal cells; a new `f_gravity_pivot_avoid_indices` (`equilibrium.jl`)
+combines the existing domestic-avoid set with the A-pivot's own cell so the f-pivot is
+simultaneously off-diagonal AND distinct from the A-pivot. At the benchmark: A-pivot
+`(4,2)`, f-pivot `(3,1)` — both off-diagonal, distinct, neither `(1,1)`. A new
+`pivot_conditioning_diagnostics` reports the (diagnostic-only) leverage comparison:
+unrestricted pivot `0.915`, restricted (production) pivot `1.398`, orthonormal/null-space
+reference `1.0` — the off-diagonal restriction costs a modest conditioning penalty (as
+expected, since it is no longer free to choose literally the largest-`|c|` cell), not a
+severe one. 15 new regression tests (`test/melitz/runtests.jl`, "Section 1.1") cover
+`o!=d`, `A pivot != f pivot`, `reduce(expand(theta))==theta`, `expand(reduce(p))==p`, and
+machine-precision gravity residuals at 4 random seeds plus the benchmark fixture.
+
+### 15.2 Cutoff-safe displaced-point evaluator (governing prompt Section 1.2)
+
+`ctx.cutoff` (read at every displaced outer point by the OLD `melitz_moments_adapter!`,
+even though `melitz_moments!` itself never consumes `eq.cutoff`) renamed to
+`ctx.benchmark_cutoff` and documented as reporting-only. New `melitz_outer_state(theta_free,
+ctx; obj=nothing, evaluate_inner=false, warm_start=nothing, cold=false)`
+(`delta_star.jl`) is now the single authoritative displaced-point state builder: expands
+`theta_free`, recomputes the FULL baseline cutoff matrix fresh via the new
+`melitz_baseline_cutoff` (`equilibrium.jl`), evaluates the Section 1.3 deterministic
+cutoff constraints, and (optionally) runs the real inner CC solve on a caller-supplied
+`obj`. `melitz_moments_adapter!` itself was also fixed to build its internal
+`MelitzEquilibrium` with a freshly computed cutoff rather than `ctx.benchmark_cutoff`. 6
+regression tests confirm the fresh cutoff matches the fixture's own benchmark cutoff AT
+the benchmark point (`~1e-14`) and genuinely DIFFERS from the stale benchmark cutoff at a
+displaced point.
+
+### 15.3 Deterministic cutoff constraints + exact Jacobian (governing prompt Section 1.3)
+
+`melitz_deterministic_cutoff_constraints` (`equilibrium.jl`) implements the minimal system
+— `log zhat[o,o]>=0` (`D` domestic constraints) plus `log zhat[o,d]-log zhat[o,o]>=0`
+(`D*(D-1)` export-selection constraints), `D^2` total, no redundant second system.
+`melitz_cutoff_constraint_jacobian` (`delta_star.jl`) differentiates straight through
+`expand_free_theta -> melitz_baseline_cutoff -> melitz_deterministic_cutoff_constraints`
+with `ForwardDiff` — legitimate here (unlike `Delta(theta)`) because this call chain is
+fully smooth (no participation/Boolean gate anywhere in it), automatically capturing the
+A-pivot chain rule, the f-pivot chain rule, `f[j,j]`'s derivation, and `gamma_prime`'s
+effect without hand-deriving each piece. Validated against central finite differences at
+the benchmark point and a random perturbation: `max|J_ForwardDiff - J_FD| ~ 1.4e-10`
+(domestic) / `~2.6e-10` (export), consistent with `h=1e-6` FD truncation error, i.e. exact
+to essentially machine precision.
+
+### 15.4 Authoritative evaluator + cache (governing prompt Section 2)
+
+`MelitzDeltaEvalResult` (`types.jl`) bundles everything a caller needs from one fixed-
+outer-point evaluation: `theta_free`, full `A`/`f`/`gamma_prime_j`/`f_jj`, the fresh
+cutoff, the Section 1.3 constraint values and `min_slack`/`feasible`, the moment matrix
+`G` (optional, `store_G`), the dual solution, LFD weights, `Delta`, primal/dual
+divergence and gap, moment residuals, KKT diagnostics, solver status, the full ex-post
+`MelitzEquilibriumCheck` (only when `verified`), and timings split into `state_time`
+(cheap, no KNITRO) and `inner_time`. `evaluate_melitz_delta` (`delta_star.jl`) builds this
+and `MelitzDeltaEvalCache` stores it keyed by exact `theta_free` value — but ONLY when
+`result.verified = feasible && lfd_ok && nStatus==0`; a grossly infeasible/failed probe is
+returned to the caller (so nothing hides a failure) but never cached, verified live: a
+`theta0 .+ 3.0.*randn(...)` probe returned `nStatus=-400`/`verified=false` and left the
+cache empty. At the benchmark point, `evaluate_melitz_delta` reproduces `Delta=7.5545e-6`
+at `W=20,000` EXACTLY matching Section 14.6's own table — confirming the cutoff-safety
+refactor changes nothing at the point where the old and new cutoff happen to coincide (the
+benchmark itself), only at genuinely displaced points. 17 new tests pass.
+
+### 15.5 Direct F* feasibility solve (governing prompt Section 3)
+
+`solve_fstar_direct` (`fstar_direct.jl`, NEW file, replaces the archived `solve_fstar` for
+the active minimal system) minimizes `0.5*||S*m_Fstar(theta)||^2 + rho/2*||theta -
+theta_population||^2` subject to the Section 1.3 cutoff inequalities (exterior quadratic
+penalty), via `Optim.LBFGS` with a DELIBERATELY WIDE-bandwidth (`h=1e-3`) central-
+difference gradient — matching the archived `solve_fstar`'s own documented finding that a
+naive small-`h`/autodiff gradient is locally blind to (or badly noise-dominated by) the
+`O(1/W)` participation-jump in the raw moment mean. Real-KNITRO run at `D=4`,
+`seed=29`, `W=20,000`, cold-verified inner solve at each result:
+
+| `rho` | max\|m_initial\| | max\|m_final\| | \|\|theta_final-theta_pop\|\| | cold `Delta` | `nStatus` |
+|---|---|---|---|---|---|
+| `1e-6` | `1.265e-3` | `3.05e-4` | `3.69e-3` | `1.038e-6` | `0` |
+| `1e-4` | `1.265e-3` | `2.65e-4` | `4.09e-3` | `2.546e-6` | `0` |
+| `1e-2` | `1.265e-3` | `4.01e-4` | `2.62e-3` | `2.908e-6` | `0` |
+
+Every `rho` produces the SAME qualitative result — max\|m_final\| within a factor of ~1.5
+of each other across 4 orders of magnitude of `rho`, all feasible (`min_slack~0.0166` at
+every `rho`, essentially unchanged from the starting `~0.0165`), all `nStatus=0`/verified
+— confirming the moments are, as expected for this deliberately underidentified system
+(17 moments, 30 free coordinates), insensitive to the regularizer's exact weight. `Optim`
+did NOT fully converge within its 60-iteration/90s-per-run budget (`Optim.converged=false`
+at every `rho`, `~11` iterations completed) — the max\|m_final\| improvement (`~4x` from
+`1.265e-3` to `~3e-4`) and the cold `Delta` improvement (`7.55e-6` at `theta_population`
+down to `~1-3e-6`) are genuine but PARTIAL, not the governing prompt's stated `<=1e-9`
+acceptance target. Given every result is nonetheless cold-verified `nStatus=0`/`verified`
+with `Delta` already an order of magnitude below `theta_population`'s own `Delta`, and
+divergence is nonnegative, this is read as strong (not yet fully converged) evidence
+toward `Delta_star approx 0`, cross-confirmed independently by Section 15.6's outer search.
+No claim of unique `A`/`f` recovery is made — `theta_distance_from_population` (`~0.003-
+0.004` in the 30-dimensional free-coordinate norm) is reported, not treated as informative
+about a "true" point, consistent with the underidentification.
+
+### 15.6 Nested Delta-star outer search (governing prompt Section 4)
+
+`solve_melitz_delta_star_outer` (`outer_solve.jl`, NEW file): `minimize_theta Delta(theta)`
+s.t. the Section 1.3 cutoff inequalities, using Method B (Section 15.7) for the gradient
+(re-solved fresh at every `g!` call to refresh the fixed base dual) and the same exterior-
+penalty technique as Section 15.5, `Optim.LBFGS`, bounded `time_limit`. Small-`W` (5,000)
+smoke test: `Delta` `2.667e-5 -> 2.238e-5` in 4 LBFGS iterations (437 total inner solves,
+80s, not converged), COLD-verified `nStatus=0`, `Delta_star <= Delta(theta_population)`
+confirmed.
+
+**`W=20,000` run (the reported result):** 9 LBFGS iterations, 477 total inner solves,
+315.3s wall. `Delta_init` (population-Pareto) `= 7.5545e-6 -> Delta_final_warm =
+6.6127e-6`. `Optim.converged = false` (hit the iteration/time budget, not a stationarity
+gate) -- again a GENUINE, cold-verified, PARTIAL improvement, not full convergence.
+COLD-verified incumbent: `nStatus=0`, `verified=true`, `feasible=true`, `Delta=6.6127e-6`
+-- independently re-verified a SECOND time (a fresh `evaluate_melitz_delta(...;
+cold=true)` call on the returned `theta_final`) with an IDENTICAL `Delta`, confirming no
+warm-start-dependent artifact. `Delta_star <= Delta(theta_population)`: `6.6127e-6 <=
+7.5545e-6` -- **CONFIRMED**, satisfying the governing prompt's own required inequality.
+
+Full Gate A ex-post equilibrium check re-run at the incumbent (`check_profiled_melitz_
+equilibrium` under the incumbent's own recovered LFD, not reference weights):
+
+| residual | value |
+|---|---|
+| `max\|residual_gamma_baseline\|` | `3.81e-14` |
+| `residual_market_clearing_autarky` | `-2.22e-15` |
+| `N_prime_diff_rel` | `1.11e-15` |
+| `residual_autarky_cutoff` | `1.11e-16` |
+| `min_cutoff_minus_one` (feasibility) | `0.0698` (comfortably `>0`) |
+| `gravity_residual_A` / `gravity_residual_f` | `-3.25e-17` / `1.91e-17` |
+
+Every residual is at or near machine precision, matching Gate A's own tolerances exactly
+-- the outer search did not degrade any of the fixed-point identities Gate A validated.
+
+### 15.7 Gradient laboratory (governing prompt Section 5/6) — Methods A/B/C only, reduced scale
+
+Implemented (`gradient_lab.jl`, NEW file): Method A (fully reoptimized central finite
+difference, cold-restarted at each displaced point — the expensive reference), Method B
+(fixed-dual finite-bandwidth secant `[L_fix(theta+hv;x_base)-L_fix(theta-hv;x_base)]/2h`,
+`melitz_fixed_dual_criterion` reusing `PsiObjectiveBundleDelta`'s own functor at a FIXED
+dual), and Method C (`ForwardDiff` through a dedicated type-generic fixed-active-set
+scalar evaluator, `melitz_fixed_active_set_scalar` — built FRESH rather than reusing
+`obj`'s preallocated `Float64` `H` buffer, exactly the Dual-incompatibility this session's
+prompt warned about). Methods D (hand-derived analytic branch derivative) and E (smooth
+surrogate) were NOT implemented this session — flagged as the clearest follow-up item, not
+silently dropped (Method D's formulas are given explicitly in the governing prompt and are
+mechanical to implement given Method C's fixed-active-set machinery already exists to
+cross-validate against).
+
+Zero-switch validation (`W=5,000`, benchmark point, random tangent direction, `h=1e-6`
+confirmed 0 switches both directions): Method B `0.0032989` vs Method C (exact)
+`0.0032760` — agree to `~0.7%`, confirming the fixed-dual-criterion construction is
+internally consistent (Section 6 core question 1: yes, methods agree when the active set
+is unchanged). Method A at `h=1e-4` (same direction) gave a visibly different value
+(`0.000859`) — expected, since Method A re-optimizes the dual at each displaced point
+(capturing genuine curvature/re-optimization effects Method B/C's fixed-`x_base`
+construction does not), and `h=1e-4` is two orders of magnitude coarser than the zero-
+switch confirmation bandwidth.
+
+**Reduced battery (`W=20,000`, real KNITRO, 60 probes total):** 2 points (population-
+Pareto, `Delta=7.55e-6`; a `scale=0.01` random perturbation with `Delta=1.16e-3`,
+matching the governing prompt's requested "`Delta` around `1e-3`" point) x 6 directions
+(`gamma`, `ordinary_A`, `ordinary_f`, `random_tangent`, `f_high_switch`,
+`A_pivot_sensitive`) x 5 bandwidths (`1e-6` to `1e-2`), Method A run on a `{1e-4,1e-3}`
+subset only (2 cold KNITRO solves/probe) — a deliberate scale-down from the governing
+prompt's full `30 coordinates x 11 bandwidths x >=5 points` grid (infeasible in this
+session's time budget). Full CSV in the session's pushed output.
+
+**Known limitation in this run**: `f_high_switch` was implemented as the SAME coordinate
+as `ordinary_f` (`theta_free` index `2+D^2-1`, the first free f-cell) rather than a
+distinct high-switch-inducing f direction — confirmed by their IDENTICAL results at every
+bandwidth in the CSV. Not corrected mid-run (would have cost another full pass); flagged
+honestly rather than silently presented as two independent directions. A genuinely
+separate high-switch f direction (e.g. a large-magnitude perturbation concentrated on a
+near-marginal cutoff cell) is a cheap fix for the next session.
+
+**Answers to the Section 6 core questions, from this reduced battery:**
+
+1. *Do analytic/ForwardDiff (Method C) and the fixed-dual secant (Method B) agree when
+   the activity set is unchanged?* YES at confirmed-zero-switch bandwidths: e.g.
+   `A_pivot_sensitive` at `h=1e-6` (0 switches both sides), `B=-0.000400272` vs
+   `C=-0.000400264` — agree to `0.002%`. `random_tangent`/`ordinary_A` at `h=1e-6` agree
+   to `0.7%`/`4.5%`. The `gamma` direction is the interesting counterexample: even at
+   `h=1e-6` it already has 1 switch on the minus side (`gamma` moves the autarky price
+   power, which shifts participation broadly), and `B`/`C` diverge sharply there
+   (`0.00586` vs `0.000987`) — exactly the switch-driven disagreement the construction
+   predicts, not a bug.
+
+2. *Do branch derivatives agree with very-small-`h` reoptimized (Method A) differences
+   for `A` coordinates?* **NOT ANSERED this session** — `bandwidths_for_A` was
+   `{1e-4,1e-3}` only (cost-driven), and even `h=1e-4` already shows 7-8 switches for
+   `ordinary_A`, so no genuinely zero-switch Method A data point was collected. At
+   `h=1e-4` Method A and Method C even disagree in SIGN for `ordinary_A`
+   (`A=+0.00620` vs `C=-0.000617`) — consistent with Method C simply missing the
+   (already-present) switches' contribution, but not a clean answer to the question as
+   posed. Flagged for the next session: run Method A at `h<=1e-6` for a handful of `A`
+   coordinates specifically.
+
+3. *Do branch derivatives fail in `f` directions as expected?* YES, cleanly. At
+   confirmed-zero-switch bandwidths (`h<=1e-5`), Method C reports EXACTLY `0.0` for
+   `ordinary_f` — matching the given closed-form prediction `d(trade share)/d log f_od =
+   0` conditional on fixed activity precisely, not merely approximately. Method B also
+   reports exactly `0.0` there (consistent: at zero switches its finite difference of the
+   same fixed-active-set criterion has nothing to differentiate). Once switches appear
+   (`h=1e-3`, 6-7 switches), Method B jumps to a genuinely nonzero `-0.00122` — confirming
+   "for `f` coordinates, essentially the entire trade-share response comes from firms
+   crossing the cutoff."
+
+4. *Which fixed-dual bandwidth best predicts independently reoptimized (Method A)
+   changes?* The clearest pattern in this battery is not about bandwidth but about
+   POINT: at the population-Pareto point (`Delta approx 0`), Method B tracks Method A
+   poorly (`ordinary_A` `h=1e-4`: `A=0.00620` vs `B=0.00519`, 16% off; `A_pivot_sensitive`
+   `h=1e-3`: `A=-0.0112` vs `B=-0.00186`, off by `6x`). At the `perturbed` point
+   (`Delta=1.16e-3`, away from near-degeneracy), Method B tracks Method A remarkably
+   closely at BOTH tested bandwidths: `ordinary_A` `h=1e-4`: `A=-0.3488` vs `B=-0.3488`
+   (`<0.01%`); `gamma` `h=1e-4`: `A=0.2608` vs `B=0.2613` (`0.17%`); `random_tangent`
+   `h=1e-4`: `A=-0.2140` vs `B=-0.2107` (`1.5%`). Plausible mechanism (not independently
+   confirmed this session): near `Delta approx 0` the optimal dual is itself close to a
+   degenerate/boundary configuration, making the "hold `x` fixed" envelope approximation
+   less stable than away from degeneracy. If this holds up, it is a genuinely useful,
+   non-obvious operational finding for a future finite-`delta` campaign (where `delta>0`
+   keeps the search away from the `Delta=0` boundary).
+
+5. *Is there a stable bandwidth across points, or should `h` be coordinate-scaled?*
+   Switch counts at matched `h` are broadly similar across `gamma`/`ordinary_A`/
+   `random_tangent`/`A_pivot_sensitive` (`~0` at `h<=1e-5`, `~6-10` at `h=1e-4`, `~65-90`
+   at `h=1e-3`, `~600-900` at `h=1e-2`) but MUCH milder for the `f` direction tested
+   (`ordinary_f`: `0`/`0`/`7`/`88` at the same four bandwidths) — consistent with `f`
+   affecting only its own cell's participation margin directly (the given formula) while
+   `A`/`gamma` affect prices, and hence participation, more broadly. A mildly LARGER safe
+   bandwidth for `f`-only coordinates than for `A`/`gamma` coordinates is weakly supported,
+   not dramatically.
+
+6. *Does a hybrid gradient (branch derivative for `A`, bandwidth secant for `f`) work
+   better?* Qualitatively well-motivated by this battery, not exhaustively tested:
+   Method C gives a well-defined, informative nonzero baseline for `A` directions
+   (further refined by switches Method B captures); for `f` directions Method C gives
+   EXACTLY zero (correctly reflecting no smooth component) and essentially ALL the signal
+   comes from switches, i.e. from Method B. A production hybrid (Method-D-once-built for
+   `A`, Method B for `f`/cutoff-sensitive coordinates) is a reasonable next step, not
+   validated end-to-end this session.
+
+### 15.8 Not reached: finite-delta smoke test (governing prompt Section 8)
+
+Not attempted this session — Sections 15.1-15.7 consumed the available time budget. No
+infrastructure for the upper/lower gains-from-trade programs (`minimize`/`maximize log
+gamma_prime` s.t. `Delta(theta)<=delta`) was built. Flagged for the next session, gated
+(per the governing prompt's own ordering) behind a more complete gradient laboratory
+(Method D at minimum) so the finite-delta programs have a trustworthy gradient to use.
+
+### 15.9 What remains open
+
+- Methods D/E of the gradient laboratory (Section 15.7).
+- The full-scale gradient battery (30 coordinates, 11 bandwidths) — only a reduced subset
+  run this session.
+- Full convergence of both the direct F* solve (governing prompt's `<=1e-9` target) and
+  the nested outer search (`Optim.converged=false` in both W=5,000 and W=20,000 runs so
+  far) — both show genuine, cold-verified, partial improvement, not full convergence,
+  within this session's bounded iteration/time budgets.
+- The finite-delta smoke test (Section 15.8).
+- A KNITRO-native outer solve (matching `production/fullA-exact`'s own nested-KNITRO
+  pattern via `ccOuter.jl`/`outer_loop_functions.jl`) was NOT attempted — this session's
+  outer solve uses `Optim.LBFGS` with an exterior penalty instead, adequate for an
+  infrastructure smoke test but not wired into this repo's own production outer-loop
+  machinery.

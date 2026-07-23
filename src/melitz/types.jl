@@ -230,3 +230,45 @@ struct MelitzEquilibriumCheck{T<:Real}
     gravity_residual_A::T                    # Section 9.8 (Cov(withinTransform(log tau), withinTransform(log A)))
     gravity_residual_f::T                    # Section 9.8 (Cov(withinTransform(log tau), withinTransform(log f)))
 end
+
+"""
+Session prompt Section 2: the single authoritative, IMMUTABLE result of one fixed-outer-
+point evaluation (`evaluate_melitz_delta`, delta_star.jl) -- everything a gradient-lab or
+outer-solve caller needs, in one struct, so nothing downstream has to independently
+reconstruct state or silently read a stale field. `G` is `nothing` unless requested
+(`store_G=true`, the default) -- opt out for memory-heavy repeated-evaluation loops (the
+gradient laboratory, Section 5/6) where only scalar `Delta`/moment-residual summaries are
+needed. `verified = feasible && lfd_ok && nStatus==0`: the SAME three-way gate
+`evaluate_melitz_delta`'s cache uses to decide whether a point is eligible for storage
+(main prompt Section 2: never cache failed solves, unverified results, or cutoff-infeasible
+points) -- exposed here too so callers can apply the identical test to an UNCACHED result.
+"""
+struct MelitzDeltaEvalResult
+    theta_free::Vector{Float64}
+    A::Matrix{Float64}
+    f::Matrix{Float64}
+    gamma_prime_j::Float64
+    f_jj::Float64
+    cutoff::Matrix{Float64}
+    g_domestic::Vector{Float64}               # Section 1.3, length D
+    g_export::Vector{Float64}                 # Section 1.3, length D*(D-1)
+    min_slack::Float64
+    feasible::Bool                            # min_slack >= 0 (deterministic cutoff constraints only)
+    G::Union{Nothing,Matrix{Float64}}         # W x num_moments, or nothing if store_G=false
+    dual_x::Vector{Float64}
+    weights::Vector{Float64}                  # normalized LFD probabilities
+    Delta::Float64
+    primal_divergence::Float64
+    dual_divergence::Float64
+    primal_dual_gap::Float64
+    moment_residuals::Vector{Float64}
+    kkt_opt_error::Float64
+    kkt_feas_error::Float64
+    nStatus::Int
+    lfd_ok::Bool
+    verified::Bool                            # feasible && lfd_ok && nStatus==0
+    equilibrium_check::Union{Nothing,MelitzEquilibriumCheck}  # nothing unless verified
+    state_time::Float64                       # seconds, outer-state (expand+cutoff) only
+    inner_time::Float64                       # seconds, inner CC KNITRO solve only
+    total_time::Float64
+end

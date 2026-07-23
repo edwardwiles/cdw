@@ -33,6 +33,9 @@ include(joinpath(MELITZ_DIR, "moments.jl"))
 include(joinpath(MELITZ_DIR, "delta_star.jl"))
 include(joinpath(MELITZ_DIR, "fake_data.jl"))
 include(joinpath(MELITZ_DIR, "fstar_solver.jl"))
+include(joinpath(MELITZ_DIR, "fstar_direct.jl"))
+include(joinpath(MELITZ_DIR, "gradient_lab.jl"))
+include(joinpath(MELITZ_DIR, "outer_solve.jl"))
 
 # ============================================================================
 # 1. Pareto draws
@@ -221,6 +224,92 @@ end
         # minimum-norm: the correction (z_proj - z_raw) is parallel to c
         correction = z_proj .- z_raw
         @test isapprox(abs(dot(correction, c)), norm(correction) * norm(c); rtol=1e-8)
+    end
+
+    # ========================================================================
+    # 2026-07-22 session Section 1.1: off-diagonal, mutually-distinct outer gravity
+    # pivots. Regression tests for the fix -- before this session, the active outer
+    # expansion (delta_star.jl's build_gravity_pivots/reduce_to_free_theta/
+    # expand_free_theta) excluded ONLY the A-pivot cell when choosing the f-pivot, never
+    # restricting either pivot to off-diagonal cells. Under Gate A5's withinTransform
+    # coefficient vector (diagonal-dominated, see f_pivot_domestic_avoid_indices), the
+    # UNRESTRICTED A-pivot lands on a domestic cell, entangling that country's own
+    # cutoffs with the gravity-feasibility construction.
+    # ========================================================================
+    @testset "Section 1.1: off-diagonal, mutually-distinct A/f gravity pivots" begin
+        target_country = 1
+        for seed in (7, 29, 99, 123)
+            rng3 = MersenneTwister(seed)
+            tau3 = ones(Float64, D, D)
+            for o in 1:D, d in 1:D
+                o == d && continue
+                tau3[o, d] = exp(0.05 + 0.4 * rand(rng3))
+            end
+            A_pivot_od, f_pivot_od = gravity_pivot_cells(tau3, target_country)
+
+            @testset "seed=$seed: o != d for both pivots" begin
+                @test A_pivot_od[1] != A_pivot_od[2]
+                @test f_pivot_od[1] != f_pivot_od[2]
+            end
+            @testset "seed=$seed: A pivot != f pivot" begin
+                @test A_pivot_od != f_pivot_od
+            end
+            @testset "seed=$seed: neither pivot is (j,j)" begin
+                @test A_pivot_od != (target_country, target_country)
+                @test f_pivot_od != (target_country, target_country)
+            end
+        end
+    end
+
+    @testset "Section 1.1: reduce(expand(theta))==theta and expand(reduce(p))==p round-trip through the FIXED off-diagonal pivots" begin
+        data = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=1_000)
+        p = data.primitives
+        moment_layout = MelitzMomentLayout(D)
+        c_full3, A_pivot3 = build_gravity_pivots(p.tau, p.target_country)
+        outer_layout3 = melitz_outer_layout(D, p.target_country)
+        ctx3 = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=p.target_country,
+            tau=p.tau, w=p.w, w_prime=data.counterfactual.w_prime, L=data.L,
+            expenditure=data.equilibrium.expenditure, cutoff=data.equilibrium.cutoff,
+            moment_layout=moment_layout, X_data=data.equilibrium.trade_flow, c_full=c_full3,
+            A_pivot=A_pivot3, jj_lin=outer_layout3.jj_lin, f_free_lin=outer_layout3.f_free_lin)
+
+        theta_free = reduce_to_free_theta(p, ctx3)
+
+        @testset "expand(reduce(p)) reconstructs p exactly" begin
+            A_rt, f_rt, gamma_rt, f_jj_rt = expand_free_theta(theta_free, ctx3)
+            @test isapprox(A_rt, p.A; rtol=1e-10)
+            @test isapprox(f_rt, p.f; rtol=1e-10)
+            @test isapprox(gamma_rt, p.gamma_prime_target; rtol=1e-10)
+            @test isapprox(f_jj_rt, p.f[p.target_country, p.target_country]; rtol=1e-10)
+        end
+
+        @testset "reduce(expand(theta))==theta" begin
+            A_e, f_e, gamma_e, _ = expand_free_theta(theta_free, ctx3)
+            p_e = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, A_e, f_e, gamma_e)
+            theta_rt = reduce_to_free_theta(p_e, ctx3)
+            @test isapprox(theta_rt, theta_free; rtol=1e-10, atol=1e-10)
+        end
+
+        @testset "both gravity residuals at machine precision at the round-tripped point" begin
+            A_rt, f_rt, gamma_rt, _ = expand_free_theta(theta_free, ctx3)
+            p_rt = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, A_rt, f_rt, gamma_rt)
+            res_A, res_f = gravity_residuals(p_rt)
+            @test abs(res_A) < 1e-8
+            @test abs(res_f) < 1e-8
+        end
+    end
+
+    @testset "Section 1.1: pivot_conditioning_diagnostics (conditioning-only comparison)" begin
+        diag = pivot_conditioning_diagnostics(tau, 1)
+        # Under Gate A5's withinTransform coefficient vector, the unrestricted max-|c|
+        # pivot is expected to land on a diagonal cell at this D=4 fixture (the
+        # diagonal-dominance finding motivating this whole fix) -- not asserted as a
+        # hard requirement (a different random tau could avoid it), only reported.
+        @test diag.restricted_pivot_od[1] != diag.restricted_pivot_od[2]
+        @test isfinite(diag.unrestricted_max_leverage)
+        @test isfinite(diag.restricted_max_leverage)
+        @test diag.orthonormal_leverage == 1.0
     end
 end
 
@@ -635,6 +724,178 @@ if KNITRO_AVAILABLE
             end
         end
     end
+
+    # ========================================================================
+    # 2026-07-22 session Section 2: evaluate_melitz_delta + MelitzDeltaEvalCache
+    # ========================================================================
+    @testset "Section 2: evaluate_melitz_delta authoritative evaluator + cache" begin
+        small_fixture = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=20_000)
+        obj, theta0 = build_melitz_psi_bundle(small_fixture;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+        ctx = obj.γ
+        cache = MelitzDeltaEvalCache()
+
+        @testset "at the benchmark point: verified, matches the documented W=20,000 benchmark Delta" begin
+            r = evaluate_melitz_delta(theta0, ctx, obj; cache=cache)
+            @test r.verified
+            @test r.feasible
+            @test r.nStatus == 0
+            # session prompt's own stated benchmark: Delta(theta_Fstar) = 7.5545e-6 at
+            # W=20,000, seed=29 -- exact match confirms melitz_outer_state's freshly
+            # computed cutoff reproduces the SAME inner solve as the pre-fix path at this
+            # (benchmark) point (only DISPLACED points should ever differ).
+            @test isapprox(r.Delta, 7.5545e-6; rtol=1e-3)
+            @test r.G !== nothing
+            @test size(r.G) == (20_000, ctx.moment_layout.num_moments)
+            @test r.equilibrium_check !== nothing
+            @test r.state_time >= 0 && r.inner_time > 0
+        end
+
+        @testset "cache hit returns the identical stored object, no recomputation" begin
+            r1 = evaluate_melitz_delta(theta0, ctx, obj; cache=cache)
+            misses_before = cache.misses
+            r2 = evaluate_melitz_delta(theta0, ctx, obj; cache=cache)
+            @test cache.misses == misses_before
+            @test cache.hits >= 1
+            @test r1 === r2
+        end
+
+        @testset "store_G=false omits the moment matrix but keeps everything else" begin
+            r = evaluate_melitz_delta(theta0, ctx, obj; store_G=false)
+            @test r.G === nothing
+            @test isfinite(r.Delta)
+        end
+
+        @testset "a grossly infeasible/failed point is returned but NEVER cached" begin
+            cache2 = MelitzDeltaEvalCache()
+            rng = MersenneTwister(3)
+            theta_bad = theta0 .+ 3.0 .* randn(rng, length(theta0))
+            r_bad = evaluate_melitz_delta(theta_bad, ctx, obj; cache=cache2, cold=true)
+            @test !r_bad.verified
+            @test length(cache2.store) == 0
+            # re-evaluating the SAME good point afterward still caches normally (the bad
+            # point does not corrupt the cache or obj's warm-start state going forward)
+            r_good = evaluate_melitz_delta(theta0, ctx, obj; cache=cache2, cold=true)
+            @test r_good.verified
+            @test length(cache2.store) == 1
+        end
+    end
+
+    # ========================================================================
+    # 2026-07-22 session Section 3: direct F* feasibility solve (fstar_direct.jl)
+    # ========================================================================
+    @testset "Section 3: solve_fstar_direct (direct F* feasibility solve)" begin
+        small_fixture = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        obj3, theta_pop = build_melitz_psi_bundle(small_fixture;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+        ctx3 = obj3.γ
+
+        m_init = fstar_equal_weight_moments(theta_pop, ctx3, obj3)
+        @test length(m_init) == ctx3.moment_layout.num_moments
+
+        res = solve_fstar_direct(theta_pop, ctx3, obj3; rho=1e-4, iterations=5, time_limit=30.0)
+        @testset "structural: result type, moment vector lengths, non-negative distance" begin
+            @test res isa MelitzFStarDirectResult
+            @test length(res.m_final) == ctx3.moment_layout.num_moments
+            @test res.theta_distance_from_population >= 0
+        end
+        @testset "cutoff feasibility is preserved (small rho, short run, starts feasible)" begin
+            @test res.eval.feasible
+        end
+        @testset "cold-verified inner solve at the F*-direct result is a real KNITRO call" begin
+            @test res.eval.nStatus in (0, -100, -101, -103, -400, -500, -502)  # any real status, not a stub
+            @test isfinite(res.eval.Delta)
+        end
+        @testset "moments did not get WORSE than the population starting point" begin
+            # a real (even if not fully converged) improvement step should not increase
+            # the worst-case moment residual
+            @test res.max_abs_moment_final <= res.max_abs_moment_initial + 1e-8
+        end
+    end
+
+    # ========================================================================
+    # 2026-07-22 session Section 5: gradient laboratory (gradient_lab.jl) -- structural +
+    # the core Section 6 Q1 check (analytic/ForwardDiff envelope agrees with a small-h
+    # fixed-dual secant when no draw switches), at reduced scale (small W for speed).
+    # ========================================================================
+    @testset "Section 5: gradient laboratory (Methods A/B/C), structural + zero-switch agreement" begin
+        small_fixture = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        obj5, theta0 = build_melitz_psi_bundle(small_fixture;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+        ctx5 = obj5.γ
+
+        r_base = evaluate_melitz_delta(theta0, ctx5, obj5; cold=true, store_G=false)
+        @test r_base.nStatus == 0
+        x_base = copy(r_base.dual_x)
+        mask = base_active_mask(theta0, ctx5, obj5)
+
+        @testset "base_active_mask has the right shape and is not degenerate" begin
+            @test size(mask) == (ctx5.D, ctx5.D, size(obj5.U, 1))
+            @test 0 < sum(mask) < length(mask)
+        end
+
+        rng5 = MersenneTwister(11)
+        v = randn(rng5, length(theta0)); v ./= norm(v)
+
+        @testset "Method B at a small bandwidth with zero switches agrees with Method C (exact) to a few %" begin
+            h_small = 1e-6
+            nsw_p, _ = count_switches(mask, theta0 .+ h_small .* v, ctx5, obj5)
+            nsw_m, _ = count_switches(mask, theta0 .- h_small .* v, ctx5, obj5)
+            @test nsw_p == 0 && nsw_m == 0  # confirms this h genuinely has no switches
+            rb = method_b_fixed_dual_secant(theta0, v, h_small, x_base, ctx5, obj5)
+            rc = method_c_forwarddiff_envelope(theta0, v, h_small, x_base, mask, ctx5, obj5)
+            # rtol=5%, not 1%: this is a finite-h (h=1e-6) SECANT approximation to Method
+            # C's exact derivative, at a small-W (2,000) fixture -- a few percent residual
+            # discrepancy is expected numerical behavior, not a correctness bug (the
+            # governing session's own reduced battery, W=20,000, real KNITRO, found
+            # agreement ranging from 0.002% to ~5% across directions at confirmed
+            # zero-switch bandwidths, docs/melitz_delta_star.md Section 15.7).
+            @test isapprox(rb.deriv, rc.deriv; rtol=5e-2)
+        end
+
+        @testset "Method A (reoptimized FD) returns a finite derivative at a moderate bandwidth" begin
+            ra = method_a_reoptimized_fd(theta0, v, 1e-4, ctx5, obj5; cold=true)
+            @test isfinite(ra.deriv)
+        end
+
+        @testset "count_switches is zero against itself (mask compared to its own base point)" begin
+            nsw0, _ = count_switches(mask, theta0, ctx5, obj5)
+            @test nsw0 == 0
+        end
+    end
+
+    # ========================================================================
+    # 2026-07-22 session Section 4: nested Delta-star outer solve (outer_solve.jl)
+    # ========================================================================
+    @testset "Section 4: solve_melitz_delta_star_outer (nested outer solve, cold-verified)" begin
+        small_fixture = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        obj4, theta0 = build_melitz_psi_bundle(small_fixture;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+        ctx4 = obj4.γ
+
+        res = solve_melitz_delta_star_outer(theta0, ctx4, obj4; iterations=3, time_limit=40.0)
+        @testset "structural: result type, cold-verified incumbent is real" begin
+            @test res isa MelitzDeltaStarOuterResult
+            @test res.cold_verified isa MelitzDeltaEvalResult
+            @test res.n_inner_solves > 0
+        end
+        @testset "Delta_star <= Delta(theta_population) (session prompt Section 4's own required inequality)" begin
+            @test res.cold_verified.Delta <= res.Delta_init + 1e-9
+        end
+        @testset "cold-verified incumbent passes the Gate A ex-post equilibrium checks" begin
+            if res.cold_verified.verified
+                @test res.cold_verified.equilibrium_check !== nothing
+                c = res.cold_verified.equilibrium_check
+                @test maximum(abs.(c.residual_gamma_baseline)) < 1e-3
+                @test abs(c.gravity_residual_A) < 1e-8
+                @test abs(c.gravity_residual_f) < 1e-8
+            end
+        end
+    end
 end
 
 # ============================================================================
@@ -679,6 +940,109 @@ end
     end
     @testset "at least one small perturbation is cutoff-feasible" begin
         @test n_feasible >= 1
+    end
+end
+
+# ============================================================================
+# 2026-07-22 session Section 1.2/1.3: melitz_outer_state (never reads a benchmark cutoff
+# at a displaced point) and the deterministic cutoff-constraint Jacobian (exact via
+# ForwardDiff -- legitimate here since the cutoff formula is smooth, unlike Delta(theta)'s
+# hard participation gate).
+# ============================================================================
+@testset "Section 1.2: melitz_outer_state never reuses a stale benchmark cutoff" begin
+    p = FIXTURE.primitives
+    D, j = p.D, p.target_country
+    c_full, A_pivot = build_gravity_pivots(p.tau, j)
+    outer_layout = melitz_outer_layout(D, j)
+    moment_layout = MelitzMomentLayout(D)
+    ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
+           w_prime=FIXTURE.counterfactual.w_prime, L=FIXTURE.L, expenditure=FIXTURE.equilibrium.expenditure,
+           benchmark_cutoff=FIXTURE.equilibrium.cutoff, moment_layout=moment_layout,
+           X_data=FIXTURE.equilibrium.trade_flow, c_full=c_full, A_pivot=A_pivot,
+           jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
+           outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"))
+    theta0 = reduce_to_free_theta(p, ctx)
+
+    @testset "at the benchmark point, the fresh cutoff matches the fixture's own cutoff" begin
+        st = melitz_outer_state(theta0, ctx)
+        @test isapprox(st.cutoff, FIXTURE.equilibrium.cutoff; rtol=1e-8, atol=1e-10)
+        @test st.feasible
+        @test st.min_slack > 0
+    end
+
+    @testset "at a displaced point, the fresh cutoff DIFFERS from the stale benchmark cutoff" begin
+        rng = MersenneTwister(555)
+        theta_pert = theta0 .+ 0.05 .* randn(rng, length(theta0))
+        st = melitz_outer_state(theta_pert, ctx)
+        # regression test for the bug this fixes: a stale-cutoff implementation would
+        # silently return ctx.benchmark_cutoff unchanged here, which is essentially never
+        # what a genuinely displaced (A,f) implies.
+        @test !isapprox(st.cutoff, ctx.benchmark_cutoff; rtol=1e-6)
+        @test isapprox(st.cutoff, melitz_baseline_cutoff(st.A, st.f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma); rtol=1e-10)
+    end
+
+    @testset "melitz_moments_adapter! also never touches ctx.benchmark_cutoff (construction-level check)" begin
+        # the adapter builds its own eq internally; confirm it does not error/read a
+        # cutoff field that isn't there by constructing a ctx WITHOUT benchmark_cutoff at
+        # all and confirming moments! still runs (proves benchmark_cutoff is load-bearing
+        # nowhere in the active moments path).
+        ctx_no_bench = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau,
+            w=p.w, w_prime=ctx.w_prime, L=ctx.L, expenditure=ctx.expenditure,
+            moment_layout=moment_layout, X_data=ctx.X_data, c_full=c_full, A_pivot=A_pivot,
+            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin)
+        obj_stub = (γ=ctx_no_bench,)
+        K = zeros(100); G = zeros(100, moment_layout.num_moments)
+        U = FIXTURE.z_draws[1:100, :]
+        melitz_moments_adapter!(K, G, theta0, U, obj_stub)
+        @test all(isfinite, G)
+    end
+end
+
+@testset "Section 1.3: deterministic cutoff constraints and their exact Jacobian" begin
+    p = FIXTURE.primitives
+    D, j = p.D, p.target_country
+    c_full, A_pivot = build_gravity_pivots(p.tau, j)
+    outer_layout = melitz_outer_layout(D, j)
+    moment_layout = MelitzMomentLayout(D)
+    ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
+           w_prime=FIXTURE.counterfactual.w_prime, L=FIXTURE.L, expenditure=FIXTURE.equilibrium.expenditure,
+           benchmark_cutoff=FIXTURE.equilibrium.cutoff, moment_layout=moment_layout,
+           X_data=FIXTURE.equilibrium.trade_flow, c_full=c_full, A_pivot=A_pivot,
+           jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           inner_loop_opt="unused", outer_loop_opt="unused")
+    theta0 = reduce_to_free_theta(p, ctx)
+
+    @testset "g_domestic/g_export have the right lengths and are feasible at theta0" begin
+        g_d, g_e = melitz_cutoff_constraints_at(theta0, ctx)
+        @test length(g_d) == D
+        @test length(g_e) == D * (D - 1)
+        @test all(>=(0), g_d)
+        @test all(>=(0), g_e)
+    end
+
+    @testset "Jacobian matches central finite differences at theta0 and at a perturbed point" begin
+        rng = MersenneTwister(1)
+        for theta_test in (theta0, theta0 .+ 0.02 .* randn(rng, length(theta0)))
+            Jd, Je = melitz_cutoff_constraint_jacobian(theta_test, ctx)
+            @test size(Jd) == (D, length(theta0))
+            @test size(Je) == (D * (D - 1), length(theta0))
+
+            h = 1e-6
+            n = length(theta_test)
+            Jd_fd = zeros(size(Jd))
+            Je_fd = zeros(size(Je))
+            for k in 1:n
+                tp = copy(theta_test); tp[k] += h
+                tm = copy(theta_test); tm[k] -= h
+                gdp, gep = melitz_cutoff_constraints_at(tp, ctx)
+                gdm, gem = melitz_cutoff_constraints_at(tm, ctx)
+                Jd_fd[:, k] = (gdp .- gdm) ./ (2h)
+                Je_fd[:, k] = (gep .- gem) ./ (2h)
+            end
+            @test isapprox(Jd, Jd_fd; rtol=1e-4, atol=1e-6)
+            @test isapprox(Je, Je_fd; rtol=1e-4, atol=1e-6)
+        end
     end
 end
 

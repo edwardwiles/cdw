@@ -22,6 +22,7 @@
 # `theta`, and needed for the nearby-perturbation tests (main prompt Section 12).
 
 using LinearAlgebra: dot
+using ForwardDiff
 
 "lin2od(i, D) -> (o, d): invert Julia's column-major vec()/reshape() linear index."
 lin2od(i::Int, D::Int) = (mod1(i, D), div(i - 1, D) + 1)
@@ -90,12 +91,50 @@ vector for both gravity restrictions. `A_pivot` is fixed once `tau` is fixed (of
 `g0=0` exactly, since every A cell is free); the f-pivot must be REBUILT on every call
 (its offset depends on the current `f[j,j]`, itself a function of `gamma_prime_j`) --
 see `expand_free_theta` below.
+
+Session prompt Section 1.1: the A-pivot is restricted to the largest-`|c|` ELIGIBLE
+OFF-DIAGONAL cell (`avoid` excludes every `(o,o)` cell). Before this fix, `A_pivot` was
+chosen unrestricted -- and since Gate A5's `withinTransform` switch made `|c|`
+systematically diagonal-dominated (`f_pivot_domestic_avoid_indices`'s own finding), the
+unrestricted choice landed on a DOMESTIC cell in the active production configuration,
+never exercised against an outer solve. Off-diagonal pivots preserve coordinate
+locality (session prompt Section 1.1): a domestic A-pivot cell feeds directly into that
+country's own baseline AND autarky cutoffs (`derive_fjj_from_autarky_cutoff` reads
+`A[j,j]` when `j` is the pivoted country), entangling every outer coordinate's effect on
+gravity-feasibility with the focal autarky construction; an export-cell pivot does not.
+The f-pivot's own off-diagonal + distinct-from-A-pivot restriction is applied where the
+f-pivot is actually built (`reduce_to_free_theta`/`expand_free_theta`, via
+`f_gravity_pivot_avoid_indices`), since its domain (`f_free_lin`, already excluding
+`(j,j)`) is only available there.
 """
 function build_gravity_pivots(tau::Matrix{Float64}, target_country::Int)
     D = size(tau, 1)
     c_full = gravity_coefficient_vector(D, tau)
-    A_pivot = build_gravity_pivot(c_full, 0.0)
+    A_diag_avoid = [od2lin(o, o, D) for o in 1:D]
+    A_pivot = build_gravity_pivot(c_full, 0.0; avoid=A_diag_avoid)
     return c_full, A_pivot
+end
+
+"""
+    gravity_pivot_cells(tau, target_country) -> (A_pivot_od, f_pivot_od)
+
+Session prompt Section 1.1 diagnostic: the physical `(o,d)` cells chosen as the A- and
+f-gravity pivots for a given `tau`/`target_country`, using the SAME off-diagonal,
+mutually-distinct restriction the active outer coordinate system enforces
+(`build_gravity_pivots`/`f_gravity_pivot_avoid_indices`). `g0=0.0` is used for the
+f-pivot's offset here (any value would do -- WHICH cell is chosen depends only on `c`
+and the avoid-set, never on `g0`; see `pivot_expand`).
+"""
+function gravity_pivot_cells(tau::Matrix{Float64}, target_country::Int)
+    D = size(tau, 1)
+    c_full, A_pivot = build_gravity_pivots(tau, target_country)
+    jj_lin = od2lin(target_country, target_country, D)
+    f_free_lin = [i for i in 1:D^2 if i != jj_lin]
+    avoid_f = f_gravity_pivot_avoid_indices(D, f_free_lin, A_pivot.pivot)
+    f_pivot = build_gravity_pivot(c_full[f_free_lin], 0.0; avoid=avoid_f)
+    A_pivot_od = lin2od(A_pivot.pivot, D)
+    f_pivot_od = lin2od(f_free_lin[f_pivot.pivot], D)
+    return A_pivot_od, f_pivot_od
 end
 
 """
@@ -113,7 +152,7 @@ function reduce_to_free_theta(p::MelitzPrimitives, ctx)
 
     f_jj = p.f[j, j]
     g0_f = ctx.c_full[ctx.jj_lin] * log(f_jj)
-    avoid_f = f_pivot_avoid_index(ctx.A_pivot.pivot, ctx.f_free_lin)
+    avoid_f = f_gravity_pivot_avoid_indices(D, ctx.f_free_lin, ctx.A_pivot.pivot)
     f_pivot = build_gravity_pivot(ctx.c_full[ctx.f_free_lin], g0_f; avoid=avoid_f)
     logf_free_full = [log(p.f[lin2od(i, D)...]) for i in ctx.f_free_lin]
     f_free = pivot_reduce(logf_free_full, f_pivot)
@@ -145,7 +184,7 @@ function expand_free_theta(theta_free::AbstractVector{T}, ctx) where {T}
     f_jj = derive_fjj_from_autarky_cutoff(gamma_prime_j, ctx.w_prime, 1.0, A_jj, expenditure_prime_j, ctx.sigma)
 
     g0_f = ctx.c_full[ctx.jj_lin] * log(f_jj)
-    avoid_f = f_pivot_avoid_index(ctx.A_pivot.pivot, ctx.f_free_lin)
+    avoid_f = f_gravity_pivot_avoid_indices(D, ctx.f_free_lin, ctx.A_pivot.pivot)
     f_pivot = build_gravity_pivot(ctx.c_full[ctx.f_free_lin], g0_f; avoid=avoid_f)
     logf_free_full = pivot_expand(f_free_free, f_pivot)
 
@@ -160,15 +199,127 @@ function expand_free_theta(theta_free::AbstractVector{T}, ctx) where {T}
 end
 
 """
+    melitz_outer_state(theta_free, ctx; obj=nothing, evaluate_inner=false,
+                        warm_start=nothing, cold=false) -> NamedTuple
+
+Session prompt Section 1.2: the single authoritative displaced-outer-point state builder.
+NEVER reads `ctx.benchmark_cutoff` -- every field that could be stale at a displaced point
+is recomputed fresh from `theta_free`, every call:
+
+ 1. expands `theta_free` into `(A, f, gamma_prime_j)` (`expand_free_theta`, which itself
+    derives `f[j,j]` via the autarky-cutoff condition and rebuilds the f-gravity pivot's
+    offset every time -- see that function's docstring);
+ 2. `f[j,j]` (already returned by 1., surfaced here as its own field for convenience);
+ 3. recomputes the FULL baseline cutoff matrix from the CURRENT `(A, f)`
+    (`melitz_baseline_cutoff`), never `ctx.benchmark_cutoff`;
+ 4. computes the deterministic cutoff feasibility constraints at that fresh cutoff
+    (`melitz_deterministic_cutoff_constraints`, Section 1.3);
+ 5. constructs the current `MelitzPrimitives`/`MelitzEquilibrium`/`MelitzCounterfactual`
+    (the `MelitzEquilibrium` here also carries the FRESH cutoff, not a benchmark one);
+ 6. OPTIONALLY evaluates the inner CC problem (`evaluate_inner=true`) via
+    `melitz_recover_lfd` on the CALLER-SUPPLIED `obj::PsiObjectiveBundleDelta` (built once
+    by `build_melitz_psi_bundle` and reused across calls for the SAME `ctx`/`z_draws` --
+    this function does not construct a throwaway `obj`, so the caller controls warm-start
+    continuity across a sequence of outer points explicitly, via `obj.use_cached_x`/
+    `obj.x`, rather than this function silently deciding). `warm_start`, if given, is
+    written into `obj.x` before solving (and `obj.use_cached_x` is forced `true`);
+    `cold=true` clears `obj.use_cached_x` to `false` (and `obj.x` to `NaN`) first, forcing
+    KNITRO's zero-vector default start regardless of whatever the bundle's own cache
+    holds -- the caller must set at least one of `cold`/`warm_start` deliberately for every
+    call whose starting point matters (both default to "whatever the bundle's `x` cache
+    currently holds", i.e. an ordinary warm continuation).
+
+`feasible = (min_slack >= 0)` where `min_slack = min(minimum(g_domestic),
+minimum(g_export))` -- the single worst deterministic-constraint margin, negative iff
+infeasible. This is a CHEAP (no Monte Carlo, no KNITRO) check available even when
+`evaluate_inner=false`.
+"""
+function melitz_outer_state(theta_free::AbstractVector, ctx; obj=nothing,
+                             evaluate_inner::Bool=false, warm_start=nothing, cold::Bool=false)
+    D, j = ctx.D, ctx.target_country
+    A, f, gamma_prime_j, f_jj = expand_free_theta(theta_free, ctx)
+
+    cutoff = melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
+    g_domestic, g_export = melitz_deterministic_cutoff_constraints(cutoff)
+    min_slack = min(minimum(g_domestic), minimum(g_export))
+
+    primitives = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, j, ctx.tau, ctx.w, A, f, gamma_prime_j)
+    equilibrium = MelitzEquilibrium(ctx.expenditure, ones(Float64, D), cutoff, ctx.X_data)
+    expenditure_prime = ctx.w_prime * ctx.L[j]
+    counterfactual = MelitzCounterfactual(j, ctx.w_prime, expenditure_prime, 1.0, expenditure_prime)
+
+    lfd = nothing
+    if evaluate_inner
+        obj === nothing && throw(ArgumentError(
+            "melitz_outer_state: evaluate_inner=true requires a caller-supplied `obj` " *
+            "(build_melitz_psi_bundle's PsiObjectiveBundleDelta, sharing this `ctx`)"))
+        if cold
+            obj.use_cached_x = false
+            obj.x .= NaN
+        end
+        if warm_start !== nothing
+            obj.x .= warm_start
+            obj.use_cached_x = true
+        end
+        lfd = melitz_recover_lfd(obj, theta_free)
+    end
+
+    return (theta_free=theta_free, A=A, f=f, gamma_prime_j=gamma_prime_j, f_jj=f_jj,
+            cutoff=cutoff, g_domestic=g_domestic, g_export=g_export, min_slack=min_slack,
+            feasible=(min_slack >= 0), primitives=primitives, equilibrium=equilibrium,
+            counterfactual=counterfactual, lfd=lfd)
+end
+
+"""
+    melitz_cutoff_constraint_jacobian(theta_free, ctx) -> (J_domestic, J_export)
+
+Session prompt Section 1.3: the EXACT Jacobian of `melitz_deterministic_cutoff_constraints`
+with respect to `theta_free`, including the A-gravity-pivot chain rule, the f-gravity-pivot
+chain rule, the derived `f[j,j]`, and `gamma_prime` -- ALL captured automatically by
+differentiating straight through `expand_free_theta` -> `melitz_baseline_cutoff` ->
+`melitz_deterministic_cutoff_constraints` with ForwardDiff, rather than hand-deriving each
+piece separately. This is legitimate here (unlike `Delta(theta)`'s hard participation
+gate, docs' own documented ForwardDiff pitfall) because the cutoff formula is a SMOOTH
+closed-form algebraic expression in `(A, f, w, tau, expenditure)` -- no Monte Carlo, no
+`profit>0` Boolean gate anywhere in this call chain. `expand_free_theta`/
+`melitz_baseline_cutoff`/`melitz_deterministic_cutoff_constraints` are all written
+type-generically (`T = eltype(...)`), so Dual-number propagation is exact, not an
+approximation -- validated against central finite differences in the test suite
+(`test/melitz/runtests.jl`, "Section 1.3").
+"""
+function melitz_cutoff_constraints_at(theta_free::AbstractVector, ctx)
+    A, f, _, _ = expand_free_theta(theta_free, ctx)
+    zhat = melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
+    return melitz_deterministic_cutoff_constraints(zhat)
+end
+
+function melitz_cutoff_constraint_jacobian(theta_free::AbstractVector, ctx)
+    g_domestic_fn(tf) = melitz_cutoff_constraints_at(tf, ctx)[1]
+    g_export_fn(tf) = melitz_cutoff_constraints_at(tf, ctx)[2]
+    J_domestic = ForwardDiff.jacobian(g_domestic_fn, theta_free)
+    J_export = ForwardDiff.jacobian(g_export_fn, theta_free)
+    return J_domestic, J_export
+end
+
+"""
     melitz_moments_adapter!(K, G, theta, U, obj)
 
 Adapter matching the `(K, G, theta, U, obj) -> nothing` contract required by
 `PsiObjectiveBundleDelta`. `theta` is the FREE `2D^2-2` vector. `obj.gamma` (`ctx`) holds
 everything besides `theta` needed to reconstruct the model: `D, sigma, theta_star,
-target_country, tau, w, w_prime, L, expenditure, cutoff, moment_layout, X_data, c_full,
-A_pivot, jj_lin, f_free_lin`. FULLY re-equilibrates `(A, f, gamma_prime_target)` and the
-autarky counterfactual from `theta` on every call (general, not fixed-theta*-only --
+target_country, tau, w, w_prime, L, expenditure, benchmark_cutoff, moment_layout, X_data,
+c_full, A_pivot, jj_lin, f_free_lin`. FULLY re-equilibrates `(A, f, gamma_prime_target)` and
+the autarky counterfactual from `theta` on every call (general, not fixed-theta*-only --
 contrast the superseded closure's adapter).
+
+Session prompt Section 1.2: the `MelitzEquilibrium` built here uses a FRESH cutoff
+(`melitz_baseline_cutoff(A, f, ...)`, recomputed from THIS call's own `(A,f)`), never
+`ctx.benchmark_cutoff` -- `melitz_moments!` itself does not currently read `eq.cutoff`
+(only `eq.expenditure`), but constructing `eq` with a stale benchmark-only cutoff at a
+displaced `theta` would be a landmine for any future/downstream code that reads `eq.cutoff`
+expecting it to be real (e.g. a feasibility screen or diagnostic). `ctx.benchmark_cutoff`
+itself (the field name change from the former `ctx.cutoff`) is retained ONLY for reporting
+comparisons against the fixture's own benchmark point -- never read here.
 """
 function melitz_moments_adapter!(K, G, theta, U, obj)
     ctx = obj.γ
@@ -177,7 +328,8 @@ function melitz_moments_adapter!(K, G, theta, U, obj)
 
     primitives = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, ctx.target_country,
                                    ctx.tau, ctx.w, A, f, gamma_prime_j)
-    eq = MelitzEquilibrium(ctx.expenditure, ones(Float64, D), ctx.cutoff, ctx.X_data)
+    cutoff = melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
+    eq = MelitzEquilibrium(ctx.expenditure, ones(Float64, D), cutoff, ctx.X_data)
     expenditure_prime = ctx.w_prime * ctx.L[ctx.target_country]
     cf = MelitzCounterfactual(ctx.target_country, ctx.w_prime, expenditure_prime,
                                1.0, expenditure_prime)
@@ -210,9 +362,13 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
     outer_layout = melitz_outer_layout(D, j)
 
     ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
-           w_prime=cf.w_prime, L=data.L, expenditure=eq.expenditure, cutoff=eq.cutoff,
+           w_prime=cf.w_prime, L=data.L, expenditure=eq.expenditure,
+           benchmark_cutoff=eq.cutoff,  # reporting ONLY (Section 1.2) -- never read for
+                                        # candidate feasibility; melitz_outer_state/
+                                        # melitz_moments_adapter! always recompute fresh
            moment_layout=moment_layout, X_data=X_data, c_full=c_full, A_pivot=A_pivot,
-           jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin)
+           jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
 
     theta_free = reduce_to_free_theta(p, ctx)
 
@@ -367,4 +523,108 @@ function run_melitz_inner_delta(data::MelitzSyntheticData; kwargs...)
     obj, theta = build_melitz_psi_bundle(data; kwargs...)
     lfd = melitz_recover_lfd(obj, theta)
     return lfd, obj
+end
+
+# ============================================================================
+# Session prompt Section 2: the authoritative fixed-outer-point evaluator + cache.
+# ============================================================================
+
+"""
+    MelitzDeltaEvalCache()
+
+A cache of `theta_free -> MelitzDeltaEvalResult`, keyed by EXACT value equality on the
+free-coordinate vector (no rounding/binning -- the gradient laboratory and outer solve
+both re-query EXACT points, e.g. `theta`/`theta+h*v`/`theta-h*v` triples, so exact-key
+lookups are the useful case; a fuzzy/nearest-point cache is a different, unimplemented
+data structure). `evaluate_melitz_delta`'s own gate (`result.verified`) decides what may
+be STORED here -- the cache itself never re-checks or overrides that gate.
+"""
+mutable struct MelitzDeltaEvalCache
+    store::Dict{Vector{Float64},MelitzDeltaEvalResult}
+    hits::Int
+    misses::Int
+end
+MelitzDeltaEvalCache() = MelitzDeltaEvalCache(Dict{Vector{Float64},MelitzDeltaEvalResult}(), 0, 0)
+
+"""
+    evaluate_melitz_delta(theta_free, ctx, obj; warm_start=nothing, cold=false,
+                           cache=nothing, store_G=true) -> MelitzDeltaEvalResult
+
+Session prompt Section 2: THE authoritative fixed-outer-point evaluator. Wraps
+`melitz_outer_state` (cutoff-safe state, Section 1.2, timed separately as `state_time`)
+and `melitz_recover_lfd` (the real inner CC KNITRO solve, timed as `inner_time`) into one
+IMMUTABLE `MelitzDeltaEvalResult`, and, when `lfd.nStatus==0`, the full ex-post
+equilibrium check (`check_profiled_melitz_equilibrium`) under the RECOVERED LFD weights
+(never reference/equal weights).
+
+`verified = state.feasible && lfd.lfd_ok && lfd.nStatus==0` -- the three-way gate. Main
+prompt Section 2's caching rule is enforced HERE, not left to the caller: a result is
+written into `cache.store` if and only if `result.verified` -- a failed numerical solve
+(`nStatus != 0`), an approximate/unverified LFD (`lfd_ok=false`), or a cutoff-infeasible
+point (`feasible=false`) is returned to the CALLER (so the caller sees exactly what
+happened) but never cached, and never overwrites an existing cached (necessarily
+verified) entry for the same `theta_free` with something worse.
+
+`warm_start`/`cold` are forwarded to `melitz_outer_state` (`obj.x`/`obj.use_cached_x`
+semantics -- see that function's docstring); the default (both absent) is an ordinary warm
+continuation from whatever `obj`'s cache currently holds. This D=4 development pass is
+SERIAL by design (main prompt Section 2's own instruction) -- no parallel callback
+evaluation is added here; `obj` (and hence its mutable KNITRO-facing cache/scratch) must
+not be shared across concurrent callers.
+"""
+function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
+                                warm_start=nothing, cold::Bool=false,
+                                cache::Union{Nothing,MelitzDeltaEvalCache}=nothing,
+                                store_G::Bool=true)
+    if cache !== nothing
+        key = Vector{Float64}(theta_free)
+        hit = get(cache.store, key, nothing)
+        if hit !== nothing
+            cache.hits += 1
+            return hit
+        end
+        cache.misses += 1
+    end
+
+    t0 = time()
+    state = melitz_outer_state(theta_free, ctx)  # cheap: no inner solve (Section 1.2)
+    state_time = time() - t0
+
+    t1 = time()
+    if cold
+        obj.use_cached_x = false
+        obj.x .= NaN
+    end
+    if warm_start !== nothing
+        obj.x .= warm_start
+        obj.use_cached_x = true
+    end
+    lfd = melitz_recover_lfd(obj, theta_free)
+    inner_time = time() - t1
+
+    G_out = nothing
+    if store_G
+        W = size(obj.U, 1)
+        K = zeros(W)
+        G = zeros(W, obj.d)
+        obj.moments!(K, G, theta_free, obj.U, obj)
+        G_out = G
+    end
+
+    verified = state.feasible && lfd.lfd_ok && lfd.nStatus == 0
+    check = verified ? check_profiled_melitz_equilibrium(
+        state.primitives, state.equilibrium, state.counterfactual, obj.U, lfd.weights) : nothing
+
+    result = MelitzDeltaEvalResult(
+        Vector{Float64}(theta_free), state.A, state.f, state.gamma_prime_j, state.f_jj,
+        state.cutoff, state.g_domestic, state.g_export, state.min_slack, state.feasible,
+        G_out, lfd.dual_x, lfd.weights, lfd.Delta, lfd.primal_divergence, lfd.dual_divergence,
+        lfd.primal_dual_gap, lfd.moment_residuals, lfd.kkt_opt_error, lfd.kkt_feas_error,
+        lfd.nStatus, lfd.lfd_ok, verified, check, state_time, inner_time, state_time + inner_time)
+
+    if cache !== nothing && result.verified
+        cache.store[Vector{Float64}(theta_free)] = result
+    end
+
+    return result
 end

@@ -231,6 +231,63 @@ function build_equilibrium(X::Matrix{T}, N::Vector{T}, w::Vector{T}, tau::Matrix
 end
 
 """
+    melitz_baseline_cutoff(A, f, w, tau, expenditure, sigma) -> D x D matrix
+
+Session prompt Section 1.2/1.3: the deterministic (data/parameter-only, NO Monte Carlo)
+zero-profit baseline cutoff `zhat_od = melitz_cutoff(w_o, f_od, sigma, C_od)`, `C_od =
+melitz_C(w_o, tau_od, A_od, sigma, expenditure_d)`. Recomputable at ANY `(A, f)` -- NEVER
+read from a fixed benchmark object at a displaced outer point (`melitz_outer_state`,
+delta_star.jl, is the one caller that matters for this: it calls this function fresh on
+every evaluation instead of reusing a stored `ctx.benchmark_cutoff`). `w`, `tau`,
+`expenditure` are treated as fixed DATA throughout the outer search (never re-solved from
+`theta`), matching how the trade-share moments themselves treat `expenditure` as fixed
+(`moments.jl`'s `lambda_od = X_data[o,d]/eq.expenditure[d]`) -- only `A`/`f` (and, through
+`f[j,j]`, `gamma_prime_target`) vary with the outer point. Fully type-generic (parametric
+`T = promote_type(eltype(A), eltype(f))`) so it composes with ForwardDiff Duals for the
+Section 1.3 Jacobian.
+"""
+function melitz_baseline_cutoff(A::AbstractMatrix, f::AbstractMatrix, w::AbstractVector,
+                                 tau::AbstractMatrix, expenditure::AbstractVector, sigma::Real)
+    D = size(A, 1)
+    T = promote_type(eltype(A), eltype(f))
+    zhat = zeros(T, D, D)
+    @inbounds for o in 1:D, d in 1:D
+        C_od = melitz_C(w[o], tau[o, d], A[o, d], sigma, expenditure[d])
+        zhat[o, d] = melitz_cutoff(w[o], f[o, d], sigma, C_od)
+    end
+    return zhat
+end
+
+"""
+    melitz_deterministic_cutoff_constraints(zhat) -> (g_domestic, g_export)
+
+Session prompt Section 1.3: the MINIMAL deterministic feasibility inequality system --
+`log zhat[o,o] >= 0` for every `o` (`g_domestic`, length `D`) and `log zhat[o,d] - log
+zhat[o,o] >= 0` for every `o` and `d != o` (`g_export`, length `D*(D-1)`, export-selection).
+Together these imply every bilateral cutoff is `>= 1` (`log zhat[o,d] = log zhat[o,o] +
+(log zhat[o,d]-log zhat[o,o]) >= 0 + 0 = 0`), so imposing a SEPARATE, redundant `D^2`
+raw-cutoff-`>=1` system on top would add nothing (session prompt's own instruction).
+Feasible iff every entry of both returned vectors is `>= 0`; the more negative a coordinate,
+the further into infeasibility.
+"""
+function melitz_deterministic_cutoff_constraints(zhat::AbstractMatrix)
+    D = size(zhat, 1)
+    T = eltype(zhat)
+    g_domestic = zeros(T, D)
+    g_export = zeros(T, D * (D - 1))
+    k = 0
+    @inbounds for o in 1:D
+        g_domestic[o] = log(zhat[o, o])
+        for d in 1:D
+            d == o && continue
+            k += 1
+            g_export[k] = log(zhat[o, d]) - log(zhat[o, o])
+        end
+    end
+    return g_domestic, g_export
+end
+
+"""
     normalize_baseline_entrant_mass(N, A, f, f_entry, sigma; N_prime=nothing)
         -> (A_new, f_new, f_entry_new, N_prime_new)
 
@@ -516,6 +573,69 @@ exactly on `(j,j)` (which isn't in `f_free_lin` at all) or is otherwise not a ca
 """
 f_pivot_avoid_index(A_pivot_global::Int, f_free_lin::Vector{Int}) =
     findfirst(==(A_pivot_global), f_free_lin)
+
+"""
+    f_gravity_pivot_avoid_indices(D, f_free_lin, A_pivot_global) -> Vector{Int}
+
+Session prompt Section 1.1: the combined LOCAL (within `f_free_lin`) avoid-set for
+choosing the f-gravity pivot, replacing the previous production path's incomplete
+`f_pivot_avoid_index`-only exclusion (which excluded only the A-pivot's physical cell,
+NOT domestic cells -- so the f-pivot could, and empirically did, land on a domestic
+`(o,o)` cell). Combines every domestic (`o==d`) cell (`f_pivot_domestic_avoid_indices`,
+the Gate A5 diagonal-dominance finding -- landing the f-pivot there risks pushing
+`f[o,o]` above its own export cells and breaking export-selection) with the A-pivot's
+own physical cell (`f_pivot_avoid_index`, so the two pivots cannot coincide). Guarantees
+(session prompt Section 1.1's four requirements, given `build_gravity_pivots` also
+restricts the A-pivot to off-diagonal): `o != d` for both pivots, the two pivot cells
+differ, and neither pivot is `(j,j)` (never a candidate for either domain in the first
+place -- `(j,j)` is diagonal, excluded from `f_free_lin` entirely and from A's
+diagonal-avoid set).
+"""
+function f_gravity_pivot_avoid_indices(D::Int, f_free_lin::Vector{Int}, A_pivot_global::Int)
+    domestic = f_pivot_domestic_avoid_indices(D, f_free_lin)
+    a_local = f_pivot_avoid_index(A_pivot_global, f_free_lin)
+    return a_local === nothing ? domestic : vcat(domestic, a_local)
+end
+
+"""
+    pivot_conditioning_diagnostics(tau, target_country) -> NamedTuple
+
+Session prompt Section 1.1: a CONDITIONING-ONLY comparison of the active off-diagonal
+gravity-pivot elimination against (a) the UNRESTRICTED max-`|c|` pivot (whichever cell
+that is, diagonal or not -- the choice `build_gravity_pivots` made before this session's
+fix) and (b) an orthonormal/null-space parameterization of the SAME affine constraint
+(equivalent in spirit to `project_to_gravity_manifold`'s minimum-L2 correction, which
+spreads a unit perturbation evenly across every free coordinate instead of concentrating
+it in one). Reports each choice's worst-case LEVERAGE: for a single-cell pivot
+elimination `z[pivot] = -(g0 + sum_k c[other[k]]*z_free[k]) / c[pivot]`, a unit
+perturbation of free coordinate `k` moves the pivot coordinate by `|c[other[k]]/c[pivot]|`;
+`max_leverage` is the worst case over every free coordinate. An orthogonal-projection
+(orthonormal/null-space) parameterization is NON-EXPANSIVE in L2 by construction --
+leverage `<=1` always -- so `orthonormal_leverage` is reported as exactly `1.0` rather
+than separately constructed. Diagnostic only: does NOT choose the production pivot
+(`build_gravity_pivots` does that, using the off-diagonal-restricted choice).
+"""
+function pivot_conditioning_diagnostics(tau::Matrix{Float64}, target_country::Int)
+    D = size(tau, 1)
+    c_full = gravity_coefficient_vector(D, tau)
+
+    unrestricted = build_gravity_pivot(c_full, 0.0)
+    A_diag_avoid = [od2lin(o, o, D) for o in 1:D]
+    restricted = build_gravity_pivot(c_full, 0.0; avoid=A_diag_avoid)
+
+    leverage(gp) = maximum(abs.(gp.c[gp.other] ./ gp.c[gp.pivot]))
+
+    unrestricted_od = lin2od(unrestricted.pivot, D)
+    restricted_od = lin2od(restricted.pivot, D)
+    return (
+        unrestricted_pivot_od=unrestricted_od,
+        unrestricted_pivot_is_diagonal=(unrestricted_od[1] == unrestricted_od[2]),
+        unrestricted_max_leverage=leverage(unrestricted),
+        restricted_pivot_od=restricted_od,
+        restricted_max_leverage=leverage(restricted),
+        orthonormal_leverage=1.0,
+    )
+end
 
 "z_free (length n-1) -> full z (length n), gravity-feasible EXACTLY."
 function pivot_expand(z_free::AbstractVector{T}, gp::GravityPivot) where {T}
