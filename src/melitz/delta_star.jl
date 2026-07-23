@@ -473,7 +473,8 @@ function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus:
                                            theta::AbstractVector, obj;
                                            kkt_opt_error::Real=NaN, kkt_feas_error::Real=NaN,
                                            moment_tol::Real=1e-6, normalization_tol::Real=1e-6,
-                                           gap_atol::Real=1e-10, gap_rtol::Real=1e-6)
+                                           gap_atol::Real=1e-10, gap_rtol::Real=1e-6,
+                                           G_precomputed::Union{Nothing,AbstractMatrix}=nothing)
     d = obj.d
     W = size(obj.U, 1)
 
@@ -483,9 +484,28 @@ function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus:
                                 NaN, val, NaN, NaN, NaN, kkt_opt_error, kkt_feas_error)
     end
 
-    K = zeros(W)
-    G = zeros(W, d)
-    obj.moments!(K, G, theta, obj.U, obj)
+    # 2026-07-23 continuation session, Section 4: `G_precomputed`, when supplied, MUST be
+    # the moment matrix at this EXACT `theta` -- the caller's responsibility to guarantee
+    # (e.g. `finite_delta_outer.jl`'s `register_live_candidate!` passes a view onto
+    # `obj.H`'s own G columns, populated by the inner solve that JUST ran at this same
+    # `theta`, with nothing mutating it in between). This skips a second, otherwise
+    # identical O(W*(D^2+1)) `obj.moments!` build -- the single largest component of the
+    # "second authoritative evaluation" cost `docs/melitz_optimization_report_2026-07-23.md`
+    # Section A.3/G identified in `fc_candidate_registration` (~65-75ms/FC call). Default
+    # (`nothing`) preserves the exact prior behavior (always rebuild G fresh) for every
+    # OTHER caller (tests, gradient-lab diagnostics, `evaluate_melitz_delta`'s own ordinary
+    # fresh-solve path) that cannot make this same freshness guarantee.
+    local G
+    if G_precomputed === nothing
+        K = zeros(W)
+        G = zeros(W, d)
+        obj.moments!(K, G, theta, obj.U, obj)
+    else
+        size(G_precomputed) == (W, d) || throw(DimensionMismatch(
+            "melitz_recover_lfd_from_solution: G_precomputed has size $(size(G_precomputed)), " *
+            "expected ($W, $d)"))
+        G = G_precomputed
+    end
 
     arg0 = zeros(W)
     @inbounds for w in 1:W
@@ -699,22 +719,33 @@ own `K`-based `objSol` -- see `melitz_recover_lfd_from_solution`'s own docstring
 `state_time`/`inner_time` are set to `0.0` (no separate real-time measurement is meaningful
 here, since neither computation involves a fresh KNITRO solve) rather than a misleading
 wall-clock split; `total_time` likewise `0.0`.
+
+`G_precomputed` (2026-07-23 continuation session, Section 4): forwarded to
+`melitz_recover_lfd_from_solution` -- see that function's docstring. Passing the caller's
+own already-computed G (guaranteed fresh at this exact `theta_free`) avoids a second
+`obj_like.moments!` build; `nothing` (default) preserves the original always-rebuild
+behavior.
 """
 function evaluate_melitz_delta_from_solution(theta_free::AbstractVector, ctx, obj_like,
                                               Delta_val::Real, x::AbstractVector, nStatus::Integer;
                                               kkt_opt_error::Real=NaN, kkt_feas_error::Real=NaN,
-                                              store_G::Bool=false)
+                                              store_G::Bool=false,
+                                              G_precomputed::Union{Nothing,AbstractMatrix}=nothing)
     state = melitz_outer_state(theta_free, ctx)
     lfd = melitz_recover_lfd_from_solution(Float64(Delta_val), x, nStatus, theta_free, obj_like;
-        kkt_opt_error=kkt_opt_error, kkt_feas_error=kkt_feas_error)
+        kkt_opt_error=kkt_opt_error, kkt_feas_error=kkt_feas_error, G_precomputed=G_precomputed)
 
     G_out = nothing
     if store_G
-        W = size(obj_like.U, 1)
-        Ktmp = zeros(W)
-        Gtmp = zeros(W, obj_like.d)
-        obj_like.moments!(Ktmp, Gtmp, theta_free, obj_like.U, obj_like)
-        G_out = Gtmp
+        if G_precomputed !== nothing
+            G_out = Matrix{Float64}(G_precomputed)
+        else
+            W = size(obj_like.U, 1)
+            Ktmp = zeros(W)
+            Gtmp = zeros(W, obj_like.d)
+            obj_like.moments!(Ktmp, Gtmp, theta_free, obj_like.U, obj_like)
+            G_out = Gtmp
+        end
     end
 
     verified = state.feasible && lfd.lfd_ok && lfd.nStatus == 0
