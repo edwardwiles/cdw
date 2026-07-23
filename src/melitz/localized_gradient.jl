@@ -1,3 +1,5 @@
+using LinearAlgebra: BLAS
+
 # Phase II.11 (screening-continuation session): localized fixed-dual gradient backend.
 #
 # GATE 1 (this section): the affected-moment-column dependency map, built and validated
@@ -229,4 +231,135 @@ function make_melitz_moments_jacobian_b_localized(h::Real)
         return nothing
     end
     return melitz_moments_jacobian_b_localized!
+end
+
+# ============================================================================
+# Phase II.12 (this continuation session): parallel coordinate sweep on top of the now-
+# validated, bit-exact serial localized backend (Section 11 above). Main prompt Section 3's
+# own required design:
+#
+#   - the base inner solve (which produces `obj`'s dual `x`/`H` state this gradient reads
+#     via `dual_scalar_at_fixed_G`/PsiObjectiveBundle's own functor machinery) must have
+#     ALREADY completed before any coordinate work starts -- true by construction here: this
+#     function is called as `moments_jacobian!` from `cc_algo`'s own `calculate_grad_k!`,
+#     which is only ever invoked AFTER the current outer point's inner solve; nothing in
+#     this function itself launches or waits on an inner solve;
+#   - the base state (`Gbase`, `theta`, `ctx`, `obj`) is read-only for the whole parallel
+#     region -- ONLY `Gbase` is shared, and no thread ever writes to it, only `copyto!`s FROM
+#     it into its own private buffer;
+#   - one thread-local scratch object per Julia thread (`Gp_bufs[]`/`Gm_bufs[]`/
+#     `profit_bufs[]`, each a `Vector` of length `Threads.nthreads()`, indexed by
+#     `Threads.threadid()` under `:static` scheduling -- the same iteration-to-thread
+#     mapping this repo's own `docs/fullA_inner_blas_threading_report.md`/
+#     `full_aod_diag/d4_exact/bench_threading.jl` Context B convention relies on) -- never a
+#     single shared `Gp_buf`/`Gm_buf` (that would be the exact bug this session's own governing
+#     prompt warns against, "no shared mutable moment columns");
+#   - `G_jac[:, :, k]` for distinct `k` are disjoint views of the SAME output array -- safe
+#     for concurrent writes with no synchronization needed;
+#   - no inner KNITRO solve can be launched from inside a coordinate thread
+#     (`fixed_active_set_moments_restricted!` is pure economic algebra over a FIXED dual
+#     `x_base`/moment matrix, never touching KNITRO) -- guarded, not just assumed, via
+#     `cc_algo/parallelism_guards.jl`'s existing `guard_enter_coord_pool!`/
+#     `guard_exit_coord_pool!` (the SAME mutual-exclusion invariant checker
+#     `inner_loop_KNITRO` already calls into on the Ricardian/fullA side), reused here rather
+#     than inventing a second guard mechanism, matching this repo's own documented prior
+#     regression (`fullA_nested_knitro_solve_hang_fixed.md`) from omitting exactly this class
+#     of guard;
+#   - BLAS threads forced to 1 for the duration of the coordinate sweep (`melitz_firm`'s own
+#     per-draw scalar arithmetic does not call BLAS, but the main prompt's Section 3
+#     requirement is unconditional -- honored here regardless), and the caller's own prior
+#     BLAS thread count is restored afterward via `try/finally` even if a coordinate throws;
+#   - no global RNG mutation anywhere in this call (none of the functions on this path touch
+#     `Random`).
+"""
+    make_melitz_moments_jacobian_b_localized_parallel(h) -> Function
+
+Backend `:B_localized_parallel` (Phase II.12): identical calling convention, dependency map,
+and central-difference construction to `:method_b_localized` (`make_melitz_moments_jacobian_b_localized`
+above), but the `n` coordinate probes run under `Threads.@threads :static` instead of a
+serial `for` loop. Requires numerical equivalence -- in fact BIT-IDENTITY, not merely
+`isapprox` -- to the serial localized backend, since each coordinate's own output column
+`G_jac[:,:,k]` is computed from the identical inputs (`Gbase`, `theta`, `h`) regardless of
+which thread executes it, with no floating-point-order-dependent reduction across threads.
+Validated in the test suite ("Phase II.12: parallel localized gradient").
+"""
+function make_melitz_moments_jacobian_b_localized_parallel(h::Real)
+    Gbase_buf = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    Gbase_profit_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    depmap_cache = Ref{Union{Nothing,Vector{MelitzCoordDependency}}}(nothing)
+    ctx_cache = Ref{Any}(nothing)
+    Gp_bufs = Ref{Union{Nothing,Vector{Matrix{Float64}}}}(nothing)
+    Gm_bufs = Ref{Union{Nothing,Vector{Matrix{Float64}}}}(nothing)
+    profit_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    nthreads_alloc = Ref(0)
+
+    function melitz_moments_jacobian_b_localized_parallel!(K_jac, G_jac, theta, U, obj)
+        n = length(theta)
+        K_jac .= 0.0
+        K_jac[:, 1] .= 1.0
+        if size(U, 1) < size(obj.U, 1)
+            G_jac .= 0.0
+            return nothing
+        end
+        ctx = obj.γ
+        W = size(obj.U, 1)
+        d = ctx.moment_layout.num_moments
+        # `Threads.threadid()` ranges over `1:Threads.maxthreadid()`, NOT `1:Threads.nthreads()`
+        # -- Julia's `:default`/`:interactive` threadpool split (1.9+) means the global thread id
+        # a task lands on can exceed the `:default`-pool count `Threads.nthreads()` returns. Sizing
+        # these per-thread buffers by `Threads.nthreads()` alone throws a live `BoundsError` the
+        # moment a task is scheduled onto a thread outside that range (found live this session at
+        # `JULIA_NUM_THREADS=2` during the thread-count sweep) -- `Threads.maxthreadid()` is the
+        # correct, safe upper bound for indexing by `Threads.threadid()`.
+        nt = Threads.maxthreadid()
+
+        if Gbase_buf[] === nothing || size(Gbase_buf[]) != (W, d)
+            Gbase_buf[] = zeros(Float64, W, d)
+            Gbase_profit_buf[] = zeros(Float64, W)
+        end
+        if Gp_bufs[] === nothing || nthreads_alloc[] != nt || size(Gp_bufs[][1]) != (W, d)
+            Gp_bufs[] = [zeros(Float64, W, d) for _ in 1:nt]
+            Gm_bufs[] = [zeros(Float64, W, d) for _ in 1:nt]
+            profit_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            nthreads_alloc[] = nt
+        end
+        if depmap_cache[] === nothing || ctx_cache[] !== ctx
+            depmap_cache[] = melitz_localized_dependency_map(ctx)
+            ctx_cache[] = ctx
+        end
+        Gbase, Gbase_profit = Gbase_buf[], Gbase_profit_buf[]
+        depmap = depmap_cache[]
+
+        # Base moments at theta itself -- ONCE, SERIALLY, before any coordinate thread starts
+        # (the base state must be fully built and immutable for the parallel region below).
+        fixed_active_set_moments!(Gbase, Gbase_profit, theta, ctx, obj)
+
+        prev_blas_threads = BLAS.get_num_threads()
+        guards_on = isdefined(Main, :CounterfactualSensitivity)
+        BLAS.set_num_threads(1)
+        guards_on && Main.CounterfactualSensitivity.guard_enter_coord_pool!()
+        try
+            Threads.@threads :static for k in 1:n
+                tid = Threads.threadid()
+                Gp, Gm, profit_j = Gp_bufs[][tid], Gm_bufs[][tid], profit_bufs[][tid]
+                dep = depmap[k]
+                copyto!(Gp, Gbase)
+                copyto!(Gm, Gbase)
+                theta_p = copy(theta)
+                theta_p[k] += h
+                theta_m = copy(theta)
+                theta_m[k] -= h
+                fixed_active_set_moments_restricted!(Gp, profit_j, theta_p, ctx, obj;
+                    cells=dep.cells, compute_link=dep.touches_link)
+                fixed_active_set_moments_restricted!(Gm, profit_j, theta_m, ctx, obj;
+                    cells=dep.cells, compute_link=dep.touches_link)
+                @views G_jac[:, :, k] .= (Gp .- Gm) ./ (2h)
+            end
+        finally
+            guards_on && Main.CounterfactualSensitivity.guard_exit_coord_pool!()
+            BLAS.set_num_threads(prev_blas_threads)
+        end
+        return nothing
+    end
+    return melitz_moments_jacobian_b_localized_parallel!
 end

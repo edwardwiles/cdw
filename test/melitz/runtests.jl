@@ -1125,6 +1125,56 @@ if KNITRO_AVAILABLE
                 end
             end
         end
+
+        # ====================================================================
+        # Phase II.12 (this continuation session): the parallel coordinate sweep
+        # (`:method_b_localized_parallel`, `Threads.@threads :static`) must be BIT-IDENTICAL
+        # to the serial localized backend at every thread count -- each coordinate's own
+        # output column is computed independently from the same read-only base state
+        # (`Gbase`), so there is no floating-point-order-dependent reduction across threads
+        # to introduce even roundoff-scale drift. This process's own `Threads.nthreads()`
+        # (1 under this repo's standard `JULIA_NUM_THREADS=1` test-run policy) exercises the
+        # `Threads.@threads :static` code path and the parallelism-guard wiring correctly,
+        # but only at `nthreads=1` -- true multi-thread scaling/exactness at `nthreads>1` is
+        # validated separately via `scripts/melitz_parallel_gradient_sweep.sh`, not by this
+        # in-process test (a single Julia process cannot change its own thread pool size).
+        # ====================================================================
+        @testset "Phase II.12: parallel localized gradient (:method_b_localized_parallel)" begin
+            mj_loc12 = make_melitz_moments_jacobian_b_localized(1e-4)
+            mj_par12 = make_melitz_moments_jacobian_b_localized_parallel(1e-4)
+            n12 = length(theta11)
+            d12 = ctx11.moment_layout.num_moments
+            Wt12 = size(obj11.U, 1)
+
+            rng12 = MersenneTwister(71)
+            for trial in 1:3
+                theta_probe12 = theta11 .+ 0.02 .* randn(rng12, n12)
+                K_loc, G_loc = zeros(Wt12, n12), zeros(Wt12, d12, n12)
+                K_par, G_par = zeros(Wt12, n12), zeros(Wt12, d12, n12)
+                mj_loc12(K_loc, G_loc, theta_probe12, obj11.U, obj11)
+                mj_par12(K_par, G_par, theta_probe12, obj11.U, obj11)
+                @testset "trial $trial: parallel bit-identical to serial localized (nthreads=$(Threads.nthreads()))" begin
+                    @test K_par == K_loc
+                    @test G_par == G_loc
+                end
+            end
+
+            @testset "BLAS thread count restored after the parallel coordinate sweep" begin
+                prev = BLAS.get_num_threads()
+                BLAS.set_num_threads(3)
+                K_par2, G_par2 = zeros(Wt12, n12), zeros(Wt12, d12, n12)
+                mj_par12(K_par2, G_par2, theta11, obj11.U, obj11)
+                @test BLAS.get_num_threads() == 3
+                BLAS.set_num_threads(prev)
+            end
+
+            @testset "small-N probe call (size(U,1) < size(obj.U,1)) skips G_jac safely" begin
+                K_small, G_small = zeros(2, n12), zeros(2, d12, n12)
+                mj_par12(K_small, G_small, theta11, obj11.U[1:2, :], obj11)
+                @test all(iszero, G_small)
+                @test all(==(1.0), K_small[:, 1])
+            end
+        end
     end
 
     # ========================================================================
