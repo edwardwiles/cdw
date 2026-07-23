@@ -36,6 +36,7 @@ include(joinpath(MELITZ_DIR, "fstar_solver.jl"))
 include(joinpath(MELITZ_DIR, "fstar_direct.jl"))
 include(joinpath(MELITZ_DIR, "gradient_lab.jl"))
 include(joinpath(MELITZ_DIR, "outer_solve.jl"))
+include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 
 # ============================================================================
 # 1. Pareto draws
@@ -952,6 +953,46 @@ if KNITRO_AVAILABLE
                 @test maximum(abs.(c.residual_gamma_baseline)) < 1e-3
                 @test abs(c.gravity_residual_A) < 1e-8
                 @test abs(c.gravity_residual_f) < 1e-8
+            end
+        end
+    end
+
+    # ========================================================================
+    # Section 3 (2026-07-23 governing-correction session): the direct finite-delta
+    # bound problem via KNITRO with explicit nonlinear constraints. Regression coverage
+    # only (a short, loose run) -- the real economic campaigns are Section 4, run
+    # separately, not as part of the automated test suite.
+    # ========================================================================
+    @testset "Section 3: solve_melitz_finite_delta_bound (finite-delta KNITRO outer NLP)" begin
+        small_fixture = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        obj3fd, theta0_3fd = build_melitz_psi_bundle(small_fixture;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+        ctx3fd = obj3fd.γ
+        r0 = evaluate_melitz_delta(theta0_3fd, ctx3fd, obj3fd; cold=true, store_G=false)
+        @test r0.nStatus == 0
+
+        # A loose delta (comfortably above the population Delta) and a short run --
+        # this is a regression/plumbing check (does the combined callback run without
+        # crashing, does it respect the corrected constraint direction, does the
+        # verified-success gate work), not a converged economic result.
+        delta_loose = max(r0.Delta * 5, 1e-3)
+        res3 = solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd; delta=delta_loose,
+            direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+
+        @testset "structural: result type, ran without a KNITRO callback crash" begin
+            @test res3 isa MelitzFiniteDeltaOuterResult
+            @test res3.nStatus != -500  # the combined-callback crash this session's fix targets
+            @test res3.inner_solve_count > 0
+        end
+        @testset "terminal point's own cutoff feasibility is internally consistent" begin
+            @test res3.terminal_eval.feasible == (res3.terminal_eval.min_slack >= 0)
+        end
+        @testset "IF a cold-verified incumbent was found, it respects the delta budget" begin
+            if res3.cold_verified_incumbent !== nothing
+                @test res3.cold_verified_incumbent.Delta <= delta_loose + 1e-6
+                @test res3.cold_verified_incumbent.verified
             end
         end
     end
