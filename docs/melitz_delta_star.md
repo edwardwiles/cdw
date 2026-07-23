@@ -1,570 +1,743 @@
-# Full-D Melitz Δ\* benchmark: design document
+# Full-D Melitz Δ\* benchmark: design document (ACTIVE closure)
 
-Branch: `melitz/fullD-delta-star` (created from `origin/production/fullA-exact` @ `670eac4`).
-This document is written *before* the bulk of the implementation, per the project brief,
-and is updated with actual results once the D=4 benchmark runs (§13-14).
+Branch: `melitz/fullD-delta-star` (from `production/fullA-exact` @ `670eac4`). This
+document describes the **active minimal-moment / LFD-recovery closure**, which supersedes
+an earlier f_entry-primitive / N-derived / N'=N closure implemented on this same branch.
+The full historical derivation of the superseded closure (firm algebra, Pareto
+tail-moment formulas, wage-solve fixed point, gravity-restriction construction — all of
+which are REUSED unchanged below) is preserved in
+`docs/melitz_delta_star_v1_superseded_closure.md`; this document does not re-derive that
+material, only what changed and why.
+
+**2026-07-22 update (critical bug fix + population-Pareto reconstruction, see Section 13):**
+Sections 11-12 below (the exact-sample-correction benchmark and its `nStatus=-102`
+failure) are **RETRACTED**. Two real bugs made that entire benchmark point internally
+inconsistent — not a genuine CC-feasibility failure as previously reported. Both are fixed;
+Section 13 documents the fix and the now-passing real-KNITRO result
+(`nStatus=0`, `Delta(theta*)` small/positive/declining in `W`).
+
+**2026-07-22/23 update (Gate A validation, see Section 14): a further real bug was found
+and fixed** — the gains-from-trade formula reported in Section 13.4 below omitted the
+baseline/autarky wage ratio and is **WRONG SIGN** at this benchmark (`-0.0075` reported,
+`+0.052` correct, confirmed via the ACR/Chaney identity to `~1e-14`). A SECOND real bug was
+also found and fixed: the gravity restriction (`gravity_residuals`/
+`gravity_coefficient_vector`/`GravityPivot`, used throughout `equilibrium.jl`/
+`delta_star.jl`/`fake_data.jl`) used `doubleDiff` (an anchored, asymmetric contrast),
+which does NOT reproduce `production/fullA-exact`'s own canonical OLS-two-way-FE gravity
+coefficient (`withinTransform`, universal in every production run config) — verified live,
+off by up to 2.3 in the coefficient and occasionally the wrong SIGN. Both are fixed; the
+default fixture seed also changed (2 → 29) as a consequence of the gravity-transform fix.
+See Section 14 for the full Gate A report.
 
 ## 0. Scope of this milestone
 
-Build the first clean, full-country (no rest-of-world aggregation) Melitz/Chaney
-implementation, validate it end-to-end against the Christensen–Connault (CC)
-minimum-divergence machinery already in `production/fullA-exact`, and demonstrate
-**Δ\* ≈ 0** for a D=4 synthetic economy generated from the Pareto reference distribution
-F\*. Finite-δ upper/lower bound programs are explicitly **out of scope** for this
-milestone (per the brief).
-
----
-
-## 1. The mathematical model
-
-### 1.1 Firm problem (pure Melitz, constant markup)
-
-A continuum of potential entrants in origin `o` draw productivity `z_o ~ Pareto(1, θ*)`,
-i.i.d. across draws, independently across origins. A firm with productivity `z` selling
-into destination `d` faces
-
-```
-marginal_cost_od(z) = w_o · τ_od / (A_od · z)
-price_od(z)         = markup · marginal_cost_od(z),   markup = σ/(σ-1)
-```
-
-`A_od` is the paper's efficiency shifter (higher `A` ⟹ lower marginal cost — see §2 for
-why this needs no adapter against the existing repo). `τ_od = 1+t_od` is the full variable
-trade-cost wedge, diagonal = 1. There is **no** `ρ`, no perfect-competition fallback, no
-hybrid branch: `markup` is always `σ/(σ-1)` and the model requires `σ > 1`.
-
-Demand for a firm's variety in `d` is CES, so unconstrained revenue is
-
-```
-price_power_d           = Σ_o N_o · E_F[ price_od(z)^(1-σ) · active_od(z) ]     (≡ "γ_d")
-unconstrained_revenue_od(z) = expenditure_d · price_od(z)^(1-σ) / price_power_d
-operating_profit_od(z)  = unconstrained_revenue_od(z)/σ − w_o · f_od
-active_od(z)            = operating_profit_od(z) > 0
-```
-
-with `realized_revenue`/`realized_operating_profit` zero when `!active` (the `>0`
-convention is used consistently everywhere; the boundary has probability zero under the
-continuous Pareto). `N_o` (paper: `N_o`; code: `entrant_mass`, or bare `N` when
-unambiguous) is the **economic mass of potential entrants** — never a numerical firm
-count, and never divides revenue or fixed costs. `W`/`num_draws` is a pure Monte-Carlo
-integration-accuracy setting.
-
-### 1.2 The `price_power_d ≡ γ_d = 1` normalization
-
-Multiplying every `A_od` (fixed `d`) by a constant `c_d` divides every price in
-destination `d` by `c_d` and leaves `p_od(z)^(1-σ)/price_power_d` — hence every economic
-object (revenue, profit, cutoffs, entry) — unchanged, since `price_power_d` scales by
-`c_d^(σ-1)`. This is pure destination-specific scale freedom in `A_od`'s level, with no
-economic content. We use it to set **`price_power_d = 1` for every baseline destination
-`d`** (§4 shows this holds automatically, at machine precision, once `expenditure_d` is
-defined as `Σ_o X_od` — no separate rescaling step is needed for the synthetic fixture).
-With this normalization, `realized_revenue_od(z) = expenditure_d · price_od(z)^(1-σ)`
-directly (no division needed since `price_power_d ≡ 1`), matching the addendum's §3.4.
-
-The counterfactual `price_power'_d` (only needed for the focal/target country in the
-autarky counterfactual) is **not** independently normalized — it is an endogenous object
-computed from the normalized baseline `A`.
-
-### 1.3 Zero-profit cutoff and the analytical Pareto aggregate
-
-Define `C_od = expenditure_d · (markup·w_o·τ_od/A_od)^(1-σ)`, so `realized_revenue_od(z) =
-C_od · z^(σ-1) · active`. The zero-profit cutoff solves `C_od·ẑ_od^(σ-1) = σ·w_o·f_od`, i.e.
-
-```
-ẑ_od = (σ·w_o·f_od / C_od)^(1/(σ-1))
-```
-
-For `z ~ Pareto(1, θ*)` (density `θ*·z^(-θ*-1)`, `θ* > σ-1` required for finiteness):
-
-```
-Pr(z > ẑ)              = ẑ^(-θ*)                                     (ẑ ≥ 1)
-E_F[z^(σ-1)·1{z>ẑ}]    = θ*/(θ*-σ+1) · ẑ^(σ-1-θ*)
-```
-
-so aggregate bilateral trade under F\* is
-
-```
-X_od = N_o · C_od · θ*/(θ*-σ+1) · ẑ_od^(σ-1-θ*)                        (*)
-```
-
-and expected per-entrant operating profit (derivation in §1.5) collapses to
-
-```
-E_F[operating_profit_od(z)] = C_od·(σ-1)/(σ·(θ*-σ+1)) · ẑ_od^(σ-1-θ*)
-```
-
-### 1.4 `N_o` is derived, closed form, from `L_o` and `f_entry_o` — matching Melitz-Redding eq. (22)
-
-This derivation went through three passes in one session, worth recording because the
-final answer is a genuine reconciliation of two seemingly conflicting facts, not a
-correction of one by the other.
-
-**Pass 1** tried to use free entry to *solve for* `N_o` directly and failed (a
-D-dimensional NLsolve system that would not converge even after homotopy).
-
-**Pass 2** found that `N_o` cancels out of the free-entry condition entirely once `C_od`
-is expressed the "structural" way (`C_od = expenditure_d·(markup·w_o·τ_od/A_od)^(1-σ)`,
-no `N_o`), concluding `N_o` is a free scale like the Ricardian repo's `L` — this is true,
-but only as a statement about the *data-inversion* parameterization of §1.6 (`C_od` built
-from `X_od/N_o`): for **that specific parameterization**, `N_o` and `A_od` trade off
-against each other holding `X_od` fixed, so `N_o` is not separately identified from
-*aggregate trade data alone*. This is a real, defensible econometric point (§1.7) — but it
-does not mean `N_o` is unconstrained by the *model's own primitives*.
-
-**Pass 3**, prompted by checking Melitz & Redding's own closed-form mass-of-entrants
-result (their eq. 22, `M_Ei=(σ-1)/(kσ)·L_i/f_Ei`, derived from a genuine labor
-income/resource identity, `w_i·L_i` = revenue = mass-of-entrants × average revenue per
-potential entrant), found the same identity holds here: combining
-`f_entry_o = S_o·(σ-1)/(σ·θ*·w_o)` (`S_o = Σ_d C_od·M_od`, from §1.6's `entry_cost_from_free_entry`,
-still valid regardless of parameterization) with `N_o = w_o·L_o/S_o` (the income/sales
-identity, already enforced by `melitz_solve_wages`, §1.5) and eliminating `S_o` gives
-
-```
-N_o = (σ-1)/(σ·θ*) · L_o/f_entry_o
-```
-
-— exactly Melitz-Redding's eq. (22), extended unchanged to the bilateral-`A_od` case (the
-cutoff/`A`/`τ` dependence cancels algebraically, exactly as in their result). **Verified
-numerically** (`verify_closed_form_N.jl`, this session) against the already-working
-Pass-2 construction: computing `N` this way from the *already-derived* `f_entry`
-reproduces the *already-chosen* `N` to 1e-9 — confirming Pass 2 and Pass 3 are the same
-system of equations, just solved in opposite directions (Pass 2: choose `N`, derive
-`f_entry`; Pass 3: choose `f_entry`, derive `N`).
-
-**Resolution:** `f_entry_o` (with `L_o`) is the primitive; `N_o` is derived via the
-closed form above — matching Melitz-Redding, matching the brief's original parameter
-table, and matching standard Melitz practice. Pass 2's non-identification point is not
-wrong, it is simply about a *different* question (§1.7: what can be recovered from
-*aggregate trade data alone*, without knowing `L_o`/`f_entry_o` — relevant to the
-eventual F\* *solver*, §9) than what this section answers (what pins `N_o` in the
-*forward, deep-primitives* construction of the synthetic fixture).
-
-### 1.5 Data, not deep primitives: mirroring the Ricardian repo's actual architecture
-
-A second, related correction (also caught mid-session): the Ricardian repo's data object
-is trade **shares** `λ_od`, not trade-flow **levels** `X_od`. Shares alone under-determine
-levels — levels require `expenditure_d = w_d·L_d`, and wages must be *solved* so that
-income (`w_o·L_o`) equals sales (`Σ_d X_od`) for every country *simultaneously* (no
-deficits). An earlier draft of this file chose `X_od` levels directly and only impose
-`expenditure_d = Σ_o X_od` (destination-side balance) — that silently drops the
-origin-side balance (`w_o·L_o = Σ_d X_od`) and can run an undetected trade deficit.
-
-The fix reuses `prestep/iterWagesPreStep!.jl`'s exact damped-Jacobi fixed point verbatim
-(`melitz_solve_wages` in `equilibrium.jl`): `w1 = λ·(w0.*L)./L`, iterated to convergence,
-normalized `w[1]=1`. Given `λ` (data, columns sum to 1), `L` (chosen labor endowment),
-this is the **only** numerical fixed point in the entire construction — well-behaved
-(effectively finding the stationary vector of a column-stochastic-weighted system),
-nothing like the abandoned steep power-law system of §1.4's first attempt. Given the
-solved `w`, `expenditure_d := w_d·L_d` and `X_od := λ_od·expenditure_d` follow in closed
-form and satisfy **both** row and column balance by construction.
-
-### 1.6 Profiling the D² trade-flow equations analytically (the addendum's parameterization)
-
-Given `N_o` (§1.4, derived from `L_o`/`f_entry_o`) and *any* candidate cutoff `ẑ_od ≥ 1` (with `ẑ_od ≥
-ẑ_oo` for `d≠o`, per the export-selection restriction), `(*)` can be solved for `C_od`
-directly:
-
-```
-C_od = (X_od/N_o) · (θ*-σ+1)/θ* · ẑ_od^(θ*-σ+1)
-```
-
-and then, inverting the definitions of `C_od` and the cutoff condition,
-
-```
-A_od = markup·w_o·τ_od · (C_od/expenditure_d)^(1/(σ-1))
-f_od = C_od·ẑ_od^(σ-1) / (σ·w_o)
-```
-
-This is exactly the derivation sketched in the addendum §1.5 (independently re-derived
-here; the two agree term for term). **The D² trade-flow equations are therefore satisfied
-by construction for any choice of `{ẑ_od}`** — they never separately identify `A_od` and
-`f_od`; the free parameterization is the `D²`-dimensional cutoff matrix `{ẑ_od}`
-(equivalently, any `A/f` pair related to it by the formulas above), subject only to the
-two gravity restrictions and the support/export-selection inequalities. We use this
-cutoff parameterization as the practical implementation device in `fake_data.jl`, but
-**do not claim it is the economically identified object** — see §9 and the addendum §1.3.
-
-### 1.7 Non-identification of `A_od`/`f_od` individually (why this must not be oversold)
-
-Because `price_power_d ≡ 1` removes `N_o` from firm-level revenue, and because the
-data-inversion parameterization of §1.6 shows `N_o` and `A_od`'s level trade off against
-each other holding *aggregate trade data* fixed (§1.4's Pass 2), the object that
-aggregate F\*-Melitz trade **data alone** identifies, once double-differenced, is the
-composite the addendum derives:
-
-```
-r = θ*·a + β·h,     a = ΔΔ log A,  h = ΔΔ log f,  β = 1 - θ*/(σ-1)
-```
-
-not `a` and `h` separately. §1.6's cutoff parameterization is one convenient *computational*
-way to pick a point in the affine set of decompositions consistent with `r`; it is not a
-claim that `ẑ_od` (or the implied `A_od`/`f_od` split) is identified by the data. The
-acceptance tests (§13) check the identified composite and the two orthogonality
-restrictions, never elementwise recovery of `A`/`f`.
-
-### 1.8 Autarky: the target country's own baseline cutoff is derived, not chosen
-
-The brief requires `ẑ'_{target,target} = 1` (the autarky cutoff sits exactly at the Pareto
-lower support) while *also* holding the target country's resources fixed across baseline
-and autarky (same labor endowment, same wage numeraire `w'=w=1`) — necessary for the
-ACR/Chaney cross-check to be a meaningful comparison at all (ACR compares two equilibria
-with the *same* endowment; if `expenditure_prime` were allowed to differ from the
-baseline's own `expenditure[target]`, the price-index ratio would reflect a scale change,
-not a pure market-access change, and would have no reason to match `1-λ_dd^(1/θ*)`).
-
-An earlier pass at this derivation got the *direction* backwards — it tried to derive
-`f[target,target]` from `f_entry[target]` and treat `N[target]`/`expenditure_prime` as
-free. Redone correctly (holding `expenditure_prime[target] = expenditure[target]`,
-`w'=1`, `τ'_tt=1`, and combining the baseline and autarky zero-profit conditions with the
-price-power definitions for cell `(target,target)`), the algebra shows the *baseline*
-cutoff for that one cell, not `f_entry` or `N`, is what must be pinned:
-
-```
-ẑ[target,target] = (expenditure[target]·w[target] / X[target,target])^(1/θ*)
-                  = (w[target] / λ_tt)^(1/θ*)
-```
-
-(`λ_tt = X[target,target]/expenditure[target]`, the baseline domestic trade share — the
-resemblance to the ACR formula `1-λ_tt^(1/θ*)` is exactly why the cross-check below comes
-out exact). This was verified two ways: symbolically, and numerically (re-deriving it by
-substitution gave an apparently different, `N`-dependent formula on a first pass; a direct
-numeric probe in `test_equilibrium.jl` showed the `N`-dependent formula is an identity that
-holds automatically once this cutoff value is used, for *any* `N[target]` — confirming
-`N[target]` is free (§1.4) and this cutoff is the one genuine normalization). `f_entry` and
-`f[target,target]` are then computed by the *same* closed-form formulas as every other
-cell (§1.6) — no special-casing beyond fixing this one cutoff rather than letting it be
-gravity-projected like the other `D²-1` cells (§10's projection step treats it as a fixed
-constant, exactly as it already treated the old, now-superseded, `f[target,target]`
-formula).
-
-**Validated end-to-end** (`test_equilibrium.jl`, this session): with this cutoff fixed,
-`price_power_d≡1` for all `d`, the autarky cutoff comes out at exactly `1`, and
-`GT_model` (via the price-power ratio) matches `GT_ACR = 1-λ_tt^(1/θ*)` to **2.2e-16**
-— including after changing `N[target]` from `1.5` to `7.3`, confirming free entry data
-matches to machine precision independent of the free `N` choice.
-
----
-
-## 2. Mapping to the repository's notation (`A`, `c`, `γ`)
-
-**`A` (productivity):** confirmed independently (not merely inferred from the legacy
-file) that `production/fullA-exact`'s underlying convention is `MC_od = w_o·τ_od/(A_od·z_o)`
-— i.e. *higher* `A` ⟹ *lower* marginal cost, **exactly the paper's convention**. The repo
-internally stores the reciprocal `AodPow = 1/A_od` for its own numerics/gradients, but the
-economic object already matches the paper. **No adapter is needed**; the Melitz module
-defines its own `A[o,d]` directly in this convention and does not reuse `cHat`/`AodPow`.
-
-**`γ` (price-related object) — deliberately renamed, not reused:** the repo's own `γ`
-satisfies `γ_d^σ · gdp_d = P_d^(1-σ)` (a GDP-and-σ-rescaled Fréchet price-power aggregate
-built from `SpecialFunctions.gamma`, the Euler Gamma special function — an unrelated
-naming collision the repo's own code comments flag). The Melitz module's analogous object
-(§1.1, `price_power_d = Σ_o N_o E_F[p_od^(1-σ)·active]`) is a **different formula** (no
-Euler-Gamma special function; the truncation comes from the Pareto tail, not a Fréchet
-extreme-value moment) and is named `price_power` throughout, never `gamma`, to avoid the
-collision. `computeGamma.jl` is not reused.
-
-**`doubleDiff` vs. `withinTransform`:** the repo has two double-differencing-style
-operators (`misc/doubleDiff.jl`): the cell-referenced `doubleDiff(z)` (reference row 1 /
-column 2) and `withinTransform(z)` (two-way fixed-effects "within" transform). Production's
-*own* live gravity moment uses `withinTransform`, because `doubleDiff` does not reproduce
-an OLS two-way-FE elasticity-regression coefficient — but that concern is about
-*estimating θ* by regression, which the Melitz module never does (θ\* is a fixed,
-calibrated benchmark parameter here, §5). The two Melitz gravity restrictions are direct
-scalar covariance restrictions `⟨ΔΔlogτ, ΔΔlogA⟩=0` / `⟨ΔΔlogτ, ΔΔlogf⟩=0` on the
-model's own `A`/`f`, which is exactly what `doubleDiff` computes (and both live in the
-same `(D-1)²`-dimensional double-differenced space the addendum's math uses). The Melitz
-module therefore uses **`doubleDiff`**, matching the addendum's `ΔΔ` notation and the
-brief's explicit instruction to reuse it, and documents (here) why this differs from
-production's own `withinTransform` usage rather than silently picking one.
-
----
-
-## 3. Integration draws vs. `N_o`
-
-- `z_o ~ Pareto(1, θ*)`, one draw per **origin**, `W × D` reference-draw matrix (matches
-  the repo's own `UoModel=1` convention, `prepare_cc/drawU.jl`). Generated once via a
-  single `Random.seed!(seed)` + `rand!` + inverse-CDF transform (`z = (1-u)^(-1/θ*)`),
-  mirroring `prepare_cc/genRands.jl`'s "seed once, draw once, reuse everywhere" discipline
-  — not `cc_algo/rhalton.jl` (validated but unused on the production hot path; available
-  as an opt-in alternative, §11).
-- `W`/`num_draws` is a pure accuracy dial. `N_o`/`entrant_mass[o]` is the economic mass of
-  potential entrants (§1.1, §1.4) and is never divided into revenue or fixed costs, and
-  never confused with `W`.
-- `N'_o = N_o` is imposed by construction: the counterfactual moment code receives the
-  identical `entrant_mass` vector as the baseline (never an independently searched
-  `NPrime`).
-
----
-
-## 4. Moment functions
-
-All moments are built from the same shared per-draw firm routine (`firm_quantities.jl`),
-called identically in baseline and counterfactual — never a separate manual counterfactual
-formula and never evaluated at a single draw index (the two anti-patterns the legacy audit
-flags).
-
-### A. D² bilateral trade-flow moments — matched as SHARES, not levels
-
-```
-lambda_od = X_data[o,d] / expenditure_d
-g_trade[o,d](z) = entrant_mass[o]·realized_revenue_od(z_o)/expenditure_d − lambda_od
-```
-
-for **every** `(o,d)` pair — all `D²` cells, never gated on `baseIndex`/"rest of world".
-**Corrected mid-session from an earlier level-based draft** (`g_trade =
-entrant_mass[o]·realized_revenue − X_data[o,d]`, optionally rescaled by the cell's own
-`X_data[o,d]` for conditioning): live user feedback pointed out the Ricardian repo's own
-`moments/hFunction.jl` matches **shares**, not levels — confirmed by reading it directly:
-`G[ω,d1] = pricesTemp[o] − P[d1]·denom[d]`, where `P[d1]` is literally the vectorized
-trade-*share* data (`prepare_cc/buildObjectsForMoments.jl`) and `denom[d]=γ[d]^σ·gdp[d]`
-is a destination-level rescaling constant applied to make it comparable to the simulated
-term — the fundamental data object matched is the share. `setup/createFakeData.jl`
-confirms this is a **closed-form** object (`lambda = phi./sum(phi,dims=1)` under the
-Fréchet gravity equation), never a Monte Carlo sample average — the Melitz module's own
-`X_data`/`entry_target` default (`build_melitz_psi_bundle`) mirrors this: the closed-form
-population values `(eq.trade_flow, w.*f_entry)`, not a sample mean over the same draws
-used to evaluate the moments (see §14 for why that distinction matters numerically).
-Matching all `D²` flows with `expenditure_d = Σ_o X_od` implies `price_power_d=1`
-automatically (§1.6's derivation: `price_power_d = (1/expenditure_d)·Σ_o N_o C_od M_od =
-(Σ_o X_od)/expenditure_d ≡ 1`) — **no separate price-index moment is added.**
-
-### B. D free-entry moments (per-entrant, not multiplied by `N_o`)
-
-```
-g_entry[o](z) = Σ_d realized_operating_profit_od(z_o) − w_o·f_entry_o
-```
-
-`N_o` never appears here (§1.1: it multiplies aggregate trade and price-power
-contributions, not the per-potential-entrant free-entry condition — this is a modeling
-requirement, not a simplification we chose for convenience; §1.4's closed form for `N_o`
-would be circular/wrong if `N_o` also entered this equation).
-
-### C. Two gravity restrictions (outer, F-independent equality constraints)
-
-`⟨doubleDiff(τ), doubleDiff(A)⟩ = 0` and `⟨doubleDiff(τ), doubleDiff(f)⟩ = 0`. Following
-production's own treatment of its analogous F-independent gravity moment (it is carved out
-as an **outer**-loop equality constraint on θ via `outer_constr_index`, not an inner-loop
-column matched over draws — `prepare_cc/master_prepare_cc.jl`'s `nOuterLoopMoments`
-accounting), the Melitz module does the same: these two restrictions are evaluated once
-from `(A,f,τ)` (no `U` dependence) and enter as equality constraints in the outer θ-search,
-**not** as additional `G` columns — avoiding the brief's "do not duplicate the same
-restriction in both places."
-
-### D. Factor-market / expenditure closure
-
-Following the Ricardian repo's own minimal convention (confirmed: no `deficit`, no
-`tariff` revenue, and — critically — **no `gdp_adjustment` object anywhere** in
-`production/fullA-exact`; GDP is simply `w·L`), the Melitz module adopts the analogous
-closure `expenditure_d := Σ_o X_data[o,d]` (an accounting identity, not a free parameter),
-with `L_o := expenditure_o/w_o` reported as a derived diagnostic (labor income), not as an
-independent primitive requiring its own equilibrium condition. This is a deliberately
-minimal closure matching the Ricardian repo's own level of ambition (§11) — it is *not*
-a microfounded labor-resource constraint on production/fixed/entry costs, which the
-brief's "any factor-market... restrictions required by the current paper" leaves to the
-existing architecture's own precedent.
-
----
-
-## 5. Parameter inventory
-
-| object | dims | searched / fixed / derived | transform | normalization | role | code location |
-|---|---|---|---|---|---|---|
-| `σ` | scalar | fixed/calibrated | `log σ` internally if ever searched | `σ>1` required | CES elasticity | `types.jl` |
-| `θ*` | scalar | fixed/calibrated | `log θ*` internally if ever searched | `θ*>σ-1` required | Pareto shape | `types.jl` |
-| `λ[o,d]` | D×D | **data** (chosen for the synthetic fixture; columns sum to 1) | — | none | trade share (mirrors Ricardian's own data object) | `fake_data.jl` |
-| `L[o]` | D | fixed/chosen (labor endowment) | `log L` | none | endowment | `fake_data.jl` |
-| `w[o]` | D | **solved** via `melitz_solve_wages` (reuses `iterWagesPreStep!`'s exact fixed point, given `λ`, `L`) | — | `w[1]=1` (numeraire) | wage | `equilibrium.jl` |
-| `w'[target]` | scalar | fixed | — | `w'[target]=1` (counterfactual numeraire) | autarky wage | `equilibrium.jl` |
-| `τ[o,d]` | D×D | fixed (data) | — | diag = 1 | trade cost | `fake_data.jl` |
-| `expenditure[d]` | D | derived, closed form: `w_d·L_d` | — | `expenditure_d = Σ_o X_od` (holds automatically given the wage solve) | destination spend | `equilibrium.jl` |
-| `X[o,d]` | D×D | derived, closed form: `λ_od·expenditure_d` | — | `Σ_d X_od = w_o·L_o` (income=sales, holds automatically) | trade flow (data level) | `equilibrium.jl` |
-| `f_entry[o]` | D | **primitive (chosen/calibrated)** | `log f_entry` | none | entry cost | `fake_data.jl` |
-| `entrant_mass[o]` (`N_o`) | D | **derived, closed form**: `(σ-1)/(σθ*)·L_o/f_entry_o` (§1.4 — matches Melitz-Redding eq. 22) | — | `N'_o=N_o` (shared object) | mass of potential entrants | `equilibrium.jl` |
-| `ẑ[o,d]` | D×D | free computational parameterization (§1.6), not economically identified — **except** `ẑ[target,target]` | — | `ẑ_od≥1`; `ẑ_od≥ẑ_oo` (d≠o); `ẑ[target,target]` **derived** (§1.8) | baseline cutoff | `fake_data.jl` |
-| `A[o,d]` | D×D | derived, closed form from `(X,N,w,τ,expenditure,ẑ)` (§1.6), non-identified split (§1.7) | `log A` | `price_power_d≡1` holds automatically given the closure above | efficiency shifter | `equilibrium.jl` |
-| `f[o,d]` | D×D | derived, closed form (§1.6) | `log f` | none beyond `ẑ[target,target]`'s own normalization | fixed market-access cost | `equilibrium.jl` |
-| `price_power[d]` | D | derived diagnostic | — | `≡1` by construction (§1.2/1.5) | CES price-power aggregate | `equilibrium.jl` |
-| `price_power'[target]` | scalar | derived (autarky, closed form) | — | none (endogenous) | counterfactual price-power | `equilibrium.jl` |
-| `ẑ'[target,target]` | scalar | normalized | — | `=1` exactly (Pareto lower support) | autarky cutoff | `equilibrium.jl` |
-| Pareto lower support | scalar | fixed | — | `=1` | F\* primitive | `pareto.jl` |
-
----
-
-## 6. Firm-level calculations
-
-Single shared routine `melitz_firm!`/`melitz_firm` in `firm_quantities.jl`, used for both
-baseline and counterfactual, evaluated at every draw (never draw index 1 only):
-`marginal_cost → price → unconstrained_revenue → operating_profit → active →
-realized_revenue/realized_operating_profit`, exactly the formulas in §1.1.
-
----
-
-## 7. Why free-entry is not multiplied by `N_o`
-
-`f_entry_o` is the entry cost **per potential entrant** — the condition `E_F[Σ_d
-operating_profit_od(z)] = w_o f_entry_o` says a representative potential entrant expects
-zero net profit from paying the entry cost and then discovering `z` and choosing where to
-sell. Multiplying by `N_o` would conflate "zero expected profit per entrant" with "zero
-*aggregate* profit across the whole mass of entrants" — a different condition, and it is
-precisely because this equation is `N_o`-free that combining it with the labor/income
-identity yields `N_o`'s own closed form (§1.4) — multiplying by `N_o` here would corrupt
-that derivation, not just be economically wrong on its own terms.
-
----
-
-## 8. Baseline cutoffs and autarky cutoff normalization
-
-Baseline cutoffs `ẑ[o,d]` are the free computational parameterization of §1.6 (chosen
-subject to `ẑ≥1`, `ẑ_od≥ẑ_oo`) — **except** `ẑ[target,target]`, which is **derived**
-(§1.8's closed form) rather than freely projected, so that the autarky cutoff
-`ẑ'[target,target]=1` holds exactly while holding the target country's resources fixed.
-The cell is simply excluded from the gravity-projection step (§10) that produces the
-other `D²-1` cells of `ẑ` (equivalently `A`/`f`), with its known, fixed contribution to
-the restriction's inner product netted out of that projection.
-
----
-
-## 9. `N'_o = N_o`
-
-The equilibrium/moment code takes a single `entrant_mass::Vector` and passes the same
-vector to both the baseline and counterfactual firm/moment evaluators — there is no
-`NPrime` object anywhere in the Melitz module (the legacy code's `NumberActiveFirmsPrime`
-pattern, which computes a separate value and is later force-equated to `NumberActiveFirms`
-via an `impose_M_Mprime_equality` flag, is explicitly rejected).
-
----
-
-## 10. Full-D gravity restrictions (construction)
-
-`fake_data.jl` generates raw `log ẑ` (the cutoff parameterization, §1.6) with
-heterogeneous cell-specific noise plus origin/destination fixed effects (which vanish
-under `doubleDiff`). Because `log A_od` and `log f_od` are each *affine* in `log ẑ_od`
-given the other data fixed (coefficients `(θ*-σ+1)/(σ-1)` and `θ*` respectively — derived
-this session, §1.6), the two gravity restrictions reduce to a single linear requirement
-on `⟨doubleDiff(τ), doubleDiff(log ẑ)⟩`, itself pinned by requiring the trade-flow data's
-own composite restriction `⟨T, ΔΔlogX + θ*T⟩ = 0` to hold (§1.7's identified-composite
-condition). `fake_data.jl` projects the *free* cells' double-differenced `log ẑ`
-component onto that required value (Gram-Schmidt-style), with `ẑ[target,target]` excluded
-and held at its §1.8 value throughout (its known, fixed contribution to the inner product
-is netted out so the free cells absorb the correction). Both restrictions are verified
-numerically to machine precision as part of fixture construction, and `std(log A) > 0`,
-`std(log f) > 0`, `std(doubleDiff(log A)) > 0`, `std(doubleDiff(log f)) > 0` are asserted
-(never trivially-all-ones matrices).
-
----
-
-## 11. Ricardian routines reused / adapted
-
-**Reused as-is:** `misc/doubleDiff.jl`'s `doubleDiff` (§2, §10); the general "seed once,
-draw once" discipline of `prepare_cc/drawU.jl`/`genRands.jl` (adapted to Pareto inverse-CDF
-instead of Exp(1)+Fréchet transform, §3); `prestep/iterWagesPreStep!.jl`'s damped-Jacobi
-fixed point `w1 = λ·(w0.*L)./L` reused **verbatim** as `melitz_solve_wages` (§1.5 — not
-just "the same pattern": this is the one and only numerical fixed point anywhere in the
-Melitz construction, taking trade *shares* as data exactly as the Ricardian repo does);
-the CC minimum-divergence inner loop
-(`cc_algo/ccInner.jl`, `cc_algo/inner_loop_functions.jl`, `PsiObjectiveBundleDelta` from
-`cc_algo/PsiObjectiveBundle.jl`) — the Melitz module supplies its own `moments!(K,G,θ,U,obj)`
-function and plugs it into an unmodified `PsiObjectiveBundleDelta`; the outer Δ\*
-minimization via the method-agnostic `cc_algo/outer_loop_cached.jl` +
-`cc_algo/free_param_map.jl` (recommended integration point per the infrastructure survey,
-since it accepts caller-supplied gradients rather than assuming the Fréchet-specific
-`jac_h`/autodiff-through-`moments!` path); `cc_algo/Psi.jl`'s divergence functions
-(model-agnostic).
-
-**Not reused, with reason:** `prestep/computeGamma.jl` (Fréchet-specific, uses
-`SpecialFunctions.gamma`, wrong formula for Melitz — §2); `moments/hFunction.jl`/
-`moments/moments!.jl` (Fréchet-specific per-draw firm formulas — Melitz has its own,
-§6); `withinTransform` for the gravity restriction itself (used for elasticity
-*estimation* in production, not applicable here — §2, though the function remains
-available if a future extension needs it).
-
----
-
-## 12. Legacy routines adapted or rejected
-
-See `docs/melitz_legacy_audit.md` for the full file/line inventory. In summary: the
-constant-markup price/revenue/profit algebra and the Pareto tail-expectation *shape* were
-useful cross-checks (re-derived independently in §1.3-§1.7, not copied); the
-`f[target,target] = f_entry·(θ*-σ+1)/(σ-1)` formula in particular was found, isolated, and
-confirmed correct — but only after re-deriving it from scratch (§1.7) and then cross-
-checking against the buried legacy expression, not by trusting the legacy code directly.
-Everything else — foreign-country aggregation, the ρ/σ hybrid branch, `N`-as-firm-count,
-single-draw counterfactuals, `gdp_adjustment=ones(D)`, repurposed parameter slots — is
-rejected per that document.
-
----
-
-## 13. Reproducing the D=4 Δ\* test
-
-```
-source .knitro_env.sh   # KNITRO license only resolves on demand.mit.edu
-julia --project=. scripts/run_melitz_delta_star_fake.jl --D 4 --seed 1234 --draws 80000
-```
-
-Prints normalizations, the true parameter summary, moment residuals (with the
-`min_active_draw_count` diagnostic — see §14), the GT/ACR cross-check, and `Delta(theta*)`
-via the real, unmodified CC/KNITRO inner loop. The formal automated equivalent is
-
-```
-julia --project=. test/melitz/runtests.jl
-```
-
-(104 tests; the last two testsets require KNITRO and are skipped with a warning, not a
-hard failure, if `cc_algo`/KNITRO cannot be loaded in the current environment).
-
-## 14. Numerical result and tolerance
-
-**Verified live, `seed=1234`, `--draws 80000`:**
+Per the governing prompt: implement exactly the reduced `D^2+1`-moment system, solve the
+fixed-parameter Christensen–Connault minimum-divergence problem, recover the least-
+favorable distribution (LFD), reconstruct every equilibrium object profiled out of the
+active moments, and verify every omitted equation ex post under that LFD — for the exact
+Pareto benchmark and a handful of nearby gravity-feasible perturbations. Finite-δ
+upper/lower bound programs remain **out of scope**.
+
+## 1. What changed vs. the superseded closure
+
+| claim (superseded doc) | status now |
+|---|---|
+| `f_entry[o]` is an observed primitive | **superseded** — not a field of `MelitzPrimitives` at all; recovered from the LFD post-solve (`recover_entry_costs_from_lfd`) |
+| `N_o` (baseline entrant mass) derived from `f_entry_o`, generally ≠1 | **superseded** — `N_o≡1` for every origin, a universal normalization (`normalize_baseline_entrant_mass` converts an arbitrary economy to this) |
+| `N'[target] = N[target]` (reused unchanged) | **superseded** — `N'[target]` is recovered post-LFD from TWO independent formulas (market clearing, price index) and compared, never imposed |
+| `gamma_prime[target]` (`price_power_prime`) precomputed in closed form before the inner solve | **superseded** — `gamma_prime_target` is a SEARCHED field of `MelitzPrimitives`, part of the packed outer vector |
+| `f[target,target]` derived from a fixed-mass ACR-style baseline-cutoff-pinning trick | **superseded** — derived directly from `(gamma_prime_target, A[target,target], L[target])` via the autarky cutoff-at-one condition (`derive_fjj_from_autarky_cutoff`), independent of any baseline data |
+| moment system: `D^2` trade-share + `D` free-entry moments (`D^2+D` total) | **superseded** — `D^2` trade-share + exactly 1 focal baseline-vs-autarky free-entry LINK moment (`D^2+1` total) |
+| `run_melitz_inner_delta` returns `(val, x, nStatus)` only | **superseded** — returns a `MelitzLFDResult` including the recovered, normalized LFD weights and every moment residual evaluated under them |
+| reference draws: `MersenneTwister` pseudorandom | **superseded as default** — scrambled Halton (`cc_algo/rhalton.jl`) is now the default (`pareto_draws(...; mode=:halton)`); pseudorandom kept as an explicit `mode=:pseudorandom` robustness check |
+| gravity restrictions evaluated via `doubleDiff(A)`/`doubleDiff(f)` on levels | **unchanged, but re-verified**: `misc/doubleDiff.jl`'s `doubleDiff` already logs internally, so this always was `DD(log A)`/`DD(log f)` — confirmed correct, not re-derived differently (an interim "fix" wrapping inputs in an extra `log.()` was tried, found to double-log and blow up at `tau=1`, and reverted) |
+
+Also **new** (not present, or present differently, in the superseded closure): the two
+gravity restrictions are now eliminated via an explicit `GravityPivot` construction
+(`equilibrium.jl`), giving a genuine `2D^2-2`-dimensional FREE coordinate system (the
+outer search space) on top of the `2D^2`-dimensional ECONOMIC outer vector — the
+superseded closure carried the two restrictions as separate outer-loop equality
+constraints rather than eliminating them structurally.
+
+## 2. Active parameter/moment counts (D=4)
+
+| quantity | count | formula |
+|---|---|---|
+| stochastic moments | 17 | `D^2 + 1` |
+| economic outer parameters | 32 | `1 (gamma_prime_j) + D^2 (A) + (D^2-1) (f, excl. f[j,j])` `= 2D^2` |
+| free numerical coordinates (post gravity-pivot) | 30 | `2D^2 - 2` |
+
+## 3. Object status table (main prompt Section 14)
+
+| object | status | dimension | where determined |
+|---|---|---|---|
+| `A[o,d]` | searched | `D^2` | outer vector (`delta_star.jl`) |
+| `f[o,d]`, except `f[j,j]` | searched | `D^2-1` | outer vector |
+| `gamma_prime[j]` | searched | 1 | outer vector |
+| `f[j,j]` | derived | 1 | `derive_fjj_from_autarky_cutoff` (`equilibrium.jl`) from the autarky cutoff-at-one condition |
+| baseline `gamma[d]` | normalized to 1 | `D` | universal, not stored |
+| baseline `N[o]` | normalized to 1 | `D` | universal, not stored (`normalize_baseline_entrant_mass` converts an arbitrary economy) |
+| `f_entry[o]` | recovered from LFD | `D` | `recover_entry_costs_from_lfd` |
+| `N'[j]` | recovered from LFD + autarky market clearing | 1 | `recover_N_prime_market_clearing` (cross-checked against `recover_N_prime_price_index`) |
+| baseline wages `w[o]` | solved from data | `D` | `melitz_solve_wages` (unchanged, reused verbatim) |
+| `w'[j]` | numeraire | 1 | fixed at 1 |
+| gravity restrictions | deterministic outer equalities | 2 | eliminated via `GravityPivot` (A over the full `D^2` domain, `f` over the `D^2-1` free cells) |
+
+## 4. Moment system (main prompt Section 4)
+
+`melitz_moments!` (`moments.jl`) fills exactly `D^2+1` columns:
+
+- **`D^2` trade-share moments**: `g_trade[o,d](z) = price_od(z_o)^(1-sigma)*active_od(z_o)
+  - lambda_data[o,d]`. With baseline `N_o≡1`, `gamma_d≡1` this is literally
+  `realized_revenue_od(z)/expenditure_d - lambda_data[o,d]` — no entrant-mass factor (the
+  superseded closure's `entrant_mass[o]*realized_revenue/expenditure_d` collapses since
+  `entrant_mass[o]≡1`).
+- **1 focal free-entry LINK moment**: `g_free_entry_link(z) = Pi_baseline_j(z)/w[j] -
+  Pi_autarky_j(z)/w'[j]`, `Pi_baseline_j(z) = sum_d realized_operating_profit[j,d](z)`,
+  `Pi_autarky_j(z) = realized_operating_profit'_jj(z)`. Replaces the superseded closure's
+  `D` per-origin free-entry moments AND the `f_entry[j]` parameter simultaneously.
+
+The two gravity restrictions are never `G` columns — F-independent, enforced exactly
+(machine precision) by the `GravityPivot` construction, not duplicated as moments.
+
+`K` (`obj.H[:,1]`) is set to `gamma_prime_target - 1`, a documented, UNCONSUMED
+placeholder this milestone — confirmed by grepping `cc_algo/inner_loop_functions.jl` that
+`K`/`H[:,1]` is never read by a fixed-theta `inner_loop` call (only the full outer
+δ-search reads it, out of scope here), and the LFD-recovery reconstruction
+(`melitz_recover_lfd`) itself never touches `K` either.
+
+## 5. Outer parameterization and gravity pivots (main prompt Section 2/5)
+
+Two representations (`delta_star.jl`):
+
+- **Economic vector** (`melitz_outer_layout`, length `2D^2`): `(log(gamma_prime_j),
+  vec(log A), log_f_free)` — NOT assumed gravity-feasible.
+- **Free vector** (the ACTUAL `theta` packed for `PsiObjectiveBundleDelta`, length
+  `2D^2-2`): `(log(gamma_prime_j), A_free [pivoted, D^2-1], f_free_free [pivoted,
+  D^2-2])` — gravity-feasible BY CONSTRUCTION.
+
+`GravityPivot` (`equilibrium.jl`) solves one cell out of an affine constraint
+`dot(c,z)+g0=0` to satisfy `Cov(DD(log A),DD(log tau))=0` (A: `g0=0` always, every A cell
+free) or `Cov(DD(log f),DD(log tau))=0` (`f`: `g0` depends on the current `f[j,j]`,
+rebuilt every evaluation). `c` is computed via `gravity_coefficient_vector`, NOT the naive
+`vec(doubleDiff(tau))` guess — `doubleDiff`'s within-transform differences against a
+FIXED reference row/column (not a symmetric demeaning projection), so the true
+coefficient vector is `M^T @ vec(T)` for `doubleDiff`'s own linear map `M`; `c=vec(T)` was
+tried, verified wrong live (residual −2.8, not ~0), and replaced with a robust
+unit-log-perturbation computation. The two pivots' cells are kept DISTINCT
+(`f_pivot_avoid_index`) — letting both land on the same physical cell was found to
+over-concentrate both corrections there, driving that cell's Pareto participation
+probability toward 0.
+
+`fake_data.jl`'s fixture construction uses a DIFFERENT (minimum-L2,
+`project_to_gravity_manifold`) projection for the SAME two restrictions — dumping an
+entire correction onto one pivot cell was found live to occasionally produce an
+economically extreme (cutoff below 1, infeasible) synthetic economy; spreading the
+correction evenly across every free cell avoids this. The two projection methods serve
+different purposes (fixture construction wants a "nice" matrix; the outer coordinate
+system needs a well-defined free/pivot split for the eventual optimizer) and are not
+required to agree.
+
+## 6. LFD recovery (main prompt Section 9)
+
+`melitz_recover_lfd` (`delta_star.jl`) reuses the EXACT conjugate-derivative recipe
+already used (copy-pasted 11×) in `sequential_gravity/run_profiled_production.jl`'s
+`recover_lfd`: after `inner_loop(obj,theta)` returns the KNITRO-optimal dual vector
+`x=(zeta,lambda...)`, per-draw `arg0[w] = -x[1] - dot(G[w,1:d], x[2:end])`, `dPsi!` maps
+`arg0` to unnormalized LFD weights, normalized by their sum. One shared copy was written
+for Melitz rather than adding a 12th copy-paste of this pattern.
+
+`MelitzLFDResult` bundles: `Delta`, the dual vector, KNITRO status, normalized weights,
+an `lfd_ok` flag, every moment residual evaluated under the LFD, the pre-normalization
+sum, and min/max weight + max density deviation (`|W*weight-1|`).
+
+## 7. Ex-post equilibrium checks (main prompt Section 9)
+
+`check_profiled_melitz_equilibrium` (`equilibrium.jl`) computes, ALL under the recovered
+LFD (never reference/equal weights): baseline price-index identities (9.1), baseline and
+autarky free-entry residuals (9.2/9.3) alongside the entry costs they're built from
+(`recover_entry_costs_from_lfd`, `recover_focal_autarky_entry_cost`), autarky market
+clearing (9.4), the autarky price-index identity — "the key omitted moment" — and its
+independent `N'[j]` cross-check (9.5), the autarky cutoff identity (9.6), cutoff
+inequalities (9.9), and gravity (9.8). Every profiled/omitted equation the active moment
+system does NOT enforce directly is checked here.
+
+## 8. Reused unchanged from the superseded closure
+
+`firm_quantities.jl` in full (shared per-draw firm routine, markup/price/revenue/profit,
+no hybrid/ρ/Bertrand branches); `melitz_solve_wages`/`melitz_K1`/`cell_from_cutoff`/
+`build_equilibrium` (still used for Pareto-benchmark construction);
+`gravity_residuals`'s formula (log-additive via `doubleDiff`, re-verified not re-derived);
+`pareto_tail_prob`/`pareto_tail_power_mean`(`_numeric`); `cc_algo`'s
+`PsiObjectiveBundleDelta`/`inner_loop`/`Psi.jl`/the `parallelism_guards.jl` fix, all
+unmodified.
+
+## 9. Refactored
+
+`types.jl` (new struct fields/layout), `equilibrium.jl` (demoted `pareto_*` diagnostics +
+new gravity-pivot/LFD-recovery/ex-post-check functions), `moments.jl` (`D^2+1` system),
+`pareto.jl` (Halton draws), `delta_star.jl` (outer/free layouts, LFD recovery,
+general — not fixed-theta\*-only — moment adapter), `fake_data.jl` (`N_o=1` construction,
+ACR-seeded `gamma_prime_j`), `fstar_solver.jl` (exact-sample correction solve, see §10).
+
+## 10. Archived / demoted to Pareto-only diagnostics
+
+`equilibrium.jl`'s `pareto_entrant_mass_from_labor`, `pareto_autarky_fixed_cost_fixed_mass`,
+`pareto_target_cutoff_fixed_mass`, `pareto_entry_cost_from_free_entry`,
+`pareto_solve_autarky_counterfactual_fixed_mass` — the exact SUPERSEDED closed forms,
+kept only for the cross-check that the new and old closures agree at the exact Pareto
+benchmark (addendum Section 15), never called from the active moment/delta_star path.
+
+## 11. The exact-sample correction solve (`fstar_solver.jl`)
+
+`fake_data.jl` builds a gravity-feasible fixture whose `gamma_prime_target` (ACR-seeded)
+and gravity-projected `A`/`f` are NOT yet exact-sample-consistent with the fixed
+`X_data=eq.trade_flow` — the ≤2 gravity-pivot-adjusted cells generically mismatch. Main
+prompt Section 11/addendum Section 13.1 ask for a correction solve finding a nearby point
+where the equal-weight sample-mean of every one of the `D^2+1` moments is ~0.
+
+**Method: per-coordinate bisection (`Roots.jl`), Gauss-Seidel swept, not a gradient-based
+minimizer.** `Optim.LBFGS` (both `autodiff=:forward` and `:finite`) was tried first and
+found live to stall far from zero or crash: `melitz_firm`'s `active=profit>0`
+participation gate makes the mean residual have small `O(1/W)` JUMPS (one draw crossing
+the cutoff), the same class of issue as this repo's own documented "winner-boundary
+derivative" bug in the related full-A codebase — `ForwardDiff`/finite-difference
+gradients are locally blind to (or, for finite differences with a large enough step,
+mis-estimate) that jump, so the line search satisfies its stopping criteria on a biased
+gradient well before the true residual is small. Bisection needs no derivative; each
+trade-share residual is (to bisection resolution) monotonic in its cell's own `A_od` or
+`f_od`. An early version let the search bracket grow unbounded (found to occasionally
+reach numerical overflow at the bracket endpoints, corrupting the sign-change test and
+converging to a spurious root far from anywhere sensible — one coordinate's "correction"
+made its own residual 60× worse); capped at `±6` in log-space, generous but safe.
+
+Coordinate assignment: each of the `D^2-1` non-A-pivot free `A` coordinates zeros its own
+cell's trade residual; `gamma_prime_j` is zeroed against the focal link residual. The
+A-pivot cell and the f-pivot cell (generically DISTINCT cells) are mutually coupled --
+`A[A-pivot]` depends on every OTHER `A_free` coordinate (including the one dedicated to
+the f-pivot cell) via the affine gravity constraint, and symmetrically for `f[f-pivot]` --
+so naive alternating 1D bisection between them was found LIVE to converge geometrically
+for a few sweeps then STALL at a nonzero fixed point (confirmed reproducible and NOT a
+bisection-specific artifact: an independent full-30-dimension `Optim.LBFGS` polish landed
+at the EXACT same stuck point). Fixed by solving this one pair JOINTLY
+(`solve_pivot_pair!`, a damped 2D Newton step with a deliberately wide finite-difference
+step to average over the `O(1/W)` jump noise rather than differentiate through it) instead
+of alternating.
+
+**This joint fix substantially improves but does NOT fully resolve the stall** — see the
+live numbers in §12: the corrected fixture still plateaus around max residual ~0.46
+(down from ~3-11 at the raw fixture, roughly an order of magnitude, but not the
+1e-8 target). This remains flagged as an OPEN finding, not silently accepted.
+
+**RETRACTED 2026-07-22 (see Section 13):** the entire exact-sample-correction approach
+(this section and the numbers in §12 below) is superseded by the addendum's population-
+Pareto construction. `solve_fstar`/`fstar_solver.jl` is archived as an optional debugging
+utility, no longer part of the active fixture-construction path.
+
+## 12. Numerical results (RETRACTED — see Section 13)
+
+**RETRACTED 2026-07-22.** The `nStatus=-102`/`Delta=1e10` failure reported below was
+caused by the benchmark point being INTERNALLY INCONSISTENT (two real bugs, Section 13.1),
+not a genuine finite-support CC-infeasibility. Kept verbatim for the historical record;
+do not cite these numbers.
+
+Fixed benchmark point throughout: D=4, sigma=2.5, theta_star=6.8, target_country=1,
+seed=2 (NOT seed=1234 -- the superseded closure's own default seed is infeasible under
+the active closure's N_o=1 + minimum-L2 gravity projection; seed=2 is the first verified
+feasible seed under the new construction, see fake_data.jl).
+
+**Fixture construction + gravity/feasibility (exact, W-independent):**
 
 | quantity | value |
 |---|---|
-| max ⎜bilateral-flow residual⎟ (economic units, Monte Carlo vs. closed-form target) | 0.0424 |
-| max ⎜free-entry residual⎟ (economic units) | 0.0249 |
-| `A` gravity residual `⟨ΔΔlogτ, ΔΔlogA⟩` | −1.04e-17 |
-| `f` gravity residual `⟨ΔΔlogτ, ΔΔlogf⟩` | −4.86e-16 |
-| `GT` (model, price-power ratio) | 0.0362015 |
-| `GT` (ACR/Chaney, `1−λ_dd^(1/θ*)`) | 0.0362015 |
-| ⎜GT_model − GT_ACR⎟ | 1.11e-16 |
-| min active-draw count (any cell) at `W=80,000` | 69 |
-| **Δ(θ\*)** (real KNITRO CC inner loop) | **1.07e-4** |
-| KNITRO status | 0 (optimal) |
-| max ⎜optimal dual variable⎟ | 0.212 |
+| `gamma_prime_target` (ACR-seeded initial value) | 0.7561231654704139 |
+| `f[j,j]` (derived) | 6.954120717040161 |
+| `A` gravity residual | -8.3e-17 (machine precision) |
+| `f` gravity residual | -2.1e-15 (machine precision) |
+| min baseline cutoff | 1.2049 (feasible, `>=1`) |
+| min export-minus-domestic cutoff | > 0 (feasible) |
 
-Both gravity restrictions and the ACR cross-check hold to machine precision (1e-16 to
-1e-17) by construction, independent of `W` — they never touch the Monte Carlo draws.
-`Δ(θ*)` itself is genuinely small but **not** machine-precision zero, and this is the
-correct, expected result once the target moments are the closed-form population values
-(§4A) rather than a sample average over the same draws used to evaluate the moments (the
-brief's own "Mode 1" construction — useful only as a degenerate code-correctness check,
-since it makes `Δ(θ*)=0` a tautology, not a validation; confirmed this reduces to exactly
-`0.0` with an all-zero dual solution when tested, correctly flagged as suspicious and
-investigated live rather than reported as the headline result).
+**Exact-sample correction (`solve_fstar`, addendum Section 13.1) — OPEN FINDING, target not fully met:**
 
-**A real numerical finding, diagnosed live:** at smaller `W` (500 to 32,000 tested), the
-KNITRO inner solve does not converge — its dual variables diverge to `~1e14`–`1e16` rather
-than settling on a large-but-finite `Δ`. Root cause, confirmed directly: bilateral
-participation probability under Pareto is `Pr(active) = ẑ_od^(-θ*)`, which is small enough
-for high-cutoff (especially export) cells that some cells have **zero** active draws in
-the *entire* Monte Carlo sample at small `W` for this fixture (verified: cell `(1,2)` has
-0 active draws at `W=500`; cell `(2,3)` has 0 at `W=2000`, 5 at `W=8000`, 69 by `W=80,000`).
-A cell with zero active draws has a perfectly constant, never-zero moment residual across
-every single draw — no reweighting of the Ψ-divergence dual problem can bring that to
-zero, so the optimal dual variable is genuinely unbounded (not a solver bug). This is a
-substantive, previously-undocumented numerical property of applying the CC minimum-
-divergence machinery to models with rare extensive-margin participation (the Ricardian/EK
-model has no analog: its "argmin" winner-take-all selection is essentially always likely
-for at least one competitor). `min_active_draw_count` (`moments.jl`) makes this checkable
-before running KNITRO; `melitz_inner_loop_options.opt` raises the shared default's
-`maxit=100` to `10000` (did not by itself fix small-`W` divergence — confirming the issue
-is genuine dual unboundedness, not merely an iteration-limit shortfall).
+| quantity | W=20,000 | W=80,000 |
+|---|---|---|
+| correction wall time | 1m54s | 9m39s |
+| max trade-share residual (equal weights) | 0.460 | 0.460 |
+| max focal link residual (equal weights) | 0.050 | 0.051 |
+| gravity residuals (post-correction) | machine precision | machine precision |
+| min cutoff (post-correction) | feasible | feasible |
 
-**`Δ(θ*)` shrinks with `W`, as expected** (all KNITRO status 0, optimal): `2.10e-4`
-(`W=64,000`) → `1.37e-4` (`W=100,000`) → `3.71e-5` (`W=150,000`) → `2.63e-5`
-(`W=200,000`).
+The residual plateaus at essentially the SAME value regardless of `W` (0.46/0.050 at both
+20k and 80k) -- consistent with a genuine coupled-coordinate stationary point (§11), not
+Monte Carlo noise. Target per main prompt Section 11 is `<=1e-8`; **not reached**. This is
+reported honestly, not worked around by loosening the target without cause (the
+`test/melitz/runtests.jl` assertion for this step is `<1.0`, documented as a
+"substantially reduced, not machine-precision" check, not a silent pass).
 
-**Remaining discrepancy:** the moment-residual magnitudes (0.02–0.04, economic units) at
-`W=80,000` reflect ordinary Monte Carlo noise on a heavy-tailed Pareto-revenue statistic,
-not a construction error — both gravity restrictions and the ACR identity, which don't
-depend on the draws at all, are exact to machine precision at the *same* parameter values,
-confirming the underlying economics is correct; only the finite-sample moment matching (an
-intrinsically stochastic quantity) carries residual noise, and it visibly shrinks with `W`.
+**Real KNITRO CC inner minimum-divergence loop, on the corrected fixture:**
+
+| quantity | W=20,000 | W=80,000 |
+|---|---|---|
+| min active-draw count (worst cell) | 3 | 13 |
+| KNITRO status (`nStatus`) | -102 (dual unbounded) | -102 (dual unbounded) |
+| `Delta(theta)` reported | 1e10 (sentinel, not a real value) | 1e10 (sentinel) |
+| max `\|dual_x\|` | 1.66e16 | 1.58e16 |
+| LFD reconstruction | numerically degenerate (near-point-mass; `lfd_ok=true` by the finite/nonneg check, but NOT a trustworthy LFD given `nStatus != 0`) | same |
+
+**KNITRO does not reach a bounded dual (nStatus=0) at either `W` on this fixture,
+raw OR corrected.** This mirrors — but is quantitatively worse than — the superseded
+closure's own documented small-`W` finding (docs Section 14 of the archived report):
+there, `W=80,000` was sufficient because the target residual magnitude was ~0.02-0.04;
+here, even after correction, the residual (~0.46/0.05) is roughly an order of magnitude
+larger, driven by the SAME unresolved pivot-pair coupling. Consequently the LFD-recovery
+and ex-post-equilibrium-check machinery (§6-7, `melitz_recover_lfd`,
+`check_profiled_melitz_equilibrium`) is implemented, unit-tested for its own internal
+logic (normalization, finiteness, structural correctness), and wired end-to-end into a
+real KNITRO call that runs without crashing — but has NOT yet been exercised against a
+genuinely converged (`nStatus=0`) real dual solution. This is the primary open item for
+follow-up work (see "Remaining discrepancy" below).
+
+**Non-KNITRO test suite: 44/44 passing** (Pareto draws, firm-level calcs, gravity
+coefficient/pivot machinery, `N_o=1` normalization invariance, fixture
+construction/feasibility, `D^2+1` moment structure/sensitivity,
+`min_active_draw_count`/`cell_participation_diagnostics`, nearby gravity-feasible
+perturbations, legacy Pareto-only diagnostics). The `solve_fstar` and real-KNITRO
+testsets pass their STRUCTURAL assertions (gravity exactness, cutoff feasibility, no
+crash) and honestly report (via `@test_broken`, not silently) the two numerical items
+above that do not yet meet their target tolerance.
+
+**Remaining discrepancy / next steps:** the coupled A-pivot/f-pivot cell pair is the
+single identified root cause blocking both the exact-sample correction and, downstream,
+a bounded real KNITRO dual. Candidate follow-ups (not attempted this session, flagged for
+the next one): (a) choose `target_country`/seed combinations where the two pivots'
+cells are further apart in the gravity-coefficient ranking, empirically reducing
+coupling strength; (b) extend `solve_pivot_pair!`-style joint solving to a small cluster
+of cells if 2 turns out not to be the true coupling order; (c) revisit whether the
+single-cell `GravityPivot` (vs. the minimum-L2 `project_to_gravity_manifold` used only in
+`fake_data.jl`) is the right choice for the ACTIVE outer coordinate system, given it
+appears to concentrate correction difficulty onto specific cells by construction.
+
+See the session's live-run report (pushed to Dropbox) for the fully populated table,
+nearby-perturbation results, and the reused/refactored/archived file lists.
+
+## 13. 2026-07-22: critical bug fix + population-Pareto reconstruction
+
+Two independent real bugs made the §11-12 benchmark point internally inconsistent. Both
+are fixed. The exact-sample-correction approach itself is also replaced (per the governing
+addendum) with a genuine population-Pareto construction. The result: the SAME class of
+real-KNITRO CC inner problem that previously failed (`nStatus=-102`) now converges cleanly
+(`nStatus=0`) with a small, positive, `W`-declining `Delta(theta*)`.
+
+### 13.1 Bug 1: autarky revenue evaluated at the wrong price power
+
+`f[j,j]` was correctly derived from the autarky cutoff-at-one condition using
+`price_power_d = gamma_prime_target`. But every ACTIVE autarky firm evaluation (7 call
+sites: `melitz_moments!`, `focal_link_residual`, `recover_focal_autarky_entry_cost`,
+`recover_N_prime_price_index`, both autarky terms inside
+`check_profiled_melitz_equilibrium`, and the productivity-one cutoff diagnostic) called
+`melitz_firm` with `price_power_d = 1.0` (the BASELINE normalization) instead. Exact
+algebraic signature, reproduced live: `residual_autarky_cutoff = -1.6959...  ==
+(gamma_prime_target - 1) * f[j,j]`. Fixed at all 7 sites; `residual_autarky_cutoff` is now
+`-8.9e-16` (machine precision) at the same point. New unit test
+(`test/melitz/runtests.jl`, "Autarky price-power fix"): for several arbitrary
+`(gamma_prime, A_jj, expenditure_prime)` triples, verifies both that the CORRECT price
+power gives exact zero profit at `z=1`, and that the BUGGY price power gives EXACTLY
+`(gamma_prime-1)*w'*f_jj` — the same signature, not just "some nonzero number".
+
+### 13.2 Bug 2: A[j,j]/f[j,j] self-consistency under the GE price-index normalization
+
+Found while rebuilding the fixture as a genuine general equilibrium (§13.3): the baseline
+price-index normalization `gamma_d==1` is enforced by rescaling EACH DESTINATION COLUMN of
+`A` by a closed-form factor `s_d = (E_d/colsum_d(X))^(1/theta_star)` (this is gravity-
+neutral — `doubleDiff` is invariant to per-column log-additive shifts, verified directly
+from its definition). Since country `j` is itself a destination, this ALSO rescales
+`A[j,j]`. But `f[j,j] = derive_fjj_from_autarky_cutoff(gamma_prime_target, ..., A[j,j],
+...)` was derived using the PRE-rescale `A[j,j]`, while every later use of `f[j,j]`
+(moments, ex-post checks) pairs it with the POST-rescale `A_final[j,j]`. Live signature:
+`melitz_firm` at `z=1` gave `operating_profit=0.28...`, not `0`, even though
+`derive_fjj_from_autarky_cutoff` is algebraically exact given the RIGHT `A_jj` (verified by
+hand: `firm.unconstrained_revenue` at `z=1` implied an `A_jj` inconsistent with the one fed
+to `derive_fjj_from_autarky_cutoff`). Fixed with a small inner fixed point in
+`fake_data.jl`'s `build_at`: guess `A[j,j]` → derive `f[j,j]` → solve GE → get new
+`A_final[j,j]` → re-derive `f[j,j]` → repeat to convergence (weak coupling, converges in a
+handful of iterations). After the fix, `firm.operating_profit` at `z=1` is `3.9e-15` for
+every `gamma_prime_target` tried.
+
+This bug ALSO explains why a naive Monte-Carlo evaluation of the focal link residual can
+be badly wrong even when the closed-form population residual is exactly zero: at
+`W=2,000,000`, before the fix the MC focal-link residual sat at `-0.36` (NOT shrinking with
+`W` — the signature of a real bias, not sampling noise); after the fix it converges to
+`~5.6e-7` at the same `W`.
+
+### 13.3 Population-Pareto reconstruction (addendum, supersedes Sections 2/11/12 above)
+
+`fake_data.jl` was rebuilt end-to-end per the addendum's "population Pareto fake data"
+instructions. Construction order (CRITICAL sequencing rule: never compute a trade
+share/flow before `(A,f,w)` are ALL final):
+
+1. `tau`, `L` chosen exogenously.
+2. Raw heterogeneous `A`, gravity-projected EXACTLY via minimum-L2
+   `project_to_gravity_manifold` (NOT the single-cell `GravityPivot` used by
+   `delta_star.jl`'s own outer coordinate system — the single-cell pivot was found LIVE to
+   occasionally dump an entire gravity correction onto one cell, producing backwards
+   export-selection or extreme cutoffs; L2 spreads it evenly, matching the ALREADY-
+   established fix for exactly this failure mode).
+3. Raw (pre-gravity) log-levels of the `D^2-1` free `f`-cells chosen with domestic cells
+   systematically cheaper than export cells (avoids the same backwards-export-selection
+   failure mode when domestic/export levels are drawn symmetrically).
+4. `gamma_prime_target` is SOLVED (not chosen/seeded), by 1-D bisection (`Roots.jl`,
+   canned) on the POPULATION-level focal free-entry link residual
+   (`population_focal_link_residual`, closed form, no Monte Carlo) — a genuine equilibrium
+   condition, not a free parameter. An arbitrarily chosen `gamma_prime_target` was found
+   LIVE to leave this residual stuck around `-0.3` regardless of `W`, the signature of an
+   uncalibrated parameter, not sampling noise.
+5. Given `(A,f)` final, baseline wages `w` are a genuine GENERAL-EQUILIBRIUM output
+   (`melitz_solve_wages_ge`), NOT a normalization: unlike the superseded closure's
+   data-driven `melitz_solve_wages` (which solves against exogenous share DATA and has a
+   genuine nominal wage-scale indeterminacy, resolved by a numeraire pick), this GE ties
+   absolute wage levels to the REAL primitives (`f_od`/`A_od` are labor-value/productivity
+   quantities) — there is NO free wage-scale normalization here. Verified live: forcing
+   `w[j]=1` post-hoc broke the fixed point (factor-market residual jumped from `~1e-12` to
+   `~1`). `melitz_solve_wages_ge` is the SAME damped-Jacobi income-redistribution iteration
+   as `melitz_solve_wages`/the Ricardian model (not NLsolve/autodiff — tried first, found
+   unnecessarily complex for what is, at heart, the same trivial fixed-point iteration),
+   just recomputing `lambda`/`X` from the Melitz-Pareto closed form
+   (`population_X`/`pareto_tail_power_mean`) at each iterate instead of taking it as fixed
+   data. Requires `damping~0.1` (not the data-driven solver's `0.6` default) — the
+   Melitz-Pareto share elasticity in wages is effectively `theta_star` (steeper than a
+   plain CES gravity elasticity `sigma-1`), so the naive damped-Jacobi map is not a
+   contraction at large damping (`damping=0.5` diverges/oscillates live).
+6. Feasibility (`q>=1`, export-selection) and the well-conditioned-fixture criterion (min
+   reference participation probability `>=0.01`) verified on the FINAL cutoff matrix;
+   gravity, factor-market clearing, and the focal-link identity all verified to `<1e-8`.
+
+`generate_fake_melitz_data`'s tuned defaults (`tau_offdiag_logrange`, `L_range`,
+`logA_noise_sd`, `logf_domestic_mean`/`logf_export_mean`/`logf_noise_sd`) were found by a
+grid search minimizing cutoff spread while keeping export-selection satisfied — a UNIFORM
+level rescaling of `f` alone cannot fix a too-wide cutoff spread (verified: the max/min
+cutoff ratio is invariant to uniform rescaling), so the noise/heterogeneity SCALE itself
+had to be tightened, not just the level.
+
+`solve_fstar`/`fstar_solver.jl` (the exact-sample-correction machinery) is ARCHIVED per the
+addendum: kept in the repo as an optional debugging utility (one structural smoke test,
+`test/melitz/runtests.jl`), no longer part of the active fixture-construction or
+validation path.
+
+### 13.4 Results at the corrected D=4/seed=2 benchmark
+
+`gamma_prime_target` (SOLVED, not chosen) `= 1.0113`; `GT_j = 1-gamma_prime^(1/(sigma-1))
+= -0.0075` (this particular random draw happens to have very small/near-zero implied
+gains from trade for the target country — an economically valid but unremarkable outcome,
+not tuned for a "large gains" narrative). Cutoff range `[1.055, 1.814]`; min reference
+participation probability `0.0174` (`>=0.01` target met); min active-draw count at
+`W=80,000` is `1,393` (worst cell), comfortably above the `>=500` well-conditioned-fixture
+threshold.
+
+**W-convergence (equal-weight raw residuals, addendum Section 3 — expect small, declining,
+NOT exact-zero):**
+
+| `W` | max trade-share residual | focal-link residual | min active count |
+|---|---|---|---|
+| 5,000 | 0.00173 | 0.00023 | 87 |
+| 20,000 | 0.00065 | 0.000034 | 349 |
+| 80,000 | 0.00022 | -0.000014 | 1,393 |
+| 200,000 | 0.00011 | 0.0000087 | 3,483 |
+
+Both decline with `W` as expected (roughly the `O(1/sqrt(W))` Monte-Carlo rate); contrast
+the PRE-fix focal-link residual, which sat at `-0.31` to `-0.36` regardless of `W` (Section
+13.2's bug signature, not sampling noise).
+
+**Real KNITRO CC inner minimum-divergence loop (`run_melitz_inner_delta`, on the RAW
+population fixture, no correction):**
+
+| quantity | W=20,000 | W=80,000 |
+|---|---|---|
+| wall time | 7.4s | 0.4s |
+| KNITRO status (`nStatus`) | **0 (optimal)** | **0 (optimal)** |
+| `Delta(theta*)` | 1.39e-6 | 1.56e-7 |
+| max `\|moment residual\|` under LFD | 3.0e-17 | 1.8e-13 |
+| `lfd_ok` (new, stricter, Section 13.5) | true | true |
+| min/max LFD weight | [4.97e-5, 5.11e-5] | [1.233e-5, 1.265e-5] |
+| `residual_autarky_cutoff` (ex-post) | 3.9e-15 | 3.9e-15 |
+| gravity residuals (ex-post) | machine precision | machine precision |
+| `N'[j]` two-formula rel. diff | 2.2e-15 | 3.1e-13 |
+
+**This directly replaces the previous `nStatus=-102`/`Delta=1e10` failure.** `Delta(theta*)`
+is small, positive, and declining in `W`, exactly the addendum's expected pattern — not a
+sentinel. The previous "coupled A-pivot/f-pivot cell" diagnosis (§11) is now understood to
+have been chasing a symptom of Bugs 1-2 (an internally-inconsistent benchmark point), not
+a genuine finite-support CC infeasibility.
+
+### 13.5 LFD validity rule strengthened (addendum Section 4)
+
+`melitz_recover_lfd`'s `lfd_ok` previously required only: dual `x` finite; raw LFD weights
+finite and nonnegative with positive sum. This let a numerically degenerate reconstruction
+through as `lfd_ok=true` even with `nStatus=-102` (the exact failure mode documented in the
+retracted §12). Now requires ALL of: `nStatus==0` (checked BEFORE any normalization is
+attempted — an unbounded/failed dual is never normalized and presented as an LFD); dual `x`
+finite; raw LFD weights finite/nonnegative; pre-normalization sum close to `W`
+(`|s/W-1|<1e-6`); every imposed moment holding under the recovered weights
+(`max|residual|<1e-6`); and the PRIMAL divergence at the recovered weights
+(`melitz_primal_divergence`, the exact convex-conjugate counterpart of `Psi!`/`dPsi!`,
+ported from `sequential_gravity/run_profiled_production.jl`'s `divergence_of`) agreeing
+with the dual objective `val` (`<1e-4`).
+
+### 13.6 Iceberg-cost factor-market closure (addendum Section 6)
+
+Already satisfied by construction, no change needed: `population_X`'s market-clearing
+condition is the plain `w_o*L_o = sum_d X_od` (income=sales), with NO `1/tau_od`
+tariff-revenue term anywhere in `melitz_solve_wages_ge`/`population_X`. `tau_od` enters only
+through marginal cost (`w_o*tau_od/(A_od*z)`), consistent with an iceberg-cost
+interpretation throughout.
+
+### 13.7 What remains open / out of scope this pass
+
+Not attempted this session (flagged for follow-up, none block the above):
+- `W=200,000`/`800,000` KNITRO runs (only the closed-form equal-weight residuals were
+  checked at these `W`, not the real inner solve — cheap to add, just more KNITRO wall
+  time).
+- Cross-repo gravity-equivalence tests against `production/fullA-exact`'s own gravity
+  residual (main prompt Section 6) — not run this pass.
+- A dedicated D=4 stress-test fixture with deliberately rare cells (kept as a SEPARATE
+  fixture from the well-conditioned default, per main prompt Section 7's own guidance —
+  not yet built).
+- An outer `Delta*` search over structural parameters (explicitly out of scope per the
+  addendum: the fixed-`theta*` inner problem is the milestone).
+
+## 14. Gate A validation (2026-07-22/23): two real bugs found and fixed, then the full
+## fixed-point system re-verified
+
+Governing prompt: finish Gate A (fixed-point validation) before touching Gate B (the
+outer `Delta*` search) or Gate C (gradient methods). This section reports Gate A only.
+Gate B/C are **not started** this pass — they are explicitly gated behind Gate A in the
+governing prompt, and this session's time went entirely into Gate A, including two
+newly-found blocking bugs that were not on anyone's radar going in.
+
+### 14.1 Bug 3: gains-from-trade formula omitted the wage ratio (main prompt Section A1)
+
+Section 13.4 reported `GT_j = 1 - gamma_prime^(1/(sigma-1)) = -0.0075` and called this
+"an economically valid but unremarkable... near-zero" result. It is neither: the formula
+silently assumes `w_prime_j/w_j == 1`, which does NOT hold here — `w[target_country]` is a
+genuine general-equilibrium output of `melitz_solve_wages_ge` (never renormalized; see
+that function's own docstring, which documents LIVE that forcing `w[j]=1` post-hoc breaks
+its fixed point), while `w_prime_j == 1` always (the autarky numeraire).
+
+**Correct formula** (derived from `price_power_d ≡ P_d^{-(sigma-1)}` and baseline
+`gamma_d==1 ⟹ P_d==1` in these units):
+
+```
+GT_j = 1 - (w_prime_j/w_j) * gamma_prime_j^(1/(sigma-1))
+```
+
+implemented as `melitz_gains_from_trade(p, cf)` (`equilibrium.jl`). Chose the "keep
+unequal wages, use the wage-ratio formula everywhere" route the main prompt explicitly
+offers as an alternative to a common-numeraire reconstruction of the whole fixture: a
+full renormalization would have to re-derive invariance through
+`melitz_solve_wages_ge`'s hard-won, previously-buggy GE fixed point
+([[melitz-population-pareto-bugfix-2026-07-22]]), a materially higher-risk change than
+fixing the welfare formula itself, and the wage-ratio formula is valid for ANY `w_j` so
+nothing is lost.
+
+**Verified live at the (old, seed=2) fixture**: `w[target]=1.0628`, `gamma_prime_target
+=1.0113` →
+
+| formula | value |
+|---|---|
+| naive (Section 13.4, WRONG) | `-0.0075` |
+| `melitz_gains_from_trade` (correct) | `+0.0520` |
+| `acr_gains_from_trade` (ACR/Chaney, independent) | `+0.0520` |
+| `\|GT_model - GT_ACR\|` | `3.6e-14` |
+
+The naive formula does not merely rescale the answer — it flips the **sign** of the
+reported gains from trade at this benchmark.
+
+### 14.2 ACR/Chaney cross-check restored (main prompt Section A2)
+
+`acr_gains_from_trade(p, eq)` (`equilibrium.jl`) computes `lambda_jj =
+X[j,j]/expenditure[j]`, `GT_ACR = 1 - lambda_jj^(1/theta_star)` — a REAL
+(nominal-normalization-invariant) quantity that needs no wage-ratio correction. Verified
+to agree with `melitz_gains_from_trade` to `~1e-14` (population-level, both are closed
+forms) across every `(D, seed, W)` combination tried in Section 14.6's campaign below —
+never merely "close," always within 2 orders of magnitude of machine epsilon.
+
+Also verified (main prompt Section A2's second requirement): the recovered autarky
+entrant mass satisfies `N_prime[j]/N[j] ≈ 1` (`N[j]≡1` by the universal baseline
+normalization) **without being imposed anywhere in the construction** — this is a genuine,
+nontrivial equilibrium property of the closure (not a bookkeeping artifact), confirmed to
+converge toward 1 as `W` grows: `|N'_mc - 1|` is `2.6e-5` at `W=20,000` and `6.7e-8` at
+`W=80,000` at the original diagnostic point, and `N'_mc ∈ [0.999998, 1.000003]` across
+every `(W, seed)` combination in the Section 14.6 campaign.
+
+### 14.3 Ex-post equilibrium residuals: tight tolerances, classified (main prompt Section A3)
+
+Added an explicit, tightly-toleranced testset (`test/melitz/runtests.jl`, "Gate A3")
+replacing the previous loose `N_prime_diff_rel < 1e-2` / `residual_autarky_cutoff < 1e-4`
+gate. Every field of `MelitzEquilibriumCheck` is now asserted individually, classified by
+what it actually tests:
+
+| residual | classification | tolerance | typical value (W=80,000) |
+|---|---|---|---|
+| `residual_gamma_baseline` | IMPLIED (== `sum_o` of the D imposed trade-share moment residuals, verified algebraically) | `1e-8` | `4.9e-13` |
+| `residual_free_entry_baseline`, `residual_free_entry_autarky` | DEFINITIONAL (`f_entry := E[Pi]/w`, so the residual is identically 0) | `1e-10` | `0.0` exactly |
+| `\|f_entry_recovered[j] - f_entry_autarky_recovered\|` | IMPLIED by the focal free-entry LINK moment (this difference IS that moment) | `1e-8` | `1.4e-13` |
+| `residual_market_clearing_autarky` | INDEPENDENT (ties labor-cost-side `N'` to revenue-side accounting) | `1e-8` | `3.7e-13` |
+| `residual_gamma_autarky`, `N_prime_diff_rel` | INDEPENDENT (the KEY omitted moment: ties labor-cost-side `N'` to price-index/demand-side `N'`) | `1e-8` | `3.1e-13` / `3.1e-13` |
+| `residual_autarky_cutoff` | DEFINITIONAL (`derive_fjj_from_autarky_cutoff`'s own construction) | `1e-10` | `3.9e-15` |
+| `min_cutoff_minus_one`, `min_export_minus_domestic` | feasibility inequalities, pre-LFD | `>= -1e-6` | `>0` |
+| `gravity_residual_A`, `gravity_residual_f` | exact by pivot construction | `1e-8` | `~1e-17` |
+
+Every residual clears its tolerance by 3-5 orders of magnitude at every `(W, seed)` tried
+— none is "bounded away from zero," and the two genuinely INDEPENDENT cross-checks
+(market clearing vs. price index for `N'[j]`) are the most informative, per the main
+prompt's own guidance.
+
+### 14.4 Primal-dual diagnostics stored explicitly (main prompt Section A4)
+
+`MelitzLFDResult` (`types.jl`) gained explicit fields: `primal_divergence`,
+`dual_divergence` (`== Delta`), `primal_dual_gap`, `maximum_weighted_moment_residual`,
+`probability_normalization_residual`, `kkt_opt_error`, `kkt_feas_error`. The last two are
+KNITRO's own `KN_get_abs_opt_error`/`KN_get_abs_feas_error`, captured via a new
+non-invasive global-Ref instrumentation pair (`INNER_LAST_OPT_ERR`/`INNER_LAST_FEAS_ERR`,
+`cc_algo/inner_loop_functions.jl`) rather than changing `inner_loop`'s shared return
+signature (used by every method in this repo, including `production/fullA-exact`).
+
+`melitz_recover_lfd`'s `lfd_ok` gate replaced the flat `divergence_tol=1e-4` (documented
+as larger than `Delta(theta_Fstar)` itself, hence unable to discriminate) with the
+requested scale-aware test: `gap <= max(1e-10, 1e-6*max(1,|primal|,|dual|))`.
+
+Verified live (W=80,000, seed=29): `primal_divergence = dual_divergence = 3.5146e-07`
+(agree to `3.0e-19`), `kkt_opt_error = 4.6e-17`, `kkt_feas_error = 0.0` — both orders of
+magnitude inside the new gate, at every `(W, seed)` tried.
+
+### 14.5 Gravity equivalence vs. `production/fullA-exact` (main prompt Section A5) — BLOCKING BUG FOUND AND FIXED
+
+This was the most consequential Gate A finding. `gravity_residuals`/
+`gravity_coefficient_vector`/`GravityPivot`/`project_to_gravity_manifold` were all built
+on `misc/doubleDiff.jl`'s `doubleDiff` — an "anchored" contrast that differences against a
+FIXED reference row (1) and column (2), NOT a symmetric projection.
+`production/fullA-exact`'s own canonical gravity moment
+(`moments/newGravityMoment!.jl`'s `UoModel==1` branch — confirmed via `grep` to be the
+UNIVERSAL setting in every production run config in this repo, `GravityMomentFirstApproach=0`
+everywhere too) is instead built on `withinTransform` — the symmetric two-way
+origin+destination fixed-effects "within" residual, which the repo's OWN code comment in
+that file states reproduces the OLS-two-way-FE gravity coefficient EXACTLY (Frisch-Waugh-
+Lovell), while explicitly noting **"the old cell double-difference did not."**
+
+Verified live via three independent lines of evidence (main prompt Section A5's own
+warning — do not assume equivalence just because each returns zero on its own data —
+taken seriously):
+
+1. **Coefficient-vector non-proportionality**: `sum(doubleDiff(tau).*doubleDiff(X))`'s
+   per-cell unit-perturbation coefficients are NOT a constant multiple of
+   `sum(withinTransform(tau).*withinTransform(X))`'s (ratio ranges from `-33.9` to
+   `92.9` across cells on a random D=4 draw — not remotely proportional).
+2. **Repo's own pre-existing `gravity_check.jl`** (re-run, not re-derived): over 2000
+   random `(tau, A)` trials, `withinTransform` matches an explicit OLS-with-two-way-FE-
+   dummies regression coefficient to `1.8e-15`; `doubleDiff` is off by up to `2.31`, and
+   the two transforms' bilinear-form VALUES can have opposite SIGNS on the same data.
+3. **`full_aod_diag/test_free_param_and_gravity.jl`** independently cross-validates
+   `gravity_value` (`full_aod_diag/d4_exact/gravity_elimination.jl`, also
+   `withinTransform`-based) against `newGravityMoment!` — the two agree, both being
+   `withinTransform`-based, neither ever built on `doubleDiff`.
+
+Both transforms DO share the same null space (both vanish exactly on any log-additive-FE
+`A`/`f` — verified), which is why using `doubleDiff` never tripped a visible failure in
+this module's own self-constructed tests. As a general restriction on genuine (non-
+additive) bilateral structure, though, it is a different, non-canonical choice from what
+`production/fullA-exact` actually enforces.
+
+**Fixed**: `gravity_residuals`/`gravity_coefficient_vector` (`equilibrium.jl`) now use
+`withinTransform`. A useful simplification falls out for free: `withinTransform` is
+self-adjoint (an orthogonal two-way-FE projection), so `gravity_coefficient_vector`'s
+`c` is now provably `== vec(withinTransform(tau))` exactly (added as an explicit test) —
+`doubleDiff`'s `c` needed the more roundabout unit-perturbation derivation because it is
+NOT self-adjoint.
+
+**Consequence for the fixture (`fake_data.jl`)**: the coefficient vector's structure
+changed qualitatively — under `withinTransform`, `|c|` is now systematically LARGEST on
+DIAGONAL (domestic, `o==d`) cells (verified: every one of D=4 diagonal entries dominated
+all 12 off-diagonal entries in a live check), whereas `doubleDiff`'s `c` had no such
+preference. The min-L2 `project_to_gravity_manifold` (which weights the correction by
+`c` itself) therefore started dumping most of the A/f-gravity correction onto domestic
+costs, pushing them above their own export costs and breaking export-selection — 100% of
+the first 60 seeds tried failed immediately after the transform switch, and retuning the
+domestic/export noise means/gaps alone (even at extreme settings) did NOT fix it,
+confirming the failure tracked the projection's implicit weighting, not fixture noise.
+**Fix**: a new `project_to_gravity_manifold_weighted` (equilibrium.jl) down-weights
+domestic cells (weight 1000 vs. 1 for export cells) in both the A and f projections,
+routing the correction onto export costs, which have far more feasibility slack. With
+this, roughly 9% of seeds are feasible (vs. ~0% unweighted); **seed=29 replaces seed=2**
+as the new default (`generate_fake_melitz_data`'s `seed` keyword default and every
+explicit `seed=2` call site in `test/melitz/runtests.jl` updated). This is a re-tuning of
+an arbitrary fixture draw, not a new economic finding.
+
+A regression test (`test/melitz/runtests.jl`, "Gate A5") pins both the coefficient-vector
+self-adjointness and the `withinTransform`-matches/`doubleDiff`-doesn't OLS-FE comparison
+so this cannot silently regress.
+
+### 14.6 Additional fixed-point checks: W-convergence + 3-seed campaign (main prompt Section A6)
+
+Full real-KNITRO inner solve + LFD recovery + ex-post check, at D=4/target=1, for the
+corrected (`withinTransform`, seed=29) fixture:
+
+**W-convergence (seed=29):**
+
+| `W` | `Delta(theta*)` | max trade-share resid (equal wt) | primal-dual gap | KKT opt error | `N'_mc` | min active |
+|---|---|---|---|---|---|---|
+| 20,000 | `7.55e-6` | `1.27e-3` | `1.4e-18` | `1.2e-16` | `0.999998` | 395 |
+| 80,000 | `3.51e-7` | `2.69e-4` | `3.0e-19` | `4.6e-17` | `1.000001` | 1558 |
+| 200,000 | `1.40e-7` | `1.54e-4` | `1.8e-19` | `1.8e-17` | `0.999999` | 3893 |
+
+`Delta(theta*)` and the equal-weight trade-share residual both decline monotonically with
+`W` as expected (roughly the `O(1/sqrt(W))` Monte-Carlo rate); `nStatus=0` and
+`lfd_ok=true` at every `W`; gravity residuals stay at machine precision (`~2e-17`)
+throughout, as they must (gravity is `W`-independent by pivot construction).
+
+**3-seed robustness check (W=20,000):**
+
+| seed | `Delta(theta*)` | `nStatus` | `GT_model==GT_ACR` | `N'_mc` | min active | min ref. prob |
+|---|---|---|---|---|---|---|
+| 29 | `7.55e-6` | 0 | `0.0652` (`\|diff\|=1.9e-14`) | `0.999998` | 395 | 0.0194 |
+| 49 | `1.54e-6` | 0 | `0.0895` (`\|diff\|=4.3e-14`) | `1.000003` | 792 | 0.0396 |
+| 50 | `3.12e-6` | 0 | `0.1279` (`\|diff\|=6.6e-15`) | `1.000001` | 633 | 0.0317 |
+
+All three independently-generated fixtures converge cleanly (`nStatus=0`, `lfd_ok=true`);
+`GT_model`/`GT_ACR` agree to `~1e-14` at every seed (each seed implies a genuinely
+different gains-from-trade level, as expected — no false convergence to a common value);
+`N'[j]` sits within `3e-6` of 1 at every seed; no seed shows a residual "stuck" away from
+zero. Per main prompt Section A6, monotonicity across seeds is NOT required and none is
+claimed — only the absence of a structurally-bounded-away-from-zero residual, which holds.
+
+`W=200,000`/`800,000` real-KNITRO runs (not just closed-form residuals) are now done (see
+table above); `W=800,000` was not attempted (no evidence anything is currently wrong at
+`W=200,000` that a further-`W` run would diagnose).
+
+### 14.7 Known non-blocking regression: `solve_fstar`'s archived smoke test got much slower
+
+`solve_fstar` (`fstar_solver.jl`, archived per Section 13.3, exercised only by one
+structural smoke test) went from `~1m10s` to `~20m28s` wall time after the seed/transform
+change. It still passes (produces a `MelitzFStarResult`, no crash) — its bisection-based
+per-coordinate solve is presumably converging much more slowly against the new gravity
+projection's coefficient structure. Since this utility is explicitly NOT part of the
+active validation path, its performance was not investigated further this pass; flagged
+for whoever next touches `fstar_solver.jl` or wants faster test-suite iteration.
+
+### 14.8 Test suite status
+
+All new Gate A assertions (Sections 14.1-14.4's GT/ACR/N', ex-post-residual, and primal-
+dual-diagnostic checks) were added to `test/melitz/runtests.jl` and pass at the new
+default fixture (D=4, seed=29). See the session's live run output for the exact updated
+pass count (`test/melitz/runtests.jl`'s own summary lines are authoritative — this
+document does not restate a specific number that could drift out of sync with the code).
+
+### 14.9 What remains open before Gate B
+
+Nothing found in Gate A blocks Gate B on economic grounds — every checked identity holds
+at 3-5 orders of magnitude inside its tolerance, at every `W` and seed tried. Still open,
+flagged for whoever picks up Gate B next:
+- A dedicated rare-cell stress-test fixture (Section 13.7, still not built — optional,
+  not blocking).
+- `solve_fstar`'s slowdown (Section 14.7, archived utility only).
+- Gate B (the actual `Delta_star = min_theta Delta(theta)` outer search) and Gate C
+  (gradient-method comparison) are **NOT STARTED**. Per the governing prompt's own gate
+  ordering, they should not begin until Gate A's report is reviewed/accepted.

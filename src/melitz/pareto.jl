@@ -4,23 +4,44 @@
 # Convention: z ~ Pareto(scale=1, shape=theta_star), density theta_star * z^(-theta_star-1)
 # on [1, infinity). theta_star > sigma-1 is required for E[z^(sigma-1)] to be finite.
 
-using Random: rand!, MersenneTwister
+# Bare `using Random` (not a selective import) -- `cc_algo/rhalton.jl`, included below,
+# calls unqualified `shuffle` and `Random.seed!` and expects the including scope to have
+# the full Random stdlib in scope, exactly as `cc_algo/include_cc_algo.jl` provides it
+# elsewhere in the repo.
+using Random
+
+const MELITZ_RHALTON_PATH = joinpath(dirname(dirname(@__DIR__)), "cc_algo", "rhalton.jl")
+if isfile(MELITZ_RHALTON_PATH) && !isdefined(@__MODULE__, :rhalton)
+    include(MELITZ_RHALTON_PATH)
+end
 
 """
-    pareto_draws(W, D, theta_star; seed) -> Matrix{Float64} (W x D)
+    pareto_draws(W, D, theta_star; seed, mode=:halton) -> Matrix{Float64} (W x D)
 
 Deterministic Pareto(1, theta_star) reference draws, one per origin per Monte-Carlo row
 (matches the repository's own `UoModel=1` convention: draws are indexed by *origin*, not
-by origin-destination pair). Uses its own `MersenneTwister(seed)` (not the global RNG) so
-repeated calls are reproducible regardless of what else has consumed `Random.default_rng()`
-in the same process -- generated once and reused throughout parameter solving, moment
-construction, and Delta-star evaluation, never resampled.
+by origin-destination pair). Generated once and reused throughout parameter solving,
+moment construction, and Delta-star evaluation, never resampled.
+
+`mode=:halton` (default, addendum Section 11): uses the repository's own scrambled-Halton
+generator (`cc_algo/rhalton.jl`'s `rhalton(n, d; singleseed)`), inverse-Pareto-CDF
+transformed -- deterministic given the seed, lower discrepancy than pseudorandom draws for
+the same `W`. `mode=:pseudorandom`: the original `MersenneTwister`-based draw, kept as an
+explicit opt-in robustness check (addendum Section 11: "retain a pseudorandom mode only as
+an optional robustness test").
 """
-function pareto_draws(W::Int, D::Int, theta_star::Real; seed::Int)
-    rng = MersenneTwister(seed)
-    u = zeros(Float64, W, D)
-    rand!(rng, u)
-    z = similar(u)
+function pareto_draws(W::Int, D::Int, theta_star::Real; seed::Int, mode::Symbol=:halton)
+    u = if mode == :halton
+        rhalton(W, D; singleseed=seed)
+    elseif mode == :pseudorandom
+        rng = MersenneTwister(seed)
+        uu = zeros(Float64, W, D)
+        rand!(rng, uu)
+        uu
+    else
+        throw(ArgumentError("pareto_draws: unknown mode $mode (expected :halton or :pseudorandom)"))
+    end
+    z = similar(Matrix{Float64}(undef, W, D))
     @. z = (1.0 - u)^(-1.0 / theta_star)
     return z
 end

@@ -4,6 +4,16 @@ const INNER_SOLVE_COUNT  = Ref(0)
 const INNER_INFEAS_COUNT = Ref(0)
 const INNER_ITERS_TOTAL  = Ref(0)
 
+# Melitz Gate A4 (docs/melitz_delta_star.md): the last inner solve's KNITRO KKT
+# diagnostics (`KN_get_abs_opt_error`/`KN_get_abs_feas_error`), captured non-invasively --
+# no change to `inner_loop`'s return signature (shared by every method incl.
+# production/fullA-exact) -- following the SAME global-Ref instrumentation pattern as
+# `INNER_ITERS_TOTAL` above. Safe under the existing `guard_enter_inner_solve!`/
+# `guard_exit_inner_solve!` single-flight discipline (only one inner KNITRO solve may be
+# in-flight at a time), so a plain global Ref cannot be raced.
+const INNER_LAST_OPT_ERR  = Ref(NaN)
+const INNER_LAST_FEAS_ERR = Ref(NaN)
+
 # EXP: KNITRO.jl v1.2.1 exposes only the low-level (kc, out_ptr)->status getters for these;
 # wrap them to return the value directly.
 function _kn_num_iters(kc)
@@ -94,6 +104,8 @@ function inner_loop_KNITRO(obj)
         KNITRO.KN_solve(kc)
         nSTatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
         INNER_ITERS_TOTAL[] += _kn_num_iters(kc)   # EXP instrumentation
+        INNER_LAST_OPT_ERR[] = _kn_opt_err(kc)     # Melitz Gate A4 instrumentation
+        INNER_LAST_FEAS_ERR[] = _kn_feas_err(kc)
         KNITRO.KN_free(kc)
 
         return nSTatus, objSol, x, lambda_

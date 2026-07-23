@@ -39,7 +39,9 @@ export outer_loop,
        write_trace_csv,
        outer_loop_cached,
        reset_jac_h_counters!,
-       jac_h_counters_snapshot
+       jac_h_counters_snapshot,
+       INNER_LAST_OPT_ERR,
+       INNER_LAST_FEAS_ERR
 
 include("knitro_compat.jl")   # restore KNITRO.jl 0.13/0.14 convenience wrappers on v1.2.1
 include("parallelism_guards.jl")   # guard_enter/exit_inner_solve!, called by inner_loop_functions.jl below;

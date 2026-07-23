@@ -1,161 +1,212 @@
-# Deterministic synthetic D=4 (or general D) Melitz economy generator.
-# See docs/melitz_delta_star.md Sections 1.5-1.8, 10 for the derivations used here.
+# Synthetic D=4 (or general D) Melitz economy generator -- POPULATION-Pareto construction
+# (addendum "Population-Pareto fake data and iceberg-cost closure", superseding the
+# exact-sample-correction closure described in the main body of docs/melitz_delta_star.md
+# Section 11 and this file's own prior header comment).
 #
-# Construction order (mirrors the corrected equilibrium.jl architecture):
-#   1. Choose tau, L (labor endowment), raw trade-share heterogeneity.
-#   2. Project the raw shares' double-differenced component so the trade-flow DATA
-#      itself satisfies the identified-composite restriction <T, DDlogX + theta*T> = 0
-#      (docs Sec 1.7) -- this is what makes BOTH gravity restrictions on A and f
-#      simultaneously satisfiable via a single cutoff projection in step 4.
-#      Note DD(log X) = DD(log lambda) exactly (expenditure_d is a pure destination
-#      effect and vanishes under doubleDiff), so this can be done directly on lambda,
-#      decoupled from the (nonlinear) wage solve.
-#   3. Solve wages (melitz_solve_wages), get expenditure = w.*L, X = lambda.*expenditure'.
-#   4. Fix zhat[target,target] at its Sec 1.8 value; project the *other* D^2-1 raw
-#      cutoffs so <T, DDlogzhat> hits the value the f-gravity-restriction requires
-#      (equivalently, given step 2, the A-restriction too -- verified, not assumed).
-#   5. Choose f_entry (primitive); derive entrant mass N via `entrant_mass_from_labor`
-#      (docs Sec 1.4, revised: N is NOT free -- matches Melitz & Redding 2014 eq. 22).
-#   6. Build A, f via `build_equilibrium` (closed form, no iteration beyond step 3's
-#      wage solve); cross-check the free-entry identity reproduces the chosen f_entry.
+# CRITICAL SEQUENCING RULE (addendum Section 2): never construct trade-flow targets first
+# and then adjust (A,f) to satisfy gravity while retaining the old targets. This
+# construction NEVER computes a trade share/flow until (A,f,w,gamma_prime_target) are ALL
+# FINAL:
+#   1. Choose tau (iceberg costs, off-diagonal) and L (labor endowments) -- exogenous.
+#   2. Choose a raw heterogeneous A, project onto the A-gravity restriction EXACTLY via
+#      minimum-L2 `project_to_gravity_manifold` (NOT the single-cell `GravityPivot` used by
+#      delta_star.jl's OWN outer coordinate system -- found live, again, that dumping an
+#      entire gravity correction onto one cell can force backwards export-selection
+#      (q_od < q_oo) or push cutoffs outside a well-conditioned range; L2 projection spreads
+#      it evenly and was already the established fix for exactly this failure mode, see
+#      `project_to_gravity_manifold`'s docstring in equilibrium.jl).
+#   3. Choose the D^2-1 free f-cells' RAW (pre-gravity) log-levels (domestic cells drawn
+#      systematically CHEAPER than export cells -- economically sensible "cheaper to sell
+#      at home" structure, and avoids the backwards-export-selection failure found when
+#      domestic/export levels are drawn symmetrically) -- but do NOT fix f[j,j] yet.
+#   4. SOLVE for `gamma_prime_target` (hence `f[j,j]` via `derive_fjj_from_autarky_cutoff`,
+#      hence the f-gravity affine offset, hence the whole f matrix, hence the baseline GE)
+#      via 1-D bisection on the POPULATION-level focal free-entry LINK residual
+#      (`population_focal_link_residual`) -- NOT an arbitrary/ACR-seeded choice. This
+#      residual is a genuine equilibrium condition (main prompt Section 4.2) and must hold
+#      at numerical precision in POPULATION, not merely shrink with W (addendum Section 8);
+#      an arbitrarily chosen gamma_prime_target was found live to leave this residual stuck
+#      around -0.3 regardless of W, which is the signature of an uncalibrated parameter,
+#      not finite-sample noise.
+#   5. At the solved `gamma_prime_target`, the inner `build_at` closure below ALREADY
+#      recomputes (f, w, A_final, X, q) self-consistently (it is exactly the function being
+#      root-found on) -- reuse that final evaluation directly, never a separately "observed"
+#      X that (A,f) are later bent to match.
+#   6. Verify feasibility (q>=1, export>=domestic) and the well-conditioned-fixture
+#      criterion (min reference participation probability -- main prompt Section 7) on the
+#      FINAL cutoff matrix; verify both gravity restrictions, factor-market clearing, and
+#      the focal link residual to machine precision.
+#
+# Reference draws (`z_draws`) are then generated at whatever `W` is requested; the addendum
+# EXPECTS (Section 3) that equal finite-sample weights will NOT exactly satisfy the
+# population moments at finite W, and that the gap shrinks as W grows -- this is the
+# intended finite-sample behavior, not a defect to "correct" via `fstar_solver.jl` (which is
+# now archived as an optional debugging utility only, never called from this path).
 
 using Random: MersenneTwister, randn!, rand!
 using LinearAlgebra: diag
 using Statistics: std
+using Roots: find_zero, Bisection
 
 """
     generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8, target_country=1,
-                                 seed=1234, W=20_000, ...) -> MelitzSyntheticData
+                                 seed=29, W=20_000, draw_mode=:halton, ...)
+        -> MelitzSyntheticData
 
-Deterministic synthetic Melitz economy generator for the D=4 Delta-star benchmark.
-Nontrivial, heterogeneous `tau`, `A`, `f` (never all-ones); both gravity restrictions
-satisfied to numerical (solver) tolerance by construction; target country's autarky
-cutoff exactly 1; all other required inequality restrictions (`zhat>=1`,
-`zhat_od>=zhat_oo`) verified.
+Population-Pareto synthetic Melitz economy (addendum construction). `A`, `f` are
+gravity-EXACT by construction (min-L2 projection); baseline wages `w` are a genuine
+general-equilibrium OUTPUT (`melitz_solve_wages_ge`), not a normalization -- do NOT expect
+`w[target_country]==1`. `gamma_prime_target` is SOLVED (not chosen) to zero the
+POPULATION-level focal free-entry link residual exactly. `eq.trade_flow` is the POPULATION
+closed-form value implied by the FINAL (A,f,w) (never a separately-chosen target). The
+noise scales below were tuned (main prompt Section 7) so that, at D=4/seed=29, every
+bilateral cell's reference Pareto participation probability exceeds `min_participation_prob`
+(default 0.01) -- comfortably >500 active draws at the W=80,000 benchmark -- while cutoffs
+remain feasible (`>=1`, export-selection satisfied).
+
+GATE A5 NOTE (docs/melitz_delta_star.md): the default seed changed from 2 to 29, and the
+gravity projection now uses `project_to_gravity_manifold_weighted` (domestic cells
+down-weighted), when `gravity_residuals`/`gravity_coefficient_vector` switched from
+`doubleDiff` to the canonical `withinTransform` -- the coefficient vector's structure
+changed (now diagonal-dominated), so seed=2's fixture stopped being export-selection
+feasible under the corrected transform (reproduced live: 100% of the first 60 seeds
+failed under `doubleDiff`'s replacement before the weighted projection was added; ~9% of
+seeds pass with it, of which 29 is the first). This is a re-tuning of an arbitrary fixture
+draw, not an economic finding.
 """
 function generate_fake_melitz_data(; D::Int=4, sigma::Float64=2.5, theta_star::Float64=6.8,
-                                    target_country::Int=1, seed::Int=1234, W::Int=20_000,
-                                    tau_offdiag_range::Tuple{Float64,Float64}=(0.15, 0.55),
-                                    L_range::Tuple{Float64,Float64}=(0.8, 2.5),
-                                    f_entry_range::Tuple{Float64,Float64}=(0.10, 0.30),
-                                    zhat_base::Float64=2.2, zhat_noise_sd::Float64=0.12,
-                                    lambda_noise_sd::Float64=0.18, lambda_diag_bonus::Float64=0.6,
-                                    lambda_effect_sd::Float64=0.35)
+                                    target_country::Int=1, seed::Int=29, W::Int=20_000,
+                                    draw_mode::Symbol=:halton,
+                                    tau_offdiag_logrange::Tuple{Float64,Float64}=(0.05, 0.13),
+                                    L_range::Tuple{Float64,Float64}=(0.95, 1.25),
+                                    logA_noise_sd::Float64=0.04,
+                                    logf_domestic_mean::Float64=-0.55, logf_export_mean::Float64=-0.30,
+                                    logf_noise_sd::Float64=0.06,
+                                    gamma_prime_bracket::Tuple{Float64,Float64}=(0.2, 1.5),
+                                    min_participation_prob::Float64=0.01,
+                                    ge_damping::Float64=0.1)
     rng = MersenneTwister(seed)
+    j = target_country
 
-    # 1. tau: diag=1, heterogeneous off-diagonal iceberg costs
+    # 1. tau, L -- exogenous, no gravity/GE constraint needed at this stage.
     tau = ones(Float64, D, D)
     for o in 1:D, d in 1:D
         o == d && continue
-        tau[o, d] = exp(tau_offdiag_range[1] + (tau_offdiag_range[2] - tau_offdiag_range[1]) * rand(rng))
+        tau[o, d] = exp(tau_offdiag_logrange[1] + (tau_offdiag_logrange[2] - tau_offdiag_logrange[1]) * rand(rng))
     end
-
-    # labor endowments (primitive, chosen)
     L = L_range[1] .+ (L_range[2] - L_range[1]) .* rand(rng, D)
 
-    T = doubleDiff(tau) # DD(log tau); row 1 and column 2 are exactly zero by construction
-    TT = sum(T .^ 2)
-    TT > 0 || error("generate_fake_melitz_data: doubleDiff(tau) is degenerate (D<3?), cannot project")
+    # 2. raw heterogeneous A, gravity-projected EXACTLY (min-L2, spreads the correction).
+    logA_raw = logA_noise_sd .* randn(rng, D, D)
+    c_full = gravity_coefficient_vector(D, tau)
+    # Gate A5: as with f (below), weight the A-gravity projection away from DOMESTIC (o==d)
+    # cells for the same reason -- |c| is diagonal-dominated under withinTransform, so an
+    # unweighted min-L2 projection disproportionately perturbs A[o,o], which feeds into the
+    # domestic cutoff and can push it (in either direction, depending on sign) far enough
+    # to break export-selection even before f is touched.
+    a_proj_weights = vec([o == d ? 1000.0 : 1.0 for o in 1:D, d in 1:D])
+    A = exp.(reshape(project_to_gravity_manifold_weighted(vec(logA_raw), c_full, 0.0, a_proj_weights), D, D))
 
-    # 2. raw trade-share heterogeneity (origin+destination effects vanish under DD, so
-    # only the noise matters for the gravity projection -- but the effects still give
-    # genuine cross-sectional heterogeneity in levels/shares).
-    origin_eff = lambda_effect_sd .* randn(rng, D)
-    dest_eff = lambda_effect_sd .* randn(rng, D)
-    raw_loglambda = zeros(Float64, D, D)
-    for o in 1:D, d in 1:D
-        raw_loglambda[o, d] = origin_eff[o] + dest_eff[d] + lambda_noise_sd * randn(rng)
-        o == d && (raw_loglambda[o, d] += lambda_diag_bonus)
+    # 3. raw (pre-gravity) log-levels of the D^2-1 free f-cells -- domestic systematically
+    # cheaper than export. f[j,j] is NOT fixed yet (depends on the gamma_prime_target being
+    # solved for in step 4).
+    jj_lin = od2lin(j, j, D)
+    f_free_lin = [i for i in 1:D^2 if i != jj_lin]
+    logf_raw = [lin2od(i, D)[1] == lin2od(i, D)[2] ? logf_domestic_mean + logf_noise_sd * randn(rng) :
+                logf_export_mean + logf_noise_sd * randn(rng) for i in f_free_lin]
+    # Gate A5: under withinTransform's coefficient vector, |c| is largest on DOMESTIC
+    # cells (see project_to_gravity_manifold_weighted's docstring), so weight the f-gravity
+    # projection to route the correction onto EXPORT cells instead (weight 1) and leave
+    # domestic cells (weight 1000) nearly untouched -- an unweighted min-L2 projection was
+    # verified live to break export-selection on 100% of 60 tried seeds after the
+    # doubleDiff -> withinTransform switch.
+    f_proj_weights = [lin2od(i, D)[1] == lin2od(i, D)[2] ? 1000.0 : 1.0 for i in f_free_lin]
+
+    """
+    Given a trial gamma_prime_target, rebuild (f, w, A_final, X, q, expenditure)
+    self-consistently. `derive_fjj_from_autarky_cutoff` needs `A[j,j]` -- but the GE solve's
+    per-destination `gamma_d==1` rescaling (`melitz_solve_wages_ge`) ALSO rescales column j
+    of A (country j is itself a destination), so the FINAL A[j,j] actually paired with
+    f[j,j] everywhere else (moments, ex-post checks) differs from the pre-rescale A[j,j]
+    used to derive it -- found live: this mismatch alone left the autarky zero-profit
+    condition at z=1 off by ~0.28 (nowhere near zero), even though `derive_fjj_from_autarky_cutoff`
+    is algebraically exact given the RIGHT A_jj. Fixed by iterating this inner fixed point
+    (A[j,j] guess -> f_jj -> GE solve -> new A_final[j,j] -> re-derive f_jj -> ...) to
+    self-consistency (converges in a handful of iterations; the coupling is weak since
+    A[j,j]'s GE rescaling factor depends only weakly, through theta_star-power column
+    sums, on f_jj).
+    """
+    function build_at(gamma_prime_target::Real)
+        A_jj_guess = A[j, j]
+        local f, f_jj, w, A_final, X, q, expenditure
+        for _ in 1:50
+            f_jj = derive_fjj_from_autarky_cutoff(gamma_prime_target, 1.0, 1.0, A_jj_guess, L[j], sigma)
+            g0_f = c_full[jj_lin] * log(f_jj)
+            logf_free_final = project_to_gravity_manifold_weighted(logf_raw, c_full[f_free_lin], g0_f, f_proj_weights)
+            f = zeros(Float64, D, D)
+            f[j, j] = f_jj
+            for (k, i) in enumerate(f_free_lin)
+                o, d = lin2od(i, D)
+                f[o, d] = exp(logf_free_final[k])
+            end
+            w, A_final, _ = melitz_solve_wages_ge(L, tau, A, f, sigma, theta_star; damping=ge_damping)
+            abs(A_final[j, j] - A_jj_guess) < 1e-14 * max(1.0, abs(A_jj_guess)) && break
+            A_jj_guess = A_final[j, j]
+        end
+        X, q, expenditure = population_X(w, L, tau, A_final, f, sigma, theta_star)
+        return (f=f, f_jj=f_jj, w=w, A=A_final, X=X, q=q, expenditure=expenditure)
     end
 
-    # Project so the DATA's own identified composite <T, DDlogX + theta*T> = 0 holds.
-    # DD(log X) = DD(log lambda) exactly (expenditure_d is a destination fixed effect).
-    required_inner_X = -theta_star * TT
-    current_inner = sum(T .* doubleDiff(exp.(raw_loglambda)))
-    c1 = (required_inner_X - current_inner) / TT
-    loglambda = raw_loglambda .+ c1 .* T
-    lambda_unnorm = exp.(loglambda)
-    lambda = lambda_unnorm ./ sum(lambda_unnorm, dims=1)
-
-    # 3. solve wages (Ricardian repo's own damped-Jacobi fixed point, reused verbatim)
-    w = melitz_solve_wages(lambda, L)
-    w ./= w[target_country] # renormalize to the target-country numeraire
-
-    expenditure = w .* L
-    X = lambda .* expenditure'
-
-    @assert isapprox(vec(sum(X, dims=1)), expenditure; rtol=1e-8) "column balance failed"
-    @assert isapprox(vec(sum(X, dims=2)), w .* L; rtol=1e-8) "row balance (income=sales) failed"
-
-    # verify the identified-composite condition actually holds on the constructed X
-    DDlogX = doubleDiff(X)
-    gravity_composite_residual = sum(T .* DDlogX) + theta_star * TT
-    @assert abs(gravity_composite_residual) < 1e-6 * max(1.0, abs(theta_star * TT)) "composite gravity condition failed to construct"
-
-    # entrant mass: NOT free -- derived in closed form from L and f_entry (docs Sec 1.4,
-    # revised; matches Melitz & Redding 2014 eq. 22). f_entry is the chosen primitive.
-    f_entry = f_entry_range[1] .+ (f_entry_range[2] - f_entry_range[1]) .* rand(rng, D)
-    N = [entrant_mass_from_labor(L[o], f_entry[o], sigma, theta_star) for o in 1:D]
-
-    # 4. cutoffs: target_country's own cell is derived (Sec 1.8); every other cell is a
-    # free computational parameterization, projected to satisfy the (now-consistent)
-    # gravity restriction on f (equivalently, given step 2, on A too).
-    zhat_tt_required = target_baseline_cutoff_for_autarky(expenditure[target_country],
-                                                            w[target_country],
-                                                            X[target_country, target_country],
-                                                            theta_star)
-    raw_logzhat = zeros(Float64, D, D)
-    for o in 1:D, d in 1:D
-        raw_logzhat[o, d] = log(zhat_base) + 0.15 * (d == o ? -1.0 : 1.0) + zhat_noise_sd * randn(rng)
+    # 4. solve for gamma_prime_target: the POPULATION-level focal free-entry link residual
+    # must vanish exactly (main prompt Section 4.2) -- NOT an arbitrary/ACR-seeded choice
+    # (an arbitrary choice was found live to leave this residual stuck around -0.3
+    # regardless of W, the signature of an uncalibrated parameter, not sampling noise).
+    function link_residual(gamma_prime_target::Real)
+        r = build_at(gamma_prime_target)
+        primitives_trial = MelitzPrimitives(D, sigma, theta_star, j, tau, r.w, r.A, r.f, gamma_prime_target)
+        cf_trial = MelitzCounterfactual(j, 1.0, 1.0 * L[j], 1.0, 1.0 * L[j])
+        return population_focal_link_residual(primitives_trial, r.X, r.q, r.f_jj, cf_trial)
     end
-    raw_logzhat[target_country, target_country] = log(zhat_tt_required)
+    gamma_prime_target = find_zero(link_residual, gamma_prime_bracket, Bisection(); xatol=1e-12)
 
-    T_masked = copy(T)
-    T_masked[target_country, target_country] = 0.0
-    TmaskTmask = sum(T_masked .^ 2)
-    TmaskTmask > 0 || error("generate_fake_melitz_data: masked doubleDiff(tau) is degenerate")
+    # 5. final evaluation at the solved gamma_prime_target.
+    r = build_at(gamma_prime_target)
+    f, f_jj, w, A_final, X, zhat, expenditure = r.f, r.f_jj, r.w, r.A, r.X, r.q, r.expenditure
 
-    required_inner_zhat = -sum(T .* DDlogX) / theta_star
-    current_inner_zhat = sum(T .* doubleDiff(exp.(raw_logzhat)))
-    c2 = (required_inner_zhat - current_inner_zhat) / TmaskTmask
-    logzhat = raw_logzhat .+ c2 .* T_masked
-    zhat = exp.(logzhat)
-    @assert isapprox(zhat[target_country, target_country], zhat_tt_required; rtol=1e-10) "target cell was perturbed by projection"
+    primitives = MelitzPrimitives(D, sigma, theta_star, j, tau, w, A_final, f, gamma_prime_target)
+    price_power = vec(sum(X, dims=1)) ./ expenditure # should be ==1 to machine precision (GE-enforced)
+    eq = MelitzEquilibrium(expenditure, price_power, zhat, X)
 
-    # 5. assemble A, f, entrant-mass-consistent equilibrium (closed form)
-    A, f, C, eq = build_equilibrium(X, N, w, tau, expenditure, zhat, sigma, theta_star)
+    expenditure_prime = 1.0 * L[j] # w_prime[j] = 1 (numeraire), autarky counterfactual only
+    counterfactual = MelitzCounterfactual(j, 1.0, expenditure_prime, 1.0, expenditure_prime)
 
-    # sanity check: the free-entry identity, evaluated independently from (C, zhat), must
-    # reproduce the CHOSEN f_entry exactly (this is the same equation as
-    # entrant_mass_from_labor, just solved in the other direction -- see docs Sec 1.4).
-    f_entry_check = [entry_cost_from_free_entry(C[o, :], zhat[o, :], w[o], sigma, theta_star) for o in 1:D]
-    @assert isapprox(f_entry_check, f_entry; rtol=1e-6) "free-entry identity inconsistent with entrant_mass_from_labor: $f_entry_check vs $f_entry"
-
-    primitives = MelitzPrimitives(D, sigma, theta_star, target_country, tau, w, A, f, f_entry)
-    counterfactual = solve_autarky_counterfactual(primitives, eq)
-
-    # verify support / export-selection restrictions
-    min_cutoff, max_cutoff = extrema(zhat)
-    min_cutoff >= 1.0 || error("generate_fake_melitz_data: zhat >= 1 violated (min=$min_cutoff); retune zhat_base/noise")
+    # 6. verify support / export-selection / well-conditioned-fixture restrictions on the
+    # FINAL cutoff matrix, and gravity + factor-market + focal-link identities to machine
+    # precision.
+    min_cutoff = minimum(zhat)
+    min_cutoff >= 1.0 || error("generate_fake_melitz_data: zhat >= 1 violated (min=$min_cutoff); retune")
     for o in 1:D, d in 1:D
         d == o && continue
         zhat[o, d] >= zhat[o, o] || error(
             "generate_fake_melitz_data: export-selection zhat[$o,$d]>=zhat[$o,$o] violated")
     end
+    min_prob = minimum(pareto_tail_prob(zhat[o, d], theta_star) for o in 1:D, d in 1:D)
+    min_prob >= min_participation_prob || error(
+        "generate_fake_melitz_data: min participation probability $min_prob < $min_participation_prob; retune")
 
-    # verify both gravity restrictions numerically
-    gravity_residual_A = sum(T .* doubleDiff(A))
-    gravity_residual_f = sum(T .* doubleDiff(f))
-    @assert abs(gravity_residual_A) < 1e-6 "A gravity restriction not satisfied: $gravity_residual_A"
-    @assert abs(gravity_residual_f) < 1e-6 "f gravity restriction not satisfied: $gravity_residual_f"
+    gravity_residual_A, gravity_residual_f = gravity_residuals(primitives)
+    @assert abs(gravity_residual_A) < 1e-8 "A gravity restriction not satisfied: $gravity_residual_A"
+    @assert abs(gravity_residual_f) < 1e-8 "f gravity restriction not satisfied: $gravity_residual_f"
+    @assert maximum(abs.(w .* L .- vec(sum(X, dims=2)))) < 1e-8 "factor-market clearing (w*L == row-sum X) violated"
+    @assert maximum(abs.(price_power .- 1.0)) < 1e-8 "baseline price-index normalization gamma_d==1 violated"
+    @assert abs(population_focal_link_residual(primitives, X, zhat, f_jj, counterfactual)) < 1e-8 "population focal link residual not zeroed"
 
-    # verify heterogeneity requirements (never trivially-all-ones)
-    @assert std(log.(A)) > 0.01 "A matrix is too close to trivial"
+    @assert std(log.(A_final)) > 0.01 "A matrix is too close to trivial"
     @assert std(log.(f)) > 0.01 "f matrix is too close to trivial"
-    @assert std(doubleDiff(A)) > 1e-4 "doubleDiff(A) has no genuine variation"
-    @assert std(doubleDiff(f)) > 1e-4 "doubleDiff(f) has no genuine variation"
+    @assert std(withinTransform(A_final)) > 1e-4 "withinTransform(A) has no genuine bilateral variation"
+    @assert std(withinTransform(f)) > 1e-4 "withinTransform(f) has no genuine bilateral variation"
 
-    z_draws = pareto_draws(W, D, theta_star; seed=seed + 1)
+    z_draws = pareto_draws(W, D, theta_star; seed=seed + 1, mode=draw_mode)
 
-    return MelitzSyntheticData(primitives, eq, counterfactual, z_draws, seed)
+    return MelitzSyntheticData(primitives, eq, counterfactual, L, z_draws, seed)
 end
