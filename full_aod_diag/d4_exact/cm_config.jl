@@ -176,8 +176,10 @@ collide with an unrestricted (or differently-configured CM) point in the same ca
 `SafeExactCache{CMEvalKey}` (oracle.jl's genericized cache), NOT `SafeExactCache{FullAEvalKey}` --
 the two must never share a cache instance, since nothing here type-checks that a caller passed
 the wrong dict; keep unrestricted and CM caches as physically separate `SafeExactCache` objects.
+
+AUD-08 fix: carries ctx_fingerprint (context_fingerprint(ctx), oracle.jl) for the same reason
+FullAEvalKey does -- see that struct's docstring.
 """
-"AUD-08 fix: carries ctx_fingerprint (context_fingerprint(ctx), oracle.jl) for the same reason FullAEvalKey does -- see that struct's docstring."
 struct CMEvalKey
     x_free::Vector{Float64}
     δ::Float64
