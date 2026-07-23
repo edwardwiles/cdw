@@ -141,8 +141,19 @@ the same BLAS contraction production uses).
 `calculate_grad_k!`'s own small-`N` (2-draw) probe call is detected by `size(U,1) <
 size(obj.U,1)` and skipped (that call only reads `K_jac`, discarding `G_jac` entirely --
 `cc_algo/outer_loop_functions.jl:279-291`).
+
+Section 12.4/7.5 optimization: the `2*n` displaced moment builds per gradient callback
+(`n=30` at D=4, i.e. 60 full `W x (D^2+1)` matrix constructions) now reuse TWO persistent
+`Float64` buffers (`fixed_active_set_moments!`, gradient_lab.jl) closed over by this
+function, rebuilt only if a first call or a `(W, num_moments)` shape change is detected
+(defensive, e.g. a caller reusing this closure across bundles of different `D`/`W`) --
+rather than allocating a fresh `(W x num_moments)` matrix on every one of the 60 probes.
+Bit-identical numerics to the prior always-allocating version (same shared fill body).
 """
 function make_melitz_moments_jacobian_b(h::Real)
+    Gp_buf = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    Gm_buf = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    profit_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
     function melitz_moments_jacobian_b!(K_jac, G_jac, theta, U, obj)
         n = length(theta)
         K_jac .= 0.0
@@ -152,11 +163,19 @@ function make_melitz_moments_jacobian_b(h::Real)
             return nothing
         end
         ctx = obj.γ
+        W = size(obj.U, 1)
+        d = ctx.moment_layout.num_moments
+        if Gp_buf[] === nothing || size(Gp_buf[]) != (W, d)
+            Gp_buf[] = zeros(Float64, W, d)
+            Gm_buf[] = zeros(Float64, W, d)
+            profit_buf[] = zeros(Float64, W)
+        end
+        Gp, Gm, profit_j = Gp_buf[], Gm_buf[], profit_buf[]
         ei = zeros(n)
         @inbounds for k in 1:n
             ei[k] = 1.0
-            Gp = fixed_active_set_moments(theta .+ h .* ei, ctx, obj)
-            Gm = fixed_active_set_moments(theta .- h .* ei, ctx, obj)
+            fixed_active_set_moments!(Gp, profit_j, theta .+ h .* ei, ctx, obj)
+            fixed_active_set_moments!(Gm, profit_j, theta .- h .* ei, ctx, obj)
             @views G_jac[:, :, k] .= (Gp .- Gm) ./ (2h)
             ei[k] = 0.0
         end
@@ -180,7 +199,7 @@ function melitz_moment_directional_derivative(theta::AbstractVector, v::Abstract
     sigma = ctx.sigma
     layout = ctx.moment_layout
 
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta, ctx)
+    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta, ctx)
     dvec = ForwardDiff.derivative(a -> expand_theta_econ_vector(theta .+ a .* v, ctx), 0.0)
     D2 = D * D
     dA = reshape(dvec[1:D2], D, D)
@@ -489,9 +508,10 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     end
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
+        t_fc0 = time_ns()
         n_fc_calls[] += 1
         theta = collect(evalRequest.x)
-        objSol, x, nStatus = inner_solve_verified_or_fail(theta)
+        objSol, x, nStatus = @melitz_profile :fc_inner_solve inner_solve_verified_or_fail(theta)
 
         # Section 3.1: the outer objective is ALWAYS the finite, deterministic gamma
         # coordinate -- never the inner solve's own return value or a failure sentinel.
@@ -514,21 +534,23 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         # cutoff rows are still evaluated through the generic nonlinear callback exactly as
         # before.
         if cutoff_constraint_backend == :nonlinear_reference
-            g_d, g_e = melitz_cutoff_constraints_at(theta, obj.γ)
+            g_d, g_e = @melitz_profile :fc_cutoff_nonlinear melitz_cutoff_constraints_at(theta, obj.γ)
             nd = length(g_d)
             evalResult.c[2:1+nd] .= g_d
             evalResult.c[2+nd:end] .= g_e
         end
 
-        register_live_candidate!(theta, Delta_theta, collect(x), nStatus)
+        @melitz_profile :fc_candidate_registration register_live_candidate!(theta, Delta_theta, collect(x), nStatus)
+        melitz_record_seconds!(:fc_total, (time_ns() - t_fc0) / 1e9)
         return 0
     end
 
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
+        t_ga0 = time_ns()
         n_ga_calls[] += 1
         theta = collect(evalRequest.x)
         n_ = length(theta)
-        objSol, x, nStatus = inner_solve_verified_or_fail(theta)
+        objSol, x, nStatus = @melitz_profile :ga_inner_solve inner_solve_verified_or_fail(theta)
 
         # Section 3.1: d(±theta[1])/dtheta -- exact, trivial, independent of the inner
         # solve (which is still needed below, for the constraint Jacobian only).
@@ -537,11 +559,11 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
 
         dummy_g = zeros(n_)
         local_jac = zeros(n_)
-        obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
+        @melitz_profile :ga_divergence_gradient obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
         evalResult.jac[1:n_] .= local_jac ./ (1e10 * delta)   # Section 4.2: same scaling as the value
 
         if cutoff_constraint_backend == :nonlinear_reference
-            J_d, J_e = melitz_cutoff_constraint_jacobian(theta, obj.γ)
+            J_d, J_e = @melitz_profile :ga_cutoff_jacobian_nonlinear melitz_cutoff_constraint_jacobian(theta, obj.γ)
             nd, ne = size(J_d, 1), size(J_e, 1)
             @inbounds for kk in 1:nd
                 evalResult.jac[kk*n_+1:(kk+1)*n_] .= @view J_d[kk, :]
@@ -551,6 +573,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                 evalResult.jac[(off+kk-1)*n_+1:(off+kk)*n_] .= @view J_e[kk, :]
             end
         end
+        melitz_record_seconds!(:ga_total, (time_ns() - t_ga0) / 1e9)
         return 0
     end
 
@@ -671,12 +694,18 @@ reverification).
 `theta_box`: the outer decision vector has no natural box (the governing prompt imposes
 none) -- a symmetric `theta_init .± theta_box` bound is set purely for KNITRO
 well-posedness (an ARTIFICIAL bound, flagged per Section 8.F, not an economic
-restriction).
+restriction). May be a scalar (uniform box, the original behavior) OR a length-`n` vector
+(Section 9's restricted nuisance-coordinate searches: a `0.0` entry pins that coordinate
+exactly at `theta_init`'s own value -- KNITRO sees `lobnd==upbnd` for that variable, the
+same "zero degrees of freedom" mechanism `melitz_fixed_point_probe` already uses for every
+coordinate -- while a nonzero entry frees that coordinate within the usual symmetric
+range; both branches of the broadcasted `.-`/`.+` below already work for either shape, no
+separate code path needed).
 """
 function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVector;
                                           delta::Real, direction::Symbol,
                                           gradient_backend::Symbol=:B, h::Real=1e-4,
-                                          theta_box::Real=2.0,
+                                          theta_box::Union{Real,AbstractVector}=2.0,
                                           n_live_candidates_tracked::Int=5,
                                           cutoff_constraint_backend::Symbol=:nonlinear_reference,
                                           inner_loop_opt::AbstractString,

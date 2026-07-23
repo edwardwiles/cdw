@@ -25,6 +25,7 @@ using LinearAlgebra: dot, norm
 
 const MELITZ_DIR = joinpath(@__DIR__, "..", "..", "src", "melitz")
 include(joinpath(dirname(dirname(@__DIR__)), "misc", "doubleDiff.jl"))
+include(joinpath(MELITZ_DIR, "profiling.jl"))
 include(joinpath(MELITZ_DIR, "types.jl"))
 include(joinpath(MELITZ_DIR, "pareto.jl"))
 include(joinpath(MELITZ_DIR, "firm_quantities.jl"))
@@ -943,6 +944,60 @@ if KNITRO_AVAILABLE
             @test v_hs != v_ord  # regression: no longer accidentally the same coordinate/direction
             @test (nsw_hs + auk_hs) >= (nsw_ord + auk_ord)  # at least as many switches as ordinary_f
         end
+
+        @testset "Section 12.4: fixed_active_set_moments! (in-place) matches the allocating reference" begin
+            Wt = size(obj5.U, 1)
+            d = ctx5.moment_layout.num_moments
+            rng12 = MersenneTwister(41)
+            for _ in 1:5
+                theta_probe = theta0 .+ 0.01 .* randn(rng12, length(theta0))
+                G_ref = fixed_active_set_moments(theta_probe, ctx5, obj5)
+                G_buf = zeros(Wt, d)
+                profit_buf = zeros(Wt)
+                fixed_active_set_moments!(G_buf, profit_buf, theta_probe, ctx5, obj5)
+                @test G_buf == G_ref  # bit-identical: same shared fill body
+            end
+        end
+
+        @testset "Section 12.4: fixed_active_set_moments! eliminates the per-call G allocation" begin
+            Wt = size(obj5.U, 1)
+            d = ctx5.moment_layout.num_moments
+            G_buf = zeros(Wt, d)
+            profit_buf = zeros(Wt)
+            fixed_active_set_moments!(G_buf, profit_buf, theta0, ctx5, obj5)  # warm up (JIT)
+            fixed_active_set_moments(theta0, ctx5, obj5)
+            bytes_inplace = @allocated fixed_active_set_moments!(G_buf, profit_buf, theta0, ctx5, obj5)
+            bytes_alloc = @allocated fixed_active_set_moments(theta0, ctx5, obj5)
+            @test bytes_inplace < bytes_alloc
+            # the allocating version must allocate at least the W x d matrix itself
+            @test bytes_alloc >= Wt * d * 8
+            println("    [Section 12.4] allocating=$bytes_alloc bytes, in-place=$bytes_inplace bytes ",
+                "($(round(bytes_alloc / max(1, bytes_inplace); digits=1))x less)")
+        end
+
+        @testset "Section 12.4: make_melitz_moments_jacobian_b (live GA path) numerically unaffected by buffer reuse" begin
+            # Cross-check the LIVE finite_delta_outer.jl closure (now buffer-reusing)
+            # against a fresh, independently-allocating one at the same point -- confirms
+            # buffer reuse across coordinate probes never leaks stale values between
+            # probes (each fixed_active_set_moments! call fully overwrites G via fill!).
+            mj1 = make_melitz_moments_jacobian_b(1e-4)
+            mj2 = make_melitz_moments_jacobian_b(1e-4)
+            n = length(theta0)
+            d = ctx5.moment_layout.num_moments
+            Wt = size(obj5.U, 1)
+            K_jac1, G_jac1 = zeros(Wt, n), zeros(Wt, d, n)
+            K_jac2, G_jac2 = zeros(Wt, n), zeros(Wt, d, n)
+            mj1(K_jac1, G_jac1, theta0, obj5.U, obj5)
+            mj2(K_jac2, G_jac2, theta0, obj5.U, obj5)
+            @test G_jac1 == G_jac2
+            @test K_jac1 == K_jac2
+            # calling the SAME closure twice in a row (simulating repeated GA callbacks)
+            # must also reproduce identically -- the persistent buffer must not carry any
+            # cross-call contamination.
+            K_jac1b, G_jac1b = zeros(Wt, n), zeros(Wt, d, n)
+            mj1(K_jac1b, G_jac1b, theta0, obj5.U, obj5)
+            @test G_jac1b == G_jac1
+        end
     end
 
     # ========================================================================
@@ -1631,6 +1686,98 @@ end
         melitz_moments!(K_f, G_f, prim_f, eq_f, cf_f, z_draws, moment_layout; X_data=ctx.X_data)
         melitz_moments!(K_q, G_q, prim_q, eq_q, cf_q, z_draws, moment_layout; X_data=ctx.X_data)
         @test isapprox(G_f, G_q; atol=1e-8, rtol=1e-8)
+    end
+end
+
+# ============================================================================
+# 9b. Section 5 (live wiring): :logf vs :logcutoff, live end-to-end, real KNITRO.
+# Unlike the economic-core-only testset above (round trips at hand-built `ctx`
+# NamedTuples, no inner solve), this exercises the FULL live path: build_melitz_psi_bundle
+# with outer_parameterization=:logcutoff, the melitz_expand_theta dispatcher threaded
+# through melitz_outer_state/melitz_moments_adapter!/gradient_lab/affine_cutoff, and a
+# real cold-verified inner CC KNITRO solve -- required agreement fields per the governing
+# prompt: A, f, gamma_prime, q, moment matrix G, positive Delta, dual solution, LFD,
+# omitted-equilibrium diagnostics, economic GT.
+# ============================================================================
+if KNITRO_AVAILABLE
+    @testset "Section 5 (live wiring): :logf vs :logcutoff live fixed-point equivalence (real KNITRO)" begin
+        inner_opt = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+
+        obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logf, inner_loop_opt=inner_opt)
+        ctx_f = obj_f.γ
+        obj_q, theta0_q = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff, inner_loop_opt=inner_opt)
+        ctx_q = obj_q.γ
+
+        @testset "ctx carries the requested outer_parameterization" begin
+            @test ctx_f.outer_parameterization == :logf
+            @test ctx_q.outer_parameterization == :logcutoff
+        end
+
+        A_f, f_f, gamma_f, fjj_f = melitz_expand_theta(theta0_f, ctx_f)
+        A_q, f_q, gamma_q, fjj_q = melitz_expand_theta(theta0_q, ctx_q)
+        _, _, _, _, q_q_mat = expand_free_theta_logcutoff(theta0_q, ctx_q)
+        q_f_vec = melitz_log_cutoff_vec(theta0_f, ctx_f)
+
+        @testset "A, f, gamma_prime, f_jj agree (same physical point by construction)" begin
+            @test isapprox(A_f, A_q; atol=1e-8, rtol=1e-8)
+            @test isapprox(f_f, f_q; atol=1e-8, rtol=1e-8)
+            @test isapprox(gamma_f, gamma_q; atol=1e-10, rtol=1e-10)
+            @test isapprox(fjj_f, fjj_q; atol=1e-8, rtol=1e-8)
+        end
+
+        @testset "q (baseline log-cutoff) agrees" begin
+            @test isapprox(q_f_vec, vec(q_q_mat); atol=1e-8, rtol=1e-8)
+        end
+
+        r_f = evaluate_melitz_delta(theta0_f, ctx_f, obj_f; cold=true)
+        r_q = evaluate_melitz_delta(theta0_q, ctx_q, obj_q; cold=true)
+
+        @testset "both real-KNITRO cold solves converge (nStatus==0) and are verified" begin
+            @test r_f.nStatus == 0
+            @test r_q.nStatus == 0
+            @test r_f.verified
+            @test r_q.verified
+        end
+
+        @testset "positive Delta agrees" begin
+            @test r_f.Delta > 0
+            @test r_q.Delta > 0
+            @test isapprox(r_f.Delta, r_q.Delta; atol=1e-8, rtol=1e-2)
+        end
+
+        @testset "dual solution agrees" begin
+            @test isapprox(r_f.dual_x, r_q.dual_x; atol=1e-4, rtol=1e-2)
+        end
+
+        @testset "LFD (recovered least-favorable distribution) agrees" begin
+            @test isapprox(r_f.weights, r_q.weights; atol=1e-8, rtol=1e-2)
+        end
+
+        @testset "moment matrix G agrees" begin
+            @test isapprox(r_f.G, r_q.G; atol=1e-8, rtol=1e-8)
+        end
+
+        @testset "omitted-equilibrium diagnostics agree" begin
+            c_f, c_q = r_f.equilibrium_check, r_q.equilibrium_check
+            @test isapprox(c_f.gravity_residual_A, c_q.gravity_residual_A; atol=1e-8)
+            @test isapprox(c_f.gravity_residual_f, c_q.gravity_residual_f; atol=1e-8)
+            @test isapprox(c_f.residual_autarky_cutoff, c_q.residual_autarky_cutoff; atol=1e-8)
+            @test isapprox(c_f.N_prime_market_clearing, c_q.N_prime_market_clearing; atol=1e-6, rtol=1e-6)
+            @test isapprox(c_f.N_prime_from_gamma, c_q.N_prime_from_gamma; atol=1e-6, rtol=1e-6)
+            @test isapprox(c_f.min_baseline_cutoff, c_q.min_baseline_cutoff; atol=1e-8)
+        end
+
+        @testset "economic GT (gains from trade) agrees" begin
+            p_f = MelitzPrimitives(ctx_f.D, ctx_f.sigma, ctx_f.theta_star, ctx_f.target_country,
+                                    ctx_f.tau, ctx_f.w, r_f.A, r_f.f, r_f.gamma_prime_j)
+            p_q = MelitzPrimitives(ctx_q.D, ctx_q.sigma, ctx_q.theta_star, ctx_q.target_country,
+                                    ctx_q.tau, ctx_q.w, r_q.A, r_q.f, r_q.gamma_prime_j)
+            expenditure_prime = ctx_f.w_prime * ctx_f.L[ctx_f.target_country]
+            cf = MelitzCounterfactual(ctx_f.target_country, ctx_f.w_prime, expenditure_prime, 1.0, expenditure_prime)
+            GT_f = melitz_gains_from_trade(p_f, cf)
+            GT_q = melitz_gains_from_trade(p_q, cf)
+            @test isapprox(GT_f, GT_q; atol=1e-8, rtol=1e-6)
+        end
     end
 end
 

@@ -20,25 +20,26 @@ using ForwardDiff
 using LinearAlgebra: dot
 
 """
-    fixed_active_set_moments(theta_free, ctx, obj) -> G (W x num_moments)
+    _fill_fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj) -> G
 
-Section 1.1 steps 1-4 of `fixed_dual_scalar`, factored out on its own so the Section 1.2
-per-moment-column directional-derivative audit can compare `ForwardDiff.derivative` of
-THIS function against central finite differences of the SAME function, column by column
--- without duplicating the moment-construction logic a second time. `fixed_dual_scalar`
-(below) is a thin composition of this function with `dual_scalar_at_fixed_G`; nothing
-about the moment economics is implemented twice.
+Section 12.4/7.5 optimization: the shared, type-generic (Float64 or ForwardDiff.Dual) fill
+body for `fixed_active_set_moments`/`fixed_active_set_moments!` -- takes caller-owned
+`G`/`profit_j` buffers rather than allocating its own, so the allocating (`T`-generic,
+used by Method C's ForwardDiff path) and in-place (`Float64`-only, used by Method B's
+coordinate-probe loop) entry points below share ONE implementation instead of duplicating
+the moment-construction logic a second time.
 """
-function fixed_active_set_moments(theta_free::AbstractVector{T}, ctx, obj) where {T}
+function _fill_fixed_active_set_moments!(G::AbstractMatrix{T}, profit_j::AbstractVector{T},
+                                          theta_free::AbstractVector, ctx, obj) where {T}
     D, j = ctx.D, ctx.target_country
     W = size(obj.U, 1)
     sigma = ctx.sigma
     layout = ctx.moment_layout
 
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta_free, ctx)
+    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta_free, ctx)
 
-    G = zeros(T, W, layout.num_moments)
-    profit_j = zeros(T, W)
+    fill!(G, zero(T))
+    fill!(profit_j, zero(T))
     price_power_d = 1.0
     @inbounds for o in 1:D, d in 1:D
         trade_col = layout.trade_index[o, d]
@@ -62,6 +63,34 @@ function fixed_active_set_moments(theta_free::AbstractVector{T}, ctx, obj) where
         G[w, link_col] = profit_j[w] / ctx.w[j] - firm_autarky.realized_operating_profit / ctx.w_prime
     end
     return G
+end
+
+function fixed_active_set_moments(theta_free::AbstractVector{T}, ctx, obj) where {T}
+    W = size(obj.U, 1)
+    layout = ctx.moment_layout
+    G = zeros(T, W, layout.num_moments)
+    profit_j = zeros(T, W)
+    return _fill_fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj)
+end
+
+"""
+    fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj) -> G
+
+Section 12.4/7.5 optimization: in-place `Float64`-only variant of
+`fixed_active_set_moments`, for callers that already own a persistent `(W x num_moments)`
+buffer `G` and length-`W` scratch `profit_j` and want to avoid allocating a fresh matrix
+on every call -- e.g. `finite_delta_outer.jl`'s `make_melitz_moments_jacobian_b`, whose
+coordinate-probe loop calls this `2*n` times per outer gradient callback (the governing
+prompt's own Section 7.5 concern: "up to 2*30=60 full displaced moment builds per
+gradient"). ForwardDiff/Method C callers must keep using the allocating
+`fixed_active_set_moments` (their `G` is `Dual`-typed and cannot share this `Float64`
+buffer). Bit-identical output to `fixed_active_set_moments` at the same input (shared fill
+body) -- validated in the test suite ("Section 12.4: fixed_active_set_moments! (in-place)
+matches the allocating reference").
+"""
+function fixed_active_set_moments!(G::AbstractMatrix{Float64}, profit_j::AbstractVector{Float64},
+                                    theta_free::AbstractVector{Float64}, ctx, obj)
+    return _fill_fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj)
 end
 
 """
@@ -256,7 +285,7 @@ function base_active_mask(theta_base::AbstractVector, ctx, obj)
     D, j = ctx.D, ctx.target_country
     W = size(obj.U, 1)
     sigma = ctx.sigma
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta_base, ctx)
+    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta_base, ctx)
     mask = falses(D, D, W)
     @inbounds for o in 1:D, d in 1:D
         for w in 1:W
@@ -290,7 +319,7 @@ function count_switches(snap::MelitzActiveSetSnapshot, theta_probe::AbstractVect
     D, j = ctx.D, ctx.target_country
     W = size(obj.U, 1)
     sigma = ctx.sigma
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta_probe, ctx)
+    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta_probe, ctx)
     per_cell = zeros(Int, D, D)
     total = 0
     @inbounds for o in 1:D, d in 1:D
@@ -337,7 +366,7 @@ in either `expand_free_theta`'s chain rule or `melitz_firm`'s hand-derived parti
 show up as a Method C/D disagreement even where both individually look self-consistent).
 """
 function expand_theta_econ_vector(theta_free::AbstractVector{T}, ctx) where {T}
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta_free, ctx)
+    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta_free, ctx)
     D = ctx.D
     return vcat(vec(A), vec(f), gamma_prime_j, f_jj)
 end
@@ -382,7 +411,7 @@ function method_d_hand_derived(theta::AbstractVector, v::AbstractVector, h::Real
     sigma = ctx.sigma
     layout = ctx.moment_layout
 
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta, ctx)
+    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta, ctx)
     dvec = ForwardDiff.derivative(a -> expand_theta_econ_vector(theta .+ a .* v, ctx), 0.0)
     D2 = D * D
     dA = reshape(dvec[1:D2], D, D)

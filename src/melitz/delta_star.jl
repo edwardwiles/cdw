@@ -237,10 +237,10 @@ infeasible. This is a CHEAP (no Monte Carlo, no KNITRO) check available even whe
 function melitz_outer_state(theta_free::AbstractVector, ctx; obj=nothing,
                              evaluate_inner::Bool=false, warm_start=nothing, cold::Bool=false)
     D, j = ctx.D, ctx.target_country
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta_free, ctx)
+    A, f, gamma_prime_j, f_jj = @melitz_profile :outer_state_expand melitz_expand_theta(theta_free, ctx)
 
-    cutoff = melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
-    g_domestic, g_export = melitz_deterministic_cutoff_constraints(cutoff)
+    cutoff = @melitz_profile :outer_state_cutoff melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
+    g_domestic, g_export = @melitz_profile :outer_state_constraints melitz_deterministic_cutoff_constraints(cutoff)
     min_slack = min(minimum(g_domestic), minimum(g_export))
 
     primitives = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, j, ctx.tau, ctx.w, A, f, gamma_prime_j)
@@ -288,7 +288,7 @@ approximation -- validated against central finite differences in the test suite
 (`test/melitz/runtests.jl`, "Section 1.3").
 """
 function melitz_cutoff_constraints_at(theta_free::AbstractVector, ctx)
-    A, f, _, _ = expand_free_theta(theta_free, ctx)
+    A, f, _, _ = melitz_expand_theta(theta_free, ctx)
     zhat = melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
     return melitz_deterministic_cutoff_constraints(zhat)
 end
@@ -323,7 +323,7 @@ comparisons against the fixture's own benchmark point -- never read here.
 """
 function melitz_moments_adapter!(K, G, theta, U, obj)
     ctx = obj.γ
-    A, f, gamma_prime_j, f_jj = expand_free_theta(theta, ctx)
+    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta, ctx)
     D = ctx.D
 
     primitives = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, ctx.target_country,
@@ -350,8 +350,11 @@ FREE gravity-pivoted `theta_free` (`l = 2D^2-2`, main prompt Section 2's preferr
 """
 function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   X_data::Matrix{Float64}=data.equilibrium.trade_flow,
+                                  outer_parameterization::Symbol=:logf,
                                   inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
                                   outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"))
+    outer_parameterization in (:logf, :logcutoff) || throw(ArgumentError(
+        "outer_parameterization must be :logf or :logcutoff, got $outer_parameterization"))
     p, eq, cf = data.primitives, data.equilibrium, data.counterfactual
     D = p.D
     j = p.target_country
@@ -368,9 +371,10 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                         # melitz_moments_adapter! always recompute fresh
            moment_layout=moment_layout, X_data=X_data, c_full=c_full, A_pivot=A_pivot,
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           outer_parameterization=outer_parameterization,
            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
 
-    theta_free = reduce_to_free_theta(p, ctx)
+    theta_free = melitz_reduce_theta(p, ctx)
 
     obj = PsiObjectiveBundleDelta(
         γ=ctx,
@@ -617,14 +621,17 @@ function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
         hit = get(cache.store, key, nothing)
         if hit !== nothing
             cache.hits += 1
+            MELITZ_PROFILE[] && melitz_record!(:eval_cache_hit, Int64(0))
             return hit
         end
         cache.misses += 1
+        MELITZ_PROFILE[] && melitz_record!(:eval_cache_miss, Int64(0))
     end
 
     t0 = time()
     state = melitz_outer_state(theta_free, ctx)  # cheap: no inner solve (Section 1.2)
     state_time = time() - t0
+    melitz_record_seconds!(:outer_state_total, state_time)
 
     t1 = time()
     if cold
@@ -637,6 +644,8 @@ function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
     end
     lfd = melitz_recover_lfd(obj, theta_free)
     inner_time = time() - t1
+    melitz_record_seconds!(cold ? :inner_solve_cold : :inner_solve_warm, inner_time)
+    melitz_record_seconds!(:inner_solve_total, inner_time)
 
     G_out = nothing
     if store_G
@@ -648,6 +657,7 @@ function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
     end
 
     verified = state.feasible && lfd.lfd_ok && lfd.nStatus == 0
+    MELITZ_PROFILE[] && melitz_record!(verified ? :eval_verified : :eval_unverified, Int64(0))
     check = verified ? check_profiled_melitz_equilibrium(
         state.primitives, state.equilibrium, state.counterfactual, obj.U, lfd.weights) : nothing
 

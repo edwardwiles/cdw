@@ -58,26 +58,30 @@ function melitz_moments!(K::AbstractVector, G::AbstractMatrix, p::MelitzPrimitiv
     j = p.target_country
     profit_j = zeros(eltype(G), W)
 
-    @inbounds for o in 1:D
-        for d in 1:D
-            trade_col = layout.trade_index[o, d]
-            lambda_od = X_data[o, d] / eq.expenditure[d]
-            for w in 1:W
-                z = z_draws[w, o]
-                firm = melitz_firm(p.w[o], p.tau[o, d], p.A[o, d], p.f[o, d], p.sigma,
-                                    eq.expenditure[d], price_power_d, z)
-                G[w, trade_col] = firm.realized_revenue / eq.expenditure[d] - lambda_od
-                o == j && (profit_j[w] += firm.realized_operating_profit)
+    @melitz_profile :moments_trade_share begin
+        @inbounds for o in 1:D
+            for d in 1:D
+                trade_col = layout.trade_index[o, d]
+                lambda_od = X_data[o, d] / eq.expenditure[d]
+                for w in 1:W
+                    z = z_draws[w, o]
+                    firm = melitz_firm(p.w[o], p.tau[o, d], p.A[o, d], p.f[o, d], p.sigma,
+                                        eq.expenditure[d], price_power_d, z)
+                    G[w, trade_col] = firm.realized_revenue / eq.expenditure[d] - lambda_od
+                    o == j && (profit_j[w] += firm.realized_operating_profit)
+                end
             end
         end
     end
 
     link_col = layout.focal_link_index
-    @inbounds for w in 1:W
-        z_j = z_draws[w, j]
-        firm_autarky = melitz_firm(cf.w_prime, 1.0, p.A[j, j], p.f[j, j], p.sigma,
-                                    cf.expenditure_prime, price_power_autarky, z_j)
-        G[w, link_col] = profit_j[w] / p.w[j] - firm_autarky.realized_operating_profit / cf.w_prime
+    @melitz_profile :moments_focal_link begin
+        @inbounds for w in 1:W
+            z_j = z_draws[w, j]
+            firm_autarky = melitz_firm(cf.w_prime, 1.0, p.A[j, j], p.f[j, j], p.sigma,
+                                        cf.expenditure_prime, price_power_autarky, z_j)
+            G[w, link_col] = profit_j[w] / p.w[j] - firm_autarky.realized_operating_profit / cf.w_prime
+        end
     end
 
     K .= p.gamma_prime_target - 1

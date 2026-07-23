@@ -255,3 +255,53 @@ function reduce_to_free_theta_logcutoff(A::AbstractMatrix, f::AbstractMatrix,
 
     return vcat(log(gamma_prime_j), A_free, q_free)
 end
+
+# ============================================================================
+# Section 5 (live wiring): single dispatch point letting every downstream consumer of
+# `expand_free_theta`/`reduce_to_free_theta` (moments!, cutoff constraints and their exact
+# Jacobian, gradient laboratory Methods A-D, the affine cutoff system's basis-probe
+# construction) work UNCHANGED under EITHER parameterization, keyed off
+# `ctx.outer_parameterization` (`:logf`, the default, or `:logcutoff`). Both
+# parameterizations expand to the SAME PHYSICAL `(A, f, gamma_prime_j, f_jj)` -- only
+# theta_free's own coordinate meaning differs -- so no downstream function needs a
+# per-parameterization twin; only the expand/reduce step itself is parameterization-
+# specific, and every call site that used to call `expand_free_theta`/`reduce_to_free_theta`
+# directly now calls this dispatcher instead (delta_star.jl's `melitz_outer_state`,
+# `melitz_cutoff_constraints_at`, `melitz_moments_adapter!`; affine_cutoff.jl's
+# `melitz_log_cutoff_vec`; gradient_lab.jl's `fixed_active_set_moments`,
+# `base_active_mask`, `count_switches`, `method_d_hand_derived`,
+# `expand_theta_econ_vector`; finite_delta_outer.jl's
+# `melitz_moment_directional_derivative`).
+# ============================================================================
+
+"""
+    melitz_expand_theta(theta_free, ctx) -> (A, f, gamma_prime_j, f_jj)
+
+Dispatches to `expand_free_theta` (:logf) or `expand_free_theta_logcutoff` (:logcutoff,
+discarding its extra native `q` output -- callers that want `q` directly should call
+`expand_free_theta_logcutoff` themselves) based on `get(ctx, :outer_parameterization,
+:logf)` -- absent defaults to `:logf` so any `ctx` built before this dispatcher existed
+(e.g. the Section 5 round-trip tests' own hand-built `ctx` NamedTuples) still works.
+"""
+function melitz_expand_theta(theta_free::AbstractVector, ctx)
+    if get(ctx, :outer_parameterization, :logf) == :logcutoff
+        A, f, gamma_prime_j, f_jj, _q = expand_free_theta_logcutoff(theta_free, ctx)
+        return A, f, gamma_prime_j, f_jj
+    else
+        return expand_free_theta(theta_free, ctx)
+    end
+end
+
+"""
+    melitz_reduce_theta(p::MelitzPrimitives, ctx) -> theta_free
+
+Inverse dispatcher: routes to `reduce_to_free_theta` (:logf) or
+`reduce_to_free_theta_logcutoff` (:logcutoff) based on `ctx.outer_parameterization`.
+"""
+function melitz_reduce_theta(p::MelitzPrimitives, ctx)
+    if get(ctx, :outer_parameterization, :logf) == :logcutoff
+        return reduce_to_free_theta_logcutoff(p.A, p.f, p.gamma_prime_target, ctx)
+    else
+        return reduce_to_free_theta(p, ctx)
+    end
+end

@@ -13,6 +13,7 @@
 # them (not merely defining them) requires `cc_algo/include_cc_algo.jl` +
 # `using .CounterfactualSensitivity` to have been loaded first.
 
+include("profiling.jl")
 include("types.jl")
 include("pareto.jl")
 include("firm_quantities.jl")

@@ -11,6 +11,7 @@ using Printf
 
 const MELITZ_DIR = joinpath(@__DIR__, "..", "src", "melitz")
 include(joinpath(dirname(@__DIR__), "misc", "doubleDiff.jl"))
+include(joinpath(MELITZ_DIR, "profiling.jl"))
 include(joinpath(MELITZ_DIR, "types.jl"))
 include(joinpath(MELITZ_DIR, "pareto.jl"))
 include(joinpath(MELITZ_DIR, "firm_quantities.jl"))

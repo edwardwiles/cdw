@@ -51,7 +51,7 @@ point, in the SAME `od2lin`/`lin2od` column-major linear-index convention used t
 `delta_star.jl`/`equilibrium.jl`.
 """
 function melitz_log_cutoff_vec(theta_free::AbstractVector, ctx)
-    A, f, _, _ = expand_free_theta(theta_free, ctx)
+    A, f, _, _ = melitz_expand_theta(theta_free, ctx)
     zhat = melitz_baseline_cutoff(A, f, ctx.w, ctx.tau, ctx.expenditure, ctx.sigma)
     return vec(log.(zhat))
 end
@@ -254,6 +254,14 @@ function build_melitz_affine_cutoff_system(ctx; epsilon_support::Real=0.0,
                                             method::Symbol=:basis,
                                             base::AbstractVector=zeros(melitz_free_dim(ctx)))
     D = ctx.D
+    if method == :analytical && get(ctx, :outer_parameterization, :logf) == :logcutoff
+        error("build_melitz_affine_cutoff_system: method=:analytical hand-derives the " *
+              ":logf-specific pivot chain only (affine_cutoff_map_analytical) -- it is not " *
+              "valid under ctx.outer_parameterization=:logcutoff. Use method=:basis (the " *
+              "default), which treats expand_free_theta_logcutoff as a black box via " *
+              "melitz_log_cutoff_vec's own outer_parameterization dispatch and is exact " *
+              "for either parameterization.")
+    end
     Q, q0 = method == :basis ? affine_cutoff_map_basis(ctx; base=base) :
             method == :analytical ? affine_cutoff_map_analytical(ctx) :
             error("method must be :basis or :analytical, got $method")
