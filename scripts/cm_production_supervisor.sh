@@ -158,6 +158,21 @@ export MEANZC_K_PAIR="${MEANZC_K_PAIR:-0}"
 export MEANZC_BASIS="${MEANZC_BASIS:-direct}"
 export MEANZC_ETA_NU0="${MEANZC_ETA_NU0:-}"
 
+# Origin-specific-ZC K<=2 production release (2026-07-23): off by default. Set
+# STAGE_RUNNER_SCRIPT=full_aod_diag/d4_exact/originzc_production_stage_runner.jl (and
+# COLD_VERIFY_SCRIPT=full_aod_diag/d4_exact/originzc_cold_verify.jl) plus DISTRIBUTION_RESTRICTION/
+# ORIGIN_K_MEAN to opt in -- this is a SEPARATE stage-runner script (never routed through
+# CM_EXTENSION/MEANZC_*/the CM driver above), reusing this SAME generic watchdog/state-machine.
+# Parameterizing the target scripts here, rather than writing a second shell watchdog, is
+# deliberate (task brief Section 6: "do not create a second independent shell watchdog
+# implementation if the current generic supervisor can be parameterized safely").
+STAGE_RUNNER_SCRIPT="${STAGE_RUNNER_SCRIPT:-full_aod_diag/d4_exact/cm_production_stage_runner.jl}"
+COLD_VERIFY_SCRIPT="${COLD_VERIFY_SCRIPT:-full_aod_diag/d4_exact/cm_cold_verify.jl}"
+export DISTRIBUTION_RESTRICTION="${DISTRIBUTION_RESTRICTION:-}"
+export ORIGIN_K_MEAN="${ORIGIN_K_MEAN:-}"
+export ORIGIN_K_PAIR="${ORIGIN_K_PAIR:-}"
+export POWER_TARGET_LAYOUT="${POWER_TARGET_LAYOUT:-origin_by_power}"
+
 # slog: ALL output goes to stderr (and $SUPERVISOR_LOG, once it is set) -- NEVER stdout.
 # This is what keeps `ckpt_path=$(run_stage_with_watchdog ...)` safe: stdout is reserved
 # exclusively for run_stage_with_watchdog's single final `echo "$ckpt_latest"`.
@@ -254,6 +269,13 @@ run_stage_with_watchdog() {
       echo "meanzc_K_mean=$MEANZC_K_MEAN"
       echo "meanzc_K_pair=$MEANZC_K_PAIR"
       echo "meanzc_basis=$MEANZC_BASIS"
+      echo "stage_runner_script=$STAGE_RUNNER_SCRIPT"
+      if [ -n "$DISTRIBUTION_RESTRICTION" ]; then
+        echo "distribution_restriction=$DISTRIBUTION_RESTRICTION"
+        echo "origin_K_mean=$ORIGIN_K_MEAN"
+        echo "origin_K_pair=$ORIGIN_K_PAIR"
+        echo "power_target_layout=$POWER_TARGET_LAYOUT"
+      fi
     } >> "$stage_dir/run_meta.txt"
 
     # Per-attempt sentinel scoping (item 3): record the log's byte size BEFORE this
@@ -277,8 +299,9 @@ run_stage_with_watchdog() {
     ( cd "$REPO_ROOT" && setsid bash -c '
         echo "$$" > "$1"
         shift
-        exec "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_production_stage_runner.jl "$1" "$2" "$3" "$4" "$5" "$6"
-      ' _ "$pgid_file" "$stage_dir" "$delta" "$remaining" "$cur_mode" "$cur_seed" "$perturb_seed" \
+        script="$7"
+        exec "$JULIA_BIN" --project=. "$script" "$1" "$2" "$3" "$4" "$5" "$6"
+      ' _ "$pgid_file" "$stage_dir" "$delta" "$remaining" "$cur_mode" "$cur_seed" "$perturb_seed" "$STAGE_RUNNER_SCRIPT" \
         >> "$log_file" 2>&1 ) &
     local pid=$!
     echo "$pid" > "$stage_dir/run_meta.txt.pid"
@@ -437,6 +460,14 @@ run_stage_with_watchdog() {
 main() {
   CHAIN_ID="${1:?usage: cm_production_supervisor.sh <chain_id> <ckpt_root_dir>}"
   CKPT_ROOT="${2:?usage: cm_production_supervisor.sh <chain_id> <ckpt_root_dir>}"
+  # Release fix (2026-07-23, section 4.1): resolve to absolute BEFORE any stage runner
+  # (which may cd() during real-data setup) ever sees this path -- a relative CKPT_ROOT
+  # would otherwise let every downstream path (stage_dir, RESTART_LOG, SUPERVISOR_LOG,
+  # checkpoint files) resolve against whatever cwd a child process happens to have.
+  case "$CKPT_ROOT" in
+    /*) : ;;
+    *) CKPT_ROOT="$(pwd)/$CKPT_ROOT" ;;
+  esac
 
   RESUME_CAMPAIGN="${RESUME_CAMPAIGN:-0}"
   if [ -d "$CKPT_ROOT" ] && [ -n "$(ls -A "$CKPT_ROOT" 2>/dev/null)" ] && [ "$RESUME_CAMPAIGN" != "1" ]; then
@@ -474,7 +505,7 @@ main() {
 
     slog "delta=$delta: cold-verifying $ckpt_path"
     local verify_out="$stage_dir/cold_verified_seed.jls"
-    if ! ( cd "$REPO_ROOT" && "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_cold_verify.jl "$ckpt_path" "$verify_out" \
+    if ! ( cd "$REPO_ROOT" && "$JULIA_BIN" --project=. "$COLD_VERIFY_SCRIPT" "$ckpt_path" "$verify_out" \
           >> "$stage_dir/coldverify.log" 2>&1 ); then
       slog "delta=$delta: COLD VERIFICATION FAILED (no verified feasible incumbent exists) -- see $stage_dir/coldverify.log -- aborting chain $CHAIN_ID"
       return 1

@@ -52,7 +52,7 @@ using Printf, Random, Dates, Serialization
 
 lp(xs...) = (println(xs...); flush(stdout))
 
-const CKPT_DIR = ARGS[1]
+const CKPT_DIR = abspath(ARGS[1])   # release fix 2026-07-23 section 4.1: resolve before any real-data setup runs
 const DELTA = parse(Float64, ARGS[2])
 const BUDGET = parse(Float64, ARGS[3])
 const MODE = ARGS[4]

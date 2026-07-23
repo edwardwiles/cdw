@@ -169,6 +169,16 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
         nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing)
     lp(xs...) = (println(xs...); flush(stdout))
+    # Release fix (2026-07-23, section 4.1): resolve ckpt_dir to an absolute path
+    # BEFORE any real-data/model setup runs. A relative ckpt_dir silently
+    # resolved against whatever the process's cwd happened to be at the time
+    # each later joinpath(ckpt_dir, ...) call executed -- found live during the
+    # K=2 D=20 shakedown, where a real-data setup file further down the include
+    # chain calls cd() as a side effect, causing the shakedown's relative
+    # ckpt_dir to land at the worktree root instead of the launch-time directory
+    # (see ORIGIN_SPECIFIC_ZC_K12_INTEGRATION_REPORT_2026-07-23.md). abspath()
+    # here is computed against the cwd at call time, i.e. before any such cd().
+    ckpt_dir = abspath(ckpt_dir)
     mkpath(ckpt_dir)
 
     distribution_restriction !== :unrestricted ||

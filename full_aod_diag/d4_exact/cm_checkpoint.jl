@@ -368,6 +368,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         meanzc_basis::Symbol = :direct,
         meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing)
     lp(xs...) = (println(xs...); flush(stdout))
+    # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
+    # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
+    # rationale in run_originzc_upper_checkpointed (cm_originzc_checkpoint.jl). Applied here
+    # too since this is the shared CM-family entry point and is exposed to the exact same
+    # cd()-during-real-data-setup hazard.
+    ckpt_dir = abspath(ckpt_dir)
     mkpath(ckpt_dir)
 
     cm_gradient_backend in (:reference, :cplus) ||

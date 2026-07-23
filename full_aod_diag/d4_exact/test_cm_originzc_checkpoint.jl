@@ -114,4 +114,52 @@ println("="^100)
         OriginZCConfig(distribution_restriction = :origin_specific_moments, K_mean = 1, power_target_layout = :shared_by_power, meanzc_basis = :anchored), 4) isa SharedByPowerLayout
 end
 println()
+
+println("="^100)
+println("Release rough-edge fix (section 4.1): a relative ckpt_dir survives an intervening cd()")
+println("="^100)
+@testset "abspath(ckpt_dir) is immune to a working-directory change after capture" begin
+    # Reproduces the exact hazard the K=2 D=20 shakedown hit live: a real-data setup file
+    # further down the include chain calls cd() as a side effect, so a *relative* ckpt_dir
+    # captured before that point must still resolve against the ORIGINAL launch directory,
+    # not wherever cwd ends up. This exercises the identical two-line fix now at the top of
+    # both run_originzc_upper_checkpointed (cm_originzc_checkpoint.jl) and
+    # run_cm_upper_checkpointed (cm_checkpoint.jl): `ckpt_dir = abspath(ckpt_dir)` computed
+    # BEFORE mkpath/any later cd().
+    pwd0 = pwd()
+    launch_dir = mktempdir()
+    other_dir = mktempdir()
+    try
+        cd(launch_dir)
+        rel_ckpt_dir = "relative_ckpt_subdir"
+        ckpt_dir = abspath(rel_ckpt_dir)   # the fix: resolved against launch_dir, BEFORE any cd()
+        cd(other_dir)                       # simulates the real-data setup's own cd()
+        mkpath(ckpt_dir)
+
+        D = 20; K_mean = 1; K_pair = 1
+        ck5 = CMCheckpointV5(5, "cwd_test_run", "cwd_test_label", :cm_upper, true, 1.0, 80000, 20260719,
+            :sobol_randomized, "csum_u", "csum_t", 0, Float64[], :anchored, :equal, :cumulative, :dense_reference, :cplus,
+            :cm_only, 0, 0, :direct, 0,
+            :origin_specific_moments_zero_covariance, K_mean, K_pair, :origin_by_power, D, ORIGINZC_MOMENT_LAYOUT_VERSION,
+            0.7, randn(23), randn(K_mean * D), zeros(20, 20), Float64[], Dict{Int,Float64}(),
+            nothing, 1, 1, 10.0, 20.0, :new_best, "13.0.1")
+        ckpt_path = joinpath(ckpt_dir, "cwd_test_latest.jls")
+        save_cm_checkpoint(ckpt_path, ck5)
+
+        # The file must land under launch_dir/rel_ckpt_dir (the launch-time interpretation of
+        # the relative path), NOT under other_dir/rel_ckpt_dir (what a naive relative
+        # mkpath/joinpath would have produced after the intervening cd()).
+        @test isfile(joinpath(launch_dir, rel_ckpt_dir, "cwd_test_latest.jls"))
+        @test !isdir(joinpath(other_dir, rel_ckpt_dir))
+
+        loaded = load_cm_checkpoint_v5(ckpt_path)
+        @test loaded isa CMCheckpointV5
+        @test loaded.schema == 5
+        @test loaded.origin_K_mean == K_mean
+        @test loaded.origin_K_pair == K_pair
+    finally
+        cd(pwd0)
+    end
+end
+println()
 println("ALL ORIGIN-ZC CHECKPOINT SCHEMA TESTS PASSED")
