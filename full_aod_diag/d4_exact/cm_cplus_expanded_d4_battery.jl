@@ -1,0 +1,290 @@
+# Part II.1 follow-up, 2026-07-23: expanded D=4 CM-C+ equivalence battery, extending
+# overnight_cm_cplus_d4_gate.jl (48->54/54 pass after the Part I sign-bug fix) with the specific
+# categories the follow-up brief calls out that the prior session's battery did not individually
+# isolate: every free coordinate individually, multiple fixed bandwidths, forced exact ties,
+# controlled near-ties, an explicit incumbent/runner-up-origin-change point, top-three-fast-path
+# vs generic-fallback isolation, and nonfinite-probe/retry discipline. Reuses existing, validated
+# machinery (TiedWinnerError/detect_price_ties from lfix_incremental.jl, the tie-construction
+# technique from c10_structured_moment_verify.jl) rather than re-deriving it.
+include(joinpath(@__DIR__, "context.jl"))
+include(joinpath(@__DIR__, "winners.jl"))
+include(joinpath(@__DIR__, "oracle.jl"))
+include(joinpath(@__DIR__, "common_marginals_moments.jl"))
+include(joinpath(@__DIR__, "common_marginals_interval.jl"))
+include(joinpath(@__DIR__, "instrumentation.jl"))
+include(joinpath(@__DIR__, "oracle_fast.jl"))
+include(joinpath(@__DIR__, "gravity_elimination.jl"))
+include(joinpath(@__DIR__, "three_way_derivatives.jl"))
+include(joinpath(@__DIR__, "lfix_incremental.jl"))
+include(joinpath(@__DIR__, "composite_gradient.jl"))
+include(joinpath(@__DIR__, "composite_gradient_fast.jl"))
+include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
+include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
+include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
+include(joinpath(@__DIR__, "cm_production_bundle.jl"))
+include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))
+using Printf, LinearAlgebra, Random
+
+n_pass = 0; n_fail = 0
+function check(name, cond)
+    global n_pass, n_fail
+    if cond
+        n_pass += 1; println("  PASS: ", name)
+    else
+        n_fail += 1; println("  FAIL: ", name)
+    end
+end
+
+ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
+pe = build_pivot_elimination(ctx)
+D = ctx.D; D2 = D^2; W = size(ctx.U, 1)
+const L = 10
+contrasts = :orthonormal
+pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts)
+ctx_cm = pcx.ctx_cm; aug = pcx.aug; bins = pcx.bins; cctx = pcx.cctx
+ws = build_lfix_factorized_workspace(D, W)
+
+x_free_calib = ctx.θ0_up[ctx.free_idx]
+base0, verify0 = archC_verified_state(x_free_calib, ctx_cm, cctx)
+cache_ref0 = build_lfix_base_cache_cm(x_free_calib, ctx_cm, base0, ctx, aug, bins)
+cache_cp0 = build_lfix_base_cache_cm_C!(ws, x_free_calib, ctx_cm, base0, ctx, aug, bins)
+z0 = log.(reshape(x_free_calib[2:end], D, D))
+w0 = vcat(x_free_calib[1], pivot_reduce(z0, pe))
+
+println("="^100)
+println("SECTION A: every free coordinate individually (D2-1=$(D2-1) A-block coords + gamma), h=0.01, tier=:incremental_o1/:top3")
+println("="^100)
+h_a = 0.01
+for k in 1:D2
+    if k == 1
+        # gamma uses the analytic path, not lfix_incremental_at -- covered by Section 2's
+        # full-gradient comparison (g[1]) in overnight_cm_cplus_d4_gate.jl; skip here.
+        continue
+    end
+    Lp_ref = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] + h_a; tier = :incremental_o1, multi_method = :top3)
+    Lm_ref = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] - h_a; tier = :incremental_o1, multi_method = :top3)
+    secant_ref = (Lp_ref - Lm_ref) / (2h_a)
+
+    Lp_cp = lfix_incremental_at_C(cache_cp0, ctx_cm, pe, w0, k, w0[k] + h_a)
+    Lm_cp = lfix_incremental_at_C(cache_cp0, ctx_cm, pe, w0, k, w0[k] - h_a)
+    secant_cp = (Lp_cp - Lm_cp) / (2h_a)
+
+    check("[coord k=$k] C+ matches Reference secant (h=$h_a) < 1e-8 abs", isapprox(secant_cp, secant_ref; atol = 1e-8, rtol = 1e-8))
+end
+
+println()
+println("="^100)
+println("SECTION B: multiple fixed bandwidths, full-vector gradient agreement (Reference vs C+)")
+println("="^100)
+for h in [0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0005]
+    g_ref, _ = cm_production_gradient(x_free_calib, pcx, ctx, pe; base = base0, threaded = false, h_mode = :fixed, h0 = h)
+    g_cp, _ = cm_production_gradient_cplus(x_free_calib, pcx, ctx, pe, build_grad_workspace_pool(W), ws; base = base0, threaded = false, h_mode = :fixed, h0 = h)
+    maxerr = maximum(abs.(g_ref .- g_cp))
+    cosang = dot(g_ref, g_cp) / (norm(g_ref) * norm(g_cp) + 1e-300)
+    @printf "  h=%.4f  max|Δg|=%.3e  cosine=%.10f\n" h maxerr cosang
+    check("[h=$h] Reference/C+ full-gradient max|Δg| < 1e-6", maxerr < 1e-6)
+    check("[h=$h] Reference/C+ full-gradient cosine > 1-1e-8", cosang > 1 - 1e-8)
+end
+
+"lfix_incremental_at_C, but forcing the generic O(D) rescan tier instead of the top3 default -- mirrors lfix_incremental_at_C's own q-construction exactly (lfix_factorized.jl), only the dest_contrib_incremental_*_C call differs."
+function lfix_incremental_at_C_generic(cache::LFixBaseCacheC, ctx, pe, w0::AbstractVector, coord_idx::Int, new_val::Float64)
+    w = copy(w0); w[coord_idx] = new_val
+    z = pivot_expand(w[2:end], pe)
+    Aod_theta = exp.(z)
+    x_free = vcat(w[1], vec(Aod_theta))
+    θ_full = CS.reconstruct_full(x_free, ctx.m)
+    cells = affected_cells(pe, coord_idx)
+    affected_dests = unique(last.(cells))
+    cf_touched = coord_idx == 1 || any(((o, d),) -> o == cache.baseIndex && d == cache.baseIndex, cells)
+    q = copy(cache.q0)
+    for d in affected_dests
+        old_contrib = @view cache.contrib0[:, d]
+        origins_here = [o for (o, dd) in cells if dd == d]
+        new_contrib = dest_contrib_incremental_generic_C(cache, ctx, θ_full, d, origins_here)
+        q .-= new_contrib .- old_contrib
+    end
+    if cf_touched
+        new_cf = cf_contrib_at(cache, θ_full, ctx)
+        q .-= new_cf .- cache.cf_contrib0
+    end
+    return lfix_from_q(q, cache.ζstar)
+end
+
+println()
+println("="^100)
+println("SECTION C: top-three-fast-path vs generic-full-rescan-fallback isolation (tier=:incremental_o1)")
+println("="^100)
+for k in [2, 3, 5, D2]
+    Lp_ref_t3 = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] + h_a; tier = :incremental_o1, multi_method = :top3)
+    Lp_ref_gen = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] + h_a; tier = :incremental_o1, multi_method = :generic)
+    check("[Reference k=$k] top3 == generic fallback (< 1e-10)", isapprox(Lp_ref_t3, Lp_ref_gen; atol = 1e-10))
+
+    Lp_cp_t3 = lfix_incremental_at_C(cache_cp0, ctx_cm, pe, w0, k, w0[k] + h_a)
+    Lp_cp_gen = lfix_incremental_at_C_generic(cache_cp0, ctx_cm, pe, w0, k, w0[k] + h_a)
+    check("[C+ k=$k] top3 == generic fallback (< 1e-10)", isapprox(Lp_cp_t3, Lp_cp_gen; atol = 1e-10))
+    check("[k=$k] Reference-top3 == C+-top3 (cross-backend, < 1e-8)", isapprox(Lp_ref_t3, Lp_cp_t3; atol = 1e-8))
+end
+
+"""
+    ctx_with_U(ctx, Unew) -> ctx
+
+Builds a modified context with `U` replaced by `Unew`, keeping `ctx.γ.Uσ` (a PRECOMPUTED
+derivative of U, `Uσ = U .^ (1-σHat)`, built once at setup time by
+`prepare_cc/createUDerivatives!.jl` and never re-derived from `ctx.U` downstream) consistent.
+`merge(ctx, (U=Unew,))` alone leaves `γ.Uσ` referencing the OLD U -- harmless for tests that only
+check winner IDENTITY (raw price, `price_and_pTsigma_cell!`'s `pbuf`, does not use `Uσ`), but
+produces a large, spurious Reference/C+ disagreement in `pTσ`/`q0`/gradient comparisons, which
+depend on `γ.Uσ` (Reference's dense path) vs a σ-only formula recomputed fresh from `U` (C+'s
+log-score path) -- these only agree when `Uσ` is actually consistent with `U`. Discovered via
+`diag_near_tie_isolate.jl` this session: an un-fixed-up near-tie test showed a ~6e-2 q0
+discrepancy that persisted UNCHANGED across eps=1e-2 down to 1e-8 (inconsistent with genuine
+near-tie sensitivity, which should shrink well before 1e-8); recomputing `γ.Uσ` here drops it to
+1e-15. A test-construction pitfall, not a backend defect -- see
+docs/CM_FIXED_DUAL_VS_REOPTIMIZED_DIRECTIONAL_AUDIT_2026-07-23.md's sibling report for the writeup.
+"""
+function ctx_with_U(ctx, Unew::AbstractMatrix)
+    γ_new = merge(ctx.γ, (Uσ = Unew .^ (1 .- ctx.σ),))
+    return merge(ctx, (U = Unew, γ = γ_new))
+end
+
+println()
+println("="^100)
+println("SECTION D: forced exact price tie -- both CM-Reference and CM-C+ builders must throw TiedWinnerError identically")
+println("="^100)
+μ4 = base0.θ_full0[1]
+γo4 = ctx.γ
+Aod_θ4 = reshape(base0.θ_full0[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+lambda4 = reshape(γo4.P, (D, D))'
+Aod4 = Aod_θ4 .* γo4.cHat .* (((γo4.wHat .* γo4.τ) ./ (γo4.wHat[1,1] .* γo4.τ[1,:]')) .^ (1/μ4)) .* (lambda4 ./ lambda4[1,:]')
+AodPow4 = (Aod4 ./ γo4.cHat) .^ (-μ4)
+constCons4 = [γo4.wHat[o] * AodPow4[o,d] * γo4.τ[o,d] for o in 1:D, d in 1:D]
+Ubad = copy(ctx.U)
+s_tie, d_tie, o1, o2 = 1, 1, 1, 2
+ratio = (constCons4[o1, d_tie] / constCons4[o2, d_tie])^(1/μ4)
+Ubad[s_tie, o2] = Ubad[s_tie, o1] * ratio
+ctx_tie = ctx_with_U(ctx, Ubad)
+pcx_tie = build_cm_production_context(ctx_tie, CS; L = L, contrasts = contrasts)
+base_tie, _ = archC_base_state(x_free_calib, pcx_tie.ctx_cm, pcx_tie.cctx), nothing
+base_tie = archC_base_state(x_free_calib, pcx_tie.ctx_cm, pcx_tie.cctx)
+
+function throws_tied(f)
+    try
+        f()
+        return false
+    catch e
+        return e isa TiedWinnerError
+    end
+end
+threw_ref = throws_tied(() -> build_lfix_base_cache_cm(x_free_calib, pcx_tie.ctx_cm, base_tie, ctx_tie, pcx_tie.aug, pcx_tie.bins))
+threw_cp = throws_tied(() -> build_lfix_base_cache_cm_C!(ws, x_free_calib, pcx_tie.ctx_cm, base_tie, ctx_tie, pcx_tie.aug, pcx_tie.bins))
+println("  Reference throws TiedWinnerError on forced tie: $threw_ref")
+println("  C+        throws TiedWinnerError on forced tie: $threw_cp")
+check("[forced tie] Reference builder throws TiedWinnerError", threw_ref)
+check("[forced tie] C+ builder throws TiedWinnerError (same synthetic tie)", threw_cp)
+
+println()
+println("="^100)
+println("SECTION E: controlled near-ties (both sides of the tie, NOT exact) -- must NOT throw, must agree tightly")
+println("="^100)
+# Swept over relative separation eps rather than a single fixed magnitude: TiedWinnerError's own
+# docstring documents that ties are a probability-zero event for generic continuous draws and have
+# never been observed in a real trajectory; the interesting question is not "does agreement hold
+# at some arbitrary eps" but "at what separation does agreement recover, and is that floor itself
+# realistic for real data" (Reference and C+ compute prices via genuinely different formulas --
+# dense price_and_pTsigma_cell! vs constCons_matrix+log-score -- so each has its own floating-point
+# noise floor, and a separation smaller than that floor can flip which formula calls the winner).
+for eps_sign in (+1.0, -1.0), eps_mag in [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
+    Unear = copy(ctx.U)
+    Unear[s_tie, o2] = Unear[s_tie, o1] * ratio * (1 + eps_sign * eps_mag)
+    ctx_near = ctx_with_U(ctx, Unear)
+    pcx_near = build_cm_production_context(ctx_near, CS; L = L, contrasts = contrasts)
+    base_near = archC_base_state(x_free_calib, pcx_near.ctx_cm, pcx_near.cctx)
+    cache_ref_near = build_lfix_base_cache_cm(x_free_calib, pcx_near.ctx_cm, base_near, ctx_near, pcx_near.aug, pcx_near.bins)
+    cache_cp_near = build_lfix_base_cache_cm_C!(ws, x_free_calib, pcx_near.ctx_cm, base_near, ctx_near, pcx_near.aug, pcx_near.bins)
+    maxerr_q0 = maximum(abs.(cache_ref_near.q0 .- cache_cp_near.q0))
+    idx_worst = argmax(abs.(cache_ref_near.q0 .- cache_cp_near.q0))
+    @printf "  near-tie(sign=%+.0f, eps=%.1e): max|q0_ref - q0_cp| = %.3e  (worst draw idx=%d)\n" eps_sign eps_mag maxerr_q0 idx_worst
+    check("[near-tie sign=$eps_sign eps=$eps_mag] q0 Reference/C+ agree < 1e-8", maxerr_q0 < 1e-8)
+end
+
+println()
+println("="^100)
+println("SECTION F: explicit incumbent/runner-up-origin-change point (constructed, not merely likely)")
+println("="^100)
+winner_base, _, gap_base = compute_winners(base0.θ_full0, ctx)
+# pick the (ω,d) pair with the SMALLEST winner/runner-up gap -- the cheapest place to force a
+# real origin (incumbent) swap with a small, controlled perturbation.
+gapflat = vec(gap_base)
+idx_min = argmin(gapflat)
+ω_swap = ((idx_min - 1) % W) + 1
+d_swap = ((idx_min - 1) ÷ W) + 1
+@printf "  smallest winner/runner-up gap: (ω=%d, d=%d), gap=%.3e, incumbent origin=%d\n" ω_swap d_swap gap_base[ω_swap, d_swap] winner_base[ω_swap, d_swap]
+# scale up the A-block coordinate most likely to move that destination's prices (any coordinate
+# touching column d_swap) until the gap is provably crossed.
+touched_k = findfirst(k -> d_swap in last.(affected_cells(pe, k)), 2:D2)
+touched_k = touched_k === nothing ? 2 : touched_k + 1
+function find_incumbent_swap(w0, touched_k, ω_swap, d_swap, winner_base, pe, ctx_cm, ctx)
+    for hmag in [0.001, 0.003, 0.01, 0.03, 0.1, 0.3]
+        wtest = copy(w0); wtest[touched_k] += hmag
+        ztest = pivot_expand(wtest[2:end], pe)
+        xftest = vcat(wtest[1], vec(exp.(ztest)))
+        θftest = CS.reconstruct_full(xftest, ctx_cm.m)
+        winner_test, _, _ = compute_winners(θftest, ctx)
+        if winner_test[ω_swap, d_swap] != winner_base[ω_swap, d_swap]
+            return true, hmag, xftest
+        end
+    end
+    return false, 0.0, copy(w0)
+end
+swap_found, h_swap, xf_swap = find_incumbent_swap(w0, touched_k, ω_swap, d_swap, winner_base, pe, ctx_cm, ctx)
+if swap_found
+    @printf "  incumbent swap achieved at coord k=%d, h=%.3f: origin %d -> %d at (ω=%d,d=%d)\n" touched_k h_swap winner_base[ω_swap,d_swap] compute_winners(CS.reconstruct_full(xf_swap, ctx_cm.m), ctx)[1][ω_swap,d_swap] ω_swap d_swap
+    base_swap = archC_base_state(xf_swap, ctx_cm, cctx)
+    g_ref_swap, _ = cm_production_gradient(xf_swap, pcx, ctx, pe; base = base_swap, threaded = false, h_mode = :fixed, h0 = 0.01)
+    g_cp_swap, _ = cm_production_gradient_cplus(xf_swap, pcx, ctx, pe, build_grad_workspace_pool(W), ws; base = base_swap, threaded = false, h_mode = :fixed, h0 = 0.01)
+    maxerr_swap = maximum(abs.(g_ref_swap .- g_cp_swap))
+    @printf "  at incumbent-swapped point: max|Δg| Reference vs C+ = %.3e\n" maxerr_swap
+    check("[incumbent-swap point] Reference/C+ full-gradient max|Δg| < 1e-6", maxerr_swap < 1e-6)
+else
+    println("  Could not force an incumbent swap at (ω=$ω_swap,d=$d_swap) within tested h range -- skipping this sub-check (disclosed, not fabricated)")
+end
+
+println()
+println("="^100)
+println("SECTION G: nonfinite-probe/retry discipline (a_block_fd_component vs a_block_fd_component_C)")
+println("="^100)
+# Force a nonfinite probe: an extreme step that drives exp(z) to overflow/underflow at a
+# gravity-pivot-coupled coordinate. h is deliberately far outside any bandwidth selector would
+# choose, to directly exercise the retry/shrink path documented in a_block_fd_component's own
+# docstring (AUD-12).
+h_extreme = 50.0
+k_extreme = 2
+r_ref = a_block_fd_component(cache_ref0, ctx_cm, pe, w0, k_extreme, h_extreme)
+r_cp = a_block_fd_component_C(cache_cp0, ctx_cm, pe, w0, k_extreme, h_extreme)
+@printf "  h=%.1f (extreme): a_block_fd_component(Reference)=%s  a_block_fd_component_C(C+)=%s\n" h_extreme string(r_ref) string(r_cp)
+check("[nonfinite-probe h=$h_extreme] Reference and C+ retry/fallback agree (both NaN, or both finite and close)",
+      (isnan(r_ref) && isnan(r_cp)) || (isfinite(r_ref) && isfinite(r_cp) && isapprox(r_ref, r_cp; atol = 1e-6, rtol = 1e-6)))
+
+println()
+println("="^100)
+println("SECTION H: zero-multiplier column check (economic lambda / CM lambda) -- report only, no fabrication")
+println("="^100)
+λstar = base0.λstar
+econ_block = λstar[1:D2]
+cm_tail = λstar[D2+1:end]
+n_econ_zero = count(x -> abs(x) < 1e-10, econ_block)
+n_cm_zero = count(x -> abs(x) < 1e-10, cm_tail)
+@printf "  economic-block λ near-zero entries: %d / %d\n" n_econ_zero length(econ_block)
+@printf "  CM-tail λ near-zero entries: %d / %d\n" n_cm_zero length(cm_tail)
+if n_econ_zero > 0 || n_cm_zero > 0
+    println("  Found naturally-occurring near-zero multiplier column(s) at the calibration point -- would need a dedicated per-column q0 decomposition check to exploit; NOT further exploited this session (disclosed).")
+else
+    println("  No naturally near-zero multiplier column at the calibration point (expected -- KNITRO's converged dual solution has no structural reason to zero out a specific column at a generic point); constructing one would require solving a specially-designed sub-problem, out of scope for this pass -- disclosed as NOT tested, not fabricated as passing.")
+end
+
+println()
+println("="^100)
+println("TOTAL: $n_pass passed, $n_fail failed")
+println("="^100)
+n_fail == 0 || error("$n_fail check(s) failed")
+println("DONE")
