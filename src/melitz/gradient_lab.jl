@@ -20,53 +20,16 @@ using ForwardDiff
 using LinearAlgebra: dot
 
 """
-    fixed_dual_scalar(theta_free, x_base, ctx, obj) -> scalar
+    fixed_active_set_moments(theta_free, ctx, obj) -> G (W x num_moments)
 
-THE single authoritative fixed-dual criterion (2026-07-23 governing-correction session,
-Section 1.1). Both Method B (`method_b_fixed_dual_secant`, central finite difference in
-`Float64`) and Method C (`method_c_forwarddiff_envelope`, `ForwardDiff.derivative`) call
-EXACTLY this function -- the former separate `melitz_fixed_dual_criterion`/
-`melitz_fixed_active_set_scalar` pair is retired.
-
-1. expands the free gravity coordinates (`expand_free_theta`);
-2. `f[j,j]` falls out of that same expansion (`derive_fjj_from_autarky_cutoff`);
-3. recomputes CURRENT hard participation directly via the type-generic shared
-   `melitz_firm` routine for every `(o,d,w)` trade cell (`price_power=1`, the baseline
-   formula -- correct for every cell, INCLUDING `(j,j)`'s own baseline-domestic decision)
-   and, SEPARATELY, for the focal autarky term (`price_power=gamma_prime_j`, `tau=1`,
-   wage `w_prime`, expenditure `expenditure_prime` -- a STRUCTURALLY DIFFERENT
-   participation gate from the baseline `(j,j)` cell: different cutoff, since
-   price_power/wage/expenditure/tau all differ);
-4. constructs the `D^2+1` moments (`G`) exactly as `melitz_moments!` does (this function
-   is, deliberately, a Dual-safe reimplementation of that same economics -- see the bug
-   note below for why it is not literally a call to `melitz_moments!`);
-5. evaluates the exact dual scalar at the FIXED base optimized dual `x_base`, reproducing
-   `PsiObjectiveBundleDelta`'s own functor algebra directly (does not call `obj(x)`, and
-   never mutates `obj.H` -- `Dual`-typed intermediates cannot be written into `obj`'s
-   preallocated `Float64` buffer, main prompt's own warning; using a pure function also
-   means Methods B and C never share mutable state with each other);
-6. performs NO inner optimization (`x_base` is a fixed input, never re-solved here).
-
-**The bug this replaces**: the former Method C (`melitz_fixed_active_set_scalar`) held
-participation fixed via a PRECOMPUTED `active_mask` array (`base_active_mask`), whose
-`(j,j)` autarky slot incorrectly REUSED the baseline `(j,j)` domestic decision (computed
-with `price_power=1`) as a proxy for the autarky decision (which needs `price_power=
-gamma_prime_j`) -- two different economic gates that generally disagree. Method B was
-already correct (it called the real `obj.moments!`, which has always used the right
-autarky formula). This explains a zero-switch B/C discrepancy: `count_switches`'s own
-diagnostic only ever recomputed the BASELINE-formula mask, so it could report "zero
-switches" while the (never separately checked) autarky decision had in fact flipped --
-Method B, using the true autarky formula, then correctly captured that jump while the old
-Method C's frozen (and wrong-formula) proxy could not.
-
-Evaluating this function through `ForwardDiff.derivative(a -> fixed_dual_scalar(theta .+
-a.*v, x_base, ctx, obj), 0.0)` (Method C) freezes the active set EXACTLY at `theta`'s own
-CORRECTLY-recomputed participation decision, per cell, with no separate explicit mask
-needed at all: ForwardDiff's `Dual` comparisons (`profit > 0` inside `melitz_firm`)
-resolve on the `Dual`'s VALUE component, which at `a=0` equals `theta` itself.
+Section 1.1 steps 1-4 of `fixed_dual_scalar`, factored out on its own so the Section 1.2
+per-moment-column directional-derivative audit can compare `ForwardDiff.derivative` of
+THIS function against central finite differences of the SAME function, column by column
+-- without duplicating the moment-construction logic a second time. `fixed_dual_scalar`
+(below) is a thin composition of this function with `dual_scalar_at_fixed_G`; nothing
+about the moment economics is implemented twice.
 """
-function fixed_dual_scalar(theta_free::AbstractVector{T}, x_base::AbstractVector{Float64},
-                            ctx, obj) where {T}
+function fixed_active_set_moments(theta_free::AbstractVector{T}, ctx, obj) where {T}
     D, j = ctx.D, ctx.target_country
     W = size(obj.U, 1)
     sigma = ctx.sigma
@@ -98,7 +61,18 @@ function fixed_dual_scalar(theta_free::AbstractVector{T}, x_base::AbstractVector
                                     expenditure_prime, price_power_autarky, z_j)
         G[w, link_col] = profit_j[w] / ctx.w[j] - firm_autarky.realized_operating_profit / ctx.w_prime
     end
+    return G
+end
 
+"""
+    dual_scalar_at_fixed_G(G, x_base, obj) -> scalar
+
+Section 1.1 step 5: the exact CC dual scalar evaluated at a FIXED dual `x_base` given an
+already-built moment matrix `G` -- reproduces `PsiObjectiveBundleDelta`'s own functor
+algebra directly (never calls `obj(x)`, never mutates `obj.H`).
+"""
+function dual_scalar_at_fixed_G(G::AbstractMatrix{T}, x_base::AbstractVector{Float64}, obj) where {T}
+    W = size(G, 1)
     arg0 = zeros(T, W)
     @inbounds for w in 1:W
         arg0[w] = -x_base[1] - dot(view(G, w, :), view(x_base, 2:length(x_base)))
@@ -110,6 +84,40 @@ function fixed_dual_scalar(theta_free::AbstractVector{T}, x_base::AbstractVector
     end
     raw = sum(psi) / W + x_base[1]
     return obj.find_smallest ? -raw : raw
+end
+
+"""
+    fixed_dual_scalar(theta_free, x_base, ctx, obj) -> scalar
+
+THE single authoritative fixed-dual criterion (2026-07-23 governing-correction session,
+Section 1.1): `dual_scalar_at_fixed_G(fixed_active_set_moments(theta_free, ctx, obj),
+x_base, obj)`. Both Method B (`method_b_fixed_dual_secant`, central finite difference in
+`Float64`) and Method C (`method_c_forwarddiff_envelope`, `ForwardDiff.derivative`) call
+EXACTLY this function -- the former separate `melitz_fixed_dual_criterion`/
+`melitz_fixed_active_set_scalar` pair is retired.
+
+**The bug this replaces**: the former Method C (`melitz_fixed_active_set_scalar`) held
+participation fixed via a PRECOMPUTED `active_mask` array (`base_active_mask`), whose
+`(j,j)` autarky slot incorrectly REUSED the baseline `(j,j)` domestic decision (computed
+with `price_power=1`) as a proxy for the autarky decision (which needs `price_power=
+gamma_prime_j`) -- two different economic gates that generally disagree. Method B was
+already correct (it called the real `obj.moments!`, which has always used the right
+autarky formula). This explains a zero-switch B/C discrepancy: `count_switches`'s own
+diagnostic only ever recomputed the BASELINE-formula mask, so it could report "zero
+switches" while the (never separately checked) autarky decision had in fact flipped --
+Method B, using the true autarky formula, then correctly captured that jump while the old
+Method C's frozen (and wrong-formula) proxy could not.
+
+Evaluating this function through `ForwardDiff.derivative(a -> fixed_dual_scalar(theta .+
+a.*v, x_base, ctx, obj), 0.0)` (Method C) freezes the active set EXACTLY at `theta`'s own
+CORRECTLY-recomputed participation decision, per cell, with no separate explicit mask
+needed at all: ForwardDiff's `Dual` comparisons (`profit > 0` inside `melitz_firm`)
+resolve on the `Dual`'s VALUE component, which at `a=0` equals `theta` itself.
+"""
+function fixed_dual_scalar(theta_free::AbstractVector{T}, x_base::AbstractVector{Float64},
+                            ctx, obj) where {T}
+    G = fixed_active_set_moments(theta_free, ctx, obj)
+    return dual_scalar_at_fixed_G(G, x_base, obj)
 end
 
 """
