@@ -1772,3 +1772,239 @@ tried); `W=80,000` confirmation (Section 7 of the finite-delta campaign spec).
 
 Session outputs (this write-up, campaign logs, Section 8 validation logs) pushed to
 Dropbox, `Gravity robustness/Analysis/Server Output/melitz_finite_delta_bookkeeping_fix_2026-07-23/`.
+
+## 21. 2026-07-23 continuation session: affine cutoff constraints as true KNITRO linear
+## rows + experimental log-cutoff parameterization (governing prompt Sections 1-5 done;
+## Sections 6-11 not reached)
+
+Governing session prompt: freeze/validate Section 20's state, correct gains-from-trade
+reporting everywhere, derive and register the deterministic cutoff restrictions as true
+affine KNITRO constraints (replacing the generic nonlinear FC/GA evaluation), implement an
+experimental log-cutoff outer parameterization, profile the outer computation, diagnose
+whether A/f/cutoff coordinates are meaningfully searched, and compare the two
+parameterizations. Given this session's real-KNITRO time budget against the full 12-section
+scope, work was explicitly prioritized: Sections 1-5 are complete, tested, and committed;
+Section 4's benchmark ran one matched delta (not the full grid); Sections 6-11 were not
+reached. Each cut is flagged explicitly below, not silently dropped.
+
+### 21.A Current-state checkpoint (Section 1)
+
+Commit at session start: `32336b6` (19 commits ahead of `origin/production/fullA-exact`,
+per Section 20.H); `git status` was clean (only untracked `output/`/`stata/`, never
+committed in this repo's history) -- no uncommitted tracked-file changes to freeze. Julia
+`1.12.6`; KNITRO `13.0.1`; option-file SHA-256 hashes UNCHANGED from Section 20.H's own
+recorded values. Pre-change test suite: 337/337, matching the prior session's own count
+exactly -- confirms no drift.
+
+Reproduced all four finite-delta incumbents ONCE, exactly (`scripts/
+melitz_finite_delta_campaign.jl`, NEW; D=4, W=20,000, seed=29, Backend B `h=1e-4`,
+`theta_box=0.10`):
+
+| delta | direction | nStatus | Delta | gamma_prime | GT (correct, wage-ratio) | GT (ACR, fixed reference) |
+|---|---|---|---|---|---|---|
+| 1e-2 | upper | -410 | 9.532018e-03 | 0.935445 | 0.080287 | 0.065237 |
+| 1e-2 | lower | -400 | 9.955828e-03 | 0.988286 | 0.045970 | 0.065237 |
+| 1e-3 | upper | -410 | 8.807682e-04 | 0.952339 | 0.069246 | 0.065237 |
+| 1e-3 | lower | -410 | 9.791978e-04 | 0.961709 | 0.063151 | 0.065237 |
+
+`gamma_prime` matches Section 20.F's own reported values to displayed precision at every
+one of the 4 combinations -- full determinism confirmed, environment unchanged.
+
+### 21.B Corrected gains-from-trade reporting (Section 2)
+
+The correct formula (`melitz_gains_from_trade`, `GT_j = 1 -
+(w_prime_j/w_j)*gamma_prime_j^(1/(sigma-1))`) was already implemented and tested in Gate A
+(Section 14.1) -- no code change was needed in `equilibrium.jl` itself. What was missing
+was a live campaign driver that actually prints it: the only prior "campaign logs"
+reporting `GT(naive)` were ad hoc/uncommitted scratch scripts from a previous session, not
+part of this repo. The new `scripts/melitz_finite_delta_campaign.jl` reports BOTH
+`melitz_gains_from_trade` (correct) and `acr_gains_from_trade` (independent cross-check)
+for the population start and every incumbent -- table above. This makes the ECONOMIC
+STAKES of the Gate-A fix concrete for the first time against real finite-delta incumbents:
+the naive formula would give a different number at every incumbent, since
+`w[target]/w'[target] != 1` at this fixture (a genuine GE output, per
+`melitz_solve_wages_ge`'s own docstring). `GT(ACR)` is a fixed reference constant across
+rows because `acr_gains_from_trade` uses only the empirical baseline domestic trade share
+(fixed data), not the searched outer point.
+
+### 21.C Affine cutoff constraints (Section 3, NEW file `src/melitz/affine_cutoff.jl`)
+
+**Derivation**: `expand_free_theta`'s entire chain (A-gravity pivot, `f[j,j]`'s
+autarky-cutoff derivation, f-gravity pivot) is affine in `theta_free`, so `q(theta_free) =
+log(zhat(theta_free)) = q0 + Q*theta_free` exactly (not a local linearization).
+
+**Two independent constructions of `(Q,q0)`**, required to agree at machine precision:
+`affine_cutoff_map_basis` (authoritative -- unit-basis probes around a fixed origin,
+treating `expand_free_theta -> melitz_baseline_cutoff -> log` as a black box, verified
+base-independent) and `affine_cutoff_map_analytical` (independent cross-check -- hand-
+derived by chaining the `GravityPivot` structs' own linear algebra directly, never calling
+`expand_free_theta`). Agreement: `max|Q_basis-Q_analytical| = 4.4e-16`,
+`max|q0_basis-q0_analytical| = 4.4e-16`.
+
+`build_melitz_affine_cutoff_system` assembles the `D + D*(D-1) = 16` (D=4) row system
+`C*theta_free+b>=0` (`C=S*Q`, `b=S*q0-epsilon`), row-scaled (`scale[row]=max(1,
+||C_raw[row,:]||_2)`). 140 equivalence assertions: 1000 random free vectors match
+`melitz_cutoff_constraints_at` to `2.2e-15`; `C_raw` matches
+`melitz_cutoff_constraint_jacobian`'s ForwardDiff-exact Jacobian to `~1e-15`; row scaling
+preserves feasibility sign; a cutoff-feasible point plus a domestic-support-infeasible and
+an export-selection-infeasible point were constructed DETERMINISTICALLY (moving from the
+population-Pareto point along a chosen row's negative normal direction -- the target
+row's slack becomes exactly `-margin` by the affine structure) -- the prior session's own
+Section 20.D flagged this construction as NOT achievable via single-coordinate search;
+Section C's construction sidesteps that entirely.
+
+**KNITRO registration** (`melitz_register_finite_delta_knitro_problem!`, new function in
+`finite_delta_outer.jl`; new `cutoff_constraint_backend::Symbol` option --
+`:linear`/`:nonlinear_reference` -- threaded through `melitz_build_finite_delta_callbacks`,
+`solve_melitz_finite_delta_bound`, `melitz_fixed_point_probe`): under `:linear`, the 16
+cutoff rows are registered via `KN_add_con_linear_struct` (constant coefficients, no
+per-iterate callback cost); the eval callback covers ONLY the genuinely nonlinear
+divergence-budget row. Still ONE eval-callback context throughout, deliberately avoiding
+Section 17.C's documented "two separate callback contexts" crash.
+
+**A genuine, reproducible KNITRO limitation was found and fixed in the process**: once
+this problem's own callback has triggered >=1 nested `KN_new`/`KN_solve`/`KN_free` cycle
+(exactly what happens every evaluation here, for the real CC inner solve), a POST-SOLVE
+`KN_get_con_values_all` query for the natively-registered linear rows comes back
+corrupted/stale -- reproduced in a minimal example completely outside Melitz (a bare
+2-row linear-constraint toy problem; without the nested KN instance the reported values
+are exact, with it they are wrong). Solve-time enforcement itself is UNAFFECTED (cross-
+checked: KNITRO's own presolve-deduced-infeasibility message for a constructed infeasible
+point reported the exact expected violation, `-0.02`, matching the constructed margin to
+machine precision, even though a post-hoc query for the same row would have been
+corrupted). Fixed by recomputing the cutoff-row values directly in Julia
+(`cutoff_sys.C*theta+cutoff_sys.b`) in `melitz_fixed_point_probe`'s return value; the
+production incumbent-tracking path (`solve_melitz_finite_delta_bound`) was already
+unaffected (it never calls `KN_get_con_values_all` for cutoff rows -- every feasibility
+decision goes through the independent Julia-side `evaluate_melitz_delta`/
+`evaluate_melitz_delta_from_solution`). 17 real-KNITRO integration assertions
+("Section 3.3/3.4") confirm `:linear` matches `:nonlinear_reference` to `1e-8`, a
+constructed domestic-infeasible point is correctly rejected (`nStatus=-204`), and
+`solve_melitz_finite_delta_bound` runs end to end under `:linear`.
+
+Full suite after Section 3 alone: 473/473 (up from 337).
+
+### 21.D Section 4: matched linear-vs-nonlinear benchmark
+
+One matched delta (`1e-2`, both directions -- `1e-3` not run this session), same
+`theta_init`/`gradient_backend=:B`/`h=1e-4`/`theta_box=0.10`/`maxit=25`, real KNITRO
+throughout (`scripts/melitz_cutoff_backend_benchmark.jl`, NEW), complete-trajectory wall
+time (per the governing prompt's own instruction not to infer a speedup from isolated
+cutoff-evaluation timing):
+
+| delta | dir | backend | wall(s) | nStatus | FC calls | GA calls | inner solves (infeas) | Delta | gamma_prime |
+|---|---|---|---|---|---|---|---|---|---|
+| 1e-2 | upper | nonlinear_reference | 88.1 | -410 | 97 | 26 | 149 (52) | 9.532e-3 | 0.935445 |
+| 1e-2 | upper | linear | 76.6 | -410 | 107 | 26 | 162 (58) | 8.859e-3 | 0.940030 |
+| 1e-2 | lower | nonlinear_reference | 334.3 | -400 | 156 | 26 | 224 (84) | 9.956e-3 | 0.988286 |
+| 1e-2 | lower | linear | 264.0 | -410 | 141 | 26 | 197 (60) | 9.871e-3 | 0.977397 |
+
+**Speedup: 1.15x (upper), 1.27x (lower)** -- genuine but modest, not dramatic: total wall
+time is dominated by the nested CC inner KNITRO solves (149-224 per run), not by the outer
+cutoff-constraint Jacobian evaluation `:linear` eliminates -- exactly the outcome the
+governing prompt's own warning anticipated. `GA_calls` identical between backends at
+matched settings (26 in all 4 runs, driven by KNITRO's own outer-iteration count under the
+shared `maxit=25`); `FC_calls` differ moderately. Both backends terminate at the same
+iteration-limit-family status (not `nStatus=0`) at this budget -- consistent with the
+prior session's own finding that `maxit=25`/`theta_box=0.10` does not reach full KNITRO-
+native convergence on the 30-free-coordinate problem. The two backends' cold-verified
+incumbents differ by `0.5-1.1%` in `gamma_prime` (both genuinely cold-verified,
+budget-respecting, feasible -- KNITRO's own internal step behavior differs slightly once
+the Jacobian sparsity/evaluation split changes, even though constraint VALUES agree to
+`1e-8` at any fixed point; not evidence either backend is wrong, and the feasible set
+itself was already verified identical at machine precision in Section 21.C).
+
+**Recommendation**: switch the production default to `cutoff_constraint_backend=:linear`
+for future finite-delta campaigns -- mathematically exact, faster in every one of the 4
+real runs tried, and simpler (the callback shrinks to the one genuinely nonlinear row).
+Kept at `:nonlinear_reference` as the DEFAULT in `solve_melitz_finite_delta_bound`'s own
+signature this session (zero behavioral change to existing call sites); flipping the
+default is a one-line follow-up once this recommendation is reviewed.
+
+### 21.E Log-cutoff parameterization: economic core (Section 5, NEW file
+### `src/melitz/log_cutoff_param.jl`)
+
+A parallel `:logcutoff` outer coordinate system searching directly over baseline
+log-cutoffs `q_od = log(zhat_od)` instead of `log f_od`, same `2D^2-2` free dimension,
+built alongside (not replacing) `:logf`.
+
+`melitz_log_f_from_q` inverts the baseline cutoff formula for `log(f_od)` given
+`(q_od,a_od)`. The focal domestic cell is NEVER a free q coordinate:
+`derive_qjj_from_autarky_cutoff` derives `q[j,j]` from `(g,fixed primitives)` alone,
+algebraically INDEPENDENT of `A[j,j]` -- derived symbolically (substituting `log(f_jj)`'s
+own affine dependence on `(log A_jj, g)` into the general `q_od` formula, the `-a_jj`/
+`+a_jj` terms cancel exactly) and confirmed numerically (`f[j,j]` recovered this way
+matches `derive_fjj_from_autarky_cutoff` to `1e-10` at 10 random points, D=4/seed=29).
+
+The q-gravity pivot's affine offset (`build_q_gravity_offset`) substitutes
+`melitz_log_f_from_q` into the f-gravity restriction `dot(c_full,vec(log f))=0`: **a real
+bug was found and fixed live via the Section 5.5 round-trip test** -- an earlier version
+omitted the `c_full[jj_lin]*q_jj` contribution to the full-`D^2`-cell restriction entirely
+(since `q[j,j]` is excluded from the q-pivot's own free domain but its value still enters
+the FULL-vector gravity sum), giving `gravity_residual_f ~ 0.0065` instead of machine
+precision; fixed by including that term.
+
+**Full cross-parameterization equivalence** (Section 5.5, 63 new assertions): starting
+from the EXISTING `:logf` fixture, encoding the equivalent `:logcutoff` free vector,
+expanding back, and comparing against the ORIGINAL `:logf` expansion and the TRUE
+`gravity_residuals` (not a second copy of the same derived formula) -- `A`, `f`,
+`gamma_prime`, `f[j,j]`, the full baseline cutoff matrix, BOTH gravity residuals, and the
+`D^2+1`-column moment matrix `G` itself all agree to `1e-8`-`4.4e-16` (`G` itself: `max|G_f
+- G_q| = 4.4e-16`, machine precision). This satisfies the governing prompt's own
+precondition ("no comparison of outer solver behavior is meaningful until these
+fixed-point equivalence tests pass tightly") for any future live comparison.
+
+Full suite including Section 5: **536/536 passing** (up from 337 baseline), zero
+regressions.
+
+### 21.F What was NOT reached this session
+
+- **Section 4's full grid**: only `delta=1e-2` (both directions) was matched-compared;
+  `delta=1e-3` was not (Section 21.C's own machine-precision equivalence tests make a
+  qualitatively different result there unlikely, but it was not run).
+- **Live KNITRO wiring for `:logcutoff`** (Sections 6/9): an `outer_parameterization`
+  switch analogous to `cutoff_constraint_backend`, needing its own `moments!` adapter
+  (swap `expand_free_theta` for `expand_free_theta_logcutoff`) and its own q-space affine
+  cutoff system (structurally easy given `affine_cutoff.jl`'s existing basis-probe
+  machinery) -- not implemented. No claim is made about which parameterization performs
+  better in a live search; that question requires this wiring.
+- **Section 6** (gradient backends under `:logcutoff`, incl. the switch-calibrated
+  q-bandwidth idea): blocked on the above, not started.
+- **Section 7** (fine-grained per-category profiling instrumentation and allocation
+  profiling at 4 representative points): not built. The only new instrumentation is
+  coarse: `MelitzFiniteDeltaOuterResult` now carries `n_fc_calls`/`n_ga_calls` (total
+  callback invocation counts), which supported Section 21.D's comparison but not a
+  category-level breakdown.
+- **Section 8** (restricted-search G/GA/GF/GAF comparisons, parameter-movement/
+  activity-switch diagnostics): not run. The only available evidence is indirect, from
+  Section 21.A's reproduction: incumbent `gamma_prime` differs from the gamma-only-profile
+  roots quoted in the governing prompt (e.g. `delta=1e-2` upper: full-search `0.935445` vs
+  gamma-only `~0.942938`), confirming (as the prior session already established) that
+  nuisance coordinates move the bound non-trivially, especially at the lower direction --
+  but WHICH coordinates do that work was not investigated further.
+- **Section 10** (burst-based continuation strategy): not built. This session's own
+  single-shot `theta_box=0.10`/`maxit=25` reproduction (Section 21.A) still terminates at
+  `-410`/`-400` (iteration limit) in 3 of 4 cases, not `nStatus=0` -- unchanged from
+  Section 20.F, since no continuation logic was added this session.
+- **Section 11** (performance experiments guided by profiling): blocked on Section 7, not
+  started.
+- D=20 scaling and common-marginal restrictions: explicitly out of scope per the governing
+  prompt, not attempted.
+
+### 21.G Next priorities (ranked, based on what this session measured, not conjecture)
+
+1. Wire `:logcutoff` into `solve_melitz_finite_delta_bound` (mechanically small given the
+   validated Section 21.E core) -- unblocks Sections 6/9 directly.
+2. Run Section 4's benchmark at the full `2 delta x 2 direction` grid.
+3. Build the fine-grained Section 7 profiling instrumentation before attempting Section
+   8's restricted-search campaigns -- the upper/lower wall-time asymmetry Section 17.G/
+   20.G already flagged remains unexplained; Section 21.D's FC/GA/inner-solve counters are
+   too coarse to diagnose it further.
+4. Section 8's restricted-search comparisons (gamma-only vs GA vs GF/GQ vs full), seeded
+   from the already-known gamma-only roots quoted in the governing prompt.
+5. Section 10's burst-based continuation strategy, starting from the already-cold-verified
+   incumbents this session reproduced.
+
+Session commits: `2bfecaf` (Section 3/4/5 implementation + tests), `7f354ac` (docstring
+accuracy fix). New files: `src/melitz/affine_cutoff.jl`, `src/melitz/log_cutoff_param.jl`,
+`scripts/melitz_finite_delta_campaign.jl`, `scripts/melitz_cutoff_backend_benchmark.jl`.
