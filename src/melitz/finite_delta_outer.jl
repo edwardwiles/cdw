@@ -492,7 +492,11 @@ callbacks as KNITRO calls them -- the caller reads them AFTER `KN_solve` returns
 function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smallest::Bool;
                                               n_live_candidates_tracked::Int=5,
                                               cutoff_constraint_backend::Symbol=:nonlinear_reference,
-                                              on_inner_result=nothing)
+                                              on_inner_result=nothing,
+                                              dual_polish_screen::Bool=false,
+                                              dual_polish_steps::Int=3,
+                                              origin_block_screen::Bool=false,
+                                              screen_order::Symbol=:A)
     cutoff_constraint_backend in (:linear, :nonlinear_reference) || throw(ArgumentError(
         "cutoff_constraint_backend must be :linear or :nonlinear_reference, got $cutoff_constraint_backend"))
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
@@ -606,7 +610,9 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         # exactly ONE KNITRO attempt (no cold retry) if neither screen rejects.
         t0 = time_ns()
         result = melitz_classified_inner_solve(obj, theta, ctx; delta=delta, bank=dual_bank,
-            on_result=on_inner_result)
+            on_result=on_inner_result, dual_polish_screen=dual_polish_screen,
+            dual_polish_steps=dual_polish_steps, origin_block_screen=origin_block_screen,
+            screen_order=screen_order)
         elapsed = (time_ns() - t0) / 1e9
 
         if result isa InnerSolved
@@ -879,7 +885,11 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           inner_loop_opt::AbstractString,
                                           outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"),
                                           on_inner_result=nothing,
-                                          lower_limit_guard::Union{Nothing,Real}=nothing)
+                                          lower_limit_guard::Union{Nothing,Real}=nothing,
+                                          dual_polish_screen::Bool=false,
+                                          dual_polish_steps::Int=3,
+                                          origin_block_screen::Bool=false,
+                                          screen_order::Symbol=:A)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     t0 = time()
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
@@ -912,7 +922,9 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     # callers.
     cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
         n_live_candidates_tracked=n_live_candidates_tracked,
-        cutoff_constraint_backend=cutoff_constraint_backend, on_inner_result=on_inner_result)
+        cutoff_constraint_backend=cutoff_constraint_backend, on_inner_result=on_inner_result,
+        dual_polish_screen=dual_polish_screen, dual_polish_steps=dual_polish_steps,
+        origin_block_screen=origin_block_screen, screen_order=screen_order)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)

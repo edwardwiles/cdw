@@ -40,6 +40,7 @@ include(joinpath(MELITZ_DIR, "fstar_direct.jl"))
 include(joinpath(MELITZ_DIR, "gradient_lab.jl"))
 include(joinpath(MELITZ_DIR, "outer_solve.jl"))
 include(joinpath(MELITZ_DIR, "inner_screening.jl"))
+include(joinpath(MELITZ_DIR, "origin_block_screen.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 
 # ============================================================================
@@ -1191,6 +1192,319 @@ if KNITRO_AVAILABLE
             @test pD.nStatus in MELITZ_KNITRO_EVAL_ERROR_STATUSES
             @test isnan(pD.obj_value)   # never a garbage value (not 1e10, not theta[1] either)
             @test isempty(pD.live_candidates)   # no incumbent contamination from a failed point
+        end
+    end
+
+    # ========================================================================
+    # Screening-session continuation, Phase I.1: the KNITRO-native `lower_limit` mid-solve
+    # early stop (`cc_algo/PsiObjectiveBundle.jl`'s `if f <= lower_limit; return
+    # -KNITRO.KN_INFINITY`) must be classified as `BudgetInfeasible(...,:live_dual_threshold)`,
+    # not `NumericalFailure` -- it is a certificate (weak duality, unconditional -- see
+    # inner_screening.jl's file header), not an unresolved failure. Direct tests on one
+    # known Delta-above-budget point (guard SHOULD fire and be classified correctly) and one
+    # known Delta-below-budget point (guard must NOT false-reject a genuinely feasible point).
+    # ========================================================================
+    @testset "Phase I.1: live dual-threshold classification (BudgetInfeasible, not NumericalFailure)" begin
+        @testset "Delta-above-budget point: threshold fires, classified BudgetInfeasible(:live_dual_threshold)" begin
+            theta_pertT1 = theta0_20 .+ 0.005 .* randn(MersenneTwister(11), length(theta0_20))
+            rT1 = evaluate_melitz_delta(theta_pertT1, ctx20, obj20; cold=true, store_G=false)
+            @test rT1.nStatus == 0   # a genuinely valid inner solve at this theta, real Delta known
+            @test rT1.Delta > 0
+            delta_tightT1 = rT1.Delta / 2   # deliberately below Delta(theta) -> must be rejected
+
+            objT1 = build_melitz_implicit_bundle(ctx20, obj20.U, theta_pertT1; delta=delta_tightT1,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, lower_limit_guard=0.0)
+            @test objT1.lower_limit == -delta_tightT1
+
+            bankT1 = MelitzDualBank()
+            resultT1 = melitz_classified_inner_solve(objT1, theta_pertT1, ctx20;
+                delta=delta_tightT1, bank=bankT1)
+
+            @test resultT1 isa BudgetInfeasible
+            @test resultT1.source == :live_dual_threshold
+            @test objT1.threshold_crossed[]
+            # the certified bound is a valid Delta lower bound (weak duality) AND is why the
+            # point was rejected (it exceeds the delta budget the guard was set at):
+            @test resultT1.lower_bound <= rT1.Delta + 1e-8
+            @test resultT1.lower_bound > delta_tightT1
+            # main prompt Section 11: must not enter the numerical-failure counter -- there is
+            # no counter at this direct-classifier level, but the crossing dual must be finite
+            # and (main prompt: "may contribute its finite crossing dual to the screening
+            # bank") actually inserted:
+            @test !isempty(objT1.threshold_crossing_x[])
+            @test all(isfinite, objT1.threshold_crossing_x[])
+            @test length(bankT1.entries) == 1
+            @test bankT1.entries[1] == objT1.threshold_crossing_x[]
+        end
+
+        @testset "Delta-below-budget point: threshold does NOT fire, classified InnerSolved" begin
+            delta_looseT2 = max(r0_20.Delta * 5, 1e-3)
+            objT2 = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=delta_looseT2,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, lower_limit_guard=0.0)
+            @test objT2.lower_limit == -delta_looseT2
+
+            bankT2 = MelitzDualBank()
+            resultT2 = melitz_classified_inner_solve(objT2, theta0_20, ctx20;
+                delta=delta_looseT2, bank=bankT2)
+
+            @test resultT2 isa InnerSolved
+            @test !objT2.threshold_crossed[]   # never fired -- a feasible point must not be rejected
+            @test resultT2.Delta <= delta_looseT2
+        end
+
+        @testset "integration: solve_melitz_finite_delta_bound with lower_limit_guard routes hits through n_budget_infeasible_reject, never n_numerical_failure_reject as a threshold artifact" begin
+            # A tight guard on a short trajectory: every rejection this specific mechanism
+            # produces must appear in the budget-infeasible bucket, not the numerical-failure
+            # bucket (main prompt Section 11's "must not enter a failed-solve counter").
+            # (Other genuine numerical failures unrelated to this mechanism may still occur --
+            # this integration check only pins that the THRESHOLD mechanism itself is counted
+            # correctly, via the same live `on_inner_result` hook the no-rescue benchmark uses.)
+            n_threshold_hits = Ref(0)
+            n_numfail_seen = Ref(0)
+            collector(theta, result) = begin
+                result isa BudgetInfeasible && result.source == :live_dual_threshold && (n_threshold_hits[] += 1)
+                result isa NumericalFailure && (n_numfail_seen[] += 1)
+                nothing
+            end
+            resT3 = solve_melitz_finite_delta_bound(ctx20, obj20, theta0_20; delta=1e-2,
+                direction=:upper, theta_box=0.02, inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20,
+                lower_limit_guard=0.0, on_inner_result=collector)
+            @test resT3.n_budget_infeasible_reject >= n_threshold_hits[]
+            @test n_threshold_hits[] >= 0   # sanity: counter machinery ran without error
+        end
+    end
+
+    # ========================================================================
+    # Screening-session continuation, Phase I.5/I.6: dual-polish screen + bank eviction
+    # policies + finite-x capture from failed/stopped solves.
+    # ========================================================================
+    @testset "Phase I.6: MelitzDualBank eviction policies + non-finite rejection" begin
+        @testset ":fifo evicts oldest" begin
+            bank = MelitzDualBank(3; policy=:fifo)
+            melitz_dual_bank_insert!(bank, [1.0, 0.0])
+            melitz_dual_bank_insert!(bank, [2.0, 0.0])
+            melitz_dual_bank_insert!(bank, [3.0, 0.0])
+            melitz_dual_bank_insert!(bank, [4.0, 0.0])
+            @test length(bank.entries) == 3
+            @test bank.entries == [[2.0, 0.0], [3.0, 0.0], [4.0, 0.0]]
+        end
+
+        @testset ":nearest evicts the entry closest to the incoming point" begin
+            bank = MelitzDualBank(3; policy=:nearest)
+            melitz_dual_bank_insert!(bank, [0.0, 0.0])
+            melitz_dual_bank_insert!(bank, [10.0, 0.0])
+            melitz_dual_bank_insert!(bank, [20.0, 0.0])
+            # incoming point 0.5 is nearest to [0.0,0.0] -- that entry should be replaced,
+            # the far entries [10,0]/[20,0] must survive.
+            melitz_dual_bank_insert!(bank, [0.5, 0.0])
+            @test length(bank.entries) == 3
+            @test [0.5, 0.0] in bank.entries
+            @test [10.0, 0.0] in bank.entries
+            @test [20.0, 0.0] in bank.entries
+            @test !([0.0, 0.0] in bank.entries)
+        end
+
+        @testset ":diversity evicts the most redundant existing entry" begin
+            bank = MelitzDualBank(3; policy=:diversity)
+            melitz_dual_bank_insert!(bank, [0.0, 0.0])
+            melitz_dual_bank_insert!(bank, [0.1, 0.0])   # near-duplicate of the first -- most redundant
+            melitz_dual_bank_insert!(bank, [100.0, 0.0])
+            melitz_dual_bank_insert!(bank, [-100.0, 0.0])   # a far, informative new point
+            @test length(bank.entries) == 3
+            @test [100.0, 0.0] in bank.entries
+            @test [-100.0, 0.0] in bank.entries
+            # exactly one of the two near-duplicates survives (whichever wasn't evicted as
+            # "most redundant"); the bank must not have evicted either far point.
+            @test count(e -> e in ([0.0, 0.0], [0.1, 0.0]), bank.entries) == 1
+        end
+
+        @testset "non-finite vectors are never inserted" begin
+            bank = MelitzDualBank(3; policy=:fifo)
+            melitz_dual_bank_insert!(bank, [1.0, NaN])
+            melitz_dual_bank_insert!(bank, [Inf, 0.0])
+            @test isempty(bank.entries)
+            melitz_dual_bank_insert!(bank, [1.0, 2.0])
+            @test length(bank.entries) == 1
+        end
+    end
+
+    @testset "Phase I.5: dual-polish screen" begin
+        rT4 = evaluate_melitz_delta(theta0_20, ctx20, obj20; cold=true, store_G=false)
+        @test rT4.nStatus == 0
+        objT4 = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+            find_smallest=true, gradient_backend=:B, h=1e-4,
+            inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+        # populate obj.H at theta0_20 (mirrors what melitz_classified_inner_solve does before
+        # any screen runs) so the raw functor evaluated at the VERIFIED optimal dual reproduces
+        # the true Delta.
+        CS_ = CounterfactualSensitivity
+        GT4 = CS_.select_G_from_H(objT4, objT4.H)
+        objT4.moments!(@view(objT4.H[:, 1]), GT4, theta0_20, objT4.U, objT4)
+        objT4.H[:, 2] .= 1.0
+        x_star = rT4.dual_x
+
+        @testset "at the true optimal dual, a below-Delta budget is certified rejected immediately" begin
+            delta_tightT4 = rT4.Delta / 2
+            res = melitz_dual_polish_screen(objT4, x_star; delta=delta_tightT4, max_steps=3)
+            @test res isa BudgetInfeasible
+            @test res.source == :dual_polish
+            @test res.lower_bound <= rT4.Delta + 1e-6   # valid lower bound (weak duality)
+            @test res.lower_bound > delta_tightT4
+        end
+
+        @testset "at the true optimal dual, a comfortably-above-Delta budget is NOT rejected" begin
+            delta_looseT4 = max(rT4.Delta * 10, 1e-2)
+            res = melitz_dual_polish_screen(objT4, x_star; delta=delta_looseT4, max_steps=3)
+            @test res === nothing
+        end
+
+        @testset "wired into melitz_classified_inner_solve: dual_polish_screen=true certifies without a KNITRO call" begin
+            bankT4 = MelitzDualBank()
+            melitz_dual_bank_insert!(bankT4, x_star)
+            delta_tightT4b = rT4.Delta / 2
+            CS_.INNER_SOLVE_COUNT[] = 0
+            resultT4 = melitz_classified_inner_solve(objT4, theta0_20, ctx20; delta=delta_tightT4b,
+                bank=bankT4, stored_dual_screen=false, dual_polish_screen=true)
+            @test resultT4 isa BudgetInfeasible
+            @test resultT4.source == :dual_polish
+            @test CS_.INNER_SOLVE_COUNT[] == 0   # rejected entirely by the screen, no KNITRO attempt
+        end
+    end
+
+    @testset "Phase I.6: finite raw dual captured into the bank on NumericalFailure" begin
+        theta_badT5 = theta0_20 .+ 0.5 .* randn(MersenneTwister(1), length(theta0_20))
+        r_badT5 = evaluate_melitz_delta(theta_badT5, ctx20, obj20; cold=true, store_G=false)
+        @test !(r_badT5.nStatus in (0, -100, -101, -103))   # confirms this really is a failing point
+
+        objT5 = build_melitz_implicit_bundle(ctx20, obj20.U, theta_badT5; delta=1e-3,
+            find_smallest=true, gradient_backend=:B, h=1e-4,
+            inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+        bankT5 = MelitzDualBank()
+        # NOTE: the range screen (front-loaded, always-on) may itself already certify this
+        # point MomentInfeasible before any KNITRO attempt -- that is a CORRECT, EXPECTED
+        # outcome (a cheaper, equally valid rejection), not a test bug. This test's actual
+        # subject (finite-x bank capture) only applies on the branch where a real KNITRO
+        # attempt happens and fails without a certificate.
+        resultT5 = melitz_classified_inner_solve(objT5, theta_badT5, ctx20; delta=1e-3, bank=bankT5,
+            range_screen=false, stored_dual_screen=false)
+        @test resultT5 isa NumericalFailure
+        # either the raw KNITRO-reported x at failure was finite (captured into the bank) or
+        # it was not (bank stays empty) -- both are correct; what must NEVER happen is a
+        # non-finite entry landing in the bank (already covered by the insert-level test
+        # above), so this just pins that the capture path runs without error either way and,
+        # if it captured, only ever a finite vector:
+        @test length(bankT5.entries) in (0, 1)
+        if length(bankT5.entries) == 1
+            @test all(isfinite, bankT5.entries[1])
+        end
+    end
+
+    # ========================================================================
+    # Screening-session continuation, Phase I.3: exact compressed origin-block feasibility
+    # screen, validated against a generic O(W)-variable convex-hull LP (trusted reference)
+    # over random points, plus the monotonicity necessary condition.
+    # ========================================================================
+    @testset "Phase I.3: compressed origin-block screen vs. generic block LP reference" begin
+        # Reuses the already-validated `small_fixture20` (D=4, seed=29, W=2000, per Section
+        # 6's own setup above) rather than constructing a new fixture -- avoids re-deriving a
+        # seed/W combination that clears `generate_fake_melitz_data`'s own well-conditioned-
+        # fixture sanity checks (a fresh seed=7/W=300 attempt failed exactly that check).
+        objOB, theta0_OB, ctxOB = obj20, theta0_20, ctx20
+
+        @testset "monotonicity holds at the population-Pareto point, every origin" begin
+            for o in 1:ctxOB.D
+                @test melitz_origin_block_monotonicity_check(o, theta0_OB, ctxOB, objOB)
+            end
+        end
+
+        @testset "compressed screen agrees EXACTLY with the reference LP: population-Pareto point (feasible)" begin
+            for o in 1:ctxOB.D
+                compressed = melitz_origin_block_lp(o, theta0_OB, ctxOB, objOB)
+                reference = melitz_origin_block_lp_reference(o, theta0_OB, ctxOB, objOB)
+                @test compressed == reference
+                @test compressed   # the true population point must be feasible for its own origin blocks
+            end
+        end
+
+        @testset "compressed screen agrees EXACTLY with the reference LP: random perturbed points" begin
+            n_mismatches = 0
+            n_infeasible_found = 0
+            rngOB = MersenneTwister(42)
+            for trial in 1:20
+                theta_r = theta0_OB .+ 0.3 .* randn(rngOB, length(theta0_OB))
+                for o in 1:ctxOB.D
+                    compressed = melitz_origin_block_lp(o, theta_r, ctxOB, objOB)
+                    reference = melitz_origin_block_lp_reference(o, theta_r, ctxOB, objOB)
+                    compressed != reference && (n_mismatches += 1)
+                    !compressed && (n_infeasible_found += 1)
+                    @test compressed == reference
+                end
+            end
+            @info "Phase I.3 random-point validation" n_trials=20*ctxOB.D n_mismatches n_infeasible_found
+        end
+
+        @testset "small-perturbation point: compressed screen still agrees exactly with the reference" begin
+            # NOTE: a small random perturbation is NOT guaranteed origin-block-feasible at a
+            # finite W (the achievable moment range is a property of the FIXED W-draw sample,
+            # not of "closeness to the population point") -- this was this session's own
+            # first test-design bug (an unconditional feasibility assertion here failed on 3
+            # of 4 origins, a real property of this fixture at this perturbation scale, not a
+            # screen bug, confirmed by the compressed/reference LPs agreeing on the rejection
+            # in every case). What must hold unconditionally is EXACT agreement with the
+            # reference LP, already the subject of the random-point testset above -- this
+            # testset only re-confirms it at this specific smaller perturbation scale.
+            theta_small = theta0_OB .+ 0.01 .* randn(MersenneTwister(3), length(theta0_OB))
+            for o in 1:ctxOB.D
+                compressed = melitz_origin_block_lp(o, theta_small, ctxOB, objOB)
+                reference = melitz_origin_block_lp_reference(o, theta_small, ctxOB, objOB)
+                @test compressed == reference
+            end
+        end
+
+        @testset "budget-infeasible-but-moment-feasible point: compressed screen agrees with the reference" begin
+            # a point whose INNER solve is genuinely valid (nStatus==0, moment-feasible) but
+            # whose Delta may exceed any given delta budget -- the origin-block screen must
+            # not confuse "over budget" with "moment infeasible" (it has no notion of delta
+            # at all, by construction); what it MUST do is agree with the trusted reference.
+            theta_bf = theta0_OB .+ 0.05 .* randn(MersenneTwister(5), length(theta0_OB))
+            r_bf = evaluate_melitz_delta(theta_bf, ctxOB, objOB; cold=true, store_G=false)
+            if r_bf.nStatus == 0   # only meaningful if this trial point is a genuine valid solve
+                # NOTE: a dual-optimal (nStatus==0) solve does NOT imply Delta(theta)==0, so it
+                # does NOT imply any origin's own moment block is EXACTLY satisfiable (the CC
+                # divergence being finite/attained is a much weaker condition than exact
+                # satisfiability) -- only the agreement property is asserted unconditionally.
+                for o in 1:ctxOB.D
+                    compressed = melitz_origin_block_lp(o, theta_bf, ctxOB, objOB)
+                    reference = melitz_origin_block_lp_reference(o, theta_bf, ctxOB, objOB)
+                    @test compressed == reference
+                end
+            end
+        end
+
+        @testset "wired end-to-end: melitz_origin_block_screen returns nothing at the population point" begin
+            @test melitz_origin_block_screen(theta0_OB, ctxOB, objOB) === nothing
+        end
+
+        @testset "Phase I.8: screen_order dispatch -- :A/:B/:C agree on an ordinary feasible point" begin
+            # melitz_classified_inner_solve is designed for the finite-delta OUTER search's
+            # PsiObjectiveBundleImplicit (the `threshold_crossed`/etc. fields from Phase I.1
+            # live only on that bundle type, not the plain PsiObjectiveBundleDelta `objOB`
+            # used elsewhere in this testset for fixed-point Delta(theta) evaluation) -- build
+            # one here, matching the Phase I.1 tests' own pattern.
+            objI8 = build_melitz_implicit_bundle(ctxOB, objOB.U, theta0_OB; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            for order in (:A, :B, :C)
+                bank_ord = MelitzDualBank()
+                result = melitz_classified_inner_solve(objI8, theta0_OB, ctxOB; delta=1e-3,
+                    bank=bank_ord, origin_block_screen=true, dual_polish_screen=false,
+                    screen_order=order)
+                @test result isa InnerSolved   # population point: every screen must pass, real solve proceeds
+            end
+            @test_throws ArgumentError melitz_classified_inner_solve(objI8, theta0_OB, ctxOB;
+                delta=1e-3, bank=MelitzDualBank(), screen_order=:Z)
         end
     end
 

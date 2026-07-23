@@ -29,6 +29,7 @@ include(joinpath(MELITZ_DIR, "fake_data.jl"))
 include(joinpath(MELITZ_DIR, "gradient_lab.jl"))
 include(joinpath(MELITZ_DIR, "outer_solve.jl"))
 include(joinpath(MELITZ_DIR, "inner_screening.jl"))
+include(joinpath(MELITZ_DIR, "origin_block_screen.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(dirname(@__DIR__), "cc_algo", "include_cc_algo.jl"))
 using .CounterfactualSensitivity

@@ -269,6 +269,25 @@ end
     ∂c_∂θ               ::Array{Float64,2} = zeros(d - outer_constr_index + 2, l)
     ∂∂f_∂∂x             ::Array{Float64,2} = zeros(length(x), length(x))
     ∂∂f_∂x∂θ            ::Array{Float64,2} = zeros(length(x), l)
+    # ADDITIVE (Melitz screening session, docs/melitz_optimization_report_2026-07-23_screening_session.md
+    # Section 4 / this session's Phase I.1): the `lower_limit` early-stop branch immediately below
+    # (`if f <= lower_limit; return -KNITRO.KN_INFINITY`) already gives KNITRO a mathematically valid
+    # early "unbounded" signal, but previously discarded the exact information that PRODUCED that
+    # signal -- the crossing dual point `x`, its own valid Delta lower bound `-f`, and when it
+    # happened -- leaving a caller with only KNITRO's post-hoc `nStatus` to go on (which cannot be
+    # told apart from a genuine unresolved numerical failure). These four Refs record that
+    # information UNCONDITIONALLY whenever the branch fires (a few scalar/vector writes, negligible
+    # cost), for ANY caller of this shared bundle type, not just Melitz -- purely additive
+    # instrumentation, default state (`false`/`NaN`/empty/`0`) reproduces the exact pre-change
+    # observable behavior for every existing caller that does not read these fields (Ricardian's
+    # `ccOuter.jl`/`ccInner.jl` `lower_limit=-50` usage included). A caller wanting today's threshold
+    # crossing must reset `threshold_crossed[]=false` itself before each inner solve it wants to
+    # classify (this struct persists across an entire outer trajectory, so a stale `true` from an
+    # earlier solve would otherwise leak into a later, unrelated one).
+    threshold_crossed          ::Base.RefValue{Bool}         = Ref(false)           # did `f <= lower_limit` fire on the just-completed inner solve?
+    threshold_crossing_bound   ::Base.RefValue{Float64}      = Ref(NaN)             # `-f` at the crossing iterate -- a valid Delta lower bound (weak duality, unconditional)
+    threshold_crossing_x       ::Base.RefValue{Vector{Float64}} = Ref(Float64[])    # the (ζ,λ) dual iterate at the crossing
+    threshold_crossing_time_ns ::Base.RefValue{UInt64}       = Ref(UInt64(0))       # time_ns() at the crossing, for a caller to compute elapsed-to-crossing against its own solve-start timestamp
 end
 
 # Inner-loop objective function, gradient, and Jacobian of constraints for K program, implicit-dependence case
@@ -350,6 +369,13 @@ function (Q::PsiObjectiveBundleImplicit)(x, g = Float64[], θ = Float64[]; h = F
 	length(h) > 0 ? hessian!(h, Q) : nothing
 
 	if f <= lower_limit
+		# ADDITIVE (Melitz screening session Phase I.1): record the crossing before returning
+		# -- see the struct field comments above for why this is unconditional and safe for
+		# every existing caller.
+		Q.threshold_crossed[] = true
+		Q.threshold_crossing_bound[] = -f
+		Q.threshold_crossing_x[] = copy(x)
+		Q.threshold_crossing_time_ns[] = time_ns()
 		return -KNITRO.KN_INFINITY
 	else
 		return f
