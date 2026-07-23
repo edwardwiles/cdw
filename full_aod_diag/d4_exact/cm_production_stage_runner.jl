@@ -39,6 +39,7 @@ include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
 include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
 include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
 include(joinpath(@__DIR__, "cm_production_bundle.jl"))
+include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))   # overnight task 2026-07-22: CM-aware C+ backend, opt-in via cm_gradient_backend=:cplus
 include(joinpath(@__DIR__, "nested_quantile_grids.jl"))
 include(joinpath(@__DIR__, "cm_outer_driver.jl"))
 include(joinpath(@__DIR__, "cm_checkpoint.jl"))
