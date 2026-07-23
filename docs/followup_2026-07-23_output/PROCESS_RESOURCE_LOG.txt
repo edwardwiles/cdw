@@ -1,0 +1,50 @@
+CM-C+ / complete-state cache follow-up -- process/resource safety log
+2026-07-23
+
+1. Live campaign safety
+------------------------
+Confirmed at session start: production_runs/cm_campaign_2026-07-22 (3 chains) was
+FULLY COMPLETE and all supervisor/julia processes had exited (checked via `ps`,
+confirmed via each chain's own supervisor .out log printing
+"=== chain N complete: all deltas (0.1 0.5 1.0 2.0) finished and cold-verified ===",
+last completion at 2026-07-23 01:22:22 EDT). Only stage_latest.jls / cold_verified_seed.jls
+files were subsequently read (Julia `deserialize`, read-only) for Part II.2's real D=20
+multi-point gate. Nothing under production_runs/ was ever written, moved, or deleted by
+this session.
+
+Partway through the session (~01:56-02:03 EDT), a SEPARATE, not-self-initiated campaign
+extension ("sensitivity_w100k_sobol" / "sensitivity_w100k_sobol_unrestricted") was
+discovered running in the SAME production_runs/cm_campaign_2026-07-22 directory, on cores
+20-39 and 60-79, launched by a different process/session. This session's own work was
+confirmed via `ps`/`taskset` immediately before every subsequent real-KNITRO launch to run
+on disjoint cores (100-187 range used across the session, verified clear at each launch
+point). No collision occurred.
+
+2. Cores/resources used this session (chronological)
+------------------------------------------------------
+Part I diagnostics (D=4):            cores 100-103
+Part II.1 expanded D=4 battery:      cores 100-103
+Part II.2 D=20 multipoint gate:      cores 100-119
+Part II.3 matched trajectories:      cores 100-115 (reference), 116-131 (cplus)
+Part II.4 checkpoint provenance:     cores 100-115
+Part III.2 shadow measurement:       cores 140-155, 156-171, 172-187 (3 parallel runs)
+Regression checks:                   cores 140-155
+
+3. System load/memory checked before each real-KNITRO launch
+----------------------------------------------------------------
+/proc/loadavg and `free -g` checked before every parallel launch this session; system
+load stayed in the ~35-40 (out of 208 cores) range throughout, with >800GB free memory
+at every check -- comfortable headroom, no contention observed or reported.
+
+4. Production trunks
+------------------------
+production/fullA-exact and production/sequential-linearized: NOT touched, not fetched
+for merge, not modified in any way. No production tag created. No merge or fast-forward
+performed.
+
+5. Regression safety
+------------------------
+Pre-existing test_cm_checkpoint_original.jl + test_cm_checkpoint_resume.jl (the schema-2
+checkpoint/resume suite that predates this session) were re-run after this session's
+cm_checkpoint.jl edits (schema bump + shadow instrumentation) and PASS 4/4 -- see
+test_logs/regression_checkpoint_*.log.

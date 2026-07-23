@@ -1,0 +1,85 @@
+CM-C+ / complete-state cache follow-up -- commit provenance
+2026-07-23
+
+Branch: perf/fullA-cm-cplus-statecache-overnight-2026-07-22
+Base for THIS follow-up: b9b8462e976e431c8aa6df059ec9ffa73bb829b0
+  (the PRIOR overnight session's own final report commit)
+Base for the prior overnight session: 22683016b5a927d4952e52049145ad8d1f5a2b87
+  (production/fullA-exact @ tag cm-production-ready-2026-07-22-r3)
+Final commit this follow-up session: 59756acece960054dccdefd343079257736178ad
+
+Commits this session (oldest first):
+  0eeaf035e892b9c5862ea30dcf06b883fb82bb35  Part I directional/sign audit: root-cause the fixed-dual vs reoptimized opposite-sign observation
+  ea7767af8cb89285de12f1d740021348e041a61e  Part II.1: expanded D=4 CM-C+ equivalence battery (60/60 pass)
+  2db205829addadc4041e0c2be0acdaf7999551cc  Part II.2: real D=20/W=80000/L=50 multi-point CM-C+ gate, 5/5 pass
+  849c592f7f695ca1cb2b67c18760d82863ad3806  Part II.3: matched short real KNITRO trajectories, Reference vs C+
+  faf58931539ab84de114e09d64ed6fde55c7ad72  Part II.4: checkpoint backend provenance -- schema bump, validated on resume
+  eb08254c32e7212be966aefa210d17165986c095  Part III.1: complete-state cache process-lifecycle and hit-opportunity audit
+  59756acece960054dccdefd343079257736178ad  Part III.2: shadow-mode measurement -- zero measured cache hit opportunity
+
+Diffstat (this session's commits only):
+ .../CM_CACHE_PROCESS_LIFECYCLE_AUDIT_2026-07-23.md |  119 +
+ docs/CM_CACHE_SHADOW_MEASUREMENT_2026-07-23.md     |   76 +
+ ..._VS_REOPTIMIZED_DIRECTIONAL_AUDIT_2026-07-23.md |  170 ++
+ .../d4_exact/cm_cache_shadow_measurement.jl        |   87 +
+ full_aod_diag/d4_exact/cm_checkpoint.jl            |  201 +-
+ .../d4_exact/cm_cplus_d20_multipoint_gate.jl       |  134 ++
+ .../d4_exact/cm_cplus_expanded_d4_battery.jl       |  290 +++
+ .../d4_exact/cm_cplus_matched_trajectory.jl        |   90 +
+ full_aod_diag/d4_exact/diag_near_tie_isolate.jl    |  122 +
+ full_aod_diag/d4_exact/directional_sign_audit.jl   |  221 ++
+ .../d4_exact/overnight_cm_cplus_d4_gate.jl         |   15 +-
+ .../test_cm_checkpoint_backend_provenance.jl       |  174 ++
+ .../reference_delta0.1/shadow_gradient_backend.txt |    3 +
+ .../reference_delta0.1/shadow_latest.jls           |  Bin 0 -> 19192 bytes
+ .../reference_delta1.0/shadow_gradient_backend.txt |    3 +
+ .../reference_delta1.0/shadow_latest.jls           |  Bin 0 -> 19192 bytes
+ .../reference_delta2.0/shadow_gradient_backend.txt |    3 +
+ .../reference_delta2.0/shadow_latest.jls           |  Bin 0 -> 19192 bytes
+ .../cache_shadow_measurement/run_delta0.1.log      |  530 +++++
+ .../cache_shadow_measurement/run_delta1.0.log      |  537 +++++
+ .../cache_shadow_measurement/run_delta2.0.log      |  534 +++++
+ .../shadow_summary_reference_delta0.1.csv          |    2 +
+ .../shadow_summary_reference_delta1.0.csv          |    2 +
+ .../shadow_summary_reference_delta2.0.csv          |    2 +
+ .../checkpoint_provenance_test/corrupt.jls         |    1 +
+ .../t1_ref_ref/t1_gradient_backend.txt             |    3 +
+ .../t1_ref_ref/t1_latest.jls                       |  Bin 0 -> 19174 bytes
+ .../t1_ref_ref/t1_r2_gradient_backend.txt          |    3 +
+ .../t1_ref_ref/t1_r2_latest.jls                    |  Bin 0 -> 19177 bytes
+ .../t1_ref_ref/t3_bad_gradient_backend.txt         |    3 +
+ .../t1_ref_ref/t4_switch_backend_switch_audit.txt  |   10 +
+ .../t1_ref_ref/t4_switch_gradient_backend.txt      |    3 +
+ .../t1_ref_ref/t4_switch_latest.jls                |  Bin 0 -> 19177 bytes
+ .../t2_cplus_cplus/t2_gradient_backend.txt         |    3 +
+ .../t2_cplus_cplus/t2_latest.jls                   |  Bin 0 -> 19170 bytes
+ .../t2_cplus_cplus/t2_r2_gradient_backend.txt      |    3 +
+ .../t2_cplus_cplus/t2_r2_latest.jls                |  Bin 0 -> 19173 bytes
+ .../t6_interrupt/t6_gradient_backend.txt           |    3 +
+ .../t6_interrupt/t6_latest.jls                     |  Bin 0 -> 19174 bytes
+ .../t6_interrupt/t6_resumed_gradient_backend.txt   |    3 +
+ .../t6_interrupt/t6_resumed_latest.jls             |  Bin 0 -> 19183 bytes
+ .../checkpoint_provenance_test/test_run.log        | 2329 ++++++++++++++++++++
+ results/cm_cplus_followup/d20_multipoint_gate.csv  |    6 +
+ .../cm_cplus_followup/d20_multipoint_gate_full.log | 1156 ++++++++++
+ .../d4_expanded_battery_60of60.log                 |  148 ++
+ .../cm_cplus_followup/diag_near_tie_isolation.log  |   61 +
+ results/cm_cplus_followup/directional_audit.csv    |   29 +
+ .../cm_cplus_followup/directional_predictions.csv  |   33 +
+ .../matched_trajectory_2026-07-23/cplus.log        |  522 +++++
+ .../cplus/matched_cplus_gradient_backend.txt       |    3 +
+ .../cplus/matched_cplus_latest.jls                 |  Bin 0 -> 19189 bytes
+ .../matched_trajectory_2026-07-23/reference.log    |  522 +++++
+ .../matched_reference_gradient_backend.txt         |    3 +
+ .../reference/matched_reference_latest.jls         |  Bin 0 -> 19197 bytes
+ .../summary_cplus.jls                              |  Bin 0 -> 181 bytes
+ .../summary_reference.jls                          |  Bin 0 -> 185 bytes
+ .../matched_trajectory_long600/cplus.log           |  524 +++++
+ .../cplus/matched_cplus_gradient_backend.txt       |    3 +
+ .../cplus/matched_cplus_latest.jls                 |  Bin 0 -> 19189 bytes
+ .../matched_trajectory_long600/reference.log       |  533 +++++
+ .../matched_reference_gradient_backend.txt         |    3 +
+ .../reference/matched_reference_latest.jls         |  Bin 0 -> 19197 bytes
+ .../matched_trajectory_long600/summary_cplus.jls   |  Bin 0 -> 181 bytes
+ .../summary_reference.jls                          |  Bin 0 -> 185 bytes
+ 64 files changed, 9208 insertions(+), 17 deletions(-)
