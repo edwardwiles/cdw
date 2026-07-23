@@ -30,7 +30,7 @@ function build_cm_frechet_bin_ctx(ctx, aug_frechet)
     refIndex1 = aug_frechet.refIndex1; z = aug_frechet.z
     NCORE = aug_frechet.ncore; ncm = aug_frechet.ncm   # = D*L
     R = aug_frechet.contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
-    Bidx = compute_bin_indices(ctx.U, z)
+    Bidx = Int.(compute_bin_indices(ctx.U, z))   # see cm_frechet_moments.jl's note on the ambiguous compute_bin_indices dispatch
     W = size(ctx.U, 1)
     L1 = L + 1
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug_frechet.contrasts, R,

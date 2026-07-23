@@ -173,7 +173,12 @@ function build_cm_frechet_augmented_obj_archB(ctx, CS, targets::FrechetReference
     origins = [o for o in 1:ctx.D if o != refIndex1]
     ncm = n_cm_frechet_moments(ctx.D, L)
     R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
-    Bidx = compute_bin_indices(ctx.U, z)
+    # NOTE (same pitfall cm_production_bundle.jl's build_cm_production_context already flags):
+    # common_marginals_interval.jl and cm_hessian_architectures.jl both define
+    # compute_bin_indices(U,z) with overlapping-but-distinct signatures (z::Vector{Float64} vs
+    # z::AbstractVector{Float64}); Julia's most-specific-method dispatch silently prefers the
+    # FORMER (Unsigned-typed), not the Int-typed variant this file's Int-indexed loops need.
+    Bidx = Int.(compute_bin_indices(ctx.U, z))
 
     d_new = ncore + ncm
     outer_constr_index_new = obj0.outer_constr_index + ncm
