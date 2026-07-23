@@ -1,9 +1,15 @@
-# Session prompt (2026-07-22) Section 4: the nested Delta-star outer problem,
-# minimize_theta Delta(theta) over the 30 free coordinates s.t. the Section 1.3 cutoff
-# inequalities. Infrastructure-validation smoke test (the direct F* solve, Section 3,
-# already implies Delta_star approx 0 in population; this exercises the outer-search
-# machinery that will later be reused for finite-delta bounds), NOT a performance-tuned
-# production outer solve.
+# RELABELED per the 2026-07-23 governing correction: `minimize_theta Delta(theta)` over
+# all outer coordinates (this file's original "Section 4 nested Delta-star outer problem")
+# is NOT an economic estimand -- the CC outer problem extremizes the counterfactual
+# `g = log gamma_prime[j]` subject to a divergence BUDGET `Delta(theta) <= delta`, never
+# unconstrained minimum divergence. This file is kept ONLY as a lightweight infrastructure
+# regression test (does the nested inner-solve + Method-B-gradient + exterior-penalty
+# machinery run at all, end to end, cold-verified) -- see `run_minimum_divergence_outer_
+# smoke_test` below. Its result must never be reported as `Delta_star` or as an economic
+# finding; the direct F* solve (fstar_direct.jl, Section 3) already gives a population-
+# level Delta approx 0 certificate, so this smoke test's own terminal value is redundant
+# with that as economics -- its only job is to exercise the outer-search code path that the
+# real finite-delta upper/lower programs (Section 3/4 of the governing correction) reuse.
 #
 # Gradient: Method B (fixed-dual finite-bandwidth secant, gradient_lab.jl) -- the cheapest
 # validated method (Section 5/6), matching production/fullA-exact's own L_fix construction
@@ -39,13 +45,15 @@ function melitz_outer_gradient_b!(grad::AbstractVector, theta::AbstractVector,
 end
 
 """
-    MelitzDeltaStarOuterResult
+    MinimumDivergenceSmokeTestResult
 
-Session prompt Section 4/9 required report fields: starting/final `Delta`, outer solver
-status, evaluation counts, and the COLD-verified incumbent (re-solved from a cleared warm
-start, LFD independently reconstructed, all Gate A residual checks rerun).
+Result of the infrastructure-only `run_minimum_divergence_outer_smoke_test`. NOT an
+economic result -- see the file-level note above. Fields otherwise as originally
+documented: starting/final `Delta`, outer solver status, evaluation counts, and the
+COLD-verified incumbent (re-solved from a cleared warm start, LFD independently
+reconstructed, all Gate A residual checks rerun).
 """
-struct MelitzDeltaStarOuterResult
+struct MinimumDivergenceSmokeTestResult
     theta_init::Vector{Float64}
     theta_final::Vector{Float64}
     Delta_init::Float64
@@ -57,21 +65,30 @@ struct MelitzDeltaStarOuterResult
 end
 
 """
-    solve_melitz_delta_star_outer(theta_init, ctx, obj; h=1e-3, penalty=1e6,
-                                   iterations=30, g_tol=1e-7) -> MelitzDeltaStarOuterResult
+    run_minimum_divergence_outer_smoke_test(theta_init, ctx, obj; h=1e-3, penalty=1e6,
+                                             iterations=30, g_tol=1e-7)
+        -> MinimumDivergenceSmokeTestResult
 
-Session prompt Section 4: `minimize_theta Delta(theta)` s.t. the Section 1.3 cutoff
-inequalities, from a given `theta_init`. Uses Method B for the gradient (re-solving the
-inner problem once per `g!` call to refresh the base dual) and an exterior penalty
-(weight `penalty`) on the deterministic cutoff constraints, whose gradient is added
-EXACTLY via `melitz_cutoff_constraint_jacobian` (Section 1.3, ForwardDiff-exact, smooth).
-Returns the run's own `Delta` at the last-evaluated (`_warm`) point AND a `cold_verified`
-`MelitzDeltaEvalResult` at `theta_final` (fresh KNITRO solve from a cleared warm start,
-independent LFD reconstruction, full ex-post equilibrium check via
-`evaluate_melitz_delta`'s own machinery) -- the number that should actually be trusted and
-reported (session prompt Section 4's own instruction).
+INFRASTRUCTURE DIAGNOSTIC ONLY (2026-07-23 governing correction) -- formerly named
+`solve_melitz_delta_star_outer`, formerly (incorrectly) described as computing an economic
+`Delta_star`. `minimize_theta Delta(theta)` over ALL outer coordinates is not an economic
+estimand: the actual CC outer problem extremizes the counterfactual `g` subject to a
+divergence budget `Delta(theta) <= delta` (see the finite-delta upper/lower programs).
+This function is retained solely as a software regression test confirming the nested
+outer-search machinery (Method B gradient, exterior-penalty cutoff constraints, cold
+verification) runs end to end without crashing; do not read its terminal `Delta` as an
+economic finding, and do not spend further effort tightening its convergence.
+
+s.t. the Section 1.3 cutoff inequalities, from a given `theta_init`. Uses Method B for the
+gradient (re-solving the inner problem once per `g!` call to refresh the base dual) and an
+exterior penalty (weight `penalty`) on the deterministic cutoff constraints, whose gradient
+is added EXACTLY via `melitz_cutoff_constraint_jacobian` (Section 1.3, ForwardDiff-exact,
+smooth). Returns the run's own `Delta` at the last-evaluated (`_warm`) point AND a
+`cold_verified` `MelitzDeltaEvalResult` at `theta_final` (fresh KNITRO solve from a cleared
+warm start, independent LFD reconstruction, full ex-post equilibrium check via
+`evaluate_melitz_delta`'s own machinery).
 """
-function solve_melitz_delta_star_outer(theta_init::AbstractVector, ctx, obj;
+function run_minimum_divergence_outer_smoke_test(theta_init::AbstractVector, ctx, obj;
                                         h::Real=1e-3, penalty::Real=1e4,
                                         iterations::Int=25, g_tol::Real=1e-7,
                                         time_limit::Real=180.0)
@@ -117,6 +134,6 @@ function solve_melitz_delta_star_outer(theta_init::AbstractVector, ctx, obj;
     cold_verified = evaluate_melitz_delta(theta_final, ctx, obj; cold=true)
     n_inner_solves[] += 1
 
-    return MelitzDeltaStarOuterResult(collect(theta_init), theta_final, Delta_init,
+    return MinimumDivergenceSmokeTestResult(collect(theta_init), theta_final, Delta_init,
         r_final_warm.Delta, result, n_inner_solves[], cold_verified, time() - t0)
 end

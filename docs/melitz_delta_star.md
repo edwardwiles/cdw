@@ -1022,3 +1022,41 @@ gamma_prime` s.t. `Delta(theta)<=delta`) was built. Flagged for the next session
   outer solve uses `Optim.LBFGS` with an exterior penalty instead, adequate for an
   infrastructure smoke test but not wired into this repo's own production outer-loop
   machinery.
+
+## 16. 2026-07-23: governing conceptual correction — Section 15.6 was never an economic
+## result
+
+Section 15.6 above (`solve_melitz_delta_star_outer`, `Delta_init -> Delta_final_warm`,
+"`Delta_star <= Delta(theta_population)`") is kept verbatim as a historical record of what
+actually ran, but its framing was wrong and must not be cited as an economic finding.
+`minimize_theta Delta(theta)` over every outer coordinate (`g` AND every free `A`/`f`
+nuisance parameter simultaneously) is not a Christensen–Connault estimand: the governing
+correction's outer problem extremizes the counterfactual `g = log gamma_prime[j]` subject
+to a divergence BUDGET `Delta(g,eta) <= delta`, i.e. it optimizes only the ONE coordinate
+that has direct economic content, treating the rest (`eta`) as nuisance parameters whose
+role is to make the budget constraint as easy as possible to satisfy — not to jointly
+shrink `Delta` for its own sake. An outer point is not "better" merely for having smaller
+`Delta` while `g` sits near its benchmark value.
+
+Consequently:
+
+- `solve_melitz_delta_star_outer` is renamed `run_minimum_divergence_outer_smoke_test`
+  (`outer_solve.jl`); its result struct is renamed `MinimumDivergenceSmokeTestResult`. Both
+  are documented as an INFRASTRUCTURE REGRESSION TEST ONLY — confirming the nested
+  outer-search machinery (Method B gradient, exterior-penalty cutoff constraints, cold
+  verification) runs end to end without crashing. Do not spend further effort tightening
+  its convergence; it is not a paper estimand.
+- `solve_fstar_direct` (`fstar_direct.jl`, Section 3 above) is similarly a numerical
+  feasibility diagnostic (does a nearby gravity-feasible point exist at which equal
+  reference weights are ~feasible), not an optimization the paper cares about the minimizer
+  of. Its docstrings' former `Delta_star approx 0` phrasing is corrected to `Delta(theta)
+  approx 0` (a statement about ONE theta, not a minimum).
+- Going forward in this document and the codebase: `Delta(theta)` (or
+  `minimum_divergence_at_theta`) denotes the fixed-point CC inner minimum divergence at a
+  COMPLETE outer point; `delta_profile(g) = min_eta Delta(g,eta)` denotes the nuisance-only
+  profile at a FIXED counterfactual `g` (Section 5 of the finite-delta campaign, below);
+  "upper/lower finite-delta bound" denotes the actual target programs (`min`/`max g` s.t.
+  `Delta(g,eta)<=delta`). `Delta_star` is retired as a name in this codebase.
+
+See the finite-delta campaign sections below (this document's continuation, 2026-07-23
+session) for the actual upper/lower gains-from-trade programs.

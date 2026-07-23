@@ -833,8 +833,15 @@ if KNITRO_AVAILABLE
         mask = base_active_mask(theta0, ctx5, obj5)
 
         @testset "base_active_mask has the right shape and is not degenerate" begin
-            @test size(mask) == (ctx5.D, ctx5.D, size(obj5.U, 1))
-            @test 0 < sum(mask) < length(mask)
+            @test mask isa MelitzActiveSetSnapshot
+            @test size(mask.baseline) == (ctx5.D, ctx5.D, size(obj5.U, 1))
+            @test 0 < sum(mask.baseline) < length(mask.baseline)
+            @test length(mask.autarky) == size(obj5.U, 1)
+            # NOT asserted to be a nontrivial mix (unlike the baseline mask): the focal
+            # autarky cutoff can legitimately put ~100% of draws in the active region at
+            # this small-W fixture (a low autarky cutoff is a valid economic state, not a
+            # bug) -- only check it's a well-formed, non-empty Bool vector.
+            @test 0 <= sum(mask.autarky) <= length(mask.autarky)
         end
 
         rng5 = MersenneTwister(11)
@@ -842,11 +849,12 @@ if KNITRO_AVAILABLE
 
         @testset "Method B at a small bandwidth with zero switches agrees with Method C (exact) to a few %" begin
             h_small = 1e-6
-            nsw_p, _ = count_switches(mask, theta0 .+ h_small .* v, ctx5, obj5)
-            nsw_m, _ = count_switches(mask, theta0 .- h_small .* v, ctx5, obj5)
+            nsw_p, _, auk_p = count_switches(mask, theta0 .+ h_small .* v, ctx5, obj5)
+            nsw_m, _, auk_m = count_switches(mask, theta0 .- h_small .* v, ctx5, obj5)
             @test nsw_p == 0 && nsw_m == 0  # confirms this h genuinely has no switches
+            @test auk_p == 0 && auk_m == 0  # ...INCLUDING the separately-tracked autarky decision
             rb = method_b_fixed_dual_secant(theta0, v, h_small, x_base, ctx5, obj5)
-            rc = method_c_forwarddiff_envelope(theta0, v, h_small, x_base, mask, ctx5, obj5)
+            rc = method_c_forwarddiff_envelope(theta0, v, h_small, x_base, ctx5, obj5)
             # rtol=5%, not 1%: this is a finite-h (h=1e-6) SECANT approximation to Method
             # C's exact derivative, at a small-W (2,000) fixture -- a few percent residual
             # discrepancy is expected numerical behavior, not a correctness bug (the
@@ -862,28 +870,79 @@ if KNITRO_AVAILABLE
         end
 
         @testset "count_switches is zero against itself (mask compared to its own base point)" begin
-            nsw0, _ = count_switches(mask, theta0, ctx5, obj5)
+            nsw0, _, auk0 = count_switches(mask, theta0, ctx5, obj5)
             @test nsw0 == 0
+            @test auk0 == 0
+        end
+
+        @testset "2026-07-23 regression: gamma direction at a confirmed zero-switch (incl. autarky) bandwidth agrees B vs C tightly" begin
+            # Section 1.1 bug fix regression test: before the fix, the OLD Method C reused
+            # the baseline (j,j) mask as a (wrong) proxy for the autarky decision, so a
+            # `gamma` perturbation -- which shifts price_power_autarky and hence ONLY the
+            # autarky cutoff, leaving every baseline decision unchanged -- could show
+            # "zero switches" under the OLD (baseline-only) diagnostic while the autarky
+            # decision had, in fact, moved, and B/C would disagree sharply as a result
+            # (docs/melitz_delta_star.md Section 15.7's own documented `gamma`
+            # counterexample). At a small enough h that BOTH baseline and autarky are
+            # confirmed unchanged, the fixed Methods B/C must now agree tightly.
+            gamma_idx = 1  # theta_free's own layout: g = log gamma_prime[j] is coordinate 1
+            v_gamma = zeros(length(theta0)); v_gamma[gamma_idx] = 1.0
+            h_g = 1e-7
+            nsw_gp, _, auk_gp = count_switches(mask, theta0 .+ h_g .* v_gamma, ctx5, obj5)
+            nsw_gm, _, auk_gm = count_switches(mask, theta0 .- h_g .* v_gamma, ctx5, obj5)
+            @test nsw_gp == 0 && nsw_gm == 0 && auk_gp == 0 && auk_gm == 0
+            rb_g = method_b_fixed_dual_secant(theta0, v_gamma, h_g, x_base, ctx5, obj5)
+            rc_g = method_c_forwarddiff_envelope(theta0, v_gamma, h_g, x_base, ctx5, obj5)
+            @test isapprox(rb_g.deriv, rc_g.deriv; rtol=5e-2)
+        end
+
+        @testset "Section 1.5: Method D (hand-derived) agrees with Method C at zero switches" begin
+            for (label, vv) in (("ordinary_A_v", v), ("gamma", (u = zeros(length(theta0)); u[1] = 1.0; u)))
+                h_small = 1e-6
+                nsw_p, _, auk_p = count_switches(mask, theta0 .+ h_small .* vv, ctx5, obj5)
+                nsw_m, _, auk_m = count_switches(mask, theta0 .- h_small .* vv, ctx5, obj5)
+                if nsw_p == 0 && nsw_m == 0 && auk_p == 0 && auk_m == 0
+                    rc = method_c_forwarddiff_envelope(theta0, vv, h_small, x_base, ctx5, obj5)
+                    rd = method_d_hand_derived(theta0, vv, h_small, x_base, ctx5, obj5)
+                    @test isapprox(rc.deriv, rd.deriv; rtol=1e-6, atol=1e-10)
+                end
+            end
+        end
+
+        @testset "Section 1.6: f_high_switch_direction is genuinely distinct from ordinary_f" begin
+            nA = ctx5.D^2 - 1
+            ordinary_f_idx = 2 + nA
+            v_ord = zeros(length(theta0)); v_ord[ordinary_f_idx] = 1.0
+            h_probe = 1e-3
+            nsw_ord, _, auk_ord = count_switches(mask, theta0 .+ h_probe .* v_ord, ctx5, obj5)
+
+            v_hs, hs_idx, hs_switches_probe = f_high_switch_direction(theta0, ctx5, obj5; test_h=h_probe)
+            nsw_hs, _, auk_hs = count_switches(mask, theta0 .+ h_probe .* v_hs, ctx5, obj5)
+
+            @test v_hs != v_ord  # regression: no longer accidentally the same coordinate/direction
+            @test (nsw_hs + auk_hs) >= (nsw_ord + auk_ord)  # at least as many switches as ordinary_f
         end
     end
 
     # ========================================================================
-    # 2026-07-22 session Section 4: nested Delta-star outer solve (outer_solve.jl)
+    # Infrastructure-only regression test (formerly "Section 4 nested Delta-star outer
+    # solve"): 2026-07-23 governing correction relabels this as a software smoke test,
+    # NOT an economic minimum-divergence result -- see outer_solve.jl's file-level note.
     # ========================================================================
-    @testset "Section 4: solve_melitz_delta_star_outer (nested outer solve, cold-verified)" begin
+    @testset "Infrastructure smoke test: run_minimum_divergence_outer_smoke_test (nested outer solve, cold-verified)" begin
         small_fixture = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
             target_country=1, seed=29, W=2_000)
         obj4, theta0 = build_melitz_psi_bundle(small_fixture;
             inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
         ctx4 = obj4.γ
 
-        res = solve_melitz_delta_star_outer(theta0, ctx4, obj4; iterations=3, time_limit=40.0)
+        res = run_minimum_divergence_outer_smoke_test(theta0, ctx4, obj4; iterations=3, time_limit=40.0)
         @testset "structural: result type, cold-verified incumbent is real" begin
-            @test res isa MelitzDeltaStarOuterResult
+            @test res isa MinimumDivergenceSmokeTestResult
             @test res.cold_verified isa MelitzDeltaEvalResult
             @test res.n_inner_solves > 0
         end
-        @testset "Delta_star <= Delta(theta_population) (session prompt Section 4's own required inequality)" begin
+        @testset "smoke test's own Delta(theta_final) <= Delta(theta_init) (regression check only, not an economic finding)" begin
             @test res.cold_verified.Delta <= res.Delta_init + 1e-9
         end
         @testset "cold-verified incumbent passes the Gate A ex-post equilibrium checks" begin

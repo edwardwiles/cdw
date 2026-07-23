@@ -8,8 +8,11 @@
 # (reference-distribution) finite-sample mean of every one of the D^2+1 moments is ~0.
 # Since equal weights are then (approximately) feasible for the CC inner minimum-
 # divergence problem and divergence is nonnegative, this supplies a certificate that
-# Delta_star(theta) = 0 to numerical tolerance AT this theta -- NOT a claim that A/f are
-# uniquely recovered (the system is underidentified: 17 moments, 30 free coordinates).
+# Delta(theta) = 0 to numerical tolerance AT this theta -- NOT a claim that A/f are
+# uniquely recovered (the system is underidentified: 17 moments, 30 free coordinates), and
+# NOT a claim about any minimum over theta (2026-07-23 governing correction: this file
+# finds A nearby feasible point, it does not minimize Delta over outer coordinates as an
+# economic objective).
 
 using Optim
 using Statistics: mean
@@ -105,7 +108,7 @@ end
 
 Session prompt Section 3's required report fields: initial/final equal-weight moments,
 the regularizer's role, cutoff slacks, cold inner `Delta`, LFD deviation from equal
-weights, and the numerically-zero `Delta_star` certificate.
+weights, and the numerically-zero `Delta(theta)` certificate.
 """
 struct MelitzFStarDirectResult
     rho::Float64
@@ -130,7 +133,7 @@ starting from `theta_population` (the population-Pareto fixture's own reduced th
 main prompt's own "prefers canned solvers" guidance, and the archived `solve_fstar`'s own
 documented reason a naive-gradient canned solve fails here). Then COLD-evaluates the real
 CC inner problem at the result (`evaluate_melitz_delta(...; cold=true)`), certifying
-`Delta_star approx 0` if `eval.Delta` is tiny and `eval.verified`.
+`Delta(theta) approx 0` at this theta if `eval.Delta` is tiny and `eval.verified` (not a minimum over theta).
 """
 function solve_fstar_direct(theta_population::AbstractVector, ctx, obj;
                              rho::Real=1e-6, S::AbstractVector=fstar_default_scaling(ctx),
