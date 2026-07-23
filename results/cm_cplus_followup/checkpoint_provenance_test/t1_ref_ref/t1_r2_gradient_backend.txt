@@ -1,0 +1,3 @@
+cm_gradient_backend=reference
+run_id=t1b
+recorded_at=2026-07-23T02:42:21.204

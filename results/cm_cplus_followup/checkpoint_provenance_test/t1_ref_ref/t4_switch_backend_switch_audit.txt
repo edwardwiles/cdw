@@ -1,0 +1,10 @@
+BACKEND SWITCH ON RESUME
+resumed_from=/bbkinghome/edav/gravity_robustness/gravity-perf-fullA-cm-cplus-statecache-overnight/full_aod_diag/d4_exact/../../results/cm_cplus_followup/checkpoint_provenance_test/t1_ref_ref/t1_latest.jls
+checkpoint_backend=reference
+requested_backend=cplus
+run_id=t4
+label=t4_switch
+switched_at=2026-07-23T02:48:42.968
+bandwidth_cache_cleared=true
+n_eval_at_switch=1
+n_grad_at_switch=1

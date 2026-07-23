@@ -27,7 +27,7 @@
 # ============================================================================
 using Serialization, Dates
 
-const CM_CHECKPOINT_SCHEMA = 2
+const CM_CHECKPOINT_SCHEMA = 3
 # Bumped 1 -> 2 (remediation task Part A, finding F1): schema-1 checkpoints computed cb_F!'s
 # reported/constrained Delta as `-base.ζstar`, which silently omits mean(Psi(q*)) and overstates
 # the divergence at tail-active points (any draw with recovered weight m* > e). A schema-1
@@ -35,15 +35,32 @@ const CM_CHECKPOINT_SCHEMA = 2
 # from one. Use `migrate_cm_checkpoint_v1_candidate` to recover just the incumbent vector as a
 # fresh start point, then cold-re-evaluate it with `cm_production_value_verified` before trusting
 # any Delta/feasibility for it.
+#
+# Bumped 2 -> 3 (Part II.4 follow-up, 2026-07-23): adds `cm_gradient_backend` to the persisted
+# schema (see `CMCheckpointV3`'s own field comment). IMPORTANT Julia-Serialization gotcha,
+# discovered live this session (not assumed): `Serialization` resolves a struct field-for-field by
+# the TYPE NAME recorded inside the file, looked up in the CURRENT session -- it is NOT safe to
+# just add a field to the EXISTING `CMCheckpoint` struct under the same name, because every old
+# file's embedded type reference (`Main.CMCheckpoint`) would then resolve to the NEW, longer
+# layout and misread the byte stream (confirmed empirically: this throws `EOFError`, not a clean/
+# catchable type error, both for `deserialize(path)::CMCheckpoint` AND for an attempted read into
+# a DIFFERENTLY-NAMED struct with the old layout -- the type lookup happens via the name IN THE
+# FILE, not the annotation at the call site). The correct fix is to version the TYPE NAME: leave
+# `CMCheckpoint` (below) permanently unchanged as the schema-1/2 legacy layout -- every existing
+# checkpoint, including the entire completed `production_runs/cm_campaign_2026-07-22`, remains
+# loadable through it forever -- and introduce `CMCheckpointV3` as a distinct type for schema>=3.
+# `load_cm_checkpoint` tries `CMCheckpointV3` first, falls back to `CMCheckpoint`, and upgrades.
+# Verified against a real copy of chain1/delta_0.1/stage_latest.jls, not merely asserted.
 
 """
     CMCheckpoint
 
-CM-production analogue of `D20Checkpoint` (c10_d20_production_driver.jl), covering
-everything a resume needs to (a) validate it is reconstructing the IDENTICAL problem
-instance and (b) restart the outer KNITRO search from the best exact-feasible incumbent
-found so far -- plus the CM-specific configuration (`D20Checkpoint` has no notion of a
-common-marginals grid at all).
+Legacy (schema 1/2) checkpoint layout. Kept PERMANENTLY UNCHANGED for backward-compat reads only
+-- every schema-1/2 file ever written (including the entire 2026-07-22 real production campaign)
+has this exact type name+layout embedded in its own serialized bytes, and Julia's `Serialization`
+looks up structs by that embedded name, not by whatever the current top-of-tree definition is (see
+the `CM_CHECKPOINT_SCHEMA` comment above for how this was discovered). `save_cm_checkpoint` never
+constructs this type -- new checkpoints are always `CMCheckpointV3`.
 """
 struct CMCheckpoint
     schema::Int
@@ -79,16 +96,96 @@ struct CMCheckpoint
     knitro_version::String
 end
 
+"""
+    CMCheckpointV3
+
+CM-production checkpoint layout, schema>=3 (Part II.4 follow-up, 2026-07-23). Identical to
+`CMCheckpoint` except for one new field, `cm_gradient_backend` (see below) -- given a NEW type
+name specifically because Julia's `Serialization` cannot safely add a field to an existing struct
+name (see `CM_CHECKPOINT_SCHEMA`'s comment). This is the type `save_cm_checkpoint` always
+constructs going forward; `CMCheckpoint` (above) is retained only for reading old files.
+"""
+struct CMCheckpointV3
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol     # :reference | :cplus. Previously recorded ONLY in an
+                                     # unversioned sidecar (<label>_gradient_backend.txt), never
+                                     # validated on resume -- a checkpoint file alone could not
+                                     # reveal which backend produced it. Now part of the schema.
+    g::Float64
+    zfree::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+end
+
 "Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
-function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpoint)
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV3)
     tmp = path * ".tmp"
     serialize(tmp, ckpt)
     mv(tmp, path; force = true)
     return path
 end
 
+"Upgrades a legacy schema-2 `CMCheckpoint` to `CMCheckpointV3`, filling `cm_gradient_backend = :reference` -- CORRECT (not a guess) for every schema-2 file that exists, since :reference was the kwarg's own default throughout schema-2's entire lifetime and the only value the real 2026-07-22 campaign's stage runner ever passed (confirmed by direct read of cm_production_stage_runner.jl, which never sets cm_gradient_backend)."
+function upgrade_schema2(old::CMCheckpoint)
+    return CMCheckpointV3(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        :reference,   # cm_gradient_backend -- implicit, correct default for schema 2
+        old.g, old.zfree, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version)
+end
+
+"""
+    load_cm_checkpoint(path) -> CMCheckpointV3
+
+Tries the CURRENT (schema>=3, `CMCheckpointV3`) shape first; falls back to the legacy
+`CMCheckpoint` shape (schema 1/2, the ONLY prior layout that ever existed) and upgrades it via
+`upgrade_schema2`. Schema-1 files are still hard-refused below (semantically untrustworthy Delta,
+unrelated to the schema-3 layout change) -- this fallback only concerns the byte LAYOUT, not
+schema-1's own known defect. Always returns a `CMCheckpointV3` (uniform shape for every caller
+downstream of this function, regardless of which schema the file on disk actually is).
+"""
 function load_cm_checkpoint(path::AbstractString)
-    ckpt = deserialize(path)::CMCheckpoint
+    ckpt = try
+        deserialize(path)::CMCheckpointV3
+    catch e
+        (e isa TypeError || e isa EOFError || e isa MethodError) || rethrow()
+        local old
+        try
+            old = deserialize(path)::CMCheckpoint
+        catch
+            error("load_cm_checkpoint($path): failed to deserialize under BOTH the current " *
+                  "CMCheckpointV3 layout and the legacy CMCheckpoint (schema 1/2) layout -- this " *
+                  "file is not a recognized CM checkpoint (corrupt, truncated, or an even " *
+                  "older/unrelated format).")
+        end
+        upgrade_schema2(old)
+    end
     if ckpt.schema == 1
         error("load_cm_checkpoint($path): schema=1, expected $(CM_CHECKPOINT_SCHEMA) -- schema-1 " *
               "checkpoints stored Delta as `-zeta_star` (remediation task Part A, finding F1), NOT the " *
@@ -98,8 +195,8 @@ function load_cm_checkpoint(path::AbstractString)
               "START POINT only, then cold-re-evaluate it with cm_production_value_verified before " *
               "trusting any Delta/feasibility for it.")
     end
-    ckpt.schema == CM_CHECKPOINT_SCHEMA ||
-        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected $(CM_CHECKPOINT_SCHEMA) -- " *
+    ckpt.schema in (2, CM_CHECKPOINT_SCHEMA) ||
+        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2 or $(CM_CHECKPOINT_SCHEMA) -- " *
               "this checkpoint predates the CM checkpoint-schema unification (task §11), e.g. a bare " *
               "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
               "run instead of resuming from an incompatible checkpoint.")
@@ -153,9 +250,20 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # :reference (production default, UNCHANGED behavior -- cm_production_gradient/
         # composite_gradient_at_fast, byte-identical to every run before this kwarg existed) |
         # :cplus (experimental -- cm_production_gradient_cplus/composite_gradient_at_Cplus_from_cache,
-        # lfix_cm_cplus.jl). Fresh-per-launch, like maxtime_real/checkpoint_interval_s/verbose --
-        # NOT carried forward from a resumed checkpoint (CMCheckpoint's persisted problem identity
-        # is unchanged by this kwarg; see docs for why this is intentional).
+        # lfix_cm_cplus.jl). Part II.4 follow-up (2026-07-23): now VALIDATED against a resumed
+        # checkpoint's own persisted `cm_gradient_backend` (schema>=3; schema-2 checkpoints are
+        # treated as :reference, see `upgrade_schema2`). A mismatch is a HARD ERROR unless
+        # `allow_backend_switch=true` is also passed -- see that kwarg's own doc for the policy
+        # rationale (base-state/incumbent correctness is backend-independent, proven in
+        # docs/CM_GRADIENT_ALGEBRA_TRACE_2026-07-22.md and empirically confirmed to 1e-13..1e-16
+        # across every real D=20 point tested this session, but the persisted `bandwidth_cache`
+        # was tuned under the ORIGINAL backend's own selection formula and is cleared on a
+        # deliberate switch rather than silently reused across backends).
+        allow_backend_switch::Bool = false,   # explicit override required to resume under a
+        # DIFFERENT cm_gradient_backend than the checkpoint was written with. Ignored for a fresh
+        # (non-resumed) run. Switching is not silently allowed even though it is
+        # correctness-preserving (see above) -- the brief's own instruction is to make this an
+        # explicit, audited choice, not an invisible default.
         heartbeat_interval_s::Union{Nothing,Float64} = nothing)   # remediation task Part B:
         # opt-in liveness watchdog (nothing = off, zero overhead, the default). When set, a
         # background Timer logs, every heartbeat_interval_s, how long it has been since the last
@@ -182,6 +290,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
 
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
     find_smallest = true   # :cm_upper is the only wired direction today, matches run_cm_upper's own docstring
+    backend_switched = false   # Part II.4 follow-up -- set true below only on an explicit, audited cross-backend resume
 
     if resumed !== nothing
         W = resumed.W; delta = resumed.delta; draw_design = resumed.draw_design; draw_seed = resumed.draw_seed
@@ -189,6 +298,31 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         cm_hessian_backend = resumed.cm_hessian_backend; cm_grid_rule = resumed.cm_grid_rule
         lp("[", label, "] RESUMING from ", resume_from, " (n_eval=", resumed.n_eval, " n_grad=", resumed.n_grad,
            " wall_elapsed=", round(resumed.wall_elapsed, digits = 1), "s)")
+        # Part II.4 follow-up (2026-07-23): backend provenance check. resumed.cm_gradient_backend
+        # is always present now (schema-2 files are upgraded to :reference by load_cm_checkpoint).
+        backend_switched = resumed.cm_gradient_backend != cm_gradient_backend
+        if backend_switched
+            if !allow_backend_switch
+                error("run_cm_upper_checkpointed($label): checkpoint was written with " *
+                      "cm_gradient_backend=:$(resumed.cm_gradient_backend), but this call requests " *
+                      ":$(cm_gradient_backend) -- refusing to silently switch backends on resume. " *
+                      "Pass allow_backend_switch=true if this is intentional (base-state/incumbent " *
+                      "correctness is backend-independent -- see the kwarg's own docstring -- but the " *
+                      "switch is audited, not silent, and clears the persisted bandwidth_cache).")
+            end
+            lp("[", label, "] *** BACKEND SWITCH ON RESUME *** checkpoint backend=:",
+               resumed.cm_gradient_backend, " -> requested backend=:", cm_gradient_backend,
+               " (allow_backend_switch=true, explicit override) -- clearing persisted bandwidth_cache",
+               " (was tuned under the OLD backend's own selection formula, not safe to reuse as-is).")
+            write(joinpath(ckpt_dir, "$(label)_backend_switch_audit.txt"),
+                  "BACKEND SWITCH ON RESUME\n" *
+                  "resumed_from=$(resume_from)\n" *
+                  "checkpoint_backend=$(resumed.cm_gradient_backend)\n" *
+                  "requested_backend=$(cm_gradient_backend)\n" *
+                  "run_id=$(run_id)\nlabel=$(label)\nswitched_at=$(Dates.now())\n" *
+                  "bandwidth_cache_cleared=true\n" *
+                  "n_eval_at_switch=$(resumed.n_eval)\nn_grad_at_switch=$(resumed.n_grad)\n")
+        end
         # AUD-10 fix (matches c10_d20_production_driver.jl's identical resume warning): the
         # checkpoint's own best_feasible[] was already gated by is_verified_success in cb_F!
         # above (or is nothing) -- it remains the correct scientific incumbent regardless of
@@ -246,7 +380,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     n_grad = Ref(resumed !== nothing ? resumed.n_grad : 0)
     trace = NamedTuple[]
-    bandwidth_cache = resumed !== nothing ? copy(resumed.bandwidth_cache) : Dict{Int,Float64}()
+    bandwidth_cache = (resumed !== nothing && !backend_switched) ? copy(resumed.bandwidth_cache) : Dict{Int,Float64}()
     t_start = time()
     prior_wall = resumed !== nothing ? resumed.wall_elapsed : 0.0
     last_ckpt_t = Ref(time())
@@ -274,9 +408,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64})
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = CMCheckpoint(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV3(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
-            L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend,
+            L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(bandwidth_cache),
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
             maxtime_real - (time() - t_start), reason, knitro_version)
