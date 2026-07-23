@@ -17,9 +17,16 @@
 #   2. q-gravity (Section 5.3, NEW): after substituting `log f_od(q_od, a_od)` (Section
 #      5.1's affine formula) into the f-gravity restriction `dot(c_full, vec(log f)) = 0`,
 #      the restriction becomes affine in `(a, q)` jointly -- derived analytically below
-#      (`build_q_gravity_pivot`) and cross-validated against a basis-probe reconstruction
-#      (Section 5.3's own two-independent-methods requirement, mirroring `affine_cutoff.jl`'s
-#      Section 3.1 pattern).
+#      (`build_q_gravity_pivot`/`build_q_gravity_offset`). NOTE: Section 3.1's own
+#      basis-probe-vs-analytical two-independent-methods pattern was NOT separately
+#      replicated here for this offset formula alone -- instead it is validated a
+#      DIFFERENT way (arguably stronger): the full `(a,q) -> (A,f,gamma)` round trip is
+#      checked end to end against the ALREADY-validated `:logf` path AND against the
+#      TRUE ground-truth `gravity_residuals` (not a second derivation of the same
+#      formula) at both random points and the exact fixture (Section 5.5's own tests).
+#      A dedicated basis-probe cross-check of `build_q_gravity_offset` in isolation,
+#      mirroring `affine_cutoff.jl` exactly, was not built -- flagged as a cheap
+#      follow-up, not a gap in what was actually verified.
 #
 # The focal domestic cell `(j,j)` is NEVER a free q coordinate (Section 5.1): `q[j,j]` is
 # DERIVED from `(g, fixed primitives)` alone -- algebraically independent of `A[j,j]`
