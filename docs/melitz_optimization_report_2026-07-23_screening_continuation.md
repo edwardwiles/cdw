@@ -383,20 +383,19 @@ benchmark):
 
 ## PHASE II
 
-**Scope note, up front**: Phase II is gated on Phase I producing "a stable rejection
-policy and complete timing breakdown" -- satisfied above (Section 9). Given this session's
-remaining time after completing all of Phase I, Phase II is scoped to (10) a fresh live
-reproduction of the gradient floor under the CURRENT (post Phase-I) production
-configuration, and (11-13) a documented implementation plan rather than new, unvalidated
-gradient code -- matching the immediately-prior session's own explicit precedent for this
-exact item (`docs/melitz_optimization_report_2026-07-23_continuation.md`, "Section 6...
-carries real correctness risk... was deliberately not rushed without the exhaustive
-per-coordinate correctness gate the prompt itself demands"). That prior session's own
-dependency-map derivation (direct cell / gravity-pivot cell / focal-link column / the
-`gamma_prime_j`-is-not-sparse special case) is UNCHANGED by this session's work (no edit
-this session touched `gradient_lab.jl`, `finite_delta_outer.jl`'s gradient-Jacobian
-functions, or `moments.jl`), so it remains the authoritative plan rather than being
-re-derived here.
+**Scope note (UPDATED mid-session)**: Phase II is gated on Phase I producing "a stable
+rejection policy and complete timing breakdown" -- satisfied above (Section 9). This
+report's Phase II was ORIGINALLY scoped, like the immediately-prior session, to (10) a
+fresh reproduction of the gradient floor plus (11-13) a documented implementation plan
+rather than new gradient code -- matching that prior session's own explicit correctness-risk
+precedent. A live continuation of this same session then asked directly whether enough was
+understood to proceed on Section 11, and a careful re-read of `delta_star.jl`'s
+`expand_free_theta`/`equilibrium.jl`'s `pivot_expand` (not done by either prior session
+before writing the dependency-map plan) surfaced a genuine refinement to that plan (the
+f-pivot cell's own extra dependency on `gamma_prime_j`/`A[j,j]`, Section 11's own header)
+-- enough to proceed through BOTH of the prompt's own required correctness gates
+(dependency-map superset validation, bit-exact Jacobian match) rather than stopping at a
+plan. Sections 10-13 below reflect the COMPLETED work, not the original plan-only scoping.
 
 ### 10. Gradient-floor reproduction
 
@@ -417,42 +416,86 @@ that; this run's sole purpose is isolating the gradient cost itself):
   guard fix does NOT touch this cost at all -- it is orthogonal, entirely on the inner-solve
   side of the ledger).
 
-### 11. Localized fixed-dual gradient backend -- implementation plan (adopted from the prior
-session's own dependency-map derivation, confirmed still current)
+### 11. Localized fixed-dual gradient backend -- IMPLEMENTED AND VALIDATED
 
-Unchanged from `docs/melitz_optimization_report_2026-07-23_continuation.md`'s Section 6:
+Unlike Sections 10-13's original scoping (written before this item was attempted), this
+session DID implement and validate the localized backend, after a live continuation
+explicitly asked whether enough was understood to proceed. Two prior sessions (the
+immediately-prior continuation session, and this session's own initial Phase I/II write-up
+above) had deferred this on correctness-risk grounds; this section replaces that
+deferral with a real, gated implementation.
 
-- **Direct cell**: each free coordinate `k` (an A or f entry) directly changes exactly one
-  physical `(o_k,d_k)` trade-share cell.
-- **Gravity-pivot cell** (A and f, separately): `expand_free_theta`'s `pivot_expand`
-  reconstructs the ONE eliminated A-pivot and ONE eliminated f-pivot cell as linear
-  combinations of ALL free A/f coordinates respectively -- every free A coordinate moves the
-  A-pivot cell, every free f coordinate moves the f-pivot cell; a localized backend's
-  affected-set must always include both pivot cells for every coordinate.
-- **Focal-link column**: affected whenever the direct cell OR either pivot cell has
-  `o=target_country j`; `d share_od/d logA_od = (sigma-1)*share_od` (nonzero),
-  `d share_od/d logf_od = 0` (a smooth partial -- discrete participation-switch effects are
-  a SEPARATE row update a purely-analytic localized backend must handle explicitly, not
-  assume away).
-- **`gamma_prime_j` (`theta_free[1]`) is NOT sparse**: determines `f_jj` via
-  `derive_fjj_from_autarky_cutoff`, feeding BOTH the `(j,j)` domestic column and the
-  focal-link column's autarky term.
+**Derivation, refining the prior session's own sketch**: a full read of
+`delta_star.jl`'s `expand_free_theta` and `equilibrium.jl`'s `pivot_expand`/
+`build_gravity_pivot` (not done in either prior session before writing the dependency-map
+plan) surfaced a dependency the prior sketch did not name: the f-pivot cell's reconstructed
+value depends on `g0_f = c_full[jj_lin]*log(f_jj)`, and `f_jj` itself depends on
+`gamma_prime_j` AND whichever coordinate packs `A[j,j]` directly -- so BOTH of those
+coordinates affect the f-pivot cell, not just `(j,j)` and the focal-link column as the prior
+plan stated. Also clarified: whether a pivot cell (A-pivot or f-pivot) reaches the
+focal-link column is DATA-DEPENDENT (true iff that pivot cell's own origin is
+`target_country`), checked from the actual pivot choice at `ctx`-construction time, not
+assumed either way.
 
-**Recommended implementation order** (each with its own correctness gate before
-proceeding, per the prior session's plan): (1) build+unit-test the dependency map alone
-(no gradient logic), verifying its claimed affected-column set is a SUPERSET of the columns
-that actually differ under a finite perturbation, for every coordinate, at D=4; (2)
-implement `:method_b_localized` as a column-restricted (not incrementally-updated) wrapper
-around the EXISTING `fixed_active_set_moments!` fill body, validated bit-for-bit against
-full Method B before any further optimization; (3) only after that gate passes, consider
-sorted-crossing-row refinements as a SEPARATE subsequent step.
+**GATE 1** (`src/melitz/localized_gradient.jl`): `melitz_pivot_map(ctx)` precomputes the
+three theta-independent reconstructed-cell identities (`A_pivot_cell`, `f_pivot_cell`,
+`jj_cell` -- always three DISTINCT physical cells, verified structurally) and every free
+coordinate's own direct cell(s), purely from `ctx.A_pivot`/`ctx.c_full`/`ctx.f_free_lin`
+(no `theta`, no gradient logic). `melitz_localized_dependency_map(ctx)` builds, per free
+coordinate, the claimed affected trade cells and whether the focal-link column is touched.
 
-**Not implemented this session** -- the correctness-critical numerical-differentiation
-rewrite this represents was judged (by two consecutive sessions now) to need dedicated,
-unhurried time for its own exhaustive per-coordinate correctness gate, not a rushed pass
-inside an already-long screening-focused session.
+**Validated** (test suite, "Phase II.11 Gate 1"): for every one of 30 free coordinates,
+across 4 random D=4 base points (h=1e-4), the claimed affected set is confirmed a SUPERSET
+of the columns that ACTUALLY differ under a real finite perturbation
+(`fixed_active_set_moments(theta+h*e_k)` vs. the base, column-by-column). **This passed on
+the first live run with no coverage gaps found** -- a genuine confirmation of the
+derivation above, not merely "no test written."
 
-### 12. Parallel outer-gradient coordinates -- implementation plan
+**GATE 2** (`src/melitz/gradient_lab.jl`, `localized_gradient.jl`): `_fill_fixed_active_set_moments!`
+gains additive `cells`/`compute_link` keyword arguments (default `nothing`/`true`,
+reproducing the EXACT pre-existing unrestricted behavior for every current caller, which
+passes neither) -- when `cells` is given, the `(o,d)` loop is restricted to only those
+physical cells, and the caller is responsible for seeding `G`/`profit_j` with correct base
+values for every untouched column. `make_melitz_moments_jacobian_b_localized(h)`
+(`:method_b_localized`/`:B_localized`) wraps this into a drop-in Method B replacement:
+computes the FULL base `G(theta)` once per gradient call, then for each coordinate does two
+RESTRICTED displaced builds (only the claimed affected cells) instead of two full `D^2`-cell
+builds.
+
+**A real bug found and fixed before trusting Gate 2**: the first implementation was
+numerically close but not bit-exact -- `profit_j` (a `+=` accumulator over origin-`j`
+destinations) was summed in a DIFFERENT ORDER in the restricted path (whatever order
+`cells` happened to list origin-`j` cells in) than the unrestricted path's own fixed
+`d=1:D` order, producing ~1e-12 floating-point-roundoff-scale mismatches (floating-point
+addition is not associative) -- diagnosed via a standalone script isolating the exact
+`(coordinate,column)` pairs that differed, all traced to the link column, all at that
+noise scale. Fixed by always accumulating `profit_j` in the SAME fixed `d=1:D` order
+regardless of `cells`' own ordering. After the fix: bit-exact.
+
+**Validated** (test suite, "Phase II.11 Gate 2"): the restricted-fill extension reproduces
+the unrestricted call exactly when given the full cell set; leaves genuinely untouched
+columns exactly as provided; and `:method_b_localized`'s full `K_jac`/`G_jac` output is
+BIT-IDENTICAL (`==`, not `isapprox`) to full Method B's own output across 3 random D=4
+points/directions, both at the small test fixture and independently re-confirmed at
+PRODUCTION scale (D=4/W=20,000).
+
+**Benchmark** (`scripts/melitz_localized_gradient_benchmark.jl`, D=4/W=20,000):
+
+| backend | s/gradient | bytes/call |
+|---|---|---|
+| full `:method_b` | 0.9578 | 226,384 |
+| `:method_b_localized` | 0.2693 | 229,776 |
+
+**3.56x wall-time speedup, bit-exact, allocations essentially unchanged** (the win is from
+doing less `W`-loop work per coordinate, not from reduced allocation -- both backends use
+similarly-sized preallocated buffers). Dependency-map statistics confirm the structural
+expectation: **average 2.03 cells touched per coordinate**, vs. the full `D^2=16` a naive
+build recomputes -- close to the prior session's own "~3 cells" prediction, slightly better
+in practice; **8 of 30 coordinates touch the focal-link column** (the rest skip the extra
+`O(D)` `profit_j` pass entirely).
+
+### 12. Parallel outer-gradient coordinates -- implementation plan (NOT implemented this
+session)
 
 Unchanged from the prior session's plan: deferred until 11 is correct and validated (an
 explicit precondition both this and the prior session agree on). Once available:
@@ -473,11 +516,33 @@ allocations, CPU utilization, and BIT-IDENTICAL numerics vs. the serial localize
 (no floating-point-order-dependent reduction across threads if each thread owns disjoint
 output columns, so exact equality -- not "close" -- is the correct bar).
 
-### 13. Final end-to-end benchmark -- NOT RUN
+### 13. Final end-to-end benchmark
 
-Blocked on 11/12 (localized + parallel gradient) not being implemented this session -- see
-Section F below for the actual before/after this session DID measure (screening-only, no
-gradient-side changes).
+`scripts/melitz_phase2_final.jl` -- IDENTICAL to Section 9's own final campaign
+(`melitz_phase1_9_final.jl`: full screening stack, `maxit=250`, `:logf`/`:linear`,
+D=4/W=20,000/seed=29, `delta in {1e-3,1e-2}`, both directions), the ONLY change being
+`gradient_backend=:B_localized` instead of the default `:B`:
+
+| delta | dir | wall(s), Section 9 (`:B`) | wall(s), this section (`:B_localized`) | nStatus | numerical_fail | cold-verified Delta | gamma_prime |
+|---|---|---|---|---|---|---|---|
+| 1e-3 | upper | 54.96 | **36.30** | -400 | 0 | 9.776e-4 | 0.950508 |
+| 1e-3 | lower | 34.62 | **16.19** | -400 | 0 | 9.887e-4 | 0.965473 |
+| 1e-2 | upper | 36.17 | **15.88** | -400 | 0 | 9.787e-3 | 0.931771 |
+| 1e-2 | lower | 34.43 | **15.22** | -400 | 0 | 9.956e-3 | 0.979108 |
+| **total** | | **160.18** | **83.60** | | | | |
+
+**Every cold-verified `Delta`/`gamma_prime` is IDENTICAL between the two backends, cell for
+cell** -- expected and required given Gate 2's bit-exact validation (Section 11): the
+localized backend changes ONLY wall-clock cost, never the outer search's own trajectory or
+answer. **1.92x additional speedup from the localized gradient alone**, stacking on top of
+every Phase I win already reflected in both rows of this table.
+
+**Combined with the original (pre-screening-session) baselines**:
+
+| delta | original baseline | Phase I final (Section 9) | Phase I+II final (this section) | Phase I speedup | Phase I+II speedup |
+|---|---|---|---|---|---|
+| 1e-2 | 421.1s | 70.60s | **31.10s** | 5.97x | **13.54x** |
+| 1e-3 | 893.10s | 89.58s | **52.49s** | 9.97x | **17.02x** |
 
 ## Required final report
 
@@ -489,19 +554,17 @@ gradient-side changes).
 - **Failed inner attempt time**: WITHOUT `lower_limit_guard`: `70ms` (`maxit=25`) up to
   `2.18s` (`maxit=10000`) on this session's own 4 archived residual points (Section 2).
   WITH the guard (this session's Phase I.1 fix): `7-15ms`, uniformly, regardless of `maxit`.
-- **Complete outer-gradient time**: `~1.03s/gradient x 26 gradients = 26.7s`, `46.9%` of a
-  representative (pre-Phase-I.9) trajectory's own wall time (Section 10) -- a large, real,
-  STABLE cost, orthogonal to every Phase I screening change (Phase I only touches the
-  inner-solve side of the ledger).
+- **Complete outer-gradient time**: full Method B, `~1.03s/gradient x 26 gradients = 26.7s`,
+  `46.9%` of a representative trajectory's own wall time (Section 10); `:method_b_localized`
+  (Section 11, this session), `~0.27s/gradient` (**3.56x faster**, bit-exact), `~7s/26
+  gradients`.
 - **Complete outer-trajectory time**: screening report baseline `421.1s` (both directions,
   `delta=1e-2`) -> screening report screens-only `83.6s` -> this session's fresh screens-
   only reproduction `91.1s` (Section 0) -> this session's `+lower_limit_guard` `65.15s`
-  (Section 8) -> this session's FINAL stack (+`maxit=250`+origin-block+dual-polish) `70.60s`
-  at `delta=1e-2`, `89.58s` at `delta=1e-3` (Section 9) -- **5.97x**/**9.97x** vs. the
-  respective prior-recorded baselines (Section 9's own table; the `1e-2` final number is
-  not monotonically below `+lower_limit_guard`'s `65.15s` alone because it also swaps in
-  `maxit=250`, which changes the outer search's own trajectory, not a regression in any
-  single mechanism -- see Section 9's own note).
+  (Section 8) -> Phase I FINAL stack (+`maxit=250`+origin-block+dual-polish) `70.60s` at
+  `delta=1e-2`, `89.58s` at `delta=1e-3` (Section 9) -> Phase I+II FINAL stack
+  (+`:method_b_localized`) **`31.10s`** at `delta=1e-2`, **`52.49s`** at `delta=1e-3`
+  (Section 13) -- **13.54x**/**17.02x** vs. the respective original baselines.
 
 ### B. Residual-failure classification
 
@@ -549,11 +612,15 @@ either -- see Section C).
 
 ### E. Outer-gradient performance
 
-**Full** (this session's only measured backend): `~1.03s/gradient`, `26.7s/trajectory`,
-`46.9%` of wall (Section 10). **Localized**: not implemented (Section 11 -- implementation
-plan only, correctness-risk deferral consistent with the immediately-prior session's own
-decision on this exact item). **Localized-parallel**: not implemented (Section 12, blocked
-on 11).
+**Full**: `~1.03s/gradient`, `26.7s/26-gradient trajectory`, `46.9%` of wall (Section 10).
+**Localized** (`:method_b_localized`, IMPLEMENTED AND VALIDATED this session, Section 11):
+`~0.27s/gradient`, **3.56x faster, bit-exact** (`==`, not `isapprox`) vs. full Method B at
+both test and production (D=4/W=20,000) scale; wired into the live outer solver as
+`gradient_backend=:B_localized`, giving a **1.92x** additional END-TO-END trajectory
+speedup (Section 13) on top of every Phase I win. **Localized-parallel**: not implemented
+(Section 12 -- explicitly deferred, correctly gated on 11, which is now done; the natural
+next step for a future session, with real headroom given the gradient backend is now a
+smaller absolute cost but the SAME 30-coordinate probe structure to parallelize).
 
 ### F. End-to-end result
 
@@ -568,13 +635,15 @@ across all 4 cells is outer-feasible with `Delta` safely inside its budget and
 `gamma_prime` economically sensible (`0.93-0.98` range, consistent with the screening
 report's own prior values).
 
-**Complete-trajectory level (Phase I+II combined)**: Phase II (localized/parallel gradient)
-was NOT implemented this session (Sections 11-13) -- the `~46.9%`-of-wall gradient floor
-(Section 10/E) is UNCHANGED by anything in this session's own work, so the numbers above ARE
-the full end-to-end result this session can report; a future session implementing Section
-11's plan would act on a gradient cost that is now a LARGER relative share of a much
-smaller total trajectory time than when the screening-session predecessor first identified
-it (previously ~4-34% of a several-hundred-second trajectory; now ~47% of a ~70-90s one) --
-i.e. exactly the situation where Section 11's own investment becomes MORE valuable, not
-less, now that the inner-solve side of the ledger (this session's whole focus) is
-essentially solved for this fixture.
+**Complete-trajectory level (Phase I+II combined)**: this session went on to implement and
+validate Phase II.11 (the localized gradient backend) after an explicit mid-session
+check-in on whether enough was understood to proceed safely -- see Section 11 for the two
+correctness gates (dependency-map superset, bit-exact Jacobian match) both passing, and a
+real floating-point bug found and fixed along the way. End-to-end (Section 13): **13.54x**
+(`delta=1e-2`) and **17.02x** (`delta=1e-3`) total speedup vs. the ORIGINAL pre-screening-
+session baselines, with every cold-verified incumbent identical to the Phase-I-only run
+(the localized gradient changes only wall-clock cost, never the answer, by construction of
+the bit-exact validation). Phase II.12 (parallelizing the now-smaller, still-30-coordinate
+gradient probe loop) remains unimplemented -- the natural next-session target, now with a
+validated, bit-exact serial localized backend to parallelize on top of rather than starting
+from the full O(D^2) builder.
