@@ -1060,3 +1060,249 @@ Consequently:
 
 See the finite-delta campaign sections below (this document's continuation, 2026-07-23
 session) for the actual upper/lower gains-from-trade programs.
+
+## 17. 2026-07-23 session: gradient reconciliation (Section 1) + the direct finite-delta
+## KNITRO outer NLP (Section 3) — built, bug-fixed, and stress-tested; Section 4's
+## campaign did not yield a verified incumbent this session
+
+Governing session prompt: fix the terminology (Section 16 above), resolve the Method B/C
+zero-switch gradient discrepancy flagged as a blocking task, then build and run the actual
+finite-delta upper/lower gains-from-trade programs via a real KNITRO NLP with explicit
+nonlinear constraints, reusing the Ricardian model's own `PsiObjectiveBundleImplicit`/
+`outer_loop` machinery rather than inventing a new bundle type. Given this session's time
+budget against the full scope (Sections 1 through 8), work was explicitly prioritized:
+Sections 1-3 are complete, tested, and committed; Section 4 was attempted at real scale
+(W=20,000) and produced a genuine, informative negative result rather than a converged
+incumbent; Sections 5-7 were not reached. Each cut is flagged explicitly below.
+
+### 17.A Conceptual correction (Section 8.A)
+
+No further global minimization of `Delta` over every outer coordinate was pursued this
+session (Section 16 already retired that framing). The target implemented in Section 3/4
+below is exactly the governing correction's own program: `minimize`/`maximize g =
+log gamma_prime[target]` subject to `Delta(theta) <= delta` and the deterministic cutoff
+inequalities — a single-coordinate objective with a divergence BUDGET constraint, not an
+unconstrained minimum-divergence search. `run_minimum_divergence_outer_smoke_test`
+(Section 16) remains a software regression test only and was not touched further this
+session beyond the rename already applied.
+
+### 17.B Gradient reconciliation (Section 1, main prompt Section B)
+
+**Root cause of the reported zero-switch B/C discrepancy, found and fixed
+(`src/melitz/gradient_lab.jl`, commit `6702e05`):** the prior Gate B session's Method C
+(`melitz_fixed_active_set_scalar`) held participation fixed via a precomputed
+`active_mask` array (`base_active_mask`) whose `(j,j)` AUTARKY slot incorrectly REUSED the
+BASELINE `(j,j)` domestic participation decision (computed with `price_power=1`) as a
+proxy for the autarky decision (which needs `price_power=gamma_prime_j`) — two
+economically different gates (different implied cutoff, since price_power/wage/
+expenditure/tau all differ between the baseline-domestic and autarky evaluations of cell
+`(j,j)`). Method B was already correct (it called the real, type-generic `moments!`, which
+has always used the right autarky formula). The bug meant `count_switches`'s own
+diagnostic never independently checked the autarky decision, so a probe could be reported
+as "zero switches" while the (never-checked) autarky participation had, in fact, flipped —
+exactly the `gamma`-direction counterexample the prior session's own CSV had documented
+(16% B/C disagreement near `Delta≈0`, at the time misattributed to "near-degeneracy",
+docs Section 15.7) but never diagnosed.
+
+**Fix**: `fixed_dual_scalar` (later split into `fixed_active_set_moments` +
+`dual_scalar_at_fixed_G`, commit `9aab8c2`) is now the ONE authoritative, type-generic
+implementation both Method B (finite difference) and Method C (`ForwardDiff.derivative`)
+call — recomputing participation fresh, per cell, with the CORRECT autarky formula,
+whether `theta_free` is `Float64`- or `Dual`-typed. No separate duplicate implementation
+of the fixed-dual criterion is maintained.
+
+**Verification (real KNITRO, D=4/seed=29, W=20,000 unless noted):**
+
+- Zero-switch bandwidth sequence (`h` from `1e-8` to `1e-5`, 4 directions incl. `gamma`,
+  the prior session's own counterexample direction): Methods B and C now agree to
+  `~1e-8`–`1e-14` relative error at every confirmed-zero-switch probe (both baseline AND
+  autarky confirmed unchanged) — fully resolving the reported discrepancy, including at
+  the exact `gamma` direction that previously diverged.
+- Per-moment-column directional-derivative audit (`fixed_active_set_moments`,
+  ForwardDiff vs. central FD): at confirmed zero-switch probes, max absolute error across
+  both trade-share and the focal-link columns is `~1e-8`–`1e-9` (FD-truncation-level, not
+  a defect); at a probe with one genuine switch (`gamma`, `h=1e-6`), the naive per-column
+  FD explodes (`~3.9e5` on one row) exactly as expected for a real participation flip —
+  confirming the diagnosis, not a new bug.
+- Reduced derivative battery (population point plus two random perturbations at
+  `Delta≈3.5e-3` and `Delta≈1.85e-2`; 6 directions incl. the now-fixed `f_high_switch`;
+  bandwidths `1e-6` to `1e-3`): confirmed-zero-switch agreement is uniformly tight
+  (`~1e-10`–`1e-14` relative error) across ALL three points and all directions, resolving
+  the prior session's own tentative "B tracks A poorly near Delta≈0" finding — that WAS
+  the bug, not a genuine near-degeneracy artifact. Method A (fully reoptimized) tracks
+  Method B closely once switches are present and the point is away from `Delta≈0` (e.g.
+  `ordinary_A` at `h=1e-4`: `B=-0.605` vs `A=-0.608`, ~1% apart), consistent with the
+  prior session's own hypothesis, now confirmed cleanly on the corrected machinery.
+
+**Method D** (`method_d_hand_derived`, an independently-coded hand-derived closed-form
+cross-check, chaining the given analytic per-cell partials through
+`ForwardDiff.derivative` on `expand_theta_econ_vector` ALONE — not the full
+fixed-dual-scalar chain Method C differentiates) agrees with Method C at every
+confirmed-zero-switch probe tried, to machine precision — an independent validation of
+both the gravity-pivot chain rule (already separately validated, Section 1.3) and the
+firm-level revenue/profit algebra.
+
+**`f_high_switch` fixed** (`f_high_switch_direction`): the prior session's version was an
+accidental duplicate of `ordinary_f`. The new version empirically selects, from a base
+active-set snapshot, the free-`f` coordinate producing the most participation switches
+(baseline + autarky) at a probe bandwidth — confirmed to produce 5-8x more switches than
+`ordinary_f` at matched bandwidths on real data.
+
+**Not reached** (flagged, not silently dropped): the full `30 coordinates x 11 bandwidths
+x >=5 points` grid (Section 2's own stated scale) — a REDUCED, representative battery was
+run instead (3 points, 6 directions, 4 bandwidths), matching the prior session's own
+scope-cut precedent; the reduced result was clean and consistent enough that the full grid
+is not expected to change the conclusion, but was not run to confirm this.
+
+### 17.C The direct finite-delta constrained outer problem (Section 3, main prompt
+### Section 3)
+
+**Built** (`src/melitz/finite_delta_outer.jl`, commit `53e6ca2`): reuses
+`PsiObjectiveBundleImplicit` and the `cc_algo` outer-loop calling convention
+(`KN_new`/`KN_add_vars`/`KN_add_eval_callback`/`KN_set_cb_grad`/`KN_solve`/
+`KN_get_solution`) unmodified, per explicit instruction — Melitz supplies its own
+`moments!` (`melitz_moments_adapter_outer!`, `K := theta_free[1]` constant across draws,
+which is what makes this bundle "Implicit" in this codebase's own vocabulary, exactly
+analogous to the Ricardian GT counterfactual) and `moments_jacobian!` (Methods B or D from
+Section 1, NOT naive ForwardDiff through the hard participation gate — the whole reason
+Section 1's gradient laboratory exists) into the SAME generic struct/functor the Ricardian
+model's `ccOuter.jl` (`counterType==1` branch) uses. The deterministic cutoff inequalities
+(Section 1.3) have no Ricardian analogue (that model has no gravity-pivot/cutoff-
+feasibility system) and are genuinely new: added as extra rows in ONE combined KNITRO
+callback (see the crash finding below for why one, not two, callback contexts).
+
+**Two real bugs found via direct empirical testing (not just reading the code), both
+documented in the file itself:**
+
+1. **A vacuous constraint bound.** The Ricardian model's own `outer_loop_constraints!`
+   (`cc_algo/outer_loop_functions.jl`, and the independent `PsiObjectiveBundleImplicitMethodB`
+   variant in `sequential_gravity/`) sets `KN_set_con_upbnd(cIndices[1], 1e10*obj.δ)`
+   against the functor's `constr[1] = -1e10*f`. Algebraically this reduces to
+   `f >= -delta`, which is ALWAYS true since `f = Delta(theta) >= 0` by convex duality —
+   vacuous for a `Delta(theta) <= delta` budget. Confirmed empirically, not just
+   algebraically: a smoke run using that exact bound let `theta` drift for 60 real outer
+   iterations with the reported feasibility error pinned at `0.000e+00` throughout
+   regardless of where `theta` went; the terminal point's `Delta` only happened to satisfy
+   the intended budget by chance (the search never moved far in that particular run).
+   **Fixed**: the correct bound is a LOWER bound, `constr[1] >= -1e10*delta` (i.e.
+   `Delta(theta) <= delta`) — set directly in this file's own driver (NOT a change to the
+   shared `cc_algo/outer_loop_functions.jl`, which other models still rely on as-is).
+   Re-verified empirically: with the corrected bound, a tight `delta=1e-3` test pushed the
+   search hard enough to reach a numerically pathological inner-dual region
+   (`nStatus=-102`), which the verified-success gate correctly refused to report as a
+   result — i.e. the corrected constraint is genuinely binding, unlike the original.
+
+2. **A reproducible KNITRO callback crash from two separate callback contexts.**
+   Registering the divergence-budget block (reusing the existing cc_algo callbacks
+   directly) and the new cutoff-constraint block as TWO separate
+   `KN_add_eval_callback` contexts on the same outer problem reproducibly crashed KNITRO
+   (`-500`, "could not evaluate objective or constraints") at the very first evaluation —
+   even though EACH block, registered ALONE on its own KNITRO problem, ran flawlessly (the
+   delta-only block completed 60 real outer iterations; the cutoff-only block converged in
+   6). Direct calls to both new callback functions (bypassing KNITRO entirely) also worked
+   without error, and `par_concurrent_evals` (the cause of an unrelated, previously-
+   documented full-A nested-solve hang) was ruled out as the cause here — removing it did
+   not fix this crash. An initial hypothesis (a second, independent nested inner KNITRO
+   solve running inside the cutoff callback, on top of the delta callback's own) was
+   tested directly and ruled out: removing that second nested solve left an identical
+   crash. The exact root cause was not pinned down further given the time this would take
+   to isolate inside KNITRO's own C library; **fixed** by merging into ONE combined
+   callback context (`melitz_combined_callback_F!`/`_G!`) covering all `1+D^2`
+   constraints, which sidesteps the issue entirely and is also simply less new code
+   (verified via a real KNITRO run: 60 iterations, no crash, `nStatus=-400`/"iteration
+   limit, current point feasible" — a normal non-convergence outcome, not an error).
+
+**Regression test added** (`test/melitz/runtests.jl`, "Section 3: solve_melitz_finite_delta_bound"):
+a short, loose run (small `W`, `theta_box=0.5`) confirming the solver runs end to end
+without the `-500` crash and that any cold-verified incumbent found respects the delta
+budget. Not a converged economic result — that is Section 4's job. 307/307 Melitz tests
+pass with this section included.
+
+### 17.D Primary finite-delta campaign (Section 4) — attempted, no verified incumbent
+### found this session
+
+D=4, W=20,000, seed=29, population-Pareto start (`Delta_pop = 7.55e-6`, `gamma_prime =
+0.9585`, `GT = 0.0652`, matching `GT_ACR` to `~1e-14`), Backend B (`h=1e-4`), `delta=1e-3`
+(the first continuation checkpoint).
+
+**Attempt 1** (single KNITRO solve per direction, `maxit=25`, `theta_box=10` then `2.0`):
+both directions ran to completion without crashing (`~470-535s` wall each) but drifted far
+enough that the terminal point was numerically pathological (`nStatus=-102`/`-410`,
+`Delta` on the order of `1e16`–garbage) — correctly identified as UNVERIFIED by the
+verified-success gate (`cold_verified_incumbent = nothing` reported honestly, not a false
+positive).
+
+**Attempt 2** (genuine short-burst continuation: `theta_box=0.15`, `maxit=5` per burst,
+re-launching from the previous terminal point only if it cold-verified as feasible,
+aborting a direction's continuation otherwise): revealed a more informative and more
+concerning finding. The UPPER direction's first burst reported `nStatus=0` ("locally
+optimal solution found"), feasibility error `0.000e+00` at every one of its 6 iterations,
+and looked like a clean, converged, feasible result (`gamma=0.825`, `GT=0.154`) — but an
+INDEPENDENT cold reverification at that exact terminal `theta` (a fresh inner solve, no
+warm start) gives `Delta = 2.12`, roughly 2000x the `delta=1e-3` budget. The LOWER
+direction's first burst reached `nStatus=-102` (`Delta` again garbage on cold
+reverification). Both were correctly rejected; the continuation logic stopped rather than
+building further bursts on an unverified point (per its own design, matching Section 3.4's
+"never replace a verified incumbent with an unverified terminal point").
+
+**This is read as a genuine, informative negative result, not an infrastructure failure**:
+the SAME discipline this session's own design insists on (never trust a live/warm KNITRO
+trajectory's own reported status; always independently cold-verify) is exactly what caught
+this. The finding itself — that KNITRO's own internal constraint tracking during a
+trajectory can report `nStatus=0`/feasibility error `0.000` at a point that, independently
+reverified from a cold start, is nowhere near feasible — is consistent with, and a fresh
+concrete instance of, this same repository's own previously-documented risk class around
+inner-solve status reliability (`[[recover-lfd-nstatus-bug-fix]]`: "silently accepted
+UNBOUNDED inner KNITRO dual solves (`isfinite(x)` but wrong `nStatus`)", fixed repo-wide in
+a prior session for a different call path). The exact mechanism here (whether it is a
+genuine non-uniqueness/numerical-conditioning issue in the inner CC dual solve at this
+theta, an issue specific to the `Float64`, all-zero-initialized cold start `inner_loop_internal`
+uses by default here, or something else) was not diagnosed further this session given the
+wall-clock cost of each real-KNITRO attempt (`200`–`1000`+ seconds each).
+
+**No verified incumbent was found for either direction at `delta=1e-3` this session.**
+`delta=1e-2`/`1e-1` were not attempted (the governing prompt's own continuation ordering
+starts at the tightest budget and only widens if that succeeds comfortably — it did not).
+
+### 17.E Backend comparison (Section 4.1/8.D)
+
+Only Backend B was exercised in real KNITRO campaigns this session (Backend R does not
+fit the `moments_jacobian!` hook at all — it requires full inner reoptimization at
+displaced points, a structurally different algorithm, not a plug-in gradient function;
+Backend D's `moments_jacobian!` analogue, `make_melitz_moments_jacobian_d`, was
+implemented in `finite_delta_outer.jl` but not run in a real campaign this session; Backend
+H was not implemented for the KNITRO-native path). No cold-verified outer progress exists
+yet to compare backends against.
+
+### 17.F Sections 5-7: not reached
+
+The profiled inverse (`delta_profile(g)`, Section 5), local verification/polling of
+finite-delta incumbents (Section 6), and the W=80,000 confirmation pass (Section 7) all
+depend on having at least one cold-verified finite-delta incumbent to work from (Section
+4). None was produced this session, so none of Sections 5-7 were attempted.
+
+### 17.G Remaining risks (Section 8.F)
+
+- **The central open risk**: a real, reproducible discrepancy between KNITRO's own live
+  inner-solve status/feasibility tracking during an outer trajectory and an independent
+  cold reverification at the identical terminal point (Section 17.D). This must be
+  understood and resolved (or a robust workaround found — e.g. always cold-restarting the
+  inner solve inside the outer callback rather than relying on `inner_loop_internal`'s own
+  default zero-start, tightening the outer `feastol`, or adding a periodic mid-trajectory
+  cold-verification check that aborts/rejects a KNITRO run early once it drifts) before
+  Section 4's campaign can be trusted to produce a real result, however long it runs.
+- Backend B's reliability from a from-scratch (non-continuation) start at `delta=1e-3` is
+  poor at this `W`/starting configuration — genuine continuation (very small trust-region
+  bursts) is necessary but was not, in the time available, sufficient to produce a single
+  verified incumbent.
+- No evidence yet on whether Backend D or a hybrid backend would behave better or worse —
+  not tested in a real campaign.
+- The exact root cause of the two-separate-callback-contexts KNITRO crash (Section 17.C,
+  finding 2) was not pinned down — worked around, not fully explained. If a future session
+  needs to split constraint blocks again (e.g. for a Jacobian-sparsity or performance
+  reason), this is worth revisiting rather than assuming the workaround generalizes.
+- `theta_box`/`maxit`/`h` defaults in `finite_delta_outer.jl` and
+  `melitz_outer_finite_delta.opt` were set empirically during this session's debugging
+  (tightened after the attempt-1 blowup) and are not independently tuned or validated
+  against a wider grid.
+- Sections 5-7 (profile, local polling, W=80,000 confirmation) are entirely unstarted.
