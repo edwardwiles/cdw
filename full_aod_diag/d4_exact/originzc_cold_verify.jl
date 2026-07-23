@@ -91,9 +91,9 @@ K, base, verify = cm_originzc_production_value_verified(xf, νfull, pcx)
 cplus_pool = build_grad_workspace_pool(size(ctx.obj.U, 1))
 cplus_ws = build_lfix_factorized_workspace(ctx.D, size(ctx.obj.U, 1))
 g_cplus, _ = cm_originzc_production_gradient_cplus(xf, νfull, pcx, ctx, pe, cplus_pool, cplus_ws;
-    base = base, verify = verify)
+    base = base, verify = verify, threaded = true, h_mode = :cached, bandwidth_cache = Dict{Int,Float64}())
 g_ref, _ = cm_originzc_production_gradient(xf, νfull, pcx, ctx, pe;
-    base = base, verify = verify)
+    base = base, verify = verify, threaded = true, h_mode = :cached, bandwidth_cache = Dict{Int,Float64}())
 grad_diff = norm(g_cplus .- g_ref)
 grad_cosine = dot(g_cplus, g_ref) / (norm(g_cplus) * norm(g_ref))
 
