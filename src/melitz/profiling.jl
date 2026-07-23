@@ -68,14 +68,32 @@ Times `expr` with `time_ns()` and records the elapsed time under `category` (eva
 once, must produce a `Symbol`) into the global `MELITZ_PROF` profiler -- ONLY when
 `MELITZ_PROFILE[]` is `true`. When disabled (the default), expands to just `expr` guarded
 by a single `Bool` check -- no `time_ns()` call, no dictionary lookup, no allocation.
+
+**Exception-safe (Section 3.1, 2026-07-23 continuation session)**: uses `try/finally` so
+elapsed time is recorded whether `expr` returns normally OR throws. On a normal return the
+time is recorded under `category`; on a throw it is recorded under
+`Symbol(category, :_error)` and the original exception is ALWAYS rethrown unmodified (this
+macro never swallows an exception -- callers relying on KNITRO.jl's own callback-error
+conversion, e.g. `finite_delta_outer.jl`'s `DomainError`-throwing convention, depend on the
+exception propagating out exactly as thrown). Previously this macro only wrapped `expr` in
+a bare `if`, so any call that ultimately threw (a genuine inner-solve failure surviving a
+cold retry) contributed ZERO measured time to its category even though real wall-clock
+work happened before the throw -- documented as the single largest instrumentation gap in
+`docs/melitz_optimization_report_2026-07-23.md` Section B/H.
 """
 macro melitz_profile(category, expr)
     quote
         if MELITZ_PROFILE[]
-            t0 = time_ns()
-            local r = $(esc(expr))
-            melitz_record!($(esc(category)), Int64(time_ns() - t0))
-            r
+            local cat = $(esc(category))
+            local t0 = time_ns()
+            local threw = true
+            try
+                local r = $(esc(expr))
+                threw = false
+                r
+            finally
+                melitz_record!(threw ? Symbol(cat, :_error) : cat, Int64(time_ns() - t0))
+            end
         else
             $(esc(expr))
         end
@@ -86,6 +104,23 @@ end
 function melitz_record_seconds!(category::Symbol, elapsed_s::Real)
     MELITZ_PROFILE[] || return nothing
     melitz_record!(category, Int64(round(elapsed_s * 1e9)))
+    return nothing
+end
+
+"""
+    melitz_record_seconds_outcome!(category, outcome, elapsed_s)
+
+Section 3.1's outcome-labeled recording: records under `Symbol(category, :_, outcome)`.
+For manual `try/finally` instrumentation at call sites that need to distinguish outcomes
+finer than plain success/throw (at minimum: `warm_success`, `warm_failure`, `cold_success`,
+`cold_failure`, `callback_success`, `callback_eval_error`, `cache_hit`) -- `@melitz_profile`
+itself only distinguishes normal-return vs threw, which is not enough to see e.g. a warm
+inner solve that returned a NUMERICAL failure (`nStatus` outside the accepted set) without
+throwing at all.
+"""
+function melitz_record_seconds_outcome!(category::Symbol, outcome::Symbol, elapsed_s::Real)
+    MELITZ_PROFILE[] || return nothing
+    melitz_record!(Symbol(category, :_, outcome), Int64(round(elapsed_s * 1e9)))
     return nothing
 end
 
@@ -146,5 +181,33 @@ function melitz_profile_report(io::IO=stdout; trajectory_total_s::Union{Nothing,
             rpad(string(round(r.p90_ms; digits=3)), 10),
             rpad(string(round(r.max_ms; digits=3)), 10), pct_str)
     end
+    if trajectory_total_s !== nothing
+        melitz_profile_print_residual(io, rows, trajectory_total_s)
+    end
     return rows
+end
+
+"""
+    melitz_profile_print_residual(io, rows, trajectory_total_s)
+
+Section 3.2's decomposition: `total outer KNITRO wall` (= `trajectory_total_s`) vs.
+`complete FC/GA callback wall` (= the sum of every TOP-LEVEL `:fc_total_*`/`:ga_total_*`
+category -- ALL outcomes, since the callback wrapper's `try/finally` now records elapsed
+time regardless of success/eval-error) vs. `residual KNITRO-C/API wall` (the difference).
+Only this residual, computed AFTER exception-safe callback timing, may be described as
+KNITRO-internal overhead -- callback time that went unrecorded merely because a call threw
+is no longer part of it (the prior instrumentation gap this session's Section 3 closes).
+"""
+function melitz_profile_print_residual(io::IO, rows::Vector{<:NamedTuple}, trajectory_total_s::Real)
+    fc_total = sum((r.total_s for r in rows if startswith(string(r.category), "fc_total")), init=0.0)
+    ga_total = sum((r.total_s for r in rows if startswith(string(r.category), "ga_total")), init=0.0)
+    callback_wall = fc_total + ga_total
+    residual = trajectory_total_s - callback_wall
+    pct = trajectory_total_s > 0 ? round(100 * residual / trajectory_total_s; digits=1) : NaN
+    println(io, "\n-- Section 3.2 wall-time decomposition --")
+    println(io, "total outer KNITRO wall        = ", round(trajectory_total_s; digits=4), "s")
+    println(io, "complete FC/GA callback wall    = ", round(callback_wall; digits=4), "s (fc_total*=",
+        round(fc_total; digits=4), "s, ga_total*=", round(ga_total; digits=4), "s)")
+    println(io, "residual KNITRO-C/API wall      = ", round(residual; digits=4), "s (", pct, "% of trajectory)")
+    return (trajectory_total_s=trajectory_total_s, callback_wall=callback_wall, residual=residual)
 end
