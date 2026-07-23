@@ -23,6 +23,7 @@ include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
 include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
 include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
 include(joinpath(@__DIR__, "cm_production_bundle.jl"))
+include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))   # CM-C+ production integration 2026-07-23: cm_gradient_backend now defaults to :cplus in run_cm_upper_checkpointed, so this must always be on the include path
 include(joinpath(@__DIR__, "nested_quantile_grids.jl"))
 include(joinpath(@__DIR__, "cm_outer_driver.jl"))
 include(joinpath(@__DIR__, "cm_checkpoint.jl"))
