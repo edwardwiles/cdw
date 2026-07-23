@@ -996,6 +996,55 @@ if KNITRO_AVAILABLE
             end
         end
     end
+
+    # ========================================================================
+    # Section 18 (2026-07-23 follow-up session): pins the divergence-budget
+    # constraint's SIGN AND MAGNITUDE directly against the independently-verified
+    # ground-truth Delta(theta) (evaluate_melitz_delta / PsiObjectiveBundleDelta path).
+    # A prior version of solve_melitz_finite_delta_bound set a LOWER bound on
+    # constr[1], reasoning constr[1]=-1e10*Delta(theta)<=0; this was WRONG (the
+    # functor's raw, uncorrected f equals -Delta(theta), not +Delta(theta), the same
+    # find_smallest sign correction inner_loop/dual_scalar_at_fixed_G already apply
+    # elsewhere), so constr[1]=+1e10*Delta(theta)>=0 always, making a LOWER bound of
+    # -1e10*delta vacuous (always satisfied) -- silently re-introducing the exact
+    # failure mode the constraint direction was supposed to fix, and fully explaining
+    # the previously-reported "KNITRO live feasibility tracking disagrees with cold
+    # verification" finding (docs Section 17.D/17.G): the budget was never binding.
+    # This test would have FAILED under that prior (buggy) lower-bound convention.
+    # ========================================================================
+    @testset "Section 18: divergence-budget constraint sign (constr[1] == +1e10*Delta(theta))" begin
+        small_fixture18 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        obj18, theta0_18 = build_melitz_psi_bundle(small_fixture18;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+        ctx18 = obj18.γ
+        r0_18 = evaluate_melitz_delta(theta0_18, ctx18, obj18; cold=true, store_G=false)
+        @test r0_18.nStatus == 0
+        @test r0_18.Delta > 0  # genuinely nonzero, so sign flip is unambiguous, not a 0==-0 coincidence
+
+        obj_impl18 = build_melitz_implicit_bundle(ctx18, obj18.U, theta0_18; delta=1e-3,
+            find_smallest=true, gradient_backend=:B, h=1e-4,
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
+            outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"))
+        _, x18, nStatus18 = CounterfactualSensitivity.inner_loop_internal(obj_impl18, theta0_18)
+        @test nStatus18 == 0
+        local_c18 = zeros(1)
+        obj_impl18(x18, constr=local_c18)
+
+        @testset "constr[1] equals +1e10*Delta(theta), not -1e10*Delta(theta)" begin
+            @test isapprox(local_c18[1], 1e10 * r0_18.Delta; rtol=1e-6)
+            @test local_c18[1] > 0  # would be NEGATIVE under the prior (buggy) sign belief
+        end
+        @testset "the ACTIVE (upper) bound convention correctly discriminates feasibility" begin
+            delta_tight = r0_18.Delta / 2   # Delta(theta0) > delta_tight -> must be INFEASIBLE
+            delta_loose18 = r0_18.Delta * 2 # Delta(theta0) <= delta_loose -> must be FEASIBLE
+            @test !(local_c18[1] <= 1e10 * delta_tight)   # upper-bound convention: correctly infeasible
+            @test local_c18[1] <= 1e10 * delta_loose18    # upper-bound convention: correctly feasible
+            # the prior LOWER-bound convention is vacuous at BOTH deltas (regression pin):
+            @test local_c18[1] >= -1e10 * delta_tight
+            @test local_c18[1] >= -1e10 * delta_loose18
+        end
+    end
 end
 
 # ============================================================================

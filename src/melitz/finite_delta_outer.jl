@@ -418,25 +418,41 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     # reproducible KNITRO crash with two separate contexts, root cause not fully pinned
     # down but confirmed independent of the reused cc_algo callbacks' own correctness).
     #
-    # Constraint 1's bound: the functor computes `constr[1] = -1e10*f` where
-    # `f=Delta(theta)>=0` always (convex duality). `Delta(theta)<=delta` is therefore
-    # `f<=delta`, i.e. `constr[1] >= -1e10*delta` -- a LOWER bound. (The Ricardian
-    # model's own `outer_loop_constraints!` sets an UPPER bound of `1e10*delta` for the
-    # analogous Implicit-bundle row; that reduces to the vacuous `f>=-delta`, always
-    # true, confirmed empirically here: a smoke run using that bound let theta drift for
-    # 60 iterations with feasibility error pinned at 0.000 regardless of where theta
-    # went. Not reused for that reason -- this is the one place this file's constraint
-    # convention deliberately differs from the reused cc_algo pattern.) A tight
-    # `delta=1e-3` test with the corrected lower-bound convention pushed the search hard
-    # enough to reach a numerically pathological inner-dual region (`nStatus=-102`),
-    # correctly rejected by the verified-success gate below rather than silently
-    # accepted -- motivating Section 4's continuation strategy (start from a looser
-    # delta).
+    # Constraint 1's bound (CORRECTED 2026-07-23, see docs/melitz_delta_star.md Section
+    # 18): a PRIOR version of this file set a LOWER bound `constr[1] >= -1e10*delta`,
+    # reasoning that the functor's raw `f = sum(Psi(arg0))/M + zeta` equals `+Delta(theta)`
+    # at the optimal dual (so `constr[1] = -1e10*f <= 0` and `Delta<=delta` becomes a lower
+    # bound). That reasoning is WRONG. Empirically (and confirmed by `inner_loop`'s own
+    # `val *= -1.0` correction whenever `find_smallest==true`, `cc_algo/
+    # inner_loop_functions.jl` -- the SAME correction `dual_scalar_at_fixed_G`,
+    # gradient_lab.jl, already applies as `obj.find_smallest ? -raw : raw`), the raw `f`
+    # this functor computes is `-Delta(theta)`, not `+Delta(theta)` -- `PsiObjectiveBundleDelta`
+    # ALWAYS has `find_smallest=true` and `inner_loop` negates its raw `objSol` to report
+    # the (positive) `Delta`, so a raw, uncorrected read of `f` (exactly what `obj(x,
+    # constr=...)` below performs) is already sign-flipped relative to the reported `Delta`.
+    # Verified directly: at a converged benchmark point (`Delta_truth=2.653045e-4`),
+    # `obj(x, constr=c)` gives `c[1]=+2.653045e6 == +1e10*Delta_truth` EXACTLY (not
+    # `-1e10*Delta_truth`); at a blown-up point (`Delta_truth` sentinel `1e10`),
+    # `c[1]=+1.31e23 == +1e10*Delta_truth` again. So `constr[1] = +1e10*Delta(theta)`
+    # ALWAYS (>=0), and `Delta(theta)<=delta` is therefore `constr[1] <= 1e10*delta` -- an
+    # UPPER bound -- exactly the Ricardian model's own UNMODIFIED `outer_loop_constraints!`
+    # convention (`KN_set_con_upbnd(cIndices[1], 1e10*obj.δ)`). The prior LOWER-bound
+    # version was empirically confirmed VACUOUS (the same failure mode it was written to
+    # fix, reintroduced via the opposite sign error): `constr[1]=+1e10*Delta(theta)>=0
+    # >= -1e10*delta` for any `delta>=0`, so it accepts every point regardless of
+    # `Delta(theta)`. This fully explains the previously-reported "KNITRO live feasibility
+    # tracking disagrees with cold verification" finding (docs Section 17.D/17.G): the
+    # outer solve's own divergence-budget constraint was never actually binding, so KNITRO
+    # correctly reported feasibility error 0.000 throughout -- the search was, in fact,
+    # unconstrained in that dimension, not lying about its own state. See
+    # `test/melitz/runtests.jl`, "Section 18: divergence-budget constraint sign", which
+    # pins `constr[1] == +1e10*Delta(theta)` against the independently-verified ground
+    # truth so this cannot silently regress again.
     D2 = D * (D - 1)
     n_cutoff = D + D2
     m = 1 + n_cutoff
     cIndices = KNITRO.KN_add_cons(kc, m)
-    KNITRO.KN_set_con_lobnd(kc, cIndices[1], -1e10 * delta)
+    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1e10 * delta)
     KNITRO.KN_set_con_lobnds(kc, n_cutoff, cIndices[2:end], zeros(n_cutoff))
 
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, melitz_combined_callback_F!)

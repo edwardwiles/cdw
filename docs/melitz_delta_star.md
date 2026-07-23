@@ -1306,3 +1306,85 @@ depend on having at least one cold-verified finite-delta incumbent to work from 
   (tightened after the attempt-1 blowup) and are not independently tuned or validated
   against a wider grid.
 - Sections 5-7 (profile, local polling, W=80,000 confirmation) are entirely unstarted.
+
+## 18. 2026-07-23 follow-up session: the "central open risk" (Section 17.G) was a
+## reversed divergence-constraint sign, not a KNITRO live-tracking bug — found and fixed
+
+Governing session prompt: do not trust Section 17.G's "KNITRO live feasibility tracking
+disagrees with cold verification" conclusion as established; trace the Ricardian
+sign/scalar convention line by line through the actual active call path before doing any
+further optimization or gradient tuning.
+
+**Diagnosis.** Traced every layer between the inner KNITRO solve and the outer
+divergence-budget constraint, without inferring any scalar's meaning from its name:
+
+| layer | function | scalar | equals |
+|---|---|---|---|
+| raw inner KNITRO solve | `inner_loop_KNITRO` (`cc_algo/inner_loop_functions.jl`) | `objSol` | the functor's raw `f` at its minimizer -- **not** `Delta(theta)` directly |
+| `PsiObjectiveBundleImplicit` functor | `(Q::PsiObjectiveBundleImplicit)(x; constr=...)` (`cc_algo/PsiObjectiveBundle.jl:275-361`) | `f = sum(Psi(arg0))/M + zeta` | raw dual value at trial `x`; sign convention NOT documented in the functor itself |
+| find_smallest correction | `inner_loop` (`cc_algo/inner_loop_functions.jl:186-196`, the code block quoted in this session's own governing prompt) | `val = objSol * (-1)^find_smallest` (conceptually; literal code negates `val` iff `find_smallest==true`) | `Delta(theta)` (positive, reported) -- `PsiObjectiveBundleDelta` (the ground-truth `D^2+1` inner solve, `build_melitz_psi_bundle`) has `find_smallest=true` ALWAYS, so its raw `objSol` is `-Delta(theta)` |
+| `melitz_combined_callback_F!` (`finite_delta_outer.jl`) | `obj(x, constr=local_c)` -- calls the SAME functor directly, bypassing `inner_loop`'s correction entirely | `local_c[1] = -f*1e10` | since this functor call is UNCORRECTED (no `inner_loop` wrapper), `f` here is the same raw, sign-unflipped value as `PsiObjectiveBundleDelta`'s raw `objSol` — i.e. `f = -Delta(theta)`, so `local_c[1] = +1e10*Delta(theta)` |
+
+**Empirically confirmed** (no full outer KNITRO solve needed — a single inner solve plus
+one direct functor call, compared against the independently-verified ground truth from
+`evaluate_melitz_delta`/`PsiObjectiveBundleDelta`): at a converged benchmark point
+(`Delta_truth=2.653045e-4`), `obj(x, constr=c)` gives `c[1]=+2.653045353181363e6`, EXACTLY
+`+1e10*Delta_truth` (not `-1e10*Delta_truth`) to full floating-point precision. At a
+deliberately blown-up point (`Delta_truth` sentinel `1e10`), `c[1]=+1.3088e23`, again
+exactly `+1e10*Delta_truth`. Confirmed identical regardless of the Implicit bundle's own
+`find_smallest` (true/false) -- the raw functor's `f` does not read `find_smallest` at all
+(only the separate outer-gradient branch does), so this sign is a fixed property of the
+shared functor, not something direction-dependent.
+
+**Consequence**: `finite_delta_outer.jl`'s prior constraint bound, `KN_set_con_lobnd(kc,
+cIndices[1], -1e10*delta)` (i.e. `constr[1] >= -1e10*delta`), was reasoned out under the
+assumption `f=+Delta(theta)` — the OPPOSITE of what a direct, uncorrected functor call
+actually returns. Since `constr[1] = +1e10*Delta(theta) >= 0` always, and `delta >= 0`
+always, `constr[1] >= -1e10*delta` is trivially satisfied for EVERY `theta` — vacuous,
+confirmed empirically at both the tiny-`Delta` and blown-up-`Delta` test points across a
+`delta` grid spanning both sides of `Delta_truth` (Section 18's own regression test,
+`test/melitz/runtests.jl`). This is the SAME failure mode Section 17.C's own fix was
+written to eliminate (the Ricardian model's unmodified UPPER-bound convention, reasoned
+under the same `f=+Delta(theta)` assumption, is *also* vacuous under that assumption) —
+the fix flipped the bound direction but kept the same wrong sign assumption, so it
+reintroduced an equivalent vacuous constraint via the opposite algebraic path, rather than
+fixing it.
+
+**This fully retracts Section 17.G's "central open risk."** There never was a
+discrepancy between KNITRO's live feasibility tracking and cold reverification — KNITRO
+correctly reported feasibility error `0.000` throughout Section 17.D's trajectories
+because the divergence-budget constraint, as coded, was never capable of being violated,
+regardless of where `theta` went. The `nStatus=0`/"clean, feasible, converged" terminal
+point that cold-reverified to `Delta=2.12` (~2000x the stated `delta=1e-3` budget,
+Section 17.D) is the expected, unremarkable consequence of an effectively unconstrained
+search in that one dimension — not evidence of any KNITRO internal-state bug.
+
+**Fix** (`finite_delta_outer.jl`): `KN_set_con_lobnd(kc, cIndices[1], -1e10*delta)`
+replaced with `KN_set_con_upbnd(kc, cIndices[1], 1e10*delta)` — i.e. `constr[1] <=
+1e10*delta`, which given the now-confirmed `constr[1]=+1e10*Delta(theta)` correctly
+encodes `Delta(theta)<=delta`. This is EXACTLY the Ricardian model's own unmodified
+`outer_loop_constraints!` convention (`cc_algo/outer_loop_functions.jl:216-228`,
+`KN_set_con_upbnd(cIndices[1], 1e10*obj.δ)`) — the correct fix is therefore to trust the
+shared cc_algo convention as originally written and NOT special-case Melitz's own driver
+at all, the opposite of Section 17.C's own change.
+
+**New regression test** (`test/melitz/runtests.jl`, "Section 18: divergence-budget
+constraint sign"): builds the Implicit bundle at the population-Pareto benchmark, solves
+the inner problem once, and asserts `constr[1]` equals `+1e10*Delta(theta)` (not
+`-1e10*Delta(theta)`) against the independently-verified ground truth from
+`evaluate_melitz_delta`, then confirms the ACTIVE (upper) bound convention correctly
+discriminates feasible (`delta` above `Delta(theta)`) from infeasible (`delta` below), and
+explicitly pins that the PRIOR lower-bound convention is vacuous at both tested `delta`
+values (would have passed neither check pre-fix). Full suite: all testsets pass after the
+fix (`test/melitz/runtests.jl`), no regressions.
+
+**What remains open**: Section 4's actual finite-delta campaign (the real economic
+upper/lower gains-from-trade programs) has NOT been re-run under the corrected
+constraint this session — the diagnosis-and-repair work above consumed the session's
+scope, per the governing prompt's own instruction to fix the constraint integration
+BEFORE any further optimization/gradient tuning. Re-running Section 4's campaign with the
+now-genuinely-binding budget constraint (starting from the same `delta=1e-3` continuation
+strategy) is the immediate next step, and should be expected to behave differently now
+that the constraint can actually reject a drifting `theta` — Backend B's own reliability
+under a REAL binding constraint has not yet been observed and may differ from the
+(vacuously-constrained) Section 17.D attempts.
