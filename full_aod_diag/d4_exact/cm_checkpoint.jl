@@ -264,6 +264,17 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # (non-resumed) run. Switching is not silently allowed even though it is
         # correctness-preserving (see above) -- the brief's own instruction is to make this an
         # explicit, audited choice, not an invisible default.
+        shadow_stats::Union{Nothing,Dict{Symbol,Any}} = nothing,   # Part III.2 follow-up (2026-07-23):
+        # opt-in, ADDITIVE-ONLY shadow instrumentation for the complete-state cache hit-opportunity
+        # question (docs/CM_CACHE_PROCESS_LIFECYCLE_AUDIT_2026-07-23.md). `nothing` (the default) is
+        # exactly zero behavioral/perf cost -- no dict lookups, no extra allocation, byte-identical
+        # to every run before this kwarg existed. When a `Dict{Symbol,Any}` is passed (caller-owned,
+        # pre-populated with :f_keys=>Dict{UInt64,Int}(), :g_keys=>Dict{UInt64,Int}(),
+        # :g_same_as_last_F=>Ref(0), :g_could_have_hit_cache=>Ref(0)), cb_F!/cb_G! record the
+        # fingerprinted point key (SAME `hash(round.(x,digits=12))` scheme
+        # COMPLETE_STATE_CACHE_DESIGN_2026-07-22.md's own `outer_point_key` uses) on every call --
+        # NEVER reads from it to change behavior, purely a counter. Does not itself use any cache;
+        # measures what a cache COULD have hit.
         heartbeat_interval_s::Union{Nothing,Float64} = nothing)   # remediation task Part B:
         # opt-in liveness watchdog (nothing = off, zero overhead, the default). When set, a
         # background Timer logs, every heartbeat_interval_s, how long it has been since the last
@@ -466,6 +477,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         if verbose && (n_eval[] <= 3 || n_eval[] % 20 == 0)
             lp("  eval ", n_eval[], " t=", round(time() - t_start, digits = 1), "s gp=", w[1], " Delta=", Δ, " feasible=", feasible, " verified=", verified)
         end
+        if shadow_stats !== nothing
+            fkey = hash(round.(w, digits = 12))
+            fkeys = shadow_stats[:f_keys]::Dict{UInt64,Int}
+            fkeys[fkey] = get(fkeys, fkey, 0) + 1
+        end
         last_activity_t[] = time(); last_activity_kind[] = :cb_F!
         return 0
     end
@@ -474,6 +490,25 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         xf = x_free_from_w(w, pe)
         shared = last_F_state[]
         base = (shared !== nothing && shared.w == w) ? shared.base : nothing
+        if shadow_stats !== nothing
+            gkey = hash(round.(w, digits = 12))
+            gkeys = shadow_stats[:g_keys]::Dict{UInt64,Int}
+            gkeys[gkey] = get(gkeys, gkey, 0) + 1
+            same_as_last_F = base !== nothing   # already handled, free -- not a cache opportunity
+            if same_as_last_F
+                (shadow_stats[:g_same_as_last_F]::Base.RefValue{Int})[] += 1
+            else
+                # A genuine potential cache hit exists iff THIS exact point was already solved by
+                # an EARLIER cb_F! call in THIS SAME PROCESS (fkeys already has a prior entry for
+                # this key, counted BEFORE this cb_G! call could itself have contributed one via
+                # a later cb_F! -- fkeys is only ever incremented in cb_F!, never here, so this is
+                # a clean pre-existing-solve check, not self-referential).
+                fkeys = shadow_stats[:f_keys]::Dict{UInt64,Int}
+                if get(fkeys, gkey, 0) > 0
+                    (shadow_stats[:g_could_have_hit_cache]::Base.RefValue{Int})[] += 1
+                end
+            end
+        end
         gfull, meta = if cm_gradient_backend == :cplus
             cm_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, threaded = true,
                 h_mode = :cached, bandwidth_cache = bandwidth_cache)
