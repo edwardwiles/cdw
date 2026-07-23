@@ -91,7 +91,7 @@ function run_point(label::String, x_free0::Vector{Float64}, K_mean::Int, K_pair:
 
     # ---- 1. Fixed-point gate: CM+mean (K_mean levels, K_pair=0) ----
     aug_mean = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, K_pair = 0, contrasts = CONTRASTS,
-        meanzc_basis = :direct)
+        meanzc_basis = :direct, probs = probs)
     ctx_mean = merge(ctx, (obj = aug_mean.obj_cm,))
     cctx_mean = build_cm_meanzc_bin_ctx(ctx, aug_mean)
     t_mean = @elapsed base_mean, verify_mean = archC_meanzc_verified_state(x_free0, ν0, ctx_mean, cctx_mean)
@@ -103,7 +103,7 @@ function run_point(label::String, x_free0::Vector{Float64}, K_mean::Int, K_pair:
 
     # ---- 1. Fixed-point gate: CM+mean+ZC (K_mean levels, K_pair levels) ----
     aug_zc = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, K_pair = K_pair, contrasts = CONTRASTS,
-        meanzc_basis = :direct)
+        meanzc_basis = :direct, probs = probs)
     ctx_zc = merge(ctx, (obj = aug_zc.obj_cm,))
     cctx_zc = build_cm_meanzc_bin_ctx(ctx, aug_zc)
     bins_zc = cm_bin_indices_for(ctx, aug_zc)
@@ -151,7 +151,7 @@ function run_point(label::String, x_free0::Vector{Float64}, K_mean::Int, K_pair:
 end
 
 nu0_A = [Float64(factorial(k)) for k in 1:1]   # K=1: nu_1 = 1! = 1 (Exp(1) mean)
-base_A, verify_A, pcx_A, ν0_A = run_point("A_calibration", w_calib, 1, 1, nu0_A)
+base_A, verify_A, pcx_A, ν0_A = run_point("A_calibration", x_free_calib, 1, 1, nu0_A)
 
 nu0_B = [Float64(factorial(k)) for k in 1:2]   # K=2: nu_1=1, nu_2=2 (Exp(1) 2nd raw moment)
 base_B, verify_B, pcx_B, ν0_B = run_point("B_cm_incumbent_delta1", x_free_B, 2, 2, nu0_B)
@@ -175,7 +175,7 @@ lp("="^100)
 lp("Peak RSS")
 lp("="^100)
 peak_rss_kb = try
-    parse(Int, split(read(`grep VmHWM /proc/self/status`, String))[2])
+    parse(Int, split(read(`grep VmHWM /proc/$(getpid())/status`, String))[2])
 catch
     -1
 end

@@ -72,7 +72,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 D4X_DIR="$(cd "$SCRIPT_DIR/../full_aod_diag/d4_exact" && pwd)"
 REPO_ROOT="$(cd "$D4X_DIR/../.." && pwd)"
 
-JULIA_BIN="${JULIA_BIN:-$HOME/.juliaup/bin/julia}"   # NEVER /opt/shared_sw -- see memory note
+export JULIA_BIN="${JULIA_BIN:-$HOME/.juliaup/bin/julia}"   # NEVER /opt/shared_sw -- see memory note
+# MUST be exported (found live, 2026-07-23): the process-group launch fix below runs
+# `setsid bash -c '...'`, a genuinely NEW bash process (not a subshell fork of this script), which
+# only inherits EXPORTED variables from the environment -- a plain (non-exported) shell variable
+# silently expands to empty inside it, causing `exec "$JULIA_BIN" ...` to fail with
+# "exec: : not found" and the stage runner never launching at all. The OLD (pre-fix) launch,
+# `( cd ... && "$JULIA_BIN" ... ) &`, was a plain subshell fork of THIS script and so never needed
+# JULIA_BIN to be exported -- this export only became necessary because of the setsid/bash -c
+# rewrite, confirmed by a live smoke-test failure (15 minutes with zero checkpoint output, root
+# cause found in stage.log: "_: line 3: exec: : not found").
 export JULIA_NUM_THREADS="${JULIA_NUM_THREADS:-20}"   # <= 20 per the brief's hard cap
 export OPENBLAS_NUM_THREADS=1   # NOT bounded by JULIA_NUM_THREADS automatically -- must set explicitly
 if [ -f "$REPO_ROOT/.knitro_env.sh" ]; then
@@ -268,7 +277,7 @@ run_stage_with_watchdog() {
     ( cd "$REPO_ROOT" && setsid bash -c '
         echo "$$" > "$1"
         shift
-        exec "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_production_stage_runner.jl "$2" "$3" "$4" "$5" "$6" "$7"
+        exec "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_production_stage_runner.jl "$1" "$2" "$3" "$4" "$5" "$6"
       ' _ "$pgid_file" "$stage_dir" "$delta" "$remaining" "$cur_mode" "$cur_seed" "$perturb_seed" \
         >> "$log_file" 2>&1 ) &
     local pid=$!
