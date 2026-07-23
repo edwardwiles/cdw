@@ -704,12 +704,23 @@ par_blasnumthreads 0
 #   choose any positive integer, or
 #   0 = value determined by OMP_NUM_THREADS environment variable
 #  -1 = run sequential version of Knitro code
-par_concurrent_evals  no
-# Set to no (was yes) per diag/fullA-inner-blas-threading's report: costs nothing measurable
-# (within noise, see docs/fullA_inner_blas_threading_report.md sec 14), removes a latent
-# data-race risk since this codebase's FG/Hessian callbacks mutate shared non-thread-local
-# state (obj.H, obj.x, ...) that concurrent_evals=yes could otherwise let KNITRO evaluate
-# out of order across trial points.
+par_concurrent_evals  yes
+# Reverted to yes 2026-07-23 (was set to no on 2026-07-21 per diag/fullA-inner-blas-threading's
+# report, docs/fullA_inner_blas_threading_report.md sec 14). That change was never cross-checked
+# against docs/fullA_nested_knitro_solve_hang_rootcause.md / commit dc3196c (2026-07-22), which
+# root-caused and fixed the EXACT same class of bug for the three OUTER opt files: KNITRO
+# enforces "one thread at a time" via a non-reentrant OpenMP critical section, and this
+# codebase's architecture always nests a second KN_solve (this file's own inner CC-dual solve)
+# inside the outer solve's callback on the SAME thread -- concurrent_evals=no makes that nested
+# call re-enter a critical section the outer call (or an earlier inner call, e.g. a cold-retry)
+# is still holding, a self-deadlock independent of thread count. dc3196c's fix only touched the
+# outer files, leaving this one -- the actual production inner-solve opt file -- still on `no`.
+# Reproduced live 2026-07-23: a real D=20/W=80000/CM(L=50) delta=0.01 production run hung ~12
+# minutes in, SIGKILL'd, stack trace stuck in KTR_lsq_set_jac_callback64 inside this file's own
+# nested KN_solve -- the identical signature dc3196c documented. The PsiObjectiveBundle.jl
+# thread-aware guard (cc_algo/PsiObjectiveBundle.jl) remains the correct defense-in-depth against
+# the original AUD-02 concurrent-access hazard; the opt-file-level `no` is redundant given that
+# guard and actively breaks the nested-solve architecture. See docs/fullA_nested_knitro_solve_hang_rootcause.md.
 
 # Number of threads to use in parallel BLAS.
 #   choose any positive integer, or
