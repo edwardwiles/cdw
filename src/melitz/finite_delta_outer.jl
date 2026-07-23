@@ -321,9 +321,10 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
     lower_limit = lower_limit_guard === nothing ? -KNITRO.KN_INFINITY : -(Float64(delta) + Float64(lower_limit_guard))
 
     mj! = gradient_backend == :B ? make_melitz_moments_jacobian_b(h) :
+          gradient_backend == :B_localized ? make_melitz_moments_jacobian_b_localized(h) :
           gradient_backend == :D ? make_melitz_moments_jacobian_d() :
-          error("gradient_backend must be :B or :D for the KNITRO-native Implicit path " *
-                "(Backend R does not fit the moments_jacobian! hook -- see file header)")
+          error("gradient_backend must be :B, :B_localized, or :D for the KNITRO-native " *
+                "Implicit path (Backend R does not fit the moments_jacobian! hook -- see file header)")
 
     obj = PsiObjectiveBundleImplicit(
         δ=Float64(delta),

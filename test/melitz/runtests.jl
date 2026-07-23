@@ -41,6 +41,7 @@ include(joinpath(MELITZ_DIR, "gradient_lab.jl"))
 include(joinpath(MELITZ_DIR, "outer_solve.jl"))
 include(joinpath(MELITZ_DIR, "inner_screening.jl"))
 include(joinpath(MELITZ_DIR, "origin_block_screen.jl"))
+include(joinpath(MELITZ_DIR, "localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 
 # ============================================================================
@@ -999,6 +1000,130 @@ if KNITRO_AVAILABLE
             K_jac1b, G_jac1b = zeros(Wt, n), zeros(Wt, d, n)
             mj1(K_jac1b, G_jac1b, theta0, obj5.U, obj5)
             @test G_jac1b == G_jac1
+        end
+    end
+
+    # ========================================================================
+    # Screening-continuation session, Phase II.11: localized fixed-dual gradient backend.
+    # Self-contained fixture (independent of the enclosing "Section 5" testset's own
+    # `obj5`/`ctx5`/`theta0`, which are local to that testset's own scope and not visible
+    # after it closes).
+    # ========================================================================
+    @testset "Phase II.11: localized gradient backend (Gate 1 + Gate 2)" begin
+        fixture11 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        obj11, theta11 = build_melitz_psi_bundle(fixture11;
+            inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+        ctx11 = obj11.γ
+
+        # ====================================================================
+        # GATE 1: the affected-moment-column dependency map, validated ALONE before any
+        # gradient code is written on top of it (main prompt Section 7.1's own required
+        # order). For EVERY free coordinate, across several random base points, the claimed
+        # affected set (`cells`/`touches_link`) must be a SUPERSET of the columns that
+        # ACTUALLY differ under a real finite perturbation
+        # (`fixed_active_set_moments(theta+h*e_k)` vs the base, column-by-column `!=`).
+        # ====================================================================
+        @testset "Gate 1: localized dependency map is a superset of actual column changes" begin
+            depmap = melitz_localized_dependency_map(ctx11)
+            n11 = length(theta11)
+            @test length(depmap) == n11
+
+            @testset "structural sanity: every claimed cell is a valid (o,d) pair, jj/pivot cells distinct" begin
+                pm = melitz_pivot_map(ctx11)
+                @test pm.jj_cell != pm.A_pivot_cell
+                @test pm.jj_cell != pm.f_pivot_cell
+                @test pm.A_pivot_cell != pm.f_pivot_cell
+                for dep in depmap, c in dep.cells
+                    @test 1 <= c[1] <= ctx11.D && 1 <= c[2] <= ctx11.D
+                end
+            end
+
+            rng11 = MersenneTwister(97)
+            h11 = 1e-4
+            n_checked = 0
+            for _ in 1:4
+                theta_base11 = theta11 .+ 0.02 .* randn(rng11, n11)
+                G_base = fixed_active_set_moments(theta_base11, ctx11, obj11)
+                link_col = ctx11.moment_layout.focal_link_index
+                for k in 1:n11
+                    ek = zeros(n11); ek[k] = 1.0
+                    Gp = fixed_active_set_moments(theta_base11 .+ h11 .* ek, ctx11, obj11)
+                    Gm = fixed_active_set_moments(theta_base11 .- h11 .* ek, ctx11, obj11)
+                    dep = depmap[k]
+                    claimed_cols = Set(ctx11.moment_layout.trade_index[c[1], c[2]] for c in dep.cells)
+                    dep.touches_link && push!(claimed_cols, link_col)
+                    for col in 1:ctx11.moment_layout.num_moments
+                        actually_changed = @view(Gp[:, col]) != @view(G_base[:, col]) ||
+                                            @view(Gm[:, col]) != @view(G_base[:, col])
+                        if actually_changed
+                            @test col in claimed_cols
+                            n_checked += 1
+                        end
+                    end
+                end
+            end
+            @info "Phase II.11 Gate 1 superset validation" n_coordinates=n11 n_base_points=4 n_actual_changes_checked=n_checked
+            @test n_checked > 0   # sanity: the probe grid must have exercised at least some real changes
+        end
+
+        # ====================================================================
+        # GATE 2: the restricted-fill extension and the :method_b_localized Jacobian
+        # backend built on top of it, ONLY reachable after Gate 1 passed above. Bit-exact
+        # (not merely close) agreement against full Method B is the required bar (main
+        # prompt Section 7.3): with Gate 1's dependency map correct, an unaffected column's
+        # localized central-difference MUST be exactly 0.0 at every draw, matching what
+        # full Method B's own (Gp_full-Gm_full)/(2h) computes for a column that truly does
+        # not move under that displacement.
+        # ====================================================================
+        @testset "Gate 2: restricted-fill extension + :method_b_localized bit-exact vs. full Method B" begin
+            @testset "restricted-fill sanity: full cell set + compute_link=true reproduces the unrestricted call exactly" begin
+                Wt2 = size(obj11.U, 1)
+                d2 = ctx11.moment_layout.num_moments
+                all_cells = Tuple{Int,Int}[(o, d) for o in 1:ctx11.D for d in 1:ctx11.D]
+                G_unrestricted = fixed_active_set_moments(theta11, ctx11, obj11)
+                G_restricted = zeros(Wt2, d2)
+                profit_scratch = zeros(Wt2)
+                fixed_active_set_moments_restricted!(G_restricted, profit_scratch, theta11, ctx11, obj11;
+                    cells=all_cells, compute_link=true)
+                @test G_restricted == G_unrestricted
+            end
+
+            @testset "restricted-fill leaves untouched columns exactly as provided" begin
+                Wt2 = size(obj11.U, 1)
+                d2 = ctx11.moment_layout.num_moments
+                G_seed = fixed_active_set_moments(theta11, ctx11, obj11)
+                G_probe = copy(G_seed)
+                profit_scratch = zeros(Wt2)
+                one_cell = Tuple{Int,Int}[(1, 1)]
+                fixed_active_set_moments_restricted!(G_probe, profit_scratch, theta11 .+ 0.05 .* randn(MersenneTwister(3), length(theta11)),
+                    ctx11, obj11; cells=one_cell, compute_link=false)
+                for o in 1:ctx11.D, d in 1:ctx11.D
+                    (o, d) == (1, 1) && continue
+                    col = ctx11.moment_layout.trade_index[o, d]
+                    @test G_probe[:, col] == G_seed[:, col]
+                end
+                @test G_probe[:, ctx11.moment_layout.focal_link_index] == G_seed[:, ctx11.moment_layout.focal_link_index]
+            end
+
+            mj_full = make_melitz_moments_jacobian_b(1e-4)
+            mj_loc = make_melitz_moments_jacobian_b_localized(1e-4)
+            n2 = length(theta11)
+            d2 = ctx11.moment_layout.num_moments
+            Wt2 = size(obj11.U, 1)
+
+            rng_gate2 = MersenneTwister(53)
+            for trial in 1:3
+                theta_probe2 = theta11 .+ 0.02 .* randn(rng_gate2, n2)
+                K_full, G_full = zeros(Wt2, n2), zeros(Wt2, d2, n2)
+                K_loc, G_loc = zeros(Wt2, n2), zeros(Wt2, d2, n2)
+                mj_full(K_full, G_full, theta_probe2, obj11.U, obj11)
+                mj_loc(K_loc, G_loc, theta_probe2, obj11.U, obj11)
+                @testset "trial $trial: K_jac and G_jac bit-identical, localized vs full Method B" begin
+                    @test K_loc == K_full
+                    @test G_loc == G_full
+                end
+            end
         end
     end
 

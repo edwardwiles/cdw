@@ -20,7 +20,8 @@ using ForwardDiff
 using LinearAlgebra: dot
 
 """
-    _fill_fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj) -> G
+    _fill_fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj;
+        cells=nothing, compute_link=true) -> G
 
 Section 12.4/7.5 optimization: the shared, type-generic (Float64 or ForwardDiff.Dual) fill
 body for `fixed_active_set_moments`/`fixed_active_set_moments!` -- takes caller-owned
@@ -28,9 +29,28 @@ body for `fixed_active_set_moments`/`fixed_active_set_moments!` -- takes caller-
 used by Method C's ForwardDiff path) and in-place (`Float64`-only, used by Method B's
 coordinate-probe loop) entry points below share ONE implementation instead of duplicating
 the moment-construction logic a second time.
+
+Phase II.11 Gate 2 (screening-continuation session) ADDITIVE extension: `cells` (default
+`nothing`, meaning "every `(o,d)` pair", the exact pre-existing behavior -- EVERY existing
+caller passes neither kwarg and is completely unaffected) restricts the trade-cell loop to
+only the given `(o,d)` pairs, and `compute_link` (default `true`, also pre-existing
+behavior) controls whether the focal-link column is (re)computed at all. **Restricted-mode
+contract** (only reachable when a caller explicitly passes `cells`): `G`/`profit_j` are
+assumed to ALREADY hold correct values for every column/entry NOT touched by the requested
+cells/link recomputation (the caller's responsibility -- typically a copy of a cached base
+`G`) -- `fill!` is skipped entirely in this mode, so an untouched column is left exactly as
+the caller provided it, not zeroed. Because the focal-link column depends on `profit_j`,
+which sums realized operating profit over ALL `D` destinations from origin `j` (not just
+whichever cells a single coordinate directly touches), `compute_link=true` ALWAYS
+recomputes every origin-`j` destination cell fresh (added to `cells` if not already
+present) so `profit_j` is exact, never incrementally patched -- still `O(D)`, not `O(D^2)`,
+for the common case where a coordinate's own `cells` list is much smaller than every
+origin-`j` cell.
 """
 function _fill_fixed_active_set_moments!(G::AbstractMatrix{T}, profit_j::AbstractVector{T},
-                                          theta_free::AbstractVector, ctx, obj) where {T}
+                                          theta_free::AbstractVector, ctx, obj;
+                                          cells::Union{Nothing,AbstractVector{Tuple{Int,Int}}}=nothing,
+                                          compute_link::Bool=true) where {T}
     D, j = ctx.D, ctx.target_country
     W = size(obj.U, 1)
     sigma = ctx.sigma
@@ -38,29 +58,70 @@ function _fill_fixed_active_set_moments!(G::AbstractMatrix{T}, profit_j::Abstrac
 
     A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta_free, ctx)
 
-    fill!(G, zero(T))
-    fill!(profit_j, zero(T))
+    restricted = cells !== nothing
     price_power_d = 1.0
-    @inbounds for o in 1:D, d in 1:D
-        trade_col = layout.trade_index[o, d]
-        lambda_od = ctx.X_data[o, d] / ctx.expenditure[d]
-        for w in 1:W
-            z = obj.U[w, o]
-            firm = melitz_firm(ctx.w[o], ctx.tau[o, d], A[o, d], f[o, d], sigma,
-                                ctx.expenditure[d], price_power_d, z)
-            G[w, trade_col] = firm.realized_revenue / ctx.expenditure[d] - lambda_od
-            o == j && (profit_j[w] += firm.realized_operating_profit)
+
+    if !restricted
+        fill!(G, zero(T))
+        fill!(profit_j, zero(T))
+        @inbounds for o in 1:D, d in 1:D
+            trade_col = layout.trade_index[o, d]
+            lambda_od = ctx.X_data[o, d] / ctx.expenditure[d]
+            for w in 1:W
+                z = obj.U[w, o]
+                firm = melitz_firm(ctx.w[o], ctx.tau[o, d], A[o, d], f[o, d], sigma,
+                                    ctx.expenditure[d], price_power_d, z)
+                G[w, trade_col] = firm.realized_revenue / ctx.expenditure[d] - lambda_od
+                o == j && (profit_j[w] += firm.realized_operating_profit)
+            end
+        end
+    else
+        @inbounds for (o, d) in cells
+            trade_col = layout.trade_index[o, d]
+            lambda_od = ctx.X_data[o, d] / ctx.expenditure[d]
+            for w in 1:W
+                z = obj.U[w, o]
+                firm = melitz_firm(ctx.w[o], ctx.tau[o, d], A[o, d], f[o, d], sigma,
+                                    ctx.expenditure[d], price_power_d, z)
+                G[w, trade_col] = firm.realized_revenue / ctx.expenditure[d] - lambda_od
+            end
+        end
+        if compute_link
+            # profit_j is an ACCUMULATOR (sum over d=1:D of origin-j operating profit), and
+            # floating-point addition is not associative -- it must be recomputed in the
+            # EXACT SAME fixed d=1:D order the unrestricted branch above uses (reached when
+            # its outer `o` loop hits `o==j`), not whatever order `cells` happens to list
+            # origin-j destinations in, or this branch would differ from the unrestricted
+            # one at the ~1e-12 floating-point-roundoff scale -- exactly the mismatch this
+            # comment replaces (found live via the Phase II.11 Gate 2 bit-exactness test).
+            # Every origin-j destination is (re)computed here regardless of whether it was
+            # already in `cells` (a harmless redundant recompute when it was, since both
+            # branches write the identical deterministic value to that column either way).
+            fill!(profit_j, zero(T))
+            for d in 1:D
+                trade_col = layout.trade_index[j, d]
+                lambda_od = ctx.X_data[j, d] / ctx.expenditure[d]
+                for w in 1:W
+                    z = obj.U[w, j]
+                    firm = melitz_firm(ctx.w[j], ctx.tau[j, d], A[j, d], f[j, d], sigma,
+                                        ctx.expenditure[d], price_power_d, z)
+                    G[w, trade_col] = firm.realized_revenue / ctx.expenditure[d] - lambda_od
+                    profit_j[w] += firm.realized_operating_profit
+                end
+            end
         end
     end
 
-    link_col = layout.focal_link_index
-    expenditure_prime = ctx.w_prime * ctx.L[j]
-    price_power_autarky = gamma_prime_j
-    @inbounds for w in 1:W
-        z_j = obj.U[w, j]
-        firm_autarky = melitz_firm(ctx.w_prime, 1.0, A[j, j], f_jj, sigma,
-                                    expenditure_prime, price_power_autarky, z_j)
-        G[w, link_col] = profit_j[w] / ctx.w[j] - firm_autarky.realized_operating_profit / ctx.w_prime
+    if compute_link
+        link_col = layout.focal_link_index
+        expenditure_prime = ctx.w_prime * ctx.L[j]
+        price_power_autarky = gamma_prime_j
+        @inbounds for w in 1:W
+            z_j = obj.U[w, j]
+            firm_autarky = melitz_firm(ctx.w_prime, 1.0, A[j, j], f_jj, sigma,
+                                        expenditure_prime, price_power_autarky, z_j)
+            G[w, link_col] = profit_j[w] / ctx.w[j] - firm_autarky.realized_operating_profit / ctx.w_prime
+        end
     end
     return G
 end
@@ -91,6 +152,23 @@ matches the allocating reference").
 function fixed_active_set_moments!(G::AbstractMatrix{Float64}, profit_j::AbstractVector{Float64},
                                     theta_free::AbstractVector{Float64}, ctx, obj)
     return _fill_fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj)
+end
+
+"""
+    fixed_active_set_moments_restricted!(G, profit_j, theta_free, ctx, obj; cells, compute_link) -> G
+
+Phase II.11 Gate 2 (screening-continuation session): the RESTRICTED in-place entry point --
+`G`/`profit_j` must already hold correct values for every column/entry the requested
+`cells`/`compute_link` will not touch (see `_fill_fixed_active_set_moments!`'s own
+restricted-mode contract). Used ONLY by `:method_b_localized`
+(`localized_gradient.jl`); every other caller keeps using the unrestricted
+`fixed_active_set_moments!` above.
+"""
+function fixed_active_set_moments_restricted!(G::AbstractMatrix{Float64}, profit_j::AbstractVector{Float64},
+                                               theta_free::AbstractVector{Float64}, ctx, obj;
+                                               cells::AbstractVector{Tuple{Int,Int}}, compute_link::Bool)
+    return _fill_fixed_active_set_moments!(G, profit_j, theta_free, ctx, obj;
+        cells=cells, compute_link=compute_link)
 end
 
 """
