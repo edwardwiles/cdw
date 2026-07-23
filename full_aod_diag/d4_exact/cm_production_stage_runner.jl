@@ -54,6 +54,15 @@ const MODE = ARGS[4]
 const SEED_ARG = length(ARGS) >= 5 ? ARGS[5] : nothing
 const CHAIN_PERTURB_SEED = length(ARGS) >= 6 ? parse(Int, ARGS[6]) : 0
 
+# CM-C+ production integration 2026-07-23: env override, defaults to the production backend
+# (:cplus) when unset. `CM_GRADIENT_BACKEND=reference` selects the documented fallback/
+# validation backend instead. Unknown values fail immediately (run_cm_upper_checkpointed's own
+# validation), not silently coerced.
+const CM_GRADIENT_BACKEND = Symbol(get(ENV, "CM_GRADIENT_BACKEND", "cplus"))
+# Only meaningful for MODE=="resume": explicit, audited override required to resume under a
+# DIFFERENT cm_gradient_backend than the checkpoint this stage is resuming was written with.
+const CM_ALLOW_BACKEND_SWITCH = get(ENV, "CM_ALLOW_BACKEND_SWITCH", "0") == "1"
+
 const DRAW_SEED = 20260719   # fixed across chains/deltas -- this is the economic DGP's own
                               # draw seed, part of the problem instance, NOT an optimizer
                               # multistart seed. Chain diversity comes from CHAIN_PERTURB_SEED
@@ -85,7 +94,8 @@ const FOCAL_BASEINDEX = 2   # France -- fixed by build_ad_context_real_d20, not 
 
 mkpath(CKPT_DIR)
 lp(">>> Julia threads: ", Threads.nthreads(), "  mode=", MODE, " delta=", DELTA, " budget=", BUDGET,
-   "s ckpt_dir=", CKPT_DIR, " chain_perturb_seed=", CHAIN_PERTURB_SEED, " contrasts=", CM_CONTRASTS)
+   "s ckpt_dir=", CKPT_DIR, " chain_perturb_seed=", CHAIN_PERTURB_SEED, " contrasts=", CM_CONTRASTS,
+   " cm_gradient_backend=", CM_GRADIENT_BACKEND, CM_ALLOW_BACKEND_SWITCH ? " (allow_backend_switch=true)" : "")
 
 snaps = nested_grid_sequence([10, 20, 50])
 probs = snaps[L]
@@ -189,7 +199,8 @@ res = run_cm_upper_checkpointed(resume_from === nothing ? w0 : nothing;
     cm_hessian_backend = :structured, cm_grid_rule = :nested_family,
     maxtime_real = BUDGET, ckpt_dir = CKPT_DIR, run_id = "cm_campaign_$(Dates.format(now(), "yyyymmdd_HHMMSS"))",
     label = "stage", checkpoint_interval_s = 30.0, resume_from = resume_from,
-    heartbeat_interval_s = 30.0)
+    heartbeat_interval_s = 30.0,
+    cm_gradient_backend = CM_GRADIENT_BACKEND, allow_backend_switch = CM_ALLOW_BACKEND_SWITCH)
 
 lp(">>> STAGE result: knitro_status=", res.knitro_status, " wall=", round(res.wall, digits = 1),
    " n_eval=", res.n_eval, " n_grad=", res.n_grad,

@@ -246,11 +246,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
-        cm_gradient_backend::Symbol = :reference,   # overnight task 2026-07-22 (docs/CM_GRADIENT_ALGEBRA_TRACE_2026-07-22.md):
-        # :reference (production default, UNCHANGED behavior -- cm_production_gradient/
-        # composite_gradient_at_fast, byte-identical to every run before this kwarg existed) |
-        # :cplus (experimental -- cm_production_gradient_cplus/composite_gradient_at_Cplus_from_cache,
-        # lfix_cm_cplus.jl). Part II.4 follow-up (2026-07-23): now VALIDATED against a resumed
+        cm_gradient_backend::Symbol = :cplus,   # CM-C+ production integration 2026-07-23 (docs/CM_PRODUCTION_STATE_2026-07-23.md,
+        # docs/CM_GRADIENT_ALGEBRA_TRACE_2026-07-22.md): :cplus (PRODUCTION DEFAULT --
+        # cm_production_gradient_cplus/composite_gradient_at_Cplus_from_cache, lfix_cm_cplus.jl;
+        # 60/60 D=4 + 5/5 real D=20/W=80000/L=50 gates, cosine 1.0 / zero sign mismatches against
+        # :reference, ~4.9x-6.8x faster + ~85x fewer allocations per gradient callback) |
+        # :reference (documented fallback/validation backend -- cm_production_gradient/
+        # composite_gradient_at_fast, the original, byte-identical-to-pre-C+ path; retained for
+        # audit/comparison and as an explicit override). Part II.4 follow-up (2026-07-23): now VALIDATED against a resumed
         # checkpoint's own persisted `cm_gradient_backend` (schema>=3; schema-2 checkpoints are
         # treated as :reference, see `upgrade_schema2`). A mismatch is a HARD ERROR unless
         # `allow_backend_switch=true` is also passed -- see that kwarg's own doc for the policy
@@ -284,7 +287,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     cm_gradient_backend in (:reference, :cplus) ||
         error("run_cm_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
     lp("[", label, "] cm_gradient_backend=", cm_gradient_backend,
-       cm_gradient_backend == :cplus ? " (EXPERIMENTAL -- overnight task 2026-07-22, opt-in)" : " (production default)")
+       cm_gradient_backend == :cplus ? " (production default)" : " (fallback/validation backend)")
     write(joinpath(ckpt_dir, "$(label)_gradient_backend.txt"),
           "cm_gradient_backend=$(cm_gradient_backend)\nrun_id=$(run_id)\nrecorded_at=$(Dates.now())\n")
 
@@ -354,10 +357,30 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
     pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
 
-    # overnight task 2026-07-22: pool/workspace for cm_gradient_backend=:cplus only -- zero cost
-    # (nothing allocated) when the default :reference backend is in effect.
+    # pool/workspace for cm_gradient_backend=:cplus only -- zero cost (nothing allocated) when
+    # the :reference fallback backend is explicitly selected instead.
     cplus_pool = cm_gradient_backend == :cplus ? build_grad_workspace_pool(size(ctx.obj.U, 1)) : nothing
     cplus_ws = cm_gradient_backend == :cplus ? build_lfix_factorized_workspace(ctx.D, size(ctx.obj.U, 1)) : nothing
+
+    # Production integration 2026-07-23: an explicit, audited backend switch on resume must cold-
+    # verify the resumed incumbent before it is trusted going forward, not merely inherit whatever
+    # verification it received under the OLD backend at write time. The inner dual solve (and
+    # hence Delta_dual/feasibility/verified-ness) is backend-independent -- only the outer cb_G!
+    # gradient differs across cm_gradient_backend -- so this is expected to reproduce the
+    # checkpoint's own recorded Delta to numerical precision; a failure here would mean the
+    # resumed incumbent is not safe to carry across the switch.
+    if backend_switched && resumed.best_feasible !== nothing
+        xf_switch = x_free_from_w(resumed.best_feasible.w, pe)
+        _, _, verify_switch = cm_production_value_verified(xf_switch, pcx)
+        is_verified_success(verify_switch) ||
+            error("run_cm_upper_checkpointed($label): backend switch on resume requested (allow_backend_switch=true), " *
+                  "but the resumed incumbent (gp=$(resumed.best_feasible.gp) Delta=$(resumed.best_feasible.Delta)) " *
+                  "FAILED independent cold re-verification under the new backend (class=$(classify_inner_result(verify_switch))) " *
+                  "-- refusing to carry it forward as best_feasible[] across the switch.")
+        lp("[", label, "] backend-switch cold re-verification of resumed incumbent: Delta_dual=",
+           verify_switch.Delta_dual, " (checkpoint recorded ", resumed.best_feasible.Delta, ") |diff|=",
+           abs(verify_switch.Delta_dual - resumed.best_feasible.Delta), " -- PASSED.")
+    end
 
     D2 = length(w0)
     gp_lo, gp_hi = ctx.bounds.γp_lo, ctx.bounds.γp_hi

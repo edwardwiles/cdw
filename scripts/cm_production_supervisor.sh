@@ -96,6 +96,13 @@ else
 fi
 EXPECTED_CKPT_SUFFIX="_latest.jls"   # every CMCheckpoint (schema-2) is written as "<label>_latest.jls"
 
+# CM-C+ production integration 2026-07-23: defaults to the production backend (:cplus);
+# CM_GRADIENT_BACKEND=reference selects the documented fallback/validation backend for the
+# whole campaign instead. Exported so cm_production_stage_runner.jl (launched as a child
+# process below) inherits it without any extra plumbing.
+export CM_GRADIENT_BACKEND="${CM_GRADIENT_BACKEND:-cplus}"
+export CM_ALLOW_BACKEND_SWITCH="${CM_ALLOW_BACKEND_SWITCH:-0}"
+
 # slog: ALL output goes to stderr (and $SUPERVISOR_LOG, once it is set) -- NEVER stdout.
 # This is what keeps `ckpt_path=$(run_stage_with_watchdog ...)` safe: stdout is reserved
 # exclusively for run_stage_with_watchdog's single final `echo "$ckpt_latest"`.
@@ -187,6 +194,7 @@ run_stage_with_watchdog() {
       echo "stage=$mode"
       echo "start_time=$(date '+%Y-%m-%d %H:%M:%S')"
       echo "remaining_budget_s=$remaining"
+      echo "cm_gradient_backend=$CM_GRADIENT_BACKEND"
     } >> "$stage_dir/run_meta.txt"
 
     # Per-attempt sentinel scoping (item 3): record the log's byte size BEFORE this
@@ -342,7 +350,7 @@ main() {
   SUPERVISOR_LOG="$CKPT_ROOT/supervisor.log"
   COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 
-  slog "=== supervisor starting === commit=$COMMIT ckpt_root=$CKPT_ROOT julia_threads=$JULIA_NUM_THREADS resume_campaign=$RESUME_CAMPAIGN"
+  slog "=== supervisor starting === commit=$COMMIT ckpt_root=$CKPT_ROOT julia_threads=$JULIA_NUM_THREADS resume_campaign=$RESUME_CAMPAIGN cm_gradient_backend=$CM_GRADIENT_BACKEND"
 
   local mode="calibration"
   local seed_arg=""
