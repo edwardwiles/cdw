@@ -1467,3 +1467,308 @@ having already gone to diagnosing + re-testing the Section 18 fix):
 
 Full logs (all six KNITRO runs, driver scripts) pushed to Dropbox,
 `melitz_finite_delta_constraint_sign_fix_2026-07-23/section4_followup/`.
+
+## 20. 2026-07-23 same-day follow-up: three integration/bookkeeping bugs fixed (objective
+## contamination, opaque 1e10 constraint scaling, garbage-value inner-failure handling) +
+## incumbent bookkeeping rebuilt — first-ever cold-verified incumbents at every
+## `(delta, direction)` combination tried
+
+Governing session prompt: do not simply re-run longer KNITRO trajectories on top of
+Section 18/19's sign fix — the latest results (Section 19) exposed additional integration
+defects that had to be repaired first: (1) the reported "no cold-verified incumbent" was a
+bookkeeping bug, not a real infeasibility; (2) the outer objective was contaminated by the
+inner solve's own failure sentinel; (3) the divergence constraint's `1e10` scaling made
+KNITRO's feasibility-error reporting economically meaningless; (4) a failed inner solve was
+written into the KNITRO problem as a garbage constraint value instead of signaled as an
+evaluation failure. All four are fixed below, verified with new regression tests passing
+through the exact production KNITRO callback (not helper-function bypasses), and the
+Section 4 campaign was re-run — for the first time, every one of 4 `(delta, direction)`
+combinations tried produced a genuine, cold-verified, budget-respecting incumbent.
+
+### 20.A Incumbent bug
+
+**Diagnosis.** The pre-existing `solve_melitz_finite_delta_bound` only ever inspected the
+KNITRO trajectory's OWN terminal point (`terminal_eval`) for incumbent purposes. Section
+19's six real campaigns repeatedly found feasible, low-`Delta` points mid-trajectory
+(iterations 0-10, feasibility error `0.000`, objective genuinely improving) that were never
+captured, because nothing recorded them — only the (often drifted-infeasible) terminal
+point was ever checked. Separately, the cold-verified starting point itself
+(`Delta_start=7.5545e-6 < delta` at every `delta` tried) was never installed as a fallback
+incumbent before `KN_solve` ran at all, so a pathological trajectory (or, as tested, a
+trajectory artificially capped at 1 iteration) could report "no incumbent" even though a
+perfectly good one — `theta_init` itself — was available for free.
+
+**Fix** (`src/melitz/finite_delta_outer.jl`): `evaluate_melitz_delta(theta_init, ctx,
+obj_inner; cold=true)` is now run BEFORE `KN_solve`, classified via the new
+`melitz_classify_outer_feasibility` (Section 20.C below), and installed as
+`initial_incumbent` whenever outer-feasible. During the trajectory, every successful
+callback evaluation is classified and (if outer-feasible) pushed into a bounded,
+objective-ranked `live_candidates` list (`register_live_candidate!`, up to 5 tracked) — at
+NO extra KNITRO-solve cost (see Section 20.D). After `KN_solve` returns, live candidates
+are cold-reverified best-first until one survives; the result falls back to
+`initial_incumbent` if none does. `MelitzFiniteDeltaOuterResult` now exposes
+`initial_incumbent`/`best_live_incumbent`/`cold_verified_incumbent` as three DISTINCT
+fields (previously conflated into one `cold_verified_incumbent` that only ever looked at
+the terminal point).
+
+**Regression test** (`test/melitz/runtests.jl`, "Section 2.1/12: initial incumbent
+survives a KNITRO run limited to one iteration"): builds a temporary options file with
+`maxit 1`, runs `solve_melitz_finite_delta_bound` with it, and asserts
+`initial_incumbent !== nothing`, `initial_incumbent.classification.outer_feasible`, and
+`cold_verified_incumbent.eval.Delta <= delta` — this test would have failed under the
+prior bookkeeping (a 1-iteration KNITRO run has essentially no opportunity to converge, so
+the terminal-point-only logic would very likely report `nothing`). 4/4 assertions pass.
+
+### 20.B Objective contamination
+
+**Diagnosis.** The prior combined callback set `evalResult.obj[1] = -objSol`, where
+`objSol` came from `inner_loop_internal(obj::PsiObjectiveBundleImplicit, theta)`. On a
+SUCCESSFUL inner solve this equals `obj.H_save = theta[1]*(-1)^find_smallest` (the correct,
+finite `K`-based objective) — but on a FAILED inner solve, `inner_loop_internal` returns
+the fixed sentinel `-1e10` regardless of `theta` (`cc_algo/inner_loop_functions.jl:217-241`,
+shared, unmodified code). So `evalResult.obj[1]` silently became `+1e10` (or `-1e10`)
+whenever the inner solve failed at a trial point — exactly the documented "lower run's
+outer objective becomes 1.0e10" symptom. The outer objective (`theta[1]`, always finite and
+well-defined regardless of whether the inner divergence problem happens to solve at that
+point) was needlessly coupled to the inner solve's own success/failure.
+
+**Fix**: the objective is now computed DIRECTLY from `theta`, with no dependence on the
+inner solve's return value at all: `evalResult.obj[1] = find_smallest ? theta[1] :
+-theta[1]` (Upper-GT problem: `obj(theta)=theta[g_index]`; Lower-GT: `obj(theta) =
+-theta[g_index]`; gradient exactly `+e_g`/`-e_g`, set directly, not through
+`calculate_grad_k!`'s legacy K-gradient path).
+
+**Verification**: a dedicated fixed-point test (`melitz_fixed_point_probe`, Test D) fixes
+`theta` at a point independently confirmed to make the inner CC dual solve fail even after
+a cold retry (`evaluate_melitz_delta` at that `theta` gives `nStatus ∉
+{0,-100,-101,-103}`), then confirms via the REAL, registered KNITRO callback that the
+evaluation is rejected as a callback failure (`eval_failed=true`, KNITRO status `-502`) —
+`obj_value` is `NaN` (never touched, never `1e10`, never a garbage number), so the
+objective-contamination question is moot at this point (a rejected evaluation has no
+objective at all, not a corrupted one). At a FEASIBLE point (Test A), `obj_value` is
+verified to equal `theta[1]` exactly (`atol=1e-10`). Combined, these two probes bracket the
+claim precisely: the objective is correct when the inner solve succeeds, and is never
+computed as (or contaminated by) the inner solve's own sentinel when it fails, because the
+inner solve is never READ for the objective at all.
+
+### 20.C Constraint scaling
+
+**Old**: `constr[1] = -f*1e10` (the shared `PsiObjectiveBundleImplicit` functor,
+unmodified) `<= 1e10*delta`. Correct in SIGN (Section 18) but badly scaled: at
+`delta=1e-3`, a raw divergence excess of `4.26e-6` produced a KNITRO feasibility error
+around `42,600` — seven orders of magnitude larger than the cutoff rows' own `O(1)` scale,
+making KNITRO's own reported feasibility error economically meaningless and effectively
+un-comparable across the constraint block.
+
+**New** (Section 4.1's preferred dimensionless representation): `c_delta(theta) =
+Delta(theta)/delta <= 1`. Implementation reuses the SAME underlying `1e10*Delta(theta)`
+raw value the shared functor already computes (no `cc_algo` edits) — both the constraint
+VALUE and its JACOBIAN are divided by the identical factor `1e10*delta` before being
+handed to KNITRO, so value/Jacobian/finite-difference-checks/tolerances all share one
+scaling consistently (Section 4.2).
+
+| quantity | old (1e10 scaling) | new (Delta/delta scaling) |
+|---|---|---|
+| constraint value at a converged point (`Delta≈7.5e-6`, `delta=1e-3`) | `7.5e1` | `7.5e-3` |
+| constraint value at the SAME `delta=1e-2` | `7.5e1` (same — scale is `delta`-independent under the old bug) | `7.5e-4` |
+| feasibility error for a `4.26e-6` divergence excess at `delta=1e-3` | `~42,600` | `~4.3e-3` |
+| KNITRO feasibility error observed live at a `-410` terminal point (Section 20.F, `delta=1e-2`, upper) | (old convention would show `~2.1e10`) | `2.13e-1` (Delta itself is genuinely `0.21`, `21x` over budget — an economically legible number, not a scale artifact) |
+
+**Regression tests**: Test A (feasible Pareto point) confirms `c[1] == Delta(theta)/delta`
+to `rtol=1e-6` and `c[1] < 1`; Test B (budget-infeasible, inner-valid point, constructed at
+`scale=0.005` perturbation, `nStatus=0`) confirms `c[1] == Delta(theta)/delta > 1` and that
+KNITRO reports genuine infeasibility (`nStatus ∉ {0}`, specifically `-201` observed live);
+a boundary case is implicit in the Section 8.1 root-finding cross-check (Section 20.E)
+where the KNITRO-found endpoint's cold `Delta` sits within `0.002%`-`2%` of `delta` in
+every one of 4 cases.
+
+### 20.D Inner failure handling
+
+**Diagnosis**: the prior callback wrote `local_c[1] = 1e9` (hand-invented) whenever
+`abs(objSol)==1e10`, telling KNITRO the point WAS successfully evaluated with a huge but
+finite constraint value. This is exactly the failure mode `full_aod_diag/d4_exact/
+c9_phase8_d20_pilot.jl` (a prior session, Ricardian model) diagnosed and fixed: a fabricated
+"successful" evaluation with a huge objective/constraint (and, worse, a PAIRED zero
+gradient at the corresponding `evalResult.jac`) trivially satisfies first-order optimality
+and can make KNITRO falsely declare convergence.
+
+**Fix**: `inner_solve_verified_or_fail` (shared by `cb_F!`/`cb_G!` via
+`melitz_build_finite_delta_callbacks`) retries once from a neutral cold start
+(`obj.use_cached_x=false`) on a bad `nStatus`; if that ALSO fails, it `throw`s a
+`DomainError`. KNITRO.jl's own `_try_catch_handler` (`C_wrapper.jl`) catches this and
+converts it to a proper `KN_RC_EVAL_ERR`/`KN_RC_CALLBACK_ERR` status, telling KNITRO to
+reject/backtrack from the trial point — matching `c9_phase8_d20_pilot.jl`'s own documented
+convention exactly (chosen deliberately over re-deriving a failure convention from
+scratch).
+
+**Truth table** (`melitz_fixed_point_probe`, exercising the real registered KNITRO
+callback, D=4/W=2,000/seed=29 unless noted):
+
+| case | inner solve | `eval_failed` | KNITRO `nStatus` | `obj_value` | notes |
+|---|---|---|---|---|---|
+| Test A: feasible Pareto point | succeeds (`nStatus=0`) | `false` | `0` | `theta[1]` exactly | `c[1]<1`, all cutoff rows `>=0` |
+| Test B: budget-infeasible, inner-valid | succeeds (`nStatus=0`) | `false` | `-201` (genuine infeasible) | `theta[1]` exactly | `c[1]>1`, a REAL violated constraint, not a numerical failure |
+| Test C: cutoff-infeasible, inner-valid | **not constructed** — see below | — | — | — | at this D=4/W∈{500,2000} fixture, every accessible single-coordinate perturbation large enough to violate a deterministic cutoff constraint ALSO destabilized the inner CC dual (a systematic search over 25+ coordinates x both directions x magnitudes from `0.001` to `2.0` found zero exceptions) — reported honestly as a fixture-scale limitation, not forced |
+| Test D: inner numerical failure | fails even after cold retry (`nStatus=-400`, confirmed independently via `evaluate_melitz_delta`) | `true` | `-502` (`KN_RC_EVAL_ERR`) | `NaN` (never `1e10`, never fabricated) | `live_candidates` empty — no incumbent contamination |
+
+Test C's non-constructibility is itself informative: it suggests that, at this fixture's
+`W` scale, "mild economic irregularity" (a barely-violated cutoff) and "numerical
+pathology in the CC dual" are not cleanly separable failure modes reachable by small
+perturbations of a single free coordinate — consistent with (though not conclusive proof
+of) the gravity-pivot construction's coupling of nominally-local coordinate changes across
+cells. Not investigated further this session (out of scope: the callback's OWN behavior in
+this combined scenario — reject cleanly via the Section 5 throw path — is already covered
+by Test D, which is the behaviorally relevant case regardless of which condition triggered
+the inner failure).
+
+**Section 7 (combined-callback audit) A/B/A test**: builds ONE shared `obj`/callback pair
+(`melitz_build_finite_delta_callbacks`), evaluates feasible point A (via duck-typed mock
+`EvalRequest`/`EvalResult` structs calling `cb_F!`/`cb_G!` directly — the exact production
+closures, not reimplementations), evaluates a known-failing point B (confirms it throws a
+`DomainError`), then re-evaluates point A again. Requires COMPLETE restoration of
+objective/constraint/gradient/Jacobian (`==`, not `≈`) and confirms the failed point B never
+enters `live_candidates` (2 entries recorded, both A, none B). 7/7 assertions pass.
+
+### 20.E Restricted outer tests (Section 8)
+
+**8.1 (1-D gamma-only test, D=4/W=20,000/seed=29, real KNITRO throughout).** Holding all 29
+other free coordinates fixed at the population-Pareto benchmark, a 21-point grid of
+`g=theta[1]` around the benchmark (step `0.03`, span `±0.30`) confirms `Delta(g)` has a
+sharp, narrow trough at `g_0=-0.042387` (`Delta(g_0)=7.5545e-6`, exactly the known
+population value) — outside a band of roughly `±0.02`, either the inner CC dual solve
+fails (`nStatus∈{-102,-400,-101}`) or `Delta` explodes (`>1e15`, a numerical, not
+economic, blow-up). The ACTUAL 1-D-free KNITRO NLP (registering the exact production
+callback, only `theta[1]` free, `theta_box` up to `0.5`) was then solved for both
+directions at `delta∈{1e-3,1e-2}`:
+
+| `delta` | direction | KNITRO `nStatus` | KNITRO endpoint `g` | independent bisection root `g*` | agreement | cold `Delta` at endpoint |
+|---|---|---|---|---|---|---|
+| `1e-3` | upper | `-400` (iter limit, feasible) | `-0.047184` | `-0.047189` | `5e-6` | `9.990e-4` (`<=1e-3` ✓) |
+| `1e-3` | lower | `-410` (iter limit, marginal) | `-0.038133` | `-0.038132` | `1e-6` | `1.000004e-3` (`4e-9` relative over) |
+| `1e-2` | upper | `-410` (iter limit, marginal) | `-0.058765` | `-0.058755` | `1e-5` | `1.0057e-2` (`0.6%` over) |
+| `1e-2` | lower | `0` (optimal) | `-0.030087` | `-0.030055` | `3e-5` | `9.877e-3` (`<=1e-2` ✓) |
+
+The bisection root is an INDEPENDENT ground truth (`evaluate_melitz_delta`'s own real
+KNITRO inner solve, no relation to the outer NLP's constraint/gradient machinery) — KNITRO's
+own endpoint agreeing with it to 4-6 significant figures in every one of 4 cases is strong,
+clean evidence that the objective sign, the (rescaled) divergence constraint's VALUE, and
+its JACOBIAN are all correct: a wrong-signed or badly-scaled Jacobian would not let a
+gradient-based Newton-type method converge to the true root this precisely. This is exactly
+the "transparent end-to-end test of objective sign, divergence constraint, constraint
+Jacobian, upper/lower direction, incumbent tracking" the main prompt's Section 8.1 asked
+for, and it passes cleanly.
+
+**8.2 (small-coordinate test, gamma + 1 ordinary `A` + 1 ordinary `f` free, same
+fixture).** A coarse `3^3` grid (step `±0.5` per coordinate — deliberately the SAME box
+used for the KNITRO solve below) found only the benchmark point itself feasible at
+`delta=1e-2`; every other grid point either failed the inner solve or was wildly over
+budget — confirming the feasible neighborhood is narrow relative to a `0.5`-scale grid
+(consistent with 8.1's own `±0.02` gamma-only band). The 3-free-coordinate KNITRO NLP
+(`theta_box=0.5`, `delta=1e-2`, real production callback) for both directions:
+
+| direction | KNITRO `nStatus` | endpoint `(g,A,f)` | cold `Delta` | vs. `delta=1e-2` |
+|---|---|---|---|---|
+| upper | `-410` (iter limit, marginal) | `(-0.0667, 0.3122, -0.4886)` | `2.135e-2` | `2.1x` over |
+| lower | `-410` (iter limit, marginal) | `(-0.0307, 0.3146, -0.5585)` | `1.019e-2` | `1.9%` over |
+
+No crashes, no objective/constraint contamination, correct classification at every
+evaluation — the machinery scales cleanly beyond the trivial 1-D case, but convergence
+(within the shared `maxit=25`, Backend B finite-difference gradient) visibly gets harder as
+free dimensionality grows from 1 to 3, exactly the kind of staged difficulty escalation
+Section 8's own ordering is designed to surface before committing to the full 30-free-
+coordinate problem.
+
+### 20.F Full outer results (Section 9/10 campaign, D=4/W=20,000/seed=29, full 30-free-
+### coordinate problem, `theta_box=0.10`, Backend B `h=1e-4`, `maxit=25` — the shared
+### default `melitz_outer_finite_delta.opt`)
+
+Population-Pareto initial incumbent at every run: `gamma_prime=0.958498`,
+`Delta=7.5545e-6`, `nStatus=0`, `min_slack=0.0166`, gravity residuals `~1e-17`. **For the
+first time across every session that has attempted this exact campaign (Sections 17.D,
+19), all 4 `(delta,direction)` combinations produced a genuine, cold-verified,
+budget-respecting incumbent** — none required falling back to the initial incumbent (all 4
+found a strictly better live candidate that also survived independent cold
+reverification):
+
+| `delta` | direction | terminal `nStatus` | terminal outer-feasible | cold-verified `gamma_prime` | cold `Delta` | budget slack (`delta - Delta`) | min cutoff slack | gravity resid. (A/f) | wall time | inner solves (infeas / eval-failures) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `1e-2` | upper | `-410` | false (`Delta=0.213`, `21x` over) | `0.935445` | `9.532e-3` | `4.68e-4` | `0.0205` | `-2.3e-17` / `2.3e-17` | `96.2s` | `149` (`52` / `26`) |
+| `1e-2` | lower | `-400` | **true** (terminal itself verified) | `0.988286` | `9.956e-3` | `4.42e-5` | `0.0164` | `-1.2e-17` / `1.9e-17` | `373.6s` | `224` (`84` / `42`) |
+| `1e-3` | upper | `-410` | false (`Delta=9.86e-3`, `9.9x` over) | `0.952339` | `8.808e-4` | `1.19e-4` | `0.0174` | `-3.7e-17` / `2.1e-17` | `147.8s` | `226` (`70` / `35`) |
+| `1e-3` | lower | `-410` | false (`Delta=2.03e-3`, `2.0x` over) | `0.961709` | `9.792e-4` | `2.08e-5` | `0.0190` | `-1.0e-17` / `1.9e-17` | `342.6s` | `224` (`90` / `45`) |
+
+Gradient backend: B throughout (`h=1e-4`); Backend D was not exercised in a real campaign
+this session (still available, unrun, per Section 17.E's own carryover). Every
+`cold_verified_incumbent` moved `gamma_prime` in the economically correct direction (down
+for upper/minimize, up for lower/maximize) relative to the initial `0.958498`, by an amount
+that scales sensibly with the budget (`1e-2` allows a larger move than `1e-3`, as expected).
+In 3 of 4 cases the terminal KNITRO trajectory point itself drifted outside the budget
+(by `2x`-`21x`) even though a genuinely better, cold-verified point existed earlier in the
+SAME trajectory — this is exactly the scenario the Section 20.A incumbent-bookkeeping fix
+was built to rescue, and it did so in every case tried. The one case where the terminal
+point itself was outer-feasible (`delta=1e-2`, lower) had the terminal and
+`cold_verified_incumbent` coincide.
+
+Not run this session (flagged, not silently dropped): the reversed-continuation-order
+strategy (start looser, tighten via short bursts) and Backend D, both recommended by
+Section 19's own carryover — not needed this pass since the direct single-shot solve
+already succeeded at both `delta` values tried; `theta_box∈{0.05,0.15}` (only `0.10`
+tried); `W=80,000` confirmation (Section 7 of the finite-delta campaign spec).
+
+### 20.G Remaining numerical risks
+
+- **Stable incumbent tracking**: yes, verified both by construction (Section 20.A) and by
+  the campaign's own live results (Section 20.F) — every run returned a genuinely better,
+  cold-verified incumbent than the trivial fallback.
+- **Stable inner retries**: the one-cold-retry-then-reject convention (Section 20.D) is
+  now uniform across `cb_F!`/`cb_G!`; `inner_eval_failures` (26-45 per run out of 149-226
+  total inner solves, i.e. roughly 15-20%) confirms the retry-then-throw path is exercised
+  routinely at this `theta_box`/`delta` combination, not a rare edge case — KNITRO
+  correctly backtracked from every one of these without crashing.
+- **Meaningful constraint scaling**: yes (Section 20.C) — feasibility errors and
+  constraint values are now O(1)-to-O(tens) at worst, not O(1e4)-O(1e7), and directly
+  interpretable as "how many multiples of the budget `Delta` currently sits at."
+- **Reliable gradient behavior**: qualified yes. Backend B (finite-bandwidth secant,
+  `h=1e-4`) is what every result in Sections 20.E-F used; it visibly does NOT fully
+  converge within `maxit=25` at this `theta_box`/`W` combination (every terminal `nStatus`
+  but one was a `-4xx` iteration-limit code, not `0`) — but the INCUMBENT-TRACKING
+  machinery makes this non-fatal: a genuinely better, verified point is still recovered
+  from mid-trajectory in every case. Backend D (exact hand-derived branch derivative,
+  implemented but never run in a real full-scale campaign) remains the clearest lever for
+  actually reaching KNITRO-native convergence (`nStatus=0`) rather than relying on
+  incumbent rescue.
+- **Sensitivity to `h`/`theta_box`**: only `h=1e-4`/`theta_box=0.10` tried this session for
+  the full campaign (Section 8.1/8.2 tried `theta_box` up to `0.5` at reduced
+  dimensionality only). Not swept.
+- **Test C's non-constructibility** (Section 20.D) is flagged as an open, not fully
+  explained, structural question for whoever next touches the gravity-pivot/cutoff
+  machinery — worth revisiting if a future session needs a clean cutoff-only-infeasible
+  fixture point for some other purpose.
+
+### 20.H Reproduction record (main prompt Section 1)
+
+- git commit at session start: `1a9b5aa` (`melitz/fullD-delta-star`, 19 commits ahead of
+  `origin/production/fullA-exact`); working tree had only unrelated untracked `output/`,
+  `stata/` directories, no uncommitted tracked-file changes. This session's changes
+  (`src/melitz/delta_star.jl`, `src/melitz/finite_delta_outer.jl`,
+  `test/melitz/runtests.jl`) are UNCOMMITTED as of this report — left for the user to
+  review/commit.
+- Julia `1.12.6`; KNITRO `13.0.1` (`/opt/shared_sw/knitro/13.0.1`).
+- Option-file SHA-256 (unchanged from session start): `melitz_inner_loop_options.opt`
+  `9bc9c73b...`, `melitz_outer_finite_delta.opt` `a80b0409...`, `ek_inner_loop_options.opt`
+  `f303308a...`, `ek_outer_loop_options.opt` `8b90810b...`.
+- Pre-change baseline test run: 100% pass (all existing testsets green) — confirms the
+  bugs fixed this session were genuine integration defects, not something the existing
+  test suite already caught.
+- Population-Pareto starting point independently re-confirmed (D=4, W=20,000, seed=29):
+  `Delta_start=7.5545087570375445e-6` (matches the governing prompt's own cited
+  `~7.5545e-6`), `gamma_prime=0.958498472749465` (matches `~0.958498`), `nStatus=0`,
+  `lfd_ok=true`, cutoff-feasible (`min_slack=0.01655`), gravity exact
+  (`~1.5e-17`/`4.2e-17`), `verified=true` — a cold-verified outer-feasible incumbent, per
+  the prompt's own description.
+- Full post-change test suite: **337/337 passing**, zero regressions, including 43 new
+  assertions across 4 new testsets (Section 6: 21, Section 7: 7, Section 2.1/12: 4, plus
+  11 in the strengthened Section 3 test, up from 5).
+
+Session outputs (this write-up, campaign logs, Section 8 validation logs) pushed to
+Dropbox, `Gravity robustness/Analysis/Server Output/melitz_finite_delta_bookkeeping_fix_2026-07-23/`.

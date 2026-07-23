@@ -32,29 +32,64 @@
 #     default to ForwardDiff when `moments_jacobian! == error`, else call the supplied
 #     function directly) -- no cc_algo file is modified.
 #
-# Everything else -- `PsiObjectiveBundleImplicit`'s struct/functor, `outer_loop`,
-# `outer_loop_constraints!`, the KNITRO F/G callback dispatch, `inner_loop_internal`'s
-# nested real KNITRO solve, the `-1e10*f <= 1e10*delta` constraint-1 convention -- is
-# used completely UNCHANGED, matching the Ricardian model's own `ccOuter.jl` usage
-# pattern (`counterType==1` branch) line for line. `outer_constr_index = d+1` (every
-# active moment used INSIDE the inner CC problem, none held out as extra outer equality
-# rows) -- matching this closure's own D^2+1 system exactly (there is no separate
-# "extra" moment beyond what the inner Delta(theta) solve already enforces), so the
-# `ift!`-based total-derivative correction (`PsiObjectiveBundle.jl:331-343`, only active
-# when `outer_constr_index <= d`) is never exercised here, exactly as in the
-# already-existing `sequential_gravity/PsiObjectiveBundleImplicitMethodB.jl` precedent
-# for a DIFFERENT model (that file's own `check_methodB_valid` documents the identical
-# condition).
+# Everything else -- `PsiObjectiveBundleImplicit`'s struct/functor, the KNITRO F/G
+# callback dispatch pattern, the nested real KNITRO inner solve -- follows the Ricardian
+# model's own `ccOuter.jl` usage pattern (`counterType==1` branch) line for line, BUT (see
+# the 2026-07-23 correctness-repair session below) this file's OWN combined callback no
+# longer delegates the outer objective/constraint SEMANTICS to `outer_loop`/
+# `outer_loop_constraints!`/`callbackEval_and_ConsF/G_outer!` (still reused for the
+# Ricardian model, untouched) -- it builds its own KNITRO problem directly, because this
+# milestone's objective/constraint conventions (Section 3.1/4.1 below) are Melitz-specific
+# and must not silently inherit `cc_algo`'s shared 1e10-scaled, inner-solve-coupled
+# convention (see the 2026-07-23 bug writeup below for why that coupling was unsafe).
 #
-# The deterministic cutoff inequalities (Section 1.3) do NOT fit this constraint
-# vocabulary (`outer_loop_constraints!` only supports the divergence-budget row plus
-# EQUALITY-bound held-out moments) -- they are added as a SEPARATE KNITRO constraint
-# block via a second `KN_add_eval_callback` (KNITRO natively supports multiple callbacks
-# over disjoint constraint-index subsets; the deterministic cutoff Jacobian
-# (`melitz_cutoff_constraint_jacobian`, Section 1.3, exact/ForwardDiff-validated) is
-# reused unchanged for it) -- `outer_loop` itself is not modified; this file's own driver
-# mirrors `outer_loop`'s body, adding the one extra callback registration `outer_loop`
-# has no hook for.
+# ============================================================================
+# 2026-07-23 correctness-repair session: three real bugs fixed, on top of the (still
+# valid) Section 18 sign fix. See docs/melitz_delta_star.md Section 20 for the full report.
+# ============================================================================
+#
+# 1. OBJECTIVE CONTAMINATION (main prompt Section 3). The prior combined callback set
+#    `evalResult.obj[1] = -objSol` where `objSol` came from `inner_loop_internal`'s own
+#    return value -- `obj.H_save = theta[1]*(-1)^find_smallest` on a SUCCESSFUL inner
+#    solve, but the FIXED FAILURE SENTINEL `-1e10` (regardless of theta) whenever the
+#    inner solve failed (`inner_loop_internal`'s own `nStatus` branch,
+#    `cc_algo/inner_loop_functions.jl:217-241`). This is EXACTLY the "lower run's outer
+#    objective becomes 1.0e10" bug: a failed inner solve silently overwrote a perfectly
+#    well-defined outer objective (`theta[1]` is always finite) with a value that has
+#    nothing to do with the counterfactual gamma coordinate. Fixed (Section 3.1 below):
+#    the objective is now computed DIRECTLY from `theta` -- `evalResult.obj[1] =
+#    find_smallest ? theta[1] : -theta[1]` -- with NO dependence on the inner solve's
+#    success/failure at all. The inner solve is still needed (for the divergence
+#    constraint), but its own return value never touches `evalResult.obj`.
+#
+# 2. OPAQUE 1e10 CONSTRAINT SCALING (main prompt Section 4). The prior constraint row was
+#    `constr[1] = +1e10*Delta(theta) <= 1e10*delta` -- correct in SIGN (Section 18) but
+#    badly scaled: at `delta=1e-3`, a raw divergence violation of `4.26e-6` produced a
+#    KNITRO feasibility error around `42,600`, next to the cutoff rows' own O(1) scale.
+#    Fixed: `c_delta(theta) = Delta(theta)/delta <= 1` (Section 4.1's preferred
+#    dimensionless representation) -- the SAME underlying `1e10*Delta(theta)` raw value
+#    the shared `PsiObjectiveBundleImplicit` functor already computes (unchanged, no
+#    cc_algo edits), just divided by `1e10*delta` for BOTH the constraint value and its
+#    Jacobian (Section 4.2: same scaling factor applied consistently everywhere) before
+#    handing either to KNITRO.
+#
+# 3. INNER FAILURE HANDLING (main prompt Section 5). The prior callback wrote `local_c[1]
+#    = 1e9` as a hand-invented placeholder whenever `abs(objSol)==1e10`, telling KNITRO
+#    the point WAS successfully evaluated with a huge (but finite, differentiable-looking)
+#    constraint value -- exactly the failure mode `full_aod_diag/d4_exact/
+#    c9_phase8_d20_pilot.jl` (the mature Ricardian-model pilot, found live in a PRIOR
+#    session on that file) already diagnosed and fixed for the Ricardian model: KNITRO.jl's
+#    own callback wrapper (`_try_catch_handler` in `C_wrapper.jl`) already catches any
+#    exception thrown inside an eval callback and converts it to a proper KNITRO
+#    evaluation-error return code, telling KNITRO "this point could not be evaluated,
+#    reject it and backtrack" -- the correct, robust way to signal infeasibility. Fixed:
+#    on a genuine inner-solve failure (bad `nStatus` even after one cold retry), this
+#    file's own callback now `throw`s a `DomainError`, matching that same convention,
+#    rather than inventing a constraint value.
+#
+# Also implemented (main prompt Section 2): initial-incumbent installation, live
+# feasible-candidate tracking during the trajectory, and end-of-run cold reverification --
+# see `solve_melitz_finite_delta_bound`'s own docstring.
 
 using KNITRO
 using LinearAlgebra: dot
@@ -73,7 +108,10 @@ Delta(theta) solve -- no duplicate G-construction logic), then overwrites `K` wi
 constant `theta[1]` (`= log gamma_prime_target`, the real outer objective for the
 upper/lower gains-from-trade program). A constant K (same value at every draw) is what
 makes this bundle "Implicit" in this codebase's vocabulary -- `PsiObjectiveBundleImplicit`
-reads only `H[1,1]` as kappa.
+reads only `H[1,1]` as kappa. NOTE (2026-07-23 correctness-repair session): `K`/`H_save`
+is used ONLY by the (now-unused-for-the-objective) legacy `calculate_grad_k!` bookkeeping
+path; the outer objective itself is computed directly from `theta` in the combined
+callback (Section 3.1), never read off `K`/`H_save`.
 """
 function melitz_moments_adapter_outer!(K, G, theta, U, obj)
     melitz_moments_adapter!(K, G, theta, U, obj)
@@ -216,7 +254,7 @@ function make_melitz_moments_jacobian_d()
 end
 
 # ============================================================================
-# Bundle construction + driver, reusing PsiObjectiveBundleImplicit/outer_loop AS-IS.
+# Bundle construction, reusing PsiObjectiveBundleImplicit AS-IS.
 # ============================================================================
 
 """
@@ -263,89 +301,103 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
 end
 
 # ============================================================================
-# Deterministic cutoff constraints (Section 1.3): genuinely NEW -- no analogue exists in
-# the Ricardian model (it has no gravity-pivot/cutoff-feasibility system), so there is
-# nothing to adapt here; registered as a SECOND, independent KNITRO eval-callback block
-# (KNITRO natively supports multiple callbacks over disjoint constraint-index subsets)
-# alongside the FIRST, UNMODIFIED `callbackEval_and_ConsF/G_outer!` block that owns the
-# objective and the divergence-budget constraint.
+# Section 2.3: unambiguous outer-feasibility classification. Replaces ad hoc
+# `terminal_eval.verified && terminal_eval.Delta <= delta` checks scattered across the
+# driver/tests with ONE named predicate per necessary condition, so nothing is ever
+# printed/returned as "feasible=true" for a point with Delta > delta or a failed inner
+# solve.
 # ============================================================================
 
 """
-    melitz_combined_callback_F!/_G!
+    MelitzOuterFeasibilityClassification
 
-A SINGLE combined callback covering all `1+D^2` constraints (the divergence budget,
-index 1, plus the cutoff inequalities, indices `2:end`), registered ONCE on the outer
-`kc`. Earlier versions registered the divergence budget and cutoff blocks as TWO
-separate `KN_add_eval_callback` contexts on the same `kc` (one reusing cc_algo's own
-`callbackEval_and_ConsF/G_outer!` unchanged, one new for cutoffs); that combination
-reproducibly crashed KNITRO with a `-500` ("could not evaluate objective or
-constraints") at the very first evaluation, even though EACH block, registered ALONE
-on its own `kc`, ran flawlessly (the delta-only block completed 60 real outer
-iterations; the cutoff-only block converged in 6). The cause was not pinned down
-exactly (an earlier hypothesis -- a second, independent nested inner KNITRO solve
-running inside the cutoff callback, on top of the delta callback's own -- was tested
-and ruled out: removing it left the identical crash), but is evidently specific to
-having TWO separate KNITRO callback CONTEXTS on one `kc` where one of them also
-triggers a NESTED inner KNITRO solve. Merging into one callback context (this
-function) sidesteps the issue entirely rather than chasing it further, and is also
-simply a smaller, more obviously correct piece of new code: it computes the delta-row
-by calling `inner_loop_internal`/the functor directly (the SAME calls
-`callbackEval_and_ConsF/G_outer!` make, just inlined into one callback rather than a
-second registered context) and appends the (KNITRO-free, cheap) cutoff constraints/
-Jacobian in the same call.
+Section 2.3's explicit, unambiguous feasibility fields for a fixed-outer-point evaluation
+(`MelitzDeltaEvalResult`), replacing the single overloaded `feasible`/`verified` booleans
+wherever a caller needs to know WHICH condition is (not) satisfied:
+
+  - `inner_verified`: the inner CC dual solve itself converged to KNITRO's strict optimal
+    status (`nStatus==0` -- NOT the looser `[0,-100,-101,-103]` acceptance set used
+    elsewhere in this codebase for continuing a trajectory; a value reported as a
+    candidate INCUMBENT must clear the strict bar).
+  - `inner_moment_feasible`: `lfd_ok` -- the recovered LFD's own internal consistency
+    checks (normalization, moment residuals, primal-dual gap) all pass.
+  - `cutoff_feasible`: the Section 1.3 deterministic cutoff/export-selection inequalities
+    hold (`min_slack >= 0`).
+  - `gravity_feasible`: the two gravity restrictions hold to `gravity_tol` (structural, by
+    pivot construction -- should ALWAYS be machine-precision-true; checked explicitly
+    rather than assumed, since `false` here would indicate a genuine construction bug).
+  - `budget_feasible`: `Delta(theta) <= delta` -- the ACTUAL divergence budget this
+    milestone's program constrains on.
+  - `outer_feasible`: the conjunction of all five -- the ONLY condition under which a
+    point may be reported as a valid economic incumbent.
 """
-function melitz_combined_callback_F!(kc, cb, evalRequest, evalResult, userParams)
-    obj = userParams
-    theta = evalRequest.x
-    objSol, x, nStatus = CounterfactualSensitivity.inner_loop_internal(obj, theta)
-    evalResult.obj[1] = -objSol
-
-    local_c = zeros(1)
-    obj(x, constr=local_c)
-    evalResult.c[1] = local_c[1]
-    if abs(objSol) == 1e10
-        evalResult.c[1] = 1e9
-    end
-
-    g_d, g_e = melitz_cutoff_constraints_at(theta, obj.γ)
-    nd = length(g_d)
-    evalResult.c[2:1+nd] .= g_d
-    evalResult.c[2+nd:end] .= g_e
-    return 0
+struct MelitzOuterFeasibilityClassification
+    inner_verified::Bool
+    inner_moment_feasible::Bool
+    cutoff_feasible::Bool
+    gravity_feasible::Bool
+    budget_feasible::Bool
+    outer_feasible::Bool
 end
 
-function melitz_combined_callback_G!(kc, cb, evalRequest, evalResult, userParams)
-    obj = userParams
-    theta = evalRequest.x
-    n = length(theta)
-    objSol, x, nStatus = CounterfactualSensitivity.inner_loop_internal(obj, theta)
+"""
+    melitz_classify_outer_feasibility(r::MelitzDeltaEvalResult, delta; gravity_tol=1e-6)
+        -> MelitzOuterFeasibilityClassification
 
-    local_jac = zeros(n)
-    obj(x, evalResult.objGrad, theta; jac=local_jac)
-    evalResult.objGrad .*= -1.0
-    evalResult.jac[1:n] .= local_jac
-
-    J_d, J_e = melitz_cutoff_constraint_jacobian(theta, obj.γ)
-    nd, ne = size(J_d, 1), size(J_e, 1)
-    @inbounds for kk in 1:nd
-        evalResult.jac[kk*n+1:(kk+1)*n] .= @view J_d[kk, :]
-    end
-    off = 1 + nd
-    @inbounds for kk in 1:ne
-        evalResult.jac[(off+kk-1)*n+1:(off+kk)*n] .= @view J_e[kk, :]
-    end
-    return 0
+Builds the Section 2.3 classification from an existing `MelitzDeltaEvalResult` (from
+either `evaluate_melitz_delta` or `evaluate_melitz_delta_from_solution`) and the outer
+program's own `delta` budget.
+"""
+function melitz_classify_outer_feasibility(r::MelitzDeltaEvalResult, delta::Real;
+                                            gravity_tol::Real=1e-6)
+    inner_verified = r.nStatus == 0
+    inner_moment_feasible = r.lfd_ok
+    cutoff_feasible = r.feasible
+    gravity_feasible = r.equilibrium_check !== nothing &&
+                        abs(r.equilibrium_check.gravity_residual_A) < gravity_tol &&
+                        abs(r.equilibrium_check.gravity_residual_f) < gravity_tol
+    budget_feasible = isfinite(r.Delta) && r.Delta <= delta
+    outer_feasible = inner_verified && inner_moment_feasible && cutoff_feasible &&
+                      gravity_feasible && budget_feasible
+    return MelitzOuterFeasibilityClassification(inner_verified, inner_moment_feasible,
+        cutoff_feasible, gravity_feasible, budget_feasible, outer_feasible)
 end
+
+"""
+    MelitzOuterCandidate
+
+Section 2.1/2.2: one complete, immutable candidate incumbent -- the full
+`MelitzDeltaEvalResult` (theta_free, full A/f/gamma_prime, cutoff matrix and slacks,
+dual/LFD, Delta, gravity/moment residuals, every verification diagnostic), its Section 2.3
+feasibility classification, the signed objective value being optimized (`+theta[1]` for
+the upper direction, `-theta[1]` for the lower -- so "smaller is better" uniformly,
+matching what KNITRO itself always minimizes, Section 3.1), and a `source` tag recording
+how this candidate was obtained.
+"""
+struct MelitzOuterCandidate
+    objective::Float64
+    eval::MelitzDeltaEvalResult
+    classification::MelitzOuterFeasibilityClassification
+    source::Symbol   # :initial, :live, :cold_verified
+end
+
+# ============================================================================
+# Section 3.4/13.F: the finite-delta outer result, with unambiguous incumbent fields.
+# ============================================================================
 
 """
     MelitzFiniteDeltaOuterResult
 
-Section 3.4/8.C required report fields. `terminal` is whatever KNITRO's own solution
-was (may be infeasible/unverified); `cold_verified_incumbent` is the best VERIFIED
-feasible point tracked during the run, INDEPENDENTLY re-solved from a cleared warm start
-at the very end (Section 6: never trust a warm-started `verified=true` flag as the final
-word) -- `nothing` if the run never found one.
+`terminal_eval`/`terminal_classification` describe whatever KNITRO's own trajectory ended
+at (may be infeasible/unverified -- reported honestly, never hidden). `initial_incumbent`
+is `theta_init`'s own cold-verified outer-feasibility evaluation (Section 2.1 -- installed
+BEFORE `KN_solve` is ever called, so it survives even a 0/1-iteration KNITRO run).
+`best_live_incumbent` is the best (smallest signed objective) outer-feasible point observed
+during the trajectory itself (Section 2.2, WARM -- not yet independently reverified).
+`cold_verified_incumbent` is the best live candidate that survives an independent cold
+reverification (a fresh KNITRO solve from a cleared warm start, Section 2.2 steps 2-4),
+falling back to `initial_incumbent` if none does -- THIS is the field callers should treat
+as "the answer."
 """
 struct MelitzFiniteDeltaOuterResult
     theta_init::Vector{Float64}
@@ -354,44 +406,188 @@ struct MelitzFiniteDeltaOuterResult
     gradient_backend::Symbol
     terminal_theta::Vector{Float64}
     terminal_eval::MelitzDeltaEvalResult
-    cold_verified_incumbent::Union{Nothing,MelitzDeltaEvalResult}
+    terminal_classification::MelitzOuterFeasibilityClassification
+    initial_incumbent::Union{Nothing,MelitzOuterCandidate}
+    best_live_incumbent::Union{Nothing,MelitzOuterCandidate}
+    cold_verified_incumbent::Union{Nothing,MelitzOuterCandidate}
     nStatus::Int
     inner_solve_count::Int
     inner_infeas_count::Int
+    inner_eval_failures::Int
     wall_time::Float64
 end
 
 """
+    melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
+        n_live_candidates_tracked=5) -> NamedTuple
+
+Section 6/7: factors the finite-delta outer NLP's combined callback pair (objective +
+divergence-budget + cutoff constraints, Sections 3.1/4.1/5.2) out of
+`solve_melitz_finite_delta_bound` so a SEPARATE fixed-point test driver
+(`melitz_fixed_point_probe`) can register the EXACT SAME production `cb_F!`/`cb_G!`
+closures against a degenerate (0-degree-of-freedom) KNITRO problem -- Section 6's own
+requirement ("these tests must pass through the exact production combined callback and
+registered bounds, not merely call helper functions") -- rather than duplicating this
+logic a second time, which would risk exactly the production/test drift Section 6 warns
+against.
+
+Returns a `NamedTuple` `(cb_F!, cb_G!, live_candidates, n_inner_eval_failures,
+signed_objective)`. `live_candidates`/`n_inner_eval_failures` are mutated in place by the
+callbacks as KNITRO calls them -- the caller reads them AFTER `KN_solve` returns.
+"""
+function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smallest::Bool;
+                                              n_live_candidates_tracked::Int=5)
+    signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
+    live_candidates = MelitzOuterCandidate[]
+    n_inner_eval_failures = Ref(0)
+
+    function register_live_candidate!(theta::Vector{Float64}, Delta_val::Float64,
+                                       x::Vector{Float64}, nStatus::Integer)
+        r = evaluate_melitz_delta_from_solution(theta, ctx, obj, Delta_val, x, nStatus)
+        cls = melitz_classify_outer_feasibility(r, delta)
+        cls.outer_feasible || return nothing
+        push!(live_candidates, MelitzOuterCandidate(signed_objective(theta), r, cls, :live))
+        sort!(live_candidates; by=c -> c.objective)
+        while length(live_candidates) > n_live_candidates_tracked
+            pop!(live_candidates)
+        end
+        return nothing
+    end
+
+    # Section 5.2: a genuine inner-solve failure is an EVALUATION failure, not a model
+    # value. Retry once from a neutral cold start; if that also fails, throw a
+    # `DomainError` -- KNITRO.jl's own `_try_catch_handler` catches this and converts it to
+    # a proper evaluation-error return code (KN_RC_EVAL_ERR), telling KNITRO to
+    # reject/backtrack from this trial point -- matching
+    # `full_aod_diag/d4_exact/c9_phase8_d20_pilot.jl`'s documented convention for the
+    # Ricardian model.
+    function inner_solve_verified_or_fail(theta::AbstractVector)
+        objSol, x, nStatus = CounterfactualSensitivity.inner_loop_internal(obj, theta)
+        if nStatus in (0, -100, -101, -103)
+            return objSol, x, nStatus
+        end
+        was_cached = obj.use_cached_x
+        obj.use_cached_x = false
+        objSol2, x2, nStatus2 = CounterfactualSensitivity.inner_loop_internal(obj, theta)
+        obj.use_cached_x = was_cached
+        if nStatus2 in (0, -100, -101, -103)
+            return objSol2, x2, nStatus2
+        end
+        n_inner_eval_failures[] += 1
+        throw(DomainError(theta[1],
+            "melitz finite-delta outer callback: inner CC dual solve failed even after a " *
+            "cold retry (warm nStatus=$nStatus, cold nStatus=$nStatus2) -- rejecting this " *
+            "trial point (Section 5.2)"))
+    end
+
+    function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
+        theta = collect(evalRequest.x)
+        objSol, x, nStatus = inner_solve_verified_or_fail(theta)
+
+        # Section 3.1: the outer objective is ALWAYS the finite, deterministic gamma
+        # coordinate -- never the inner solve's own return value or a failure sentinel.
+        evalResult.obj[1] = signed_objective(theta)
+
+        local_c = zeros(1)
+        obj(x, constr=local_c)   # raw functor call: local_c[1] == +1e10*Delta(theta) (Section 18)
+        Delta_theta = local_c[1] / 1e10
+        # Section 4.1: c_delta(theta) = Delta(theta)/delta <= 1 -- dimensionless, O(1) at
+        # the budget boundary regardless of delta's own scale (replaces the old
+        # 1e10-scaled row).
+        evalResult.c[1] = Delta_theta / delta
+
+        g_d, g_e = melitz_cutoff_constraints_at(theta, obj.γ)
+        nd = length(g_d)
+        evalResult.c[2:1+nd] .= g_d
+        evalResult.c[2+nd:end] .= g_e
+
+        register_live_candidate!(theta, Delta_theta, collect(x), nStatus)
+        return 0
+    end
+
+    function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
+        theta = collect(evalRequest.x)
+        n_ = length(theta)
+        objSol, x, nStatus = inner_solve_verified_or_fail(theta)
+
+        # Section 3.1: d(±theta[1])/dtheta -- exact, trivial, independent of the inner
+        # solve (which is still needed below, for the constraint Jacobian only).
+        evalResult.objGrad .= 0.0
+        evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
+
+        dummy_g = zeros(n_)
+        local_jac = zeros(n_)
+        obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
+        evalResult.jac[1:n_] .= local_jac ./ (1e10 * delta)   # Section 4.2: same scaling as the value
+
+        J_d, J_e = melitz_cutoff_constraint_jacobian(theta, obj.γ)
+        nd, ne = size(J_d, 1), size(J_e, 1)
+        @inbounds for kk in 1:nd
+            evalResult.jac[kk*n_+1:(kk+1)*n_] .= @view J_d[kk, :]
+        end
+        off = 1 + nd
+        @inbounds for kk in 1:ne
+            evalResult.jac[(off+kk-1)*n_+1:(off+kk)*n_] .= @view J_e[kk, :]
+        end
+        return 0
+    end
+
+    return (cb_F! = cb_F!, cb_G! = cb_G!, live_candidates = live_candidates,
+            n_inner_eval_failures = n_inner_eval_failures, signed_objective = signed_objective)
+end
+
+"""
     solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init; delta, direction,
-        gradient_backend=:B, h=1e-4, theta_box=10.0,
+        gradient_backend=:B, h=1e-4, theta_box=2.0, n_live_candidates_tracked=5,
         outer_loop_opt=<default>) -> MelitzFiniteDeltaOuterResult
 
-Section 3/4: solves `minimize/maximize theta_free[1] s.t. Delta(theta)<=delta` and the
-Section 1.3 cutoff inequalities. Mirrors `cc_algo/ccOuter.jl`'s own `counterType==1`
-usage of `outer_loop`/`PsiObjectiveBundleImplicit` almost line for line -- see this
-file's header for the precise list of what is reused unchanged vs. newly added (the
-cutoff-constraint block has no Ricardian analogue).
+Section 3/4 (2026-07-23 correctness-repair session): solves
+`minimize/maximize theta_free[1] s.t. Delta(theta)<=delta` and the Section 1.3 cutoff
+inequalities, reusing `PsiObjectiveBundleImplicit` (constructed by
+`build_melitz_implicit_bundle`) for the inner CC dual solve/envelope-gradient machinery,
+but registering its OWN KNITRO problem/callbacks directly (see this file's header for why
+`outer_loop`/`outer_loop_constraints!` are not reused for the outer NLP itself, unlike the
+inner-bundle construction).
+
+Three corrections vs. the prior (2026-07-23, pre-repair) version of this function, per
+`docs/melitz_delta_star.md`'s governing correction:
+
+  1. **Objective** (Section 3.1): `evalResult.obj[1] = find_smallest ? theta[1] :
+     -theta[1]`, ALWAYS -- independent of the inner solve's own success/failure.
+  2. **Constraint scaling** (Section 4.1): the divergence row is
+     `c_delta(theta) = Delta(theta)/delta <= 1`, not the old `1e10*Delta(theta) <=
+     1e10*delta` -- the SAME underlying `1e10*Delta` raw functor value, consistently
+     rescaled (value AND Jacobian) by `1/(1e10*delta)`.
+  3. **Inner failure handling** (Section 5): a genuine inner-solve failure (bad `nStatus`
+     even after one cold retry) throws a `DomainError`, caught by KNITRO.jl's own callback
+     wrapper and converted to a proper evaluation-error return code -- matching
+     `full_aod_diag/d4_exact/c9_phase8_d20_pilot.jl`'s documented convention for the
+     Ricardian model, not a hand-invented constraint value.
+
+Also implements Section 2's incumbent bookkeeping: `theta_init` is cold-evaluated and
+installed as `initial_incumbent` BEFORE `KN_solve` runs (survives even a
+zero/one-iteration KNITRO run, Section 2.1); every outer-feasible point evaluated during
+the trajectory is classified via `evaluate_melitz_delta_from_solution` (NO extra KNITRO
+solve -- reuses the dual `x` this SAME callback call already computed) and the best
+`n_live_candidates_tracked` are kept (Section 2.2); at the end, live candidates are
+cold-reverified best-first until one survives, falling back to `initial_incumbent`
+(Section 2.2 steps 2-4).
 
 `obj_inner`: the EXISTING `PsiObjectiveBundleDelta` bundle from `build_melitz_psi_bundle`
 (shares `ctx`/reference draws with the new `PsiObjectiveBundleImplicit` this function
-builds internally) -- used for the final cold-verification gate.
+builds internally) -- used for every cold-verification call (initial incumbent, end-of-run
+reverification).
 
 `theta_box`: the outer decision vector has no natural box (the governing prompt imposes
 none) -- a symmetric `theta_init .± theta_box` bound is set purely for KNITRO
 well-posedness (an ARTIFICIAL bound, flagged per Section 8.F, not an economic
-restriction). Default `2.0`, deliberately modest (not the "generous ±10" first tried):
-an unconstrained smoke run with a wide box and an APPROXIMATE (Method B) constraint
-gradient ran theta far enough from the start that the inner CC problem entered a
-numerically pathological region (a real, reproducible failure mode, not hypothetical --
-the verified-success gate correctly refused to report that terminal point as a
-result). A tighter box is a cheap extra safety net on top of Section 4's own
-continuation strategy (small delta steps from an already-good start), not a substitute
-for it.
+restriction).
 """
 function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVector;
                                           delta::Real, direction::Symbol,
                                           gradient_backend::Symbol=:B, h::Real=1e-4,
                                           theta_box::Real=2.0,
+                                          n_live_candidates_tracked::Int=5,
                                           inner_loop_opt::AbstractString,
                                           outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"))
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
@@ -399,10 +595,29 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
     D = ctx.D
     n = length(theta_init)
+    delta = Float64(delta)
 
     obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta_init; delta=delta,
         find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
+
+    signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
+
+    # ------------------------------------------------------------------------
+    # Section 2.1: install the initial incumbent BEFORE KN_solve is ever called, from a
+    # COLD evaluation of theta_init -- this must be returned even if KNITRO's own
+    # trajectory never produces a verified point (Section 12's zero/one-iteration
+    # regression test pins exactly this).
+    # ------------------------------------------------------------------------
+    initial_eval = evaluate_melitz_delta(collect(theta_init), ctx, obj_inner; cold=true)
+    initial_classification = melitz_classify_outer_feasibility(initial_eval, delta)
+    initial_incumbent = initial_classification.outer_feasible ?
+        MelitzOuterCandidate(signed_objective(theta_init), initial_eval, initial_classification, :initial) :
+        nothing
+
+    # Section 6/7: the SAME callback pair a fixed-point test would register directly.
+    cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
+        n_live_candidates_tracked=n_live_candidates_tracked)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -412,51 +627,16 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     KNITRO.KN_set_var_upbnds_all(kc, collect(theta_init) .+ theta_box)
     KNITRO.KN_set_var_primal_init_values_all(kc, collect(theta_init))
 
-    # ONE combined constraint block/callback covering the divergence budget (index 1)
-    # AND the cutoff inequalities (indices 2:end) -- see melitz_combined_callback_F!'s
-    # own docstring for why this is a single callback context rather than two (a real,
-    # reproducible KNITRO crash with two separate contexts, root cause not fully pinned
-    # down but confirmed independent of the reused cc_algo callbacks' own correctness).
-    #
-    # Constraint 1's bound (CORRECTED 2026-07-23, see docs/melitz_delta_star.md Section
-    # 18): a PRIOR version of this file set a LOWER bound `constr[1] >= -1e10*delta`,
-    # reasoning that the functor's raw `f = sum(Psi(arg0))/M + zeta` equals `+Delta(theta)`
-    # at the optimal dual (so `constr[1] = -1e10*f <= 0` and `Delta<=delta` becomes a lower
-    # bound). That reasoning is WRONG. Empirically (and confirmed by `inner_loop`'s own
-    # `val *= -1.0` correction whenever `find_smallest==true`, `cc_algo/
-    # inner_loop_functions.jl` -- the SAME correction `dual_scalar_at_fixed_G`,
-    # gradient_lab.jl, already applies as `obj.find_smallest ? -raw : raw`), the raw `f`
-    # this functor computes is `-Delta(theta)`, not `+Delta(theta)` -- `PsiObjectiveBundleDelta`
-    # ALWAYS has `find_smallest=true` and `inner_loop` negates its raw `objSol` to report
-    # the (positive) `Delta`, so a raw, uncorrected read of `f` (exactly what `obj(x,
-    # constr=...)` below performs) is already sign-flipped relative to the reported `Delta`.
-    # Verified directly: at a converged benchmark point (`Delta_truth=2.653045e-4`),
-    # `obj(x, constr=c)` gives `c[1]=+2.653045e6 == +1e10*Delta_truth` EXACTLY (not
-    # `-1e10*Delta_truth`); at a blown-up point (`Delta_truth` sentinel `1e10`),
-    # `c[1]=+1.31e23 == +1e10*Delta_truth` again. So `constr[1] = +1e10*Delta(theta)`
-    # ALWAYS (>=0), and `Delta(theta)<=delta` is therefore `constr[1] <= 1e10*delta` -- an
-    # UPPER bound -- exactly the Ricardian model's own UNMODIFIED `outer_loop_constraints!`
-    # convention (`KN_set_con_upbnd(cIndices[1], 1e10*obj.δ)`). The prior LOWER-bound
-    # version was empirically confirmed VACUOUS (the same failure mode it was written to
-    # fix, reintroduced via the opposite sign error): `constr[1]=+1e10*Delta(theta)>=0
-    # >= -1e10*delta` for any `delta>=0`, so it accepts every point regardless of
-    # `Delta(theta)`. This fully explains the previously-reported "KNITRO live feasibility
-    # tracking disagrees with cold verification" finding (docs Section 17.D/17.G): the
-    # outer solve's own divergence-budget constraint was never actually binding, so KNITRO
-    # correctly reported feasibility error 0.000 throughout -- the search was, in fact,
-    # unconstrained in that dimension, not lying about its own state. See
-    # `test/melitz/runtests.jl`, "Section 18: divergence-budget constraint sign", which
-    # pins `constr[1] == +1e10*Delta(theta)` against the independently-verified ground
-    # truth so this cannot silently regress again.
     D2 = D * (D - 1)
     n_cutoff = D + D2
     m = 1 + n_cutoff
     cIndices = KNITRO.KN_add_cons(kc, m)
-    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1e10 * delta)
+    # Section 4.1: c_delta <= 1 -- dimensionless, replaces the old 1e10*delta magnitude.
+    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1.0)
     KNITRO.KN_set_con_lobnds(kc, n_cutoff, cIndices[2:end], zeros(n_cutoff))
 
-    cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, melitz_combined_callback_F!)
-    KNITRO.KN_set_cb_grad(kc, cb, melitz_combined_callback_G!,
+    cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cbset.cb_F!)
+    KNITRO.KN_set_cb_grad(kc, cb, cbset.cb_G!,
         jacIndexCons=repeat(cIndices, inner=n), jacIndexVars=repeat(xIndices, outer=m))
     KNITRO.KN_set_cb_user_params(kc, cb, obj)
 
@@ -470,17 +650,132 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
 
     theta_final = collect(theta_final_raw)
     terminal_eval = evaluate_melitz_delta(theta_final, ctx, obj_inner; cold=true)
+    terminal_classification = melitz_classify_outer_feasibility(terminal_eval, delta)
 
-    # Section 3.4: only the COLD-verified terminal point may be reported as the
-    # incumbent -- an unverified/infeasible/failed terminal point is returned to the
-    # caller as `terminal_eval` (so nothing hides a failure) but `cold_verified_incumbent`
-    # stays `nothing` (Section 6 does further, separate local polling on top of this).
+    # ------------------------------------------------------------------------
+    # Section 2.2 steps 2-4: rank the live candidates best-first (smallest signed
+    # objective), cold-reverify from a cleared warm start until one survives; fall back to
+    # the initial Pareto incumbent if none does. Never restart/report from an unverified
+    # terminal point (Section 10's own "never restart from an infeasible terminal point").
+    # ------------------------------------------------------------------------
+    live_candidates = cbset.live_candidates
     cold_verified_incumbent = nothing
-    if terminal_eval.verified && terminal_eval.Delta <= delta + 1e-6
-        cold_verified_incumbent = terminal_eval
+    for cand in live_candidates
+        cold_eval = evaluate_melitz_delta(cand.eval.theta_free, ctx, obj_inner; cold=true)
+        cold_cls = melitz_classify_outer_feasibility(cold_eval, delta)
+        if cold_cls.outer_feasible
+            cold_verified_incumbent = MelitzOuterCandidate(signed_objective(cand.eval.theta_free),
+                cold_eval, cold_cls, :cold_verified)
+            break
+        end
+    end
+    if cold_verified_incumbent === nothing
+        cold_verified_incumbent = initial_incumbent
     end
 
-    return MelitzFiniteDeltaOuterResult(collect(theta_init), Float64(delta), direction,
-        gradient_backend, theta_final, terminal_eval, cold_verified_incumbent,
-        nStatus, solve_inner_count, solve_infeas_count, time() - t0)
+    best_live_incumbent = isempty(live_candidates) ? nothing : first(live_candidates)
+
+    return MelitzFiniteDeltaOuterResult(collect(theta_init), delta, direction,
+        gradient_backend, theta_final, terminal_eval, terminal_classification,
+        initial_incumbent, best_live_incumbent, cold_verified_incumbent,
+        nStatus, solve_inner_count, solve_infeas_count, cbset.n_inner_eval_failures[], time() - t0)
+end
+
+# ============================================================================
+# Section 6: fixed-point KNITRO integration tests. `melitz_fixed_point_probe` builds a
+# degenerate (0-degree-of-freedom, var lobnd==upbnd) KNITRO problem around a single given
+# `theta_probe` and registers the EXACT SAME production callback pair
+# (`melitz_build_finite_delta_callbacks`) `solve_melitz_finite_delta_bound` itself uses --
+# so `KN_solve` performs exactly one production-path evaluation, exercising the real
+# registered objective/constraint/bounds/Jacobian wiring end to end, not a bypass helper
+# call.
+# ============================================================================
+
+"""
+    MelitzFixedPointProbeResult
+
+Result of `melitz_fixed_point_probe`. `nStatus` is KNITRO's own overall solve status at
+the (single, fixed) evaluation point. `eval_failed` is `true` iff the inner CC dual solve
+failed even after the Section 5.2 cold retry (the callback threw, KNITRO caught it and
+reported a `KN_RC_CALLBACK_ERR`/`KN_RC_EVAL_ERR`-family status: `-500` or `-502`) -- in
+that case `obj_value`/`c` are `NaN`/empty, since KNITRO never recorded a real evaluation.
+When `!eval_failed`, `obj_value` is the registered objective (Section 3.1: `±theta[1]`
+exactly) and `c` is the full `m`-vector of registered constraint values (`c[1]` = the
+Section 4.1 normalized `Delta(theta)/delta` divergence row, `c[2:end]` = the Section 1.3
+deterministic cutoff rows), both read directly off KNITRO
+(`KN_get_obj_value`/`KN_get_con_values_all`) rather than recomputed independently.
+`live_candidates` holds whatever the shared incumbent-tracking logic recorded for this one
+evaluation (0 or 1 entries).
+"""
+struct MelitzFixedPointProbeResult
+    nStatus::Int
+    eval_failed::Bool
+    obj_value::Float64
+    c::Vector{Float64}
+    live_candidates::Vector{MelitzOuterCandidate}
+end
+
+const MELITZ_KNITRO_EVAL_ERROR_STATUSES = (-500, -501, -502, -503, -504, -505, -506,
+                                            -515, -518, -520, -522, -600)
+
+"""
+    melitz_fixed_point_probe(ctx, obj_inner, theta_probe; delta, direction,
+        gradient_backend=:B, h=1e-4, inner_loop_opt, outer_loop_opt=<default>)
+        -> MelitzFixedPointProbeResult
+
+Section 6 Tests A-D: fixes ALL outer variables at `theta_probe` (KNITRO lower bound ==
+upper bound, zero degrees of freedom) and runs the finite-delta outer NLP's real,
+production combined callback (`melitz_build_finite_delta_callbacks`) exactly once.
+"""
+function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
+                                   delta::Real, direction::Symbol,
+                                   gradient_backend::Symbol=:B, h::Real=1e-4,
+                                   inner_loop_opt::AbstractString,
+                                   outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"))
+    direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
+    find_smallest = direction == :upper
+    D = ctx.D
+    n = length(theta_probe)
+    delta = Float64(delta)
+    theta_probe_v = collect(Float64.(theta_probe))
+
+    obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta_probe_v; delta=delta,
+        find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
+        inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
+
+    cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest)
+
+    kc = KNITRO.KN_new()
+    KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
+
+    xIndices = KNITRO.KN_add_vars(kc, n)
+    KNITRO.KN_set_var_lobnds_all(kc, theta_probe_v)
+    KNITRO.KN_set_var_upbnds_all(kc, theta_probe_v)
+    KNITRO.KN_set_var_primal_init_values_all(kc, theta_probe_v)
+
+    D2 = D * (D - 1)
+    n_cutoff = D + D2
+    m = 1 + n_cutoff
+    cIndices = KNITRO.KN_add_cons(kc, m)
+    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1.0)
+    KNITRO.KN_set_con_lobnds(kc, n_cutoff, cIndices[2:end], zeros(n_cutoff))
+
+    cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cbset.cb_F!)
+    KNITRO.KN_set_cb_grad(kc, cb, cbset.cb_G!,
+        jacIndexCons=repeat(cIndices, inner=n), jacIndexVars=repeat(xIndices, outer=m))
+    KNITRO.KN_set_cb_user_params(kc, cb, obj)
+
+    KNITRO.KN_solve(kc)
+    nStatus, objVal, _, _ = KNITRO.KN_get_solution(kc)
+
+    eval_failed = nStatus in MELITZ_KNITRO_EVAL_ERROR_STATUSES
+    c = Float64[]
+    if !eval_failed
+        c = zeros(m)
+        KNITRO.KN_get_con_values_all(kc, c)
+    end
+    KNITRO.KN_free(kc)
+
+    return MelitzFixedPointProbeResult(nStatus, eval_failed, eval_failed ? NaN : objVal, c,
+                                        cbset.live_candidates)
 end

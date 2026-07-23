@@ -415,11 +415,27 @@ function melitz_primal_divergence(weights::AbstractVector, W::Int)
 end
 
 """
-    melitz_recover_lfd(obj::PsiObjectiveBundleDelta, theta) -> MelitzLFDResult
+    melitz_recover_lfd_from_solution(val, x, nStatus, theta, obj; kkt_opt_error=NaN,
+        kkt_feas_error=NaN, moment_tol=1e-6, normalization_tol=1e-6, gap_atol=1e-10,
+        gap_rtol=1e-6) -> MelitzLFDResult
 
-Runs `inner_loop(obj, theta)` (real KNITRO, `cc_algo/inner_loop_functions.jl`,
-unmodified) and RECOVERS THE PRIMAL LFD -- not just the dual objective/status (the
-superseded closure's `run_melitz_inner_delta` returned only `(val, x, nStatus)`).
+The post-processing half of `melitz_recover_lfd` (which is now a thin wrapper: run
+`inner_loop`, then call this) -- factored out (2026-07-23 correctness-repair session, main
+prompt Section 2.2) so a caller that has ALREADY obtained a verified inner dual solution
+`(val, x, nStatus)` at `theta` -- e.g. the finite-delta outer NLP's own combined callback,
+which calls `inner_loop_internal` itself every evaluation -- can recover the LFD/moment-
+residual/primal-dual diagnostics WITHOUT launching a SECOND, redundant real KNITRO solve
+at the same point.
+
+`val` must already be in the SAME sign/scale convention `inner_loop` returns
+(`Delta(theta)`, positive) -- a caller holding a `PsiObjectiveBundleImplicit`'s own
+`objSol` (which is `K`-based -- `theta[1]`, NOT `Delta` -- see
+`docs/melitz_delta_star.md` Section 3.2) must NOT pass that directly; it must compute
+`Delta(theta)` separately (e.g. via the raw functor's `constr[1]/1e10`, Section 18's sign
+convention) and pass THAT as `val`.
+
+RECOVERS THE PRIMAL LFD -- not just the dual objective/status (the superseded closure's
+`run_melitz_inner_delta` returned only `(val, x, nStatus)`).
 
 Reuses the exact conjugate-derivative recipe already validated (and copy-pasted 11x) in
 `sequential_gravity/run_profiled_production.jl`'s `recover_lfd`: after `inner_loop`
@@ -449,14 +465,13 @@ non-invasively via `cc_algo/inner_loop_functions.jl`'s `INNER_LAST_OPT_ERR`/
 single-flight `guard_enter_inner_solve!` discipline) -- no change to `inner_loop`'s shared
 return signature was needed.
 """
-function melitz_recover_lfd(obj, theta::AbstractVector; moment_tol::Real=1e-6,
-                             normalization_tol::Real=1e-6,
-                             gap_atol::Real=1e-10, gap_rtol::Real=1e-6)
+function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus::Integer,
+                                           theta::AbstractVector, obj;
+                                           kkt_opt_error::Real=NaN, kkt_feas_error::Real=NaN,
+                                           moment_tol::Real=1e-6, normalization_tol::Real=1e-6,
+                                           gap_atol::Real=1e-10, gap_rtol::Real=1e-6)
     d = obj.d
     W = size(obj.U, 1)
-    val, x, nStatus = inner_loop(obj, theta)
-    kkt_opt_error = INNER_LAST_OPT_ERR[]
-    kkt_feas_error = INNER_LAST_FEAS_ERR[]
 
     if nStatus != 0 || !all(isfinite, x)
         return MelitzLFDResult(val, x, nStatus, fill(1.0 / W, W), false,
@@ -508,6 +523,27 @@ function melitz_recover_lfd(obj, theta::AbstractVector; moment_tol::Real=1e-6,
                             primal_divergence, dual_divergence, primal_dual_gap,
                             max_moment_residual, normalization_residual,
                             kkt_opt_error, kkt_feas_error)
+end
+
+"""
+    melitz_recover_lfd(obj::PsiObjectiveBundleDelta, theta) -> MelitzLFDResult
+
+Runs `inner_loop(obj, theta)` (real KNITRO, `cc_algo/inner_loop_functions.jl`, unmodified)
+then delegates to `melitz_recover_lfd_from_solution` (see its docstring for the full
+recovery recipe and the `lfd_ok` acceptance rule) -- the ordinary "solve fresh, then
+recover" entry point. Use `melitz_recover_lfd_from_solution` directly instead when a
+verified `(val, x, nStatus)` at `theta` is already in hand (no redundant KNITRO solve).
+"""
+function melitz_recover_lfd(obj, theta::AbstractVector; moment_tol::Real=1e-6,
+                             normalization_tol::Real=1e-6,
+                             gap_atol::Real=1e-10, gap_rtol::Real=1e-6)
+    val, x, nStatus = inner_loop(obj, theta)
+    kkt_opt_error = INNER_LAST_OPT_ERR[]
+    kkt_feas_error = INNER_LAST_FEAS_ERR[]
+    return melitz_recover_lfd_from_solution(val, x, nStatus, theta, obj;
+        kkt_opt_error=kkt_opt_error, kkt_feas_error=kkt_feas_error,
+        moment_tol=moment_tol, normalization_tol=normalization_tol,
+        gap_atol=gap_atol, gap_rtol=gap_rtol)
 end
 
 """
@@ -627,4 +663,58 @@ function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
     end
 
     return result
+end
+
+"""
+    evaluate_melitz_delta_from_solution(theta_free, ctx, obj_like, Delta_val, x, nStatus;
+        kkt_opt_error=NaN, kkt_feas_error=NaN, store_G=false) -> MelitzDeltaEvalResult
+
+2026-07-23 correctness-repair session (main prompt Section 2.2): builds the SAME
+authoritative `MelitzDeltaEvalResult` `evaluate_melitz_delta` does, but from a dual
+solution `(Delta_val, x, nStatus)` the CALLER has already obtained at this exact
+`theta_free` -- e.g. the finite-delta outer NLP's combined callback, which calls
+`inner_loop_internal` on its own `PsiObjectiveBundleImplicit` every evaluation anyway.
+Launches NO additional real KNITRO solve (`melitz_outer_state`'s cutoff/gravity state and
+`melitz_recover_lfd_from_solution`'s LFD reconstruction are both cheap closed-form/O(W)
+computations) -- this is what lets the outer callback classify every live evaluation as a
+candidate incumbent (Section 2.2 step 1-3) without doubling the trajectory's own KNITRO
+solve count.
+
+`obj_like` need only expose `.moments!`/`.U`/`.d` (both `PsiObjectiveBundleDelta` and
+`PsiObjectiveBundleImplicit` qualify -- the divergence-relevant moment matrix `G` is
+identical between them at a shared `ctx`, see `docs/melitz_delta_star.md` Section 3's file
+header). `Delta_val` must be `Delta(theta)` itself (positive), NOT a `PsiObjectiveBundleImplicit`'s
+own `K`-based `objSol` -- see `melitz_recover_lfd_from_solution`'s own docstring.
+
+`state_time`/`inner_time` are set to `0.0` (no separate real-time measurement is meaningful
+here, since neither computation involves a fresh KNITRO solve) rather than a misleading
+wall-clock split; `total_time` likewise `0.0`.
+"""
+function evaluate_melitz_delta_from_solution(theta_free::AbstractVector, ctx, obj_like,
+                                              Delta_val::Real, x::AbstractVector, nStatus::Integer;
+                                              kkt_opt_error::Real=NaN, kkt_feas_error::Real=NaN,
+                                              store_G::Bool=false)
+    state = melitz_outer_state(theta_free, ctx)
+    lfd = melitz_recover_lfd_from_solution(Float64(Delta_val), x, nStatus, theta_free, obj_like;
+        kkt_opt_error=kkt_opt_error, kkt_feas_error=kkt_feas_error)
+
+    G_out = nothing
+    if store_G
+        W = size(obj_like.U, 1)
+        Ktmp = zeros(W)
+        Gtmp = zeros(W, obj_like.d)
+        obj_like.moments!(Ktmp, Gtmp, theta_free, obj_like.U, obj_like)
+        G_out = Gtmp
+    end
+
+    verified = state.feasible && lfd.lfd_ok && lfd.nStatus == 0
+    check = verified ? check_profiled_melitz_equilibrium(
+        state.primitives, state.equilibrium, state.counterfactual, obj_like.U, lfd.weights) : nothing
+
+    return MelitzDeltaEvalResult(
+        Vector{Float64}(theta_free), state.A, state.f, state.gamma_prime_j, state.f_jj,
+        state.cutoff, state.g_domestic, state.g_export, state.min_slack, state.feasible,
+        G_out, lfd.dual_x, lfd.weights, lfd.Delta, lfd.primal_divergence, lfd.dual_divergence,
+        lfd.primal_dual_gap, lfd.moment_residuals, lfd.kkt_opt_error, lfd.kkt_feas_error,
+        lfd.nStatus, lfd.lfd_ok, verified, check, 0.0, 0.0, 0.0)
 end

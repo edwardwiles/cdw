@@ -604,6 +604,24 @@ catch e
     false
 end
 
+# 2026-07-23 correctness-repair session, Section 7: minimal duck-typed stand-ins for
+# KNITRO's own EvalRequest/EvalResult so the A/B/A repeated-evaluation test can call the
+# EXACT production callback closures (`melitz_build_finite_delta_callbacks`'s `cb_F!`/
+# `cb_G!`) directly, without a full KNITRO problem/solve -- the callbacks only ever read
+# `evalRequest.x` and write `evalResult.obj`/`.c`/`.objGrad`/`.jac`, never touch `kc`/`cb`/
+# `userParams` (they close over `obj` directly instead), so a plain mutable struct with
+# just those fields suffices. Must be defined at top level (struct definitions are not
+# allowed inside a `@testset` block's local scope).
+mutable struct MelitzMockEvalRequest
+    x::Vector{Float64}
+end
+mutable struct MelitzMockEvalResult
+    obj::Vector{Float64}
+    c::Vector{Float64}
+    objGrad::Vector{Float64}
+    jac::Vector{Float64}
+end
+
 if KNITRO_AVAILABLE
     @testset "CC inner minimum-divergence loop + LFD recovery (real KNITRO)" begin
         # Directly on the RAW population-Pareto fixture -- NO exact-sample correction
@@ -989,11 +1007,15 @@ if KNITRO_AVAILABLE
         @testset "terminal point's own cutoff feasibility is internally consistent" begin
             @test res3.terminal_eval.feasible == (res3.terminal_eval.min_slack >= 0)
         end
-        @testset "IF a cold-verified incumbent was found, it respects the delta budget" begin
-            if res3.cold_verified_incumbent !== nothing
-                @test res3.cold_verified_incumbent.Delta <= delta_loose + 1e-6
-                @test res3.cold_verified_incumbent.verified
-            end
+        @testset "Section 2.1: theta_init is outer-feasible here, so the initial incumbent is always installed" begin
+            @test res3.initial_incumbent !== nothing
+            @test res3.initial_incumbent.classification.outer_feasible
+            @test res3.initial_incumbent.eval.Delta <= delta_loose
+        end
+        @testset "cold-verified incumbent (falls back to initial if the trajectory found nothing better) respects the delta budget" begin
+            @test res3.cold_verified_incumbent !== nothing
+            @test res3.cold_verified_incumbent.classification.outer_feasible
+            @test res3.cold_verified_incumbent.eval.Delta <= delta_loose + 1e-6
         end
     end
 
@@ -1044,6 +1066,135 @@ if KNITRO_AVAILABLE
             @test local_c18[1] >= -1e10 * delta_tight
             @test local_c18[1] >= -1e10 * delta_loose18
         end
+    end
+
+    # ========================================================================
+    # 2026-07-23 correctness-repair session: Sections 2-7/12 regression tests. These pin
+    # the three bugs fixed this session (objective contamination, opaque 1e10 constraint
+    # scaling, garbage-value inner-failure handling) plus the new incumbent-bookkeeping
+    # machinery (Section 2), directly against the PRODUCTION combined callback -- not a
+    # bypass/helper-function call (Section 6's own requirement).
+    # ========================================================================
+    small_fixture20 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+        target_country=1, seed=29, W=2_000)
+    obj20, theta0_20 = build_melitz_psi_bundle(small_fixture20;
+        inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+    ctx20 = obj20.γ
+    inner_opt20 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+    outer_opt20 = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+    r0_20 = evaluate_melitz_delta(theta0_20, ctx20, obj20; cold=true, store_G=false)
+
+    @testset "Section 6: fixed-point KNITRO integration tests (production combined callback)" begin
+        @test r0_20.nStatus == 0
+
+        @testset "Test A: feasible Pareto point" begin
+            delta_loose20 = max(r0_20.Delta * 5, 1e-3)
+            pA = melitz_fixed_point_probe(ctx20, obj20, theta0_20; delta=delta_loose20,
+                direction=:upper, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            @test !pA.eval_failed
+            @test pA.nStatus == 0
+            # Section 3.1: objective equals the correct +/- gamma coordinate exactly,
+            # independent of anything the inner solve computed.
+            @test isapprox(pA.obj_value, theta0_20[1]; atol=1e-10)
+            # Section 4.1/4.2: c_delta == Delta(theta)/delta, the SAME scaling for value
+            # and (implicitly, via the shared 1/(1e10*delta) factor) Jacobian.
+            @test isapprox(pA.c[1], r0_20.Delta / delta_loose20; rtol=1e-6)
+            @test pA.c[1] < 1.0
+            @test all(>=(-1e-8), pA.c[2:end])
+            @test length(pA.live_candidates) == 1
+            @test pA.live_candidates[1].classification.outer_feasible
+        end
+
+        @testset "Test B: budget-infeasible, inner-valid point" begin
+            theta_pertB = theta0_20 .+ 0.005 .* randn(MersenneTwister(11), length(theta0_20))
+            rB = evaluate_melitz_delta(theta_pertB, ctx20, obj20; cold=true, store_G=false)
+            @test rB.nStatus == 0   # a genuinely valid inner solve -- NOT an nStatus=-102 point
+            @test rB.Delta > 0
+            delta_tightB = rB.Delta / 2   # deliberately below Delta(theta) -> budget must be violated
+            pB = melitz_fixed_point_probe(ctx20, obj20, theta_pertB; delta=delta_tightB,
+                direction=:upper, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            @test !pB.eval_failed   # a real, evaluable, merely-violated constraint -- not a numerical failure
+            @test pB.nStatus != 0   # KNITRO reports infeasibility
+            @test pB.c[1] > 1.0     # divergence row violates its upper bound
+            @test isapprox(pB.c[1], rB.Delta / delta_tightB; rtol=1e-6)
+            @test isapprox(pB.obj_value, theta_pertB[1]; atol=1e-10)   # objective still correct
+        end
+
+        @testset "Test D: inner numerical failure -- controlled callback rejection" begin
+            theta_bad20 = theta0_20 .+ 0.5 .* randn(MersenneTwister(1), length(theta0_20))
+            r_bad = evaluate_melitz_delta(theta_bad20, ctx20, obj20; cold=true, store_G=false)
+            @test !(r_bad.nStatus in (0, -100, -101, -103))   # confirms this really is a failing point
+            pD = melitz_fixed_point_probe(ctx20, obj20, theta_bad20; delta=1e-3,
+                direction=:upper, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            @test pD.eval_failed   # Section 5: rejected as an evaluation failure, not a model value
+            @test pD.nStatus in MELITZ_KNITRO_EVAL_ERROR_STATUSES
+            @test isnan(pD.obj_value)   # never a garbage value (not 1e10, not theta[1] either)
+            @test isempty(pD.live_candidates)   # no incumbent contamination from a failed point
+        end
+    end
+
+    @testset "Section 7: A/B/A repeated evaluation -- no stale-state leakage" begin
+        n20 = length(theta0_20)
+        m20 = 1 + ctx20.D + ctx20.D * (ctx20.D - 1)
+        delta_loose20b = max(r0_20.Delta * 5, 1e-3)
+        obj7 = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=delta_loose20b,
+            find_smallest=true, gradient_backend=:B, h=1e-4,
+            inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+        cbset7 = melitz_build_finite_delta_callbacks(obj7, ctx20, delta_loose20b, true)
+
+        theta_A = collect(theta0_20)
+        theta_B = theta0_20 .+ 0.5 .* randn(MersenneTwister(1), n20)   # a known-failing point
+
+        evalResA1 = MelitzMockEvalResult(zeros(1), zeros(m20), zeros(n20), zeros(n20 * m20))
+        cbset7.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta_A)), evalResA1, nothing)
+        cbset7.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta_A)), evalResA1, nothing)
+
+        threw = false
+        try
+            evalResB = MelitzMockEvalResult(zeros(1), zeros(m20), zeros(n20), zeros(n20 * m20))
+            cbset7.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta_B)), evalResB, nothing)
+        catch e
+            threw = e isa DomainError
+        end
+        @test threw
+
+        evalResA2 = MelitzMockEvalResult(zeros(1), zeros(m20), zeros(n20), zeros(n20 * m20))
+        cbset7.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta_A)), evalResA2, nothing)
+        cbset7.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta_A)), evalResA2, nothing)
+
+        @testset "point A's objective/constraint/Jacobian are IDENTICALLY reproduced after the failed B in between" begin
+            @test evalResA2.obj == evalResA1.obj
+            @test evalResA2.c == evalResA1.c
+            @test evalResA2.objGrad == evalResA1.objGrad
+            @test evalResA2.jac == evalResA1.jac
+        end
+        @testset "the failed point B never contaminates the live-candidate list" begin
+            @test length(cbset7.live_candidates) == 2   # both A evaluations, no dedup, no B
+            @test all(c -> c.eval.theta_free == theta_A, cbset7.live_candidates)
+        end
+    end
+
+    @testset "Section 2.1/12: initial incumbent survives a KNITRO run limited to one iteration" begin
+        maxit1_opt = tempname() * ".opt"
+        open(maxit1_opt, "w") do io
+            for line in readlines(outer_opt20)
+                println(io, startswith(line, "maxit") ? "maxit 1" : line)
+            end
+        end
+        delta_loose20c = max(r0_20.Delta * 5, 1e-3)
+        res_lim = solve_melitz_finite_delta_bound(ctx20, obj20, theta0_20; delta=delta_loose20c,
+            direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+            inner_loop_opt=inner_opt20, outer_loop_opt=maxit1_opt)
+        rm(maxit1_opt; force=true)
+
+        @test res_lim.initial_incumbent !== nothing
+        @test res_lim.initial_incumbent.classification.outer_feasible
+        # the RETURNED incumbent must be theta_init's own, even though KNITRO barely ran:
+        @test res_lim.cold_verified_incumbent !== nothing
+        @test res_lim.cold_verified_incumbent.eval.Delta <= delta_loose20c
     end
 end
 
