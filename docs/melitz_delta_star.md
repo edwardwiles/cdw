@@ -1388,3 +1388,82 @@ strategy) is the immediate next step, and should be expected to behave different
 that the constraint can actually reject a drifting `theta` — Backend B's own reliability
 under a REAL binding constraint has not yet been observed and may differ from the
 (vacuously-constrained) Section 17.D attempts.
+
+## 19. 2026-07-23 same-session follow-up: re-ran Section 4 under the corrected constraint
+## — genuinely binding, but no verified incumbent found at `delta=1e-3` in six real
+## KNITRO attempts; an honest negative result, not an infrastructure failure
+
+Immediately following Section 18's fix, re-ran the real finite-delta campaign at the
+SAME setup as Section 17.D (`D=4`, `W=20,000`, `seed=29`, population-Pareto start,
+Backend B `h=1e-4`, `delta=1e-3`), across six real KNITRO configurations (three per
+direction), ~77 minutes of total real KNITRO wall time. **No cold-verified incumbent was
+found for either direction at this `delta`** — but the RESULTS ARE QUALITATIVELY
+DIFFERENT from Section 17.D's, and confirm the constraint is now genuinely binding.
+
+| direction | config (`theta_box`, `maxit`) | wall | terminal `nStatus` | terminal `Delta` | vs. `delta=1e-3` |
+|---|---|---|---|---|---|
+| upper | `2.0`, `25` (direct, matching 17.D's Attempt 1) | 341s | `-410` (iter limit, infeasible) | `0.0010043` | **0.4% over** |
+| upper | `2.0`, `100` | 1227s | `-410` | `0.0012557` | 26% over |
+| upper | `0.15`, `100` | 555s | `-410` | `0.0027734` | 177% over |
+| lower | `2.0`, `25` (direct) | 882s | `-410`, cold `Delta` sentinel `1e10` (genuine inner-solve failure, not iter-limit-near-miss) | `1.0e10` | garbage |
+| lower | `0.15`, `25` | 246s | `-410` | `0.0024926` | 149% over |
+| lower | `0.15`, `100` | 1355s | `-410` | `0.0019026` | 90% over |
+
+**This is a categorically different failure mode than Section 17.D's** (retracted by
+Section 18): there, the vacuous constraint let `theta` drift to `Delta≈2.12` (~2000x the
+budget) or outright numerical garbage, with KNITRO's OWN tracking falsely reporting
+feasibility `0.000` throughout. Here, every terminal `Delta` is within `0.4x`-`2x` of the
+budget — the search is now visibly TRYING to satisfy `Delta(theta)<=delta` and getting
+close, exactly what a genuinely binding constraint should produce — and KNITRO correctly
+reports `-410`/nonzero feasibility error at every terminal point (no false "clean" reports
+this time; the diagnosis that Section 17.D's live/cold disagreement was purely the
+vacuous-constraint artifact, not a tracking bug, is further corroborated: this round shows
+NO live/cold disagreement anywhere — KNITRO's own live feasibility error and the cold
+`Delta` recheck agree in direction every time).
+
+**Two distinct sub-failure-modes, not one**:
+
+1. **Large `theta_box` (`2.0`) risks genuine inner-CC-dual pathology**, not just constraint
+   violation: lower's direct attempt (`theta_box=2.0`) hit the `1e10` cold-`Delta` sentinel
+   (a real inner-solve failure, `nStatus` outside the accepted set) partway through the
+   trajectory — the SAME class of risk Section 17.G already flagged ("Backend B's
+   reliability from a from-scratch start ... is poor"), now confirmed under a constraint
+   that is actually trying to prevent exactly this kind of excursion but doesn't always
+   succeed within KNITRO's own step-acceptance logic.
+2. **Small `theta_box` (`0.15`) avoids the inner-solve pathology but converges too slowly**:
+   every `0.15`-box run shows a clean, monotonically DECLINING feasibility error (upper's
+   `0.15`/`100` run stayed EXACTLY feasible for its first 56 iterations before a late
+   destabilization at iteration 57 — the cleanest trajectory of the six) but does not reach
+   the tight `delta=1e-3` tolerance within the iteration budgets tried (`25` or `100`).
+   Critically, MORE iterations did not monotonically help: upper's `0.15`/`100` run
+   (`Delta=0.00277`) finished WORSE than its own `2.0`/`25` run (`Delta=0.0010043`) despite
+   3x the wall time — confirming this is genuine optimizer/gradient-noise difficulty at
+   this tight a budget, not simply an iteration-count shortfall that a bigger `maxit` alone
+   resolves.
+
+**Interpretation**: `delta=1e-3` is tight relative to Backend B's own gradient accuracy
+(a finite-bandwidth secant, `h=1e-4`, chosen for the switch-noise reasons documented in
+Section 1/17.B, not for maximal precision) — the search can approach the budget boundary
+but the approximate gradient does not reliably keep it there once close, consistent with
+`docs` Section 17.G's own (still-valid) flagged risk about Backend B's reliability near a
+tight budget. This is now understood as a genuine numerical-difficulty finding, not
+conflated with the (retracted) constraint-sign bug.
+
+**Recommended next steps** (not attempted this pass, this session's real-KNITRO budget
+having already gone to diagnosing + re-testing the Section 18 fix):
+- Reverse the continuation ORDER Section 4 originally specified (tightest `delta` first,
+  widen only on failure): given `delta=1e-3` fails from a cold population start at every
+  config tried here, START from a looser `delta` (e.g. `1e-2` or `5e-3`, where the
+  population point's own `Delta_pop=7.55e-6` is comfortably inside budget with more slack
+  for gradient noise), get a genuinely verified incumbent there, and continue INWARD
+  (tightening `delta`) from that verified point rather than from the raw population start.
+- Try Backend D (`make_melitz_moments_jacobian_d`, the hand-derived exact branch
+  derivative, implemented in `finite_delta_outer.jl` but never run in a real campaign —
+  Section 17.E) in place of Backend B, since it removes finite-difference bandwidth noise
+  from the constraint Jacobian entirely.
+- A proper trust-region-aware continuation (shrinking `theta_box` adaptively based on
+  whether the previous burst's feasibility error declined vs. grew) rather than a single
+  fixed `theta_box` per attempt.
+
+Full logs (all six KNITRO runs, driver scripts) pushed to Dropbox,
+`melitz_finite_delta_constraint_sign_fix_2026-07-23/section4_followup/`.
