@@ -1,0 +1,137 @@
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+
+####################################################################################################
+# contrasts = :anchored  (L=10, D=4, W=8000)
+####################################################################################################
+====================================================================================================
+SECTION 1: base-point q0 agreement (CM-Reference builder vs CM-C+ builder), shared base
+====================================================================================================
+  [calibration] max|q0_ref - q0_cplus| = 8.882e-16
+  PASS: [calibration/anchored] q0 agreement (CM-Reference vs CM-C+) < 1e-8
+  PASS: [calibration/anchored] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
+  [perturbed_0.03] max|q0_ref - q0_cplus| = 5.662e-14
+  PASS: [perturbed_0.03/anchored] q0 agreement (CM-Reference vs CM-C+) < 1e-8
+  PASS: [perturbed_0.03/anchored] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
+  [perturbed_0.08] max|q0_ref - q0_cplus| = 7.017e-14
+  PASS: [perturbed_0.08/anchored] q0 agreement (CM-Reference vs CM-C+) < 1e-8
+  PASS: [perturbed_0.08/anchored] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
+
+====================================================================================================
+SECTION 2: full production-wiring gradient agreement, cm_production_gradient vs cm_production_gradient_cplus (PRIMARY gate, matched h_mode=:fixed)
+====================================================================================================
+  [calibration] gamma: ref=1.369544e-01 cplus=1.369544e-01 diff=0.000e+00 | max|Δg|=1.450e-15 relerr=1.059e-14 cos=1.0000000000 sign-mismatches=0/15
+  PASS: [calibration/anchored] gamma-component agreement < 1e-6
+  PASS: [calibration/anchored] A-block max abs diff < 1e-6 (matched h=0.01)
+  PASS: [calibration/anchored] A-block cosine > 1 - 1e-8
+  PASS: [calibration/anchored] zero sign mismatches
+  [perturbed_0.03] gamma: ref=9.463338e-01 cplus=9.463338e-01 diff=0.000e+00 | max|Δg|=1.408e-13 relerr=5.917e-14 cos=1.0000000000 sign-mismatches=0/15
+  PASS: [perturbed_0.03/anchored] gamma-component agreement < 1e-6
+  PASS: [perturbed_0.03/anchored] A-block max abs diff < 1e-6 (matched h=0.01)
+  PASS: [perturbed_0.03/anchored] A-block cosine > 1 - 1e-8
+  PASS: [perturbed_0.03/anchored] zero sign mismatches
+  [perturbed_0.08] gamma: ref=3.694449e+00 cplus=3.694449e+00 diff=0.000e+00 | max|Δg|=2.047e-13 relerr=5.541e-14 cos=1.0000000000 sign-mismatches=0/15
+  PASS: [perturbed_0.08/anchored] gamma-component agreement < 1e-6
+  PASS: [perturbed_0.08/anchored] A-block max abs diff < 1e-6 (matched h=0.01)
+  PASS: [perturbed_0.08/anchored] A-block cosine > 1 - 1e-8
+  PASS: [perturbed_0.08/anchored] zero sign mismatches
+
+====================================================================================================
+SECTION 3: bandwidth-selected (h_mode=:adaptive/:cached) agreement -- exercises select_bandwidth vs select_bandwidth_C independently, own bisections
+====================================================================================================
+  [calibration] own-bandwidth cosine=1.00000000  relative A-block norm diff=6.451e-15
+  PASS: [calibration/anchored] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
+  [perturbed_0.03] own-bandwidth cosine=1.00000000  relative A-block norm diff=4.711e-14
+  PASS: [perturbed_0.03/anchored] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
+  [perturbed_0.08] own-bandwidth cosine=1.00000000  relative A-block norm diff=5.249e-14
+  PASS: [perturbed_0.08/anchored] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
+
+====================================================================================================
+SECTION 4: independently reoptimized directional check -- fixed-dual secant (Reference AND C+) vs true reoptimized central-FD secant of Delta_dual, anchored to the SAME sign evalResult.jac uses
+====================================================================================================
+  [k=2] true_reoptimized=2.282090e-02  fixed_dual(Reference)=-2.021805e-02  fixed_dual(C+)=-2.021805e-02
+  PASS: [k=2/anchored] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
+  [k=3] true_reoptimized=5.327738e-03  fixed_dual(Reference)=-8.863793e-03  fixed_dual(C+)=-8.863793e-03
+  PASS: [k=3/anchored] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
+  [k=5] true_reoptimized=1.857935e-02  fixed_dual(Reference)=-1.826432e-02  fixed_dual(C+)=-1.826432e-02
+  PASS: [k=5/anchored] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
+
+####################################################################################################
+# contrasts = :orthonormal  (L=10, D=4, W=8000)
+####################################################################################################
+====================================================================================================
+SECTION 1: base-point q0 agreement (CM-Reference builder vs CM-C+ builder), shared base
+====================================================================================================
+  [calibration] max|q0_ref - q0_cplus| = 8.327e-16
+  PASS: [calibration/orthonormal] q0 agreement (CM-Reference vs CM-C+) < 1e-8
+  PASS: [calibration/orthonormal] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
+  [perturbed_0.03] max|q0_ref - q0_cplus| = 5.673e-14
+  PASS: [perturbed_0.03/orthonormal] q0 agreement (CM-Reference vs CM-C+) < 1e-8
+  PASS: [perturbed_0.03/orthonormal] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
+  [perturbed_0.08] max|q0_ref - q0_cplus| = 6.972e-14
+  PASS: [perturbed_0.08/orthonormal] q0 agreement (CM-Reference vs CM-C+) < 1e-8
+  PASS: [perturbed_0.08/orthonormal] lfix_from_q(q0) agreement (Reference vs C+) < 1e-10
+
+====================================================================================================
+SECTION 2: full production-wiring gradient agreement, cm_production_gradient vs cm_production_gradient_cplus (PRIMARY gate, matched h_mode=:fixed)
+====================================================================================================
+  [calibration] gamma: ref=1.369544e-01 cplus=1.369544e-01 diff=0.000e+00 | max|Δg|=1.582e-15 relerr=1.155e-14 cos=1.0000000000 sign-mismatches=0/15
+  PASS: [calibration/orthonormal] gamma-component agreement < 1e-6
+  PASS: [calibration/orthonormal] A-block max abs diff < 1e-6 (matched h=0.01)
+  PASS: [calibration/orthonormal] A-block cosine > 1 - 1e-8
+  PASS: [calibration/orthonormal] zero sign mismatches
+  [perturbed_0.03] gamma: ref=9.463338e-01 cplus=9.463338e-01 diff=0.000e+00 | max|Δg|=1.410e-13 relerr=5.926e-14 cos=1.0000000000 sign-mismatches=0/15
+  PASS: [perturbed_0.03/orthonormal] gamma-component agreement < 1e-6
+  PASS: [perturbed_0.03/orthonormal] A-block max abs diff < 1e-6 (matched h=0.01)
+  PASS: [perturbed_0.03/orthonormal] A-block cosine > 1 - 1e-8
+  PASS: [perturbed_0.03/orthonormal] zero sign mismatches
+  [perturbed_0.08] gamma: ref=3.694449e+00 cplus=3.694449e+00 diff=0.000e+00 | max|Δg|=2.025e-13 relerr=5.481e-14 cos=1.0000000000 sign-mismatches=0/15
+  PASS: [perturbed_0.08/orthonormal] gamma-component agreement < 1e-6
+  PASS: [perturbed_0.08/orthonormal] A-block max abs diff < 1e-6 (matched h=0.01)
+  PASS: [perturbed_0.08/orthonormal] A-block cosine > 1 - 1e-8
+  PASS: [perturbed_0.08/orthonormal] zero sign mismatches
+
+====================================================================================================
+SECTION 3: bandwidth-selected (h_mode=:adaptive/:cached) agreement -- exercises select_bandwidth vs select_bandwidth_C independently, own bisections
+====================================================================================================
+  [calibration] own-bandwidth cosine=1.00000000  relative A-block norm diff=7.016e-15
+  PASS: [calibration/orthonormal] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
+  [perturbed_0.03] own-bandwidth cosine=1.00000000  relative A-block norm diff=4.767e-14
+  PASS: [perturbed_0.03/orthonormal] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
+  [perturbed_0.08] own-bandwidth cosine=1.00000000  relative A-block norm diff=5.239e-14
+  PASS: [perturbed_0.08/orthonormal] own-bandwidth cosine > 1 - 1e-4 (looser: independent bisections may pick slightly different h)
+
+====================================================================================================
+SECTION 4: independently reoptimized directional check -- fixed-dual secant (Reference AND C+) vs true reoptimized central-FD secant of Delta_dual, anchored to the SAME sign evalResult.jac uses
+====================================================================================================
+  [k=2] true_reoptimized=2.282090e-02  fixed_dual(Reference)=-2.021805e-02  fixed_dual(C+)=-2.021805e-02
+  PASS: [k=2/orthonormal] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
+  [k=3] true_reoptimized=5.327738e-03  fixed_dual(Reference)=-8.863793e-03  fixed_dual(C+)=-8.863793e-03
+  PASS: [k=3/orthonormal] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
+  [k=5] true_reoptimized=1.857935e-02  fixed_dual(Reference)=-1.826432e-02  fixed_dual(C+)=-1.826432e-02
+  PASS: [k=5/orthonormal] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)
+
+====================================================================================================
+TOTAL: 48 passed, 0 failed
+====================================================================================================
+DONE
