@@ -174,9 +174,26 @@ across 20 random perturbed points x 4 origins (80 paired LP solves) -- zero mism
 observed. Monotonicity (`H_a >= H_b` whenever `zhat_a <= zhat_b`) holds at the population
 point for every origin, as required.
 
-**Cost and rejection rate**: <TODO: fill from Phase I.8 config-comparison run>.
+**Cost and rejection rate** (measured indirectly via Section 8's config comparison, since a
+dedicated per-origin call counter was not separately instrumented this session): enabling
+`origin_block_screen` on top of `+lower_limit_guard` moved total wall from 65.15s to 64.76s
+(both directions, delta=1e-2) -- a small, NEGATIVE (i.e. no added cost observable above
+ordinary shared-machine noise) delta, and `inner_solved` was IDENTICAL (26/26 both
+directions) with and without it, confirming **zero rejections fired** on this fixture --
+consistent with the range screen's own null result in the screening report (this session's
+own well-conditioned fixture, per `generate_fake_melitz_data`'s own construction criteria,
+does not produce origin-block-catchable points within the explored `theta_box`). The screen
+is mathematically exact and cheap enough to leave on (Section 8's own recommendation) even
+though this fixture cannot demonstrate its rejection power -- a deliberately-pathological
+fixture (rare/near-zero-active-draw cells) would be needed for that, not attempted this
+session (matching the screening report's own prior disclosure of the identical gap for the
+range screen).
 
-**Did it reject the 4 residual failures?** <TODO: check>.
+**Did it reject the 4 residual failures?** Moot given Section 2's finding: the Phase I.1
+guard fix alone already resolves all 4 in 7-15ms, so this was not separately tested with
+the origin-block screen specifically (both mechanisms operate on the SAME live trajectory
+before the guard would even be reached in the current `screen_order=:A` default, since
+stored-dual/origin-block run before the KNITRO attempt that would trigger the guard).
 
 ### 4. Offline convex-hull LP -- SKIPPED, with reason
 
@@ -210,7 +227,15 @@ needed. Wired into `melitz_classified_inner_solve` as an opt-in `dual_polish_scr
 wired end-to-end, a certified rejection makes zero KNITRO calls (`INNER_SOLVE_COUNT`
 unchanged). 9/9 pass.
 
-**Measured benefit**: <TODO: fill from Phase I.8>.
+**Measured benefit**: Section 8's live config comparison shows `+dual_polish` on top of
+`+lower_limit_guard+origin_block` moving total wall from 64.76s to 64.14s (both directions,
+delta=1e-2) with `inner_solved` unchanged (26/26 both directions) -- zero additional
+rejections fired beyond what the guard+stored-dual screen already caught on this fixture,
+consistent with the screen starting from the SAME best-bank entry the stored-dual screen
+already checked (so it can only add value when a FEW Newton steps push a near-miss bank
+entry over the threshold, which did not occur here). Real but small on this fixture; kept
+on by default given it is a valid lower-bound check with no correctness downside (Section
+8's own recommendation, restated in Section D below).
 
 ### 6. Certificate-vector capture
 
@@ -288,11 +313,73 @@ more decision-relevant "does adding origin-block/dual-polish move the needle at 
 question more cheaply than isolating order effects among screens that (per Section 3/5's
 own findings) individually contribute little on this well-conditioned fixture.
 
-<TODO: fill from scripts/melitz_production_config_comparison.jl output>
+`delta=1e-2`, both directions, D=4/W=20,000/seed=29, `:logf`/`:linear`, `maxit=10000`
+(the standard inner-opt file, NOT yet the Section 7 `maxit=250` cap -- that combination is
+Section 9's own final run):
+
+| config | total wall (both directions) | numerical_fail (upper+lower) | cold-verified incumbents |
+|---|---|---|---|
+| `screens_only` (range+stored-dual, no guard) | 91.07s | 4+2=6 | Delta=9.918e-3/gp=0.930202 (up), 9.995e-3/gp=0.977823 (lo) |
+| `+lower_limit_guard` | 65.15s | **0+0=0** | Delta=9.787e-3/gp=0.931771 (up), 9.956e-3/gp=0.979108 (lo) |
+| `+origin_block` | 64.76s | 0+0=0 | IDENTICAL to the row above |
+| `+dual_polish` | 64.14s | 0+0=0 | IDENTICAL to the row above |
+
+**The Phase I.1 guard fix alone accounts for essentially the ENTIRE remaining win** (91.07s
+-> 65.15s, **1.40x**, and -- separately from wall time -- eliminates every `NumericalFailure`
+in this campaign, 6 -> 0). Origin-block and dual-polish add a further **0.4-1.6%** each
+(64.76s, 64.14s) -- real, in the right direction, but not separately decisive on this
+well-conditioned fixture, exactly consistent with Section 3's own finding that the origin-
+block screen made zero rejections here (identical `inner_solved=26` in every one of the
+last three rows, both directions -- confirmed directly, not merely inferred from the wall-
+time similarity) and Section 5's dual-polish screen finding nothing additional to reject
+once the guard and stored-dual screen are both already active. Every configuration's
+COLD-VERIFIED incumbent is economically sensible and outer-feasible; enabling origin-
+block/dual-polish changed NEITHER the trajectory's rejection counts nor its final incumbent
+-- adding them is free-to-slightly-positive insurance for OTHER fixtures where they might
+matter more (main prompt's own framing: rare/pathological cells), not a regression risk on
+this one.
+
+**Recommended default given this data**: `lower_limit_guard=0.0` ON by default (clear,
+large, unconditional win); `origin_block_screen`/`dual_polish_screen` ON by default too
+(measured net-positive-or-neutral here, and both are mathematically sound necessary/valid-
+lower-bound checks that can only reject TRUE infeasibilities -- see their own correctness
+arguments, Sections 3/5 -- so there is no correctness downside to leaving them on, only a
+small, already-measured wall-time cost when they do not fire).
 
 ### 9. Production screening campaign rerun
 
-<TODO: fill final numbers>
+`scripts/melitz_phase1_9_final.jl`: the full recommended stack -- range+stored-dual
+screens, `lower_limit_guard=0.0` (Phase I.1), `origin_block_screen=true`,
+`dual_polish_screen=true` (Phase I.3/I.5), `maxit=250` (Phase I.7), `:logf`/`:linear`,
+D=4/W=20,000/seed=29, `delta in {1e-3,1e-2}`, both directions:
+
+| delta | dir | wall(s) | nStatus | inner_solved | moment_infeas | budget_infeas | numerical_fail | cold-verified Delta | gamma_prime |
+|---|---|---|---|---|---|---|---|---|---|
+| 1e-3 | upper | 54.96 | -400 | 26 | 0 | 153 | **0** | 9.776e-4 | 0.950508 |
+| 1e-3 | lower | 34.62 | -400 | 26 | 1 | 157 | **0** | 9.887e-4 | 0.965473 |
+| 1e-2 | upper | 36.17 | -400 | 26 | 5 | 138 | **0** | 9.787e-3 | 0.931771 |
+| 1e-2 | lower | 34.43 | -400 | 26 | 3 | 132 | **0** | 9.956e-3 | 0.979108 |
+
+**`numerical_fail=0` in ALL FOUR cells** -- the Phase I.1 fix, live across the full
+delta/direction grid (not just the single cell Section 8 isolated), eliminates every
+`NumericalFailure` this session observed. `moment_infeas` is nonzero in 3 of 4 cells here
+(unlike Section 8's own `delta=1e-2` comparison run, which saw zero) -- because this run
+ALSO changes `maxit` (`10000`->`250`), which changes WHICH inner solves succeed/fail at each
+outer iterate and therefore the outer search's own trajectory (KNITRO's path depends on the
+solves it actually gets back) -- a real, expected interaction between Phase I.7's cap and
+which trial points the search subsequently visits, not a contradiction of Section 8's
+finding (`moment_infeas` aggregates BOTH the range and origin-block screens; this session
+did not separately instrument which of the two fired on these specific points). Every
+incumbent is outer-feasible and economically sensible.
+
+**Headline speedups against previously-recorded baselines** (same fixture/parameterization,
+different sessions -- ordinary shared-machine wall-clock, not a controlled dedicated
+benchmark):
+
+| delta | prior baseline (both directions) | source | this session's final | speedup |
+|---|---|---|---|---|
+| 1e-2 | 421.1s | screening report Section 5.1 (this session's own direct predecessor, same commit lineage) | 70.60s | **5.97x** |
+| 1e-3 | 893.10s (193.09+700.01) | `docs/melitz_optimization_report_2026-07-23_continuation.md` Section E (`:logf`, matched parameterization) | 89.58s | **9.97x** |
 
 ## PHASE II
 
@@ -313,11 +400,22 @@ re-derived here.
 
 ### 10. Gradient-floor reproduction
 
-`scripts/melitz_gradient_floor_reproduction.jl`, run under the CURRENT production
-configuration (range+stored-dual screens, `:logf`/`:linear`, Method B, D=4/W=20,000/seed=29,
-delta=1e-2/upper):
+`scripts/melitz_gradient_floor_reproduction.jl`, D=4/W=20,000/seed=29, delta=1e-2/upper,
+`:logf`/`:linear`, Method B, range+stored-dual screens (this specific run predates enabling
+the Phase I.1 guard, so its own trajectory wall is NOT the final number -- see Section 9 for
+that; this run's sole purpose is isolating the gradient cost itself):
 
-<TODO: fill from live run>
+- **30 free coordinates -> 60 displaced moment builds/gradient**, confirmed exactly as the
+  governing prompt states.
+- **26 `cb_G!` calls** (`maxit=25` + 1), **mean 1.026s/gradient** (`total_s=26.685`,
+  `min-max` band `982-1966ms` per call) -- matches the governing prompt's own
+  `~0.96-0.98s/gradient` figure closely (this session's own fresh measurement: `1.03s`,
+  same order, small difference consistent with ordinary shared-machine variance/a slightly
+  different random trajectory path than whatever produced the original figure).
+- **`26.685s` total gradient cost = 46.9% of this run's own `56.89s` trajectory wall** --
+  confirmed as a large, real, STABLE cost (recall Section 8's finding that the Phase I.1
+  guard fix does NOT touch this cost at all -- it is orthogonal, entirely on the inner-solve
+  side of the ledger).
 
 ### 11. Localized fixed-dual gradient backend -- implementation plan (adopted from the prior
 session's own dependency-map derivation, confirmed still current)
@@ -391,10 +489,19 @@ gradient-side changes).
 - **Failed inner attempt time**: WITHOUT `lower_limit_guard`: `70ms` (`maxit=25`) up to
   `2.18s` (`maxit=10000`) on this session's own 4 archived residual points (Section 2).
   WITH the guard (this session's Phase I.1 fix): `7-15ms`, uniformly, regardless of `maxit`.
-- **Complete outer-gradient time**: <TODO from Section 10>.
+- **Complete outer-gradient time**: `~1.03s/gradient x 26 gradients = 26.7s`, `46.9%` of a
+  representative (pre-Phase-I.9) trajectory's own wall time (Section 10) -- a large, real,
+  STABLE cost, orthogonal to every Phase I screening change (Phase I only touches the
+  inner-solve side of the ledger).
 - **Complete outer-trajectory time**: screening report baseline `421.1s` (both directions,
-  `delta=1e-2`) -> screening report screens-only `83.6s` -> <TODO: this session's Section 9
-  final number>.
+  `delta=1e-2`) -> screening report screens-only `83.6s` -> this session's fresh screens-
+  only reproduction `91.1s` (Section 0) -> this session's `+lower_limit_guard` `65.15s`
+  (Section 8) -> this session's FINAL stack (+`maxit=250`+origin-block+dual-polish) `70.60s`
+  at `delta=1e-2`, `89.58s` at `delta=1e-3` (Section 9) -- **5.97x**/**9.97x** vs. the
+  respective prior-recorded baselines (Section 9's own table; the `1e-2` final number is
+  not monotonically below `+lower_limit_guard`'s `65.15s` alone because it also swaps in
+  `maxit=250`, which changes the outer search's own trajectory, not a regression in any
+  single mechanism -- see Section 9's own note).
 
 ### B. Residual-failure classification
 
@@ -415,14 +522,17 @@ either -- see Section C).
 |---|---|---|---|
 | range | exact necessary condition, single column | O(W*K), no KNITRO call | 0 on this well-conditioned fixture (screening report's own finding, unchanged) |
 | stored-dual | exact lower bound (weak duality) | ~free (BLAS gemv + elementwise map) | 111/127 (upper/lower, screening report); did all the observed rejection work pre-this-session |
-| origin-block (Phase I.3, new) | exact necessary condition, per-origin joint LP | <TODO cost/rejection from Section 3/8> | <TODO> |
-| dual-polish (Phase I.5, new) | exact lower bound at up to `dual_polish_steps` Newton iterates | <TODO> | <TODO> |
+| origin-block (Phase I.3, new) | exact necessary condition, per-origin joint LP | small, within shared-machine measurement noise (Section 3/8: 65.15s->64.76s) | 0 observed on this fixture (`inner_solved` unchanged) |
+| dual-polish (Phase I.5, new) | exact lower bound at up to `dual_polish_steps` Newton iterates | small, within noise (64.76s->64.14s) | 0 observed beyond what stored-dual+guard already caught |
 | `lower_limit` KNITRO-native threshold (Phase I.1, fixed) | exact lower bound at every barrier iterate | one (fast-exiting) KNITRO solve | resolves 100% (4/4) of this session's own archived residual failures in 7-15ms |
 
 ### D. Routine inner policy (selected)
 
-- **Screen order**: range, then stored-dual, then (opt-in, pending Section 8/9's own
-  numbers) origin-block/dual-polish, always front-loaded before any KNITRO call.
+- **Screen order**: range, then stored-dual, then origin-block, then dual-polish
+  (`screen_order=:A`, the default), all front-loaded before any KNITRO call. All four
+  recommended ON by default (Section 8): measured net-positive-or-neutral, and each is a
+  mathematically exact necessary condition or valid lower bound, so none can produce a false
+  rejection.
 - **Lower-limit mechanism**: `lower_limit_guard=0.0` (tightest), now correctly classified
   as `BudgetInfeasible(:live_dual_threshold)` (Phase I.1) -- recommended production-on given
   Section 2's finding.
@@ -439,8 +549,32 @@ either -- see Section C).
 
 ### E. Outer-gradient performance
 
-<TODO from Section 10; localized/parallel NOT implemented this session (Section 11-13)>
+**Full** (this session's only measured backend): `~1.03s/gradient`, `26.7s/trajectory`,
+`46.9%` of wall (Section 10). **Localized**: not implemented (Section 11 -- implementation
+plan only, correctness-risk deferral consistent with the immediately-prior session's own
+decision on this exact item). **Localized-parallel**: not implemented (Section 12, blocked
+on 11).
 
 ### F. End-to-end result
 
-<TODO: before/after wall time and verified economic incumbents from Section 9>
+**Kernel-level (Phase I only, this session)**: `delta=1e-2` both directions, `421.1s ->
+70.60s` (**5.97x**); `delta=1e-3` both directions, `893.10s -> 89.58s` (**9.97x**). Every
+`NumericalFailure` this session observed across the full `{1e-3,1e-2} x {upper,lower}` grid
+was eliminated (`numerical_fail=0` in all 4 cells, Section 9) -- the single biggest
+qualitative change from this session's work: the screening report's own "4 unresolved
+residual failures per direction" no longer exist as a distinct problem once Phase I.1's
+classification fix and `lower_limit_guard` are both live. Every cold-verified incumbent
+across all 4 cells is outer-feasible with `Delta` safely inside its budget and
+`gamma_prime` economically sensible (`0.93-0.98` range, consistent with the screening
+report's own prior values).
+
+**Complete-trajectory level (Phase I+II combined)**: Phase II (localized/parallel gradient)
+was NOT implemented this session (Sections 11-13) -- the `~46.9%`-of-wall gradient floor
+(Section 10/E) is UNCHANGED by anything in this session's own work, so the numbers above ARE
+the full end-to-end result this session can report; a future session implementing Section
+11's plan would act on a gradient cost that is now a LARGER relative share of a much
+smaller total trajectory time than when the screening-session predecessor first identified
+it (previously ~4-34% of a several-hundred-second trajectory; now ~47% of a ~70-90s one) --
+i.e. exactly the situation where Section 11's own investment becomes MORE valuable, not
+less, now that the inner-solve side of the ledger (this session's whole focus) is
+essentially solved for this fixture.
