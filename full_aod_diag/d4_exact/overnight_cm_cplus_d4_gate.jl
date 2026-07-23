@@ -149,7 +149,13 @@ for contrasts in (:anchored, :orthonormal)
         wp = copy(w0); wp[k] += h; wm = copy(w0); wm[k] -= h
         zp = pivot_expand(wp[2:end], pe); zm = pivot_expand(wm[2:end], pe)
         xfp = vcat(wp[1], vec(exp.(zp))); xfm = vcat(wm[1], vec(exp.(zm)))
-        true_secant = -(delta_dual_true(xfp) - delta_dual_true(xfm)) / (2h)   # sign matches evalResult.jac / g[k] convention, see algebra trace Section 6
+        # NOTE 2026-07-23: this secant previously carried an erroneous leading minus sign, which
+        # inverted its sign relative to fixed_dual's own (Lp-Lm)/(2h) convention at every
+        # coordinate where the two actually agree -- see
+        # docs/CM_FIXED_DUAL_VS_REOPTIMIZED_DIRECTIONAL_AUDIT_2026-07-23.md (Part I audit). Dp/Dm
+        # use the identical +h/-h points Lp/Lm do, so no negation belongs here: matches
+        # evalResult.jac / g[k] convention, see algebra trace Section 6.
+        true_secant = (delta_dual_true(xfp) - delta_dual_true(xfm)) / (2h)
 
         Lp_ref = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] + h)
         Lm_ref = lfix_incremental_at(cache_ref0, ctx_cm, pe, w0, k, w0[k] - h)
@@ -162,6 +168,13 @@ for contrasts in (:anchored, :orthonormal)
         @printf "  [k=%d] true_reoptimized=%.6e  fixed_dual(Reference)=%.6e  fixed_dual(C+)=%.6e\n" k true_secant secant_ref secant_cp
         check("[k=$k/$contrasts] C+ fixed-dual secant matches Reference's fixed-dual secant (not the true secant -- known AUD-05 approximation, both share it equally)",
               isapprox(secant_cp, secant_ref; atol = 1e-6, rtol = 1e-6))
+        # Gated per docs/CM_FIXED_DUAL_VS_REOPTIMIZED_DIRECTIONAL_AUDIT_2026-07-23.md Part I: sign
+        # must agree at h=0.02 (this test's own fixed h) -- a genuine smooth-point sign disagreement
+        # would be a blocker, but this h is not always winner-stable, so this check is intentionally
+        # loose (sign only, not magnitude) and is a coarser companion to the dedicated
+        # directional_sign_audit.jl battery, not a replacement for it.
+        check("[k=$k/$contrasts] fixed-dual(Reference) sign matches independently-reoptimized true secant sign (h=$h)",
+              sign(secant_ref) == sign(true_secant) || abs(true_secant) < 1e-8)
     end
 end
 
