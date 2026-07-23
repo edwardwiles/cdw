@@ -9,7 +9,7 @@ performance work — those are unchanged and still described accurately by
 
 ## What changed this session
 
-All in one commit, `<COMMIT_HASH>` (see "Final Git state" below for the exact hash):
+All in one commit, `13dd2a5888d848e71b8e9b3e297b157da30075a7` (see "Final Git state" below for the exact hash):
 
 1. **Return-path safety** (`scripts/cm_production_supervisor.sh`). `slog` now writes to stderr
    only (still appended to `$SUPERVISOR_LOG`). Before this fix,
@@ -153,9 +153,9 @@ block starting the campaign, but it should still happen.
 
 ## Final Git state
 
-- Production branch: `production/fullA-exact` @ `<COMMIT_HASH>`
-- Pushed to `cdw`: `cdw/production/fullA-exact` @ `<COMMIT_HASH>` (must match local exactly)
-- Production tag: `cm-production-ready-2026-07-22-r3` @ `<COMMIT_HASH>` (annotated, pushed to
+- Production branch: `production/fullA-exact` @ `13dd2a5888d848e71b8e9b3e297b157da30075a7`
+- Pushed to `cdw`: `cdw/production/fullA-exact` @ `13dd2a5888d848e71b8e9b3e297b157da30075a7` (must match local exactly)
+- Production tag: `cm-production-ready-2026-07-22-r3` @ `13dd2a5888d848e71b8e9b3e297b157da30075a7` (annotated, pushed to
   `cdw`)
 - `git status --short`: clean (verified after this session's commits)
 - `perf/fullA-cm-postclosure-2026-07-22`: worktree and branch (local + `cdw`) **removed** —
