@@ -27,7 +27,15 @@
 # ============================================================================
 using Serialization, Dates
 
-const CM_CHECKPOINT_SCHEMA = 3
+const CM_CHECKPOINT_SCHEMA = 4
+# Bumped 3 -> 4 (CM+moments(+ZC) production integration, 2026-07-23): adds cm_extension,
+# meanzc_K_mean, meanzc_K_pair, meanzc_basis, eta_nu, moment_layout_version to the persisted
+# schema, generalizing the checkpoint to cover the (:cm_only | :cm_plus_equal_means |
+# :cm_plus_equal_means_zero_covariance | :cm_plus_moments) extension family at any (K_mean,K_pair)
+# -- ONE checkpoint type for the whole family, not a parallel CMMeanZCCheckpoint universe, so the
+# same production stage runner/supervisor/cold-verifier handles every arm. Same Serialization
+# gotcha as the 2->3 bump applies (see that comment below) -- CMCheckpointV3 kept permanently
+# unchanged, CMCheckpointV4 is a new type name.
 # Bumped 1 -> 2 (remediation task Part A, finding F1): schema-1 checkpoints computed cb_F!'s
 # reported/constrained Delta as `-base.ζstar`, which silently omits mean(Psi(q*)) and overstates
 # the divergence at tail-active points (any draw with recovered weight m* > e). A schema-1
@@ -141,8 +149,59 @@ struct CMCheckpointV3
     knitro_version::String
 end
 
+"""
+    CMCheckpointV4
+
+CM-production checkpoint layout, schema>=4 (CM+moments(+ZC) production integration,
+2026-07-23). Identical to `CMCheckpointV3` except six new fields, appended at the end:
+`cm_extension`, `meanzc_K_mean`, `meanzc_K_pair`, `meanzc_basis`, `eta_nu`,
+`moment_layout_version`. New type name for the same Julia-Serialization reason `CMCheckpointV3`
+itself exists (see `CM_CHECKPOINT_SCHEMA`'s comment) -- `CMCheckpointV3` is retained permanently,
+read-only, for every schema-3 file the CM-C+ campaign already wrote.
+"""
+struct CMCheckpointV4
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol            # :cm_only | :cm_plus_equal_means | :cm_plus_equal_means_zero_covariance | :cm_plus_moments
+    meanzc_K_mean::Int              # 0 for :cm_only
+    meanzc_K_pair::Int              # 0 for :cm_only
+    meanzc_basis::Symbol            # :direct (only option implemented); irrelevant when cm_extension==:cm_only
+    moment_layout_version::Int      # bump if wrap_moments_with_cm_meanzc's column order ever changes
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}         # length meanzc_K_mean; Float64[] for :cm_only
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+end
+
+const MEANZC_MOMENT_LAYOUT_VERSION = 1   # wrap_moments_with_cm_meanzc's column order, cm_meanzc_moments.jl
+
 "Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
-function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV3)
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV4)
     tmp = path * ".tmp"
     serialize(tmp, ckpt)
     mv(tmp, path; force = true)
@@ -160,31 +219,48 @@ function upgrade_schema2(old::CMCheckpoint)
         old.knitro_version)
 end
 
-"""
-    load_cm_checkpoint(path) -> CMCheckpointV3
+"Upgrades a schema-3 `CMCheckpointV3` (CM-C+ campaign, no meanzc extension ever existed at that schema) to `CMCheckpointV4`, filling cm_extension=:cm_only, meanzc_K_mean=meanzc_K_pair=0, meanzc_basis=:direct, eta_nu=Float64[] -- CORRECT (not a guess): the meanzc extension point did not exist anywhere in the codebase when any schema-3 file was written, so :cm_only is the only value consistent with those files' own provenance."
+function upgrade_schema3(old::CMCheckpointV3)
+    return CMCheckpointV4(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend,
+        :cm_only, 0, 0, :direct, MEANZC_MOMENT_LAYOUT_VERSION,
+        old.g, old.zfree, Float64[], old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version)
+end
 
-Tries the CURRENT (schema>=3, `CMCheckpointV3`) shape first; falls back to the legacy
-`CMCheckpoint` shape (schema 1/2, the ONLY prior layout that ever existed) and upgrades it via
-`upgrade_schema2`. Schema-1 files are still hard-refused below (semantically untrustworthy Delta,
-unrelated to the schema-3 layout change) -- this fallback only concerns the byte LAYOUT, not
-schema-1's own known defect. Always returns a `CMCheckpointV3` (uniform shape for every caller
+"""
+    load_cm_checkpoint(path) -> CMCheckpointV4
+
+Tries the CURRENT (schema>=4, `CMCheckpointV4`) shape first; falls back to schema-3
+(`CMCheckpointV3`, upgraded via `upgrade_schema3`) then legacy schema-1/2 (`CMCheckpoint`,
+upgraded via `upgrade_schema2` then `upgrade_schema3`). Schema-1 files are still hard-refused
+below (semantically untrustworthy Delta) -- this fallback chain only concerns byte LAYOUT, not
+schema-1's own known defect. Always returns a `CMCheckpointV4` (uniform shape for every caller
 downstream of this function, regardless of which schema the file on disk actually is).
 """
 function load_cm_checkpoint(path::AbstractString)
     ckpt = try
-        deserialize(path)::CMCheckpointV3
-    catch e
-        (e isa TypeError || e isa EOFError || e isa MethodError) || rethrow()
-        local old
+        deserialize(path)::CMCheckpointV4
+    catch e1
+        (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
         try
-            old = deserialize(path)::CMCheckpoint
-        catch
-            error("load_cm_checkpoint($path): failed to deserialize under BOTH the current " *
-                  "CMCheckpointV3 layout and the legacy CMCheckpoint (schema 1/2) layout -- this " *
-                  "file is not a recognized CM checkpoint (corrupt, truncated, or an even " *
-                  "older/unrelated format).")
+            upgrade_schema3(deserialize(path)::CMCheckpointV3)
+        catch e2
+            (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
+            local old
+            try
+                old = deserialize(path)::CMCheckpoint
+            catch
+                error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV4, " *
+                      "CMCheckpointV3, AND the legacy CMCheckpoint (schema 1/2) layout -- this file " *
+                      "is not a recognized CM checkpoint (corrupt, truncated, or an even older/" *
+                      "unrelated format).")
+            end
+            upgrade_schema3(upgrade_schema2(old))
         end
-        upgrade_schema2(old)
     end
     if ckpt.schema == 1
         error("load_cm_checkpoint($path): schema=1, expected $(CM_CHECKPOINT_SCHEMA) -- schema-1 " *
@@ -195,8 +271,8 @@ function load_cm_checkpoint(path::AbstractString)
               "START POINT only, then cold-re-evaluate it with cm_production_value_verified before " *
               "trusting any Delta/feasibility for it.")
     end
-    ckpt.schema in (2, CM_CHECKPOINT_SCHEMA) ||
-        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2 or $(CM_CHECKPOINT_SCHEMA) -- " *
+    ckpt.schema in (2, 3, CM_CHECKPOINT_SCHEMA) ||
+        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, or $(CM_CHECKPOINT_SCHEMA) -- " *
               "this checkpoint predates the CM checkpoint-schema unification (task §11), e.g. a bare " *
               "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
               "run instead of resuming from an incompatible checkpoint.")
@@ -267,7 +343,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # (non-resumed) run. Switching is not silently allowed even though it is
         # correctness-preserving (see above) -- the brief's own instruction is to make this an
         # explicit, audited choice, not an invisible default.
-        heartbeat_interval_s::Union{Nothing,Float64} = nothing)   # remediation task Part B:
+        heartbeat_interval_s::Union{Nothing,Float64} = nothing,   # remediation task Part B:
         # opt-in liveness watchdog (nothing = off, zero overhead, the default). When set, a
         # background Timer logs, every heartbeat_interval_s, how long it has been since the last
         # cb_F!/cb_G! callback RETURNED. Purpose: distinguish, with real evidence, "ordinary long
@@ -281,6 +357,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # test_threaded_exception_propagation.jl). Does NOT attempt to time individual
         # sub-phases (moment construction / Hessian / BLAS / GC) -- that finer breakdown is Part
         # D's scope (full production timing instrumentation), not duplicated here.
+        cm_extension::Symbol = :cm_only,   # CM+moments(+ZC) production integration (2026-07-23):
+        # :cm_only (default, UNCHANGED behavior -- dispatches to the pre-existing
+        # cm_production_value_verified/cm_production_gradient(_cplus) path exactly as before,
+        # byte-identical) | :cm_plus_equal_means | :cm_plus_equal_means_zero_covariance |
+        # :cm_plus_moments (the general K_mean/K_pair escape hatch). Resolved via
+        # meanzc_resolve_K/CMMeanZCConfig (cm_meanzc_config.jl), the SAME validated logic
+        # CMMeanZCConfig uses, not re-derived here.
+        meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,   # only consulted when cm_extension=:cm_plus_moments
+        meanzc_basis::Symbol = :direct,
+        meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing)
     lp(xs...) = (println(xs...); flush(stdout))
     mkpath(ckpt_dir)
 
@@ -291,11 +377,37 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     write(joinpath(ckpt_dir, "$(label)_gradient_backend.txt"),
           "cm_gradient_backend=$(cm_gradient_backend)\nrun_id=$(run_id)\nrecorded_at=$(Dates.now())\n")
 
+    # CM+moments(+ZC) production integration (2026-07-23): resolve (K_mean,K_pair) via the SAME
+    # validated CMMeanZCConfig logic cm_meanzc_config.jl already establishes -- not re-derived
+    # here. is_meanzc==false takes the exact pre-existing :cm_only code path at every branch
+    # below (byte-identical behavior, confirmed by test_cm_meanzc_d4_gates.jl's own CM-only
+    # regression gate and by this function's own :cm_only smoke test).
+    meanzc_K_mean, meanzc_K_pair = meanzc_resolve_K(CMMeanZCConfig(cm_extension = cm_extension,
+        meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair, meanzc_basis = meanzc_basis))
+    is_meanzc = cm_extension !== :cm_only
+    is_meanzc && lp("[", label, "] cm_extension=", cm_extension, " K_mean=", meanzc_K_mean,
+                     " K_pair=", meanzc_K_pair, " meanzc_basis=", meanzc_basis)
+
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
     find_smallest = true   # :cm_upper is the only wired direction today, matches run_cm_upper's own docstring
     backend_switched = false   # Part II.4 follow-up -- set true below only on an explicit, audited cross-backend resume
 
     if resumed !== nothing
+        # CM+moments(+ZC) integration: the moment-column layout (hence the outer vector's own
+        # dimension and meaning) is FIXED by (cm_extension,K_mean,K_pair,meanzc_basis) at
+        # checkpoint-write time -- unlike cm_gradient_backend (a pure outer-gradient-kernel
+        # choice, provably safe to switch, see below), there is no safe override here: refuse
+        # outright, no allow_*_switch escape hatch.
+        (resumed.cm_extension == cm_extension && resumed.meanzc_K_mean == meanzc_K_mean &&
+         resumed.meanzc_K_pair == meanzc_K_pair &&
+         (cm_extension === :cm_only || resumed.meanzc_basis == meanzc_basis)) ||
+            error("run_cm_upper_checkpointed($label): meanzc config MISMATCH on resume -- checkpoint " *
+                  "was written with cm_extension=:$(resumed.cm_extension), K_mean=$(resumed.meanzc_K_mean), " *
+                  "K_pair=$(resumed.meanzc_K_pair), meanzc_basis=:$(resumed.meanzc_basis); this call " *
+                  "requests cm_extension=:$cm_extension, K_mean=$meanzc_K_mean, K_pair=$meanzc_K_pair, " *
+                  "meanzc_basis=:$meanzc_basis -- refusing to resume under a different moment-column " *
+                  "layout (the outer vector's own dimension/meaning depends on K_mean; there is no safe " *
+                  "override for this, unlike cm_gradient_backend).")
         W = resumed.W; delta = resumed.delta; draw_design = resumed.draw_design; draw_seed = resumed.draw_seed
         L = resumed.cm_L; probs = resumed.cm_probs; contrasts = resumed.cm_contrasts
         cm_hessian_backend = resumed.cm_hessian_backend; cm_grid_rule = resumed.cm_grid_rule
@@ -349,13 +461,27 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                   "draws (design=:$(draw_design), seed=$(draw_seed)) do not match the checkpoint's own " *
                   "recorded checksums. Refusing to resume from a different problem instance.")
         end
-        w0 = vcat(resumed.g, resumed.zfree)
+        w0 = vcat(resumed.g, resumed.zfree, resumed.eta_nu)
     elseif w0 === nothing
-        error("run_cm_upper_checkpointed($label): w0 required for a fresh (non-resumed) run")
+        error("run_cm_upper_checkpointed($label): w0 required for a fresh (non-resumed) run " *
+              (is_meanzc ? "-- must be vcat(gp, zfree, eta_nu) with length(eta_nu)==$(meanzc_K_mean)" : ""))
     end
 
     probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
-    pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+    pcx = is_meanzc ?
+        build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
+            contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs) :
+        build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+
+    # D2_econ = length of the (gp, zfree) economic block only -- length(w0) itself is
+    # D2_econ + meanzc_K_mean when is_meanzc, matching cm_meanzc_production.jl's own convention
+    # (g_ext has length D^2 + K_mean, D^2 == D2_econ).
+    D2_econ = length(w0) - (is_meanzc ? meanzc_K_mean : 0)
+
+    nu_bounds = is_meanzc ?
+        (meanzc_nu_bounds === nothing ? meanzc_default_nu_bounds(ctx, meanzc_K_mean) : meanzc_nu_bounds) :
+        NTuple{2,Float64}[]
+    is_meanzc && lp("[", label, "] eta_nu box (per level, log-nu units): ", nu_bounds)
 
     # pool/workspace for cm_gradient_backend=:cplus only -- zero cost (nothing allocated) when
     # the :reference fallback backend is explicitly selected instead.
@@ -370,8 +496,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # checkpoint's own recorded Delta to numerical precision; a failure here would mean the
     # resumed incumbent is not safe to carry across the switch.
     if backend_switched && resumed.best_feasible !== nothing
-        xf_switch = x_free_from_w(resumed.best_feasible.w, pe)
-        _, _, verify_switch = cm_production_value_verified(xf_switch, pcx)
+        xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
+        verify_switch = if is_meanzc
+            νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
+            (_, _, vs) = cm_meanzc_production_value_verified(xf_switch, νvec_switch, pcx); vs
+        else
+            (_, _, vs) = cm_production_value_verified(xf_switch, pcx); vs
+        end
         is_verified_success(verify_switch) ||
             error("run_cm_upper_checkpointed($label): backend switch on resume requested (allow_backend_switch=true), " *
                   "but the resumed incumbent (gp=$(resumed.best_feasible.gp) Delta=$(resumed.best_feasible.Delta)) " *
@@ -384,8 +515,10 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
 
     D2 = length(w0)
     gp_lo, gp_hi = ctx.bounds.γp_lo, ctx.bounds.γp_hi
-    w_lo = vcat(gp_lo, w0[2:end] .- z_halfwidth)
-    w_hi = vcat(gp_hi, w0[2:end] .+ z_halfwidth)
+    w_lo_econ = vcat(gp_lo, w0[2:D2_econ] .- z_halfwidth)
+    w_hi_econ = vcat(gp_hi, w0[2:D2_econ] .+ z_halfwidth)
+    w_lo = is_meanzc ? vcat(w_lo_econ, [nu_bounds[k][1] for k in 1:meanzc_K_mean]) : w_lo_econ
+    w_hi = is_meanzc ? vcat(w_hi_econ, [nu_bounds[k][2] for k in 1:meanzc_K_mean]) : w_hi_econ
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
@@ -429,12 +562,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     end
 
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64})
-        zfree_now = w_current[2:end]
+        zfree_now = w_current[2:D2_econ]
+        eta_nu_now = is_meanzc ? w_current[D2_econ+1:end] : Float64[]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = CMCheckpointV3(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        dual_warm_src = is_meanzc ? pcx.ctx_cm.obj.x : ctx.obj.x
+        ckpt = CMCheckpointV4(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
-            w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(bandwidth_cache),
+            cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, MEANZC_MOMENT_LAYOUT_VERSION,
+            w_current[1], copy(zfree_now), copy(eta_nu_now), logA_full, copy(dual_warm_src), copy(bandwidth_cache),
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
             maxtime_real - (time() - t_start), reason, knitro_version)
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
@@ -445,10 +581,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
-        xf = x_free_from_w(w, pe)
+        xf = x_free_from_w(w[1:D2_econ], pe)
+        νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
         local base, verify
         try
-            _, base, verify = cm_production_value_verified(xf, pcx)
+            if is_meanzc
+                _, base, verify = cm_meanzc_production_value_verified(xf, νvec, pcx)
+            else
+                _, base, verify = cm_production_value_verified(xf, pcx)
+            end
         catch e
             # Closure task Phase 3B: narrowed further to the dedicated CMExpectedSolveFailure
             # type (cm_production_bundle.jl) -- see cm_outer_driver.jl's identical fix for the
@@ -470,7 +611,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         evalResult.obj[1] = w[1]
         evalResult.c[1] = Δ
         n_eval[] += 1
-        last_F_state[] = (w = copy(w), base = base)
+        last_F_state[] = (w = copy(w), base = base, verify = verify)
         feasible = isfinite(Δ) && Δ <= delta + 1e-6
         # AUD-04 gate (matches c10_d20_production_driver.jl's cb_F! pattern): feasibility
         # (Delta<=delta) alone is not a verified solve -- KNITRO's own statuses 0/-100/-101/-103
@@ -494,15 +635,28 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     end
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
-        xf = x_free_from_w(w, pe)
+        xf = x_free_from_w(w[1:D2_econ], pe)
+        νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
         shared = last_F_state[]
-        base = (shared !== nothing && shared.w == w) ? shared.base : nothing
-        gfull, meta = if cm_gradient_backend == :cplus
-            cm_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, threaded = true,
-                h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        matched = shared !== nothing && shared.w == w
+        base = matched ? shared.base : nothing
+        verify_c = matched ? shared.verify : nothing
+        gfull, meta = if is_meanzc
+            if cm_gradient_backend == :cplus
+                cm_meanzc_production_gradient_cplus(xf, νvec, pcx, ctx, pe, cplus_pool, cplus_ws;
+                    base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            else
+                cm_meanzc_production_gradient(xf, νvec, pcx, ctx, pe;
+                    base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            end
         else
-            cm_production_gradient(xf, pcx, ctx, pe; base = base, threaded = true,
-                h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            if cm_gradient_backend == :cplus
+                cm_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, threaded = true,
+                    h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            else
+                cm_production_gradient(xf, pcx, ctx, pe; base = base, threaded = true,
+                    h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            end
         end
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
@@ -533,10 +687,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # says nothing about whether the INNER dual solve at that point passed the AUD-04
     # residual/gap checks. best_feasible[] (already gated by is_verified_success in cb_F! above)
     # remains the correct resume/incumbent state regardless of this outcome.
-    xf_final = x_free_from_w(collect(xsol), pe)
+    xsol_v = collect(xsol)
+    xf_final = x_free_from_w(xsol_v[1:D2_econ], pe)
     local verify_final
     try
-        _, _, verify_final = cm_production_value_verified(xf_final, pcx)
+        if is_meanzc
+            νvec_final = exp.(xsol_v[D2_econ+1:end])
+            _, _, verify_final = cm_meanzc_production_value_verified(xf_final, νvec_final, pcx)
+        else
+            _, _, verify_final = cm_production_value_verified(xf_final, pcx)
+        end
     catch e
         # Closure task Phase 3B: narrowed further to the dedicated CMExpectedSolveFailure type
         # (cm_production_bundle.jl) -- see cm_outer_driver.jl's identical fix for the full

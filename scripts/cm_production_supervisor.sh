@@ -96,12 +96,58 @@ else
 fi
 EXPECTED_CKPT_SUFFIX="_latest.jls"   # every CMCheckpoint (schema-2) is written as "<label>_latest.jls"
 
+# ----------------------------------------------------------------------------
+# Process-group termination fix (2026-07-23, mean/ZC release addendum): the CM-C+ release
+# report flagged that `pid=$!` after `( cd ... && "$JULIA_BIN" ... ) &` captures the SUBSHELL's
+# PID, not necessarily the Julia/KNITRO process itself -- `kill -TERM/-KILL "$pid"` could
+# therefore leave a Julia/KNITRO grandchild alive as an orphan if the subshell forked rather than
+# exec'd into it. Fix: launch under `setsid bash -c '...; exec julia ...'` -- regardless of
+# whatever fork depth setsid(1) itself uses internally, the bash script's own `$$` (captured
+# BEFORE it execs into Julia) is, by construction, the PID of the process on which setsid()
+# was actually called -- i.e. the new session/process-group leader's PID, preserved across the
+# subsequent `exec` into Julia (exec never changes PID). Recording that PID to a file lets every
+# kill below target the ENTIRE process group (`kill -SIG -- -$pgid`), not a single PID guess.
+# ----------------------------------------------------------------------------
+kill_pgroup() {
+  local pgid_file="$1" sig="$2"
+  [ -s "$pgid_file" ] || { slog "kill_pgroup: no pgid file at $pgid_file -- cannot signal process group"; return 1; }
+  local pgid; pgid=$(cat "$pgid_file" 2>/dev/null)
+  [ -n "$pgid" ] || { slog "kill_pgroup: empty pgid in $pgid_file"; return 1; }
+  slog "kill_pgroup: sending SIG$sig to process group -$pgid"
+  kill "-$sig" -- "-$pgid" 2>/dev/null
+}
+alive_pgroup() {
+  local pgid_file="$1"
+  [ -s "$pgid_file" ] || return 1
+  local pgid; pgid=$(cat "$pgid_file" 2>/dev/null)
+  [ -n "$pgid" ] && kill -0 -- "-$pgid" 2>/dev/null
+}
+# Waits up to $2 seconds (default 5) for the pgid file to appear (written asynchronously by the
+# just-launched background job) -- a genuine race at process-launch time, not a symptom of a bug.
+wait_for_pgid_file() {
+  local pgid_file="$1" timeout_s="${2:-5}" waited=0
+  while [ ! -s "$pgid_file" ] && [ "$waited" -lt "$timeout_s" ]; do
+    sleep 0.2; waited=$(( waited + 1 ))
+  done
+  [ -s "$pgid_file" ]
+}
+
 # CM-C+ production integration 2026-07-23: defaults to the production backend (:cplus);
 # CM_GRADIENT_BACKEND=reference selects the documented fallback/validation backend for the
 # whole campaign instead. Exported so cm_production_stage_runner.jl (launched as a child
 # process below) inherits it without any extra plumbing.
 export CM_GRADIENT_BACKEND="${CM_GRADIENT_BACKEND:-cplus}"
 export CM_ALLOW_BACKEND_SWITCH="${CM_ALLOW_BACKEND_SWITCH:-0}"
+
+# CM+moments(+ZC) production integration (2026-07-23): defaults to :cm_only (unchanged production
+# default -- the extension is an explicit opt-in). Exported so cm_production_stage_runner.jl
+# (launched as a descendant process below) inherits it without any extra plumbing, same pattern
+# as CM_GRADIENT_BACKEND above.
+export CM_EXTENSION="${CM_EXTENSION:-cm_only}"
+export MEANZC_K_MEAN="${MEANZC_K_MEAN:-0}"
+export MEANZC_K_PAIR="${MEANZC_K_PAIR:-0}"
+export MEANZC_BASIS="${MEANZC_BASIS:-direct}"
+export MEANZC_ETA_NU0="${MEANZC_ETA_NU0:-}"
 
 # slog: ALL output goes to stderr (and $SUPERVISOR_LOG, once it is set) -- NEVER stdout.
 # This is what keeps `ckpt_path=$(run_stage_with_watchdog ...)` safe: stdout is reserved
@@ -195,6 +241,10 @@ run_stage_with_watchdog() {
       echo "start_time=$(date '+%Y-%m-%d %H:%M:%S')"
       echo "remaining_budget_s=$remaining"
       echo "cm_gradient_backend=$CM_GRADIENT_BACKEND"
+      echo "cm_extension=$CM_EXTENSION"
+      echo "meanzc_K_mean=$MEANZC_K_MEAN"
+      echo "meanzc_K_pair=$MEANZC_K_PAIR"
+      echo "meanzc_basis=$MEANZC_BASIS"
     } >> "$stage_dir/run_meta.txt"
 
     # Per-attempt sentinel scoping (item 3): record the log's byte size BEFORE this
@@ -213,12 +263,21 @@ run_stage_with_watchdog() {
     # production/shakedown script in this tree is invoked this same way, cwd=repo root, script
     # given as a repo-relative path. Confirmed live this session: running from D4X_DIR instead
     # fails fast with "Package SpecialFunctions not found in current path."
-    ( cd "$REPO_ROOT" && "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_production_stage_runner.jl \
-        "$stage_dir" "$delta" "$remaining" "$cur_mode" "$cur_seed" "$perturb_seed" \
+    local pgid_file="$stage_dir/run_meta.txt.pgid"
+    rm -f "$pgid_file"
+    ( cd "$REPO_ROOT" && setsid bash -c '
+        echo "$$" > "$1"
+        shift
+        exec "$JULIA_BIN" --project=. full_aod_diag/d4_exact/cm_production_stage_runner.jl "$2" "$3" "$4" "$5" "$6" "$7"
+      ' _ "$pgid_file" "$stage_dir" "$delta" "$remaining" "$cur_mode" "$cur_seed" "$perturb_seed" \
         >> "$log_file" 2>&1 ) &
     local pid=$!
     echo "$pid" > "$stage_dir/run_meta.txt.pid"
-    slog "delta=$delta: pid=$pid log=$log_file"
+    if wait_for_pgid_file "$pgid_file" 10; then
+      slog "delta=$delta: wrapper_pid=$pid pgid=$(cat "$pgid_file") log=$log_file"
+    else
+      slog "delta=$delta: WARNING: pgid file never appeared at $pgid_file within 10s -- process-group kill will not be available for this attempt (falling back to wrapper-pid-only signaling, the pre-fix behavior)"
+    fi
 
     local last_size=-1 last_progress_t
     last_progress_t=$(date +%s)
@@ -228,10 +287,31 @@ run_stage_with_watchdog() {
       now=$(date +%s)
       if [ "$now" -ge "$stage_deadline" ]; then
         slog "delta=$delta: stage wall budget hit while pid=$pid still running -- terminating for wall-limit, not stall"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta pid=$pid reason=wall_budget_exhausted" >> "$RESTART_LOG"
-        kill -TERM "$pid" 2>/dev/null
+        local pgid_now=""; [ -s "$pgid_file" ] && pgid_now=$(cat "$pgid_file" 2>/dev/null)
+        echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta wrapper_pid=$pid pgid=$pgid_now reason=wall_budget_exhausted" >> "$RESTART_LOG"
+        if alive_pgroup "$pgid_file"; then
+          kill_pgroup "$pgid_file" TERM
+        else
+          slog "delta=$delta: no live process group (pgid file missing/stale) -- falling back to wrapper-pid TERM"
+          kill -TERM "$pid" 2>/dev/null
+        fi
         sleep "$GRACE_TERM_S"
-        kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+        if alive_pgroup "$pgid_file"; then
+          slog "delta=$delta: process group -$pgid_now still alive after ${GRACE_TERM_S}s grace -- escalating to SIGKILL"
+          kill_pgroup "$pgid_file" KILL
+          echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta wrapper_pid=$pid pgid=$pgid_now action=SIGKILL_pgroup" >> "$RESTART_LOG"
+        elif kill -0 "$pid" 2>/dev/null; then
+          # pgroup already gone but the wrapper subshell itself is somehow still alive (should not
+          # normally happen given the exec chain) -- kill it directly too, belt and suspenders.
+          kill -KILL "$pid" 2>/dev/null
+          echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta wrapper_pid=$pid pgid=$pgid_now action=SIGKILL_wrapper_fallback" >> "$RESTART_LOG"
+        fi
+        # Confirm cleanup: no process in this group should remain.
+        if [ -n "$pgid_now" ] && pgrep -g "$pgid_now" >/dev/null 2>&1; then
+          slog "delta=$delta: WARNING: pgrep still finds live members of process group -$pgid_now after kill sequence"
+        else
+          slog "delta=$delta: confirmed no process-group members remain (pgid=$pgid_now)"
+        fi
         wall_exhausted=1
         break
       fi
@@ -257,18 +337,32 @@ run_stage_with_watchdog() {
         slog "delta=$delta: ** PROBABLE STALL ** pid=$pid no log growth / checkpoint advance for ${stall_for}s (>=${STALL_THRESHOLD_S}s threshold). ps: $ps_info"
         echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta pid=$pid reason=probable_stall stall_for=${stall_for}s ps=[$ps_info]" >> "$RESTART_LOG"
 
-        slog "delta=$delta: sending SIGTERM to pid=$pid (graceful first)"
-        kill -TERM "$pid" 2>/dev/null
+        local pgid_now=""; [ -s "$pgid_file" ] && pgid_now=$(cat "$pgid_file" 2>/dev/null)
+        slog "delta=$delta: sending SIGTERM to process group -$pgid_now (graceful first)"
+        if alive_pgroup "$pgid_file"; then
+          kill_pgroup "$pgid_file" TERM
+        else
+          slog "delta=$delta: no live process group (pgid file missing/stale) -- falling back to wrapper-pid TERM"
+          kill -TERM "$pid" 2>/dev/null
+        fi
         local waited=0
-        while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$GRACE_TERM_S" ]; do
+        while alive_pgroup "$pgid_file" && [ "$waited" -lt "$GRACE_TERM_S" ]; do
           sleep 2; waited=$(( waited + 2 ))
         done
-        if kill -0 "$pid" 2>/dev/null; then
-          slog "delta=$delta: pid=$pid still alive after ${GRACE_TERM_S}s grace -- escalating to SIGKILL"
+        if alive_pgroup "$pgid_file"; then
+          slog "delta=$delta: process group -$pgid_now still alive after ${GRACE_TERM_S}s grace -- escalating to SIGKILL"
+          kill_pgroup "$pgid_file" KILL
+          echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta wrapper_pid=$pid pgid=$pgid_now action=SIGKILL_pgroup" >> "$RESTART_LOG"
+        elif kill -0 "$pid" 2>/dev/null; then
           kill -KILL "$pid" 2>/dev/null
-          echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta pid=$pid action=SIGKILL" >> "$RESTART_LOG"
+          echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta wrapper_pid=$pid pgid=$pgid_now action=SIGKILL_wrapper_fallback" >> "$RESTART_LOG"
         else
-          echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta pid=$pid action=SIGTERM_succeeded" >> "$RESTART_LOG"
+          echo "$(date '+%Y-%m-%d %H:%M:%S') chain=$CHAIN_ID delta=$delta wrapper_pid=$pid pgid=$pgid_now action=SIGTERM_succeeded" >> "$RESTART_LOG"
+        fi
+        if [ -n "$pgid_now" ] && pgrep -g "$pgid_now" >/dev/null 2>&1; then
+          slog "delta=$delta: WARNING: pgrep still finds live members of process group -$pgid_now after kill sequence"
+        else
+          slog "delta=$delta: confirmed no process-group members remain (pgid=$pgid_now)"
         fi
         hung=1
         break

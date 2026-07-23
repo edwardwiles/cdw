@@ -42,6 +42,11 @@ include(joinpath(@__DIR__, "cm_production_bundle.jl"))
 include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))   # overnight task 2026-07-22: CM-aware C+ backend, opt-in via cm_gradient_backend=:cplus
 include(joinpath(@__DIR__, "nested_quantile_grids.jl"))
 include(joinpath(@__DIR__, "cm_outer_driver.jl"))
+include(joinpath(@__DIR__, "cm_config.jl"))
+include(joinpath(@__DIR__, "cm_meanzc_moments.jl"))
+include(joinpath(@__DIR__, "cm_meanzc_config.jl"))
+include(joinpath(@__DIR__, "cm_meanzc_production.jl"))
+include(joinpath(@__DIR__, "cm_meanzc_cplus.jl"))   # CM+moments(+ZC) production integration 2026-07-23
 include(joinpath(@__DIR__, "cm_checkpoint.jl"))
 using Printf, Random, Dates, Serialization
 
@@ -62,6 +67,19 @@ const CM_GRADIENT_BACKEND = Symbol(get(ENV, "CM_GRADIENT_BACKEND", "cplus"))
 # Only meaningful for MODE=="resume": explicit, audited override required to resume under a
 # DIFFERENT cm_gradient_backend than the checkpoint this stage is resuming was written with.
 const CM_ALLOW_BACKEND_SWITCH = get(ENV, "CM_ALLOW_BACKEND_SWITCH", "0") == "1"
+
+# CM+moments(+ZC) production integration (2026-07-23): env overrides, same pattern as
+# CM_GRADIENT_BACKEND above. Defaults to :cm_only (production default, unchanged behavior).
+const CM_EXTENSION = Symbol(get(ENV, "CM_EXTENSION", "cm_only"))
+const MEANZC_K_MEAN = parse(Int, get(ENV, "MEANZC_K_MEAN", "0"))
+const MEANZC_K_PAIR = parse(Int, get(ENV, "MEANZC_K_PAIR", "0"))
+const MEANZC_BASIS = Symbol(get(ENV, "MEANZC_BASIS", "direct"))
+const IS_MEANZC = CM_EXTENSION !== :cm_only
+# Initial nu_k for a fresh "calibration" start only (irrelevant for seed_w0/resume, which carry
+# their own eta_nu forward) -- defaults to E_F[z^k]=k! (the Exp(1) draws' own k-th raw moment),
+# matching test_cm_meanzc_d4_gates.jl's nu0vec convention. Override via MEANZC_ETA_NU0 (comma-
+# separated log-nu values, one per level) only for deliberate off-calibration smoke testing.
+const MEANZC_ETA_NU0_OVERRIDE = get(ENV, "MEANZC_ETA_NU0", "")
 
 const DRAW_SEED = 20260719   # fixed across chains/deltas -- this is the economic DGP's own
                               # draw seed, part of the problem instance, NOT an optimizer
@@ -95,7 +113,8 @@ const FOCAL_BASEINDEX = 2   # France -- fixed by build_ad_context_real_d20, not 
 mkpath(CKPT_DIR)
 lp(">>> Julia threads: ", Threads.nthreads(), "  mode=", MODE, " delta=", DELTA, " budget=", BUDGET,
    "s ckpt_dir=", CKPT_DIR, " chain_perturb_seed=", CHAIN_PERTURB_SEED, " contrasts=", CM_CONTRASTS,
-   " cm_gradient_backend=", CM_GRADIENT_BACKEND, CM_ALLOW_BACKEND_SWITCH ? " (allow_backend_switch=true)" : "")
+   " cm_gradient_backend=", CM_GRADIENT_BACKEND, CM_ALLOW_BACKEND_SWITCH ? " (allow_backend_switch=true)" : "",
+   " cm_extension=", CM_EXTENSION, IS_MEANZC ? " K_mean=$(MEANZC_K_MEAN) K_pair=$(MEANZC_K_PAIR) meanzc_basis=$(MEANZC_BASIS)" : "")
 
 snaps = nested_grid_sequence([10, 20, 50])
 probs = snaps[L]
@@ -135,22 +154,50 @@ if MODE == "calibration"
         w0 = copy(w_calib)
         w0[2:end] .+= 0.02 .* randn(rng, length(w0) - 1)
     end
-    lp(">>> calibration start: g=", w0[1], " ||zfree||=", norm(w0[2:end]),
+    # CM+moments(+ZC) production integration (2026-07-23): append eta_nu_1..eta_nu_K_mean to the
+    # economic w0, matching cm_meanzc_production.jl's own w_ext = [gp; zfree; eta_nu_1;...] convention.
+    # Perturbing eta_nu too (when CHAIN_PERTURB_SEED != 0) is deliberate -- gives genuinely
+    # different starting nu across chains, not just different (g,A_od).
+    if IS_MEANZC
+        eta_nu0 = if isempty(MEANZC_ETA_NU0_OVERRIDE)
+            log.(Float64.(factorial.(1:MEANZC_K_MEAN)))
+        else
+            parse.(Float64, split(MEANZC_ETA_NU0_OVERRIDE, ","))
+        end
+        length(eta_nu0) == MEANZC_K_MEAN ||
+            error("cm_production_stage_runner: MEANZC_ETA_NU0 has $(length(eta_nu0)) values, expected MEANZC_K_MEAN=$(MEANZC_K_MEAN)")
+        w0 = vcat(w0, eta_nu0)
+    end
+
+    lp(">>> calibration start: g=", w0[1], " ||zfree||=", norm(w0[2:(IS_MEANZC ? end-MEANZC_K_MEAN : end)]),
+       IS_MEANZC ? " eta_nu0=$(w0[end-MEANZC_K_MEAN+1:end])" : "",
        " chain_perturb_seed=", CHAIN_PERTURB_SEED, " rng_seed=", something(rng_seed_used, "n/a (unperturbed)"))
     lp(">>> calibration start w0 (full vector, reproducible from tag+chain_id+draw_seed): ", w0)
     serialize(joinpath(CKPT_DIR, "w0_used.jls"),
         (chain_perturb_seed = CHAIN_PERTURB_SEED, rng_seed = rng_seed_used, w0 = copy(w0),
          draw_seed = DRAW_SEED, W = W, contrasts = CM_CONTRASTS, delta = DELTA,
-         generated_at = string(now())))
+         cm_extension = CM_EXTENSION, meanzc_K_mean = MEANZC_K_MEAN, meanzc_K_pair = MEANZC_K_PAIR,
+         meanzc_basis = MEANZC_BASIS, generated_at = string(now())))
 
     # Feasibility pre-check (found necessary live, see NOTE above): never hand KNITRO a start
     # point that cannot even be evaluated -- fail fast with an actionable message instead of
     # burning the stage's wall budget on an instant KN_solve presolve error.
-    let xf0 = x_free_from_w(w0, pe0), pcx0 = build_cm_production_context(ctx0, CS; L = L, contrasts = CM_CONTRASTS, probs = probs)
+    let D2_econ0 = length(w0) - (IS_MEANZC ? MEANZC_K_MEAN : 0),
+        xf0 = x_free_from_w(w0[1:D2_econ0], pe0)
         try
-            _, _, verify0 = cm_production_value_verified(xf0, pcx0)
-            isfinite(verify0.Delta_dual) || error("Delta_dual is not finite at the (possibly perturbed) start point")
-            lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
+            if IS_MEANZC
+                νvec0 = exp.(w0[D2_econ0+1:end])
+                pcx0 = build_cm_meanzc_production_context(ctx0, CS; L = L, K_mean = MEANZC_K_MEAN, K_pair = MEANZC_K_PAIR,
+                    contrasts = CM_CONTRASTS, meanzc_basis = MEANZC_BASIS, probs = probs)
+                _, _, verify0 = cm_meanzc_production_value_verified(xf0, νvec0, pcx0)
+                isfinite(verify0.Delta_dual) || error("Delta_dual is not finite at the (possibly perturbed) start point")
+                lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
+            else
+                pcx0 = build_cm_production_context(ctx0, CS; L = L, contrasts = CM_CONTRASTS, probs = probs)
+                _, _, verify0 = cm_production_value_verified(xf0, pcx0)
+                isfinite(verify0.Delta_dual) || error("Delta_dual is not finite at the (possibly perturbed) start point")
+                lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
+            end
         catch e
             e isa CMExpectedSolveFailure || rethrow()
             error("cm_production_stage_runner: perturbed calibration start (chain_perturb_seed=$(CHAIN_PERTURB_SEED)) " *
@@ -181,10 +228,22 @@ elseif MODE == "seed_w0"
         error("cm_production_stage_runner: seed-provenance mismatch: seed.bi=$(seed.bi) != $(FOCAL_BASEINDEX)")
     !hasproperty(seed, :schema) || seed.schema == CM_CHECKPOINT_SCHEMA ||
         error("cm_production_stage_runner: seed-provenance mismatch: seed.schema=$(seed.schema) != $(CM_CHECKPOINT_SCHEMA)")
+    # CM+moments(+ZC) production integration (2026-07-23): the moment-column layout must be
+    # IDENTICAL across a delta transition (only delta itself may legitimately differ) -- a seed
+    # written under a different (cm_extension,K_mean,K_pair,meanzc_basis) would silently splice
+    # together two different restriction sets.
+    !hasproperty(seed, :cm_extension) || seed.cm_extension == CM_EXTENSION ||
+        error("cm_production_stage_runner: seed-provenance mismatch: seed.cm_extension=$(seed.cm_extension) != $(CM_EXTENSION)")
+    !hasproperty(seed, :meanzc_K_mean) || seed.meanzc_K_mean == MEANZC_K_MEAN ||
+        error("cm_production_stage_runner: seed-provenance mismatch: seed.meanzc_K_mean=$(seed.meanzc_K_mean) != $(MEANZC_K_MEAN)")
+    !hasproperty(seed, :meanzc_K_pair) || seed.meanzc_K_pair == MEANZC_K_PAIR ||
+        error("cm_production_stage_runner: seed-provenance mismatch: seed.meanzc_K_pair=$(seed.meanzc_K_pair) != $(MEANZC_K_PAIR)")
+    !hasproperty(seed, :meanzc_basis) || !IS_MEANZC || seed.meanzc_basis == MEANZC_BASIS ||
+        error("cm_production_stage_runner: seed-provenance mismatch: seed.meanzc_basis=$(seed.meanzc_basis) != $(MEANZC_BASIS)")
     w0 = seed.w
     lp(">>> seeded from cold-verified prior-stage incumbent: ", SEED_ARG,
        " (prior Delta_dual=", seed.Delta_dual, ") -- provenance validated (W/draw_design/draw_seed/",
-       "cm_L/contrasts/bi/schema all match except delta, as expected)")
+       "cm_L/contrasts/bi/schema/cm_extension/K_mean/K_pair/meanzc_basis all match except delta, as expected)")
 elseif MODE == "resume"
     resume_from = SEED_ARG
     isfile(resume_from) || error("cm_production_stage_runner: resume requested but no checkpoint at $resume_from")
@@ -200,7 +259,9 @@ res = run_cm_upper_checkpointed(resume_from === nothing ? w0 : nothing;
     maxtime_real = BUDGET, ckpt_dir = CKPT_DIR, run_id = "cm_campaign_$(Dates.format(now(), "yyyymmdd_HHMMSS"))",
     label = "stage", checkpoint_interval_s = 30.0, resume_from = resume_from,
     heartbeat_interval_s = 30.0,
-    cm_gradient_backend = CM_GRADIENT_BACKEND, allow_backend_switch = CM_ALLOW_BACKEND_SWITCH)
+    cm_gradient_backend = CM_GRADIENT_BACKEND, allow_backend_switch = CM_ALLOW_BACKEND_SWITCH,
+    cm_extension = CM_EXTENSION, meanzc_K_mean = MEANZC_K_MEAN, meanzc_K_pair = MEANZC_K_PAIR,
+    meanzc_basis = MEANZC_BASIS)
 
 lp(">>> STAGE result: knitro_status=", res.knitro_status, " wall=", round(res.wall, digits = 1),
    " n_eval=", res.n_eval, " n_grad=", res.n_grad,
