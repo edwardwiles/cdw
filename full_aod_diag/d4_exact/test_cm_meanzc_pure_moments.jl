@@ -3,8 +3,12 @@
 # isolation before it is wired into any inner solve. Adapted from the
 # independently-audited prototype (archive/fullA-cm-mean-zc-prototype-2026-07-22,
 # c40_test_meanzc_pure_moments.jl) to this integration's Ref-free ν-threading
-# API (d_delta_dual_d_nu/d_delta_dual_d_eta_nu take ν as an explicit argument,
-# not aug.nu_ref[]).
+# API (d_delta_dual_d_nu_vec/d_delta_dual_d_eta_nu_vec take νvec as an explicit
+# argument, not aug.nu_ref[]), and generalized from K=1 (equal means [+ pairwise
+# zero covariance]) to K_mean/K_pair power-level moments E[z_o^k]=ν_k,
+# E[z_o^k z_p^k]=ν_k^2. K_mean=1,K_pair=0/1 reproduce the original two arms
+# exactly (see "K=1 regression" testsets below); a K_mean=2,K_pair=2 testset
+# validates the generalization itself.
 include(joinpath(@__DIR__, "cm_meanzc_moments.jl"))
 using Test, Random, LinearAlgebra, Statistics
 
@@ -24,12 +28,24 @@ Random.seed!(4021)
     end
 end
 
-@testset "n_meanzc_moments" begin
+@testset "n_meanzc_moments (K_mean, K_pair)" begin
     for D in (3, 4, 5, 20)
-        @test n_meanzc_moments(D, :cm_plus_equal_means) == D
-        @test n_meanzc_moments(D, :cm_plus_equal_means_zero_covariance) == D + div(D * (D - 1), 2)
+        @test n_meanzc_moments(D, 1, 0) == D                                    # old :cm_plus_equal_means
+        @test n_meanzc_moments(D, 1, 1) == D + div(D * (D - 1), 2)              # old :cm_plus_equal_means_zero_covariance
+        @test n_meanzc_moments(D, 2, 0) == 2D
+        @test n_meanzc_moments(D, 2, 1) == 2D + div(D * (D - 1), 2)
+        @test n_meanzc_moments(D, 2, 2) == 2D + 2 * div(D * (D - 1), 2)
     end
-    @test_throws ErrorException n_meanzc_moments(4, :cm_only)
+    @test_throws ErrorException n_meanzc_moments(4, 0, 0)      # K_mean must be >= 1
+    @test_throws ErrorException n_meanzc_moments(4, 1, 2)      # K_pair must be <= K_mean
+    @test_throws ErrorException n_meanzc_moments(4, 1, -1)     # K_pair must be >= 0
+end
+
+@testset "meanzc_extension_to_K sugar" begin
+    @test meanzc_extension_to_K(:cm_plus_equal_means) == (1, 0)
+    @test meanzc_extension_to_K(:cm_plus_equal_means_zero_covariance) == (1, 1)
+    @test_throws ErrorException meanzc_extension_to_K(:cm_only)
+    @test_throws ErrorException meanzc_extension_to_K(:bogus)
 end
 
 @testset "nu_feasible_interval" begin
@@ -76,6 +92,32 @@ end
         direct = sum(m[s] * (U[s, o] * U[s, p] - ν^2) for s in 1:W) / W
         @test resid_pair[k] ≈ direct atol=1e-9
     end
+end
+
+@testset "level-k (k=2) moment construction and build_raw_mean_pair_matrix_levels" begin
+    W, D = 2000, 4
+    U = rand(W, D) .* 2 .+ 0.5
+    ν2 = 1.9
+
+    Z2, Zpair2 = build_raw_mean_pair_matrices(U, 2; want_pair = true)
+    @test Z2 ≈ U .^ 2
+    pairs = packed_pair_index(D)
+    for (k, (o, p)) in enumerate(pairs)
+        @test Zpair2[:, k] ≈ (U[:, o] .^ 2) .* (U[:, p] .^ 2)
+    end
+    Gmean2 = mean_columns_direct(Z2, ν2)
+    @test Gmean2 ≈ U .^ 2 .- ν2
+
+    # build_raw_mean_pair_matrix_levels stacks K_mean/K_pair levels consistently with the
+    # single-level constructor above
+    Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(U, 2, 2)
+    @test length(Zraw_all) == 2 && length(Zpairraw_all) == 2
+    @test Zraw_all[1] ≈ U
+    @test Zraw_all[2] ≈ Z2
+    @test Zpairraw_all[2] ≈ Zpair2
+
+    Zraw_all_meanonly, Zpairraw_all_meanonly = build_raw_mean_pair_matrix_levels(U, 2, 0)
+    @test length(Zpairraw_all_meanonly) == 0    # no pair matrices built at all when K_pair=0
 end
 
 @testset "mean-only arm never builds pair columns" begin
@@ -182,32 +224,75 @@ end
     λ[ncore_econ:ncore_econ+n_mean-1] .= λ_mean_vals
     λ[ncore_econ+n_mean:ncore_econ+n_mean+npair-1] .= λ_pair_vals
 
-    aug_direct = (ncore_econ = ncore_econ, n_mean = n_mean, n_pair = npair,
+    mock_Zraw = [zeros(1, D)]   # only size(.,2)==D matters for d_delta_dual_d_nu_vec here
+    aug_direct = (ncore_econ = ncore_econ, K_mean = 1, K_pair = 1, Zraw_all = mock_Zraw,
                   meanzc_basis = :direct, refIndex1 = 1)
-    aug_anchor = (ncore_econ = ncore_econ, n_mean = n_mean, n_pair = npair,
+    aug_anchor = (ncore_econ = ncore_econ, K_mean = 1, K_pair = 1, Zraw_all = mock_Zraw,
                   meanzc_basis = :anchored, refIndex1 = 1)
-    aug_direct_meanonly = (ncore_econ = ncore_econ, n_mean = n_mean, n_pair = 0,
+    aug_direct_meanonly = (ncore_econ = ncore_econ, K_mean = 1, K_pair = 0, Zraw_all = mock_Zraw,
                   meanzc_basis = :direct, refIndex1 = 1)
 
     mean_m = 1.0
-    d_direct = d_delta_dual_d_nu(λ, aug_direct, ν; mean_m = mean_m)
+    d_direct = d_delta_dual_d_nu_vec(λ, aug_direct, [ν]; mean_m = mean_m)
     expect_direct = -(sum(λ_mean_vals) + 2ν * sum(λ_pair_vals))
-    @test d_direct ≈ expect_direct atol = 1e-12
+    @test only(d_direct) ≈ expect_direct atol = 1e-12
 
-    d_anchor = d_delta_dual_d_nu(λ, aug_anchor, ν; mean_m = mean_m)
+    d_anchor = d_delta_dual_d_nu_vec(λ, aug_anchor, [ν]; mean_m = mean_m)
     expect_anchor = -(λ_mean_vals[1] + 2ν * sum(λ_pair_vals))   # only refIndex1=1 mean term survives
-    @test d_anchor ≈ expect_anchor atol = 1e-12
+    @test only(d_anchor) ≈ expect_anchor atol = 1e-12
 
     λ_meanonly = λ[1:ncore_econ-1+n_mean]
-    d_meanonly = d_delta_dual_d_nu(λ_meanonly, aug_direct_meanonly, ν; mean_m = mean_m)
+    d_meanonly = d_delta_dual_d_nu_vec(λ_meanonly, aug_direct_meanonly, [ν]; mean_m = mean_m)
     expect_meanonly = -sum(λ_mean_vals)
-    @test d_meanonly ≈ expect_meanonly atol = 1e-12   # no pair term at all in the mean-only arm
+    @test only(d_meanonly) ≈ expect_meanonly atol = 1e-12   # no pair term at all in the mean-only arm
 
-    @test d_delta_dual_d_eta_nu(λ, aug_direct, ν; mean_m = mean_m) ≈ ν * d_direct atol = 1e-12
+    @test only(d_delta_dual_d_eta_nu_vec(λ, aug_direct, [ν]; mean_m = mean_m)) ≈ ν * only(d_direct) atol = 1e-12
+end
+
+@testset "envelope derivative sign/formula sanity: K_mean=2, K_pair=2 generalization (mock aug)" begin
+    D = 4
+    ncore_econ = 50
+    npair = div(D * (D - 1), 2)
+    K_mean, K_pair = 2, 2
+    ν = [1.2, 1.6]
+    λlen = ncore_econ - 1 + K_mean * D + K_pair * npair
+    λ = zeros(λlen)
+    λ_mean_vals = [ [0.3, -0.1, 0.2, 0.05], [0.11, -0.07, 0.13, 0.02] ]     # per level k
+    λ_pair_vals = [ fill(0.02, npair), fill(-0.01, npair) ]                # per level k
+    mean_start = ncore_econ
+    pair_start0 = ncore_econ + K_mean * D
+    for k in 1:K_mean
+        λ[mean_start+(k-1)*D : mean_start+k*D-1] .= λ_mean_vals[k]
+    end
+    for k in 1:K_pair
+        λ[pair_start0+(k-1)*npair : pair_start0+k*npair-1] .= λ_pair_vals[k]
+    end
+    mock_Zraw = [zeros(1, D), zeros(1, D)]
+    aug = (ncore_econ = ncore_econ, K_mean = K_mean, K_pair = K_pair, Zraw_all = mock_Zraw,
+           meanzc_basis = :direct, refIndex1 = 1)
+
+    mean_m = 1.0
+    d = d_delta_dual_d_nu_vec(λ, aug, ν; mean_m = mean_m)
+    @test length(d) == K_mean
+    for k in 1:K_mean
+        expect_k = -(sum(λ_mean_vals[k]) + 2ν[k] * sum(λ_pair_vals[k]))
+        @test d[k] ≈ expect_k atol = 1e-12
+    end
+    # block-diagonal-in-k check: perturbing ν_1 alone must not change level 2's component, and
+    # vice versa (each level's derivative depends only on its OWN ν_k, per the file header's
+    # block-diagonal Jacobian argument)
+    ν_perturbed_1 = [ν[1] + 0.3, ν[2]]
+    d_p1 = d_delta_dual_d_nu_vec(λ, aug, ν_perturbed_1; mean_m = mean_m)
+    @test d_p1[2] ≈ d[2] atol = 1e-12
+    @test !isapprox(d_p1[1], d[1]; atol = 1e-12)
+
+    d_eta = d_delta_dual_d_eta_nu_vec(λ, aug, ν; mean_m = mean_m)
+    @test d_eta ≈ ν .* d atol = 1e-12
 end
 
 @testset "malformed extension/configuration rejection" begin
-    @test_throws ErrorException n_meanzc_moments(4, :bogus)
+    @test_throws ErrorException n_meanzc_moments(4, 1, 2)
+    @test_throws ErrorException meanzc_extension_to_K(:cm_only)
 end
 
 println("All pure-moment tests passed.")
