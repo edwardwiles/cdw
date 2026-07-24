@@ -323,8 +323,11 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
     mj! = gradient_backend == :B ? make_melitz_moments_jacobian_b(h) :
           gradient_backend == :B_localized ? make_melitz_moments_jacobian_b_localized(h) :
           gradient_backend == :B_localized_parallel ? make_melitz_moments_jacobian_b_localized_parallel(h) :
+          gradient_backend == :B_argument_localized_serial ? make_melitz_moments_jacobian_b_argument_localized_serial(h) :
+          gradient_backend == :B_argument_localized_parallel ? make_melitz_moments_jacobian_b_argument_localized_parallel(h) :
           gradient_backend == :D ? make_melitz_moments_jacobian_d() :
-          error("gradient_backend must be :B, :B_localized, :B_localized_parallel, or :D for " *
+          error("gradient_backend must be :B, :B_localized, :B_localized_parallel, " *
+                ":B_argument_localized_serial, :B_argument_localized_parallel, or :D for " *
                 "the KNITRO-native Implicit path (Backend R does not fit the moments_jacobian! hook -- see file header)")
 
     obj = PsiObjectiveBundleImplicit(
@@ -474,7 +477,7 @@ struct MelitzFiniteDeltaOuterResult
 end
 
 """
-    MelitzExactPointCache()
+    MelitzExactPointCache(max_size=256)
 
 Continuation session (2026-07-23), Section 4.2: a SHAREABLE upgrade of the prior session's
 single-slot `exact_cache_theta`/`exact_cache_result`/`exact_cache_H` mechanism (Section 5.1)
@@ -494,12 +497,73 @@ one call behaves identically to a single forgetful slot from that call's own poi
 tests, which call `melitz_build_finite_delta_callbacks` without this new kwarg, are
 unaffected). Insert-only-on-a-verified-solve, matching the mechanism it replaces -- a
 non-finite or failed solve is never written here.
+
+Continuation session (2026-07-23, "make the optimized architecture scalable in memory and
+D") Section 4: bounded via the shared `MelitzLRUOrder` machinery (`bounded_cache.jl`),
+default capacity `256` -- a documented DEVIATION from that session's literal "compact
+cache" spec (theta/Delta/dual/status/context-fingerprint only, no moment matrix): this
+cache's own correctness fix (see `inner_solve_verified_or_fail` below) requires restoring
+`obj.H` on a hit, so each entry HERE still carries a `copy(obj.H)` (a `(W, num_moments+2)`
+matrix), unlike the deliberately tiny `MelitzDeltaEvalCache` (`delta_star.jl`), which is
+this codebase's actual "heavy-state" tier. The capacity here is set much larger (256, not
+1-4) because this cache's HIT RATE is what makes the duplicate `cb_F!`/`cb_G!`-at-the-same-
+iterate elimination free (documented 26/26 hits per cell in the continuation2 report) --
+capping it as small as the heavy-state tier would defeat that. Both are BOUNDED now, per
+the governing prompt's "do not retain every full moment matrix indefinitely," at capacities
+suited to their own distinct access patterns; see docs/melitz_optimization_report_2026-07-23_continuation3.md
+Section C for the full before/after memory accounting and rationale.
+
+`fp` (an `objectid(ctx)`-based fingerprint) is stored alongside every entry and checked on
+lookup: a hit whose fingerprint does not match the QUERYING call's own `ctx` is treated as a
+miss (and the stale entry is dropped) rather than silently restoring `obj.H` from a
+different context's moment layout -- a defensive guard against exactly the class of bug this
+session's own stale-context test exercises (see `test/melitz/runtests.jl`), even though in
+the CURRENT production call pattern `ctx` is always the same object for the lifetime of one
+`MelitzExactPointCache`.
 """
 mutable struct MelitzExactPointCache
-    store::Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64}}}
+    store::Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64},UInt}}
+    order::MelitzLRUOrder
+    max_size::Int
+    evictions::Int
 end
-MelitzExactPointCache() = MelitzExactPointCache(
-    Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64}}}())
+MelitzExactPointCache(max_size::Int=256) = MelitzExactPointCache(
+    Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64},UInt}}(),
+    MelitzLRUOrder(), max_size, 0)
+
+"""
+    melitz_exact_cache_get(cache, key, ctx) -> Union{Nothing,Tuple{Float64,Vector{Float64},Int,Matrix{Float64}}}
+
+Looks up `key` in `cache`, applying the stale-context guard (see `MelitzExactPointCache`'s
+own docstring): a hit whose stored fingerprint disagrees with `objectid(ctx)` is dropped and
+treated as `nothing`. A genuine hit is moved to MRU position.
+"""
+function melitz_exact_cache_get(cache::MelitzExactPointCache, key::Vector{Float64}, ctx)
+    hit = get(cache.store, key, nothing)
+    hit === nothing && return nothing
+    Delta_hit, x_hit, nStatus_hit, H_hit, fp = hit
+    if fp != objectid(ctx)
+        delete!(cache.store, key)
+        melitz_lru_forget!(cache.order, key)
+        return nothing
+    end
+    melitz_lru_touch!(cache.order, key)
+    return (Delta_hit, x_hit, nStatus_hit, H_hit)
+end
+
+"""
+    melitz_exact_cache_insert!(cache, key, Delta, x, nStatus, H, ctx) -> nothing
+
+Inserts/overwrites `key`, moves it to MRU, and evicts LRU entries beyond `cache.max_size`.
+"""
+function melitz_exact_cache_insert!(cache::MelitzExactPointCache, key::Vector{Float64},
+                                     Delta::Float64, x::Vector{Float64}, nStatus::Int,
+                                     H::Matrix{Float64}, ctx)
+    cache.store[key] = (Delta, x, nStatus, H, objectid(ctx))
+    melitz_lru_touch!(cache.order, key)
+    cache.evictions += melitz_lru_evict_until!(cache.order, cache.store, cache.max_size)
+    return nothing
+end
 
 """
     melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
@@ -528,7 +592,8 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                                               origin_block_screen::Bool=false,
                                               screen_order::Symbol=:A,
                                               warm_start_source::Symbol=:previous,
-                                              exact_cache::Union{Nothing,MelitzExactPointCache}=nothing)
+                                              exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
+                                              dual_bank_max_size::Int=8)
     cutoff_constraint_backend in (:linear, :nonlinear_reference) || throw(ArgumentError(
         "cutoff_constraint_backend must be :linear or :nonlinear_reference, got $cutoff_constraint_backend"))
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
@@ -540,7 +605,12 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     # Addendum Sections 3-6: front-loaded screens + stored-dual bank + no-routine-cold-retry
     # typed classification (inner_screening.jl). `dual_bank` is fresh per outer KNITRO solve
     # (never shared across solves), seeded lazily as verified inner solves accumulate.
-    dual_bank = MelitzDualBank()
+    # Continuation session (2026-07-23, memory-scalability): `dual_bank_max_size` (default 8,
+    # matching the pre-existing `MelitzDualBank()` default exactly -- this kwarg is purely
+    # additive) makes this tier's already-bounded capacity CONFIGURABLE from the outer-solve
+    # entry points too (`MelitzDualBank` itself has always been bounded via `max_size`/
+    # `policy` eviction, Phase I.6 -- this just threads the knob through one more layer).
+    dual_bank = MelitzDualBank(dual_bank_max_size)
     n_moment_infeasible_reject = Ref(0)
     n_budget_infeasible_reject = Ref(0)
     n_numerical_failure_reject = Ref(0)
@@ -636,7 +706,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         # (not the possibly-view `theta` itself) so Dict hashing/equality is well-defined and
         # consistent between the lookup here and the insert below.
         key = Vector{Float64}(theta)
-        hit = get(exact_cache.store, key, nothing)
+        hit = melitz_exact_cache_get(exact_cache, key, ctx)
         if hit !== nothing
             n_exact_cache_hits[] += 1
             melitz_record_seconds_outcome!(:inner_solve, :cache_hit, 0.0)
@@ -665,7 +735,8 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             # (Section 4.2), so a later call passed the same cache object -- even at a
             # DIFFERENT outer `delta` -- can reuse this entry (`Delta(theta)` does not depend
             # on the outer budget).
-            exact_cache.store[key] = (result.Delta, result.x, result.nStatus, copy(obj.H))
+            melitz_exact_cache_insert!(exact_cache, key, result.Delta, result.x, result.nStatus,
+                copy(obj.H), ctx)
             return (result.Delta, result.x, result.nStatus)
         elseif result isa MomentInfeasible
             n_moment_infeasible_reject[] += 1
@@ -944,7 +1015,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           screen_order::Symbol=:A,
                                           warm_start_source::Symbol=:previous,
                                           exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
-                                          eval_cache::Union{Nothing,MelitzDeltaEvalCache}=nothing)
+                                          eval_cache::Union{Nothing,MelitzDeltaEvalCache}=nothing,
+                                          dual_bank_max_size::Int=8)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     t0 = time()
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
@@ -987,7 +1059,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         cutoff_constraint_backend=cutoff_constraint_backend, on_inner_result=on_inner_result,
         dual_polish_screen=dual_polish_screen, dual_polish_steps=dual_polish_steps,
         origin_block_screen=origin_block_screen, screen_order=screen_order,
-        warm_start_source=warm_start_source, exact_cache=exact_cache)
+        warm_start_source=warm_start_source, exact_cache=exact_cache,
+        dual_bank_max_size=dual_bank_max_size)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)

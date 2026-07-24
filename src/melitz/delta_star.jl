@@ -590,21 +590,40 @@ end
 # ============================================================================
 
 """
-    MelitzDeltaEvalCache()
+    MelitzDeltaEvalCache(max_size=4)
 
-A cache of `theta_free -> MelitzDeltaEvalResult`, keyed by EXACT value equality on the
-free-coordinate vector (no rounding/binning -- the gradient laboratory and outer solve
-both re-query EXACT points, e.g. `theta`/`theta+h*v`/`theta-h*v` triples, so exact-key
-lookups are the useful case; a fuzzy/nearest-point cache is a different, unimplemented
-data structure). `evaluate_melitz_delta`'s own gate (`result.verified`) decides what may
-be STORED here -- the cache itself never re-checks or overrides that gate.
+Continuation session (2026-07-23, "make the optimized architecture scalable in memory and
+D") Section 4: THE "heavy-state cache" tier -- each entry is a full `MelitzDeltaEvalResult`,
+which carries the `W x num_moments` moment matrix `G` (`nothing` only if a caller passed
+`store_G=false`) plus the full `MelitzEquilibriumCheck` diagnostics. At D=20/W=80,000 a
+SINGLE entry's `G` alone is `80_000 * 401 * 8` bytes ~ 257MB -- retaining this UNBOUNDED
+(this cache's behavior before this session) risks unbounded growth across a long outer
+trajectory that keeps calling `evaluate_melitz_delta(...; cache=...)` at new points. Bounded
+here to a SMALL default capacity (`4`, matching the main prompt's own "very small... such as
+1-4 entries" spec for this tier) via the shared `MelitzLRUOrder` machinery
+(`bounded_cache.jl`) -- a cache HIT still requires the SAME `theta_free` key (exact value
+equality, unchanged); once evicted, a repeat query is an ordinary cache MISS (a real
+`evaluate_melitz_delta` recomputation), not an error. `max_size<=0` disables bounding
+entirely (`melitz_lru_evict_until!`'s own escape hatch) -- every production default remains
+a small positive integer.
+
+Keyed by `theta_free -> MelitzDeltaEvalResult` with EXACT value equality on the free-
+coordinate vector (no rounding/binning -- the gradient laboratory and outer solve both
+re-query EXACT points, e.g. `theta`/`theta+h*v`/`theta-h*v` triples, so exact-key lookups
+are the useful case; a fuzzy/nearest-point cache is a different, unimplemented data
+structure). `evaluate_melitz_delta`'s own gate (`result.verified`) decides what may be
+STORED here -- the cache itself never re-checks or overrides that gate.
 """
 mutable struct MelitzDeltaEvalCache
     store::Dict{Vector{Float64},MelitzDeltaEvalResult}
+    order::MelitzLRUOrder
+    max_size::Int
     hits::Int
     misses::Int
+    evictions::Int
 end
-MelitzDeltaEvalCache() = MelitzDeltaEvalCache(Dict{Vector{Float64},MelitzDeltaEvalResult}(), 0, 0)
+MelitzDeltaEvalCache(max_size::Int=4) = MelitzDeltaEvalCache(
+    Dict{Vector{Float64},MelitzDeltaEvalResult}(), MelitzLRUOrder(), max_size, 0, 0, 0)
 
 """
     evaluate_melitz_delta(theta_free, ctx, obj; warm_start=nothing, cold=false,
@@ -641,6 +660,7 @@ function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
         hit = get(cache.store, key, nothing)
         if hit !== nothing
             cache.hits += 1
+            melitz_lru_touch!(cache.order, key)  # move-to-MRU on a hit, not just on insert
             MELITZ_PROFILE[] && melitz_record!(:eval_cache_hit, Int64(0))
             return hit
         end
@@ -689,7 +709,10 @@ function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
         lfd.nStatus, lfd.lfd_ok, verified, check, state_time, inner_time, state_time + inner_time)
 
     if cache !== nothing && result.verified
-        cache.store[Vector{Float64}(theta_free)] = result
+        key = Vector{Float64}(theta_free)
+        cache.store[key] = result
+        melitz_lru_touch!(cache.order, key)
+        cache.evictions += melitz_lru_evict_until!(cache.order, cache.store, cache.max_size)
     end
 
     return result

@@ -15,6 +15,7 @@
 
 include("profiling.jl")
 include("types.jl")
+include("bounded_cache.jl")
 include("pareto.jl")
 include("firm_quantities.jl")
 include("equilibrium.jl")
@@ -30,4 +31,5 @@ include("outer_solve.jl")
 include("inner_screening.jl")
 include("origin_block_screen.jl")
 include("localized_gradient.jl")
+include("argument_localized_gradient.jl")
 include("finite_delta_outer.jl")

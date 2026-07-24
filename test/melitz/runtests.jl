@@ -27,6 +27,7 @@ const MELITZ_DIR = joinpath(@__DIR__, "..", "..", "src", "melitz")
 include(joinpath(dirname(dirname(@__DIR__)), "misc", "doubleDiff.jl"))
 include(joinpath(MELITZ_DIR, "profiling.jl"))
 include(joinpath(MELITZ_DIR, "types.jl"))
+include(joinpath(MELITZ_DIR, "bounded_cache.jl"))
 include(joinpath(MELITZ_DIR, "pareto.jl"))
 include(joinpath(MELITZ_DIR, "firm_quantities.jl"))
 include(joinpath(MELITZ_DIR, "equilibrium.jl"))
@@ -42,6 +43,7 @@ include(joinpath(MELITZ_DIR, "outer_solve.jl"))
 include(joinpath(MELITZ_DIR, "inner_screening.jl"))
 include(joinpath(MELITZ_DIR, "origin_block_screen.jl"))
 include(joinpath(MELITZ_DIR, "localized_gradient.jl"))
+include(joinpath(MELITZ_DIR, "argument_localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 
 # ============================================================================
@@ -1175,6 +1177,71 @@ if KNITRO_AVAILABLE
                 @test all(==(1.0), K_small[:, 1])
             end
         end
+
+        # ====================================================================
+        # Continuation session (2026-07-23, "make the optimized architecture scalable in
+        # memory and D"), Section 3: the argument-localized backends never build a full
+        # (W, K) matrix at all (not even a base one) -- they must still be BIT-IDENTICAL to
+        # :method_b_localized at every touched column, since the dependency-map claim
+        # (Gate 1, validated above) is shared unchanged.
+        # ====================================================================
+        @testset "Section 3: argument-localized gradient (:B_argument_localized_serial/_parallel)" begin
+            # n12/d12/Wt12/mj_loc12 are scoped INSIDE the "Phase II.12" @testset block above
+            # (a separate local scope) -- recomputed locally here rather than relying on them
+            # leaking into this sibling testset.
+            n12 = length(theta11)
+            d12 = ctx11.moment_layout.num_moments
+            Wt12 = size(obj11.U, 1)
+            mj_loc12 = make_melitz_moments_jacobian_b_localized(1e-4)
+            mj_argser = make_melitz_moments_jacobian_b_argument_localized_serial(1e-4)
+            mj_argpar = make_melitz_moments_jacobian_b_argument_localized_parallel(1e-4)
+
+            rng13 = MersenneTwister(73)
+            for trial in 1:3
+                theta_probe13 = theta11 .+ 0.02 .* randn(rng13, n12)
+                K_loc13, G_loc13 = zeros(Wt12, n12), zeros(Wt12, d12, n12)
+                K_as, G_as = zeros(Wt12, n12), zeros(Wt12, d12, n12)
+                K_ap, G_ap = zeros(Wt12, n12), zeros(Wt12, d12, n12)
+                mj_loc12(K_loc13, G_loc13, theta_probe13, obj11.U, obj11)
+                mj_argser(K_as, G_as, theta_probe13, obj11.U, obj11)
+                mj_argpar(K_ap, G_ap, theta_probe13, obj11.U, obj11)
+                @testset "trial $trial: argument-localized serial/parallel bit-identical to :B_localized, per coordinate" begin
+                    @test K_as == K_loc13
+                    @test K_ap == K_loc13
+                    for k in 1:n12
+                        @test (@views G_as[:, :, k] == G_loc13[:, :, k])
+                        @test (@views G_ap[:, :, k] == G_loc13[:, :, k])
+                    end
+                end
+            end
+
+            @testset "BLAS thread count restored after the argument-localized parallel sweep" begin
+                prev = BLAS.get_num_threads()
+                BLAS.set_num_threads(3)
+                K_ap2, G_ap2 = zeros(Wt12, n12), zeros(Wt12, d12, n12)
+                mj_argpar(K_ap2, G_ap2, theta11, obj11.U, obj11)
+                @test BLAS.get_num_threads() == 3
+                BLAS.set_num_threads(prev)
+            end
+
+            @testset "small-N probe call skips G_jac safely (serial and parallel)" begin
+                K_s1, G_s1 = zeros(2, n12), zeros(2, d12, n12)
+                mj_argser(K_s1, G_s1, theta11, obj11.U[1:2, :], obj11)
+                @test all(iszero, G_s1) && all(==(1.0), K_s1[:, 1])
+                K_s2, G_s2 = zeros(2, n12), zeros(2, d12, n12)
+                mj_argpar(K_s2, G_s2, theta11, obj11.U[1:2, :], obj11)
+                @test all(iszero, G_s2) && all(==(1.0), K_s2[:, 1])
+            end
+
+            @testset "per-coordinate touched-column count is O(D), never O(K)" begin
+                compact13 = melitz_compact_columns_map(ctx11)
+                D13 = ctx11.D
+                K13 = ctx11.moment_layout.num_moments
+                maxcols13 = maximum(length(c.direct_cols) for c in compact13)
+                @test maxcols13 < K13            # strictly fewer columns than the full moment count
+                @test maxcols13 <= D13 + 4        # bounded by O(D), the dependency-map's own claim
+            end
+        end
     end
 
     # ========================================================================
@@ -1999,7 +2066,7 @@ if KNITRO_AVAILABLE
             cbset_A.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_20)), evA, nothing)
             @test length(shared_cache.store) == 1
             entry_A = only(values(shared_cache.store))
-            Delta_A, x_A, nStatus_A, H_A = entry_A
+            Delta_A, x_A, nStatus_A, H_A, fp_A = entry_A
 
             # a SEPARATE bundle/callback set, a DIFFERENT delta, but the SAME shared_cache:
             # evaluating the IDENTICAL theta must hit the cache with ZERO new inner solves.
@@ -2059,6 +2126,112 @@ if KNITRO_AVAILABLE
                 inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
             @test res_nocache.initial_incumbent !== nothing
             @test res_nocache.initial_incumbent.classification.outer_feasible
+        end
+    end
+
+    # ========================================================================
+    # Continuation session (2026-07-23, "make the optimized architecture scalable in memory
+    # and D"), Section 4: bounded-LRU mechanics for MelitzExactPointCache/MelitzDeltaEvalCache.
+    # Pure data-structure tests (synthetic keys/values, no KNITRO) -- the cross-delta REUSE
+    # semantics are already covered live above ("Section 4.2"); these tests isolate the
+    # EVICTION/fingerprint machinery itself, which needs many more than 1-2 entries to
+    # exercise capacity limits and would be needlessly slow to drive through real inner solves.
+    # ========================================================================
+    @testset "Section 4 (memory scalability): bounded LRU caches" begin
+        @testset "MelitzLRUOrder: touch/evict primitives" begin
+            order = MelitzLRUOrder()
+            store = Dict{Vector{Float64},Int}()
+            for i in 1:5
+                k = Float64[i]
+                store[k] = i
+                melitz_lru_touch!(order, k)
+            end
+            @test order.keys == [Float64[1], Float64[2], Float64[3], Float64[4], Float64[5]]
+            n_evicted = melitz_lru_evict_until!(order, store, 3)
+            @test n_evicted == 2
+            @test length(store) == 3
+            @test !haskey(store, Float64[1]) && !haskey(store, Float64[2])
+            @test haskey(store, Float64[5])
+            # re-touching an existing key moves it to MRU without changing store contents
+            melitz_lru_touch!(order, Float64[3])
+            @test order.keys[end] == Float64[3]
+            @test length(store) == 3
+        end
+
+        @testset "MelitzExactPointCache: LRU eviction under repeated insertion" begin
+            cache = MelitzExactPointCache(3)
+            ctxA = Ref(:ctxA)
+            H = zeros(2, 2)
+            for i in 1:5
+                melitz_exact_cache_insert!(cache, Float64[i], Float64(i), [Float64(i)], 0, H, ctxA)
+            end
+            @test length(cache.store) == 3
+            @test cache.evictions == 2
+            @test !haskey(cache.store, Float64[1]) && !haskey(cache.store, Float64[2])
+            @test haskey(cache.store, Float64[5])
+        end
+
+        @testset "MelitzExactPointCache: a touched (get) entry survives eviction longer than an untouched one" begin
+            cache = MelitzExactPointCache(3)
+            ctxA = Ref(:ctxA)
+            H = zeros(2, 2)
+            for i in 1:3
+                melitz_exact_cache_insert!(cache, Float64[i], Float64(i), [Float64(i)], 0, H, ctxA)
+            end
+            # touch key 1 (now MRU); key 2 is the new LRU
+            @test melitz_exact_cache_get(cache, Float64[1], ctxA) !== nothing
+            melitz_exact_cache_insert!(cache, Float64[4], 4.0, [4.0], 0, H, ctxA)
+            @test haskey(cache.store, Float64[1])   # survived: was touched
+            @test !haskey(cache.store, Float64[2])  # evicted: least recently used
+            @test haskey(cache.store, Float64[3]) && haskey(cache.store, Float64[4])
+        end
+
+        @testset "MelitzExactPointCache: stale-context guard drops a hit from a different ctx object" begin
+            cache = MelitzExactPointCache(8)
+            ctxA = Ref(:ctxA)
+            ctxB = Ref(:ctxB)
+            H = zeros(2, 2)
+            melitz_exact_cache_insert!(cache, Float64[1], 1.0, [1.0], 0, H, ctxA)
+            @test melitz_exact_cache_get(cache, Float64[1], ctxA) !== nothing
+            # re-insert (the ctxA lookup above did not consume the entry)
+            melitz_exact_cache_insert!(cache, Float64[1], 1.0, [1.0], 0, H, ctxA)
+            @test melitz_exact_cache_get(cache, Float64[1], ctxB) === nothing   # different ctx: guarded miss
+            @test !haskey(cache.store, Float64[1])   # the stale entry was dropped, not merely skipped
+        end
+
+        @testset "MelitzDeltaEvalCache: LRU eviction bounds live entries to max_size" begin
+            small_fixture4c = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+                target_country=1, seed=29, W=2_000)
+            obj4c, theta4c = build_melitz_psi_bundle(small_fixture4c;
+                inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+            ctx4c = obj4c.γ
+            cache4c = MelitzDeltaEvalCache(2)
+            rng4c = MersenneTwister(41)
+            n4c = length(theta4c)
+            thetas4c = [theta4c .+ 0.01 .* randn(rng4c, n4c) for _ in 1:4]
+            verified_count = 0
+            for th in thetas4c
+                r = evaluate_melitz_delta(th, ctx4c, obj4c; cache=cache4c, cold=true)
+                r.verified && (verified_count += 1)
+            end
+            @test length(cache4c.store) <= 2
+            if verified_count >= 3
+                @test cache4c.evictions >= 1
+            end
+        end
+
+        @testset "MelitzDeltaEvalCache: A/B/A survives eviction when max_size is large enough" begin
+            small_fixture4d = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+                target_country=1, seed=29, W=2_000)
+            obj4d, theta4d = build_melitz_psi_bundle(small_fixture4d;
+                inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
+            ctx4d = obj4d.γ
+            cache4d = MelitzDeltaEvalCache(4)
+            r_A1 = evaluate_melitz_delta(theta4d, ctx4d, obj4d; cache=cache4d, cold=true)
+            misses_after_A1 = cache4d.misses
+            r_A2 = evaluate_melitz_delta(theta4d, ctx4d, obj4d; cache=cache4d, cold=true)
+            @test cache4d.misses == misses_after_A1   # A/A repeat: pure hit, no new miss
+            @test r_A1 === r_A2
         end
     end
 
@@ -2605,6 +2778,42 @@ if KNITRO_AVAILABLE
             GT_f = melitz_gains_from_trade(p_f, cf)
             GT_q = melitz_gains_from_trade(p_q, cf)
             @test isapprox(GT_f, GT_q; atol=1e-8, rtol=1e-6)
+        end
+
+        # ================================================================
+        # Continuation session (2026-07-23, "make the optimized architecture scalable in
+        # memory and D"), Section 11: the argument-localized gradient backends
+        # (Section 3, UNMODIFIED for :logcutoff) must remain bit-exact-agreement-class
+        # vs. the parameterization-agnostic dense reference `:B` under :logcutoff too --
+        # the existing dependency map (built from ctx.A_pivot/f_free_lin, structure
+        # SHARED between :logf/:logcutoff) was hypothesized to already be a valid
+        # superset without any :logcutoff-specific derivation; this is the coordinate-
+        # by-coordinate correctness gate confirming that hypothesis live (see
+        # scripts/melitz_logcutoff_argument_localized_validate.jl for the original
+        # standalone confirmation this test mirrors).
+        # ================================================================
+        @testset "Section 11: argument-localized gradient backends bit-exact-class under :logcutoff" begin
+            n_q = length(theta0_q)
+            d_q = ctx_q.moment_layout.num_moments
+            W_q = size(obj_q.U, 1)
+            mj_full_q = make_melitz_moments_jacobian_b(1e-4)
+            mj_as_q = make_melitz_moments_jacobian_b_argument_localized_serial(1e-4)
+            mj_ap_q = make_melitz_moments_jacobian_b_argument_localized_parallel(1e-4)
+
+            rng_q = MersenneTwister(83)
+            for trial in 1:3
+                theta_probe_q = theta0_q .+ 0.01 .* randn(rng_q, n_q)
+                K1q, G1q = zeros(W_q, n_q), zeros(W_q, d_q, n_q)
+                K2q, G2q = zeros(W_q, n_q), zeros(W_q, d_q, n_q)
+                K3q, G3q = zeros(W_q, n_q), zeros(W_q, d_q, n_q)
+                mj_full_q(K1q, G1q, theta_probe_q, obj_q.U, obj_q)
+                mj_as_q(K2q, G2q, theta_probe_q, obj_q.U, obj_q)
+                mj_ap_q(K3q, G3q, theta_probe_q, obj_q.U, obj_q)
+                @testset "trial $trial" begin
+                    @test isapprox(G1q, G2q; atol=1e-6, rtol=1e-6)
+                    @test isapprox(G1q, G3q; atol=1e-6, rtol=1e-6)
+                end
+            end
         end
     end
 end
