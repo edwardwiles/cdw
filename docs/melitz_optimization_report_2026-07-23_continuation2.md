@@ -273,7 +273,108 @@ W)` combination). **The D=20/D=10 inner-SOLVER comparison this section originall
 could not be completed** -- the D=10 numbers above stand on their own; no D=20 inner-solve
 timing exists from this session to compare against them.
 
+## Addendum (same session, follow-on work): Sections 4.2, 5, and 12 implemented after further review
+
+After the initial report above, the user asked whether enough context remained to attempt
+some of the deferred items directly. Re-reading the exact-cache/dual-bank/screening code
+more carefully surfaced that two of the "gaps" were more tractable than the first pass
+suggested, and a third (Section 12) was cheap and additive. All three below are
+IMPLEMENTED, tested, and merged into this session's commits -- not just designed. Full test
+suite after all three: **1063 assertions, 0 failures** (up from 1013 -- 50 new assertions
+across the new "Section 4.2: cross-delta cache reuse," "Section 5: dual bank as a warm-start
+source," and "Section 12: per-screen instrumentation" testsets). One real test-authoring bug
+was found and fixed along the way: the first version of the Section 12 test referenced
+`ctxOB`/`objOB`/`theta0_OB`, aliases that are local to a DIFFERENT, already-closed
+`@testset` block earlier in the file -- caught immediately by the test run itself
+(`UndefVarError`), fixed by using the actual in-scope `ctx20`/`obj20`/`theta0_20` fixtures.
+
+### Section 4.2 (cross-delta cache reuse): IMPLEMENTED
+
+Two complementary changes, both additive (default `nothing` reproduces every pre-existing
+call site's behavior exactly):
+
+- **`MelitzExactPointCache`** (`finite_delta_outer.jl`): upgrades the FC/GA screening
+  path's own single-slot `exact_cache_theta`/`exact_cache_result`/`exact_cache_H` mechanism
+  (which only remembered the MOST RECENT verified theta) to a `Dict`-keyed cache that
+  remembers EVERY verified theta seen, across however many `melitz_build_finite_delta_callbacks`/
+  `solve_melitz_finite_delta_bound` calls share the same cache object. New
+  `exact_cache::Union{Nothing,MelitzExactPointCache}=nothing` kwarg threaded through both
+  functions. Live-verified: two SEPARATE callback sets built at two DIFFERENT `delta`
+  values, sharing one cache object -- the second's evaluation of an already-cached `theta`
+  produces `INNER_SOLVE_COUNT[] == 0` (zero new KNITRO calls) and reproduces the identical
+  moment matrix `G`.
+- **`eval_cache::Union{Nothing,MelitzDeltaEvalCache}=nothing`**: the pre-existing (already
+  built and tested by an earlier session), richer full-state cache
+  (`Delta`/dual/LFD/moments/equilibrium-checks) is now threaded through
+  `solve_melitz_finite_delta_bound`'s own `initial_eval`/`terminal_eval` cold-verification
+  calls, which previously never used ANY cache at all. Live-verified with the EXACT test
+  protocol the governing prompt's own Section 4.2 describes: solve at one `delta`, then
+  solve again at a DIFFERENT `delta` sharing the same `eval_cache` -- the second call's
+  initial-incumbent evaluation is a cache HIT (`eval_cache.hits >= 1`, no new miss), and
+  `Delta`/`dual_x`/`moment_residuals`/`equilibrium_check` are bit-identical (in fact the
+  SAME object, `===`) between the two calls' incumbents.
+
+Both are additive kwargs; a caller that never passes them gets EXACTLY the pre-existing
+behavior (confirmed by a dedicated test and by the full suite passing unchanged for every
+pre-existing call site).
+
+### Section 5 (dual bank as an actual warm-start source): IMPLEMENTED
+
+- `MelitzDualBank` gained a parallel `thetas::Vector{Union{Nothing,Vector{Float64}}}` field
+  (same length/indexing as `entries`); `melitz_dual_bank_insert!` gained an optional
+  `theta::Union{Nothing,AbstractVector}=nothing` kwarg -- every EXISTING call site/test that
+  omits it keeps working identically (an untagged, `nothing`-theta entry, exactly as
+  before). The three live insertion points in `melitz_classified_inner_solve` (verified
+  solve, live-threshold crossing, numerical failure) now all pass `theta=theta`.
+- **`melitz_bank_nearest_theta(bank, theta)`**: the missing piece -- returns the
+  theta-tagged entry closest (Euclidean) to a QUERY theta, `(Inf, nothing)` if none tagged.
+- **`melitz_resolve_warm_start!(obj, bank, theta, warm_start_source)`**: applies one of four
+  policies immediately before the single real KNITRO attempt: `:previous` (default, exact
+  no-op, reproducing every pre-existing trajectory), `:bank_nearest` (nearest theta-tagged
+  bank dual, falling back to `:previous` if none tagged), `:bank_best_lb` (the bank entry
+  giving the tightest stored-dual lower bound against the CURRENT moment matrix -- reuses
+  the exact same `melitz_bank_best` the stored-dual/dual-polish screens already call), and
+  `:neutral` (clears the cache, a diagnostic "no warm start" baseline). New
+  `warm_start_source::Symbol=:previous` kwarg threaded through `melitz_classified_inner_solve`,
+  `melitz_build_finite_delta_callbacks`, and `solve_melitz_finite_delta_bound`.
+- Tests verify each policy sets `obj.x`/`obj.use_cached_x` exactly as specified (including
+  both fallback paths), that an invalid source throws `ArgumentError`, and that a live
+  `melitz_classified_inner_solve` call banks its own theta correctly end-to-end.
+
+**Not done in this addendum**: a live before/after wall-clock/iteration-count comparison
+across the four policies (the governing prompt's own Section 5 "compare: previous-point
+dual only / nearest verified bank dual / scored bank selection / neutral start, measure
+median iterations, p90 iterations, successful-inner wall, hit rate") -- the MECHANISM is
+now real and tested, but running that comparison live, at production scale, with enough
+trajectory length to see a stable difference, was judged to need its own dedicated
+follow-up rather than a rushed single-cell demo that risks over- or under-stating the
+effect. The scored-bank-selection policy (a weighted combination of tightness and distance,
+distinct from the two simple policies implemented) was also not built -- `:bank_nearest`
+and `:bank_best_lb` cover the two named STRATEGIES the prompt's own Section 5 describes
+most directly; a genuinely SCORED hybrid is a separate design decision (what weights?) not
+specified precisely enough by the prompt to implement without guessing.
+
+### Section 12 (screen cost/rejection-rate instrumentation): IMPLEMENTED
+
+Each of the four screens (`range`, `stored_dual`, `origin_block`, `dual_polish`) now times
+its own real work (not the trivial "disabled/empty-bank" short-circuit) via the EXISTING
+`melitz_record_seconds_outcome!` mechanism, recording under
+`:screen_range`/`:screen_stored_dual`/`:screen_origin_block`/`:screen_dual_polish` with
+outcome `:passed` or `:rejected`. This directly answers the governing prompt's own Section
+12 ask ("measure the actual cost and incremental rejection rate") with PRECISE per-screen
+counts/timings from `melitz_profile_summary()`, rather than the prior session's own
+indirect method (comparing whole-trajectory wall time across separate before/after
+campaign runs that differ by exactly one screen). Live-verified: a first call (empty bank)
+shows only `screen_range_passed`; a second call at a perturbed theta with the bank now
+populated shows `screen_stored_dual_*`/`screen_dual_polish_*` categories appearing with the
+expected outcome. Does not change any screen's own logic or default -- purely additive
+observability.
+
 ## 4. Complete-state exact cache into live FC/GA callbacks (Section 4 -- partially done already, gaps disclosed)
+
+**UPDATE: Section 4.2 (cross-delta reuse) was subsequently implemented -- see the Addendum
+above.** The audit below (4.1's existing scope, 4.3's finding that it is not a clean win
+given the current architecture) still stands as originally written.
 
 Auditing `finite_delta_outer.jl`'s `solve_melitz_finite_delta_bound` (`inner_solve_verified_or_fail`,
 around line 597) against this session's own Section 4 requirements:
@@ -294,21 +395,28 @@ around line 597) against this session's own Section 4 requirements:
   object rebuilt fresh for every `solve_melitz_finite_delta_bound` call (one `ctx`/`obj`/
   option-file combination per call, never mixed), but not a general-purpose cache that could
   be shared safely across calls with different settings without adding those key fields.
-- **4.2 (cross-delta reuse)**: NOT implemented. The cache is closure-local to ONE
-  `solve_melitz_finite_delta_bound` invocation -- a fresh call at a different `delta` builds
-  a brand-new empty cache, so `Delta(theta)` computed during a `delta=1e-3` run is not
-  available to a subsequent `delta=1e-2` run even at an identical `theta`. Wiring this would
-  require either (a) lifting the cache to live on `ctx`/`obj` itself (shared across calls,
-  needing the fuller key from 4.1 to stay safe), or (b) an explicit cache object threaded in
-  and out by the caller -- a real, moderate architecture change not attempted this session.
-- **4.3 (candidate registration reuse)**: NOT implemented. `fc_candidate_registration`
+- **4.2 (cross-delta reuse)**: originally found NOT implemented, closure-local to one
+  `solve_melitz_finite_delta_bound` call. **Subsequently implemented this session** -- see
+  the Addendum above (`MelitzExactPointCache` for the light screening-path cache,
+  `eval_cache`/`MelitzDeltaEvalCache` for the full-state cold-verification path), both
+  additive kwargs defaulting to the pre-existing behavior, both live-verified with real
+  cross-delta hits.
+- **4.3 (candidate registration reuse)**: investigated further and found NOT to be a clean
+  win given the current architecture, rather than simply deferred. `fc_candidate_registration`
   (Section 2's own re-profile: 4-11% of wall, 50-67ms/call mean) calls
-  `evaluate_melitz_delta_from_solution`, which reconstructs the LFD/diagnostics EVERY TIME
-  `cb_F!` runs, cache hit or not -- it does already reuse the precomputed moment matrix
-  `G_now` (an existing optimization predating this session, avoiding one redundant `O(W*K)`
-  moment build), but the LFD recovery/verification arithmetic itself still re-runs. Avoiding
-  this on a cache hit would mean ALSO caching the full `MelitzDeltaEvalResult`/classification
-  per 4.1's own note above -- deferred together with 4.1's gap for the same reason.
+  `evaluate_melitz_delta_from_solution`, which reconstructs the LFD/diagnostics on every
+  successful FC call -- but this is NOT a redundant recomputation of something already known:
+  `melitz_classified_inner_solve`'s own screening path never computes LFD weights, moment
+  residuals, or the equilibrium check at all (only `Delta`/`x`/`nStatus`), so this cost is the
+  FIRST and ONLY time those diagnostics are derived for this `theta`. Worse, the full
+  equilibrium check is NOT merely for ranking candidates (which COULD be deferred until a
+  candidate survives the top-`n_live_candidates_tracked` truncation) -- `melitz_classify_outer_feasibility`
+  needs `equilibrium_check.gravity_residual_A/f` to decide `gravity_feasible`, one of the five
+  conjuncts of `outer_feasible` itself, so the check cannot be skipped even for a candidate
+  that will be immediately discarded. Deferring it would require changing what
+  `outer_feasible` means (e.g. splitting a cheaper "provisional feasibility" from the full
+  check) -- a change to feasibility SEMANTICS, not a caching optimization, and out of scope
+  for a performance-engineering pass. Not implemented.
 
 **Why not attempted this session**: extending the cache to store full verified state and
 share it across delta values touches the exact machinery this repo's own culture treats as
@@ -320,6 +428,12 @@ gaps are left as concretely-scoped follow-up rather than a rushed, unvalidated c
 caching layer that, if wrong, could silently serve a stale `Delta`/LFD to a live outer search.
 
 ## 5. Verified dual warm-start bank (Section 5 -- NOT wired as a warm-start source; screening-only confirmed)
+
+**UPDATE: subsequently implemented -- see the Addendum above** (`melitz_bank_nearest_theta`,
+`melitz_resolve_warm_start!`, the `warm_start_source` kwarg). The audit below of the
+PRE-existing (screening-only) state still stands as originally written; the live before/after
+policy comparison this section originally scoped as follow-up work remains not done (see the
+Addendum's own "not done in this addendum" note).
 
 Audited `MelitzDualBank`/`melitz_classified_inner_solve` (`inner_screening.jl`): the bank is
 currently used ONLY for pre-solve SCREENING (`melitz_stored_dual_lower_bound`,
@@ -398,6 +512,14 @@ implements restricted-coordinate-search infrastructure (`restricted_box`,
 Sections 9/10 of THIS prompt should reuse rather than rebuild.
 
 ## 12. Reassess optional screens (Section 12 -- prior session's own numbers stand, not re-run)
+
+**UPDATE: precise per-screen call-count/timer instrumentation was subsequently added -- see
+the Addendum above.** A future live campaign can now read exact per-screen cost/rejection
+counts directly from `melitz_profile_summary()` instead of inferring them from whole-
+trajectory wall-time deltas across separate runs (this session did not itself re-run a live
+campaign with the new instrumentation to produce fresh numbers -- only unit-level
+verification that the categories populate correctly). The prior session's own numbers below
+still stand as the best AVAILABLE measurement of these screens' cost/benefit.
 
 The prior session's own Section 8 config-comparison (`docs/melitz_optimization_report_2026-07-23_screening_continuation.md`)
 already measured this directly: enabling `origin_block_screen`/`dual_polish_screen` on top
@@ -586,17 +708,27 @@ outlier cold inner-solve outside the FC/GA callback accounting, not extra KNITRO
 overhead), Section 11 (D=10 inner-solver BLAS-thread microbenchmark, flat 2-20 threads then
 oversubscription at 208; D=20's own fixture construction did NOT complete within an 8m46s
 budget and was killed -- a genuine, disclosed finding about `generate_fake_melitz_data`'s own
-poor scaling with D, not a result about the inner solver itself).
+poor scaling with D, not a result about the inner solver itself), and, in a follow-on pass
+after the user asked whether more of the deferred items were tractable: **Section 4.2**
+(cross-delta exact-cache reuse, both the light screening-path cache and the pre-existing
+full-state `MelitzDeltaEvalCache` now threaded through `solve_melitz_finite_delta_bound`),
+**Section 5** (the dual bank wired as an actual warm-start source -- `:bank_nearest`/
+`:bank_best_lb`/`:neutral` policies alongside the pre-existing `:previous` default), and
+**Section 12** (precise per-screen call-count/timer instrumentation for all four screens).
 
-**Explicitly scoped down, with concrete technical reasoning for each**: Sections 4 (cache
-gaps: cross-delta reuse, candidate-registration reuse, full-state caching), 5 (dual bank not
-wired as an actual warm-start source), 6/7 (active-tail moment construction and its
-parallelization), 8 (log-cutoff port of the localized gradient), 9/10 (incumbent pooling,
-longer continuation), 12 (screen cost reassessment -- prior session's own numbers stand,
-not re-measured). None of these were attempted shallowly; each has a concrete design
-sketch and an honest account of why it needs more dedicated time than this session had,
-consistent with this repo's own established practice of disclosing scope rather than
-claiming completeness.
+**Explicitly scoped down, with concrete technical reasoning for each**: Section 4.1/4.3
+(4.3 investigated further and found NOT to be a clean win -- the equilibrium check needed
+for candidate registration is also required by the feasibility gate itself, so it cannot be
+deferred without changing what "outer_feasible" means), 6/7 (active-tail moment construction
+and its parallelization), 8 (log-cutoff port of the localized gradient), 9/10 (incumbent
+pooling, longer continuation). A live before/after wall-clock comparison of the Section 5
+warm-start policies was also not run (the mechanism is real and tested; measuring its
+production impact is separate follow-up work). None of these were attempted shallowly; each
+has a concrete design sketch (or, for 4.3, a concrete reason it is not actually a win) and an
+honest account of why it needs more dedicated time than this session had, consistent with
+this repo's own established practice of disclosing scope rather than claiming completeness.
 
-Full test suite at session end: **1013 assertions, 0 failures** (up from 700 at session
-start, reflecting this session's own new Phase II.12 tests).
+Full test suite at session end: **1063 assertions, 0 failures** (700 at session start, 1013
+after the first pass's own new Phase II.12 tests, 1063 after this follow-on pass's new
+Section 4.2/5/12 tests -- one real test-authoring bug, an out-of-scope variable reference in
+the first draft of the Section 12 test, was found by the test run itself and fixed).

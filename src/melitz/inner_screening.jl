@@ -156,36 +156,80 @@ report:
 Every insertion point in this file funnels through `melitz_dual_bank_insert!`, which
 unconditionally refuses a non-finite vector (main prompt Section 6: "do not insert NaNs
 or nonfinite vectors") -- centralized here rather than trusted at every call site.
+
+Continuation session (2026-07-23), Section 5: `thetas` is a PARALLEL array (same length,
+same indexing as `entries`) recording the outer coordinate `theta` each dual vector was
+obtained at, when the caller supplies one -- `nothing` at an index means "no theta known
+for this entry" (every EXISTING call site/test that calls `melitz_dual_bank_insert!` without
+the new optional `theta` kwarg keeps working exactly as before, just with an untagged
+entry). This enables `melitz_bank_nearest_theta` (below) to answer "which banked dual is
+closest to the point I am ABOUT TO evaluate," the missing piece needed to use the bank as an
+actual inner-solve WARM START (not merely a pre-solve screening lower bound, its only use
+before this session) -- see `melitz_classified_inner_solve`'s new `warm_start_source` kwarg.
 """
 mutable struct MelitzDualBank
     entries::Vector{Vector{Float64}}
+    thetas::Vector{Union{Nothing,Vector{Float64}}}
     max_size::Int
     policy::Symbol
 end
-MelitzDualBank(max_size::Int=8; policy::Symbol=:fifo) = MelitzDualBank(Vector{Float64}[], max_size, policy)
+MelitzDualBank(max_size::Int=8; policy::Symbol=:fifo) =
+    MelitzDualBank(Vector{Float64}[], Union{Nothing,Vector{Float64}}[], max_size, policy)
 
-function melitz_dual_bank_insert!(bank::MelitzDualBank, x::AbstractVector)
+function melitz_dual_bank_insert!(bank::MelitzDualBank, x::AbstractVector;
+                                   theta::Union{Nothing,AbstractVector}=nothing)
     xc = collect(Float64.(x))
     all(isfinite, xc) || return nothing
+    thetac = theta === nothing ? nothing : collect(Float64.(theta))
     if length(bank.entries) < bank.max_size
         push!(bank.entries, xc)
+        push!(bank.thetas, thetac)
         return nothing
     end
     if bank.policy == :fifo
         popfirst!(bank.entries)
+        popfirst!(bank.thetas)
         push!(bank.entries, xc)
+        push!(bank.thetas, thetac)
     elseif bank.policy == :nearest
         i_near = argmin([norm(e .- xc) for e in bank.entries])
         bank.entries[i_near] = xc
+        bank.thetas[i_near] = thetac
     elseif bank.policy == :diversity
         n = length(bank.entries)
         nn_dist = [minimum(norm(bank.entries[i] .- bank.entries[j]) for j in 1:n if j != i) for i in 1:n]
         i_redundant = argmin(nn_dist)
         bank.entries[i_redundant] = xc
+        bank.thetas[i_redundant] = thetac
     else
         error("unknown MelitzDualBank policy: $(bank.policy) (expected :fifo, :nearest, or :diversity)")
     end
     return nothing
+end
+
+"""
+    melitz_bank_nearest_theta(bank, theta) -> (dist, x)
+
+Continuation session (2026-07-23), Section 5: scans `bank` for the THETA-TAGGED entry
+(`bank.thetas[i] !== nothing`) closest (Euclidean, in outer-coordinate space) to the query
+`theta`, returning its Euclidean distance and its own dual vector `x` -- the natural
+"nearest verified bank dual" warm-start candidate. `(Inf, nothing)` if the bank is empty or
+has no theta-tagged entries at all (e.g. every entry came from a call site that did not pass
+`theta`, or the bank is fresh).
+"""
+function melitz_bank_nearest_theta(bank::MelitzDualBank, theta::AbstractVector)
+    best_dist = Inf
+    best_x = nothing
+    @inbounds for i in eachindex(bank.entries)
+        th = bank.thetas[i]
+        th === nothing && continue
+        d = norm(th .- theta)
+        if d < best_dist
+            best_dist = d
+            best_x = bank.entries[i]
+        end
+    end
+    return (best_dist, best_x)
 end
 
 """
@@ -306,10 +350,67 @@ function melitz_bank_best(obj, bank::MelitzDualBank)
 end
 
 """
+    melitz_resolve_warm_start!(obj, bank, theta, warm_start_source) -> Symbol
+
+Continuation session (2026-07-23), Section 5: sets `obj.x`/`obj.use_cached_x` per
+`warm_start_source` BEFORE the real KNITRO attempt, and returns the source ACTUALLY applied
+(useful for logging -- may differ from the requested source when a bank lookup finds
+nothing, e.g. `:bank_nearest` on a bank with no theta-tagged entries falls back to
+`:previous`, never erroring or silently doing nothing unexpected):
+
+  - `:previous` (default, matches ALL prior behavior exactly): no-op -- `obj.x`/
+    `obj.use_cached_x` are left exactly as the caller/previous solve set them.
+  - `:bank_nearest`: `melitz_bank_nearest_theta(bank, theta)`'s own dual vector, the
+    theta-tagged bank entry closest to the point about to be evaluated. Falls back to
+    `:previous` (a no-op) if no theta-tagged entry exists.
+  - `:bank_best_lb`: `melitz_bank_best(obj, bank)`'s own dual vector, the entry giving the
+    TIGHTEST stored-dual lower bound against `obj.H`'s CURRENTLY loaded moment matrix
+    (already populated at `theta` by the caller before this is invoked). Falls back to
+    `:previous` if the bank is empty.
+  - `:neutral`: clears the cache (`obj.use_cached_x = false; obj.x .= NaN`), forcing
+    `inner_loop_initial_values`'s own `zeros(...)` default -- a diagnostic-only baseline for
+    comparing warm-start policies against "no warm start at all," never itself a routine
+    cold-RETRY (this remains a single, no-retry attempt either way; addendum Section 1's own
+    no-routine-cold-retry policy is unaffected).
+
+`obj.x`/`obj.use_cached_x` must already be correctly sized/initialized fields of `obj`
+(true for any live `PsiObjectiveBundleImplicit`, the only type this is ever called on).
+"""
+function melitz_resolve_warm_start!(obj, bank::MelitzDualBank, theta::AbstractVector,
+                                     warm_start_source::Symbol)
+    if warm_start_source == :previous
+        return :previous
+    elseif warm_start_source == :bank_nearest
+        _, x_near = melitz_bank_nearest_theta(bank, theta)
+        if x_near === nothing
+            return :previous
+        end
+        obj.x .= x_near
+        obj.use_cached_x = true
+        return :bank_nearest
+    elseif warm_start_source == :bank_best_lb
+        _, x_best = melitz_bank_best(obj, bank)
+        if x_best === nothing
+            return :previous
+        end
+        obj.x .= x_best
+        obj.use_cached_x = true
+        return :bank_best_lb
+    elseif warm_start_source == :neutral
+        obj.use_cached_x = false
+        obj.x .= NaN
+        return :neutral
+    else
+        throw(ArgumentError("warm_start_source must be :previous, :bank_nearest, " *
+            ":bank_best_lb, or :neutral, got $warm_start_source"))
+    end
+end
+
+"""
     melitz_classified_inner_solve(obj, theta, ctx; delta, bank, guard=1e-6,
         range_screen=true, stored_dual_screen=true, dual_polish_screen=false,
         dual_polish_steps=3, origin_block_screen=false, screen_order=:A,
-        on_result=nothing) -> MelitzInnerResult
+        warm_start_source=:previous, on_result=nothing) -> MelitzInnerResult
 
 Addendum Section 3/6's production order, extended by this session's Phase I.3/I.5/I.8: (1)
 fill `obj.H`'s moment matrix at `theta` (the same `obj.moments!` call
@@ -322,9 +423,11 @@ remaining enabled screens, in the order named by `screen_order`:
   - `:B`: compressed origin-block, then stored-dual, then dual-polish.
   - `:C`: stored-dual, then dual-polish, then compressed origin-block.
 
-(4) if nothing rejects, ONE KNITRO attempt (`CounterfactualSensitivity.inner_loop_internal`,
-reusing the caller's warm-start state via `obj.use_cached_x`/`obj.x`) -- NO routine cold
-retry on a numerical failure (addendum Section 1).
+(4) if nothing rejects, ONE KNITRO attempt (`CounterfactualSensitivity.inner_loop_internal`),
+warm-started per `warm_start_source` (Section 5, continuation session; default `:previous`,
+reusing the caller's existing `obj.use_cached_x`/`obj.x` exactly as before this kwarg
+existed) -- NO routine cold retry on a numerical failure (addendum Section 1), regardless of
+`warm_start_source`.
 
 `dual_polish_screen`/`origin_block_screen` (Phase I.5/I.3, default `false` each -- opt-in
 until the Phase I.8 screen-order benchmark decides a production default): the former runs
@@ -346,6 +449,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
                                         dual_polish_steps::Int=3,
                                         origin_block_screen::Bool=false,
                                         screen_order::Symbol=:A,
+                                        warm_start_source::Symbol=:previous,
                                         on_result=nothing)::MelitzInnerResult
     screen_order in (:A, :B, :C) || throw(ArgumentError("screen_order must be :A, :B, or :C, got $screen_order"))
     CS = CounterfactualSensitivity
@@ -353,8 +457,22 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     obj.moments!(@view(obj.H[:, 1]), G_now, theta, obj.U, obj)
     obj.H[:, 2] .= 1.0
 
+    # Continuation session (2026-07-23), Section 12: per-screen call-count/timer
+    # instrumentation, using the SAME exception-safe `melitz_record_seconds_outcome!`
+    # convention as the inner-solve outcomes above (`profiling.jl`) -- a zero-cost no-op
+    # when `MELITZ_PROFILE[]` is off. Each screen's own real work (not the trivial
+    # disabled/empty-bank short-circuit) is timed, and its outcome (`:rejected`/`:passed`)
+    # recorded under `:screen_range`/`:screen_stored_dual`/`:screen_origin_block`/
+    # `:screen_dual_polish` -- lets a live campaign report each screen's ACTUAL cost and
+    # incremental rejection rate directly (`melitz_profile_summary()`'s own `count`/
+    # `total_s` columns), rather than only inferring it indirectly from wall-time deltas
+    # across separate before/after campaign runs (the prior session's own Section 8/12
+    # methodology).
     if range_screen
+        t0_range = time_ns()
         cert = melitz_range_screen(G_now)
+        melitz_record_seconds_outcome!(:screen_range, cert === nothing ? :passed : :rejected,
+            (time_ns() - t0_range) / 1e9)
         if cert !== nothing
             on_result !== nothing && on_result(theta, cert)
             return cert
@@ -363,16 +481,31 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
 
     function try_stored_dual()
         (!stored_dual_screen || isempty(bank.entries)) && return nothing
+        t0_sd = time_ns()
         lb, _ = melitz_bank_best(obj, bank)
-        lb > delta + guard ? BudgetInfeasible(lb, :stored_dual) : nothing
+        result = lb > delta + guard ? BudgetInfeasible(lb, :stored_dual) : nothing
+        melitz_record_seconds_outcome!(:screen_stored_dual, result === nothing ? :passed : :rejected,
+            (time_ns() - t0_sd) / 1e9)
+        result
     end
     function try_dual_polish()
         (!dual_polish_screen || isempty(bank.entries)) && return nothing
+        t0_dp = time_ns()
         _, best_x = melitz_bank_best(obj, bank)
-        best_x === nothing ? nothing : melitz_dual_polish_screen(obj, best_x; delta=delta,
+        result = best_x === nothing ? nothing : melitz_dual_polish_screen(obj, best_x; delta=delta,
             guard=guard, max_steps=dual_polish_steps)
+        melitz_record_seconds_outcome!(:screen_dual_polish, result === nothing ? :passed : :rejected,
+            (time_ns() - t0_dp) / 1e9)
+        result
     end
-    try_origin_block() = origin_block_screen ? melitz_origin_block_screen(theta, ctx, obj) : nothing
+    function try_origin_block()
+        origin_block_screen || return nothing
+        t0_ob = time_ns()
+        result = melitz_origin_block_screen(theta, ctx, obj)
+        melitz_record_seconds_outcome!(:screen_origin_block, result === nothing ? :passed : :rejected,
+            (time_ns() - t0_ob) / 1e9)
+        result
+    end
 
     steps = screen_order == :A ? (try_stored_dual, try_origin_block, try_dual_polish) :
             screen_order == :B ? (try_origin_block, try_stored_dual, try_dual_polish) :
@@ -390,6 +523,11 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     # persists across the whole outer trajectory, so a stale `true` left over from an
     # earlier, unrelated inner solve must never leak into this one's classification.
     obj.threshold_crossed[] = false
+    # Continuation session (2026-07-23), Section 5: apply the requested warm-start policy
+    # (default `:previous`, a no-op reproducing all pre-existing behavior) immediately before
+    # the one real KNITRO attempt -- never a routine cold retry, addendum Section 1's policy
+    # is otherwise unchanged.
+    melitz_resolve_warm_start!(obj, bank, theta, warm_start_source)
     objSol, x, nStatus = CS.inner_loop_internal(obj, theta)
     accepted = nStatus in (0, -100, -101, -103)
     if !accepted
@@ -404,7 +542,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
             # (if not necessarily optimal) finite dual point, so it is eligible for the
             # screening bank on the same weak-duality basis as any verified solve.
             x_crossing = obj.threshold_crossing_x[]
-            melitz_dual_bank_insert!(bank, x_crossing)
+            melitz_dual_bank_insert!(bank, x_crossing; theta=theta)
             result = BudgetInfeasible(obj.threshold_crossing_bound[], :live_dual_threshold)
             on_result !== nothing && on_result(theta, result)
             return result
@@ -416,7 +554,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
         # lower-bound evaluation by the same unconditional weak-duality argument (file
         # header) regardless of why the solve failed; `melitz_dual_bank_insert!` itself
         # refuses a non-finite vector, so this is always safe to attempt.
-        melitz_dual_bank_insert!(bank, x)
+        melitz_dual_bank_insert!(bank, x; theta=theta)
         result = NumericalFailure(Int(nStatus))
         on_result !== nothing && on_result(theta, result)
         return result
@@ -425,7 +563,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     obj(x, constr=localc)
     Delta_theta = localc[1] / 1e10
     x_copy = collect(Float64.(x))
-    melitz_dual_bank_insert!(bank, x_copy)
+    melitz_dual_bank_insert!(bank, x_copy; theta=theta)
     result = InnerSolved(Delta_theta, x_copy, Int(nStatus))
     on_result !== nothing && on_result(theta, result)
     return result

@@ -474,8 +474,36 @@ struct MelitzFiniteDeltaOuterResult
 end
 
 """
+    MelitzExactPointCache()
+
+Continuation session (2026-07-23), Section 4.2: a SHAREABLE upgrade of the prior session's
+single-slot `exact_cache_theta`/`exact_cache_result`/`exact_cache_H` mechanism (Section 5.1)
+from "remembers only the MOST RECENTLY verified theta" to "remembers EVERY verified theta
+seen so far, across however many `melitz_build_finite_delta_callbacks` calls share the SAME
+cache object." Valid across DIFFERENT outer budgets `delta`: `Delta(theta)` (and its
+optimal dual/moment state) is purely a function of `theta`, never of the outer budget --
+see `inner_screening.jl`'s own header on weak duality, and this file's own
+`build_melitz_implicit_bundle` docstring. A caller wanting cross-delta reuse (e.g. a
+continuation workflow: solve at `delta=1e-3`, then reuse verified points at `delta=1e-2`)
+constructs ONE `MelitzExactPointCache()` and passes it to every `solve_melitz_finite_delta_bound`
+call in the sequence; omitting it (the default `nothing` everywhere this type is accepted)
+allocates a fresh, empty, call-local cache exactly as before -- strictly reproducing the
+pre-existing single-call-scoped behavior, since a fresh Dict-based cache started empty for
+one call behaves identically to a single forgetful slot from that call's own point of view
+(this session's own test suite confirms the pre-existing "Section 5.1"/"Section 7 A/B/A"
+tests, which call `melitz_build_finite_delta_callbacks` without this new kwarg, are
+unaffected). Insert-only-on-a-verified-solve, matching the mechanism it replaces -- a
+non-finite or failed solve is never written here.
+"""
+mutable struct MelitzExactPointCache
+    store::Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64}}}
+end
+MelitzExactPointCache() = MelitzExactPointCache(
+    Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64}}}())
+
+"""
     melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
-        n_live_candidates_tracked=5) -> NamedTuple
+        n_live_candidates_tracked=5, exact_cache=nothing) -> NamedTuple
 
 Section 6/7: factors the finite-delta outer NLP's combined callback pair (objective +
 divergence-budget + cutoff constraints, Sections 3.1/4.1/5.2) out of
@@ -498,7 +526,9 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                                               dual_polish_screen::Bool=false,
                                               dual_polish_steps::Int=3,
                                               origin_block_screen::Bool=false,
-                                              screen_order::Symbol=:A)
+                                              screen_order::Symbol=:A,
+                                              warm_start_source::Symbol=:previous,
+                                              exact_cache::Union{Nothing,MelitzExactPointCache}=nothing)
     cutoff_constraint_backend in (:linear, :nonlinear_reference) || throw(ArgumentError(
         "cutoff_constraint_backend must be :linear or :nonlinear_reference, got $cutoff_constraint_backend"))
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
@@ -548,9 +578,13 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     # before returning -- a ~`W*(d+2)*8` byte copy (trivial vs. a KNITRO solve) that keeps
     # `obj.H` and this cache's logical state consistent regardless of what happened at any
     # OTHER theta in between.
-    exact_cache_theta = Ref{Union{Nothing,Vector{Float64}}}(nothing)
-    exact_cache_result = Ref{Union{Nothing,Tuple{Float64,Vector{Float64},Int}}}(nothing)
-    exact_cache_H = Ref{Union{Nothing,Matrix{Float64}}}(nothing)
+    # Section 4.2 (this continuation session): `exact_cache` defaults to a fresh, empty,
+    # call-local `MelitzExactPointCache` when the caller passes nothing -- reproducing the
+    # prior single-slot behavior's own scoping exactly (this specific call's own cache,
+    # never shared). A caller wanting cross-delta reuse passes in the SAME cache object
+    # across multiple `solve_melitz_finite_delta_bound`/`melitz_build_finite_delta_callbacks`
+    # calls instead.
+    exact_cache = exact_cache === nothing ? MelitzExactPointCache() : exact_cache
     n_exact_cache_hits = Ref(0)
     n_exact_cache_misses = Ref(0)
 
@@ -595,15 +629,20 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     # (`evaluate_melitz_delta(...; cold=true)`, used for the initial incumbent and
     # end-of-run reverification).
     function inner_solve_verified_or_fail(theta::AbstractVector)
-        # Section 5.1: exact-point cache check -- before touching KNITRO at all. Restores
+        # Section 5.1/4.2: exact-point cache check -- before touching KNITRO at all. Restores
         # `obj.H` (see the correctness-fix comment above this closure's cache declaration)
         # so every downstream reader of `obj.H` sees state consistent with `theta`, exactly
-        # as if a real solve had just run at this point.
-        if exact_cache_theta[] !== nothing && exact_cache_theta[] == theta
+        # as if a real solve had just run at this point. `key` uses a concrete `Vector{Float64}`
+        # (not the possibly-view `theta` itself) so Dict hashing/equality is well-defined and
+        # consistent between the lookup here and the insert below.
+        key = Vector{Float64}(theta)
+        hit = get(exact_cache.store, key, nothing)
+        if hit !== nothing
             n_exact_cache_hits[] += 1
             melitz_record_seconds_outcome!(:inner_solve, :cache_hit, 0.0)
-            obj.H .= exact_cache_H[]
-            return exact_cache_result[]
+            Delta_hit, x_hit, nStatus_hit, H_hit = hit
+            obj.H .= H_hit
+            return (Delta_hit, x_hit, nStatus_hit)
         end
         n_exact_cache_misses[] += 1
 
@@ -614,19 +653,20 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         result = melitz_classified_inner_solve(obj, theta, ctx; delta=delta, bank=dual_bank,
             on_result=on_inner_result, dual_polish_screen=dual_polish_screen,
             dual_polish_steps=dual_polish_steps, origin_block_screen=origin_block_screen,
-            screen_order=screen_order)
+            screen_order=screen_order, warm_start_source=warm_start_source)
         elapsed = (time_ns() - t0) / 1e9
 
         if result isa InnerSolved
             n_inner_solved[] += 1
             melitz_record_seconds_outcome!(:inner_solve, :warm_success, elapsed)
-            # Section 5.1: cache ONLY a verified result. `obj.H` is snapshotted too (see the
-            # correctness-fix comment above) -- it was JUST populated at this exact `theta`
-            # by `melitz_classified_inner_solve`.
-            exact_cache_theta[] = collect(Float64.(theta))
-            exact_cache_result[] = (result.Delta, result.x, result.nStatus)
-            exact_cache_H[] = copy(obj.H)
-            return exact_cache_result[]
+            # Section 5.1/4.2: cache ONLY a verified result. `obj.H` is snapshotted too (see
+            # the correctness-fix comment above) -- it was JUST populated at this exact
+            # `theta` by `melitz_classified_inner_solve`. Keyed into the SHARED `exact_cache`
+            # (Section 4.2), so a later call passed the same cache object -- even at a
+            # DIFFERENT outer `delta` -- can reuse this entry (`Delta(theta)` does not depend
+            # on the outer budget).
+            exact_cache.store[key] = (result.Delta, result.x, result.nStatus, copy(obj.H))
+            return (result.Delta, result.x, result.nStatus)
         elseif result isa MomentInfeasible
             n_moment_infeasible_reject[] += 1
             n_inner_eval_failures[] += 1
@@ -753,6 +793,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             cutoff_constraint_backend = cutoff_constraint_backend,
             n_fc_calls = n_fc_calls, n_ga_calls = n_ga_calls,
             n_exact_cache_hits = n_exact_cache_hits, n_exact_cache_misses = n_exact_cache_misses,
+            exact_cache = exact_cache,
             dual_bank = dual_bank, n_moment_infeasible_reject = n_moment_infeasible_reject,
             n_budget_infeasible_reject = n_budget_infeasible_reject,
             n_numerical_failure_reject = n_numerical_failure_reject,
@@ -877,6 +918,15 @@ same "zero degrees of freedom" mechanism `melitz_fixed_point_probe` already uses
 coordinate -- while a nonzero entry frees that coordinate within the usual symmetric
 range; both branches of the broadcasted `.-`/`.+` below already work for either shape, no
 separate code path needed).
+
+`exact_cache`/`eval_cache` (Section 4.2, this continuation session): both default `nothing`
+(fresh, call-local, empty caches -- exactly the pre-existing behavior). Pass the SAME
+`MelitzExactPointCache`/`MelitzDeltaEvalCache` object across multiple calls (e.g. a
+continuation workflow solving `delta=1e-3` then `delta=1e-2` from the same `theta`
+neighborhood) to reuse verified inner-solve/evaluation results across DIFFERENT outer
+budgets -- valid because `Delta(theta)` (and everything derived from it: dual, LFD,
+moments, equilibrium checks) is a function of `theta` alone, never of the outer budget
+`delta` itself.
 """
 function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVector;
                                           delta::Real, direction::Symbol,
@@ -891,7 +941,10 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           dual_polish_screen::Bool=false,
                                           dual_polish_steps::Int=3,
                                           origin_block_screen::Bool=false,
-                                          screen_order::Symbol=:A)
+                                          screen_order::Symbol=:A,
+                                          warm_start_source::Symbol=:previous,
+                                          exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
+                                          eval_cache::Union{Nothing,MelitzDeltaEvalCache}=nothing)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     t0 = time()
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
@@ -912,7 +965,14 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     # trajectory never produces a verified point (Section 12's zero/one-iteration
     # regression test pins exactly this).
     # ------------------------------------------------------------------------
-    initial_eval = evaluate_melitz_delta(collect(theta_init), ctx, obj_inner; cold=true)
+    # Section 4.2 (this continuation session): `eval_cache`, if given, lets this cold
+    # evaluation reuse a verified `MelitzDeltaEvalResult` (Delta, dual, LFD, moments,
+    # equilibrium checks -- the FULL state, not just the FC/GA path's lighter dual-only
+    # `exact_cache`) computed by an EARLIER `solve_melitz_finite_delta_bound` call that
+    # shared the same `eval_cache`/`obj_inner` -- valid across different `delta` values for
+    # the same reason `exact_cache` is (`Delta(theta)` does not depend on the outer budget).
+    # Default `nothing`: no caching, exactly the pre-existing behavior.
+    initial_eval = evaluate_melitz_delta(collect(theta_init), ctx, obj_inner; cold=true, cache=eval_cache)
     initial_classification = melitz_classify_outer_feasibility(initial_eval, delta)
     initial_incumbent = initial_classification.outer_feasible ?
         MelitzOuterCandidate(signed_objective(theta_init), initial_eval, initial_classification, :initial) :
@@ -926,7 +986,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         n_live_candidates_tracked=n_live_candidates_tracked,
         cutoff_constraint_backend=cutoff_constraint_backend, on_inner_result=on_inner_result,
         dual_polish_screen=dual_polish_screen, dual_polish_steps=dual_polish_steps,
-        origin_block_screen=origin_block_screen, screen_order=screen_order)
+        origin_block_screen=origin_block_screen, screen_order=screen_order,
+        warm_start_source=warm_start_source, exact_cache=exact_cache)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -948,7 +1009,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     KNITRO.KN_free(kc)
 
     theta_final = collect(theta_final_raw)
-    terminal_eval = evaluate_melitz_delta(theta_final, ctx, obj_inner; cold=true)
+    terminal_eval = evaluate_melitz_delta(theta_final, ctx, obj_inner; cold=true, cache=eval_cache)
     terminal_classification = melitz_classify_outer_feasibility(terminal_eval, delta)
 
     # ------------------------------------------------------------------------

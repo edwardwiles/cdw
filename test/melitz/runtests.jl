@@ -1505,6 +1505,146 @@ if KNITRO_AVAILABLE
         end
     end
 
+    # ========================================================================
+    # Continuation session (2026-07-23), Section 5: the dual bank as an actual WARM-START
+    # source (not merely a pre-solve screening lower bound, its only use before this
+    # session). `melitz_dual_bank_insert!`'s new optional `theta` kwarg tags each entry with
+    # the outer coordinate it came from; `melitz_bank_nearest_theta` and
+    # `melitz_resolve_warm_start!` build on that tagging.
+    # ========================================================================
+    @testset "Section 5: dual bank as a warm-start source" begin
+        @testset "melitz_dual_bank_insert! without theta leaves an untagged (nothing) entry" begin
+            bank = MelitzDualBank()
+            melitz_dual_bank_insert!(bank, [1.0, 2.0])
+            @test length(bank.thetas) == 1
+            @test bank.thetas[1] === nothing
+        end
+
+        @testset "melitz_bank_nearest_theta finds the closest theta-tagged entry, ignores untagged ones" begin
+            bank = MelitzDualBank()
+            melitz_dual_bank_insert!(bank, [1.0, 2.0]; theta=[0.1, 0.2])
+            melitz_dual_bank_insert!(bank, [3.0, 4.0])   # untagged -- must never be returned
+            melitz_dual_bank_insert!(bank, [5.0, 6.0]; theta=[0.9, 1.0])
+            d1, x1 = melitz_bank_nearest_theta(bank, [0.15, 0.25])
+            @test x1 == [1.0, 2.0]
+            d2, x2 = melitz_bank_nearest_theta(bank, [1.0, 1.1])
+            @test x2 == [5.0, 6.0]
+            @test d1 < d2   # sanity: the first query really is closer to its own match
+        end
+
+        @testset "melitz_bank_nearest_theta on an empty or fully-untagged bank returns (Inf, nothing)" begin
+            d, x = melitz_bank_nearest_theta(MelitzDualBank(), [0.0, 0.0])
+            @test d == Inf && x === nothing
+            bank_untagged = MelitzDualBank()
+            melitz_dual_bank_insert!(bank_untagged, [1.0, 2.0])
+            d2, x2 = melitz_bank_nearest_theta(bank_untagged, [0.0, 0.0])
+            @test d2 == Inf && x2 === nothing
+        end
+
+        @testset "melitz_resolve_warm_start!: :previous is a no-op" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            objW.x .= 7.0
+            objW.use_cached_x = true
+            bankW = MelitzDualBank()
+            src = melitz_resolve_warm_start!(objW, bankW, theta0_20, :previous)
+            @test src == :previous
+            @test all(==(7.0), objW.x)   # untouched
+            @test objW.use_cached_x
+        end
+
+        @testset "melitz_resolve_warm_start!: :bank_nearest sets obj.x/use_cached_x from the closest theta-tagged entry" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            n_dual = length(objW.x)
+            objW.x .= -99.0
+            objW.use_cached_x = false
+            bankW = MelitzDualBank()
+            x_target = collect(1.0:n_dual)
+            melitz_dual_bank_insert!(bankW, x_target; theta=theta0_20)
+            far_theta = theta0_20 .+ 10.0
+            melitz_dual_bank_insert!(bankW, zeros(n_dual); theta=far_theta)
+            src = melitz_resolve_warm_start!(objW, bankW, theta0_20, :bank_nearest)
+            @test src == :bank_nearest
+            @test objW.x == x_target
+            @test objW.use_cached_x
+        end
+
+        @testset "melitz_resolve_warm_start!: :bank_nearest falls back to :previous when no entry is theta-tagged" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            objW.x .= 3.0
+            objW.use_cached_x = true
+            bankW = MelitzDualBank()
+            melitz_dual_bank_insert!(bankW, ones(length(objW.x)))   # untagged
+            src = melitz_resolve_warm_start!(objW, bankW, theta0_20, :bank_nearest)
+            @test src == :previous
+            @test all(==(3.0), objW.x)   # untouched -- the fallback truly is a no-op
+        end
+
+        @testset "melitz_resolve_warm_start!: :bank_best_lb picks the tightest stored-dual lower bound" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            CS_ = CounterfactualSensitivity
+            G_seed = CS_.select_G_from_H(objW, objW.H)
+            objW.moments!(@view(objW.H[:, 1]), G_seed, theta0_20, objW.U, objW)
+            objW.H[:, 2] .= 1.0
+            bankW = MelitzDualBank()
+            n_dual = length(objW.x)
+            melitz_dual_bank_insert!(bankW, zeros(n_dual))
+            expected_best_lb, expected_best_x = melitz_bank_best(objW, bankW)
+            src = melitz_resolve_warm_start!(objW, bankW, theta0_20, :bank_best_lb)
+            @test src == :bank_best_lb
+            @test objW.x == expected_best_x
+            @test objW.use_cached_x
+        end
+
+        @testset "melitz_resolve_warm_start!: :bank_best_lb falls back to :previous on an empty bank" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            objW.x .= 5.0
+            objW.use_cached_x = true
+            src = melitz_resolve_warm_start!(objW, MelitzDualBank(), theta0_20, :bank_best_lb)
+            @test src == :previous
+            @test all(==(5.0), objW.x)
+        end
+
+        @testset "melitz_resolve_warm_start!: :neutral clears the cache" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            objW.x .= 5.0
+            objW.use_cached_x = true
+            src = melitz_resolve_warm_start!(objW, MelitzDualBank(), theta0_20, :neutral)
+            @test src == :neutral
+            @test all(isnan, objW.x)
+            @test !objW.use_cached_x
+        end
+
+        @testset "melitz_resolve_warm_start!: invalid source throws ArgumentError" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            @test_throws ArgumentError melitz_resolve_warm_start!(objW, MelitzDualBank(), theta0_20, :bogus)
+        end
+
+        @testset "wired end-to-end: melitz_classified_inner_solve banks every verified/rejected point with its theta" begin
+            objW = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            bankW = MelitzDualBank()
+            result = melitz_classified_inner_solve(objW, theta0_20, ctx20; delta=1e-3, bank=bankW)
+            @test result isa InnerSolved
+            @test length(bankW.entries) == 1
+            @test bankW.thetas[1] == collect(Float64.(theta0_20))
+        end
+    end
+
     @testset "Phase I.5: dual-polish screen" begin
         rT4 = evaluate_melitz_delta(theta0_20, ctx20, obj20; cold=true, store_G=false)
         @test rT4.nStatus == 0
@@ -1683,6 +1823,50 @@ if KNITRO_AVAILABLE
         end
     end
 
+    # ========================================================================
+    # Continuation session (2026-07-23), Section 12: per-screen call-count/timer
+    # instrumentation, using the SAME `MELITZ_PROFILE[]`/`melitz_profile_summary()`
+    # machinery already exercised elsewhere in this file.
+    # ========================================================================
+    @testset "Section 12: per-screen instrumentation categories are recorded with correct outcomes" begin
+        objI12 = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=1.0,
+            find_smallest=true, gradient_backend=:B, h=1e-4,
+            inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+        bankI12 = MelitzDualBank()
+        melitz_profile_reset!()
+        MELITZ_PROFILE[] = true
+        try
+            result1 = melitz_classified_inner_solve(objI12, theta0_20, ctx20; delta=1e-3,
+                bank=bankI12, origin_block_screen=true, dual_polish_screen=true)
+            @test result1 isa InnerSolved
+            rows1 = melitz_profile_summary()
+            cats1 = Dict(r.category => r for r in rows1)
+            @test haskey(cats1, :screen_range_passed)
+            @test cats1[:screen_range_passed].count == 1
+            # stored_dual/dual_polish are skipped (not timed at all) on the FIRST call --
+            # the bank was empty, so `try_stored_dual`/`try_dual_polish` short-circuit BEFORE
+            # their own timed region even starts (an intentional design choice: timing a
+            # trivial "bank is empty" branch would not be informative).
+            @test !haskey(cats1, :screen_stored_dual_passed) && !haskey(cats1, :screen_stored_dual_rejected)
+
+            # second call, same theta but now the bank has one entry -- stored_dual now runs
+            # (and, at the SAME theta with the SAME just-cached optimal dual, must PASS, not
+            # reject: the exact optimal dual's own lower bound cannot exceed the budget it
+            # just satisfied).
+            melitz_profile_reset!()
+            result2 = melitz_classified_inner_solve(objI12, theta0_20, ctx20; delta=1e-3,
+                bank=bankI12, origin_block_screen=true, dual_polish_screen=true)
+            @test result2 isa InnerSolved
+            rows2 = melitz_profile_summary()
+            cats2 = Dict(r.category => r for r in rows2)
+            @test haskey(cats2, :screen_stored_dual_passed)
+            @test cats2[:screen_stored_dual_passed].count == 1
+            @test haskey(cats2, :screen_dual_polish_passed) || haskey(cats2, :screen_dual_polish_rejected)
+        finally
+            MELITZ_PROFILE[] = false
+        end
+    end
+
     @testset "Section 7: A/B/A repeated evaluation -- no stale-state leakage" begin
         n20 = length(theta0_20)
         m20 = 1 + ctx20.D + ctx20.D * (ctx20.D - 1)
@@ -1784,6 +1968,97 @@ if KNITRO_AVAILABLE
         @testset "cb_G! at a genuinely DIFFERENT theta is a cache miss (real inner solve runs)" begin
             @test cbset51.n_exact_cache_misses[] >= 2   # theta_X's original cb_F! + theta_Y
             @test n_after_G_diff_theta > n_after_G_same_theta
+        end
+    end
+
+    # ========================================================================
+    # Continuation session (2026-07-23), Section 4.2: exact-point/eval caches shared across
+    # DIFFERENT outer `delta` values -- valid because Delta(theta) (and everything derived
+    # from it: dual, LFD, moments, equilibrium checks) is a function of theta ALONE, never of
+    # the outer budget. Tests BOTH caches this session wired: `MelitzExactPointCache` (the
+    # FC/GA screening path's light dual-only cache, upgraded this session from a single slot
+    # to a shareable multi-entry Dict) and the pre-existing `MelitzDeltaEvalCache` (the full
+    # Delta/dual/LFD/moments/checks state, now threaded through `solve_melitz_finite_delta_bound`
+    # for its own initial-incumbent/terminal cold-verification calls).
+    # ========================================================================
+    @testset "Section 4.2: cross-delta cache reuse" begin
+        n42 = length(theta0_20)
+
+        @testset "MelitzExactPointCache: a verified entry from one melitz_build_finite_delta_callbacks call is a hit in a SEPARATE call at a different delta" begin
+            delta_A = max(r0_20.Delta * 5, 1e-3)
+            delta_B = max(r0_20.Delta * 3, 5e-4)
+            shared_cache = MelitzExactPointCache()
+
+            obj_A = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=delta_A,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            cbset_A = melitz_build_finite_delta_callbacks(obj_A, ctx20, delta_A, true;
+                exact_cache=shared_cache)
+            m42 = 1 + ctx20.D + ctx20.D * (ctx20.D - 1)
+            evA = MelitzMockEvalResult(zeros(1), zeros(m42), zeros(n42), zeros(n42 * m42))
+            cbset_A.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_20)), evA, nothing)
+            @test length(shared_cache.store) == 1
+            entry_A = only(values(shared_cache.store))
+            Delta_A, x_A, nStatus_A, H_A = entry_A
+
+            # a SEPARATE bundle/callback set, a DIFFERENT delta, but the SAME shared_cache:
+            # evaluating the IDENTICAL theta must hit the cache with ZERO new inner solves.
+            obj_B = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=delta_B,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            cbset_B = melitz_build_finite_delta_callbacks(obj_B, ctx20, delta_B, true;
+                exact_cache=shared_cache)
+            CounterfactualSensitivity.INNER_SOLVE_COUNT[] = 0
+            evB = MelitzMockEvalResult(zeros(1), zeros(m42), zeros(n42), zeros(n42 * m42))
+            cbset_B.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_20)), evB, nothing)
+            @test CounterfactualSensitivity.INNER_SOLVE_COUNT[] == 0   # cache hit, no new solve
+            @test cbset_B.n_exact_cache_hits[] == 1
+            @test length(shared_cache.store) == 1   # still just the one entry, not duplicated
+
+            # identical Delta/dual/H reused across the two different-delta callback sets.
+            G_B = Matrix(CounterfactualSensitivity.select_G_from_H(obj_B, obj_B.H))
+            G_A = Matrix(CounterfactualSensitivity.select_G_from_H(obj_A, obj_A.H))
+            @test G_B == G_A
+        end
+
+        @testset "MelitzDeltaEvalCache: solve at delta=1e-3, reuse at delta=1e-2 via solve_melitz_finite_delta_bound's own eval_cache" begin
+            eval_cache42 = MelitzDeltaEvalCache()
+            delta_loose1 = max(r0_20.Delta * 5, 1e-3)
+            delta_loose2 = max(r0_20.Delta * 8, 1e-2)
+
+            res1 = solve_melitz_finite_delta_bound(ctx20, obj20, theta0_20; delta=delta_loose1,
+                direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.0,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, eval_cache=eval_cache42)
+            misses_after_1 = eval_cache42.misses
+            @test length(eval_cache42.store) >= 1   # theta0_20's own initial/terminal eval cached
+
+            # theta_box=0.0 pins every coordinate at theta0_20 itself (zero degrees of
+            # freedom, the same mechanism melitz_fixed_point_probe uses) -- so this SECOND
+            # call, at a DIFFERENT delta, evaluates theta0_20 EXACTLY, which is already in
+            # eval_cache42 from the first call.
+            res2 = solve_melitz_finite_delta_bound(ctx20, obj20, theta0_20; delta=delta_loose2,
+                direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.0,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, eval_cache=eval_cache42)
+
+            @test eval_cache42.hits >= 1   # the second call's own initial-incumbent eval hit the cache
+            @test eval_cache42.misses == misses_after_1   # no NEW miss from the second call's initial eval
+
+            # identical Delta/dual/LFD/moments/checks -- theta0_20 is theta_INIT for both
+            # calls, so both calls' own `initial_incumbent` describe the SAME evaluation.
+            @test res1.initial_incumbent !== nothing && res2.initial_incumbent !== nothing
+            @test res1.initial_incumbent.eval.Delta == res2.initial_incumbent.eval.Delta
+            @test res1.initial_incumbent.eval.dual_x == res2.initial_incumbent.eval.dual_x
+            @test res1.initial_incumbent.eval.moment_residuals == res2.initial_incumbent.eval.moment_residuals
+            @test res1.initial_incumbent.eval.equilibrium_check == res2.initial_incumbent.eval.equilibrium_check
+        end
+
+        @testset "omitting exact_cache/eval_cache reproduces the pre-existing fresh-cache-per-call behavior" begin
+            delta_loose3 = max(r0_20.Delta * 5, 1e-3)
+            res_nocache = solve_melitz_finite_delta_bound(ctx20, obj20, theta0_20; delta=delta_loose3,
+                direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20)
+            @test res_nocache.initial_incumbent !== nothing
+            @test res_nocache.initial_incumbent.classification.outer_feasible
         end
     end
 
