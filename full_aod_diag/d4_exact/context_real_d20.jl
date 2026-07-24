@@ -25,8 +25,8 @@ include(joinpath(@__DIR__, "infeasibility_screen.jl"))   # -> precompute_pairwis
 const D20_REAL = 20
 
 "Build (so, pp, params_used) for the REAL D=20 economy at a given W, independent of AD_PARAMS."
-function build_ad_context_real_d20(; W::Int)
-    params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W))
+function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing)
+    params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx))
     so = master_setup(params)
     @assert so.D == D20_REAL "master_setup returned D=$(so.D), expected $(D20_REAL) -- real_data/noah_D20 CSVs may be malformed"
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
@@ -50,7 +50,16 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
         needs_outer_moment_jacobian::Bool = false,
-        build_screen::Bool = true)
+        build_screen::Bool = true,
+        # Part A (2026-07-23 release): omit-ROW-destination as the new production default.
+        # :exclude_row -- true dimension shrink (origins stay all 20, destinations become the 19
+        # named countries, ROW=country 20 dropped as destination/kept as origin; theta
+        # re-estimated on the rectangular sample). :all_legacy -- exact pre-Part-A square D x D
+        # behavior, bit-for-bit (regression-safety opt-out). No third option, no silent fallback.
+        destination_sample::Symbol = :exclude_row)
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("d20_real_setup: destination_sample must be :exclude_row or :all_legacy, got :$destination_sample")
+    row_idx = destination_sample == :exclude_row ? D20_REAL : nothing
     # false is the PRODUCTION default (matches run_fullA_D4_production.jl /
     # run_fullA_D10_production.jl -- neither needs an analytic outer moment
     # Jacobian, both use a ForwardDiff/Method-B gradient path instead), NOT
@@ -63,8 +72,9 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     # killed after climbing to ~780GB and still rising, headed past 1TB).
     # See docs/fullA_D20_production_path_audit.md and the continuation-9
     # W80k/W800k microbenchmark docs for the full incident writeup.
-    so, pp, params_used = build_ad_context_real_d20(W = W)
+    so, pp, params_used = build_ad_context_real_d20(W = W, row_idx = row_idx)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
+    Ddest = row_idx === nothing ? Dact : Dact - 1
     @unpack θ_initial, θ_initial_up, U, γ, outer_constr_index, nTotalMoments, complement_index, inequality_index = pp
     Aod_offset = 3 + Dact
 
@@ -81,13 +91,13 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     θ_lo[3+Dact] = bounds.γp_lo; θ_hi[3+Dact] = bounds.γp_hi
 
     l_full = length(θ0_up)
-    free_idx = vcat(3 + Dact, collect(Aod_offset+1:Aod_offset+Dact^2))
+    free_idx = vcat(3 + Dact, collect(Aod_offset+1:Aod_offset+Dact*Ddest))
     fixed_idx = vcat(1, 2, collect(3:2+Dact))
     fixed_vals = θ0_up[fixed_idx]
     m = CS.FreeParamMap(l_full, free_idx, fixed_idx, fixed_vals)
-    @assert CS.n_free(m) == 1 + Dact^2
+    @assert CS.n_free(m) == 1 + Dact * Ddest
 
-    Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Dact]
+    Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Ddest]
     τ = γ.τ
     q_tilde, N_obs = precompute_q_tilde(τ)
 
@@ -121,12 +131,16 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     screen_pairwise = nothing; screen_witness = nothing
     t_pairwise = NaN; t_witness = NaN
     if build_screen
-        ctx_min = (U = U, D = Dact)   # precompute_pairwise_M/build_extreme_draw_witness need only these two fields
+        # D = origin count, D_dest = destination count (Part A, 2026-07-23); precompute_pairwise_M
+        # needs only D (it's an origin x origin object), build_extreme_draw_witness/downstream
+        # screens need both -- see infeasibility_screen.jl.
+        ctx_min = (U = U, D = Dact, D_dest = Ddest)
         t_pairwise = @elapsed screen_pairwise = precompute_pairwise_M(ctx_min)
         t_witness = @elapsed screen_witness = build_extreme_draw_witness(ctx_min)
     end
 
-    return (so = so, pp = pp, D = Dact, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
+    return (so = so, pp = pp, D = Dact, D_dest = Ddest, row_idx = row_idx,
+            destination_sample = destination_sample, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
             θ0_up = θ0_up, θ_lo = θ_lo, θ_hi = θ_hi, l_full = l_full,
             free_idx = free_idx, fixed_idx = fixed_idx, fixed_vals = fixed_vals, m = m,
             Aod_offset = Aod_offset, Aod_free_pos = Aod_free_pos,

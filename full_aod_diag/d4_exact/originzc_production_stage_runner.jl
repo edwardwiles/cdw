@@ -97,6 +97,14 @@ const MEANZC_BASIS = Symbol(get(ENV, "MEANZC_BASIS", "direct"))
 const CM_GRADIENT_BACKEND = Symbol(get(ENV, "CM_GRADIENT_BACKEND", "cplus"))
 const CM_ALLOW_BACKEND_SWITCH = get(ENV, "CM_ALLOW_BACKEND_SWITCH", "0") == "1"
 
+# exclude-ROW-destination production release (2026-07-24): same env-driven opt-in as
+# cm_production_stage_runner.jl. Defaults to :exclude_row (PRODUCTION DEFAULT as of this release).
+# Combinable with cm_gradient_backend=:cplus (rectangularized + validated real D=20/W=80000, see
+# lfix_cplus_exclude_row_validation.jl). :all_legacy remains an explicit, reproduction-only opt-out.
+const CM_DESTINATION_SAMPLE = Symbol(get(ENV, "CM_DESTINATION_SAMPLE", "exclude_row"))
+CM_DESTINATION_SAMPLE in (:all_legacy, :exclude_row) ||
+    error("originzc_production_stage_runner: CM_DESTINATION_SAMPLE must be all_legacy|exclude_row, got $CM_DESTINATION_SAMPLE")
+
 const DRAW_SEED = 20260719   # fixed production draw seed -- see cm_production_stage_runner.jl's
                               # own comment; same problem-instance convention applies here.
 const W = 80_000
@@ -108,17 +116,22 @@ lp(">>> Julia threads: ", Threads.nthreads(), "  mode=", MODE, " delta=", DELTA,
    "s ckpt_dir=", CKPT_DIR, " chain_perturb_seed=", CHAIN_PERTURB_SEED,
    " distribution_restriction=", DISTRIBUTION_RESTRICTION, " K_mean=", ORIGIN_K_MEAN, " K_pair=", ORIGIN_K_PAIR,
    " power_target_layout=", POWER_TARGET_LAYOUT, " meanzc_basis=", MEANZC_BASIS,
-   " cm_gradient_backend=", CM_GRADIENT_BACKEND, CM_ALLOW_BACKEND_SWITCH ? " (allow_backend_switch=true)" : "")
+   " cm_gradient_backend=", CM_GRADIENT_BACKEND, CM_ALLOW_BACKEND_SWITCH ? " (allow_backend_switch=true)" : "",
+   " destination_sample=", CM_DESTINATION_SAMPLE)
 
 w0 = nothing
 resume_from = nothing
 
 if MODE == "calibration"
-    ctx0 = d20_real_setup(W = W, δ = DELTA, find_smallest = true)
+    # Part A (2026-07-23): d20_real_setup's default flipped to destination_sample=:exclude_row.
+    # Origin-ZC's own moment/pivot-elimination layer was rectangularized in the follow-up
+    # Lfix-gradient-layer pass (2026-07-24) -- CM_DESTINATION_SAMPLE now threads a real runtime
+    # choice through, default :all_legacy (unchanged behavior), :exclude_row opt-in.
+    ctx0 = d20_real_setup(W = W, δ = DELTA, find_smallest = true, destination_sample = CM_DESTINATION_SAMPLE)
     pe0 = build_pivot_elimination(ctx0)
-    D = ctx0.D
+    D = ctx0.D; Ddest = ctx0.D_dest
     x_free_calib = ctx0.θ0_up[ctx0.free_idx]
-    w_calib = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], D, D)), pe0))
+    w_calib = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], D, Ddest)), pe0))
     local rng_seed_used = nothing
     if CHAIN_PERTURB_SEED == 0
         w0 = w_calib
@@ -209,7 +222,8 @@ res = run_originzc_upper_checkpointed(resume_from === nothing ? w0 : nothing;
     label = "stage", checkpoint_interval_s = 30.0, resume_from = resume_from,
     cm_gradient_backend = CM_GRADIENT_BACKEND, allow_backend_switch = CM_ALLOW_BACKEND_SWITCH,
     distribution_restriction = DISTRIBUTION_RESTRICTION, K_mean = ORIGIN_K_MEAN, K_pair = ORIGIN_K_PAIR,
-    power_target_layout = POWER_TARGET_LAYOUT, meanzc_basis = MEANZC_BASIS)
+    power_target_layout = POWER_TARGET_LAYOUT, meanzc_basis = MEANZC_BASIS,
+    destination_sample = CM_DESTINATION_SAMPLE)
 
 lp(">>> STAGE result: knitro_status=", res.knitro_status, " wall=", round(res.wall, digits = 1),
    " n_eval=", res.n_eval, " n_grad=", res.n_grad,

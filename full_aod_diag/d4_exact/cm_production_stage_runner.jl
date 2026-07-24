@@ -69,6 +69,16 @@ const CM_GRADIENT_BACKEND = Symbol(get(ENV, "CM_GRADIENT_BACKEND", "cplus"))
 # DIFFERENT cm_gradient_backend than the checkpoint this stage is resuming was written with.
 const CM_ALLOW_BACKEND_SWITCH = get(ENV, "CM_ALLOW_BACKEND_SWITCH", "0") == "1"
 
+# exclude-ROW-destination production release (2026-07-24): env-driven opt-in, same pattern as
+# CM_GRADIENT_BACKEND above. Defaults to :exclude_row (PRODUCTION DEFAULT as of this release --
+# true D_origin/D_dest dimension shrink, ROW dropped as a destination only). Combinable with
+# cm_gradient_backend=:cplus (rectangularized + validated real D=20/W=80000, see
+# lfix_cplus_exclude_row_validation.jl). :all_legacy (square D x D) remains an explicit,
+# reproduction-only opt-out, byte-identical to every pre-existing CM production run.
+const CM_DESTINATION_SAMPLE = Symbol(get(ENV, "CM_DESTINATION_SAMPLE", "exclude_row"))
+CM_DESTINATION_SAMPLE in (:all_legacy, :exclude_row) ||
+    error("cm_production_stage_runner: CM_DESTINATION_SAMPLE must be all_legacy|exclude_row, got $CM_DESTINATION_SAMPLE")
+
 # CM+moments(+ZC) production integration (2026-07-23): env overrides, same pattern as
 # CM_GRADIENT_BACKEND above. Defaults to :cm_only (production default, unchanged behavior).
 const CM_EXTENSION = Symbol(get(ENV, "CM_EXTENSION", "cm_only"))
@@ -115,7 +125,8 @@ mkpath(CKPT_DIR)
 lp(">>> Julia threads: ", Threads.nthreads(), "  mode=", MODE, " delta=", DELTA, " budget=", BUDGET,
    "s ckpt_dir=", CKPT_DIR, " chain_perturb_seed=", CHAIN_PERTURB_SEED, " contrasts=", CM_CONTRASTS,
    " cm_gradient_backend=", CM_GRADIENT_BACKEND, CM_ALLOW_BACKEND_SWITCH ? " (allow_backend_switch=true)" : "",
-   " cm_extension=", CM_EXTENSION, IS_MEANZC ? " K_mean=$(MEANZC_K_MEAN) K_pair=$(MEANZC_K_PAIR) meanzc_basis=$(MEANZC_BASIS)" : "")
+   " cm_extension=", CM_EXTENSION, IS_MEANZC ? " K_mean=$(MEANZC_K_MEAN) K_pair=$(MEANZC_K_PAIR) meanzc_basis=$(MEANZC_BASIS)" : "",
+   " destination_sample=", CM_DESTINATION_SAMPLE)
 
 snaps = nested_grid_sequence([10, 20, 50])
 probs = snaps[L]
@@ -124,11 +135,15 @@ w0 = nothing
 resume_from = nothing
 
 if MODE == "calibration"
-    ctx0 = d20_real_setup(W = W, δ = DELTA, find_smallest = true)
+    # Part A (2026-07-23): d20_real_setup's default flipped to destination_sample=:exclude_row.
+    # CM's own moment/pivot-elimination layer (build_pivot_elimination et al) was rectangularized
+    # in the follow-up Lfix-gradient-layer pass (2026-07-24) -- CM_DESTINATION_SAMPLE now threads
+    # a real runtime choice through, default :all_legacy (unchanged behavior), :exclude_row opt-in.
+    ctx0 = d20_real_setup(W = W, δ = DELTA, find_smallest = true, destination_sample = CM_DESTINATION_SAMPLE)
     pe0 = build_pivot_elimination(ctx0)
-    D = ctx0.D
+    D = ctx0.D; Ddest = ctx0.D_dest
     x_free_calib = ctx0.θ0_up[ctx0.free_idx]
-    w_calib = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], D, D)), pe0))
+    w_calib = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], D, Ddest)), pe0))
     local rng_seed_used = nothing
     if CHAIN_PERTURB_SEED == 0
         w0 = w_calib
@@ -263,7 +278,7 @@ res = run_cm_upper_checkpointed(resume_from === nothing ? w0 : nothing;
     heartbeat_interval_s = 30.0,
     cm_gradient_backend = CM_GRADIENT_BACKEND, allow_backend_switch = CM_ALLOW_BACKEND_SWITCH,
     cm_extension = CM_EXTENSION, meanzc_K_mean = MEANZC_K_MEAN, meanzc_K_pair = MEANZC_K_PAIR,
-    meanzc_basis = MEANZC_BASIS)
+    meanzc_basis = MEANZC_BASIS, destination_sample = CM_DESTINATION_SAMPLE)
 
 lp(">>> STAGE result: knitro_status=", res.knitro_status, " wall=", round(res.wall, digits = 1),
    " n_eval=", res.n_eval, " n_grad=", res.n_grad,
