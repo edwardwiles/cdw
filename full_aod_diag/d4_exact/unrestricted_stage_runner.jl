@@ -88,7 +88,7 @@ res = run_profile_checkpointed("stage", g0, FIND_SMALLEST, zfree0;
 
 lp(">>> STAGE result: knitro_status=", res.knitro_status, " wall=", round(res.wall_ext, digits = 1),
    " n_eval=", res.n_eval,
-   " best=", res.best === nothing ? "nothing" : "gp=$(res.best.gp) Delta=$(res.best.Delta)")
+   " best=", res.best === nothing ? "nothing" : "Delta_dual=$(res.best.Delta_dual) n_eval=$(res.best.n_eval)")
 lp(">>> checkpoint: ", res.ckpt_path)
 lp(">>> screens(pw/wt/wn/env/wr/sn/pass)=", res.screen_counts)
 lp(">>> STAGE_DONE")
