@@ -82,6 +82,13 @@ lp("[6/2. cold value eval, complete callback] wall=", round(t_cold_val, digits=3
    "  inner_status=", r_cold.inner_status, "  screen_status=", meta_cold.screen_status)
 
 # ---- 3. exact same-point warm re-solve ----
+# DIAGNOSTIC ONLY -- does not occur on the production path. This deliberately passes
+# `cache=nothing, use_cache=false` to force a real KNITRO re-solve of a point whose value is
+# already known, purely to measure that cost as a comparison baseline. Every screened_eval call
+# inside the live c10_d20_production_driver.jl outer-loop callbacks (cb_F!/cb_G!/cb_newpt!) passes
+# a real, populated `exact_cache`, so an already-known point is always an O(1) cache hit there
+# (~0.000s, zero KNITRO calls) -- it never pays this "warm re-solve" cost. Do not cite this timing
+# figure as a production cost; see docs/GATEBC_POINT_AND_PRODUCTION_RESOLVE_AUDIT_2026-07-24.md.
 t0 = time()
 r_warm, meta_warm = evaluate_fullA_screened_ranged(xf0, ctx, rsc; moment_representation = :compressed,
     cache = nothing, use_cache = false, warm = true, tag = "",
