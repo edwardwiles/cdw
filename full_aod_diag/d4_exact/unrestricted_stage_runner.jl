@@ -16,9 +16,22 @@
 #   julia --project=. unrestricted_stage_runner.jl <ckpt_dir> <delta> <budget_s> <mode> <seed_arg>
 #
 # Env overrides (same pattern as cm_production_stage_runner.jl):
-#   DESTINATION_SAMPLE (exclude_row|all_legacy, default exclude_row -- the production default)
+#   DESTINATION_SAMPLE (all_legacy|exclude_row, default all_legacy -- see SCOPE NOTE below)
 #   PRICE_CACHE_BACKEND (default cplus)
 #   FIND_SMALLEST (1|0, default 1)
+#
+# ****************************************************************************************
+# **** SCOPE NOTE (exclude-ROW-destination production release, 2026-07-24): UNLIKE every  ****
+# **** other production entry point (CM/CM+ZC/origin-ZC all default to and are fully      ****
+# **** validated under destination_sample=:exclude_row), the UNRESTRICTED family here      ****
+# **** defaults to :all_legacy and HARD-ERRORS on :exclude_row. Its real per-point          ****
+# **** evaluation path (moment_representation=:compressed, compressed_moments.jl's          ****
+# **** CompressedFactual + fast_range_screen.jl) is square-D-only throughout and was        ****
+# **** never rectangularized -- this driver's own "Part A" was never touched by the         ****
+# **** validated omit-ROW work at all. See run_profile_checkpointed's own guard             ****
+# **** (c10_d20_production_driver.jl) and EXCLUDE_ROW_DESTINATION_PRODUCTION_RELEASE_       ****
+# **** 2026-07-24.md for the full rationale. Documented, scoped gap -- not silent.          ****
+# ****************************************************************************************
 # ============================================================================
 include(joinpath(@__DIR__, "c10_d20_production_driver.jl"))
 using Dates, Serialization
@@ -32,9 +45,11 @@ const MODE = ARGS[4]
 const SEED_ARG = length(ARGS) >= 5 ? ARGS[5] : nothing
 mkpath(CKPT_DIR)
 
-const DESTINATION_SAMPLE = Symbol(get(ENV, "DESTINATION_SAMPLE", "exclude_row"))
-DESTINATION_SAMPLE in (:exclude_row, :all_legacy) ||
-    error("unrestricted_stage_runner: DESTINATION_SAMPLE must be exclude_row|all_legacy, got $DESTINATION_SAMPLE")
+const DESTINATION_SAMPLE = Symbol(get(ENV, "DESTINATION_SAMPLE", "all_legacy"))
+DESTINATION_SAMPLE === :all_legacy ||
+    error("unrestricted_stage_runner: DESTINATION_SAMPLE=:$DESTINATION_SAMPLE requested, but the UNRESTRICTED " *
+          "family only supports :all_legacy -- see this file's own SCOPE NOTE header and " *
+          "run_profile_checkpointed's identical guard (c10_d20_production_driver.jl) for the full rationale.")
 const PRICE_CACHE_BACKEND = Symbol(get(ENV, "PRICE_CACHE_BACKEND", "cplus"))
 const FIND_SMALLEST = get(ENV, "FIND_SMALLEST", "1") == "1"
 const W = 80_000
@@ -42,7 +57,7 @@ const DRAW_SEED = 20260719
 
 lp(">>> Julia threads: ", Threads.nthreads(), "  mode=", MODE, " delta=", DELTA, " budget=", BUDGET,
    "s ckpt_dir=", CKPT_DIR, " destination_sample=", DESTINATION_SAMPLE,
-   DESTINATION_SAMPLE == :exclude_row ? " (production default)" : " (legacy/reproduction-only)",
+   " (unrestricted family: :all_legacy only -- :exclude_row unsupported, see SCOPE NOTE)",
    " price_cache_backend=", PRICE_CACHE_BACKEND, " find_smallest=", FIND_SMALLEST)
 
 resume_from = nothing

@@ -36,8 +36,16 @@ the `reuse=` keyword.
 """
 function build_fullA_context(; W::Int, δ::Float64, find_smallest::Bool,
         draw_design::Symbol, draw_seed::Int, inner_loop_opt::Union{Nothing,AbstractString} = nothing,
-        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
-        # (2026-07-24): see run_profile_checkpointed's identical kwarg.
+        destination_sample::Symbol = :all_legacy)   # exclude-ROW-destination production release
+        # (2026-07-24): the unrestricted family only supports :all_legacy -- see
+        # run_profile_checkpointed's identical kwarg/scope-note in c10_d20_production_driver.jl
+        # (compressed_moments.jl/fast_range_screen.jl square-D-only, out of scope for this release).
+        # Defaults to :all_legacy HERE ONLY (every other production entry point defaults to
+        # :exclude_row); d20_real_setup_design itself hard-errors on :exclude_row for anything
+        # other than draw_design=:pseudorandom regardless, so this is enforced downstream too.
+    destination_sample === :all_legacy ||
+        error("build_fullA_context: destination_sample=:$destination_sample requested, but the unrestricted " *
+              "family only supports :all_legacy -- see run_profile_checkpointed's identical guard.")
     ctx = inner_loop_opt === nothing ?
         d20_real_setup_design(W = W, δ = δ, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample) :
         d20_real_setup_design(W = W, δ = δ, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_loop_opt, destination_sample = destination_sample)
@@ -72,7 +80,7 @@ exempt -- that's exactly the field reuse is meant to override). Prevents silentl
 a context built for a different problem instance.
 """
 function reuse_matches(reuse::NamedTuple; W::Int, find_smallest::Bool, draw_design::Symbol, draw_seed::Int,
-        destination_sample::Symbol = :exclude_row)
+        destination_sample::Symbol = :all_legacy)   # unrestricted family only supports :all_legacy -- see build_fullA_context
     ctx = reuse.ctx
     return ctx.W == W && ctx.find_smallest == find_smallest &&
            ctx.draw_design == draw_design && ctx.draw_seed == draw_seed &&

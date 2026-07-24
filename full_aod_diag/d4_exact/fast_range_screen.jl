@@ -860,7 +860,12 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
     if use_witness
         B = hard_score_B(ctx)
         wt = witness === nothing ? (ctx.witness === nothing ? build_extreme_draw_witness(ctx) : ctx.witness) : witness
-        for d in 1:ctx.D, o in 1:ctx.D
+        for (o, d) in active_od_cells(ctx)
+            # exclude-ROW-destination production release (2026-07-24): was `for d in 1:ctx.D, o in
+            # 1:ctx.D`, a genuine D_origin==D_destination hot-path assumption -- Pmat = target_shares(ctx)
+            # is D x D_dest, so under :exclude_row (D_dest=19) that indexed Pmat[o,20] out of bounds.
+            # active_od_cells(ctx) (cc_algo/active_layout.jl) is the canonical origin/destination
+            # iterator and correctly matches Pmat's actual shape under either regime.
             Pmat[o, d] > 0 || continue
             exists, s, ntested, csize = query_witness(o, d, a, B, wt)
             if !exists
@@ -913,7 +918,12 @@ function evaluate_fullA_screened_ranged(x_free::AbstractVector{Float64}, ctx, rs
         # this is the cheap O(D^2)+O(W) packaging step, NOT a winner rescan) and reuse it for
         # both the general range-screen safety net (step 6) and the real inner solve (step 5),
         # rather than building it twice.
-        wres_dummy = WinnerScreenResult(true, ctx.D, 0, 0, collect(order), winner_reuse, wval_reuse, zeros(Int, ctx.D, ctx.D))
+        # exclude-ROW-destination production release (2026-07-24): win_counts is documented as
+        # D(origin) x D(destination) (infeasibility_screen.jl's own WinnerScreenResult docstring)
+        # -- was `zeros(Int, ctx.D, ctx.D)`, wrong under :exclude_row (D_dest != D). Falls back to
+        # ctx.D for legacy contexts that don't carry D_dest.
+        wres_dummy = WinnerScreenResult(true, ctx.D, 0, 0, collect(order), winner_reuse, wval_reuse,
+            zeros(Int, ctx.D, hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D))
         cf = compressed_factual_from_screen(θ_full, ctx, wres_dummy)
 
         safety_hit = nothing
