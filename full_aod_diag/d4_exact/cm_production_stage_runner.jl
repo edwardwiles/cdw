@@ -39,6 +39,7 @@ include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
 include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
 include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
 include(joinpath(@__DIR__, "cm_production_bundle.jl"))
+include(joinpath(@__DIR__, "cm_screen_bridge.jl"))   # Part B restoration (2026-07-23 release): wires pairwise/hard-winner/witness screens into the CM inner-solve path
 include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))   # overnight task 2026-07-22: CM-aware C+ backend, opt-in via cm_gradient_backend=:cplus
 include(joinpath(@__DIR__, "nested_quantile_grids.jl"))
 include(joinpath(@__DIR__, "cm_outer_driver.jl"))
@@ -189,7 +190,7 @@ if MODE == "calibration"
                 νvec0 = exp.(w0[D2_econ0+1:end])
                 pcx0 = build_cm_meanzc_production_context(ctx0, CS; L = L, K_mean = MEANZC_K_MEAN, K_pair = MEANZC_K_PAIR,
                     contrasts = CM_CONTRASTS, meanzc_basis = MEANZC_BASIS, probs = probs)
-                _, _, verify0 = cm_meanzc_production_value_verified(xf0, νvec0, pcx0)
+                _, _, verify0 = cm_meanzc_production_value_verified_screened(xf0, νvec0, pcx0)
                 isfinite(verify0.Delta_dual) || error("Delta_dual is not finite at the (possibly perturbed) start point")
                 lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
             else

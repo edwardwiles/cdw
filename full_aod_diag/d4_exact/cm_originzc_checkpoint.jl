@@ -253,7 +253,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     if backend_switched && resumed.best_feasible !== nothing
         xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
         νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
-        (_, _, vs) = cm_originzc_production_value_verified(xf_switch, νvec_switch, pcx)
+        (_, _, vs) = cm_originzc_production_value_verified_screened(xf_switch, νvec_switch, pcx)
         is_verified_success(vs) ||
             error("run_originzc_upper_checkpointed($label): backend switch on resume requested, but the resumed " *
                   "incumbent FAILED independent cold re-verification under the new backend -- refusing to carry it forward.")
@@ -319,7 +319,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         νvec = exp.(w[D2_econ+1:end])
         local base, verify
         try
-            _, base, verify = cm_originzc_production_value_verified(xf, νvec, pcx)
+            _, base, verify = cm_originzc_production_value_verified_screened(xf, νvec, pcx)
         catch e
             e isa CMExpectedSolveFailure || rethrow()
             reject_point(w[1], "run_originzc_upper_checkpointed($label): infeasible/failed inner solve at this point")
@@ -382,7 +382,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     local verify_final
     try
         νvec_final = exp.(xsol_v[D2_econ+1:end])
-        _, _, verify_final = cm_originzc_production_value_verified(xf_final, νvec_final, pcx)
+        _, _, verify_final = cm_originzc_production_value_verified_screened(xf_final, νvec_final, pcx)
     catch e
         e isa CMExpectedSolveFailure || rethrow()
         verify_final = (inner_status = -300,)

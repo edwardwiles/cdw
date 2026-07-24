@@ -56,6 +56,7 @@ include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
 include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
 include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
 include(joinpath(@__DIR__, "cm_production_bundle.jl"))
+include(joinpath(@__DIR__, "cm_screen_bridge.jl"))   # Part B restoration (2026-07-23 release): wires pairwise/hard-winner/witness screens into the origin-ZC inner-solve path
 include(joinpath(@__DIR__, "gradient_workspace.jl"))
 include(joinpath(@__DIR__, "lfix_factorized.jl"))
 include(joinpath(@__DIR__, "lfix_factorized_workspace.jl"))
@@ -163,7 +164,7 @@ if MODE == "calibration"
     let D2_econ0 = length(w0) - length(eta0), xf0 = x_free_from_w(w0[1:D2_econ0], pe0)
         try
             pcx0 = build_originzc_production_context(ctx0, CS, layout)
-            _, _, verify0 = cm_originzc_production_value_verified(xf0, exp.(eta0), pcx0)
+            _, _, verify0 = cm_originzc_production_value_verified_screened(xf0, exp.(eta0), pcx0)
             isfinite(verify0.Delta_dual) || error("Delta_dual is not finite at the (possibly perturbed) start point")
             lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
         catch e

@@ -505,9 +505,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
         verify_switch = if is_meanzc
             νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
-            (_, _, vs) = cm_meanzc_production_value_verified(xf_switch, νvec_switch, pcx); vs
+            (_, _, vs) = cm_meanzc_production_value_verified_screened(xf_switch, νvec_switch, pcx); vs
         else
-            (_, _, vs) = cm_production_value_verified(xf_switch, pcx); vs
+            (_, _, vs) = cm_production_value_verified_screened(xf_switch, pcx); vs
         end
         is_verified_success(verify_switch) ||
             error("run_cm_upper_checkpointed($label): backend switch on resume requested (allow_backend_switch=true), " *
@@ -592,9 +592,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         local base, verify
         try
             if is_meanzc
-                _, base, verify = cm_meanzc_production_value_verified(xf, νvec, pcx)
+                _, base, verify = cm_meanzc_production_value_verified_screened(xf, νvec, pcx)
             else
-                _, base, verify = cm_production_value_verified(xf, pcx)
+                _, base, verify = cm_production_value_verified_screened(xf, pcx)
             end
         catch e
             # Closure task Phase 3B: narrowed further to the dedicated CMExpectedSolveFailure
@@ -699,9 +699,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     try
         if is_meanzc
             νvec_final = exp.(xsol_v[D2_econ+1:end])
-            _, _, verify_final = cm_meanzc_production_value_verified(xf_final, νvec_final, pcx)
+            _, _, verify_final = cm_meanzc_production_value_verified_screened(xf_final, νvec_final, pcx)
         else
-            _, _, verify_final = cm_production_value_verified(xf_final, pcx)
+            _, _, verify_final = cm_production_value_verified_screened(xf_final, pcx)
         end
     catch e
         # Closure task Phase 3B: narrowed further to the dedicated CMExpectedSolveFailure type

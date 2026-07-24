@@ -96,6 +96,10 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_constr_index = outer_constr_index, inequality_index = inequality_index,
         complement_index = complement_index, l = l_full, U = U, N = params_used.Jac_W,
         lower_limit = -50, use_cached_x = true,
+        # Part C (2026-07-23 release): delta_auto_reject_threshold=10 production default, gated
+        # by the compatibility rule (disables automatically once delta is no longer safely below
+        # 10) -- separate from and does not change the pre-existing lower_limit=-50 backstop above.
+        threshold_state = CS.ThresholdAbortState(CS.resolve_threshold_for_delta(δ)),
         outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
         needs_outer_moment_jacobian = needs_outer_moment_jacobian)
     @assert obj.outer_constr_index == obj.d

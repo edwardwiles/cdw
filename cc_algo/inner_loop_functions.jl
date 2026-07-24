@@ -27,7 +27,16 @@ function callbackEvalFG_inner!(kc, cb, evalRequest, evalResult, userParams)
 
     obj = userParams
     x = evalRequest.x
-    evalResult.obj[1] = obj(x, evalResult.objGrad)
+    f = obj(x, evalResult.objGrad)
+    evalResult.obj[1] = f
+
+    # ADDITIVE (Part C, 2026-07-23 release): immediate certified-lower-bound early abort.
+    # No-op (nothing) for every bundle type except PsiObjectiveBundleImplicit with a finite
+    # threshold configured -- see cc_algo/threshold_early_abort.jl for the sign identity.
+    # Throws InterruptException(), which KNITRO.jl's C_wrapper.jl `_try_catch_handler` turns
+    # into a clean KN_RC_USER_TERMINATION solver abort (NOT a DomainError backtrack).
+    st = _threshold_state(obj)
+    st === nothing || maybe_abort_on_threshold!(st, f)
 
     return 0
 
@@ -52,6 +61,7 @@ function inner_loop_KNITRO(obj)
     # active when an inner solve is launched (or vice versa), instead of silently racing.
     guard_enter_inner_solve!()
     try
+        _reset_threshold_for_new_solve!(obj)   # ADDITIVE (Part C): clear stale abort state from a prior solve
         kc = KNITRO.KN_new()
 
 

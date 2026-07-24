@@ -39,10 +39,16 @@ export outer_loop,
        write_trace_csv,
        outer_loop_cached,
        reset_jac_h_counters!,
-       jac_h_counters_snapshot
+       jac_h_counters_snapshot,
+       CertifiedDivergenceLowerBound,
+       ThresholdAbortState,
+       threshold_abort_result,
+       resolve_threshold_for_delta,
+       threshold_permits_reject
 
 include("knitro_compat.jl")   # restore KNITRO.jl 0.13/0.14 convenience wrappers on v1.2.1
 include("Psi.jl")
+include("threshold_early_abort.jl")   # Part C: must precede PsiObjectiveBundle.jl (adds a field to Implicit)
 include("ObjectiveBundle.jl")
 include("jac_h_instrumentation.jl")   # additive counters/timers + no-jac_h default helpers, must precede PsiObjectiveBundle.jl
 include("KLObjectiveBundle.jl")

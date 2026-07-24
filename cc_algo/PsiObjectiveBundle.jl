@@ -269,7 +269,14 @@ end
     ∂c_∂θ               ::Array{Float64,2} = zeros(d - outer_constr_index + 2, l)
     ∂∂f_∂∂x             ::Array{Float64,2} = zeros(length(x), length(x))
     ∂∂f_∂x∂θ            ::Array{Float64,2} = zeros(length(x), l)
+    # ADDITIVE (Part C, 2026-07-23 release): threshold-early-abort state. Default threshold=Inf
+    # (disabled) preserves byte-identical behavior for every caller that does not opt in --
+    # see cc_algo/threshold_early_abort.jl for the sign identity and termination mechanism.
+    threshold_state     ::ThresholdAbortState = ThresholdAbortState()
 end
+
+_threshold_state(obj::PsiObjectiveBundleImplicit) = obj.threshold_state
+_reset_threshold_for_new_solve!(obj::PsiObjectiveBundleImplicit) = reset_for_new_solve!(obj.threshold_state)
 
 # Inner-loop objective function, gradient, and Jacobian of constraints for K program, implicit-dependence case
 function (Q::PsiObjectiveBundleImplicit)(x, g = Float64[], θ = Float64[]; h = Float64[], constr = Float64[], jac = Array{Float64}(undef, 0, 0))
