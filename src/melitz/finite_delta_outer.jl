@@ -320,14 +320,24 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
     l = length(theta_free_init)
     lower_limit = lower_limit_guard === nothing ? -KNITRO.KN_INFINITY : -(Float64(delta) + Float64(lower_limit_guard))
 
+    # ADDITIVE (continuation4, Section 4): the two new "direct" backends never touch
+    # moments_jacobian!/jac_h at all -- cb_G! (below) bypasses this bundle's own theta-branch
+    # entirely for them, calling melitz_gradient_delta_direct_{serial,parallel}! directly
+    # instead. moments_jacobian! is left at its `error` sentinel default (dead code on this
+    # path, never invoked) and needs_outer_moment_jacobian=false skips the dense jac_h
+    # allocation on this (outer Implicit) bundle -- the genuinely memory-scalable case the
+    # governing prompt's Section 4 asks for (no W x K x n tensor anywhere, not even zeroed).
+    is_direct = gradient_backend in (:B_direct_argument_serial, :B_direct_argument_parallel)
     mj! = gradient_backend == :B ? make_melitz_moments_jacobian_b(h) :
           gradient_backend == :B_localized ? make_melitz_moments_jacobian_b_localized(h) :
           gradient_backend == :B_localized_parallel ? make_melitz_moments_jacobian_b_localized_parallel(h) :
           gradient_backend == :B_argument_localized_serial ? make_melitz_moments_jacobian_b_argument_localized_serial(h) :
           gradient_backend == :B_argument_localized_parallel ? make_melitz_moments_jacobian_b_argument_localized_parallel(h) :
           gradient_backend == :D ? make_melitz_moments_jacobian_d() :
+          is_direct ? error :
           error("gradient_backend must be :B, :B_localized, :B_localized_parallel, " *
-                ":B_argument_localized_serial, :B_argument_localized_parallel, or :D for " *
+                ":B_argument_localized_serial, :B_argument_localized_parallel, " *
+                ":B_direct_argument_serial, :B_direct_argument_parallel, or :D for " *
                 "the KNITRO-native Implicit path (Backend R does not fit the moments_jacobian! hook -- see file header)")
 
     obj = PsiObjectiveBundleImplicit(
@@ -344,6 +354,7 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
         inner_loop_opt=inner_loop_opt,
         outer_loop_opt=outer_loop_opt,
         lower_limit=lower_limit,
+        needs_outer_moment_jacobian=!is_direct,
     )
     return obj
 end
@@ -593,9 +604,19 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                                               screen_order::Symbol=:A,
                                               warm_start_source::Symbol=:previous,
                                               exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
-                                              dual_bank_max_size::Int=8)
+                                              dual_bank_max_size::Int=8,
+                                              gradient_backend::Symbol=:B,
+                                              h::Real=1e-4)
     cutoff_constraint_backend in (:linear, :nonlinear_reference) || throw(ArgumentError(
         "cutoff_constraint_backend must be :linear or :nonlinear_reference, got $cutoff_constraint_backend"))
+    # ADDITIVE (continuation4, Section 4): when gradient_backend is one of the two "direct"
+    # backends, cb_G! (below) calls this closure directly instead of the shared
+    # PsiObjectiveBundleImplicit functor's own theta-branch (obj(x, dummy_g, theta; jac=...)),
+    # which would otherwise touch jac_h. `nothing` (the ordinary case) leaves cb_G! exactly as
+    # before -- purely additive, zero behavior change for every existing gradient_backend value.
+    direct_gradient_fn = gradient_backend == :B_direct_argument_serial ? make_melitz_gradient_delta_direct_serial(h) :
+                         gradient_backend == :B_direct_argument_parallel ? make_melitz_gradient_delta_direct_parallel(h) :
+                         nothing
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
     live_candidates = MelitzOuterCandidate[]
     n_inner_eval_failures = Ref(0)
@@ -834,9 +855,17 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             evalResult.objGrad .= 0.0
             evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
 
-            dummy_g = zeros(n_)
             local_jac = zeros(n_)
-            @melitz_profile :ga_divergence_gradient obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
+            if direct_gradient_fn === nothing
+                dummy_g = zeros(n_)
+                @melitz_profile :ga_divergence_gradient obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
+            else
+                # Section 4: direct fixed-dual gradient-vector backend -- computes
+                # d(1e10*Delta)/dtheta directly (direct_gradient.jl), bypassing the shared
+                # functor's theta-branch/jac_h entirely. `obj.H`/`x` are already the correct
+                # base state at this `theta` (inner_solve_verified_or_fail just ensured it).
+                @melitz_profile :ga_divergence_gradient direct_gradient_fn(local_jac, theta, ctx, obj, x)
+            end
             evalResult.jac[1:n_] .= local_jac ./ (1e10 * delta)   # Section 4.2: same scaling as the value
 
             if cutoff_constraint_backend == :nonlinear_reference
@@ -1060,7 +1089,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         dual_polish_screen=dual_polish_screen, dual_polish_steps=dual_polish_steps,
         origin_block_screen=origin_block_screen, screen_order=screen_order,
         warm_start_source=warm_start_source, exact_cache=exact_cache,
-        dual_bank_max_size=dual_bank_max_size)
+        dual_bank_max_size=dual_bank_max_size, gradient_backend=gradient_backend, h=h)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -1187,7 +1216,7 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
 
     cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
-        cutoff_constraint_backend=cutoff_constraint_backend)
+        cutoff_constraint_backend=cutoff_constraint_backend, gradient_backend=gradient_backend, h=h)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)

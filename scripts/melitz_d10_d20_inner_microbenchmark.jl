@@ -11,7 +11,7 @@
 using Printf
 include(joinpath(@__DIR__, "melitz_finite_delta_campaign.jl"))
 
-function bench_one(D, W; blas_threads=(1, 2, 4, 8, 16, 20, 208))
+function bench_one(D, W; blas_threads=(1, 2, 4, 8, 16, 20))
     println("\n", "="^100)
     @printf("D=%d  W=%d  K=%d economic moments\n", D, W, D^2 + 1)
     println("="^100)
@@ -27,7 +27,12 @@ function bench_one(D, W; blas_threads=(1, 2, 4, 8, 16, 20, 208))
     data = generate_fake_melitz_data(; D=D, sigma=2.5, theta_star=6.8, target_country=1, seed=29, W=W,
         min_participation_prob=(D == 4 ? 0.01 : 0.002))
     inner_opt = joinpath(dirname(@__DIR__), "melitz_inner_loop_options.opt")
-    obj, theta0 = build_melitz_psi_bundle(data; inner_loop_opt=inner_opt)
+    # jac_h fix (continuation4, cc_algo/PsiObjectiveBundle.jl): this script is a pure fixed-theta
+    # inner-solve microbenchmark (never an outer theta-gradient search on this bundle) -- the
+    # unconditional dense jac_h this bundle used to allocate was the actual root cause of this
+    # exact script hanging/thrashing at D=20 (docs/melitz_optimization_report_2026-07-23_continuation3.md
+    # Section 9). needs_outer_moment_jacobian=false skips that dead allocation entirely.
+    obj, theta0 = build_melitz_psi_bundle(data; inner_loop_opt=inner_opt, needs_outer_moment_jacobian=false)
     ctx = obj.γ
 
     rows = NamedTuple[]

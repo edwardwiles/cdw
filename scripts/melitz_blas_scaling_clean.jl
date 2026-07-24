@@ -6,26 +6,19 @@
 # every subsequently timed call is post-JIT, (2) benchmarks repeated trials in RANDOMIZED
 # thread-count order (not monotonic 1,2,4,...), (3) reports median AND minimum warm time.
 #
-# D=20 is DELIBERATELY NOT attempted at production W (80,000) by this script -- see this
-# session's own memory audit (docs/melitz_optimization_report_2026-07-23_continuation3.md
+# D=20 was previously DELIBERATELY NOT attempted at production W (80,000) by this script --
+# see this session's own memory audit (docs/melitz_optimization_report_2026-07-23_continuation3.md
 # Section F): `PsiObjectiveBundleDelta`'s constructor (`cc_algo/PsiObjectiveBundle.jl` line
-# ~425, `build_melitz_psi_bundle`'s own bundle type) unconditionally allocates a dense
+# ~425, `build_melitz_psi_bundle`'s own bundle type) unconditionally allocated a dense
 # `jac_h::Array{Float64,3}` sized `(N, d+2, l)` REGARDLESS of whether the outer-gradient
 # machinery that consumes it is ever invoked -- `2*W*D^4` elements at this problem's scale,
-# ~51.5GB at D=20/W=20,000 and ~205.8GB at D=20/W=80,000 for a SINGLE object, confirmed live
-# this session by directly reproducing the prior session's own "D=20 fixture generation hangs
-# 8m46s+" finding: the fixture itself (`generate_fake_melitz_data`) was independently
-# reproduced completing in ~4.0s (see the Section 9 profiling script) -- the actual hang is
-# this jac_h allocation inside `build_melitz_psi_bundle`, not fixture construction. Building
-# even ONE `PsiObjectiveBundleDelta` at D=20/W=20,000 for this script's own BLAS-sweep
-# purpose would repeat that same multi-minute-plus cost for no benefit (the resulting object
-# is never used for its outer-gradient jac_h at all here) -- fixing this (an additive
-# `needs_outer_moment_jacobian`-style kwarg, exactly mirroring the SAME escape hatch already
-# built for `PsiObjectiveBundleImplicit`, cc_algo/PsiObjectiveBundle.jl line ~266) is a
-# SHARED cc_algo change (used by the Ricardian/fullA production line too) flagged as a
-# HIGH-PRIORITY prerequisite for any future D=20 live campaign, not attempted in this
-# session given the correctness/production-risk of modifying shared infrastructure outside
-# this session's own narrow Melitz mandate without a dedicated validation pass.
+# ~51.5GB at D=20/W=20,000 and ~205.8GB at D=20/W=80,000 for a SINGLE object.
+#
+# FIXED (continuation4 session): `PsiObjectiveBundleDelta` now mirrors `PsiObjectiveBundleImplicit`'s
+# own `needs_outer_moment_jacobian` escape hatch (`cc_algo/PsiObjectiveBundle.jl`). A call-graph
+# audit confirmed jac_h is NEVER read on this bundle type's only actual use pattern in this repo
+# (fixed-theta inner CC dual solves via `inner_loop_KNITRO`, which never passes a nonempty θ to the
+# functor) -- so `needs_outer_moment_jacobian=false` is safe here and unblocks D=20/W=80,000.
 #
 # Usage: julia --project=. scripts/melitz_blas_scaling_clean.jl
 
@@ -41,7 +34,7 @@ function bench_blas_clean(D, W; blas_threads=(1, 2, 4, 8, 16, 20), n_trials=5,
     data = generate_fake_melitz_data(; D=D, sigma=2.5, theta_star=6.8, target_country=1, seed=29, W=W,
         min_participation_prob=min_participation_prob)
     inner_opt = joinpath(dirname(@__DIR__), "melitz_inner_loop_options.opt")
-    obj, theta0 = build_melitz_psi_bundle(data; inner_loop_opt=inner_opt)
+    obj, theta0 = build_melitz_psi_bundle(data; inner_loop_opt=inner_opt, needs_outer_moment_jacobian=false)
     CS = CounterfactualSensitivity
 
     # Warm the COMPLETE inner path once, post-JIT, before any timed trial.
@@ -81,6 +74,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
     append!(all_rows, bench_blas_clean(4, 20_000))
     append!(all_rows, bench_blas_clean(10, 20_000))
     append!(all_rows, bench_blas_clean(10, 80_000))
+    append!(all_rows, bench_blas_clean(20, 20_000))
+    append!(all_rows, bench_blas_clean(20, 80_000))
     println("\n", "="^100)
     println("SUMMARY (median warm wall time, randomized-order trials)")
     println("="^100)

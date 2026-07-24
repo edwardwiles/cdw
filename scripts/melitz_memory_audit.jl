@@ -36,6 +36,24 @@ function audit_dims_argument_localized(D, W, nt, maxcols)
         zero_fill_bytes_per_gradient)
 end
 
+function audit_dims_direct(D, W, nt, maxcols)
+    K = D^2 + 1
+    n = 2 * D^2 - 2
+    # Continuation4, Section 4/7: direct_gradient.jl's per-thread scratch -- arg0_base is
+    # SHARED (built once, O(W), not per-thread), Gp/Gm are (W,maxcols) per thread (same sizing
+    # as the argument-localized backend's own probe buffers), plus 5 more O(W) vectors per
+    # thread (linkp, linkm, profit, u_plus, u_minus, psi_buf -- 6 total). NO jac_h tensor is
+    # ever allocated, read, or zeroed -- the only "K"-scale reads are single-column views
+    # (`obj.H[:, 2+gcol]`), not a materialized (W,K) or (W,K,n) array.
+    shared_arg0_bytes = W * 8
+    per_thread_buf_bytes = 2 * W * maxcols * 8 + 6 * W * 8   # Gp+Gm (W,maxcols) + 6x O(W) vectors
+    total_thread_scratch_bytes = nt * per_thread_buf_bytes
+    output_bytes = n * 8   # the ONLY per-gradient persistent output: a length-n vector
+    jac_h_tensor_bytes = 0   # never allocated for this backend (needs_outer_moment_jacobian=false)
+    return (; D, K, n, W, nt, maxcols, shared_arg0_bytes, per_thread_buf_bytes,
+        total_thread_scratch_bytes, output_bytes, jac_h_tensor_bytes)
+end
+
 if abspath(PROGRAM_FILE) == @__FILE__
     println("=== LIVE D=4 measurement ===")
     data = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8, target_country=1, seed=29, W=20_000)
@@ -86,4 +104,32 @@ if abspath(PROGRAM_FILE) == @__FILE__
             D, fmt_bytes(full.total_copy_bytes_per_gradient), fmt_bytes(argl.total_thread_scratch_bytes),
             full.total_copy_bytes_per_gradient / argl.total_thread_scratch_bytes)
     end
+
+    println()
+    println("=== :B_direct_argument_parallel (continuation4 NEW backend): no jac_h tensor at all ===")
+    for (D, W, nt, maxcols) in [(4, 20_000, nt_live, maxcols_live), (4, 20_000, 16, maxcols_live),
+                                  (10, 80_000, 16, 10 + 4), (20, 80_000, 16, 20 + 4)]
+        d = audit_dims_direct(D, W, nt, maxcols)
+        argl = audit_dims_argument_localized(D, W, nt, maxcols)
+        @printf("D=%2d W=%6d nt=%2d maxcols=%3d | per-thread scratch=%s | total thread scratch=%s | output=%s | jac_h tensor=NEVER ALLOCATED (argument-localized backend needs %s)\n",
+            d.D, d.W, d.nt, d.maxcols, fmt_bytes(d.per_thread_buf_bytes), fmt_bytes(d.total_thread_scratch_bytes),
+            fmt_bytes(d.output_bytes), fmt_bytes(argl.zero_fill_bytes_per_gradient))
+    end
+
+    println()
+    println("=== Live @allocated check, D=4/W=20,000: direct backend allocates O(W), not O(W*K*n) ===")
+    obj_impl = build_melitz_implicit_bundle(ctx, obj.U, theta0; delta=1.0, find_smallest=true,
+        gradient_backend=:B_direct_argument_serial, h=1e-4, inner_loop_opt=inner_opt,
+        outer_loop_opt=joinpath(dirname(@__DIR__), "melitz_outer_finite_delta.opt"))
+    @printf("obj_impl.jac_h size = %s (needs_outer_moment_jacobian=%s)\n",
+        size(obj_impl.jac_h), obj_impl.needs_outer_moment_jacobian)
+    obj_impl.use_cached_x = false; obj_impl.x .= NaN
+    _, x_live, nStatus_live = CounterfactualSensitivity.inner_loop_internal(obj_impl, theta0)
+    @printf("live inner solve nStatus=%d\n", nStatus_live)
+    direct_fn = make_melitz_gradient_delta_direct_serial(1e-4)
+    g_live = zeros(length(theta0))
+    direct_fn(g_live, theta0, ctx, obj_impl, x_live)   # warm-up (JIT + buffer allocation)
+    bytes_warm = @allocated direct_fn(g_live, theta0, ctx, obj_impl, x_live)
+    @printf("post-warm-up @allocated for one full direct-backend gradient call: %s (expected ~0, all scratch reused)\n",
+        fmt_bytes(bytes_warm))
 end

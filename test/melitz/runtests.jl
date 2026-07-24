@@ -44,6 +44,7 @@ include(joinpath(MELITZ_DIR, "inner_screening.jl"))
 include(joinpath(MELITZ_DIR, "origin_block_screen.jl"))
 include(joinpath(MELITZ_DIR, "localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "argument_localized_gradient.jl"))
+include(joinpath(MELITZ_DIR, "direct_gradient.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 
 # ============================================================================
@@ -1241,6 +1242,95 @@ if KNITRO_AVAILABLE
                 @test maxcols13 < K13            # strictly fewer columns than the full moment count
                 @test maxcols13 <= D13 + 4        # bounded by O(D), the dependency-map's own claim
             end
+        end
+    end
+
+    # ========================================================================
+    # Continuation4 session, Section 4: the direct fixed-dual gradient-VECTOR backend
+    # (src/melitz/direct_gradient.jl). Self-contained fixture (own small Implicit bundle,
+    # one real inner solve for a genuine dual x).
+    # ========================================================================
+    @testset "Continuation4 Section 4: direct fixed-dual gradient backend (:B_direct_argument_serial/_parallel)" begin
+        fixture_dg = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        inner_opt_dg = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        outer_opt_dg = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+        obj_dg_inner, theta_dg = build_melitz_psi_bundle(fixture_dg; inner_loop_opt=inner_opt_dg,
+            needs_outer_moment_jacobian=false)
+        ctx_dg = obj_dg_inner.γ
+
+        obj_dg = build_melitz_implicit_bundle(ctx_dg, obj_dg_inner.U, theta_dg; delta=1.0,
+            find_smallest=true, gradient_backend=:B_direct_argument_serial, h=1e-4,
+            inner_loop_opt=inner_opt_dg, outer_loop_opt=outer_opt_dg)
+
+        @testset "needs_outer_moment_jacobian=false actually skips the jac_h allocation" begin
+            @test size(obj_dg.jac_h) == (0, 0, 0)
+            @test obj_dg.needs_outer_moment_jacobian == false
+        end
+
+        obj_dg.use_cached_x = false; obj_dg.x .= NaN
+        _, x_dg, nStatus_dg = CounterfactualSensitivity.inner_loop_internal(obj_dg, theta_dg)
+        @test nStatus_dg in (0, -100, -101, -103)
+        obj_dg.x .= x_dg
+
+        n_dg = length(theta_dg)
+        direct_serial_dg = make_melitz_gradient_delta_direct_serial(1e-4)
+        direct_parallel_dg = make_melitz_gradient_delta_direct_parallel(1e-4)
+        g_serial = zeros(n_dg)
+        g_parallel = zeros(n_dg)
+        direct_serial_dg(g_serial, theta_dg, ctx_dg, obj_dg, x_dg)
+        direct_parallel_dg(g_parallel, theta_dg, ctx_dg, obj_dg, x_dg)
+
+        @testset "serial and parallel direct backends are bit-identical" begin
+            @test g_serial == g_parallel
+        end
+
+        @testset "direct backend never allocates a W x K x n tensor (post-warm-up @allocated is O(1)-ish, not O(W*K))" begin
+            g_scratch = zeros(n_dg)
+            direct_serial_dg(g_scratch, theta_dg, ctx_dg, obj_dg, x_dg)   # warm-up
+            bytes = @allocated direct_serial_dg(g_scratch, theta_dg, ctx_dg, obj_dg, x_dg)
+            K_dg = ctx_dg.moment_layout.num_moments
+            W_dg = size(obj_dg.U, 1)
+            # a single W x K x n tensor at this fixture would be W*K*n*8 bytes (~8.16MB here).
+            # The actual post-warm-up call allocates a small, roughly W-INDEPENDENT residual
+            # (~250KB, per scripts/melitz_memory_audit.jl's own live measurement at a much
+            # larger W=20,000/D=4 fixture -- confirming this overhead does NOT scale with W, so
+            # a relative-to-W*K*n bound is the wrong shape of test at small W). Use an absolute
+            # cap instead: comfortably above the observed ~250KB, comfortably below what any
+            # O(W*K*n) tensor would require even at this tiny fixture.
+            @test bytes < 2_000_000
+            @test bytes < W_dg * K_dg * n_dg * 8 / 2   # still well under half the full-tensor size
+        end
+
+        @testset "agrees with an independent frozen-x finite difference at a random coordinate" begin
+            rng_dg = MersenneTwister(2026)
+            r = rand(rng_dg, 1:n_dg)
+            h_dg = 1e-4
+            ei_dg = zeros(n_dg); ei_dg[r] = 1.0
+            Kbuf_dg = zeros(size(obj_dg.U, 1))
+            Gbuf_dg = zeros(size(obj_dg.U, 1), ctx_dg.moment_layout.num_moments)
+            melitz_moments_adapter_outer!(Kbuf_dg, Gbuf_dg, theta_dg .+ h_dg .* ei_dg, obj_dg.U, obj_dg)
+            obj_dg.H[:, 1] .= Kbuf_dg; obj_dg.H[:, 3:end] .= Gbuf_dg
+            cp_dg = zeros(1); obj_dg(x_dg, constr=cp_dg)
+            melitz_moments_adapter_outer!(Kbuf_dg, Gbuf_dg, theta_dg .- h_dg .* ei_dg, obj_dg.U, obj_dg)
+            obj_dg.H[:, 1] .= Kbuf_dg; obj_dg.H[:, 3:end] .= Gbuf_dg
+            cm_dg = zeros(1); obj_dg(x_dg, constr=cm_dg)
+            fd_grad_dg = (cp_dg[1] - cm_dg[1]) / (2h_dg)
+            @test isapprox(g_serial[r], fd_grad_dg; rtol=1e-6, atol=1e-6)
+            # restore obj_dg.H to the base theta for any downstream reuse
+            melitz_moments_adapter_outer!(Kbuf_dg, Gbuf_dg, theta_dg, obj_dg.U, obj_dg)
+            obj_dg.H[:, 1] .= Kbuf_dg; obj_dg.H[:, 3:end] .= Gbuf_dg
+        end
+
+        @testset "wired end-to-end through melitz_fixed_point_probe without crashing" begin
+            r_probe = melitz_fixed_point_probe(ctx_dg, obj_dg_inner, theta_dg; delta=1e-2,
+                direction=:upper, gradient_backend=:B_direct_argument_serial, inner_loop_opt=inner_opt_dg)
+            @test r_probe.nStatus == 0
+            @test !r_probe.eval_failed
+            r_probe_par = melitz_fixed_point_probe(ctx_dg, obj_dg_inner, theta_dg; delta=1e-2,
+                direction=:upper, gradient_backend=:B_direct_argument_parallel, inner_loop_opt=inner_opt_dg)
+            @test r_probe_par.nStatus == 0
+            @test r_probe_par.obj_value == r_probe.obj_value
         end
     end
 

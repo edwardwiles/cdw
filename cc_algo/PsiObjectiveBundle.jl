@@ -422,7 +422,23 @@ end
     arg0                ::Array{Float64,1} = zeros(M)
     arg1                ::Array{Float64,1} = zeros(M)
     arg2                ::Array{Float64,1} = zeros(M)
-    jac_h               ::Array{Float64,3} = _instrumented_jac_h_default(N, d, l)
+    # ADDITIVE (memory-scalability continuation session, docs/melitz_optimization_report_2026-07-23_continuation3.md
+    # Section 9): mirrors PsiObjectiveBundleImplicit's own needs_outer_moment_jacobian escape hatch
+    # (introduced earlier for exactly this reason, see docs/fullA_jach_audit.md) -- an apparent
+    # oversight had left PsiObjectiveBundleDelta with an UNCONDITIONAL dense jac_h allocation
+    # (~206GB at D=20/W=80,000, quartic in D: N*(d+2)*l with d~D^2, l~2D^2). Call-graph audit
+    # (this session) confirms jac_h is NEVER read for this bundle type by any current caller in this
+    # repo: `build_melitz_psi_bundle` (the only construction site, src/melitz/delta_star.jl) is used
+    # exclusively for FIXED-theta inner CC dual solves (`inner_loop`/`melitz_recover_lfd`/
+    # `run_melitz_inner_delta`), and `inner_loop_KNITRO`'s callback (`callbackEvalFG_inner!`) always
+    # calls `obj(x, g)` with an EMPTY θ -- the theta-gradient branch of this functor (below, the only
+    # branch that touches jac_h) is dead code for every existing caller. The real Melitz outer
+    # theta-gradient search uses a SEPARATE `PsiObjectiveBundleImplicit` (`build_melitz_implicit_bundle`,
+    # `finite_delta_outer.jl`), which already has its own independent needs_outer_moment_jacobian flag.
+    # Default TRUE preserves the exact prior unconditional-allocation behavior for any caller that does
+    # not pass this kwarg.
+    needs_outer_moment_jacobian ::Bool      = true
+    jac_h               ::Array{Float64,3} = needs_outer_moment_jacobian ? _instrumented_jac_h_default(N, d, l) : _skipped_jac_h_default()
     x                   ::Array{Float64,1} = NaN .* ones(outer_constr_index)        # cache variable that stores the last successful (ζ, λ)
     ∂x_∂θ               ::Array{Float64,2} = zeros(length(x), l)
     ∂c_∂θ               ::Array{Float64,2} = zeros(d - outer_constr_index + 1, l)

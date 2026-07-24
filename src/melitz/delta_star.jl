@@ -347,12 +347,26 @@ Builds a `PsiObjectiveBundleDelta` wired to the Melitz moments (`d = D^2+1`) and
 FREE gravity-pivoted `theta_free` (`l = 2D^2-2`, main prompt Section 2's preferred
 "reuse the gravity pivots" option) reduced from `data.primitives`'s own
 `(A, f, gamma_prime_target)`.
+
+`needs_outer_moment_jacobian` (default `true`, memory-scalability continuation session):
+threads `PsiObjectiveBundleDelta`'s own escape hatch (`cc_algo/PsiObjectiveBundle.jl`,
+mirroring `PsiObjectiveBundleImplicit`'s pre-existing one) through to this constructor.
+The default preserves the exact prior unconditional dense-`jac_h` allocation
+(`N*(d+2)*l` -- ~206GB at D=20/W=80,000, quartic in `D`). Pass `false` for any caller that
+only performs FIXED-theta inner CC dual solves (`inner_loop`/`melitz_recover_lfd`/
+`run_melitz_inner_delta`) -- the call-graph audit backing this default confirms `jac_h` is
+never read on this path (the theta-gradient branch of the functor, the only branch that
+touches it, is never exercised by `inner_loop_KNITRO`'s callback, which always calls
+`obj(x, g)` with an empty `θ`). The real Melitz outer theta-gradient search uses a
+SEPARATE `PsiObjectiveBundleImplicit` (`build_melitz_implicit_bundle`), unaffected by this
+kwarg.
 """
 function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   X_data::Matrix{Float64}=data.equilibrium.trade_flow,
                                   outer_parameterization::Symbol=:logf,
                                   inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
-                                  outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"))
+                                  outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
+                                  needs_outer_moment_jacobian::Bool=true)
     outer_parameterization in (:logf, :logcutoff) || throw(ArgumentError(
         "outer_parameterization must be :logf or :logcutoff, got $outer_parameterization"))
     p, eq, cf = data.primitives, data.equilibrium, data.counterfactual
@@ -385,6 +399,7 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
         U=z_draws,
         inner_loop_opt=inner_loop_opt,
         outer_loop_opt=outer_loop_opt,
+        needs_outer_moment_jacobian=needs_outer_moment_jacobian,
     )
 
     return obj, theta_free
