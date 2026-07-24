@@ -65,19 +65,10 @@ if [ -n "$DEST_SAMPLE_ARG" ]; then
   RESOLVED_DEST="$DEST_SAMPLE_ARG"
 else
   unset "$DEST_ENV_NAME" 2>/dev/null || true
-  # exclude-ROW-destination production release (2026-07-24) SCOPE NOTE: every entry point EXCEPT
-  # unrestricted defaults to :exclude_row -- unrestricted's real evaluation path
-  # (compressed_moments.jl) is square-D-only and was never rectangularized, so it defaults to
-  # (and only supports) :all_legacy. See EXCLUDE_ROW_DESTINATION_PRODUCTION_RELEASE_2026-07-24.md.
-  if [ "$FAMILY" = "unrestricted" ]; then
-    RESOLVED_DEST="all_legacy"
-  else
-    RESOLVED_DEST="exclude_row"
-  fi
-fi
-if [ "$FAMILY" = "unrestricted" ] && [ "$RESOLVED_DEST" = "exclude_row" ]; then
-  echo "FAIL: [$FAMILY] :exclude_row was explicitly requested for the unrestricted family, which does not support it (see SCOPE NOTE)" >&2
-  exit 1
+  # exclude-ROW-destination UNRESTRICTED-CORE release (2026-07-24): every entry point, INCLUDING
+  # unrestricted (its real compressed evaluation path is now rectangular throughout), defaults to
+  # :exclude_row. :all_legacy remains a fully supported, explicit opt-out for all four families.
+  RESOLVED_DEST="exclude_row"
 fi
 
 launch_stage() {

@@ -33,26 +33,26 @@ Exact `v[j] = Σ_s weights[s] · G_{s,j}` for every inner-dual column j, from th
 compressed representation. O(W·D) (winner-bucket accumulation) + O(D^2).
 """
 function compressed_transpose_contraction(weights::AbstractVector, cf::CompressedFactual)
-    D = cf.D; W = cf.W; ncol = cf.oci - 1
+    D = cf.D; Ddest = cf.D_dest; W = cf.W; ncol = cf.oci - 1
     length(weights) == W || error("weights length $(length(weights)) != W=$W")
-    B = zeros(D, D)          # B[o,d] = Σ_{s: winner_sd=o} SW_s·weights_s·v_{s,d}
+    B = zeros(D, Ddest)      # B[o,slot] = Σ_{s: winner_s,slot=o} SW_s·weights_s·v_{s,slot}
     T = 0.0                  # T = Σ_s SW_s·weights_s
     Bcf = 0.0                # counterfactual-column bucket
     @inbounds for s in 1:W
         ws = cf.SW[s] * weights[s]
         T += ws
-        for d in 1:D
-            B[cf.winner[s, d], d] += ws * cf.wval[s, d]
+        for slot in 1:Ddest
+            B[cf.winner[s, slot], slot] += ws * cf.wval[s, slot]
         end
         if cf.cf_col > 0
             Bcf += ws * cf.cf_raw[s]
         end
     end
     v = zeros(ncol)
-    @inbounds for d in 1:D, o in 1:D
-        j = d + (o - 1) * D
-        # Σ_s w_s G_{s,j} = nrm·gdiv·(B[o,d] − P_od·denom_d·T) − nrm·usePMM·PMM_j·T
-        v[j] = cf.nrm[j] * cf.gdiv[j] * (B[o, d] - cf.Pmat[o, d] * cf.denom[d] * T) -
+    @inbounds for slot in 1:Ddest, o in 1:D
+        j = slot + (o - 1) * Ddest
+        # Σ_s w_s G_{s,j} = nrm·gdiv·(B[o,slot] − P_o,slot·denom_slot·T) − nrm·usePMM·PMM_j·T
+        v[j] = cf.nrm[j] * cf.gdiv[j] * (B[o, slot] - cf.Pmat[o, slot] * cf.denom[slot] * T) -
                cf.nrm[j] * cf.usePMM * cf.PMM[j] * T
     end
     if cf.cf_col > 0
