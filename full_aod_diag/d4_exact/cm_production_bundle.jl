@@ -72,6 +72,7 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
             inequality_index = obj_cm.inequality_index, complement_index = obj_cm.complement_index,
             l = obj_cm.l, U = obj_cm.U, N = obj_cm.N, lower_limit = obj_cm.lower_limit,
             use_cached_x = obj_cm.use_cached_x,
+            threshold_state = obj_cm.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
             outer_loop_opt = obj_cm.outer_loop_opt, inner_loop_opt = obj_cm.inner_loop_opt,
             needs_outer_moment_jacobian = obj_cm.needs_outer_moment_jacobian)
     end

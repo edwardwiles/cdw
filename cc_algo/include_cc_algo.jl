@@ -44,9 +44,13 @@ export outer_loop,
        ThresholdAbortState,
        threshold_abort_result,
        resolve_threshold_for_delta,
-       threshold_permits_reject
+       threshold_permits_reject,
+       active_origins,
+       active_destinations,
+       active_od_cells
 
 include("knitro_compat.jl")   # restore KNITRO.jl 0.13/0.14 convenience wrappers on v1.2.1
+include("active_layout.jl")   # Part B step 3 (2026-07-24 release): active-origin/destination accessors
 include("Psi.jl")
 include("threshold_early_abort.jl")   # Part C: must precede PsiObjectiveBundle.jl (adds a field to Implicit)
 include("ObjectiveBundle.jl")

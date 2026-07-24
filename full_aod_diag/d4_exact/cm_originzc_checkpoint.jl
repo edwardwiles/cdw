@@ -242,6 +242,12 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     end
 
     pcx = build_originzc_production_context(ctx, CS, layout)
+    pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    print_screen_startup_banner("origin_zc")
+    th = pcx.ctx_cm.obj.threshold_state
+    println("[threshold-config] mode=origin_zc requested_delta=", delta,
+            " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
+    flush(stdout)
     D2_econ = length(w0) - n_eta(layout)
 
     bounds = cfg.nu_bounds === nothing ? originzc_default_nu_bounds(ctx, layout) : cfg.nu_bounds
@@ -253,7 +259,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     if backend_switched && resumed.best_feasible !== nothing
         xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
         νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
-        (_, _, vs) = cm_originzc_production_value_verified_screened(xf_switch, νvec_switch, pcx)
+        (_, _, vs) = cm_originzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters)
         is_verified_success(vs) ||
             error("run_originzc_upper_checkpointed($label): backend switch on resume requested, but the resumed " *
                   "incumbent FAILED independent cold re-verification under the new backend -- refusing to carry it forward.")
@@ -319,7 +325,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         νvec = exp.(w[D2_econ+1:end])
         local base, verify
         try
-            _, base, verify = cm_originzc_production_value_verified_screened(xf, νvec, pcx)
+            _, base, verify = cm_originzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
         catch e
             e isa CMExpectedSolveFailure || rethrow()
             reject_point(w[1], "run_originzc_upper_checkpointed($label): infeasible/failed inner solve at this point")
@@ -382,7 +388,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     local verify_final
     try
         νvec_final = exp.(xsol_v[D2_econ+1:end])
-        _, _, verify_final = cm_originzc_production_value_verified_screened(xf_final, νvec_final, pcx)
+        _, _, verify_final = cm_originzc_production_value_verified_screened(xf_final, νvec_final, pcx; counters = pcx.screen_counters)
     catch e
         e isa CMExpectedSolveFailure || rethrow()
         verify_final = (inner_status = -300,)
@@ -393,7 +399,9 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         lp("[", label, "] WARNING: terminal point failed verification -- checkpointing as :stage_complete_unverified.")
         do_checkpoint(:stage_complete_unverified, collect(xsol))
     end
+    print_screen_summary(pcx; label = label)
     return (knitro_status = nStatus, wall = wall_ext, n_eval = n_eval[], n_grad = n_grad[],
             best = b, kappa = κ, xsol = collect(xsol), trace = trace, final_checkpoint = final_ckpt,
-            ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
+            ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"),
+            screen_summary = as_namedtuple(pcx.screen_counters))
 end

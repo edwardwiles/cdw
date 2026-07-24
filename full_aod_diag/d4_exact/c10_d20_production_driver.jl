@@ -587,6 +587,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     end
 
     sc = ScreenCounters()
+    println("[screen-stack] mode=unrestricted enabled=true")
+    println("[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners, ",
+            "envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE), winning_range, safety_net_moment_range")
+    th = ctx.obj.threshold_state
+    println("[threshold-config] mode=unrestricted requested_delta=", delta_in,
+            " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
+    flush(stdout)
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
     exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)
@@ -1001,6 +1008,13 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     end
 
     sc = ScreenCounters()
+    println("[screen-stack] mode=unrestricted enabled=true")
+    println("[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners, ",
+            "envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE), winning_range, safety_net_moment_range")
+    th = ctx.obj.threshold_state
+    println("[threshold-config] mode=unrestricted requested_delta=", delta_in,
+            " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
+    flush(stdout)
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
     exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)

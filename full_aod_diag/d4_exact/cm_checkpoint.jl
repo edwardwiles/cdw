@@ -478,6 +478,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
             contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs) :
         build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+    pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    print_screen_startup_banner(is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
+    th = pcx.ctx_cm.obj.threshold_state
+    println("[threshold-config] mode=", is_meanzc ? "cm_plus_meanzc" : "cm_flexible",
+            " requested_delta=", delta, " resolved_active_threshold=", th.threshold,
+            " stored_in_objective_bundle=", pcx.ctx_cm.obj.threshold_state.threshold)
+    flush(stdout)
 
     # D2_econ = length of the (gp, zfree) economic block only -- length(w0) itself is
     # D2_econ + meanzc_K_mean when is_meanzc, matching cm_meanzc_production.jl's own convention
@@ -505,9 +512,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
         verify_switch = if is_meanzc
             νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
-            (_, _, vs) = cm_meanzc_production_value_verified_screened(xf_switch, νvec_switch, pcx); vs
+            (_, _, vs) = cm_meanzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters); vs
         else
-            (_, _, vs) = cm_production_value_verified_screened(xf_switch, pcx); vs
+            (_, _, vs) = cm_production_value_verified_screened(xf_switch, pcx; counters = pcx.screen_counters); vs
         end
         is_verified_success(verify_switch) ||
             error("run_cm_upper_checkpointed($label): backend switch on resume requested (allow_backend_switch=true), " *
@@ -592,9 +599,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         local base, verify
         try
             if is_meanzc
-                _, base, verify = cm_meanzc_production_value_verified_screened(xf, νvec, pcx)
+                _, base, verify = cm_meanzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
             else
-                _, base, verify = cm_production_value_verified_screened(xf, pcx)
+                _, base, verify = cm_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
             end
         catch e
             # Closure task Phase 3B: narrowed further to the dedicated CMExpectedSolveFailure
@@ -699,9 +706,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     try
         if is_meanzc
             νvec_final = exp.(xsol_v[D2_econ+1:end])
-            _, _, verify_final = cm_meanzc_production_value_verified_screened(xf_final, νvec_final, pcx)
+            _, _, verify_final = cm_meanzc_production_value_verified_screened(xf_final, νvec_final, pcx; counters = pcx.screen_counters)
         else
-            _, _, verify_final = cm_production_value_verified_screened(xf_final, pcx)
+            _, _, verify_final = cm_production_value_verified_screened(xf_final, pcx; counters = pcx.screen_counters)
         end
     catch e
         # Closure task Phase 3B: narrowed further to the dedicated CMExpectedSolveFailure type
@@ -721,7 +728,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
            " remains the correct resume/incumbent state (AUD-10).")
         final_ckpt = do_checkpoint(:stage_complete_unverified, collect(xsol))
     end
+    print_screen_summary(pcx; label = label)
     return (knitro_status = nStatus, wall = wall_ext, n_eval = n_eval[], n_grad = n_grad[],
             best = b, kappa = κ, xsol = collect(xsol), trace = trace, final_checkpoint = final_ckpt,
-            ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"))
+            ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"),
+            screen_summary = as_namedtuple(pcx.screen_counters))
 end

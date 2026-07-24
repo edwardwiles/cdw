@@ -195,7 +195,8 @@ if MODE == "calibration"
                 lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
             else
                 pcx0 = build_cm_production_context(ctx0, CS; L = L, contrasts = CM_CONTRASTS, probs = probs)
-                _, _, verify0 = cm_production_value_verified(xf0, pcx0)
+                pcx0 = with_screen_counters(pcx0)
+                _, _, verify0 = cm_production_value_verified_screened(xf0, pcx0; counters = pcx0.screen_counters)
                 isfinite(verify0.Delta_dual) || error("Delta_dual is not finite at the (possibly perturbed) start point")
                 lp(">>> start-point feasibility pre-check passed: Delta_dual=", verify0.Delta_dual)
             end

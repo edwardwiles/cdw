@@ -36,9 +36,62 @@ mutable struct CMScreenCounters
     witness::Int
     winner::Int
     passed::Int
+    screen_wall::Float64   # cumulative wall-clock seconds spent in cm_screen_precheck! (2026-07-24 release, Part B step 7)
 end
-CMScreenCounters() = CMScreenCounters(0, 0, 0, 0)
-as_namedtuple(sc::CMScreenCounters) = (pairwise = sc.pairwise, witness = sc.witness, winner = sc.winner, passed = sc.passed)
+CMScreenCounters() = CMScreenCounters(0, 0, 0, 0, 0.0)
+as_namedtuple(sc::CMScreenCounters) = (pairwise = sc.pairwise, witness = sc.witness, winner = sc.winner,
+                                       passed = sc.passed, calls = sc.pairwise + sc.witness + sc.winner + sc.passed,
+                                       inner_solves_avoided = sc.pairwise + sc.witness + sc.winner,
+                                       screen_wall = sc.screen_wall)
+
+"""
+    with_screen_counters(pcx) -> pcx augmented with a fresh `.screen_counters::CMScreenCounters`
+
+2026-07-24 release (Part B step 7): the prior release defined `CMScreenCounters` but no
+production caller ever attached one to `pcx`, so every `..._screened` call site silently ran with
+`counters=nothing` -- observability infrastructure that was never actually wired. Call this right
+after `build_cm_production_context`/`build_cm_meanzc_production_context`/
+`build_originzc_production_context` and thread `pcx.screen_counters` into every subsequent
+`..._screened` call in the same run.
+"""
+with_screen_counters(pcx) = merge(pcx, (screen_counters = CMScreenCounters(),))
+
+"""
+    print_screen_startup_banner(mode_name; use_witness=false)
+
+Part B step 7 startup requirement: print the ordered active screen stack and restriction-specific
+policy once at the start of a production stage run. Pairwise and hard-winner certificates are the
+production default (always enabled for a screened context); the witness certificate is
+opt-in per `use_witness` (task step 4: "enabled only if its bounded benchmark shows acceptable
+cost" -- left opt-in here, see docs/SCREEN_STACK_FINAL_AUDIT_2026-07-24.md).
+"""
+function print_screen_startup_banner(mode_name::AbstractString; use_witness::Bool = false)
+    println("[screen-stack] mode=", mode_name, " enabled=true")
+    println("[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners",
+            use_witness ? ", query_witness" : "")
+    println("[screen-stack] restriction policy: pairwise=on hard-winner=on witness=", use_witness ? "on" : "off")
+    flush(stdout)
+    return nothing
+end
+
+"""
+    print_screen_summary(pcx; label="")
+
+Part B step 7 persistent-observability requirement: print the accumulated screen counters
+(calls, per-screen hits, points passed, inner solves avoided, cumulative screen wall time) for a
+`pcx` built via `with_screen_counters`. No-op if `pcx` was never wrapped (`screen_counters`
+absent) -- callers that opt out of counters get no summary rather than an error.
+"""
+function print_screen_summary(pcx; label::AbstractString = "")
+    hasproperty(pcx, :screen_counters) || return nothing
+    nt = as_namedtuple(pcx.screen_counters)
+    println("[screen-summary]", isempty(label) ? "" : " $label", " calls=", nt.calls,
+            " pairwise_hits=", nt.pairwise, " hard_winner_hits=", nt.winner, " witness_hits=", nt.witness,
+            " points_passed=", nt.passed, " inner_solves_avoided=", nt.inner_solves_avoided,
+            " screen_wall_s=", round(nt.screen_wall, digits = 4))
+    flush(stdout)
+    return nothing
+end
 
 """
     cm_screen_precheck!(x_free0, ctx_cm; counters=nothing, use_witness=false) -> Nothing
@@ -57,6 +110,18 @@ fixed draw support, never by a KNITRO timeout, a -300 status, or an approximate 
 function cm_screen_precheck!(x_free0::AbstractVector, ctx_cm;
                               counters::Union{Nothing,CMScreenCounters} = nothing,
                               use_witness::Bool = false)
+    counters === nothing && return _cm_screen_precheck_inner!(x_free0, ctx_cm; counters = nothing, use_witness = use_witness)
+    t0 = time()
+    try
+        return _cm_screen_precheck_inner!(x_free0, ctx_cm; counters = counters, use_witness = use_witness)
+    finally
+        counters.screen_wall += time() - t0
+    end
+end
+
+function _cm_screen_precheck_inner!(x_free0::AbstractVector, ctx_cm;
+                              counters::Union{Nothing,CMScreenCounters} = nothing,
+                              use_witness::Bool = false)
     ctx_cm.pairwise === nothing && return nothing
     θ_full = CS.reconstruct_full(x_free0, ctx_cm.m)
     Pmat = target_shares(ctx_cm)
@@ -70,7 +135,7 @@ function cm_screen_precheck!(x_free0::AbstractVector, ctx_cm;
 
     if use_witness && ctx_cm.witness !== nothing
         B = hard_score_B(ctx_cm)
-        for d in 1:ctx_cm.D, o in 1:ctx_cm.D
+        for (o, d) in active_od_cells(ctx_cm)
             Pmat[o, d] > 0 || continue
             exists, _, _, _ = query_witness(o, d, a, B, ctx_cm.witness)
             if !exists

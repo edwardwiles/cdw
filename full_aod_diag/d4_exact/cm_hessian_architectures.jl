@@ -161,6 +161,7 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
         inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
         l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
         use_cached_x = obj0.use_cached_x,
+        threshold_state = obj0.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
         outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
         needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
     @assert obj_cm.outer_constr_index == obj_cm.d
