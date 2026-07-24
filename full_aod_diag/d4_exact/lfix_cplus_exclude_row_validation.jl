@@ -1,7 +1,7 @@
 println("=== :cplus backend under destination_sample=:exclude_row validation starting ===")
 flush(stdout)
 
-const D4X = "/bbkinghome/edav/gravity_robustness/release-fullA-omit-row-restore-screens-2026-07-23/full_aod_diag/d4_exact"
+const D4X = @__DIR__
 cd(D4X)
 for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl",
           "common_marginals_interval.jl", "instrumentation.jl", "oracle_fast.jl",
