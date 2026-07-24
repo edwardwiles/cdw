@@ -411,21 +411,34 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
         record_success!(bank, n_eval_ref[], zfree, vcat(result.zeta, result.lambda))
     end
     st = screen_meta.screen_status
+    # Defensive field access (BUGFIX, found live via the unrestricted :exclude_row Gate C real
+    # D=20/W=80,000 run): evaluate_fullA_screened_ranged's CACHE-HIT branch (fast_range_screen.jl)
+    # returns a bare `(screen_status=..., elapsed=...)` tuple -- it does not carry worst_o/worst_d
+    # through from the original (now-cached) rejection, even when screen_status indicates a
+    # rejection stage that normally would. A cache hit on a previously-rejected point (e.g. KNITRO
+    # re-querying the same point after a callback error) therefore FieldError'd here, which KNITRO's
+    # C wrapper surfaces as a `-500 callback error` on the inner callback and then, if the SAME
+    # code path runs again outside a callback context, as an uncaught top-level crash -- this
+    # single bug explained both symptoms. Pre-existing latent bug in this shared driver function
+    # (not new to the rectangular path), apparently never triggered by prior :all_legacy campaigns.
+    # `:EXACT_INFEASIBLE_MOMENT_RANGE` below already used this exact `get(...)` defensive pattern
+    # for `certificate` -- applied uniformly to the other five branches here.
+    wo = get(screen_meta, :worst_o, 0); wd = get(screen_meta, :worst_d, 0)
     if st === :pairwise_certified_infeasible
         sc.pairwise += 1
-        push!(sc.rejections, (stage = :pairwise, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+        push!(sc.rejections, (stage = :pairwise, o = wo, d = wd, n_eval = n_eval_ref[]))
     elseif st === :witness_certified_infeasible
         sc.witness += 1
-        push!(sc.rejections, (stage = :witness, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+        push!(sc.rejections, (stage = :witness, o = wo, d = wd, n_eval = n_eval_ref[]))
     elseif st === :winner_scan_infeasible
         sc.winner += 1
-        push!(sc.rejections, (stage = :winner, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+        push!(sc.rejections, (stage = :winner, o = wo, d = wd, n_eval = n_eval_ref[]))
     elseif st === :EXACT_INFEASIBLE_PREWINNER_ENVELOPE
         sc.envelope += 1
-        push!(sc.rejections, (stage = :envelope, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+        push!(sc.rejections, (stage = :envelope, o = wo, d = wd, n_eval = n_eval_ref[]))
     elseif st === :EXACT_INFEASIBLE_WINNING_RANGE
         sc.winning_range += 1
-        push!(sc.rejections, (stage = :winning_range, o = screen_meta.worst_o, d = screen_meta.worst_d, n_eval = n_eval_ref[]))
+        push!(sc.rejections, (stage = :winning_range, o = wo, d = wd, n_eval = n_eval_ref[]))
     elseif st === :EXACT_INFEASIBLE_MOMENT_RANGE
         sc.safety_net += 1
         push!(sc.rejections, (stage = :safety_net, o = get(screen_meta, :certificate, nothing) === nothing ? 0 : screen_meta.certificate.origin,

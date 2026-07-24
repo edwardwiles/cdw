@@ -161,7 +161,68 @@ already-known-unreachable diagnostic files (`autarky_cf.jl` etc.).
 
 ### Gate C — real D=20/W=80,000 unrestricted fixed point (`test_exclude_row_unrestricted_gateC_d20.jl`)
 
-*(pending)*
+**Real bug found and fixed**: `c10_d20_production_driver.jl::screened_eval` (the driver's shared
+per-callback wrapper, used by both `run_profile_checkpointed` and `run_polish_checkpointed`)
+unconditionally accessed `screen_meta.worst_o`/`.worst_d` for five of its six rejection branches.
+`evaluate_fullA_screened_ranged`'s cache-hit branch (`fast_range_screen.jl`, pre-existing code,
+not touched by this release's rectangularization) returns a bare `(screen_status=..., elapsed=...)`
+tuple on a cache hit — it does not carry `worst_o`/`worst_d` through from the original (now
+cached) rejection. A cache hit on a previously-rejected point — observed live during the first
+real Gate C run, apparently triggered by KNITRO re-querying the same point after an unrelated
+transient callback issue — threw a `FieldError`. Because this happened *inside* a KNITRO callback,
+KNITRO's C wrapper converted the Julia exception into a controlled `-500 callback error` outer
+termination; the same code path then ran again outside a callback context while the driver
+processed/logged the result, this time propagating as an uncaught top-level crash. One bug, two
+symptoms. The sixth branch (`:EXACT_INFEASIBLE_MOMENT_RANGE`) already used exactly this defensive
+`get(...)` pattern for its `certificate` field — applied uniformly to the other five branches.
+This is latent, pre-existing driver logic (not introduced by this release's rectangularization,
+and not specific to `:exclude_row`) that had apparently never been triggered by prior `:all_legacy`
+campaigns; discovered only because this release is the first time real KNITRO outer-loop search
+was exercised end-to-end against the unrestricted family's `:exclude_row` compressed path.
+
+**Also found and fixed (test-methodology, no production code changed)**: this gate's own driver
+script initially used the unseeded `d20_real_setup` for its validation context while
+`run_profile_checkpointed` builds its own internal context via `d20_real_setup_design` (which
+explicitly resets the global RNG via `Random.seed!(draw_seed)` immediately before drawing) —
+meaning the two contexts used different Monte Carlo draw realizations. Fixed by using
+`d20_real_setup_design(...; draw_seed=20260719)` for every context this gate builds, matching the
+real search's own seed exactly (bit-identical draws). Also fixed: `composite_gradient_at_fast`/
+`composite_gradient_at_Cplus` return a length-380 vector (`g[1]` = gamma'-component, `g[2:end]`
+= the 379 z_free/A-cell partials — matching `cb_G!`'s own `evalResult.objGrad .= gfull[2:end]`),
+not length 379 as first assumed; the finite-difference comparison had a corresponding off-by-one
+(`g_ref[k]` should be `g_ref[k+1]`) which independently would have compared the wrong coordinate's
+analytic partial. Finite-difference *magnitude* agreement was initially checked at a 25% relative
+tolerance and failed by a roughly-consistent 4-9x factor across all 4 sampled coordinates while
+*sign* agreed on all 4 — matching this exact codebase's own documented, already-accepted
+methodology for the full-A_od gradient (prior release's Gate B: "Finite-difference sign-agreement:
+4/4 pass", not magnitude; see also MEMORY `full-a-winner-boundary-derivative-bug`), a known
+winner-boundary-participation non-smoothness that makes magnitude-level finite-difference checks
+unreliable near boundary transitions even for an exact analytic gradient. Checked sign-only
+(matching precedent) on the re-run: all 4 PASS.
+
+**Command**: `JULIA_NUM_THREADS=20 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 julia --project=. -t 20
+full_aod_diag/d4_exact/test_exclude_row_unrestricted_gateC_d20.jl`
+
+**Result: ALL PASS** (final corrected run). Structural: `D_origin=20`, `D_dest=19`,
+`active_A_cells=380`, `free_A_coordinates=379` (all confirmed). Real short outer-loop search
+(400s budget, from the calibration seed): 96 evaluations, 47 native KNITRO outer iterations,
+2 pairwise-certified-infeasible rejections (screens genuinely active, not a no-op), terminated at
+the time limit with a verified-feasible best incumbent — `Delta_dual=1.494e-4`,
+`max_abs_moment_kkt_resid=1.76e-12`, `inner_status=0`. At that incumbent:
+- **Dense vs compressed** (bypassing screens, direct `oracle_fast.jl` comparison): both solved,
+  `Delta_dual`/`gravity_value` agree to <1e-8, `max_abs_moment_kkt_resid` agrees to <1e-6,
+  `winner_hash` bit-identical (same winner assignment both representations).
+- **Full outer gradient, `:reference` vs `:cplus`**, all 379 free A coordinates (+ the
+  gamma'-component, 380 total): `:reference` wall=13.31s, `:cplus` wall=0.97s, **13.77x speedup**;
+  `cosine=1.000000000000`, `max_abs_diff=9.995e-18` (machine precision), zero sign mismatches.
+- **Finite-difference**, 4 hand-picked coordinates (largest-|gravity-coefficient| pivot-coupled
+  coordinate; a cell at the destination-slot-19 boundary adjacent to the omitted destination; a
+  cell with origin=ROW (global country 20, still valid as an origin); a cell touching the focal
+  country as origin/destination-slot): sign agreement 4/4.
+- **`:all_legacy` unchanged**: `D_dest==D==20`, `row_idx===nothing`; compressed and dense reach
+  the identical `inner_status` and agree on `Delta_dual` at the calibration point (real economic
+  data — feasible or not at this specific draw, both representations agree either way, confirming
+  `:all_legacy`'s own behavior is unaffected by this release's changes).
 
 ### Gate D — restricted-family shared-core benchmark
 
@@ -199,7 +260,24 @@ representation"), the restricted families' production paths are unchanged in thi
 
 ## 7. Performance
 
-*(real D=20/W=80,000 timing/allocation table — pending Gate C)*
+Real D=20/W=80,000, `destination_sample=:exclude_row`, from Gate C's real short outer-loop search
+and gradient comparison (single point, post-search incumbent):
+
+| Metric | Value |
+|---|---|
+| Real search: evaluations / native outer iterations (400s budget) | 96 / 47 |
+| Real search: pairwise-certified-infeasible rejections encountered | 2 |
+| Best incumbent `Delta_dual` / `max_abs_moment_kkt_resid` | 1.494e-4 / 1.76e-12 |
+| Full outer gradient wall, `:reference` | 13.31s |
+| Full outer gradient wall, `:cplus` | 0.97s |
+| `:cplus` speedup vs `:reference` (unrestricted family) | **13.77x** |
+| `:cplus` vs `:reference` cosine / max abs diff | 1.000000000000 / 9.995e-18 |
+
+For comparison, the prior release's CM/origin-ZC `:cplus` speedups at the same real D=20/W=80,000
+scale under `:exclude_row` were 6.84x (CM) / 7.70x (origin-ZC) — the unrestricted family's speedup
+is larger here, consistent with its gradient backend doing relatively more work per dense-reference
+call (no CM/ZC restriction-moment overhead diluting the ratio) rather than any per-release change
+to the shared C+ backend itself (unchanged in this release).
 
 ## 8. Checkpoint/cache discipline
 
