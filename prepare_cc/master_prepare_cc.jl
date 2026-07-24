@@ -31,6 +31,21 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 	ConfidenceLevel,
 	PMMGammaOnly = globalParams
 
+	# row_idx: destination excluded from the moment/estimation sample (Part A, 2026-07-23
+	# omit-ROW-destination release). nothing (default) reproduces today's D^2-moment layout
+	# exactly. Only the base autarky+gravity path (counterType==1) is supported with row_idx
+	# set -- every CM/marginals/independence extension below hard-errors rather than silently
+	# building a wrong-sized moment vector (those layers are out of scope for this release, see
+	# docs/DROP_ROW_DESTINATION_EXPERIMENT_REPORT_2026-07-23.md and the Part A plan).
+	row_idx = get(globalParams, :row_idx, nothing)
+	Ddest = row_idx === nothing ? D : D - 1
+	if row_idx !== nothing
+		(sameMarginalsMoment == 1 || independenceMoment == 1 || GravityMomentFirstApproach == 1 ||
+			localGravityMoment == 1 || PMMGammaOnly == 1 || useConfidenceIntervals == 1) &&
+			error("row_idx (omit-ROW-destination) is not supported together with sameMarginalsMoment/independenceMoment/GravityMomentFirstApproach/localGravityMoment/PMMGammaOnly/useConfidenceIntervals -- out of scope for this release.")
+		counterType == 1 || error("row_idx (omit-ROW-destination) is only implemented for counterType==1 (autarky); counterType=$(counterType) is out of scope for this release.")
+	end
+
 	# set seed
 	Random.seed!(seedU)
 
@@ -70,8 +85,9 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		# autarky: drop the D baseline price-index moments (each is the exact sum of that
 		# destination's D trade-share moments, since shares sum to 1) and the D-1 unused
 		# counterfactual placeholders (only baseIndex has a counterfactual under autarky).
-		# Keep D^2 trade shares + 1 counterfactual price-index moment.
-		numMoments = D^2 + 1
+		# Keep D*Ddest trade shares + 1 counterfactual price-index moment (Ddest==D, i.e. D^2,
+		# unless row_idx excludes a destination -- Part A, 2026-07-23).
+		numMoments = D * Ddest + 1
 	end
 
 	# we add the condition that E[Ubar] =1

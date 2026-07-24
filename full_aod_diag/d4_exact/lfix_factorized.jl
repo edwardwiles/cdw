@@ -60,7 +60,7 @@ D-fold reduction at this problem's D=20 (~5x net reduction after `contrib0`'s ow
 overhead is counted, see the benchmark report).
 """
 struct LFixBaseCacheC
-    D::Int; oci::Int; W::Int; μ::Float64; σ::Float64; baseIndex::Int
+    D::Int; Ddest::Int; oci::Int; W::Int; μ::Float64; σ::Float64; baseIndex::Int
     gammafac::Float64
     SW::Vector{Float64}
     denom::Vector{Float64}
@@ -85,29 +85,33 @@ reconstructs the winner's pTσ ON DEMAND (`pTσ_from_score`) rather than reading
 function build_lfix_base_cache_C(x_free0::AbstractVector, ctx, base::BaseDualState; validate_dense::Bool = false)
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
     γo = ctx.γ
     gammafac = spgamma(μ * (1 - σ) + 1)
     SW = γo.SamplingWeights[1:W]
-    denom = [γo.wHat[d] * γo.L[d] for d in 1:D]
+    denom = [γo.wHat[d] * γo.L[d] for d in 1:Ddest]
     λstar = base.λstar
 
     ref = build_winner_ref(x_free0, ctx)   # throws TiedWinnerError on ties, unmodified
 
-    CONST_d = zeros(D)
-    for d in 1:D
+    # CONST_d/contrib0's d1/d1w are linear indices into λstar/γ.P -- stride Ddest
+    # (destination count), NOT D (origin count); see moments-vs-aod-linear-index-
+    # convention memory / lfix_incremental.jl's identical fix.
+    CONST_d = zeros(Ddest)
+    for d in 1:Ddest
         s = 0.0
         for o in 1:D
-            d1 = d + (o - 1) * D
+            d1 = d + (o - 1) * Ddest
             s += λstar[d1] * (-γo.P[d1] * denom[d])
         end
         CONST_d[d] = s
     end
 
-    contrib0 = Matrix{Float64}(undef, W, D)
-    @inbounds for d in 1:D, ω in 1:W
+    contrib0 = Matrix{Float64}(undef, W, Ddest)
+    @inbounds for d in 1:Ddest, ω in 1:W
         wo = ref.winner[ω, d]
-        d1w = d + (wo - 1) * D
+        d1w = d + (wo - 1) * Ddest
         pTσ_wo = pTσ_from_score(ref.sw[ω, d], σ)
         contrib0[ω, d] = (SW[ω] / gammafac) * (CONST_d[d] + λstar[d1w] * pTσ_wo)
     end
@@ -117,7 +121,7 @@ function build_lfix_base_cache_C(x_free0::AbstractVector, ctx, base::BaseDualSta
     τPrime_bi = γo.τPrime[bi, bi]
     LPrime_bi = γo.LPrime[bi]
     Uσ_bi = γo.Uσ[:, bi] .^ (-μ)
-    d1_cf = D^2 + 1
+    d1_cf = D * Ddest + 1   # D*Ddest==D^2 unless row_idx excludes ROW
     λ_cf = oci - 1 >= d1_cf ? λstar[d1_cf] : 0.0
 
     AodPow_bibi0 = aod_pow_cell(base.θ_full0, ctx, bi, bi)
@@ -137,7 +141,7 @@ function build_lfix_base_cache_C(x_free0::AbstractVector, ctx, base::BaseDualSta
         maxerr < 1e-8 || error("build_lfix_base_cache_C: self-validation FAILED, max|q0_true-q0_cache|=$maxerr")
     end
 
-    return LFixBaseCacheC(D, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, ref, contrib0,
+    return LFixBaseCacheC(D, Ddest, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, ref, contrib0,
         λstar, base.ζstar, q0, wPrime_bi, τPrime_bi, LPrime_bi, Uσ_bi, λ_cf, cf_contrib0)
 end
 
@@ -170,7 +174,7 @@ function dest_contrib_incremental_generic_C(cache::LFixBaseCacheC, ctx, θ_full:
             v < bs && (bs = v; bo = o)
         end
         pTσ_wo = pTσ_from_score(bs, σ)
-        d1w = d + (bo - 1) * D
+        d1w = d + (bo - 1) * cache.Ddest
         contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
     end
     return contrib
@@ -237,7 +241,7 @@ function dest_contrib_incremental_top3_C(cache::LFixBaseCacheC, ctx, θ_full::Ab
             end
         end
         pTσ_wo = pTσ_from_score(bs, σ)
-        d1w = d + (bo - 1) * D
+        d1w = d + (bo - 1) * cache.Ddest
         contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
     end
     return contrib
@@ -380,8 +384,10 @@ end
 function composite_gradient_at_C(x_free0::AbstractVector, ctx, pe; base::Union{Nothing,BaseDualState} = nothing)
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache_C(x_free0, ctx, base)
-    D = ctx.D; D2 = D^2
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    D = ctx.D
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    D2 = D * Ddest
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
 
     g = zeros(D2)

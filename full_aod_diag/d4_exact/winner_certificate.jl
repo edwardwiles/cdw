@@ -55,18 +55,24 @@ using LinearAlgebra: dot
 """
     constCons_matrix(theta_full, ctx) -> (constCons::Matrix, logCC::Matrix, AodPow::Matrix)
 
-D x D `constCons[o,d] = wHat_o * AodPow_{o,d} * tau_{o,d}` exactly as hFunction!
+D x Ddest `constCons[o,d] = wHat_o * AodPow_{o,d} * tau_{o,d}` exactly as hFunction!
 receives it (via factual_prices), plus its elementwise log (the additive score
-offset) and AodPow. O(D^2), no draw loop.
+offset) and AodPow. O(D*Ddest), no draw loop. Ddest==D unless row_idx excludes ROW
+as a destination (Part A/CM+ZC true-shrink extension, 2026-07-23) -- `lambda`'s
+reshape uses stride Ddest (moments/P convention), NOT stride D (Aod convention);
+see moments-vs-aod-linear-index-convention memory / gravity_elimination.jl's
+identical `reshape(ctx.γ.P, (Ddest, ctx.D))'` in `gravity_from_logz`.
 """
 function constCons_matrix(θ_full::AbstractVector, ctx)
     γo = ctx.γ
-    D = ctx.D; μ = θ_full[1]
-    lambda = reshape(γo.P, (D, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    D = ctx.D
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    μ = θ_full[1]
+    lambda = reshape(γo.P, (Ddest, D))'
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:D]
+    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:Ddest]
     return constCons, log.(constCons), AodPow
 end
 
@@ -82,21 +88,27 @@ cell exactly. O(W*D) memory (NOT the O(W*D^2) dense price array).
 
 Scores are `S_{sod}=logCC_{o,d}+mulU_{s,o}` (log price). Winner = argmin (lowest
 score) with first-occurrence tie-break, IDENTICAL to compute_winners_fast/MinInd!.
+
+`Ddest` (destination count) added alongside `D` (origin count) for the true-shrink
+`destination_sample=:exclude_row` extension (Ddest==D unless row_idx excludes ROW);
+every d-indexed array below is sized W x Ddest (or D x Ddest for `logCC0`), while
+`mulU` stays W x D (origin-indexed, destination-independent).
 """
 struct WinnerRefCache
     D::Int
+    Ddest::Int
     W::Int
     μ::Float64
     σ::Float64
-    logCC0::Matrix{Float64}      # D x D reference log constCons
+    logCC0::Matrix{Float64}      # D x Ddest reference log constCons
     mulU::Matrix{Float64}        # W x D : mu*log U  (draw-dependent, A-independent)
-    winner::Matrix{Int}          # W x D : rank-1 origin (== compute_winners_fast winner)
-    sw::Matrix{Float64}          # W x D : winner score
-    runnerup::Matrix{Int}        # W x D : rank-2 origin
-    sr::Matrix{Float64}          # W x D : runner-up score
-    third::Matrix{Int}           # W x D : rank-3 origin (0 if D<3)
-    st3::Matrix{Float64}         # W x D : third score (Inf if D<3)
-    margin::Matrix{Float64}      # W x D : sr - sw  (>= 0, the min gap)
+    winner::Matrix{Int}          # W x Ddest : rank-1 origin (== compute_winners_fast winner)
+    sw::Matrix{Float64}          # W x Ddest : winner score
+    runnerup::Matrix{Int}        # W x Ddest : rank-2 origin
+    sr::Matrix{Float64}          # W x Ddest : runner-up score
+    third::Matrix{Int}           # W x Ddest : rank-3 origin (0 if D<3)
+    st3::Matrix{Float64}         # W x Ddest : third score (Inf if D<3)
+    margin::Matrix{Float64}      # W x Ddest : sr - sw  (>= 0, the min gap)
     x_free0::Vector{Float64}
     θ_full0::Vector{Float64}
 end
@@ -141,18 +153,19 @@ assumption fails there (same contract as lfix/compressed prior art).
 function build_winner_ref(x_free0::AbstractVector, ctx; check_ties::Bool = true)
     θ_full0 = CS.reconstruct_full(x_free0, ctx.m)
     D = ctx.D; U = ctx.U; W = size(U, 1)
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     μ = θ_full0[1]; σ = θ_full0[2]
     constCons0, logCC0, _ = constCons_matrix(θ_full0, ctx)
     mulU = μ .* log.(U)                       # W x D, mu*log U_{s,o}
     UPow = U .^ (-μ)                          # W x D, matches MinInd!'s price = constCons/UPow (for tie detection)
 
-    winner = Matrix{Int}(undef, W, D); sw = Matrix{Float64}(undef, W, D)
-    runnerup = Matrix{Int}(undef, W, D); sr = Matrix{Float64}(undef, W, D)
-    third = Matrix{Int}(undef, W, D); st3 = Matrix{Float64}(undef, W, D)
-    margin = Matrix{Float64}(undef, W, D)
+    winner = Matrix{Int}(undef, W, Ddest); sw = Matrix{Float64}(undef, W, Ddest)
+    runnerup = Matrix{Int}(undef, W, Ddest); sr = Matrix{Float64}(undef, W, Ddest)
+    third = Matrix{Int}(undef, W, Ddest); st3 = Matrix{Float64}(undef, W, Ddest)
+    margin = Matrix{Float64}(undef, W, Ddest)
     scol = Vector{Float64}(undef, D)
     n_tied = 0; tied = Tuple{Int,Int}[]
-    @inbounds for d in 1:D
+    @inbounds for d in 1:Ddest
         for s in 1:W
             for o in 1:D
                 scol[o] = logCC0[o, d] + mulU[s, o]
@@ -182,7 +195,7 @@ function build_winner_ref(x_free0::AbstractVector, ctx; check_ties::Bool = true)
         end
     end
     check_ties && n_tied > 0 && throw(TiedWinnerError(n_tied, tied))
-    return WinnerRefCache(D, W, μ, σ, logCC0, mulU, winner, sw, runnerup, sr,
+    return WinnerRefCache(D, Ddest, W, μ, σ, logCC0, mulU, winner, sw, runnerup, sr,
                           third, st3, margin, collect(x_free0), θ_full0)
 end
 
@@ -211,6 +224,8 @@ delta_{od} = log constCons'_{o,d} - logCC0_{o,d}, the per-cell score shift
 precision (verifies the exact code convention), erroring loudly otherwise.
 """
 function shift_matrix(ref::WinnerRefCache, ctx, θ_full′::AbstractVector)
+    ref.D == ref.Ddest ||
+        error("shift_matrix: not implemented for destination_sample=:exclude_row (D=$(ref.D) != Ddest=$(ref.Ddest)) -- Section 1/2/6 of winner_certificate.jl (certificate/coord-update/PersistentWinnerCache) are still square-only, confirmed unreachable from the :cplus production default path and out of scope for this pass.")
     D = ref.D
     _, logCC′, _ = constCons_matrix(θ_full′, ctx)
     δ = logCC′ .- ref.logCC0
@@ -461,6 +476,8 @@ reduced coordinate, kept for safety). Result is IDENTICAL to a full scan.
 """
 function coord_winner_update!(winner_out::AbstractMatrix{Int}, ref::WinnerRefCache, ctx,
                               θ_full′::AbstractVector, changed_cells::AbstractVector{<:Tuple{Int,Int}})
+    ref.D == ref.Ddest ||
+        error("coord_winner_update!: not implemented for destination_sample=:exclude_row (D=$(ref.D) != Ddest=$(ref.Ddest)) -- Section 2 of winner_certificate.jl is still square-only, confirmed unreachable from the :cplus production default path and out of scope for this pass.")
     D = ref.D; W = ref.W
     _, logCC′, _ = constCons_matrix(θ_full′, ctx)
     # default: copy cached winners (unchanged destinations stay exact)

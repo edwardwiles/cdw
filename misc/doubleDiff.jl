@@ -1,14 +1,20 @@
-function withinTransform(z)
-    # Two-way (origin=row, destination=col) fixed-effects "within" residual of log(z):
+function within_transform_rect(z::AbstractMatrix)
+    # Two-way (origin=row, destination=col) fixed-effects "within" residual of log(z), for a
+    # Do x Dd RECTANGULAR panel (Do origins, Dd destinations -- need not be equal):
     #   z̃_od = ln z_od - mean_o(ln z) - mean_d(ln z) + grand_mean(ln z)
-    # (subtract both margins, ADD BACK the grand mean). By Frisch–Waugh–Lovell, the moment
-    #   Σ_od (within lnτ)·(within lnA) = 0  reproduces EXACTLY the coefficient of an OLS gravity
-    # regression with origin + destination fixed effects — verified numerically (gravity_check.jl).
-    # eltype-generic so it passes ForwardDiff Duals.
+    # (subtract both margins, ADD BACK the grand mean, each margin divided by ITS OWN dimension).
+    # By Frisch–Waugh–Lovell, the moment Σ_od (within lnτ)·(within lnA) = 0 reproduces EXACTLY
+    # the coefficient of an OLS gravity regression with origin + destination fixed effects
+    # (verified numerically, gravity_check.jl; square case cross-checked bit-exact against the
+    # old withinTransform). eltype-generic so it passes ForwardDiff Duals. Reduces to the old
+    # square-only formula exactly when Do==Dd -- see withinTransform below.
     lz = log.(z)
-    D = size(z, 1)
-    return lz .- (sum(lz, dims = 2) ./ D) .- (sum(lz, dims = 1) ./ D) .+ (sum(lz) / D^2)
+    Do, Dd = size(lz)
+    return lz .- (sum(lz, dims = 2) ./ Dd) .- (sum(lz, dims = 1) ./ Do) .+ (sum(lz) / (Do * Dd))
 end
+
+"Square-panel alias, kept for callers that predate the rectangular generalization; bit-identical to within_transform_rect when size(z,1)==size(z,2)."
+withinTransform(z) = within_transform_rect(z)
 
 function doubleDiff(z)
     # computes Delta Delta of variable z, see theory note

@@ -303,8 +303,11 @@ trigger).
 function composite_gradient_at(x_free0::AbstractVector, ctx, pe; base::Union{Nothing,BaseDualState} = nothing, multi_method::Symbol = :top3)
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache(x_free0, ctx, base)
-    D = ctx.D; D2 = D^2
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    D = ctx.D
+    # Ddest (destination count) -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23).
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    D2 = D * Ddest
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
 
     g = zeros(D2)

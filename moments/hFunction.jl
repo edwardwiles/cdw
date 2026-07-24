@@ -1,39 +1,40 @@
 function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMoment, localGravityMoment, GravityMomentFirstApproach,independenceMoment, μHat, UoModel)
-	# main function to fill in the moment matrix G for the baseline moments 
+	# main function to fill in the moment matrix G for the baseline moments
 
-	D = size(τ, 1) # num countries 
+	D = size(τ, 1) # num origins (countries) -- always the full set
+	Ddest = size(τ, 2) # num destinations -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23)
 	W = size(UPow, 1) # num draws (or goods)
-	tuner = -100.0 # parameter for smooth mins 
-	l = D^2
+	tuner = -100.0 # parameter for smooth mins
+	l = D * Ddest
 
 	gdp = (w .* L)
 
-	# initialise important vectors 
+	# initialise important vectors
 	pricesTemp = zeros(eltype(γ), D)
 	pricesTempσ = copy(pricesTemp)
 
 	pricesInd = copy(pricesTemp)
-	denom = copy(pricesTemp)
-	constCons = zeros(eltype(γ), D, D)
+	denom = zeros(eltype(γ), Ddest)
+	constCons = zeros(eltype(γ), D, Ddest)
 	constConsσ = copy(constCons)
 	wPow = zeros(eltype(γ), D)
 
-	ξ = zeros(eltype(γ), D, D)
+	ξ = zeros(eltype(γ), D, Ddest)
 
 
-	# identify the part of G matrix where we put the price index moments; we omit wage moments if autarky 
+	# identify the part of G matrix where we put the price index moments; we omit wage moments if autarky
 	if counterType != 1
-		cInd = D^2 + D - 1
+		cInd = D * Ddest + D - 1
 	else
-		cInd = D^2
+		cInd = D * Ddest
 	end
 
 	for d ∈ 1:D
-		wPow[d] = w[d]^(1 - σ) # will need transformed wages many times, so do it once here 
+		wPow[d] = w[d]^(1 - σ) # will need transformed wages many times, so do it once here (origin-indexed despite the loop variable name)
 	end
 
 	# construct objects that we will need but that never change with omega
-	for d ∈ 1:D
+	for d ∈ 1:Ddest
 		denom[d] = γ[d]^σ * gdp[d]
 		for o ∈ 1:D
 			constCons[o, d] = w[o] * Aod[o, d] * τ[o, d]
@@ -42,21 +43,21 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 	end
 
 	if localGravityMoment == 1
-		for d ∈ 1:D
+		for d ∈ 1:Ddest
 			for o ∈ 1:D
-				d1 = d + (o - 1) * D
+				d1 = d + (o - 1) * Ddest
 				ξ[o, d] = P[d1] * denom[d]
 			end
 		end
 	end
 
 	# loop to fill in the G matrix
-	@inbounds for ω ∈ 1:W # main loop over all goods 
+	@inbounds for ω ∈ 1:W # main loop over all goods
 
-		for d ∈ 1:D # loop through all destination countries 
+		for d ∈ 1:Ddest # loop through all (named) destination countries
 
 			for o ∈ 1:D # for each origin, construct p_{od}
-				o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o 
+				o1 = o + (d - 1) * D # uncomment to to U_{od} rather than U_o
 				if UoModel == 1
 					o1 = o
 				end
@@ -80,7 +81,7 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 
 
 			for o ∈ 1:D # using min prices, compute implied expenditure share and fill in G with implied minus data
-				d1 = d + (o - 1) * D
+				d1 = d + (o - 1) * Ddest
 				pricesTemp[o] = pricesTempσ[o] * pricesInd[o]
 				G[ω, d1] = pricesTemp[o] - P[d1]*denom[d]
 				indSum += pricesTemp[o]
@@ -98,38 +99,39 @@ function hFunction!(G, UPow, Uσ, w, τ, σ, γ, Aod, L, P, counterType, gravMom
 end
 
 function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, baseIndex, UoModel)
-	# same as hFunction, except fills in counterfactual parts of G and fills in K 
+	# same as hFunction, except fills in counterfactual parts of G and fills in K
 
-	D = size(τ, 1)
+	D = size(τ, 1)      # num origins -- always the full set
+	Ddest = size(τ, 2)   # num destinations -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23)
 	W = size(UPow, 1)
 	tuner = -100
-	l = D^2
+	l = D * Ddest
 
 	gdp = (w .* L)
 
 	pricesTemp = zeros(eltype(γ), D)
 	pricesTempσ = copy(pricesTemp)
 	pricesInd = copy(pricesTemp)
-	pricesCounterVec = zeros(eltype(γ), D^2)
-	denom = copy(pricesTemp)
-	constCons = zeros(eltype(γ), D, D)
+	pricesCounterVec = zeros(eltype(γ), D * Ddest)
+	denom = zeros(eltype(γ), Ddest)
+	constCons = zeros(eltype(γ), D, Ddest)
 	constConsσ = copy(constCons)
 	wPow = zeros(eltype(γ), D)
 
 	if counterType != 1
-		bInd = D^2
-		cInd = D^2 + D - 1
-		dInd = D^2 + 2 * D - 1
+		bInd = D * Ddest
+		cInd = D * Ddest + D - 1
+		dInd = D * Ddest + 2 * D - 1
 	else
-		cInd = D^2
-		dInd = D^2 + D
+		cInd = D * Ddest
+		dInd = D * Ddest + D
 	end
 
 	for d ∈ 1:D
 		wPow[d] = w[d]^(1 - σ)
 	end
 
-	for d ∈ 1:D
+	for d ∈ 1:Ddest
 		denom[d] = γ[d]^σ * gdp[d]
 		for o ∈ 1:D
 			constCons[o, d] = w[o] * Aod[o, d] * τ[o, d]
@@ -197,8 +199,9 @@ function hFunctionCounter!(K, G, UPow, Uσ, w, τ, σ, γ, Aod, L, counterType, 
 		end
 
 		# reduced autarky layout: single counterfactual price-index moment sits right after the
-		# D^2 trade-share moments (baseline price-index moments dropped as redundant).
-		@. G[:, D^2+1] = constConsσ[baseIndex, baseIndex] ./ Uσ[:, o1] .- denom[baseIndex]
+		# D*Ddest trade-share moments (baseline price-index moments dropped as redundant).
+		# D*Ddest==D^2 unless row_idx excludes ROW as a destination (Part A, 2026-07-23).
+		@. G[:, D*Ddest+1] = constConsσ[baseIndex, baseIndex] ./ Uσ[:, o1] .- denom[baseIndex]
 		#=
 		@inbounds for ω ∈ 1:W
 			# we need only baseIndex, so we do not need to identify the price index for other countries

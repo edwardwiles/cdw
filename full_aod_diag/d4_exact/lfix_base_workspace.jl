@@ -146,6 +146,12 @@ function build_lfix_base_cache!(ws::LFixBaseWorkspace, x_free0::AbstractVector, 
     ws.valid = false
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    # This persistent-workspace backend is still square-only (D x D tensors throughout) --
+    # NOT generalized to D x Ddest this pass (out of scope, see lfix_incremental.jl's
+    # allocating build_lfix_base_cache for the true-shrink-aware version). Hard-error rather
+    # than silently misbehave if ever handed a rectangular (:exclude_row) context.
+    Ddest_here = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    Ddest_here == D || error("build_lfix_base_cache!: this workspace-pooled backend is still square-only (D=$D, Ddest=$Ddest_here) -- not implemented for destination_sample=:exclude_row.")
     (ws.D == D && ws.W == W) || throw(DimensionMismatch(
         "build_lfix_base_cache!: workspace is (D=$(ws.D),W=$(ws.W)), context needs (D=$D,W=$W) -- call ensure_lfix_workspace! first"))
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
@@ -230,7 +236,7 @@ function build_lfix_base_cache!(ws::LFixBaseWorkspace, x_free0::AbstractVector, 
     ws.fingerprint = _lfix_ws_fingerprint(x_free0, ctx)
     ws.valid = true
 
-    return LFixBaseCache(D, oci, W, μ, σ, bi, gammafac, ws.SW, ws.denom, ws.CONST_d, price0, pTσ0,
+    return LFixBaseCache(D, D, oci, W, μ, σ, bi, gammafac, ws.SW, ws.denom, ws.CONST_d, price0, pTσ0,
         winner0, winner_price0, runnerup0, runnerup_price0,
         third0, third_price0, third_pTσ0, contrib0,
         λstar, base.ζstar, q0, wPrime_bi, τPrime_bi, LPrime_bi, ws.Uσ_bi, λ_cf, ws.cf_contrib0)

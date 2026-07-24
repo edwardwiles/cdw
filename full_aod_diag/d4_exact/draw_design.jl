@@ -129,7 +129,12 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
         needs_outer_moment_jacobian::Bool = false, build_screen::Bool = true,
-        log_draw_meta::Bool = true)
+        log_draw_meta::Bool = true,
+        # Part A (2026-07-23): passthrough to d20_real_setup's own destination_sample kwarg
+        # (default :exclude_row, matching that function's new default). CM/originZC checkpoint
+        # callers (cm_checkpoint.jl, cm_originzc_checkpoint.jl) explicitly pass :all_legacy here
+        # since their moment/pivot-elimination layers are not rectangularized in this release.
+        destination_sample::Symbol = :exclude_row)
     draw_design in VALID_DRAW_DESIGNS ||
         error("d20_real_setup_design: draw_design must be one of $(VALID_DRAW_DESIGNS), got :$(draw_design)")
 
@@ -142,10 +147,16 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         Random.seed!(draw_seed)
         t_ctx = @elapsed ctx0 = d20_real_setup(W = W, δ = δ, find_smallest = find_smallest,
             outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
-            needs_outer_moment_jacobian = needs_outer_moment_jacobian, build_screen = build_screen)
+            needs_outer_moment_jacobian = needs_outer_moment_jacobian, build_screen = build_screen,
+            destination_sample = destination_sample)
         timing = (uniform_and_transform = NaN, ctx_build = t_ctx,
                   pairwise = ctx0.screen_setup_wall.pairwise, witness = ctx0.screen_setup_wall.witness)
     else
+        # Part A (2026-07-23): d20_real_setup_qmc is a separate implementation that predates and
+        # does not know about destination_sample/row_idx -- error rather than silently building a
+        # square-D20_REAL context under a caller that believes it requested :exclude_row.
+        destination_sample === :exclude_row &&
+            error("d20_real_setup_design: destination_sample=:exclude_row is not supported with draw_design=:$draw_design (only :pseudorandom routes through the rectangularized d20_real_setup) -- pass destination_sample=:all_legacy explicitly if you intend square D x D behavior here.")
         D = D20_REAL
         gen = draw_design == :sobol_randomized ? sobol_U : halton_U
         t_gen = @elapsed Uexp = gen(W, D; seed = draw_seed)

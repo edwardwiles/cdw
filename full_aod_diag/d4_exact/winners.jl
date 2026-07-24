@@ -21,15 +21,16 @@
 function factual_prices(θ_full::AbstractVector, ctx)
     @unpack wHat, τ, cHat, P = ctx.γ
     D = ctx.D; U = ctx.U; W = size(U, 1)
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
     μ = θ_full[1]
-    lambda = reshape(P, (D, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    lambda = reshape(P, (Ddest, D))'
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* cHat .* (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod ./ cHat) .^ (-μ)
-    constCons = [wHat[o] * AodPow[o, d] * τ[o, d] for o in 1:D, d in 1:D]
+    constCons = [wHat[o] * AodPow[o, d] * τ[o, d] for o in 1:D, d in 1:Ddest]
     UPow = U .^ (-μ)   # W x D, θConstant != 1 branch (matches EK_moments_gammanorm_directgp!)
-    price = Array{Float64}(undef, W, D, D)
-    @inbounds for d in 1:D, o in 1:D, ω in 1:W
+    price = Array{Float64}(undef, W, D, Ddest)
+    @inbounds for d in 1:Ddest, o in 1:D, ω in 1:W
         price[ω, o, d] = constCons[o, d] / UPow[ω, o]
     end
     return price, Aod, AodPow
@@ -45,10 +46,10 @@ used by section 11's diagnostics).
 """
 function compute_winners(θ_full::AbstractVector, ctx)
     price, Aod, AodPow = factual_prices(θ_full, ctx)
-    D = ctx.D; W = size(price, 1)
-    winner = Matrix{Int}(undef, W, D)
-    gap = Matrix{Float64}(undef, W, D)
-    @inbounds for d in 1:D, ω in 1:W
+    W = size(price, 1); Ddest = size(price, 3)
+    winner = Matrix{Int}(undef, W, Ddest)
+    gap = Matrix{Float64}(undef, W, Ddest)
+    @inbounds for d in 1:Ddest, ω in 1:W
         col = @view price[ω, :, d]
         wmin, wo = findmin(col)
         s = sort(col)
@@ -69,22 +70,23 @@ plausible -- required before trusting any hard-winner diagnostic built on it.
 """
 function validate_winners_against_hFunction(θ_full::AbstractVector, ctx; rtol = 1e-10)
     D = ctx.D; U = ctx.U; W = size(U, 1)
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
     K = zeros(W); G = zeros(W, ctx.nTotalMoments)
     EK_moments_gammanorm_directgp!(K, G, θ_full, U, ctx.obj)
 
     @unpack wHat, τ, cHat, P = ctx.γ
     σ = θ_full[2]; μ = θ_full[1]
-    lambda = reshape(P, (D, D))'
+    lambda = reshape(P, (Ddest, D))'
     winner, price, gap = compute_winners(θ_full, ctx)
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* cHat .* (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod ./ cHat) .^ (-μ)
     wPow = wHat .^ (1 - σ)
-    constConsσ = [wPow[o] * (AodPow[o, d] * τ[o, d])^(1 - σ) for o in 1:D, d in 1:D]
+    constConsσ = [wPow[o] * (AodPow[o, d] * τ[o, d])^(1 - σ) for o in 1:D, d in 1:Ddest]
     # hFunction!'s "Uσ" parameter actually RECEIVES UσPow = ctx.γ.Uσ .^ (-μ) from the caller
     # (EK_moments_gammanorm_directgp!'s θConstant!=1 branch) -- not ctx.γ.Uσ directly.
     UσPow = ctx.γ.Uσ .^ (-μ)
-    denom = [1.0^σ * (wHat[d] * ctx.γ.L[d]) for d in 1:D]  # gamma[d]==1 under this gauge
+    denom = [1.0^σ * (wHat[d] * ctx.γ.L[d]) for d in 1:Ddest]  # gamma[d]==1 under this gauge
 
     # EK_moments_gammanorm_directgp! applies TWO post-hFunction! rescalings this replication must
     # match: (1) division by gamma(mu*(1-sigma)+1) for every trade-share/price-index column
@@ -95,9 +97,9 @@ function validate_winners_against_hFunction(θ_full::AbstractVector, ctx; rtol =
     SW = ctx.γ.SamplingWeights
 
     maxerr = 0.0
-    @inbounds for d in 1:D, ω in 1:W
+    @inbounds for d in 1:Ddest, ω in 1:W
         o = winner[ω, d]
-        d1 = d + (o - 1) * D
+        d1 = d + (o - 1) * Ddest
         pTσ = constConsσ[o, d] / UσPow[ω, o]
         predicted = ((pTσ - P[d1] * denom[d]) / gammafac) * SW[ω]
         maxerr = max(maxerr, abs(predicted - G[ω, d1]))

@@ -227,6 +227,9 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
 
     mode == :hard || error("evaluate_fullA_fast: mode=:$mode not implemented (matches oracle.jl)")
 
+    # Part A (2026-07-23): see oracle.jl::evaluate_fullA for the same fallback rationale.
+    D_dest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+
     obj = ctx.obj
     key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode, context_fingerprint(ctx))
 
@@ -267,7 +270,7 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
     if !solved
         elapsed = (total = time() - t_total0, inner = t_inner, post = 0.0)
         result = (x_free = collect(x_free), θ_full = θ_full,
-                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
+                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, D_dest),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
                   gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
@@ -312,16 +315,16 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
     max_abs_moment_kkt_resid = @prof "kkt_residual_compute" kkt_residual_blas(G, m_weights, nkkt, W)
 
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*D_dest], ctx.D, D_dest)
     μ_here = θ_full[1]
-    lambda_g = reshape(ctx.γ.P, (ctx.D, ctx.D))'
+    lambda_g = reshape(ctx.γ.P, (D_dest, ctx.D))'
     gravity_val, logA, R_sum, R_mean, R_beta = @prof "gravity_compute" begin
         Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
         AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
         gv = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)
         lA = -log.(AodPow)
         rs = sum(ctx.q_tilde .* lA)
-        (gv, lA, rs, rs / ctx.D^2, rs / sum(ctx.q_tilde .^ 2))
+        (gv, lA, rs, rs / (ctx.D * D_dest), rs / sum(ctx.q_tilde .^ 2))
     end
 
     # Phase 1C fix: preallocated reduction instead of sum(G,dims=1) (a full temp-array allocation).

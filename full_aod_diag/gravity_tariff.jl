@@ -60,9 +60,9 @@ Precompute ONCE per economy (data-only): the FE-residualized log-cost
 regressor and the observation count for the FULL D×D grid.
 """
 function precompute_q_tilde(τ::AbstractMatrix)
-    D = size(τ, 1)
-    q_tilde = withinTransform(τ)    # = within(log(τ)); τ stands in for (1+tariff) in this dataset
-    N_obs = D^2
+    D, Ddest = size(τ)   # Ddest==D unless τ is already destination-restricted (row_idx, Part A 2026-07-23)
+    q_tilde = within_transform_rect(τ)    # = within(log(τ)); τ stands in for (1+tariff) in this dataset
+    N_obs = D * Ddest
     return q_tilde, N_obs
 end
 
@@ -78,11 +78,11 @@ the caller-supplied `AodPow` (kept as an explicit argument for clarity /
 testability against the existing formula).
 """
 function gravity_value(τ::AbstractMatrix, AodPow::AbstractMatrix, q_tilde::AbstractMatrix, N_obs::Int)
-    Wτ = withinTransform(τ)
-    WAodPow = withinTransform(AodPow)
+    Wτ = within_transform_rect(τ)
+    WAodPow = within_transform_rect(AodPow)
     sumGrav = zero(eltype(WAodPow))
-    D = size(τ, 1)
-    @inbounds for o in 1:D, d in 1:D
+    D, Ddest = size(τ)
+    @inbounds for o in 1:D, d in 1:Ddest
         sumGrav += Wτ[o, d] * WAodPow[o, d]
     end
     return -sumGrav / N_obs
@@ -101,7 +101,8 @@ zero, since g_gravity depends on Aod_θ ONLY.
 function gravity_grad_free!(g_free::AbstractVector, x_free::AbstractVector, D::Int,
         Aod_free_pos::AbstractMatrix{Int}, μ::Real, q_tilde::AbstractMatrix, N_obs::Int)
     fill!(g_free, 0.0)
-    @inbounds for o in 1:D, d in 1:D
+    Ddest = size(Aod_free_pos, 2)   # Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23); derived from Aod_free_pos's own shape rather than a new arg so existing callers (D4/D10 legacy production) need no changes
+    @inbounds for o in 1:D, d in 1:Ddest
         k = Aod_free_pos[o, d]
         Aod_theta_od = x_free[k]
         g_free[k] = (q_tilde[o, d] / N_obs) * (μ / Aod_theta_od)

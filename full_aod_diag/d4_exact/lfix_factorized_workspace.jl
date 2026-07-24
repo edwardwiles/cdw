@@ -29,6 +29,7 @@ ONCE per `(D,W)`, refilled on every subsequent call -- never reallocated at a fi
 """
 mutable struct LFixFactorizedWorkspace
     D::Int
+    Ddest::Int
     W::Int
     valid::Bool
     logCC0::Matrix{Float64}
@@ -49,27 +50,34 @@ mutable struct LFixFactorizedWorkspace
     cf_contrib0::Vector{Float64}
 end
 
-"`build_lfix_factorized_workspace(D, W)` -- one-time allocation of every persistent array Backend C+ needs."
-function build_lfix_factorized_workspace(D::Int, W::Int)
-    return LFixFactorizedWorkspace(D, W, false,
-        Matrix{Float64}(undef, D, D), Matrix{Float64}(undef, W, D),
-        Matrix{Int}(undef, W, D), Matrix{Float64}(undef, W, D),
-        Matrix{Int}(undef, W, D), Matrix{Float64}(undef, W, D),
-        Matrix{Int}(undef, W, D), Matrix{Float64}(undef, W, D),
-        Matrix{Float64}(undef, W, D),
-        Vector{Float64}(undef, W), Vector{Float64}(undef, D), Vector{Float64}(undef, D),
-        Matrix{Float64}(undef, W, D), Vector{Float64}(undef, W),
+"`build_lfix_factorized_workspace(D, Ddest, W)` -- one-time allocation of every persistent array Backend C+ needs. Ddest==D unless row_idx excludes ROW as a destination."
+function build_lfix_factorized_workspace(D::Int, Ddest::Int, W::Int)
+    return LFixFactorizedWorkspace(D, Ddest, W, false,
+        Matrix{Float64}(undef, D, Ddest), Matrix{Float64}(undef, W, D),
+        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest),
+        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest),
+        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest),
+        Matrix{Float64}(undef, W, Ddest),
+        Vector{Float64}(undef, W), Vector{Float64}(undef, Ddest), Vector{Float64}(undef, Ddest),
+        Matrix{Float64}(undef, W, Ddest), Vector{Float64}(undef, W),
         Vector{Float64}(undef, W), Vector{Float64}(undef, W))
 end
 
-"Mirror of `ensure_lfix_workspace!` for the factorized backend -- rebuilds only on a genuine (D,W) change."
-function ensure_lfix_factorized_workspace!(ws_ref::Base.RefValue{LFixFactorizedWorkspace}, D::Int, W::Int)
+"Backward-compatible 2-arg form (Ddest==D, the square :all_legacy case)."
+build_lfix_factorized_workspace(D::Int, W::Int) = build_lfix_factorized_workspace(D, D, W)
+
+"Mirror of `ensure_lfix_workspace!` for the factorized backend -- rebuilds only on a genuine (D,Ddest,W) change."
+function ensure_lfix_factorized_workspace!(ws_ref::Base.RefValue{LFixFactorizedWorkspace}, D::Int, Ddest::Int, W::Int)
     ws = ws_ref[]
-    if ws.D != D || ws.W != W
-        ws_ref[] = build_lfix_factorized_workspace(D, W)
+    if ws.D != D || ws.Ddest != Ddest || ws.W != W
+        ws_ref[] = build_lfix_factorized_workspace(D, Ddest, W)
     end
     return ws_ref[]
 end
+
+"Backward-compatible 2-arg form (Ddest==D, the square :all_legacy case)."
+ensure_lfix_factorized_workspace!(ws_ref::Base.RefValue{LFixFactorizedWorkspace}, D::Int, W::Int) =
+    ensure_lfix_factorized_workspace!(ws_ref, D, D, W)
 
 """
     build_winner_ref!(ws, x_free0, ctx; check_ties=true) -> WinnerRefCache
@@ -81,8 +89,9 @@ Returns a `WinnerRefCache` whose array fields alias `ws`'s buffers.
 function build_winner_ref!(ws::LFixFactorizedWorkspace, x_free0::AbstractVector, ctx; check_ties::Bool = true)
     θ_full0 = CS.reconstruct_full(x_free0, ctx.m)
     D = ctx.D; U = ctx.U; W = size(U, 1)
-    (ws.D == D && ws.W == W) || throw(DimensionMismatch(
-        "build_winner_ref!: workspace is (D=$(ws.D),W=$(ws.W)), context needs (D=$D,W=$W) -- call ensure_lfix_factorized_workspace! first"))
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    (ws.D == D && ws.Ddest == Ddest && ws.W == W) || throw(DimensionMismatch(
+        "build_winner_ref!: workspace is (D=$(ws.D),Ddest=$(ws.Ddest),W=$(ws.W)), context needs (D=$D,Ddest=$Ddest,W=$W) -- call ensure_lfix_factorized_workspace! first"))
     μ = θ_full0[1]; σ = θ_full0[2]
     constCons0, _, _ = constCons_matrix(θ_full0, ctx)
     ws.logCC0 .= log.(constCons0)
@@ -93,7 +102,7 @@ function build_winner_ref!(ws::LFixFactorizedWorkspace, x_free0::AbstractVector,
     third = ws.third; st3 = ws.st3; margin = ws.margin
     scol = Vector{Float64}(undef, D)   # O(D), negligible -- not the allocation target
     n_tied = 0; tied = Tuple{Int,Int}[]
-    @inbounds for d in 1:D
+    @inbounds for d in 1:Ddest
         for s in 1:W
             for o in 1:D
                 scol[o] = ws.logCC0[o, d] + ws.mulU[s, o]
@@ -121,7 +130,7 @@ function build_winner_ref!(ws::LFixFactorizedWorkspace, x_free0::AbstractVector,
         end
     end
     check_ties && n_tied > 0 && throw(TiedWinnerError(n_tied, tied))
-    return WinnerRefCache(D, W, μ, σ, ws.logCC0, ws.mulU, winner, sw, runnerup, sr,
+    return WinnerRefCache(D, Ddest, W, μ, σ, ws.logCC0, ws.mulU, winner, sw, runnerup, sr,
                           third, st3, margin, collect(x_free0), θ_full0)
 end
 
@@ -136,31 +145,35 @@ function build_lfix_base_cache_C!(ws::LFixFactorizedWorkspace, x_free0::Abstract
     ws.valid = false
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
     γo = ctx.γ
     gammafac = spgamma(μ * (1 - σ) + 1)
     ws.SW .= @view γo.SamplingWeights[1:W]
-    for d in 1:D
+    for d in 1:Ddest
         ws.denom[d] = γo.wHat[d] * γo.L[d]
     end
     λstar = base.λstar
 
     ref = build_winner_ref!(ws, x_free0, ctx)
 
+    # CONST_d/contrib0's d1/d1w are linear indices into λstar/γ.P -- stride Ddest
+    # (destination count), NOT D (origin count); see moments-vs-aod-linear-index-
+    # convention memory.
     CONST_d = ws.CONST_d
-    for d in 1:D
+    for d in 1:Ddest
         s = 0.0
         for o in 1:D
-            d1 = d + (o - 1) * D
+            d1 = d + (o - 1) * Ddest
             s += λstar[d1] * (-γo.P[d1] * ws.denom[d])
         end
         CONST_d[d] = s
     end
 
     contrib0 = ws.contrib0
-    @inbounds for d in 1:D, ω in 1:W
+    @inbounds for d in 1:Ddest, ω in 1:W
         wo = ref.winner[ω, d]
-        d1w = d + (wo - 1) * D
+        d1w = d + (wo - 1) * Ddest
         pTσ_wo = pTσ_from_score(ref.sw[ω, d], σ)
         contrib0[ω, d] = (ws.SW[ω] / gammafac) * (CONST_d[d] + λstar[d1w] * pTσ_wo)
     end
@@ -170,7 +183,7 @@ function build_lfix_base_cache_C!(ws::LFixFactorizedWorkspace, x_free0::Abstract
     τPrime_bi = γo.τPrime[bi, bi]
     LPrime_bi = γo.LPrime[bi]
     ws.Uσ_bi .= @view(γo.Uσ[:, bi]) .^ (-μ)
-    d1_cf = D^2 + 1
+    d1_cf = D * Ddest + 1   # D*Ddest==D^2 unless row_idx excludes ROW
     λ_cf = oci - 1 >= d1_cf ? λstar[d1_cf] : 0.0
 
     AodPow_bibi0 = aod_pow_cell(base.θ_full0, ctx, bi, bi)
@@ -196,7 +209,7 @@ function build_lfix_base_cache_C!(ws::LFixFactorizedWorkspace, x_free0::Abstract
     end
 
     ws.valid = true
-    return LFixBaseCacheC(D, oci, W, μ, σ, bi, gammafac, ws.SW, ws.denom, ws.CONST_d, ref, contrib0,
+    return LFixBaseCacheC(D, Ddest, oci, W, μ, σ, bi, gammafac, ws.SW, ws.denom, ws.CONST_d, ref, contrib0,
         λstar, base.ζstar, q0, wPrime_bi, τPrime_bi, LPrime_bi, ws.Uσ_bi, λ_cf, ws.cf_contrib0)
 end
 
@@ -239,7 +252,7 @@ function dest_contrib_incremental_top3_C!(contrib_buf::AbstractVector, cache::LF
             end
         end
         pTσ_wo = pTσ_from_score(bs, σ)
-        d1w = d + (bo - 1) * D
+        d1w = d + (bo - 1) * cache.Ddest
         contrib_buf[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
     end
     return contrib_buf
@@ -329,8 +342,10 @@ function composite_gradient_at_Cplus(x_free0::AbstractVector, ctx, pe, pool::Gra
 
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache_C!(ws, x_free0, ctx, base; validate_dense = false)
-    D = ctx.D; D2 = D^2; W = cache.W
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    D = ctx.D
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    D2 = D * Ddest; W = cache.W
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
 
     g = zeros(D2)

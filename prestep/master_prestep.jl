@@ -16,14 +16,24 @@ function master_prestep(data, counters, globalParams)
 	counterType = globalParams.counterType
 	D = globalParams.D
 
+	# row_idx: destination to exclude from the estimation/moment sample (Part A, 2026-07-23
+	# omit-ROW-destination release). nothing (default, absent from globalParams for every
+	# pre-existing caller) reproduces today's square D x D behavior exactly -- named_dest==1:D,
+	# and within_transform_rect(lambda)==withinTransform(lambda) bit-exact on a square input, so
+	# this branch is dimension-agnostic, not a fork.
+	row_idx = get(globalParams, :row_idx, nothing)
+	named_dest = row_idx === nothing ? (1:D) : filter(!=(row_idx), 1:D)
+	Ddest = length(named_dest)
+
 	# Step 1: Estimate thetaHat via gravity or prespecified.
 	# Gravity = OLS of ln λ on ln τ with origin + destination fixed effects; by FWL this is the
 	# two-way "within" transform (matches the gravity-moment constraint used in the outer loop).
 	# (The previous version used a cell-referenced double-difference, which does NOT equal the
-	#  two-way-FE coefficient — see gravity_check.jl.)
+	#  two-way-FE coefficient — see gravity_check.jl.) Restricted to named_dest columns so that
+	# excluding ROW as a destination re-estimates theta on the correct rectangular sample.
 	if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
-		Wlambda = withinTransform(lambda)
-		Wtau = withinTransform(tau)
+		Wlambda = within_transform_rect(lambda[:, named_dest])
+		Wtau = within_transform_rect(tau[:, named_dest])
 		thetaHat = -sum(Wlambda .* Wtau) / sum(Wtau .* Wtau)
 	elseif thetaIn > 0
 		thetaHat = thetaIn
@@ -95,22 +105,30 @@ function master_prestep(data, counters, globalParams)
 
 
 
+	# named_dest-restricted A_od initial guesses (true dimension shrink: D*Ddest elements, not
+	# D^2 -- the ROW column of these one-time calibration matrices is simply never flattened
+	# into the outer free-parameter vector). γHat/γPrimeHat/cHat are left at their full-D
+	# destination extent below: γHat/γPrimeHat feed only the inert, unread "old γ_θ" θ-slots
+	# (moments_gammanorm.jl: "θ[3:2+D] intentionally NOT READ") and the baseIndex-indexed κ
+	# printout above (a per-destination-column quantity, unaffected by other columns'
+	# presence/absence) -- cHat is genuinely destination-indexed data consumed downstream
+	# (Aod = Aod_θ .* cHat .* ...) and IS sliced here to match Aod_θ's (D, Ddest) shape.
 	output = (μHat = 1 ./ thetaHat,
 		wHat = wHat[:],
-		cHat = cHat,
+		cHat = cHat[:, named_dest],
 		λPrime = lambdaPrime,
 		wPrimeHat = wPrimeHat[:],
 		γHat = gammaHat[:],
 		γPrimeHat = gammaPrimeHat[:],
-		Aod_initial = ones(D^2),
+		Aod_initial = ones(D * Ddest),
 		wPrimeHat_upper = copy(wPrimeHat[:]),
 		γHat_upper = copy(gammaHat_up[:]),
 		γPrimeHat_upper = copy(gammaPrimeHat_up[:]),
-		Aod_initial_upper = reshape(Aod_initial_up, D^2)[:],
+		Aod_initial_upper = reshape(Aod_initial_up[:, named_dest], D * Ddest)[:],
 		wPrimeHat_lower = copy(wPrimeHat[:]),
 		γHat_lower = copy(gammaHat_low[:]),
 		γPrimeHat_lower = copy(gammaPrimeHat_low[:]),
-		Aod_initial_lower = reshape(Aod_initial_low, D^2)[:])
+		Aod_initial_lower = reshape(Aod_initial_low[:, named_dest], D * Ddest)[:])
 
 	# GT defined baseline -> autarky: 1 - (γ'/γ)^{σ/(σ-1)} (matches counterVal in moments!.jl)
 	κ = 1 - (output.γPrimeHat[globalParams.baseIndex] / output.γHat[globalParams.baseIndex])^(globalParams.σHat / (globalParams.σHat - 1))

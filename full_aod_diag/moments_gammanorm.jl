@@ -140,7 +140,7 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 	end
 
 	if gravMoment == 1
-		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel)
+		newGravityMoment!(G, τ, D, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel)
 	end
 
 	GravityMomentFirstApproach == 0 || error("gammanorm variant: GravityMomentFirstApproach not implemented")
@@ -148,7 +148,7 @@ function EK_moments_gammanorm!(K, G, θ, U, obj)
 	independenceMoment == 0 || error("gammanorm variant: independenceMoment not implemented")
 
 	if θConstant != 1
-		simple_end = D^2 + 1   # counterType==1 reduced layout
+		simple_end = D^2 + 1   # counterType==1 reduced layout; EK_moments_gammanorm! is not wired to any row_idx-aware context (square-only, unlike EK_moments_gammanorm_directgp!)
 		@. G[:, 1:simple_end] /= gamma(μ * (1 - σ) + 1)
 	end
 
@@ -214,7 +214,8 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	counterType == 1 || error("EK_moments_gammanorm_directgp! only implements counterType==1 (autarky)")
 
 	W = size(U, 1)
-	D = size(τ, 1)
+	D = size(τ, 1)      # origin count -- always the full country set
+	Ddest = size(τ, 2)  # destination count -- D unless row_idx excludes ROW (Part A, 2026-07-23)
 	T = eltype(θ)
 
 	μ = θ[1]
@@ -224,18 +225,18 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	wPrime = copy(obj.γ.wPrimeHat)
 	insert!(wPrime, baseIndex, 1)
 
-	Aod = ones(T, D, D)
-	AodPow = ones(T, D, D)
-	Aod_θ = ones(T, D, D)
+	Aod = ones(T, D, Ddest)
+	AodPow = ones(T, D, Ddest)
+	Aod_θ = ones(T, D, Ddest)
 	Aod_offset = 3 + D
 	if OuterScaling == 1
 		if independenceMoment == 1
 			Aod_offset += 1
 		end
-		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
+		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D*Ddest]), (D, Ddest))
 	end
 
-	lambda = reshape(P, (D, D))'
+	lambda = reshape(P, (Ddest, D))'
 
 	if θConstant != 1
 		Aod = Aod_θ .* cHat .* (((wHat .* τ) ./ (wHat[1, 1] .* τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
@@ -244,8 +245,8 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	end
 	@. AodPow[:, :] = (Aod[:, :] ./ cHat[:, :]) .^ (-μ)
 
-	γ = ones(T, D)
-	γ_prime = ones(T, D)
+	γ = ones(T, Ddest)
+	γ_prime = ones(T, Ddest)
 	γ_prime[baseIndex] = θ[3+D]
 
 	if counterExplicit == 0
@@ -281,7 +282,7 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	end
 
 	if gravMoment == 1
-		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel)
+		newGravityMoment!(G, τ, D, Ddest, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel)
 	end
 
 	GravityMomentFirstApproach == 0 || error("gammanorm variant: GravityMomentFirstApproach not implemented")
@@ -289,7 +290,7 @@ function EK_moments_gammanorm_directgp!(K, G, θ, U, obj)
 	independenceMoment == 0 || error("gammanorm variant: independenceMoment not implemented")
 
 	if θConstant != 1
-		simple_end = D^2 + 1
+		simple_end = D * Ddest + 1
 		@. G[:, 1:simple_end] /= gamma(μ * (1 - σ) + 1)
 	end
 
@@ -317,8 +318,8 @@ end
 
 "γ_dd (domestic/own trade share) for baseIndex — data constant the theoretical bound uses."
 lambda_dd_full(γobj) = begin
-	D = size(γobj.τ, 1); bi = γobj.baseIndex
-	reshape(γobj.P, (D, D))'[bi, bi]
+	D, Ddest = size(γobj.τ); bi = γobj.baseIndex
+	reshape(γobj.P, (Ddest, D))'[bi, bi]
 end
 
 """
@@ -360,7 +361,14 @@ caller must pin their bounds so the search never moves them).
 function build_theta_gammanorm(θ_initial::AbstractVector, D::Int, baseIndex::Int, μHat::Real, σ::Real)
 	θ = copy(θ_initial)
 	Aod_offset = 3 + D
-	for d in 1:D
+	# Ddest (destination count) derived from θ_initial's own length rather than a new argument,
+	# so this function's existing D4/D10 legacy callers need no changes: length(θ_initial) ==
+	# D + 3 (μ,σ,old γ_θ slots) + 1 (γ'_focal) + D*Ddest (Aod block); Ddest==D unless row_idx
+	# excludes ROW as a destination (Part A, 2026-07-23). The (d-1)*D column stride below is
+	# correct as-is for either case -- D (row/origin count) is the stride of a (D,Ddest)
+	# column-major Aod_θ reshape regardless of Ddest.
+	Ddest = (length(θ_initial) - D - 3) ÷ D
+	for d in 1:Ddest
 		γ0_d = θ_initial[2+d]
 		s_d = γ0_d^(-σ / (μHat * (σ - 1)))
 		for o in 1:D

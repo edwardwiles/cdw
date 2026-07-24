@@ -20,7 +20,8 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	NormalizeMoments = indicators
 
 	W = size(U, 1)
-	D = size(τ, 1)
+	D = size(τ, 1)      # origin count -- always the full country set
+	Ddest = size(τ, 2)  # destination count -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23)
 
 	# unpack the structural parameters vector
 	μ = θ[1]
@@ -52,11 +53,11 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 
 	# NB: element type follows θ so the moment map accepts ForwardDiff Duals
-	# (use_Jacobian=0 autodiff path). For Float64 θ this is identical to ones(D,D).
-	Aod = ones(eltype(θ), D, D)
-	AodPow = ones(eltype(θ), D, D)
+	# (use_Jacobian=0 autodiff path). For Float64 θ this is identical to ones(D,Ddest).
+	Aod = ones(eltype(θ), D, Ddest)
+	AodPow = ones(eltype(θ), D, Ddest)
 
-	Aod_θ = ones(eltype(θ), D, D)
+	Aod_θ = ones(eltype(θ), D, Ddest)
 	Aod_offset = counterType_θ_offset + 3 + D
 	if OuterScaling == 1 # Aod model
 		if independenceMoment == 1
@@ -64,10 +65,10 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		#elseif GravityMomentFirstApproach == 1 && sameMarginalsMoment == 0 && UoModel == 0
 		#	Aod_offset += D^2
 		end
-		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D^2]), (D, D))
+		Aod_θ = reshape(vcat(θ[Aod_offset+1:Aod_offset+D*Ddest]), (D, Ddest))
 	end
 
-	lambda = reshape(P, (D, D))'
+	lambda = reshape(P, (Ddest, D))'
 
 	if θConstant != 1
 		# adjust Aod such that if μ varies and Aod = 1, the model still matches trade shares for F= Frechet
@@ -87,10 +88,10 @@ function EK_moments_simple!(K, G, θ, U, obj)
 	γ = copy(γ_θ)
 	γ_prime = copy(γ_θ)
 
-	for d=1:D
+	for d=1:Ddest
 		ΔγA_d = 1
 		for o=1:D
-			d1 = d + (o - 1) * D
+			d1 = d + (o - 1) * Ddest
 			ΔγA_d *= Aod_θ[o,d]^(P[d1]*μ*(σ-1)/σ)
 		end
 		Δγμ_d = ((gamma(μ*(1-σ)+1)/gamma(μHat*(1-σ)+1))^(1/σ))*lambda[1,d]^((1-σ)*(μ-μHat)/σ) 
@@ -163,7 +164,7 @@ function EK_moments_simple!(K, G, θ, U, obj)
 		# MC_od = w_o·τ_od/(A_od·z_o) with the raw structural A_od = 1/AodPow. Hence
 		# ΔΔ ln(AodPow) = -ΔΔ ln(A_od), and Σ(ΔΔlnτ)·ΔΔ ln(AodPow)=0 is exactly the gravity
 		# consistency condition Σ ΔΔlnτ·ΔΔlnA_od = 0. So pass AodPow (= 1/A_od).
-		newGravityMoment!(G, τ, D, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel) # add gravity moment if using
+		newGravityMoment!(G, τ, D, Ddest, W, γ, AodPow, U, GravityMomentFirstApproach, UoModel) # add gravity moment if using
 	end
 
 	
@@ -209,9 +210,11 @@ function EK_moments_simple!(K, G, θ, U, obj)
 
 	#To change for other counterfactuals
 	if θConstant != 1
-	# EK simple moments to normalize by the gamma factor: full D^2+2D layout, or the reduced
-	# D^2+1 (trade shares + 1 counterfactual) under autarky's trimmed moment set.
-	simple_end = counterType == 1 ? D^2 + 1 : D^2 + 2*D
+	# EK simple moments to normalize by the gamma factor: full D*Ddest+2D layout, or the reduced
+	# D*Ddest+1 (trade shares + 1 counterfactual) under autarky's trimmed moment set. D*Ddest==D^2
+	# unless row_idx excludes ROW as a destination (Part A, 2026-07-23) -- the D*Ddest+2*D branch
+	# (counterType!=1) is unreachable with row_idx set (master_prepare_cc.jl guards counterType==1).
+	simple_end = counterType == 1 ? D*Ddest + 1 : D*Ddest + 2*D
 	@. G[:, 1:simple_end] /= gamma(μ*(1-σ)+1)
 	end
 

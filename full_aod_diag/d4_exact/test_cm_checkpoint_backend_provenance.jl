@@ -43,11 +43,18 @@ const CM_CONTRASTS = :orthonormal
 snaps = nested_grid_sequence([10, 20, 50])
 probs = snaps[L]
 
-ctx0 = d20_real_setup_design(W = W, δ = DELTA, find_smallest = true, draw_design = DRAW_DESIGN, draw_seed = DRAW_SEED)
+ctx0 = d20_real_setup_design(W = W, δ = DELTA, find_smallest = true, draw_design = DRAW_DESIGN, draw_seed = DRAW_SEED,
+    destination_sample = :all_legacy)   # this test exercises cm_gradient_backend provenance, not
+    # destination_sample -- pinned explicitly to :all_legacy (matches run_cm_upper_checkpointed's
+    # own default) rather than picking up d20_real_setup_design's separate :exclude_row default.
+    # Pre-existing latent bug found while validating the 2026-07-24 destination_sample follow-up:
+    # this test's un-pinned ctx0 build silently inherited the Part A (2026-07-23) default flip and
+    # its own reshape(...,D,D) below then failed on the resulting D*(D-1) free-parameter count --
+    # unrelated to (and predating) this session's own changes.
 pe0 = build_pivot_elimination(ctx0)
-D = ctx0.D
+D = ctx0.D; Ddest = ctx0.D_dest
 x_free_calib = ctx0.θ0_up[ctx0.free_idx]
-w0 = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], D, D)), pe0))
+w0 = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], D, Ddest)), pe0))
 
 println("="^100)
 println("TEST 1: Reference checkpoint -> Reference resume (same backend, no warning expected)")

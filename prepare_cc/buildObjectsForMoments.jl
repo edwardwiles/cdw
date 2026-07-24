@@ -42,6 +42,19 @@ function buildObjectsForMoments(
 
 	D = length(LData)
 
+	# row_idx: destination excluded from the moment sample (Part A, 2026-07-23
+	# omit-ROW-destination release). nothing (default) reproduces today's full-D^2 behavior
+	# exactly -- named_dest==1:D. τData/λData are sliced to named_dest columns HERE (the single
+	# place raw D x D data becomes D x Ddest for everything downstream: obj.γ.τ, the flattened
+	# trade-share vector P, and (via prestep_output.cHat, already sliced in master_prestep.jl)
+	# the moments callback's Aod construction). Origin axis (rows) is never sliced.
+	row_idx = get(globParams, :row_idx, nothing)
+	named_dest = row_idx === nothing ? (1:D) : filter(!=(row_idx), 1:D)
+	Ddest = length(named_dest)
+	τData = τData[:, named_dest]
+	λData = λData[:, named_dest]
+	τPrime = τPrime[:, named_dest]
+
 	indicators = (counterExplicit = counterExplicit,
 		counterType = counterType,
 		θConstant = θConstant,
@@ -73,7 +86,7 @@ function buildObjectsForMoments(
 		LPrime = LPrime,
 		τ = τData,
 		τPrime = τPrime,
-		P = reshape(λData', (1, D^2)),
+		P = reshape(λData', (1, D * Ddest)),
 		PMM = PMM,
 		σ_Moments = σ_Moments,
 		Moments_CS = Moments_CS,

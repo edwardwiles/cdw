@@ -18,8 +18,8 @@
 include(joinpath(@__DIR__, "context.jl"))   # -> AD_PARAMS, build_ad_context, master_setup etc., CS, d4_exact_setup
 
 "Build (so, pp, params_used) at an OVERRIDDEN (D, W), independent of the module-level AD_PARAMS constant."
-function build_ad_context_scaled(; D::Int, W::Int)
-    params = merge(AD_PARAMS, (DFake = D, W = W, Jac_W = W))
+function build_ad_context_scaled(; D::Int, W::Int, row_idx::Union{Nothing,Int} = nothing)
+    params = merge(AD_PARAMS, (DFake = D, W = W, Jac_W = W, row_idx = row_idx))
     so = master_setup(params)
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
     checkParams(up)
@@ -40,9 +40,16 @@ existing D=4 diagnostic function (`evaluate_fullA`, `compute_winners`,
 function d_exact_setup_scaled(; D::Int, W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
-        needs_outer_moment_jacobian::Bool = true)
-    so, pp, params_used = build_ad_context_scaled(D = D, W = W)
+        needs_outer_moment_jacobian::Bool = true,
+        # Part A (2026-07-23): OPT-IN only (default nothing, unchanged behavior for every
+        # existing D4/D6/D10 caller of this synthetic-economy builder). Passing row_idx=D lets
+        # the D=4 omit-ROW-destination validation test use country D as a pseudo-ROW destination
+        # (mirrors the prior experiment's row_destination_d4_equivalence_test.jl convention),
+        # without touching this function's default behavior at all.
+        row_idx::Union{Nothing,Int} = nothing)
+    so, pp, params_used = build_ad_context_scaled(D = D, W = W, row_idx = row_idx)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
+    Ddest = row_idx === nothing ? Dact : Dact - 1
     @unpack θ_initial, θ_initial_up, U, γ, outer_constr_index, nTotalMoments, complement_index, inequality_index = pp
     Aod_offset = 3 + Dact
 
@@ -59,13 +66,13 @@ function d_exact_setup_scaled(; D::Int, W::Int, δ::Float64 = 1.0, find_smallest
     θ_lo[3+Dact] = bounds.γp_lo; θ_hi[3+Dact] = bounds.γp_hi
 
     l_full = length(θ0_up)
-    free_idx = vcat(3 + Dact, collect(Aod_offset+1:Aod_offset+Dact^2))
+    free_idx = vcat(3 + Dact, collect(Aod_offset+1:Aod_offset+Dact*Ddest))
     fixed_idx = vcat(1, 2, collect(3:2+Dact))
     fixed_vals = θ0_up[fixed_idx]
     m = CS.FreeParamMap(l_full, free_idx, fixed_idx, fixed_vals)
-    @assert CS.n_free(m) == 1 + Dact^2
+    @assert CS.n_free(m) == 1 + Dact * Ddest
 
-    Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Dact]
+    Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Ddest]
     τ = γ.τ
     q_tilde, N_obs = precompute_q_tilde(τ)
 
@@ -78,7 +85,7 @@ function d_exact_setup_scaled(; D::Int, W::Int, δ::Float64 = 1.0, find_smallest
         needs_outer_moment_jacobian = needs_outer_moment_jacobian)
     @assert obj.outer_constr_index == obj.d
 
-    return (so = so, pp = pp, D = Dact, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
+    return (so = so, pp = pp, D = Dact, D_dest = Ddest, row_idx = row_idx, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
             θ0_up = θ0_up, θ_lo = θ_lo, θ_hi = θ_hi, l_full = l_full,
             free_idx = free_idx, fixed_idx = fixed_idx, fixed_vals = fixed_vals, m = m,
             Aod_offset = Aod_offset, Aod_free_pos = Aod_free_pos,

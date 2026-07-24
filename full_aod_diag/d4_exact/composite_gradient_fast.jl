@@ -146,9 +146,23 @@ function composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe;
             return g_fb, merge(meta_fb, (tie_fallback = true, tie_error = e))
         end
     end
-    D = ctx.D; D2 = D^2
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    D = ctx.D
+    # Ddest (destination count) -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23).
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    D2 = D * Ddest
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
+
+    # winner_cache_mode=:certificate (winner_certificate.jl) and h_mode=:quantile
+    # (bandwidth_quantile.jl) are BOTH still square-only (D^2/D x D reshape hardcodes, not
+    # generalized this pass -- out of scope per this release's own explicit follow-up list).
+    # Hard-error rather than silently misbehave under a true rectangular (:exclude_row) context.
+    if Ddest != D
+        h_mode == :quantile &&
+            error("composite_gradient_at_fast: h_mode=:quantile is not implemented for destination_sample=:exclude_row (Ddest=$Ddest != D=$D) -- bandwidth_quantile.jl is still square-only. Use h_mode=:adaptive/:fixed/:cached.")
+        winner_cache_mode == :certificate &&
+            error("composite_gradient_at_fast: winner_cache_mode=:certificate is not implemented for destination_sample=:exclude_row (Ddest=$Ddest != D=$D) -- winner_certificate.jl is still square-only. Use winner_cache_mode=:none.")
+    end
 
     g = zeros(D2)
     g[1] = gamma_component_analytic(cache, base, w0[1])
@@ -295,6 +309,8 @@ floating-point operation order. Documented and verified (not assumed) in
 `test_winner_accelerator_wiring.jl`.
 """
 function lfix_value_certified(cache::LFixBaseCache, wc::PersistentWinnerCache, ctx, x_free′::AbstractVector; threaded::Bool = false)
+    cache.D == cache.Ddest ||
+        error("lfix_value_certified: not implemented for destination_sample=:exclude_row (D=$(cache.D) != Ddest=$(cache.Ddest)) -- winner_certificate.jl's PersistentWinnerCache is still square-only, out of scope for this pass.")
     D = cache.D; W = cache.W
     winner′, wval′, stats = winner_value_update!(wc, ctx, x_free′; threaded = threaded)
 
@@ -327,8 +343,10 @@ machinery was built to avoid. `threaded` over the 2*D2 probes (safe: each probe 
 `profile_lfix_tiers.jl` already established for FD-probe-level threading).
 """
 function full_rebuild_gradient_fallback(x_free0::AbstractVector, ctx, pe, base::BaseDualState; h::Float64 = 0.01, threaded::Bool = true)
-    D = ctx.D; D2 = D^2
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    D = ctx.D
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    D2 = D * Ddest
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
     x_free_from_w(w) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
 

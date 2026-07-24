@@ -54,10 +54,10 @@ unchanged (that part was never the allocation hotspot per
 """
 function compute_winners_fast(θ_full::AbstractVector, ctx)
     price, Aod, AodPow = factual_prices(θ_full, ctx)
-    D = ctx.D; W = size(price, 1)
-    winner = Matrix{Int}(undef, W, D)
-    gap = Matrix{Float64}(undef, W, D)
-    @inbounds for d in 1:D, ω in 1:W
+    W = size(price, 1); Ddest = size(price, 3)
+    winner = Matrix{Int}(undef, W, Ddest)
+    gap = Matrix{Float64}(undef, W, Ddest)
+    @inbounds for d in 1:Ddest, ω in 1:W
         col = @view price[ω, :, d]
         wmin, wo, g = min_and_secondmin(col)
         gap[ω, d] = g

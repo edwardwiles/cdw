@@ -86,7 +86,7 @@ function primal_divergence(m_weights::AbstractVector)
     return sum(phi(W * mi / total) for mi in m_weights) / W
 end
 
-const CONTEXT_FINGERPRINT_SCHEMA = 1
+const CONTEXT_FINGERPRINT_SCHEMA = 2   # bumped for Part A (2026-07-23): digest content changed (destination_sample/row_idx/D_dest segment added)
 
 # AUD-08 fix: memoized per-ctx SHA-256 fingerprint, keyed by objectid(ctx.U) (uniquely identifies
 # one ctx's draw set/instance -- cheap identity lookup, avoids re-hashing large W x D draw
@@ -115,6 +115,17 @@ function context_fingerprint(ctx)::String
             write(buf, htol(Int64(CONTEXT_FINGERPRINT_SCHEMA)))
             write(buf, htol(Int64(ctx.D)))
             write(buf, htol(Int64(size(ctx.U, 1))))   # W
+            # Part A (2026-07-23, omit-ROW-destination): destination-sample identity, so a full-D
+            # and a ROW-excluded context can never be treated as fingerprint-equivalent even if
+            # they happened to share ctx.U by construction. row_idx/destination_sample absent
+            # (nothing/:all_legacy) reproduces the pre-Part-A digest exactly on this new segment
+            # (D_dest==D, "all_legacy" tag) -- old digests from before this field existed are still
+            # distinguished from it by CONTEXT_FINGERPRINT_SCHEMA below if that was bumped, but this
+            # segment's own content is a no-op addition for every legacy (row_idx===nothing) ctx.
+            write(buf, htol(Int64(hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D)))
+            row_idx_here = hasproperty(ctx, :row_idx) ? ctx.row_idx : nothing
+            write(buf, row_idx_here === nothing ? "all_legacy" : "exclude_row_$(row_idx_here)")
+            write(buf, row_idx_here === nothing ? "square_v1" : "rectangular_D_x_Dminus1_true_shrink_v1")
             if hasproperty(ctx, :draw_meta)
                 write(buf, ctx.draw_meta.checksum_uniform)
                 write(buf, ctx.draw_meta.checksum_transformed)
@@ -332,6 +343,11 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
 
     mode == :hard || error("evaluate_fullA: mode=:$mode not implemented -- only :hard (hFunction!'s MinInd! branch, this codebase's only wired path) exists. See docs/fullA_d4_code_audit.md sec 6.")
 
+    # Part A (2026-07-23): D_dest (destination count) defaults to ctx.D for any context builder
+    # that predates the omit-ROW-destination release and so has no D_dest field of its own --
+    # legacy square contexts (D_dest==D) are unaffected by this fallback.
+    D_dest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+
     obj = ctx.obj
     key = FullAEvalKey(collect(x_free), obj.δ, obj.find_smallest, obj.inner_loop_opt, mode, context_fingerprint(ctx))
     if cache !== nothing && use_cache
@@ -362,7 +378,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
     if !solved
         elapsed = (total = time() - t_total0, inner = t_inner, post = 0.0)
         result = (x_free = collect(x_free), θ_full = θ_full,
-                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
+                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, D_dest),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
                   gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
@@ -409,9 +425,9 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
     #      task-brief R_sum/R_mean/R_beta family, computed on the SAME q_tilde/N_obs machinery
     #      validated in gravity_tariff.jl / test_free_param_and_gravity.jl) ----
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN   # obj's own (possibly rescaled-by-caller) column; here UNSCALED raw value from a fresh obj(...) call
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*D_dest], ctx.D, D_dest)
     μ_here = θ_full[1]
-    lambda_g = reshape(ctx.γ.P, (ctx.D, ctx.D))'
+    lambda_g = reshape(ctx.γ.P, (D_dest, ctx.D))'
     Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
     AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
     gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)   # -(1/N_obs) sum q_tilde*log(A_od); see gravity_tariff.jl
@@ -420,7 +436,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
     # identity gravity_tariff.jl's own docstring proves (q_tilde already one-sided-residualized),
     # this equals sum(q_tilde .* logA) exactly -- reused here rather than re-demeaning logA.
     R_sum = sum(ctx.q_tilde .* logA)
-    R_mean = R_sum / ctx.D^2
+    R_mean = R_sum / (ctx.D * D_dest)
     R_beta = R_sum / sum(ctx.q_tilde .^ 2)
 
     benchmark_unweighted_moment_mean = vec(sum(G, dims=1)) ./ W

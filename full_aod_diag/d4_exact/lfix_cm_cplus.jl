@@ -82,8 +82,11 @@ function composite_gradient_at_Cplus_from_cache(x_free0::AbstractVector, ctx, pe
     h_mode in (:fixed, :cached) || error("composite_gradient_at_Cplus_from_cache: h_mode must be :fixed|:cached, got $h_mode")
     h_mode == :cached && bandwidth_cache === nothing && error("composite_gradient_at_Cplus_from_cache: h_mode=:cached requires a bandwidth_cache Dict")
 
-    D = ctx.D; D2 = D^2; W = cache.W
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    D = ctx.D
+    # Ddest (destination count) -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23).
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    D2 = D * Ddest; W = cache.W
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
 
     g = zeros(D2)

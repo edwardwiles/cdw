@@ -182,7 +182,11 @@ function aod_level_cell(θ_full::AbstractVector, ctx, o::Int, d::Int)
     γo = ctx.γ
     μ = θ_full[1]
     D = ctx.D
-    lambda_od = γo.P[d + (o - 1) * D]; lambda_1d = γo.P[d]   # lambda[1,d] = P[d+(1-1)*D] = P[d]
+    # γ.P's linear-index stride is Ddest (destination count), not D (origin count) --
+    # see gravity_elimination.jl::gravity_from_logz / hFunction.jl's own d1=d+(o-1)*Ddest
+    # convention (Part A, 2026-07-23). Ddest==D unless row_idx excludes ROW.
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    lambda_od = γo.P[d + (o - 1) * Ddest]; lambda_1d = γo.P[d]   # lambda[1,d] = P[d+(1-1)*Ddest] = P[d]
     Aod_θ_od = θ_full[ctx.Aod_offset + o + (d - 1) * D]
     return Aod_θ_od * γo.cHat[o, d] * ((γo.wHat[o] * γo.τ[o, d]) / (γo.wHat[1, 1] * γo.τ[1, d]))^(1 / μ) * (lambda_od / lambda_1d)
 end
@@ -254,28 +258,28 @@ function price_and_pTsigma_cell!(pbuf::AbstractVector, psbuf::AbstractVector,
 end
 
 struct LFixBaseCache
-    D::Int; oci::Int; W::Int; μ::Float64; σ::Float64; baseIndex::Int
+    D::Int; Ddest::Int; oci::Int; W::Int; μ::Float64; σ::Float64; baseIndex::Int
     gammafac::Float64
     SW::Vector{Float64}
-    denom::Vector{Float64}          # length D
-    CONST_d::Vector{Float64}        # length D
-    price0::Array{Float64,3}        # W x D x D  (levels, winner-finding)
-    pTσ0::Array{Float64,3}          # W x D x D  (sigma-transformed)
-    winner0::Matrix{Int}            # W x D
-    winner_price0::Matrix{Float64}  # W x D, price LEVEL of the cached winner
-    runnerup0::Matrix{Int}          # W x D, origin index of the cached runner-up
-    runnerup_price0::Matrix{Float64}  # W x D, price LEVEL of the cached runner-up
+    denom::Vector{Float64}          # length Ddest
+    CONST_d::Vector{Float64}        # length Ddest
+    price0::Array{Float64,3}        # W x D x Ddest  (levels, winner-finding)
+    pTσ0::Array{Float64,3}          # W x D x Ddest  (sigma-transformed)
+    winner0::Matrix{Int}            # W x Ddest
+    winner_price0::Matrix{Float64}  # W x Ddest, price LEVEL of the cached winner
+    runnerup0::Matrix{Int}          # W x Ddest, origin index of the cached runner-up
+    runnerup_price0::Matrix{Float64}  # W x Ddest, price LEVEL of the cached runner-up
     # ---- Continuation 8 addition (additive; every field above is UNCHANGED in
     # meaning/values -- old code reading only the fields above continues to work
     # exactly as before). Third-place cache, needed by `coord_winner_update!`-style
     # exact O(1) top-3 updates for the same-destination-two-changed-origins case
     # (see count_winner_flips_multi_top3 / dest_contrib_incremental_top3). Computed
     # essentially for FREE from the ALREADY-BUILT dense price0/pTσ0 below (an extra
-    # O(W*D^2) PASS over data already in memory, not an extra O(W*D^2) RECOMPUTE) ----
-    third0::Matrix{Int}             # W x D, origin index of the cached third-place (0 if D<3)
-    third_price0::Matrix{Float64}   # W x D, price LEVEL of the cached third-place (Inf if D<3)
-    third_pTσ0::Matrix{Float64}     # W x D, sigma-transformed value of the cached third-place
-    contrib0::Matrix{Float64}       # W x D, cached per-destination contribution to q0
+    # O(W*D*Ddest) PASS over data already in memory, not an extra O(W*D*Ddest) RECOMPUTE) ----
+    third0::Matrix{Int}             # W x Ddest, origin index of the cached third-place (0 if D<3)
+    third_price0::Matrix{Float64}   # W x Ddest, price LEVEL of the cached third-place (Inf if D<3)
+    third_pTσ0::Matrix{Float64}     # W x Ddest, sigma-transformed value of the cached third-place
+    contrib0::Matrix{Float64}       # W x Ddest, cached per-destination contribution to q0
     λstar::Vector{Float64}
     ζstar::Float64
     q0::Vector{Float64}
@@ -334,8 +338,9 @@ row minimum (within `tol`, default EXACT bit-equality). Returns the list of tied
 with a generic derivation bug.
 """
 function detect_price_ties(price0::Array{Float64,3}, D::Int, W::Int; tol::Float64 = 0.0)
+    Ddest = size(price0, 3)   # destination count -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23)
     tied = Tuple{Int,Int}[]
-    @inbounds for d in 1:D, ω in 1:W
+    @inbounds for d in 1:Ddest, ω in 1:W
         mn = price0[ω, 1, d]
         for o in 2:D
             price0[ω, o, d] < mn && (mn = price0[ω, o, d])
@@ -381,20 +386,22 @@ not the dense O(W*D^2) rebuild this flag guards).
 function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState; validate_dense::Bool = false)
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    # Ddest (destination count) -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23).
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
     γo = ctx.γ
     gammafac = spgamma(μ * (1 - σ) + 1)
     SW = γo.SamplingWeights[1:W]
-    denom = [γo.wHat[d] * γo.L[d] for d in 1:D]   # gamma[d]==1 factual side, always
+    denom = [γo.wHat[d] * γo.L[d] for d in 1:Ddest]   # gamma[d]==1 factual side, always
     λstar = base.λstar
 
-    price0 = Array{Float64}(undef, W, D, D)
-    pTσ0 = Array{Float64}(undef, W, D, D)
+    price0 = Array{Float64}(undef, W, D, Ddest)
+    pTσ0 = Array{Float64}(undef, W, D, Ddest)
     # Allocation-audit fix (Task 3): write directly into the destination views via
     # price_and_pTsigma_cell! instead of allocating two fresh W-length vectors per (o,d) cell (400
     # cells at D=20) and copying -- eliminates ~512MB/call of allocate-then-copy churn. See that
     # function's docstring; verified bit-for-bit identical output to the old allocating call below.
-    for d in 1:D, o in 1:D
+    for d in 1:Ddest, o in 1:D
         price_and_pTsigma_cell!(@view(price0[:, o, d]), @view(pTσ0[:, o, d]), base.θ_full0, ctx, o, d)
     end
 
@@ -405,17 +412,17 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
     tied_pairs = detect_price_ties(price0, D, W)
     isempty(tied_pairs) || throw(TiedWinnerError(length(tied_pairs), tied_pairs[1:min(5, end)]))
 
-    winner0 = Matrix{Int}(undef, W, D)
-    winner_price0 = Matrix{Float64}(undef, W, D)
-    runnerup0 = Matrix{Int}(undef, W, D)
-    runnerup_price0 = Matrix{Float64}(undef, W, D)
+    winner0 = Matrix{Int}(undef, W, Ddest)
+    winner_price0 = Matrix{Float64}(undef, W, Ddest)
+    runnerup0 = Matrix{Int}(undef, W, Ddest)
+    runnerup_price0 = Matrix{Float64}(undef, W, Ddest)
     # Continuation 8: extended to rank-3 (additive -- winner0/winner_price0/runnerup0/
     # runnerup_price0 are computed IDENTICALLY to before, min_secondthirdmin_with_idx's
     # first two return values match min_secondmin_with_idx's exactly by construction,
     # verified in test_winner_top3_equivalence.jl). third0/third_price0 are NEW.
-    third0 = Matrix{Int}(undef, W, D)
-    third_price0 = Matrix{Float64}(undef, W, D)
-    @inbounds for d in 1:D, ω in 1:W
+    third0 = Matrix{Int}(undef, W, Ddest)
+    third_price0 = Matrix{Float64}(undef, W, Ddest)
+    @inbounds for d in 1:Ddest, ω in 1:W
         m1, idx1, m2, idx2, m3, idx3 = min_secondthirdmin_with_idx(@view(price0[ω, :, d]))
         winner0[ω, d] = idx1; winner_price0[ω, d] = m1
         runnerup0[ω, d] = idx2; runnerup_price0[ω, d] = m2
@@ -425,26 +432,29 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
     # dest_contrib_incremental_top3 (mirrors how pTσ0 is already stored densely for
     # every origin -- third_pTσ0 just indexes it at the third-place origin, O(W*D),
     # free given pTσ0 is already fully materialized above).
-    third_pTσ0 = Matrix{Float64}(undef, W, D)
-    @inbounds for d in 1:D, ω in 1:W
+    third_pTσ0 = Matrix{Float64}(undef, W, Ddest)
+    @inbounds for d in 1:Ddest, ω in 1:W
         t = third0[ω, d]
         third_pTσ0[ω, d] = t == 0 ? Inf : pTσ0[ω, t, d]
     end
 
-    CONST_d = zeros(D)
-    for d in 1:D
+    # CONST_d/contrib0's `d1`/`d1w` are linear indices into λstar/γ.P -- these arrays' own
+    # column-major convention has stride Ddest (destination count), NOT D (origin count); see
+    # hFunction.jl's identical `d1 = d + (o-1)*Ddest` (Part A, 2026-07-23).
+    CONST_d = zeros(Ddest)
+    for d in 1:Ddest
         s = 0.0
         for o in 1:D
-            d1 = d + (o - 1) * D
+            d1 = d + (o - 1) * Ddest
             s += λstar[d1] * (-γo.P[d1] * denom[d])
         end
         CONST_d[d] = s
     end
 
-    contrib0 = Matrix{Float64}(undef, W, D)
-    @inbounds for d in 1:D, ω in 1:W
+    contrib0 = Matrix{Float64}(undef, W, Ddest)
+    @inbounds for d in 1:Ddest, ω in 1:W
         wo = winner0[ω, d]
-        d1w = d + (wo - 1) * D
+        d1w = d + (wo - 1) * Ddest
         contrib0[ω, d] = (SW[ω] / gammafac) * (CONST_d[d] + λstar[d1w] * pTσ0[ω, wo, d])
     end
 
@@ -456,7 +466,7 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
     # hFunctionCounter!'s own 4th positional arg (named Uσ in its body) is bound to UσPow = Uσ.^(-mu)
     # by its caller (EK_moments_gammanorm_directgp!) -- matched exactly, mu fixed so precomputed once.
     Uσ_bi = γo.Uσ[:, bi] .^ (-μ)     # UoModel==1: o1 = baseIndex
-    d1_cf = D^2 + 1
+    d1_cf = D * Ddest + 1   # D*Ddest==D^2 unless row_idx excludes ROW (Part A, 2026-07-23)
     λ_cf = oci - 1 >= d1_cf ? λstar[d1_cf] : 0.0
 
     AodPow_bibi0 = aod_pow_cell(base.θ_full0, ctx, bi, bi)
@@ -486,7 +496,7 @@ function build_lfix_base_cache(x_free0::AbstractVector, ctx, base::BaseDualState
         maxerr < 1e-8 || error("build_lfix_base_cache: self-validation FAILED, max|q0_true-q0_cache|=$maxerr -- closed-form derivation has a bug, not a numerical-tolerance issue")
     end
 
-    return LFixBaseCache(D, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, price0, pTσ0,
+    return LFixBaseCache(D, Ddest, oci, W, μ, σ, bi, gammafac, SW, denom, CONST_d, price0, pTσ0,
         winner0, winner_price0, runnerup0, runnerup_price0,
         third0, third_price0, third_pTσ0, contrib0,
         λstar, base.ζstar, q0, wPrime_bi, τPrime_bi, LPrime_bi, Uσ_bi, λ_cf, cf_contrib0)
@@ -530,7 +540,7 @@ function dest_contrib_block_local(cache::LFixBaseCache, ctx, θ_full::AbstractVe
     contrib = Vector{Float64}(undef, W)
     @inbounds for ω in 1:W
         _, wo, _ = min_and_secondmin(@view(price_d[ω, :]))
-        d1w = d + (wo - 1) * D
+        d1w = d + (wo - 1) * cache.Ddest
         contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_d[ω, wo])
     end
     return contrib
@@ -562,7 +572,7 @@ function dest_contrib_incremental(cache::LFixBaseCache, ctx, θ_full::AbstractVe
         end
         _, wo, _ = min_and_secondmin(col)
         pTσ_wo = haskey(new_pTσ, wo) ? new_pTσ[wo][ω] : cache.pTσ0[ω, wo, d]
-        d1w = d + (wo - 1) * D
+        d1w = d + (wo - 1) * cache.Ddest
         contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
     end
     return contrib
@@ -628,7 +638,7 @@ function dest_contrib_incremental_top3(cache::LFixBaseCache, ctx, θ_full::Abstr
             _, bo, _ = min_and_secondmin(col)
             bpTσ = haskey(new_pTσ, bo) ? new_pTσ[bo][ω] : cache.pTσ0[ω, bo, d]
         end
-        d1w = d + (bo - 1) * D
+        d1w = d + (bo - 1) * cache.Ddest
         contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * bpTσ)
     end
     return contrib
@@ -671,7 +681,7 @@ function dest_contrib_incremental_o1(cache::LFixBaseCache, ctx, θ_full::Abstrac
             cache.runnerup_price0[ω, d], cache.runnerup0[ω, d],
             o, new_price[ω])
         pTσ_wo = wo == o ? new_pTσ[ω] : cache.pTσ0[ω, wo, d]
-        d1w = d + (wo - 1) * D
+        d1w = d + (wo - 1) * cache.Ddest
         contrib[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
     end
     return contrib

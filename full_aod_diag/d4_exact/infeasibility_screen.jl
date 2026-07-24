@@ -151,13 +151,14 @@ a_od as defined in the mapping table above. Recomputed at every outer point
 """
 function compute_a_od(θ_full::AbstractVector, ctx)
     D = ctx.D
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
     γo = ctx.γ
     μ = θ_full[1]
-    lambda = reshape(γo.P, (D, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
-    a = Matrix{Float64}(undef, D, D)
+    lambda = reshape(γo.P, (Ddest, D))'
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
+    a = Matrix{Float64}(undef, D, Ddest)
     invmu = 1.0 / μ
-    @inbounds for d in 1:D
+    @inbounds for d in 1:Ddest
         cst_d = invmu * log(γo.wHat[1, 1] * γo.τ[1, d])
         l1d = log(lambda[1, d])
         for o in 1:D
@@ -167,11 +168,12 @@ function compute_a_od(θ_full::AbstractVector, ctx)
     return a
 end
 
-"target_shares(ctx) -> Pmat (D x D); Pmat[o,d] = observed bilateral share lambda[o,d] (the target trade share)."
+"target_shares(ctx) -> Pmat (D x Ddest); Pmat[o,d] = observed bilateral share lambda[o,d] (the target trade share)."
 function target_shares(ctx)
     D = ctx.D
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
     γo = ctx.γ
-    return [γo.P[d + (o - 1) * D] for o in 1:D, d in 1:D]
+    return [γo.P[d + (o - 1) * Ddest] for o in 1:D, d in 1:Ddest]
 end
 
 struct PairwiseScreenResult
@@ -211,10 +213,11 @@ involved (D<=400 terms of O(1)-scale log-quantities) -- see the validation
 report's tolerance-sensitivity check.
 """
 function pairwise_certificate(a::AbstractMatrix, pc::PairwiseCertificate, Pmat::AbstractMatrix; tol::Float64 = 1e-9)
-    D = pc.D
-    m_od = fill(Inf, D, D)
+    D = pc.D          # origin count (M is D x D, origin x origin)
+    Ddest = size(Pmat, 2)   # destination count -- Ddest==D unless row_idx excludes ROW (Part A, 2026-07-23)
+    m_od = fill(Inf, D, Ddest)
     worst = Inf; wo = 0; wd = 0; wk = 0
-    @inbounds for d in 1:D
+    @inbounds for d in 1:Ddest
         for o in 1:D
             Pmat[o, d] > 0 || continue
             best = Inf; bk = 0
@@ -253,7 +256,12 @@ which points are rejected or their computed values at feasible points (see
 genuinely-infeasible point is found.
 """
 function order_destinations(pres::PairwiseScreenResult, D::Int)
-    dest_score = [minimum(@view pres.m_od[:, d]) for d in 1:D]
+    # Ddest (destination count) derived from pres.m_od's own shape rather than the passed D --
+    # Part A (2026-07-23): D here is historically the origin/destination-shared dimension, but
+    # m_od is D(origin) x Ddest(destination); using its own column count is robust regardless of
+    # what the caller passes.
+    Ddest = size(pres.m_od, 2)
+    dest_score = [minimum(@view pres.m_od[:, d]) for d in 1:Ddest]
     return sortperm(dest_score)
 end
 
@@ -322,23 +330,24 @@ exit and destination order never change WHICH points get rejected or which
 work is skipped.
 """
 function screen_hard_winners(θ_full::AbstractVector, ctx, Pmat::AbstractMatrix;
-        order::AbstractVector{Int} = 1:ctx.D, full_scan::Bool = false)
+        order::AbstractVector{Int} = 1:(hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D), full_scan::Bool = false)
     γo = ctx.γ
     D = ctx.D; U = ctx.U; W = size(U, 1)
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
     μ = θ_full[1]; σ = θ_full[2]
-    lambda = reshape(γo.P, (D, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    lambda = reshape(γo.P, (Ddest, D))'
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:D]
+    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:Ddest]
     wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
-    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:D]
+    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:Ddest]
     UPow = U .^ (-μ)
     UσPow = γo.Uσ .^ (-μ)
 
-    winner = Matrix{Int}(undef, W, D)
-    wval = Matrix{Float64}(undef, W, D)
-    win_counts = zeros(Int, D, D)
+    winner = Matrix{Int}(undef, W, Ddest)
+    wval = Matrix{Float64}(undef, W, Ddest)
+    win_counts = zeros(Int, D, Ddest)
 
     for (stage, d) in enumerate(order)
         wc = zeros(Int, D)
@@ -369,14 +378,14 @@ function screen_hard_winners(θ_full::AbstractVector, ctx, Pmat::AbstractMatrix;
     end
 
     if full_scan
-        for d in 1:D, o in 1:D
+        for d in 1:Ddest, o in 1:D
             if Pmat[o, d] > 0 && win_counts[o, d] == 0
-                return WinnerScreenResult(false, D, o, d, collect(order), winner, wval, win_counts)
+                return WinnerScreenResult(false, Ddest, o, d, collect(order), winner, wval, win_counts)
             end
         end
     end
 
-    return WinnerScreenResult(true, D, 0, 0, collect(order), winner, wval, win_counts)
+    return WinnerScreenResult(true, Ddest, 0, 0, collect(order), winner, wval, win_counts)
 end
 
 # ============================================================================
@@ -502,12 +511,13 @@ inner-solver failure. Three extra fields (`screen_status`, `screen_failing_o`,
 function infeasible_result(x_free, θ_full, ctx, screen_status::Symbol, failing_o::Int, failing_d::Int,
         stage::Int, t_screen::Float64, tag::String, warm::Bool)
     D = ctx.D
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
     sentinel = screen_status === :pairwise_certified_infeasible ? -9001 :
                screen_status === :witness_certified_infeasible  ? -9002 :
                screen_status === :winner_scan_infeasible        ? -9003 : -9000
     elapsed = (total = t_screen, inner = 0.0, post = 0.0)
     return (x_free = collect(x_free), θ_full = θ_full,
-            gamma_focal_prime = θ_full[3+D], logA = fill(NaN, D, D),
+            gamma_focal_prime = θ_full[3+D], logA = fill(NaN, D, Ddest),
             K_hard = NaN, Delta_dual = Inf, Delta_primal = Inf, Delta_minus_delta = Inf,
             gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
             gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
@@ -518,7 +528,7 @@ function infeasible_result(x_free, θ_full, ctx, screen_status::Symbol, failing_
             elapsed = elapsed,
             error_reason = "exact_infeasible ($(screen_status)): origin $failing_o has zero possible " *
                             "wins at destination $failing_d (target share Pmat[$failing_o,$failing_d]>0), " *
-                            "stage=$stage/$D destinations scanned before rejection",
+                            "stage=$stage/$Ddest destinations scanned before rejection",
             screen_status = screen_status, screen_failing_o = failing_o, screen_failing_d = failing_d,
             screen_stage = stage)
 end
@@ -586,7 +596,8 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
     if use_witness
         B = hard_score_B(ctx)
         wt = witness === nothing ? build_extreme_draw_witness(ctx) : witness
-        for d in 1:ctx.D, o in 1:ctx.D
+        Ddest_w = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
+        for d in 1:Ddest_w, o in 1:ctx.D
             Pmat[o, d] > 0 || continue
             exists, s, ntested, csize = query_witness(o, d, a, B, wt)
             if !exists
@@ -619,6 +630,13 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
         cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :screen_passed, screen_elapsed = t_screen_passed, prof_meta...)
     elseif moment_representation === :compressed
+        # Part A (2026-07-23): the :compressed representation (CompressedFactual /
+        # compressed_moments.jl / compressed_live.jl) is a separate performance subsystem not
+        # audited/rectangularized in this release -- hard-error rather than silently miscompute
+        # on a row_idx-excluded context, matching this release's CM/meanZC/originZC scope guard.
+        row_idx_here = hasproperty(ctx, :row_idx) ? ctx.row_idx : nothing
+        row_idx_here === nothing ||
+            error("evaluate_fullA_screened: moment_representation=:compressed is not supported with an omit-ROW-destination (row_idx!==nothing) context -- out of scope for this release, use :dense.")
         result, prof_meta = evaluate_fullA_screened_compressed(x_free, θ_full, ctx, wres; warm = warm, tag = tag)
         result = merge(result, (screen_status = :screen_passed,))
         cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
