@@ -19,7 +19,7 @@
 # no override needed. sigma=2.5 (assumed), theta estimated via gravity
 # (thetaHat=0) -- both already AD_PARAMS defaults, unchanged.
 # ============================================================================
-include(joinpath(@__DIR__, "context.jl"))   # -> AD_PARAMS, build_ad_context, master_setup etc., CS, d4_exact_setup
+isdefined(Main, :d4_exact_setup) || include(joinpath(@__DIR__, "context.jl"))   # -> AD_PARAMS, build_ad_context, master_setup etc., CS, d4_exact_setup -- guarded (2026-07-24) so combining this file with context_scaled.jl in one script doesn't redefine the CS module twice (causes exported-name ambiguity, e.g. active_destinations)
 include(joinpath(@__DIR__, "infeasibility_screen.jl"))   # -> precompute_pairwise_M, build_extreme_draw_witness (Continuation 10, Section 5)
 
 const D20_REAL = 20

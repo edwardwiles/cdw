@@ -15,7 +15,7 @@
 # random draws/parameters at each D), used here ONLY to measure cost scaling,
 # never to compare kappa/Delta across D.
 # ============================================================================
-include(joinpath(@__DIR__, "context.jl"))   # -> AD_PARAMS, build_ad_context, master_setup etc., CS, d4_exact_setup
+isdefined(Main, :d4_exact_setup) || include(joinpath(@__DIR__, "context.jl"))   # -> AD_PARAMS, build_ad_context, master_setup etc., CS, d4_exact_setup -- guarded (2026-07-24) so combining this file with context_real_d20.jl in one script doesn't redefine the CS module twice (causes exported-name ambiguity, e.g. active_destinations)
 
 "Build (so, pp, params_used) at an OVERRIDDEN (D, W), independent of the module-level AD_PARAMS constant."
 function build_ad_context_scaled(; D::Int, W::Int, row_idx::Union{Nothing,Int} = nothing)

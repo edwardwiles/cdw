@@ -135,6 +135,7 @@ query.
 """
 struct EnvelopePrecomp
     D::Int
+    D_dest::Int
     exponent::Float64
     K2::Matrix{Float64}
     M::Matrix{Float64}
@@ -155,18 +156,14 @@ ONCE at context-build time (see `evaluate_fullA_screened_ranged`'s own
 handling), not per outer-point call.
 """
 function precompute_envelope(ctx)
-    γo = ctx.γ; D = ctx.D; U = ctx.U; W = size(U, 1)
-    # exclude-ROW-destination production release (2026-07-24): the envelope-bound derivation
-    # below (K2/M/b/Pmat, all built as D x D matrices, plus the `reshape(γo.P, (D, D))` and
-    # `Aod_offset + D^2 == length(θ0_up)` assertions) is genuinely square-only -- it was never
-    # re-derived for a rectangular D_origin x D_destination sample (out of scope for this
-    # release's selective port; the archived omit-ROW work never touched this file at all).
-    # Guard explicitly here, at the SAME EnvelopeUnsupportedContext exception the other
-    # unsupported-config checks below already use, so :exclude_row cleanly falls through to
-    # `rsc.envelope === nothing` (screen disabled, other screens unaffected) instead of an
-    # opaque `DimensionMismatch` crash from the reshape further down.
-    !hasproperty(ctx, :D_dest) || ctx.D_dest == D ||
-        throw(EnvelopeUnsupportedContext("ctx.D_dest=$(ctx.D_dest) != ctx.D=$D (destination_sample=$(hasproperty(ctx, :destination_sample) ? ctx.destination_sample : :unknown)) -- this screen's envelope-bound derivation (K2/M/b/Pmat, all D x D) is square-only and was never re-derived for a rectangular D_origin x D_destination sample; disabling rather than guessing."))
+    γo = ctx.γ; D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    U = ctx.U; W = size(U, 1)
+    # exclude-ROW-destination UNRESTRICTED-CORE release (2026-07-24): rectangularized (D x D_dest
+    # throughout, same axis split as compressed_moments.jl::build_compressed_factual -- destination
+    # axis is a LOCAL active-destination slot 1..D_dest, translated to a global country index via
+    # global_destination(ctx,slot) wherever a per-COUNTRY quantity (wHat/L) is indexed by
+    # destination). The prior hard EnvelopeUnsupportedContext guard on D_dest != D is removed now
+    # that this derivation is real and gated (see release report Gate A/B).
     ctx.θ_lo[1] == ctx.θ_hi[1] || throw(EnvelopeUnsupportedContext("mu is not fixed to a point in this ctx (theta_lo[1] != theta_hi[1]) -- the a_od(A) factorization this screen relies on assumes mu is outer-loop-constant; re-derive before using this screen with mu free."))
     ctx.θ_lo[2] == ctx.θ_hi[2] || throw(EnvelopeUnsupportedContext("sigma is not fixed to a point in this ctx (theta_lo[2] != theta_hi[2]) -- same issue as mu, see above."))
     ind = γo.indicators
@@ -176,33 +173,34 @@ function precompute_envelope(ctx)
     exponent = μ * (σ - 1)
     exponent > 0 || throw(EnvelopeUnsupportedContext("mu*(sigma-1) = $exponent is not > 0 (need mu>0, sigma>1) -- the nonnegativity/monotonicity argument this screen relies on does not hold; re-derive before using."))
 
-    lambda = reshape(γo.P, (D, D))'
+    lambda = reshape(γo.P, (Ddest, D))'
     B = γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     C1 = (B ./ γo.cHat) .^ (-μ)
     wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
-    K2 = [wPow[o] * γo.τ[o, d]^(1 - σ) * C1[o, d]^(1 - σ) for o in 1:D, d in 1:D]
+    K2 = [wPow[o] * γo.τ[o, s]^(1 - σ) * C1[o, s]^(1 - σ) for o in 1:D, s in 1:Ddest]
     all(>=(0), K2) || throw(EnvelopeUnsupportedContext("K2(o,d) has a negative entry -- the raw-contribution nonnegativity argument this screen relies on does not hold for this ctx's data; re-derive before using."))
 
     UσPow = γo.Uσ .^ (-μ)
-    Cinv = [1.0 / minimum(@view UσPow[:, o]) for o in 1:D]   # = max_s(1/UσPow[s,o])
-    M = [K2[o, d] * Cinv[o] for o in 1:D, d in 1:D]
+    Cinv = [1.0 / minimum(@view UσPow[:, o]) for o in 1:D]   # = max_s(1/UσPow[s,o]) -- origin-only, unaffected by D_dest
+    M = [K2[o, s] * Cinv[o] for o in 1:D, s in 1:Ddest]
 
-    denom = [γo.wHat[d] * γo.L[d] for d in 1:D]
-    Pmat = [γo.P[d + (o - 1) * D] for o in 1:D, d in 1:D]
-    b = [Pmat[o, d] * denom[d] for o in 1:D, d in 1:D]
+    denom = [γo.wHat[global_destination(ctx, s)] * γo.L[global_destination(ctx, s)] for s in 1:Ddest]
+    Pmat = [γo.P[s + (o - 1) * Ddest] for o in 1:D, s in 1:Ddest]
+    b = [Pmat[o, s] * denom[s] for o in 1:D, s in 1:Ddest]
     all(>=(0), b) || throw(EnvelopeUnsupportedContext("target b(o,d) has a negative entry -- unexpected for this ctx's data; re-derive before using."))
 
-    ctx.Aod_offset + D^2 == length(ctx.θ0_up) || throw(EnvelopeUnsupportedContext("A_od is not the trailing D^2 block of theta_full for this ctx (Aod_offset+D^2 != l_full) -- re-check the offset convention before using this screen."))
+    ctx.Aod_offset + D * Ddest == length(ctx.θ0_up) || throw(EnvelopeUnsupportedContext("A_od is not the trailing D*D_dest block of theta_full for this ctx (Aod_offset+D*D_dest != l_full) -- re-check the offset convention before using this screen."))
     oci = ctx.obj.outer_constr_index
     ncol = oci - 1
+    ncell = D * Ddest
     gammafac = spgamma(μ * (1 - σ) + 1)
-    gdiv = [j <= D^2 + 1 ? 1.0 / gammafac : 1.0 for j in 1:ncol]
+    gdiv = [j <= ncell + 1 ? 1.0 / gammafac : 1.0 for j in 1:ncol]
     NM = ind.NormalizeMoments
     without = γo.moments_without_var
     nrm = [(NM == 1 && !(j in without)) ? 1.0 / γo.σ_Moments[j] : 1.0 for j in 1:ncol]
     SWmax = maximum(γo.SamplingWeights[1:W])
 
-    return EnvelopePrecomp(D, exponent, K2, M, b, gdiv, nrm, SWmax, Pmat)
+    return EnvelopePrecomp(D, Ddest, exponent, K2, M, b, gdiv, nrm, SWmax, Pmat)
 end
 
 struct EnvelopeScreenResult
@@ -235,19 +233,19 @@ in `precompute_envelope`) -- returns `:INCONCLUSIVE`, NEVER a feasibility
 claim, if no cell is certified.
 """
 function envelope_prewinner_screen(θ_full::AbstractVector, ctx, ep::EnvelopePrecomp; safety_mult::Float64 = 50.0)
-    D = ep.D
-    @assert ctx.Aod_offset + D^2 == length(θ_full) "envelope_prewinner_screen: A_od is not the trailing D^2 block of theta_full for this ctx -- re-check the offset convention before trusting this screen"
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
-    for d in 1:D, o in 1:D
-        ep.Pmat[o, d] > 0 || continue
-        j = d + (o - 1) * D
-        a_od = Aod_θ[o, d]^ep.exponent
-        h_upper = a_od * ep.M[o, d]
-        g_upper = ep.SWmax * ep.nrm[j] * ((h_upper - ep.b[o, d]) * ep.gdiv[j])
-        colscale = max(h_upper, ep.b[o, d], 1.0)
+    D = ep.D; Ddest = ep.D_dest
+    @assert ctx.Aod_offset + D * Ddest == length(θ_full) "envelope_prewinner_screen: A_od is not the trailing D*D_dest block of theta_full for this ctx -- re-check the offset convention before trusting this screen"
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
+    for s in 1:Ddest, o in 1:D
+        ep.Pmat[o, s] > 0 || continue
+        j = s + (o - 1) * Ddest
+        a_od = Aod_θ[o, s]^ep.exponent
+        h_upper = a_od * ep.M[o, s]
+        g_upper = ep.SWmax * ep.nrm[j] * ((h_upper - ep.b[o, s]) * ep.gdiv[j])
+        colscale = max(h_upper, ep.b[o, s], 1.0)
         tol = safety_mult * eps(Float64) * colscale
         if g_upper < -tol
-            return EnvelopeScreenResult(:EXACT_INFEASIBLE_PREWINNER_ENVELOPE, j, o, d, h_upper, ep.b[o, d], -g_upper / colscale, tol)
+            return EnvelopeScreenResult(:EXACT_INFEASIBLE_PREWINNER_ENVELOPE, j, o, s, h_upper, ep.b[o, s], -g_upper / colscale, tol)
         end
     end
     return _no_envelope_hit()
@@ -299,25 +297,28 @@ Either rejection returns immediately without touching any later destination
 in `order` (same early-exit discipline as `screen_hard_winners`).
 """
 function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::AbstractMatrix, ep::EnvelopePrecomp;
-        order::AbstractVector{Int} = 1:ctx.D, full_scan::Bool = false, safety_mult::Float64 = 50.0)
+        order::AbstractVector{Int} = 1:(hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D), full_scan::Bool = false, safety_mult::Float64 = 50.0)
     γo = ctx.γ
-    D = ctx.D; U = ctx.U; W = size(U, 1)
+    D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D; U = ctx.U; W = size(U, 1)
     μ = θ_full[1]; σ = θ_full[2]
-    lambda = reshape(γo.P, (D, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    # `order` (from order_destinations, called with the LOCAL destination-slot count) and `d` below
+    # are LOCAL active-destination slots throughout, matching Pmat's own D x D_dest convention --
+    # NOT global country indices. See cc_algo/active_layout.jl / compressed_moments.jl.
+    lambda = reshape(γo.P, (Ddest, D))'
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:D]
+    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:Ddest]
     wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
-    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:D]
+    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:Ddest]
     UPow = U .^ (-μ)
     UσPow = γo.Uσ .^ (-μ)
-    denom = [γo.wHat[dd] * γo.L[dd] for dd in 1:D]
+    denom = [γo.wHat[global_destination(ctx, dd)] * γo.L[global_destination(ctx, dd)] for dd in 1:Ddest]
 
-    winner = Matrix{Int}(undef, W, D)
-    wval = Matrix{Float64}(undef, W, D)
-    win_counts = zeros(Int, D, D)
-    Hmax = fill(-Inf, D, D)
+    winner = Matrix{Int}(undef, W, Ddest)
+    wval = Matrix{Float64}(undef, W, Ddest)
+    win_counts = zeros(Int, D, Ddest)
+    Hmax = fill(-Inf, D, Ddest)
     # AUD-06 fix: win_counts credits EVERY exact-price tie for the win (p<=best, non-strict), but
     # the single-pass Hmax fusion below only ever updates the STRICT-first minimizer bo's own
     # entry -- a tied origin o'!=bo gets a win credited but its Hmax_d[o'] stays -Inf (or whatever
@@ -330,7 +331,7 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
     # audit's own "preferred safe policy": fall back to the trusted (real solve) path instead of a
     # false exact certificate. zero_winner is unaffected (ties can only ADD win credit, never
     # remove it, so they cannot cause a spurious wc[o]==0).
-    tie = falses(D, D)
+    tie = falses(D, Ddest)
 
     for (stage, d) in enumerate(order)
         wc = zeros(Int, D)
@@ -373,11 +374,11 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
             # 2) winning-range rejection (new): positive wins, but the best winning
             # value can never reach the target -- conservative normalized tolerance,
             # same scale convention as envelope_prewinner_screen/range_screen_standalone.
-            j0 = d  # column base, j = d + (o-1)*D
+            j0 = d  # column base, j = d + (o-1)*D_dest
             for o in 1:D
                 Pmat[o, d] > 0 || continue
                 b_od = Pmat[o, d] * denom[d]
-                j = d + (o - 1) * D
+                j = d + (o - 1) * Ddest
                 colscale = max(Hmax_d[o], b_od, 1.0)
                 tol = safety_mult * eps(Float64) * colscale
                 if Hmax_d[o] < b_od - tol && !tie_d[o]
@@ -389,25 +390,25 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
     end
 
     if full_scan
-        for d in 1:D, o in 1:D
+        for d in 1:Ddest, o in 1:D
             if Pmat[o, d] > 0 && win_counts[o, d] == 0
-                return WinnerRangeScreenResult(false, :zero_winner, D, o, d, NaN, NaN,
+                return WinnerRangeScreenResult(false, :zero_winner, Ddest, o, d, NaN, NaN,
                                                 collect(order), winner, wval, win_counts, Hmax)
             end
         end
-        for d in 1:D, o in 1:D
+        for d in 1:Ddest, o in 1:D
             Pmat[o, d] > 0 || continue
             b_od = denom[d] * Pmat[o, d]
             colscale = max(Hmax[o, d], b_od, 1.0)
             tol = safety_mult * eps(Float64) * colscale
             if Hmax[o, d] < b_od - tol && !tie[o, d]   # AUD-06: don't certify off a tie-corrupted Hmax
-                return WinnerRangeScreenResult(false, :winning_range, D, o, d, Hmax[o, d], b_od,
+                return WinnerRangeScreenResult(false, :winning_range, Ddest, o, d, Hmax[o, d], b_od,
                                                 collect(order), winner, wval, win_counts, Hmax)
             end
         end
     end
 
-    return WinnerRangeScreenResult(true, :none, D, 0, 0, NaN, NaN, collect(order), winner, wval, win_counts, Hmax)
+    return WinnerRangeScreenResult(true, :none, Ddest, 0, 0, NaN, NaN, collect(order), winner, wval, win_counts, Hmax)
 end
 
 # ============================================================================

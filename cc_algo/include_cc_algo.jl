@@ -48,7 +48,12 @@ export outer_loop,
        active_origins,
        active_destinations,
        active_od_cells,
-       print_active_layout_banner
+       print_active_layout_banner,
+       dest_slot,
+       global_destination,
+       active_cell_index,
+       active_cell_from_index,
+       active_cell_index_aod
 
 include("knitro_compat.jl")   # restore KNITRO.jl 0.13/0.14 convenience wrappers on v1.2.1
 include("active_layout.jl")   # Part B step 3 (2026-07-24 release): active-origin/destination accessors
