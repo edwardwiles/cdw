@@ -449,11 +449,16 @@ struct RangeScreenResult
     wall_time::Float64
 end
 
-_column_label(j::Int, D::Int) = j == D^2 + 1 ? (:counterfactual, 0, 0) : (:bilateral, div(j - 1, D) + 1, mod1(j, D))
+# RECTANGULAR (exclude-ROW-destination unrestricted-core release, 2026-07-24): `d` returned here
+# is a LOCAL active-destination slot (1..Ddest), not a global country index, whenever Ddest != D --
+# matches the destination-fast `j = s + (o-1)*Ddest` convention `Pmat`/`winner`/`wval` already use
+# (see MEMORY moments-vs-aod-linear-index-convention). Collapses to the pre-existing `D^2`/`D`
+# formula bit-for-bit when Ddest == D (square/`:all_legacy`).
+_column_label(j::Int, D::Int, Ddest::Int) = j == D * Ddest + 1 ? (:counterfactual, 0, 0) : (:bilateral, div(j - 1, Ddest) + 1, mod1(j, Ddest))
 
-function _certificate_from_range(j::Int, D::Int, min_val::Float64, max_val::Float64, tol::Float64, scale::Float64,
+function _certificate_from_range(j::Int, D::Int, Ddest::Int, min_val::Float64, max_val::Float64, tol::Float64, scale::Float64,
         min_idx::Int, max_idx::Int)
-    kind, o, d = _column_label(j, D)
+    kind, o, d = _column_label(j, D, Ddest)
     if min_val > tol
         return MomentRangeCertificate(j, kind, o, d, :positive, min_val, max_val, min_val, min_val / max(scale, eps(Float64)), tol, min_idx)
     elseif max_val < -tol
@@ -483,52 +488,52 @@ header).
 """
 function range_screen_standalone(cf::CompressedFactual; safety_mult::Float64 = 50.0)
     t0 = time()
-    D = cf.D; W = cf.W; ncol = cf.oci - 1
+    D = cf.D; Ddest = cf.D_dest; W = cf.W; ncol = cf.oci - 1
     SWmin, SWmax = extrema(cf.SW)
 
-    win_counts = zeros(Int, D, D)
+    win_counts = zeros(Int, D, Ddest)
     col_min = fill(Inf, ncol); col_max = fill(-Inf, ncol)
     col_min_idx = zeros(Int, ncol); col_max_idx = zeros(Int, ncol)
 
-    @inbounds for d in 1:D
-        for s in 1:W
-            o = cf.winner[s, d]
-            win_counts[o, d] += 1
-            j = d + (o - 1) * D
-            r = cf.wval[s, d] - cf.Pmat[o, d] * cf.denom[d]
-            v = cf.SW[s] * cf.nrm[j] * (r * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+    @inbounds for slot in 1:Ddest
+        for w in 1:W
+            o = cf.winner[w, slot]
+            win_counts[o, slot] += 1
+            j = slot + (o - 1) * Ddest
+            r = cf.wval[w, slot] - cf.Pmat[o, slot] * cf.denom[slot]
+            v = cf.SW[w] * cf.nrm[j] * (r * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
             if v < col_min[j]
-                col_min[j] = v; col_min_idx[j] = s
+                col_min[j] = v; col_min_idx[j] = w
             end
             if v > col_max[j]
-                col_max[j] = v; col_max_idx[j] = s
+                col_max[j] = v; col_max_idx[j] = w
             end
         end
     end
 
-    @inbounds for d in 1:D, o in 1:D
-        win_counts[o, d] == W && continue
-        j = d + (o - 1) * D
-        K = cf.nrm[j] * (-cf.Pmat[o, d] * cf.denom[d] * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+    @inbounds for slot in 1:Ddest, o in 1:D
+        win_counts[o, slot] == W && continue
+        j = slot + (o - 1) * Ddest
+        K = cf.nrm[j] * (-cf.Pmat[o, slot] * cf.denom[slot] * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
         lo = K >= 0 ? SWmin * K : SWmax * K
         hi = K >= 0 ? SWmax * K : SWmin * K
         if lo < col_min[j]
             col_min[j] = lo
-            col_min_idx[j] = _first_nonwinner(cf, o, d, W)
+            col_min_idx[j] = _first_nonwinner(cf, o, slot, W)
         end
         if hi > col_max[j]
             col_max[j] = hi
-            col_max_idx[j] = _first_nonwinner(cf, o, d, W)
+            col_max_idx[j] = _first_nonwinner(cf, o, slot, W)
         end
     end
 
     if cf.cf_col > 0
         j = cf.cf_col
         lo = Inf; hi = -Inf; lo_i = 0; hi_i = 0
-        @inbounds for s in 1:W
-            v = cf.SW[s] * cf.nrm[j] * (cf.cf_raw[s] * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
-            if v < lo; lo = v; lo_i = s; end
-            if v > hi; hi = v; hi_i = s; end
+        @inbounds for w in 1:W
+            v = cf.SW[w] * cf.nrm[j] * (cf.cf_raw[w] * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+            if v < lo; lo = v; lo_i = w; end
+            if v > hi; hi = v; hi_i = w; end
         end
         col_min[j] = lo; col_max[j] = hi; col_min_idx[j] = lo_i; col_max_idx[j] = hi_i
     end
@@ -541,7 +546,7 @@ function range_screen_standalone(cf::CompressedFactual; safety_mult::Float64 = 5
 
     certs = MomentRangeCertificate[]
     for j in 1:ncol
-        c = _certificate_from_range(j, D, col_min[j], col_max[j], tol, scale, col_min_idx[j], col_max_idx[j])
+        c = _certificate_from_range(j, D, Ddest, col_min[j], col_max[j], tol, scale, col_min_idx[j], col_max_idx[j])
         c !== nothing && push!(certs, c)
     end
 
@@ -603,9 +608,10 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
 
     solved = nStatus in (0, -100, -101, -103)
     if !solved
+        D_dest_fail = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
         elapsed = (total = time() - t_total0, inner = t_inner, post = 0.0)
         result = (x_free = collect(x_free), θ_full = θ_full,
-                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
+                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, D_dest_fail),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
                   gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
@@ -642,15 +648,16 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
     max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
 
     gravity_raw = obj.outer_constr_index <= obj.d ? cbuf[2] : NaN
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
+    D_dest_g = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*D_dest_g], ctx.D, D_dest_g)
     μ_here = θ_full[1]
-    lambda_g = reshape(ctx.γ.P, (ctx.D, ctx.D))'
+    lambda_g = reshape(ctx.γ.P, (D_dest_g, ctx.D))'
     Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
     AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
     gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)
     logA = -log.(AodPow)
     R_sum = sum(ctx.q_tilde .* logA)
-    R_mean = R_sum / ctx.D^2
+    R_mean = R_sum / (ctx.D * D_dest_g)
     R_beta = R_sum / sum(ctx.q_tilde .^ 2)
 
     benchmark_unweighted_moment_mean = moment_resid_blas(G, obj.d, W)

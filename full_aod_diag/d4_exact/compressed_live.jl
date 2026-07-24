@@ -60,11 +60,11 @@ reset_compressed_fallback_count!() = (COMPRESSED_FALLBACK_COUNT[] = 0)
 # used by EK_moments_gammanorm_directgp! for every other column.
 # ============================================================================
 
-"AodPow (D x D), the level->power transform hFunction!/hFunctionCounter!/newGravityMoment! all consume. Same formula as compressed_moments.jl::build_compressed_factual and oracle_fast.jl's own gravity_compute block (duplicated there too, not newly introduced here)."
+"AodPow (D x D_dest), the level->power transform hFunction!/hFunctionCounter!/newGravityMoment! all consume. Same formula as compressed_moments.jl::build_compressed_factual and oracle_fast.jl's own gravity_compute block (duplicated there too, not newly introduced here). RECTANGULAR (exclude-ROW-destination unrestricted-core release, 2026-07-24): D_dest read from ctx (falls back to ctx.D for contexts without the field, matching oracle_fast.jl's own defensive pattern)."
 function aod_pow_matrix(θ_full::AbstractVector, ctx)
-    γo = ctx.γ; D = ctx.D; μ = θ_full[1]
-    lambda = reshape(γo.P, (D, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    γo = ctx.γ; D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D; μ = θ_full[1]
+    lambda = reshape(γo.P, (Ddest, D))'
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     return (Aod ./ γo.cHat) .^ (-μ)
 end
@@ -348,9 +348,10 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
 
     solved = nStatus in (0, -100, -101, -103)
     if !solved
+        D_dest_fail = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
         elapsed = (total = time() - t_total0, inner = t_inner, post = 0.0)
         result = (x_free = collect(x_free), θ_full = θ_full,
-                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
+                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, D_dest_fail),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
                   gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
@@ -404,16 +405,17 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     max_abs_moment_kkt_resid = @prof "kkt_residual_compute_compressed" kkt_residual_blas(G, m_weights, nkkt, W)
 
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
+    D_dest_g = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*D_dest_g], ctx.D, D_dest_g)
     μ_here = θ_full[1]
-    lambda_g = reshape(ctx.γ.P, (ctx.D, ctx.D))'
+    lambda_g = reshape(ctx.γ.P, (D_dest_g, ctx.D))'
     gravity_val, logA, R_sum, R_mean, R_beta = @prof "gravity_compute_compressed" begin
         Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
         AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
         gv = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)
         lA = -log.(AodPow)
         rs = sum(ctx.q_tilde .* lA)
-        (gv, lA, rs, rs / ctx.D^2, rs / sum(ctx.q_tilde .^ 2))
+        (gv, lA, rs, rs / (ctx.D * D_dest_g), rs / sum(ctx.q_tilde .^ 2))
     end
 
     # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --

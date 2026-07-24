@@ -58,6 +58,79 @@ Prints the resolved destination-sample provenance for `ctx` under `mode_label` (
 prefixed, flushed immediately -- same discipline as `print_screen_startup_banner`/
 `[threshold-config]`.
 """
+# exclude-ROW-destination UNRESTRICTED release (2026-07-24 addendum #2): canonical rectangular
+# cell-indexing helpers. `active_destinations(ctx)` is a GLOBAL-country-index vector (or range) in
+# SLOT order 1..J (J = length(active_destinations(ctx))) -- it need not be contiguous or end at
+# ctx.D (production's own :exclude_row context always happens to have the omitted destination last,
+# so its `active_destinations` is `Base.OneTo(D_dest)`, but these helpers make no such assumption
+# and are exercised in Gate A against a non-last omission specifically to prevent that production
+# special case from silently leaking into the general helper).
+#
+# Canonical flattened active-cell index (matches the destination-fast "moments/P/lambda*" stride
+# convention documented in MEMORY moments-vs-aod-linear-index-convention -- NOT the Aod-parameter-
+# block's origin-fast stride, which is a different convention used only for the free-theta vector):
+#   a(o,s) = s + (o-1)*J,   o = 1..D (global origin index, origins are never restricted),
+#                            s = 1..J (LOCAL active-destination slot, not a global country index).
+
+"""
+    dest_slot(ctx, global_d) -> Int
+
+Local active-destination slot (1..J) for global country index `global_d`. Errors if `global_d` is
+not an active destination (e.g. the omitted ROW destination under `:exclude_row`) -- callers must
+never look up a slot for an inactive destination.
+"""
+function dest_slot(ctx, global_d::Int)
+    s = findfirst(==(global_d), active_destinations(ctx))
+    s === nothing && error("dest_slot: global destination $global_d is not an active destination (omitted or out of range)")
+    return s
+end
+
+"""
+    global_destination(ctx, s) -> Int
+
+Global country index for active-destination slot `s` (1..J). Inverse of `dest_slot`.
+"""
+global_destination(ctx, s::Int) = active_destinations(ctx)[s]
+
+"""
+    active_cell_index(ctx, o, s) -> Int
+
+Canonical rectangular flattened index for active cell (global origin `o`, local destination slot
+`s`): `a(o,s) = s + (o-1)*J`. This is the destination-fast convention shared by `CompressedFactual`,
+the dense moment matrix columns, and the dual multiplier vector -- NOT the Aod parameter block's
+origin-fast convention (see `active_cell_index_aod`).
+"""
+function active_cell_index(ctx, o::Int, s::Int)
+    J = length(active_destinations(ctx))
+    return s + (o - 1) * J
+end
+
+"""
+    active_cell_from_index(ctx, j) -> (o, s)
+
+Inverse of `active_cell_index`: recovers (global origin, local destination slot) from a flattened
+destination-fast active-cell index `j`.
+"""
+function active_cell_from_index(ctx, j::Int)
+    J = length(active_destinations(ctx))
+    s = mod1(j, J)
+    o = (j - s) ÷ J + 1
+    return (o, s)
+end
+
+"""
+    active_cell_index_aod(ctx, o, s) -> Int
+
+Flattened index under the OTHER (Aod-parameter-block, origin-fast) convention: `o + (s-1)*D`. Used
+only where a linear index into the free-theta Aod slice is needed (matches
+`Aod_free_pos`/`pivot_reduce`/`pivot_expand`'s existing `reshape(z, D, J)` convention) -- never mix
+this with `active_cell_index`.
+"""
+function active_cell_index_aod(ctx, o::Int, s::Int)
+    D = length(active_origins(ctx))
+    return o + (s - 1) * D
+end
+
 function print_active_layout_banner(ctx, mode_label::AbstractString)
     n_origin = length(active_origins(ctx))
     n_dest = length(active_destinations(ctx))

@@ -136,7 +136,7 @@ struct D20Checkpoint
     draw_seed::Int
     g::Float64                 # gamma'_focal at checkpoint time
     zfree::Vector{Float64}      # reduced A-block free coords (length D^2-1) at checkpoint time
-    logA_full::Matrix{Float64}  # D x D, full log(Aod_theta), gravity-feasible by construction
+    logA_full::Matrix{Float64}  # D x D_dest (D x D under :all_legacy), full log(Aod_theta), gravity-feasible by construction
     dual_warm_start::Vector{Float64}    # copy of ctx.obj.x at checkpoint time
     bandwidth_cache::Dict{Int,Float64}
     best_feasible::Any          # NamedTuple or nothing -- current best feasible point tracked so far
@@ -541,30 +541,25 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
         # a validity gate on the caller's own g). See direction_bounds.jl.
-        destination_sample::Symbol = :all_legacy)   # ****************************************************
-        # **** exclude-ROW-destination production release (2026-07-24) -- UNRESTRICTED FAMILY  ****
-        # **** SCOPE NOTE: :exclude_row is NOT supported here, unlike every other production    ****
-        # **** entry point (CM/CM+ZC/origin-ZC all default to :exclude_row and are fully         ****
-        # **** validated -- see EXCLUDE_ROW_DESTINATION_PRODUCTION_RELEASE_2026-07-24.md). This  ****
-        # **** driver's real per-point evaluation path (moment_representation=:compressed, the   ****
-        # **** production default every real cb_F!/cb_G!/cb_newpt! callback uses) is built on    ****
-        # **** compressed_moments.jl's CompressedFactual and fast_range_screen.jl's range/       ****
-        # **** envelope screens -- BOTH square-D-only throughout (Pmat/winner/wval sized D x D,  ****
-        # **** linear-index convention j=d+(o-1)*D, not re-derived for a rectangular D_origin x  ****
-        # **** D_destination sample). This is the unrestricted driver's own "Part A" -- never     ****
-        # **** touched by the validated omit-ROW work at all -- and rectangularizing it is real,  ****
-        # **** unvalidated engineering out of THIS release's selective-port scope, not a superficial ***
-        # **** guard. destination_sample defaults to :all_legacy HERE ONLY (opposite of every    ****
-        # **** other entry point) and :exclude_row is a hard error below, not silently accepted. ****
+        destination_sample::Symbol = :exclude_row)   # ****************************************************
+        # **** exclude-ROW-destination UNRESTRICTED-CORE release (2026-07-24): the unrestricted   ****
+        # **** family's real per-point evaluation path (moment_representation=:compressed, the    ****
+        # **** production default every real cb_F!/cb_G!/cb_newpt! callback uses) is now           ****
+        # **** rectangular throughout (compressed_moments.jl's CompressedFactual, fast_range_      ****
+        # **** screen.jl's evaluate_fullA_screened_compressed_with_cf/range_screen_standalone,      ****
+        # **** infeasibility_screen.jl's compressed_factual_from_screen -- D x D_dest, canonical    ****
+        # **** j=s+(o-1)*D_dest active-cell convention, see cc_algo/active_layout.jl). Default      ****
+        # **** flipped to :exclude_row HERE, matching every other production entry point            ****
+        # **** (CM/CM+ZC/origin-ZC). :all_legacy remains a fully supported, explicit opt-out --      ****
+        # **** see docs/EXCLUDE_ROW_DESTINATION_UNRESTRICTED_CORE_RELEASE_2026-07-24.md for gates.   ****
+        # **** The pre-winner envelope screen (fast_range_screen.jl::precompute_envelope) remains    ****
+        # **** disabled under :exclude_row (separate, non-mandatory gap -- zero organic hit rate     ****
+        # **** historically, see that file); every other screen is active under both regimes.        ****
         # ****************************************************************************************
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
-    destination_sample === :all_legacy ||
-        error("run_profile_checkpointed($label): destination_sample=:$destination_sample requested, but the " *
-              "UNRESTRICTED family only supports :all_legacy -- its real evaluation path (moment_representation=" *
-              ":compressed, compressed_moments.jl/fast_range_screen.jl) is square-D-only throughout and was never " *
-              "rectangularized for :exclude_row (out of scope for the 2026-07-24 exclude-ROW-destination release; " *
-              "CM/CM+ZC/origin-ZC ARE fully supported and default to :exclude_row -- this gap is specific to the " *
-              "unrestricted driver). See EXCLUDE_ROW_DESTINATION_PRODUCTION_RELEASE_2026-07-24.md.")
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("run_profile_checkpointed($label): destination_sample=:$destination_sample requested, must be " *
+              ":exclude_row or :all_legacy.")
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
@@ -1001,20 +996,17 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         # pushes copy(xf) (the exact free-parameter vector the gradient backend is dispatched on) into
         # this Ref'd vector, for a same-trajectory backend replay (c34_phase5_same_trajectory_replay.jl).
         # Purely additive; nothing read here unless explicitly passed.
-        destination_sample::Symbol = :all_legacy)   # exclude-ROW-destination production release
-        # (2026-07-24): see run_profile_checkpointed's identical kwarg/scope-note -- :exclude_row is
-        # NOT supported for the unrestricted family (compressed_moments.jl/fast_range_screen.jl are
-        # square-D-only throughout), unlike every other production entry point. Defaults to
-        # :all_legacy HERE ONLY; :exclude_row is a hard error below.
+        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination UNRESTRICTED-CORE
+        # release (2026-07-24): see run_profile_checkpointed's identical kwarg/scope-note -- default
+        # flipped to :exclude_row, matching every other production entry point; :all_legacy remains
+        # a fully supported, explicit opt-out.
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
-    destination_sample === :all_legacy ||
-        error("run_polish_checkpointed($label): destination_sample=:$destination_sample requested, but the " *
-              "UNRESTRICTED family only supports :all_legacy -- see run_profile_checkpointed's identical guard " *
-              "for the full rationale (compressed_moments.jl/fast_range_screen.jl square-D-only, out of scope " *
-              "for the 2026-07-24 exclude-ROW-destination release).")
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("run_polish_checkpointed($label): destination_sample=:$destination_sample requested, must be " *
+              ":exclude_row or :all_legacy.")
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)

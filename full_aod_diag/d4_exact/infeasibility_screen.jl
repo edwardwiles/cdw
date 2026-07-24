@@ -630,13 +630,12 @@ function evaluate_fullA_screened(x_free::AbstractVector{Float64}, ctx;
         cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
         return result, (screen_status = :screen_passed, screen_elapsed = t_screen_passed, prof_meta...)
     elseif moment_representation === :compressed
-        # Part A (2026-07-23): the :compressed representation (CompressedFactual /
-        # compressed_moments.jl / compressed_live.jl) is a separate performance subsystem not
-        # audited/rectangularized in this release -- hard-error rather than silently miscompute
-        # on a row_idx-excluded context, matching this release's CM/meanZC/originZC scope guard.
-        row_idx_here = hasproperty(ctx, :row_idx) ? ctx.row_idx : nothing
-        row_idx_here === nothing ||
-            error("evaluate_fullA_screened: moment_representation=:compressed is not supported with an omit-ROW-destination (row_idx!==nothing) context -- out of scope for this release, use :dense.")
+        # exclude-ROW-destination UNRESTRICTED-CORE release (2026-07-24): the :compressed
+        # representation (CompressedFactual / compressed_moments.jl / compressed_live.jl /
+        # compressed_factual_from_screen above) is now rectangular (D x D_dest throughout) --
+        # the prior hard-error guard against an omit-ROW-destination (row_idx!==nothing) context
+        # is removed now that the real gates (A-C) validate it, matching the production
+        # `evaluate_fullA_screened_ranged` (fast_range_screen.jl) path this function mirrors.
         result, prof_meta = evaluate_fullA_screened_compressed(x_free, θ_full, ctx, wres; warm = warm, tag = tag)
         result = merge(result, (screen_status = :screen_passed,))
         cache !== nothing && is_cacheable_result(result) && _cache_store!(cache, key, result)
@@ -667,21 +666,28 @@ separate, already-solved problem upstream).
 """
 function compressed_factual_from_screen(θ_full::AbstractVector, ctx, wres::WinnerScreenResult)
     γo = ctx.γ
-    D = ctx.D; U = ctx.U; W = size(U, 1)
+    D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    U = ctx.U; W = size(U, 1)
     μ = θ_full[1]; σ = θ_full[2]
     ind = γo.indicators
     oci = ctx.obj.outer_constr_index
 
-    lambda = reshape(γo.P, (D, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    # RECTANGULAR (exclude-ROW-destination unrestricted-core release, 2026-07-24): same axis split
+    # as compressed_moments.jl::build_compressed_factual -- see that function's comments for the
+    # full derivation; this is the actual production builder `evaluate_fullA_screened_ranged`
+    # (fast_range_screen.jl) calls, reusing an already-screened winner/wval instead of recomputing
+    # them (see wres.winner/wres.wval below).
+    lambda = reshape(γo.P, (Ddest, D))'
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    denom = [γo.wHat[d] * γo.L[d] for d in 1:D]
-    Pmat = [γo.P[d + (o - 1) * D] for o in 1:D, d in 1:D]
+    denom = [γo.wHat[global_destination(ctx, s)] * γo.L[global_destination(ctx, s)] for s in 1:Ddest]
+    Pmat = [γo.P[s + (o - 1) * Ddest] for o in 1:D, s in 1:Ddest]
 
     gammafac = spgamma(μ * (1 - σ) + 1)
     ncol = oci - 1
-    gdiv = [j <= D^2 + 1 ? 1.0 / gammafac : 1.0 for j in 1:ncol]
+    ncell = D * Ddest
+    gdiv = [j <= ncell + 1 ? 1.0 / gammafac : 1.0 for j in 1:ncol]
     NM = ind.NormalizeMoments
     without = γo.moments_without_var
     nrm = [(NM == 1 && !(j in without)) ? 1.0 / γo.σ_Moments[j] : 1.0 for j in 1:ncol]
@@ -689,7 +695,7 @@ function compressed_factual_from_screen(θ_full::AbstractVector, ctx, wres::Winn
     PMMv = usePMM == 1 ? Float64[γo.PMM[j] for j in 1:ncol] : zeros(ncol)
     SW = γo.SamplingWeights[1:W]
 
-    cf_col = D^2 + 1
+    cf_col = ncell + 1
     cf_raw = zeros(W)
     if cf_col <= ncol
         bi = ctx.bi
@@ -697,7 +703,7 @@ function compressed_factual_from_screen(θ_full::AbstractVector, ctx, wres::Winn
         wPrime_bi = wPrime[bi]
         τPrime_bi = γo.τPrime[bi, bi]
         LPrime_bi = γo.LPrime[bi]
-        AodPow_bibi = AodPow[bi, bi]
+        AodPow_bibi = AodPow[bi, dest_slot(ctx, bi)]
         γ_prime_bi = θ_full[3 + D]
         constConsσ_bibi = wPrime_bi^(1 - σ) * (AodPow_bibi * τPrime_bi)^(1 - σ)
         denom_cf = γ_prime_bi^σ * (wPrime_bi * LPrime_bi)
@@ -707,7 +713,7 @@ function compressed_factual_from_screen(θ_full::AbstractVector, ctx, wres::Winn
         cf_col = 0
     end
 
-    return CompressedFactual(D, W, oci, wres.winner, wres.wval, Pmat, denom, gdiv, nrm,
+    return CompressedFactual(D, Ddest, W, oci, wres.winner, wres.wval, Pmat, denom, gdiv, nrm,
         PMMv, usePMM, SW, gammafac, cf_raw, cf_col, 0, Tuple{Int,Int}[])
 end
 
@@ -772,9 +778,10 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
 
     solved = nStatus in (0, -100, -101, -103)
     if !solved
+        D_dest_fail = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
         elapsed = (total = time() - t_total0, inner = t_inner, post = 0.0)
         result = (x_free = collect(x_free), θ_full = θ_full,
-                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, ctx.D),
+                  gamma_focal_prime = θ_full[3+ctx.D], logA = fill(NaN, ctx.D, D_dest_fail),
                   K_hard = NaN, Delta_dual = NaN, Delta_primal = NaN, Delta_minus_delta = NaN,
                   gravity_raw = NaN, gravity_value = NaN, gravity_R_sum = NaN, gravity_R_mean = NaN,
                   gravity_R_beta = NaN, benchmark_unweighted_moment_mean = Float64[], max_abs_moment_resid = NaN,
@@ -818,15 +825,16 @@ function evaluate_fullA_screened_compressed(x_free::AbstractVector{Float64}, θ_
     max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
 
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx.D)
+    D_dest_g = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*D_dest_g], ctx.D, D_dest_g)
     μ_here = θ_full[1]
-    lambda_g = reshape(ctx.γ.P, (ctx.D, ctx.D))'
+    lambda_g = reshape(ctx.γ.P, (D_dest_g, ctx.D))'
     Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
     AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
     gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)
     logA = -log.(AodPow)
     R_sum = sum(ctx.q_tilde .* logA)
-    R_mean = R_sum / ctx.D^2
+    R_mean = R_sum / (ctx.D * D_dest_g)
     R_beta = R_sum / sum(ctx.q_tilde .^ 2)
 
     # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --

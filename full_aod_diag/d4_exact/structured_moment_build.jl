@@ -65,16 +65,16 @@ counterfactual price-index column, if present, is handled separately in
 `structured_fill_chunk!` since its "fixed" part is not a function of Pmat/denom).
 """
 function structured_coeffs(cf)
-    D = cf.D; ncol = cf.oci - 1
+    D = cf.D; Ddest = cf.D_dest; ncol = cf.oci - 1
     a = Vector{Float64}(undef, ncol)
     for j in 1:ncol
         a[j] = cf.nrm[j] * cf.gdiv[j]
     end
-    FixedCol = Vector{Float64}(undef, D^2)
-    for d in 1:D, o in 1:D
-        j = d + (o - 1) * D
+    FixedCol = Vector{Float64}(undef, D * Ddest)
+    for slot in 1:Ddest, o in 1:D
+        j = slot + (o - 1) * Ddest
         b = cf.usePMM == 1 ? cf.nrm[j] * cf.PMM[j] : 0.0
-        FixedCol[j] = a[j] * cf.Pmat[o, d] * cf.denom[d] + b
+        FixedCol[j] = a[j] * cf.Pmat[o, slot] * cf.denom[slot] + b
     end
     return a, FixedCol
 end
@@ -96,11 +96,11 @@ reordered/regrouped for BLAS-friendliness), NOT an approximation.
 """
 function structured_fill_chunk!(Gc::AbstractMatrix, cf, a::Vector{Float64}, FixedCol::Vector{Float64},
                                  rows::AbstractVector{Int}; use_ger::Bool = true)
-    D = cf.D; n = length(rows)
+    D = cf.D; Ddest = cf.D_dest; n = length(rows)
     size(Gc) == (n, cf.oci - 1) || error("structured_fill_chunk!: size(Gc)=$(size(Gc)) != (n,oci-1)=($n,$(cf.oci-1))")
     SWc = @view cf.SW[rows]
 
-    Gbil = @view Gc[:, 1:D^2]
+    Gbil = @view Gc[:, 1:D*Ddest]
     if use_ger
         fill!(Gbil, 0.0)
         BLAS.ger!(-1.0, SWc, FixedCol, Gbil)
@@ -108,12 +108,12 @@ function structured_fill_chunk!(Gc::AbstractMatrix, cf, a::Vector{Float64}, Fixe
         @views Gbil .= .-SWc .* FixedCol'
     end
 
-    @inbounds for d in 1:D
+    @inbounds for slot in 1:Ddest
         for li in 1:n
-            s = rows[li]
-            wo = cf.winner[s, d]
-            j = d + (wo - 1) * D
-            Gc[li, j] += SWc[li] * a[j] * cf.wval[s, d]
+            w = rows[li]
+            wo = cf.winner[w, slot]
+            j = slot + (wo - 1) * Ddest
+            Gc[li, j] += SWc[li] * a[j] * cf.wval[w, slot]
         end
     end
 

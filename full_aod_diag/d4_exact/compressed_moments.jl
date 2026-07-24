@@ -55,29 +55,43 @@ using SpecialFunctions: gamma as spgamma
     CompressedFactual
 
 Compressed winner-form representation of the factual moment matrix over the
-inner-dual columns 1..oci-1 (= D^2 bilateral + 1 counterfactual price index).
-Stores O(W·D) + O(D^2) data, NOT the dense O(W·D^2) matrix. Everything needed
-to reproduce `dot(β, G[s,1:oci-1])` exactly for any dual β.
+inner-dual columns 1..oci-1 (= D*D_dest bilateral + 1 counterfactual price
+index). Stores O(W·D_dest) + O(D·D_dest) data, NOT the dense O(W·D·D_dest)
+matrix. Everything needed to reproduce `dot(β, G[s,1:oci-1])` exactly for any
+dual β.
+
+RECTANGULAR (exclude-ROW-destination unrestricted-core release, 2026-07-24):
+`D` = number of origins (always the full country count, origins are never
+restricted); `D_dest` = number of ACTIVE destinations (`D_dest == D` under
+`destination_sample=:all_legacy`, `D_dest == D-1` under `:exclude_row`).
+Bilateral arrays are `D x D_dest` (or `W x D_dest`), never `D x D`. The
+flattened bilateral-column index is the destination-fast convention
+`j = s + (o-1)*D_dest` (`s` = LOCAL active-destination slot 1..D_dest, `o` =
+global origin 1..D) -- see `cc_algo/active_layout.jl`'s
+`active_cell_index`/MEMORY moments-vs-aod-linear-index-convention. When
+`D_dest == D` (square/`:all_legacy`) this collapses to the pre-existing
+`j = d + (o-1)*D` legacy formula bit-for-bit.
 """
 struct CompressedFactual
     D::Int
+    D_dest::Int
     W::Int
     oci::Int
     # --- winner-form bilateral block ---
-    winner::Matrix{Int}         # W x D : argmin origin per (draw, destination)
-    wval::Matrix{Float64}       # W x D : v_{s,d} = pTσ of the winning origin
+    winner::Matrix{Int}         # W x D_dest : argmin origin per (draw, active-destination slot)
+    wval::Matrix{Float64}       # W x D_dest : v_{s,slot} = pTσ of the winning origin
     # --- fixed (draw-independent) data used by the contraction ---
-    Pmat::Matrix{Float64}       # D x D : observed bilateral shares, Pmat[o,d]=P[d+(o-1)D]
-    denom::Vector{Float64}      # D
-    gdiv::Vector{Float64}       # length oci-1 : 1/gammafac (cols ≤ D^2+1) else 1
+    Pmat::Matrix{Float64}       # D x D_dest : observed bilateral shares, Pmat[o,slot]=P[slot+(o-1)D_dest]
+    denom::Vector{Float64}      # D_dest
+    gdiv::Vector{Float64}       # length oci-1 : 1/gammafac (cols ≤ D*D_dest+1) else 1
     nrm::Vector{Float64}        # length oci-1 : NormalizeMoments factor (or 1)
     PMM::Vector{Float64}        # length oci-1 : per-moment PMM (used only if usePMM==1)
     usePMM::Int
     SW::Vector{Float64}         # W : sampling weights
     gammafac::Float64
-    # --- counterfactual price-index column (col D^2+1) ---
+    # --- counterfactual price-index column (col D*D_dest+1) ---
     cf_raw::Vector{Float64}     # W : raw hFunctionCounter! value (before post-proc)
-    cf_col::Int                 # = D^2+1 (0 if this column is not an inner-dual column)
+    cf_col::Int                 # = D*D_dest+1 (0 if this column is not an inner-dual column)
     # --- tie bookkeeping ---
     n_tied::Int
     tied_examples::Vector{Tuple{Int,Int}}
@@ -97,53 +111,63 @@ the row-min price, throws `TiedWinnerError` (reusing lfix_incremental.jl's type)
 """
 function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool = true)
     γo = ctx.γ
-    D = ctx.D; U = ctx.U; W = size(U, 1)
+    D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    U = ctx.U; W = size(U, 1)
     μ = θ_full[1]; σ = θ_full[2]
     ind = γo.indicators
     oci = ctx.obj.outer_constr_index
 
-    # ---- draw-independent per-cell constants (D x D) ----
-    lambda = reshape(γo.P, (D, D))'                       # lambda[d1']... = observed shares
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D^2], (D, D))
+    # ---- draw-independent per-cell constants (D x D_dest) ----
+    # lambda/Aod_θ reshape conventions match oracle_fast.jl's own rectangular gravity-compute
+    # block bit-for-bit (D_dest-fast for γo.P/lambda -- the "moments" stride; D-fast, i.e. the
+    # natural `reshape(v, D, Ddest)`, for the Aod parameter block -- see MEMORY
+    # moments-vs-aod-linear-index-convention; the two conventions coincide when D==Ddest).
+    lambda = reshape(γo.P, (Ddest, D))'                    # lambda[o,s] : observed shares
+    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
     Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:D]
+    constCons = [γo.wHat[o] * AodPow[o, s] * γo.τ[o, s] for o in 1:D, s in 1:Ddest]
     wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
-    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:D]
-    denom = [γo.wHat[d] * γo.L[d] for d in 1:D]           # γ_d ≡ 1
-    Pmat = [γo.P[d + (o - 1) * D] for o in 1:D, d in 1:D]  # Pmat[o,d]=P[d1]
+    constConsσ = [wPow[o] * (AodPow[o, s] * γo.τ[o, s])^(1 - σ) for o in 1:D, s in 1:Ddest]
+    # denom is a per-COUNTRY (γo.wHat/γo.L are GLOBAL, length-D, country-indexed) quantity, so the
+    # active-destination slot s must be mapped to its GLOBAL country index -- global_destination(ctx,s)
+    # -- NOT used as a global index directly (that would be wrong whenever the omitted destination
+    # is not the last global index; harmless-but-fragile no-op in today's production ROW-is-last
+    # layout, real bug in general -- see cc_algo/active_layout.jl).
+    denom = [γo.wHat[global_destination(ctx, s)] * γo.L[global_destination(ctx, s)] for s in 1:Ddest]  # γ_d ≡ 1
+    Pmat = [γo.P[s + (o - 1) * Ddest] for o in 1:D, s in 1:Ddest]  # Pmat[o,s]=P[a(o,s)], already slot-local
 
     # BIT-IDENTICAL to hFunction!/MinInd!: price = constCons/UPow, UPow=U^{-μ}
     # (NOT constCons*U^μ -- the division form is what MinInd! compares, so the
     #  winner index and the exact-tie boundary match the dense path bit-for-bit).
-    UPow = U .^ (-μ)                                       # W x D  (UoModel==1: o1=o)
+    UPow = U .^ (-μ)                                       # W x D  (UoModel==1: o1=o; origins never restricted)
     UσPow = γo.Uσ .^ (-μ)                                  # W x D
 
-    winner = Matrix{Int}(undef, W, D)
-    wval = Matrix{Float64}(undef, W, D)
+    winner = Matrix{Int}(undef, W, Ddest)
+    wval = Matrix{Float64}(undef, W, Ddest)
     tied = Tuple{Int,Int}[]
     n_tied = 0
-    @inbounds for d in 1:D
-        for s in 1:W
+    @inbounds for s in 1:Ddest
+        for w in 1:W
             # first pass: exact row-min (matches MinInd!'s minimum(x))
-            best = constCons[1, d] / UPow[s, 1]; bo = 1
+            best = constCons[1, s] / UPow[w, 1]; bo = 1
             for o in 2:D
-                p = constCons[o, d] / UPow[s, o]
+                p = constCons[o, s] / UPow[w, o]
                 if p < best
                     best = p; bo = o
                 end
             end
-            winner[s, d] = bo
-            wval[s, d] = constConsσ[bo, d] / UσPow[s, bo]
+            winner[w, s] = bo
+            wval[w, s] = constConsσ[bo, s] / UσPow[w, bo]
             if check_ties
                 # MinInd! sets xInd[o]=1 for EVERY o with price <= min: count them.
                 c = 0
                 for o in 1:D
-                    (constCons[o, d] / UPow[s, o] <= best) && (c += 1)
+                    (constCons[o, s] / UPow[w, o] <= best) && (c += 1)
                 end
                 if c > 1
                     n_tied += 1
-                    length(tied) < 5 && push!(tied, (s, d))
+                    length(tied) < 5 && push!(tied, (w, s))
                 end
             end
         end
@@ -155,7 +179,8 @@ function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool
     # ---- normalization / post-processing vectors over inner-dual columns ----
     gammafac = spgamma(μ * (1 - σ) + 1)
     ncol = oci - 1
-    gdiv = [j <= D^2 + 1 ? 1.0 / gammafac : 1.0 for j in 1:ncol]
+    ncell = D * Ddest
+    gdiv = [j <= ncell + 1 ? 1.0 / gammafac : 1.0 for j in 1:ncol]
     NM = ind.NormalizeMoments
     without = γo.moments_without_var
     nrm = [(NM == 1 && !(j in without)) ? 1.0 / γo.σ_Moments[j] : 1.0 for j in 1:ncol]
@@ -163,8 +188,8 @@ function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool
     PMMv = usePMM == 1 ? Float64[γo.PMM[j] for j in 1:ncol] : zeros(ncol)
     SW = γo.SamplingWeights[1:W]
 
-    # ---- counterfactual price-index column (D^2+1), if it is an inner-dual col ----
-    cf_col = D^2 + 1
+    # ---- counterfactual price-index column (D*D_dest+1), if it is an inner-dual col ----
+    cf_col = ncell + 1
     cf_raw = zeros(W)
     if cf_col <= ncol
         bi = ctx.bi
@@ -172,7 +197,11 @@ function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool
         wPrime_bi = wPrime[bi]                       # ==1
         τPrime_bi = γo.τPrime[bi, bi]
         LPrime_bi = γo.LPrime[bi]
-        AodPow_bibi = AodPow[bi, bi]                 # same factual AodPow (hFunctionCounter! is passed AodPow)
+        # AodPow's SECOND axis is now the LOCAL active-destination slot, not a global country
+        # index -- bi (a global index) must be translated via dest_slot(ctx,bi) before indexing.
+        # (the focal-country==ROW guard in context_real_d20.jl guarantees bi is always an active
+        # destination, so this never errors in production).
+        AodPow_bibi = AodPow[bi, dest_slot(ctx, bi)]  # same factual AodPow (hFunctionCounter! is passed AodPow)
         γ_prime_bi = θ_full[3 + D]
         constConsσ_bibi = wPrime_bi^(1 - σ) * (AodPow_bibi * τPrime_bi)^(1 - σ)
         denom_cf = γ_prime_bi^σ * (wPrime_bi * LPrime_bi)
@@ -182,7 +211,7 @@ function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool
         cf_col = 0
     end
 
-    return CompressedFactual(D, W, oci, winner, wval, Pmat, denom, gdiv, nrm,
+    return CompressedFactual(D, Ddest, W, oci, winner, wval, Pmat, denom, gdiv, nrm,
         PMMv, usePMM, SW, gammafac, cf_raw, cf_col, 0, Tuple{Int,Int}[])
 end
 
@@ -190,25 +219,26 @@ end
     compressed_dual_contraction(β, cf::CompressedFactual) -> Vector{W}
 
 Exact compressed evaluation of `t_s = Σ_{j=1}^{oci-1} β_j · G_{s,j}` for every
-draw s, WITHOUT materializing the dense G. β has length oci-1 (= D^2 bilateral
-followed by the counterfactual column). O(W·D) work, O(D^2) setup.
+draw s, WITHOUT materializing the dense G. β has length oci-1 (= D*D_dest
+bilateral followed by the counterfactual column). O(W·D_dest) work, O(D·D_dest)
+setup.
 """
 function compressed_dual_contraction(β::AbstractVector, cf::CompressedFactual)
-    D = cf.D; W = cf.W
+    D = cf.D; Ddest = cf.D_dest; W = cf.W
     length(β) == cf.oci - 1 || error("β length $(length(β)) != oci-1 = $(cf.oci-1)")
 
-    # κ_{o,d} = β_{(o,d)} · nrm · gdiv   (bilateral cols)
-    κ = Matrix{Float64}(undef, D, D)
-    C = zeros(D)                                  # C_d = −denom_d Σ_o κ_{o,d} P_{o,d}
-    @inbounds for d in 1:D
+    # κ_{o,slot} = β_{(o,slot)} · nrm · gdiv   (bilateral cols)
+    κ = Matrix{Float64}(undef, D, Ddest)
+    C = zeros(Ddest)                               # C_slot = −denom_slot Σ_o κ_{o,slot} P_{o,slot}
+    @inbounds for slot in 1:Ddest
         acc = 0.0
         for o in 1:D
-            j = d + (o - 1) * D
+            j = slot + (o - 1) * Ddest
             k = β[j] * cf.nrm[j] * cf.gdiv[j]
-            κ[o, d] = k
-            acc += k * cf.Pmat[o, d]
+            κ[o, slot] = k
+            acc += k * cf.Pmat[o, slot]
         end
-        C[d] = -cf.denom[d] * acc
+        C[slot] = -cf.denom[slot] * acc
     end
     Csum = sum(C)
 
@@ -224,13 +254,13 @@ function compressed_dual_contraction(β::AbstractVector, cf::CompressedFactual)
     end
 
     t = Vector{Float64}(undef, W)
-    @inbounds for s in 1:W
+    @inbounds for w in 1:W
         acc = Csum
-        for d in 1:D
-            acc += κ[cf.winner[s, d], d] * cf.wval[s, d]
+        for slot in 1:Ddest
+            acc += κ[cf.winner[w, slot], slot] * cf.wval[w, slot]
         end
-        acc += κ_cf * cf.cf_raw[s]
-        t[s] = cf.SW[s] * (acc - pmmterm)
+        acc += κ_cf * cf.cf_raw[w]
+        t[w] = cf.SW[w] * (acc - pmmterm)
     end
     return t
 end
@@ -243,21 +273,21 @@ compressed representation (bilateral + counterfactual columns), applying the
 exact post-processing. For equivalence checks against obj.moments!'s G[:,1:oci-1].
 """
 function materialize_dense_factual(cf::CompressedFactual)
-    D = cf.D; W = cf.W; ncol = cf.oci - 1
+    D = cf.D; Ddest = cf.D_dest; W = cf.W; ncol = cf.oci - 1
     G = zeros(W, ncol)
-    @inbounds for d in 1:D, s in 1:W
-        wo = cf.winner[s, d]
-        v = cf.wval[s, d]
+    @inbounds for slot in 1:Ddest, w in 1:W
+        wo = cf.winner[w, slot]
+        v = cf.wval[w, slot]
         for o in 1:D
-            j = d + (o - 1) * D
-            r = (o == wo ? v : 0.0) - cf.Pmat[o, d] * cf.denom[d]
-            G[s, j] = cf.SW[s] * cf.nrm[j] * (r * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+            j = slot + (o - 1) * Ddest
+            r = (o == wo ? v : 0.0) - cf.Pmat[o, slot] * cf.denom[slot]
+            G[w, j] = cf.SW[w] * cf.nrm[j] * (r * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
         end
     end
     if cf.cf_col > 0
         j = cf.cf_col
-        @inbounds for s in 1:W
-            G[s, j] = cf.SW[s] * cf.nrm[j] * (cf.cf_raw[s] * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+        @inbounds for w in 1:W
+            G[w, j] = cf.SW[w] * cf.nrm[j] * (cf.cf_raw[w] * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
         end
     end
     return G
@@ -279,15 +309,15 @@ sigma-value evaluation for losers. Identical formula to
 re-derived.
 """
 function materialize_dense_factual!(Gview::AbstractMatrix, cf::CompressedFactual)
-    D = cf.D; W = cf.W; ncol = cf.oci - 1
+    D = cf.D; Ddest = cf.D_dest; W = cf.W; ncol = cf.oci - 1
     size(Gview) == (W, ncol) || error("materialize_dense_factual!: size(Gview)=$(size(Gview)) != (W,oci-1)=($W,$ncol)")
-    @inbounds for d in 1:D, s in 1:W
-        wo = cf.winner[s, d]
-        v = cf.wval[s, d]
+    @inbounds for slot in 1:Ddest, w in 1:W
+        wo = cf.winner[w, slot]
+        v = cf.wval[w, slot]
         for o in 1:D
-            j = d + (o - 1) * D
-            r = (o == wo ? v : 0.0) - cf.Pmat[o, d] * cf.denom[d]
-            Gview[s, j] = cf.SW[s] * cf.nrm[j] * (r * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
+            j = slot + (o - 1) * Ddest
+            r = (o == wo ? v : 0.0) - cf.Pmat[o, slot] * cf.denom[slot]
+            Gview[w, j] = cf.SW[w] * cf.nrm[j] * (r * cf.gdiv[j] - cf.usePMM * cf.PMM[j])
         end
     end
     if cf.cf_col > 0
