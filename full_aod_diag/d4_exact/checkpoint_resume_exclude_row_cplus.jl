@@ -9,7 +9,7 @@
 # point, under the SAME :cplus backend.
 # ============================================================================
 using Test
-const D4X = "/bbkinghome/edav/gravity_robustness/release-fullA-omit-row-restore-screens-2026-07-23/full_aod_diag/d4_exact"
+const D4X = @__DIR__
 for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl",
           "common_marginals_interval.jl", "instrumentation.jl", "oracle_fast.jl",
           "gravity_elimination.jl", "three_way_derivatives.jl", "lfix_incremental.jl",
