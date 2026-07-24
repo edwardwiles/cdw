@@ -256,7 +256,31 @@ representation"), the restricted families' production paths are unchanged in thi
 
 ### Gate E — supervisor/checkpoint smoke
 
-*(pending)*
+**Result: ALL 7 STEPS PASS.** Reused `scripts/exclude_row_gateC_smoke_test.sh` (existing,
+already-validated real process-group supervisor mechanics sourced from
+`scripts/cm_production_supervisor.sh` — `setsid`/`pgid` launch, `kill_pgroup`/`alive_pgroup`),
+after removing its now-stale `unrestricted -> :all_legacy-only` special-casing (§ see the
+Gate A/B section fix in the commit history) so it exercises the unrestricted family exactly like
+the other three families.
+
+**Command**: `bash scripts/exclude_row_gateC_smoke_test.sh unrestricted results/fullA_d4/gateE_unrestricted_smoke 180`
+
+| Step | Result |
+|---|---|
+| 1. Start real stage (calibration, D=20/W=80,000, default destination_sample) | launched under a real process group |
+| 2. Wait for schema-valid checkpoint | found at first poll (`stage_latest.jls`, after ~301s context build) |
+| 3. Deliberate SIGTERM to the process group | sent, no escalation to SIGKILL needed |
+| 4. Confirm zero orphan/duplicate processes | 0 process-group members, 0 stray matching Julia processes |
+| 5. Resume through the same supervisor mechanics | resumed under a new pgid, `STAGE_DONE` sentinel found |
+| 6. Banner/content verification | `destination_sample=exclude_row` printed, `[active-layout]` banner printed, `destinations=19` (ROW omitted) confirmed |
+| 7. Resume refusal under mismatched `destination_sample` | resume under `all_legacy` correctly REFUSED |
+
+Confirms: real checkpoint write/resume through the actual production supervisor, zero orphan
+processes after a deliberate kill, unrestricted default now resolves to `:exclude_row` end-to-end
+(startup banner reports `origins=20 destinations=19 active_A_cells=380`), and the
+destination-sample mismatch guard (already present in `D20CheckpointV4`'s resume validation)
+correctly refuses a cross-regime resume in both directions (verified in Gate A's structural tests
+and here live through the real supervisor).
 
 ## 7. Performance
 
@@ -289,8 +313,35 @@ these fields populate correctly for `:exclude_row` with no struct change. `logA_
 by the CM-family checkpoints (`cm_checkpoint.jl`/`cm_originzc_checkpoint.jl`) using the identical
 untyped-shape pattern in already-shipped production. `context_fingerprint` (`oracle.jl`) was
 already `D_dest`/`row_idx`-aware from the prior release (tags `"rectangular_D_x_Dminus1_true_shrink_v1"`
-vs `"square_v1"`).
+vs `"square_v1"`). Confirmed live in Gate E: real checkpoint write/resume, cross-regime resume
+refusal in both directions, zero orphan processes after a deliberate kill.
 
 ## 9. Decisive verdict
 
-*(pending Gates C/D/E — provisional: READY pending Gate C/E completion)*
+**READY_AND_MERGED.**
+
+- Mandatory success criterion met: unrestricted `destination_sample=:exclude_row` runs end-to-end
+  through the real compressed production path (`compressed_moments.jl`/`compressed_cc_inner.jl`/
+  `structured_moment_build.jl`/`fast_range_screen.jl`/`infeasibility_screen.jl`) with correct
+  values, gradients, checkpointing, screens, and cold verification, at the real D=20/W=80,000
+  benchmark scale, while `:all_legacy` remains fully preserved.
+- Gates A (39/39), B (24/24), C (all real-numerics checks), and E (7/7 supervisor steps) all pass.
+  Gate D concluded with a defensible audit-only verdict per the task's own decision rule (no
+  shared-core adoption warranted this release; exact core screens already shared).
+- Secondary goals also achieved beyond the mandatory minimum: the pre-winner envelope screen
+  (`precompute_envelope`/`envelope_prewinner_screen`/`screen_hard_winners_ranged`), explicitly
+  flagged as optional/non-blocking in the task brief, was rectangularized and restored rather than
+  left disabled — the derivation ported cleanly using the same pattern already validated three
+  times over in the mandatory path.
+- Three real, previously-latent bugs were found and fixed along the way (not merely refactored
+  around): `compressed_cc_inner.jl::compressed_transpose_contraction` (a square-only
+  `@inbounds`-suppressed out-of-bounds write causing a hard segfault — missed by the initial
+  file-list audit, caught by Gate B's real rectangular KNITRO inner solve), the CS module's
+  missing export of the new `active_layout.jl` helpers (caught immediately by the D=4 legacy
+  regression test), and `c10_d20_production_driver.jl::screened_eval`'s cache-hit `FieldError`
+  (pre-existing latent driver logic, unrelated to `:exclude_row` specifically, surfaced only
+  because this release is the first time real KNITRO outer-loop search exercised the unrestricted
+  `:exclude_row` compressed path end-to-end).
+- No blockers remain. Merged to `production/fullA-exact` and tagged
+  `exclude-row-unrestricted-core-optimizations-production-ready-2026-07-24` (see git log for the
+  exact commit range).
