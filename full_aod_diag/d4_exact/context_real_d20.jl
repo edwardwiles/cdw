@@ -91,6 +91,17 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     # W80k/W800k microbenchmark docs for the full incident writeup.
     so, pp, params_used = build_ad_context_real_d20(W = W, row_idx = row_idx)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
+    # exclude-ROW-destination production release (2026-07-24): reject focal_country==ROW. `bi`
+    # (baseIndex, AD_PARAMS's own default is 2=France, see this file's header comment) is the
+    # focal country whose gamma-prime the whole outer loop solves for and whose GT the reported
+    # kappa is a monotonic function of (frechet_benchmark_gp etc.) -- it is meaningless to ask for
+    # a focal country's own GT when that country isn't even a valid destination in the resolved
+    # sample, so a focal country coinciding with the omitted ROW destination under :exclude_row is
+    # a hard error, not a silently-nonsensical result.
+    row_idx === nothing || bi != row_idx ||
+        error("d20_real_setup: focal country (baseIndex=$bi) coincides with the omitted ROW " *
+              "destination (row_idx=$row_idx) under destination_sample=:exclude_row -- GT is undefined " *
+              "for a focal country that is not itself a valid destination in the resolved sample.")
     Ddest = row_idx === nothing ? Dact : Dact - 1
     @unpack θ_initial, θ_initial_up, U, γ, outer_constr_index, nTotalMoments, complement_index, inequality_index = pp
     Aod_offset = 3 + Dact

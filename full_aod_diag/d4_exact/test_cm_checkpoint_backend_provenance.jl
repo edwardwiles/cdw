@@ -17,9 +17,15 @@ include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
 include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
 include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
 include(joinpath(@__DIR__, "cm_production_bundle.jl"))
+include(joinpath(@__DIR__, "cm_screen_bridge.jl"))   # exclude-ROW-destination release (2026-07-24) test-harness fix: was missing, cm_checkpoint.jl calls with_screen_counters/print_screen_startup_banner/print_active_layout_banner
 include(joinpath(@__DIR__, "lfix_cm_cplus.jl"))
 include(joinpath(@__DIR__, "nested_quantile_grids.jl"))
 include(joinpath(@__DIR__, "cm_outer_driver.jl"))
+include(joinpath(@__DIR__, "cm_config.jl"))
+include(joinpath(@__DIR__, "cm_meanzc_moments.jl"))
+include(joinpath(@__DIR__, "cm_meanzc_config.jl"))   # exclude-ROW-destination release (2026-07-24) test-harness fix: was missing entirely, meanzc_resolve_K (called unconditionally by run_cm_upper_checkpointed) was UndefVarError
+include(joinpath(@__DIR__, "cm_meanzc_production.jl"))
+include(joinpath(@__DIR__, "cm_meanzc_cplus.jl"))
 include(joinpath(@__DIR__, "cm_checkpoint.jl"))
 using Printf, Serialization, LinearAlgebra
 
