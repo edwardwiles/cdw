@@ -35,10 +35,12 @@ so a caller can build it ONCE and reuse it across multiple `run_*_checkpointed` 
 the `reuse=` keyword.
 """
 function build_fullA_context(; W::Int, δ::Float64, find_smallest::Bool,
-        draw_design::Symbol, draw_seed::Int, inner_loop_opt::Union{Nothing,AbstractString} = nothing)
+        draw_design::Symbol, draw_seed::Int, inner_loop_opt::Union{Nothing,AbstractString} = nothing,
+        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
+        # (2026-07-24): see run_profile_checkpointed's identical kwarg.
     ctx = inner_loop_opt === nothing ?
-        d20_real_setup_design(W = W, δ = δ, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed) :
-        d20_real_setup_design(W = W, δ = δ, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_loop_opt)
+        d20_real_setup_design(W = W, δ = δ, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample) :
+        d20_real_setup_design(W = W, δ = δ, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_loop_opt, destination_sample = destination_sample)
     pe = build_pivot_elimination(ctx)
     rsc = build_ranged_screen_context(ctx)
     return (ctx = ctx, pe = pe, rsc = rsc)
@@ -69,8 +71,10 @@ under the SAME W/find_smallest/draw_design/draw_seed the caller is now requestin
 exempt -- that's exactly the field reuse is meant to override). Prevents silently reusing
 a context built for a different problem instance.
 """
-function reuse_matches(reuse::NamedTuple; W::Int, find_smallest::Bool, draw_design::Symbol, draw_seed::Int)
+function reuse_matches(reuse::NamedTuple; W::Int, find_smallest::Bool, draw_design::Symbol, draw_seed::Int,
+        destination_sample::Symbol = :exclude_row)
     ctx = reuse.ctx
     return ctx.W == W && ctx.find_smallest == find_smallest &&
-           ctx.draw_design == draw_design && ctx.draw_seed == draw_seed
+           ctx.draw_design == draw_design && ctx.draw_seed == draw_seed &&
+           (!hasproperty(ctx, :destination_sample) || ctx.destination_sample == destination_sample)
 end

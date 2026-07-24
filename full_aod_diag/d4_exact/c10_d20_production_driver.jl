@@ -166,8 +166,54 @@ struct D20Checkpoint
     knitro_version::String
 end
 
-"Schema 1 checkpoints (pre-draw-design-port) do not have draw_design/checksum fields; schema 2 checkpoints do not have knitro_version. Schema must be 3 to resume through this file's resume validation."
-const CHECKPOINT_SCHEMA = 3
+"""
+    D20CheckpointV4
+
+exclude-ROW-destination production release (2026-07-24): `D20Checkpoint`'s complete field set
+(schema 3, unchanged) PLUS `destination_sample`, `row_idx`, `D_dest`, appended at the end -- new
+type name for the same Julia-Serialization reason the CM-family checkpoints (cm_checkpoint.jl's
+CMCheckpointV6, cm_originzc_checkpoint.jl's CMCheckpointV7) exist: adding a field to an existing
+struct name breaks deserialization of already-written files under that name. `D20Checkpoint`
+(schema 3) has no backward-compat migration path here (this file's own pre-existing policy for
+schema mismatch is "start a fresh run", not a silent upgrade), so V4 does not attempt one either.
+"""
+struct D20CheckpointV4
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    g::Float64
+    zfree::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    knitro_iter::Int
+    wall_elapsed::Float64
+    checkpoint_reason::Symbol
+    screen_counts::NamedTuple
+    verify_Delta_dual::Float64
+    verify_gravity_value::Float64
+    verify_max_abs_moment_kkt_resid::Float64
+    verify_moment_resid_norm::Float64
+    solver_state_note::String
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    knitro_version::String
+    # ---- NEW (schema 4): omit-ROW-destination true-shrink production option ----
+    destination_sample::Symbol         # :all_legacy | :exclude_row
+    row_idx::Union{Nothing,Int}        # nothing for :all_legacy; the excluded destination's index otherwise
+    D_dest::Int                        # destination count; D_dest==D for :all_legacy
+end
+
+"Schema 1 checkpoints (pre-draw-design-port) do not have draw_design/checksum fields; schema 2 checkpoints do not have knitro_version; schema 3 (D20Checkpoint) does not have destination_sample/row_idx/D_dest. Schema must be 4 (D20CheckpointV4) to resume through this file's resume validation -- no migration path exists for any older schema, matching this file's own pre-existing 'start a fresh run' policy."
+const CHECKPOINT_SCHEMA = 4
 
 # AUD-09 fix: a cold-recomputed check at the checkpoint's own recorded point must be a HARD
 # resume gate, not merely a logged discrepancy. Since context/draws are already separately
@@ -201,20 +247,28 @@ function check_resume_tolerances!(label::AbstractString, fn::AbstractString,
 end
 
 "Atomic-ish checkpoint write: serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint that a resume could load."
-function save_checkpoint(path::AbstractString, ckpt::D20Checkpoint)
+function save_checkpoint(path::AbstractString, ckpt::D20CheckpointV4)
     tmp = path * ".tmp"
     serialize(tmp, ckpt)
     mv(tmp, path; force = true)
     return path
 end
 function load_checkpoint(path::AbstractString)
-    ckpt = deserialize(path)::D20Checkpoint
+    local ckpt
+    try
+        ckpt = deserialize(path)::D20CheckpointV4
+    catch e
+        (e isa TypeError || e isa EOFError || e isa MethodError) || rethrow()
+        error("load_checkpoint($path): failed to deserialize under D20CheckpointV4 (schema " *
+              "$(CHECKPOINT_SCHEMA)) -- this checkpoint predates the exclude-ROW-destination " *
+              "production release (schema 3, D20Checkpoint, no destination_sample/row_idx/D_dest " *
+              "fields) or an even older schema (see this function's schema-3 predecessor for that " *
+              "history). No migration path exists -- start a fresh run instead of resuming from an " *
+              "older-schema checkpoint.")
+    end
     ckpt.schema == CHECKPOINT_SCHEMA ||
-        error("load_checkpoint($path): schema=$(ckpt.schema), expected $(CHECKPOINT_SCHEMA) -- " *
-              "this checkpoint predates either the draw-design port (schema 1, no " *
-              "draw_design/checksum fields) or the KNITRO version-check addition (schema 2, no " *
-              "knitro_version field). Start a fresh run instead of resuming from an older-schema " *
-              "checkpoint.")
+        error("load_checkpoint($path): schema=$(ckpt.schema), expected $(CHECKPOINT_SCHEMA). Start a " *
+              "fresh run instead of resuming from an older-schema checkpoint.")
     return ckpt
 end
 
@@ -240,7 +294,7 @@ function guard_checkpoint_path(path::AbstractString, draw_design::Symbol, checks
     # informative schema message `load_checkpoint` gives -- wrap with the same guidance.
     local prior
     try
-        prior = deserialize(path)::D20Checkpoint
+        prior = deserialize(path)::D20CheckpointV4
     catch e
         error("guard_checkpoint_path($path): could not deserialize an existing file at this path " *
               "as the current D20Checkpoint schema (schema=$CHECKPOINT_SCHEMA) -- it likely " *
@@ -483,11 +537,16 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # a wall-clock-limited comparison, confounding "cache helped" with "cache left more time".
         # Default nothing: behavior unchanged (maxit=1_000_000, effectively unbounded, terminated
         # by maxtime_real as before this kwarg existed).
-        allow_direction_box_migration::Bool = false)   # addendum: by default, a fixed g (fresh or
+        allow_direction_box_migration::Bool = false,   # addendum: by default, a fixed g (fresh or
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
         # a validity gate on the caller's own g). See direction_bounds.jl.
+        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
+        # (2026-07-24): :exclude_row (PRODUCTION DEFAULT, matches d20_real_setup_design's own
+        # default) | :all_legacy (explicit reproduction-only opt-out).
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("run_profile_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
@@ -515,12 +574,19 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         end
         draw_design = resumed.draw_design
         bandwidth_cache = copy(resumed.bandwidth_cache)
+        # exclude-ROW-destination production release (2026-07-24): destination_sample changes
+        # n_free (D^2 vs D*D_dest), same hard-refuse discipline as draw_design just above.
+        resumed.destination_sample == destination_sample ||
+            error("run_profile_checkpointed($label): destination_sample MISMATCH on resume -- " *
+                  "checkpoint was written with destination_sample=:$(resumed.destination_sample), this " *
+                  "call requests :$destination_sample -- refusing to resume under a different " *
+                  "destination-sample regime (D^2 vs D*D_dest free-parameter dimension differs).")
         lp("[", label, "] RESUMING from ", resume_from, " (reason=", resumed.checkpoint_reason,
            " n_eval=", resumed.n_eval, " knitro_iter=", resumed.knitro_iter, " wall_elapsed=", resumed.wall_elapsed, "s)")
     end
 
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
-                                 draw_design = draw_design, draw_seed = draw_seed)
+                                 draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
     pe = build_pivot_elimination(ctx)
     # exclude-ROW-destination production release (2026-07-24): D2/n derived from zfree_start's OWN
     # length (n = length(zfree_start)) rather than recomputed as D^2-1 -- that recomputation
@@ -648,12 +714,12 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
+        ckpt = D20CheckpointV4(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.benchmark_unweighted_moment_mean),
             SOLVER_STATE_NOTE, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
-            LOADED_KNITRO_RELEASE)
+            LOADED_KNITRO_RELEASE, destination_sample, ctx.row_idx, ctx.D_dest)
         latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
         guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
         save_checkpoint(latest_path, ckpt)
@@ -912,15 +978,19 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         # gp the existing `trace` NamedTuple records) from a real short production trajectory. Purely
         # additive -- nothing is read here unless a caller explicitly passes a Ref; zero behavior/
         # allocation change otherwise.
-        grad_trace_ref::Union{Nothing,Ref{Vector{Vector{Float64}}}} = nothing)   # closure task Phase 5:
+        grad_trace_ref::Union{Nothing,Ref{Vector{Vector{Float64}}}} = nothing,   # closure task Phase 5:
         # same pattern as full_trace_ref, one level down -- when given, every cb_G! call additionally
         # pushes copy(xf) (the exact free-parameter vector the gradient backend is dispatched on) into
         # this Ref'd vector, for a same-trajectory backend replay (c34_phase5_same_trajectory_replay.jl).
         # Purely additive; nothing read here unless explicitly passed.
+        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
+        # (2026-07-24): see run_profile_checkpointed's identical kwarg.
     # primal infeasibility, confirmed by clean KNITRO -300/unbounded status on both attempts) while costing an
     # extra ~13.5s per rejected point; skipping it is a pure win (identical kappa reached in matched A/B tests,
     # ~1.4x more outer attempts explored per unit time). See docs handoff for the full investigation.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("run_polish_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint(resume_from)
@@ -943,13 +1013,18 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         end
         draw_design = resumed.draw_design
         bandwidth_cache = copy(resumed.bandwidth_cache)
+        resumed.destination_sample == destination_sample ||
+            error("run_polish_checkpointed($label): destination_sample MISMATCH on resume -- " *
+                  "checkpoint was written with destination_sample=:$(resumed.destination_sample), this " *
+                  "call requests :$destination_sample -- refusing to resume under a different " *
+                  "destination-sample regime (D^2 vs D*D_dest free-parameter dimension differs).")
         lp("[", label, "] RESUMING from ", resume_from, " (reason=", resumed.checkpoint_reason,
            " n_eval=", resumed.n_eval, " knitro_iter=", resumed.knitro_iter, ")")
     end
 
     ctx_reused = false
     if reuse !== nothing && resumed === nothing
-        if reuse_matches(reuse; W = W, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed)
+        if reuse_matches(reuse; W = W, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
             ctx = set_context_delta!(reuse.ctx, delta)
             pe = reuse.pe; rsc = reuse.rsc
             ctx_reused = true
@@ -967,8 +1042,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     end
     if !ctx_reused
         ctx = inner_opt_override === nothing ?
-            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed) :
-            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_opt_override)
+            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample) :
+            d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, inner_loop_opt = inner_opt_override, destination_sample = destination_sample)
         pe = build_pivot_elimination(ctx)
         rsc = build_ranged_screen_context(ctx)
     end
@@ -1084,12 +1159,12 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64}, r::NamedTuple)
         zfree_now = w_current[2:end]
         logA_full = pivot_expand(zfree_now, pe)
-        ckpt = D20Checkpoint(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
+        ckpt = D20CheckpointV4(CHECKPOINT_SCHEMA, run_id, label, find_smallest ? :upper : :lower, find_smallest, delta, W, draw_seed,
             w_current[1], copy(zfree_now), logA_full, copy(ctx.obj.x), copy(policy.cache),
             best_feasible[], n_eval[], knitro_iter[], time() - t_start, reason, as_namedtuple(sc),
             r.Delta_dual, r.gravity_value, r.max_abs_moment_kkt_resid, norm(r.benchmark_unweighted_moment_mean), SOLVER_STATE_NOTE,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
-            LOADED_KNITRO_RELEASE)
+            LOADED_KNITRO_RELEASE, destination_sample, ctx.row_idx, ctx.D_dest)
         latest_path = joinpath(ckpt_dir, "$(label)_latest.jls")
         guard_checkpoint_path(latest_path, draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed)
         save_checkpoint(latest_path, ckpt)
