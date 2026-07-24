@@ -51,7 +51,7 @@ snaps = nested_grid_sequence([10, 20, 50])
 L = 50
 pcx = build_cm_production_context(ctx, CS; L = L, contrasts = :anchored, probs = snaps[L])
 x_free_calib = ctx.θ0_up[ctx.free_idx]
-w_calib = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], ctx.D, ctx.D)), pe))
+w_calib = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], ctx.D, ctx.D_dest)), pe))
 xf_calib = vcat(w_calib[1], vec(exp.(pivot_expand(w_calib[2:end], pe))))
 
 lp(">>> Group 1: screen precheck alone does not false-reject the calibration point")
