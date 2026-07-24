@@ -1,5 +1,17 @@
 # Melitz performance-engineering continuation -- 2026-07-23 (session 4: eliminate jac_h, direct fixed-dual gradient backend, D=20 non-convergence finding)
 
+**2026-07-24 CORRECTION (user-raised concern, see Section B)**: this report's original
+Section B framing of the direct-vs-analytic gradient disagreement was corrected after a
+user asked whether the economics had changed. They had not -- verified directly (moment
+values bit-identical; the ORIGINAL `:B` reference backend, predating this entire session,
+agrees exactly with the backend the new one was compared against; a ForwardDiff
+cross-check pins the disagreement to a specific, small, pre-existing set of coordinates
+tied to one gravity-pivot cell's participation-boundary sensitivity, present in every
+gradient-estimation method tried, not introduced by this session). The ORIGINAL wording
+("not resolved," implying the new backend might be more trustworthy) is corrected in place
+in Section B below -- not left standing alongside the fix, per this repo's own correction
+convention.
+
 Branch: `melitz/fullD-delta-star` (working tree: `trade_robustness_modular`, remote `cdw` =
 `github.com/edwardwiles/cdw`). Starting checkpoint: `0b76652` ("Melitz: argument-localized
 gradient backend, bounded caches, D=20 root-cause diagnosis, log-cutoff validation,
@@ -188,45 +200,84 @@ thread their own existing `gradient_backend`/`h` parameters through to this call
 zero-risk, additive change (every existing call site keeps `:B`'s default behavior
 byte-for-byte).
 
-### Correctness validation, and a genuine open finding
+### Correctness validation -- corrected diagnosis (user-raised concern, follow-up investigation)
 
-`scripts/melitz_direct_gradient_validate.jl` (D=4/W=20,000, base Pareto point + 3 random
-perturbations + a `:logcutoff` base point), comparing, at a SHARED `(obj.H, x)` base-point
-state (isolating the comparison to formula agreement, not KNITRO inner-solve
-nondeterminism across separately-constructed bundles):
+**CORRECTION (post-session follow-up)**: the paragraph originally here concluded the
+direct/analytic disagreement was "not resolved" and implied the new backend might be the
+more trustworthy of the two (since it matched a "frozen-x" finite-difference check the
+original writeup called independent). A user asked, correctly, whether this meant the
+ECONOMICS had changed. A follow-up investigation (below) shows the answer is **no** --
+the economics are provably unchanged -- and identifies the actual, narrow, pre-existing
+mechanism precisely enough to retract the "not resolved" framing. The original three-point
+validation (serial==parallel bit-identical; frozen-x FD matches direct-serial) still holds
+as stated, but point 3's framing ("the analytic backend is the outlier relative to BOTH")
+is WRONG: the "frozen-x FD" check was not actually independent of the direct backend -- it
+uses the identical mathematical construction (re-evaluate `Psi` at the true displaced
+`arg0`), just via a different code path, so its agreement with the direct backend
+demonstrates implementation consistency, not correctness relative to the true gradient.
 
-1. `:B_direct_argument_serial` vs `:B_direct_argument_parallel`: **bit-identical
-   (`max|diff|=0.0`) at every case** -- the parallel implementation's per-thread scratch
-   discipline is exactly consistent with the serial one.
-2. Both direct backends vs. an INDEPENDENTLY-coded frozen-x finite-difference (a third
-   computation, re-evaluating `melitz_moments_adapter_outer!` at displaced theta and reading
-   the raw functor's own `constr=` branch with the dual `x` held fixed, no shared code with
-   `direct_gradient.jl`): **matches the direct backends to displayed precision at every
-   spot-checked coordinate, every case.**
-3. Both direct backends vs. the EXISTING `:B_argument_localized_parallel` analytic backend
-   (chain-rule contraction via `dPsi!`, `jac_h`-based): agreement ranges from tight at the
-   base Pareto point (0.27-0.38% relative) to as large as **~17% relative at random
-   (non-Pareto-optimal) perturbations** -- `scripts/melitz_direct_gradient_h_sensitivity.jl`.
+**What the follow-up investigation established, with direct evidence**:
 
-**This is disclosed as a genuine open finding, not glossed over.** It is NOT attributed to a
-bug in the new backend: two independently-coded alternative computations (the parallel
-variant, and the frozen-x FD) agree with the direct-serial backend at every case tested; the
-analytic backend is the outlier relative to BOTH. The likely mechanism, confirmed
-qualitatively by the h-sweep script: the analytic backend LINEARIZES `Psi` (via its exact
-derivative `dPsi!`) at the single FIXED base `arg0` point, then multiplies by an
-FD-approximated `dG/dtheta`; the direct backend evaluates the TRUE nonlinear `Psi!` at both
-displaced points directly. These two constructions provably converge to the identical true
-derivative as `h->0`, PROVIDED no active-set kink is crossed -- but this model's hard
-participation gate (`melitz_firm`'s `active = profit > 0`) is exactly the class of
-non-smoothness this codebase's own prior sessions have already found causes finite-difference
-Jacobian instability near cutoff boundaries (the "winner-boundary derivative" line of
-investigation in the related full-A/Ricardian code). The h-sweep script shows BOTH
-backends' raw gradient values swinging wildly (even sign-flipping) as `h` ranges from `1e-2`
-to `1e-6` at the base point -- consistent with genuine FD instability shared by both, not an
-independent drift specific to either. **Not resolved this session** -- flagged as the
-clearest, most important follow-up (a dedicated zero-switch/high-switch coordinate battery,
-matching the governing prompt's own Section 6 test-category list, would be the right next
-step).
+1. **The moment values (economics) are provably bit-identical.** An independent
+   reimplementation of the moment computation (`dense_G`, bypassing every line of code this
+   session touched) was checked against `obj.H` (populated by the untouched, pre-existing
+   `melitz_moments_adapter_outer!`): `max|diff| = 0.0`, exact, at every point tested. No
+   economic formula (`melitz_firm`, the moment system, the cutoff derivation, the gravity
+   restrictions) was modified this session -- only a new gradient-ESTIMATION method and a
+   dead-allocation removal.
+2. **The pre-existing backend family is self-consistent, confirming this instability is not
+   new.** The ORIGINAL dense-reference backend `:B` (predates every optimization session,
+   never touched by continuation3 or continuation4) was run side-by-side with
+   `:B_argument_localized_parallel` at a random perturbation point: **exact, bit-for-bit
+   agreement at all 30 coordinates**, including every coordinate that showed a large gap
+   against the NEW direct backend. This rules out "the existing backend I compared against
+   is itself somehow fragile" -- `:B` and `:B_argument_localized_parallel` are, and always
+   have been, identical.
+3. **A genuinely independent, non-finite-difference check (ForwardDiff automatic
+   differentiation through the exact composite objective, no `h` anywhere) settles which
+   backend is closer to the truth, coordinate by coordinate**
+   (`scripts/melitz_direct_gradient_forwarddiff_goldstandard.jl`). Result, at
+   `h=1e-6` (small enough that ordinary finite-difference truncation is negligible for a
+   smooth function): **the large majority of coordinates show `:B`/`:B_argument_localized`,
+   the new direct backend, AND ForwardDiff agreeing to ~1e-10 relative -- machine
+   precision.** This proves the new backend's formula is correct where the underlying
+   function is smooth.
+4. **The remaining coordinates -- a specific, identifiable minority -- are genuinely
+   ill-conditioned for EVERY method tried, not just the new one.** At these coordinates
+   (traced to ones whose `direct_cells` touch ONE particular gravity-pivot trade cell, at
+   this fixture, plus the handful of link-touching coordinates that also touch it), both
+   `:B`/`:B_argument_localized_parallel` and the new direct backend diverge (grow, not
+   shrink) as `h` is reduced from `1e-4` to `1e-6` -- and ForwardDiff reports **exactly
+   `0`** there, which is not a trustworthy answer either: ForwardDiff's dual-number
+   propagation through a Boolean comparison (`melitz_firm`'s `active = operating_profit >
+   0`) has zero derivative by construction, silently missing the real, nonzero
+   Dirac-delta-like contribution from firms whose participation status flips as theta
+   moves -- the exact class of automatic-differentiation blind spot this codebase has
+   already documented for the related Ricardian/full-A model ("winner-boundary
+   derivative", "smoothed-Dirac Jacobian understates sensitivity"). At a FIXED `h`, the two
+   real (non-blind) methods -- `:B`/`:B_argument_localized` and the new direct backend --
+   land on different-but-comparable-magnitude numbers at these coordinates (the source of
+   the originally-reported 0.3%-17% gap) because they weight the SAME underlying jump
+   discontinuity through two different, both-approximate, nonlinear constructions (one
+   linearizes `Psi` via its exact derivative around the base point and multiplies by an
+   FD-estimated `dG/dtheta`; the other evaluates the true nonlinear `Psi` at both displaced
+   points) -- neither is more "correct" there, because the classical derivative is not
+   well-defined at a jump.
+
+**Bottom line for the user's question**: no, the economics did not change -- verified
+directly, not asserted. The gradient disagreement is real, but it is (a) confined to a
+small, identifiable set of coordinates tied to one gravity-pivot cell whose baseline
+cutoff sits close enough to the Pareto support that a coordinate perturbation crosses real
+draws' participation thresholds, (b) present in the ORIGINAL `:B` backend too (not
+introduced by continuation3 or continuation4), and (c) a case where the mathematical
+derivative itself is ill-defined (a jump, not a kink), so no gradient-estimation method --
+old, new, or exact automatic differentiation -- gives a fully trustworthy answer there.
+**This is a genuine, real, unresolved numerical-analysis issue in the existing gradient
+machinery (all backends, not just the new one) that this session's investigation surfaced
+and precisely localized, but did not (and was not asked to) fix.** The clearest follow-up
+remains a dedicated zero-switch/high-switch coordinate battery (governing prompt Section 6)
+built around exactly the mechanism identified here, for whichever gradient backend
+production ultimately uses.
 
 ## C. Memory scaling (`scripts/melitz_memory_audit.jl`, extended this session)
 
