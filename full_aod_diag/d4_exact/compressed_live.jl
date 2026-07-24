@@ -85,7 +85,14 @@ function compressed_gravity_raw(θ_full::AbstractVector, ctx)
     ind.gravMoment == 1 || error("compressed_gravity_raw: ctx.γ.indicators.gravMoment != 1 -- compressed_live.jl was built/validated only for this investigation's gravMoment==1 config; extend before reusing elsewhere.")
     AodPow = aod_pow_matrix(θ_full, ctx)
     G1 = zeros(1, 1)
-    newGravityMoment!(G1, ctx.τ, ctx.D, 1, ones(ctx.D), AodPow, @view(ctx.U[1:1, :]), ind.GravityMomentFirstApproach, ind.UoModel)
+    # exclude-ROW-destination production release (2026-07-24): newGravityMoment!'s signature
+    # (moments/newGravityMoment!.jl) gained a Ddest parameter (inserted right after D, before W)
+    # as part of the rectangular D_origin/D_destination port -- this call site was missing it
+    # entirely (a real, destination_sample-independent regression: broken for :all_legacy too,
+    # not just :exclude_row, since compressed_live.jl was never touched by the omit-ROW work and
+    # so never got updated to match). ctx.D_dest == ctx.D under :all_legacy, so this fix is a
+    # no-op there and only changes behavior (from "crash") under a rectangular ctx.
+    newGravityMoment!(G1, ctx.τ, ctx.D, ctx.D_dest, 1, ones(ctx.D), AodPow, @view(ctx.U[1:1, :]), ind.GravityMomentFirstApproach, ind.UoModel)
     return G1[1, 1]
 end
 
