@@ -156,6 +156,17 @@ handling), not per outer-point call.
 """
 function precompute_envelope(ctx)
     γo = ctx.γ; D = ctx.D; U = ctx.U; W = size(U, 1)
+    # exclude-ROW-destination production release (2026-07-24): the envelope-bound derivation
+    # below (K2/M/b/Pmat, all built as D x D matrices, plus the `reshape(γo.P, (D, D))` and
+    # `Aod_offset + D^2 == length(θ0_up)` assertions) is genuinely square-only -- it was never
+    # re-derived for a rectangular D_origin x D_destination sample (out of scope for this
+    # release's selective port; the archived omit-ROW work never touched this file at all).
+    # Guard explicitly here, at the SAME EnvelopeUnsupportedContext exception the other
+    # unsupported-config checks below already use, so :exclude_row cleanly falls through to
+    # `rsc.envelope === nothing` (screen disabled, other screens unaffected) instead of an
+    # opaque `DimensionMismatch` crash from the reshape further down.
+    !hasproperty(ctx, :D_dest) || ctx.D_dest == D ||
+        throw(EnvelopeUnsupportedContext("ctx.D_dest=$(ctx.D_dest) != ctx.D=$D (destination_sample=$(hasproperty(ctx, :destination_sample) ? ctx.destination_sample : :unknown)) -- this screen's envelope-bound derivation (K2/M/b/Pmat, all D x D) is square-only and was never re-derived for a rectangular D_origin x D_destination sample; disabling rather than guessing."))
     ctx.θ_lo[1] == ctx.θ_hi[1] || throw(EnvelopeUnsupportedContext("mu is not fixed to a point in this ctx (theta_lo[1] != theta_hi[1]) -- the a_od(A) factorization this screen relies on assumes mu is outer-loop-constant; re-derive before using this screen with mu free."))
     ctx.θ_lo[2] == ctx.θ_hi[2] || throw(EnvelopeUnsupportedContext("sigma is not fixed to a point in this ctx (theta_lo[2] != theta_hi[2]) -- same issue as mu, see above."))
     ind = γo.indicators
