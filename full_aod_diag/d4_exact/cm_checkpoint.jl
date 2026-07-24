@@ -582,6 +582,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs) :
         build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    print_active_layout_banner(ctx, is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
     print_screen_startup_banner(is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
     th = pcx.ctx_cm.obj.threshold_state
     println("[threshold-config] mode=", is_meanzc ? "cm_plus_meanzc" : "cm_flexible",

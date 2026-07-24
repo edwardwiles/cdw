@@ -424,6 +424,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
 
     pcx = build_originzc_production_context(ctx, CS, layout)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    print_active_layout_banner(ctx, "origin_zc")
     print_screen_startup_banner("origin_zc")
     th = pcx.ctx_cm.obj.threshold_state
     println("[threshold-config] mode=origin_zc requested_delta=", delta,

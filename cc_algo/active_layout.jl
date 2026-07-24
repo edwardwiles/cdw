@@ -43,3 +43,31 @@ All (origin, destination) pairs over the active layout only -- `Iterators.produc
 loop built from this accessor even though today's default is the full square.
 """
 active_od_cells(ctx) = Iterators.product(active_origins(ctx), active_destinations(ctx))
+
+# exclude-ROW-destination production release (2026-07-24 addendum): `ctx` now DOES carry
+# active_origins/active_destinations under destination_sample=:exclude_row (see
+# context_real_d20.jl's row_idx/D_dest wiring), so the accessors above are no longer a permanent
+# no-op -- this banner is the "every startup banner must print..." requirement (task item 6):
+# resolved destination_sample, origin/destination/active-cell counts, free reduced A dimension,
+# and the gravity-sample/theta-calibration code versions (context_real_d20.jl).
+"""
+    print_active_layout_banner(ctx, mode_label::AbstractString)
+
+Prints the resolved destination-sample provenance for `ctx` under `mode_label` (e.g.
+"cm_flexible", "cm_plus_meanzc", "origin_zc", "unrestricted"). One line, `[active-layout]`
+prefixed, flushed immediately -- same discipline as `print_screen_startup_banner`/
+`[threshold-config]`.
+"""
+function print_active_layout_banner(ctx, mode_label::AbstractString)
+    n_origin = length(active_origins(ctx))
+    n_dest = length(active_destinations(ctx))
+    n_cells = n_origin * n_dest
+    free_dim = hasproperty(ctx, :m) ? n_free(ctx.m) : n_cells
+    println("[active-layout] mode=", mode_label,
+            " destination_sample=", hasproperty(ctx, :destination_sample) ? ctx.destination_sample : :all_legacy,
+            " origins=", n_origin, " destinations=", n_dest, " active_A_cells=", n_cells,
+            " free_reduced_A_dim=", free_dim,
+            " gravity_sample_version=", hasproperty(ctx, :gravity_sample_version) ? ctx.gravity_sample_version : 1,
+            " theta_calibration_version=", hasproperty(ctx, :theta_calibration_version) ? ctx.theta_calibration_version : 1)
+    flush(stdout)
+end

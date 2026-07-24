@@ -24,6 +24,23 @@ include(joinpath(@__DIR__, "infeasibility_screen.jl"))   # -> precompute_pairwis
 
 const D20_REAL = 20
 
+# exclude-ROW-destination production release (2026-07-24). Recorded provenance for a checkpoint's
+# resolved economic sample/estimation code path -- distinct from destination_sample itself
+# (:exclude_row|:all_legacy is the RUNTIME choice; these version numbers are the CODE that
+# implements whichever choice was made, bumped whenever the underlying sample-construction or
+# theta-estimation logic changes).
+const GRAVITY_SAMPLE_VERSION = 2       # 1 = pre-release legacy full-sample construction (square
+                                        # D x D, single code path); 2 = this release -- gravity
+                                        # sample recomputed from raw observations for the resolved
+                                        # destination_sample (rectangular for :exclude_row, square
+                                        # for :all_legacy), not derived by deleting a column from a
+                                        # previously-residualized full-sample object.
+const THETA_CALIBRATION_VERSION = 2    # 1 = theta_star estimated once on the full square sample,
+                                        # reused for every destination_sample; 2 = this release --
+                                        # theta_star (hence mu=1/theta_star and the productivity-
+                                        # draw transform) is re-estimated on the resolved sample's
+                                        # own gravity regression.
+
 "Build (so, pp, params_used) for the REAL D=20 economy at a given W, independent of AD_PARAMS."
 function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing)
     params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx))
@@ -140,7 +157,15 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     end
 
     return (so = so, pp = pp, D = Dact, D_dest = Ddest, row_idx = row_idx,
-            destination_sample = destination_sample, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
+            destination_sample = destination_sample,
+            # cc_algo/active_layout.jl accessors (active_origins/active_destinations/active_od_cells):
+            # origins are NEVER restricted (ROW is retained as an origin in both modes); destinations
+            # are truncated to 1:Ddest under :exclude_row (the omitted destination, row_idx, is by
+            # construction the LAST index, Dact -- see Aod_free_pos's own `d in 1:Ddest` convention
+            # above, which already treats destination indices 1:Ddest as the active/free set).
+            active_origins = Base.OneTo(Dact), active_destinations = Base.OneTo(Ddest),
+            gravity_sample_version = GRAVITY_SAMPLE_VERSION, theta_calibration_version = THETA_CALIBRATION_VERSION,
+            W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
             θ0_up = θ0_up, θ_lo = θ_lo, θ_hi = θ_hi, l_full = l_full,
             free_idx = free_idx, fixed_idx = fixed_idx, fixed_vals = fixed_vals, m = m,
             Aod_offset = Aod_offset, Aod_free_pos = Aod_free_pos,

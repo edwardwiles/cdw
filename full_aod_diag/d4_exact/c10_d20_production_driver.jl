@@ -522,14 +522,21 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
                                  draw_design = draw_design, draw_seed = draw_seed)
     pe = build_pivot_elimination(ctx)
-    D = ctx.D; D2 = D^2; n = D2 - 1
+    # exclude-ROW-destination production release (2026-07-24): D2/n derived from zfree_start's OWN
+    # length (n = length(zfree_start)) rather than recomputed as D^2-1 -- that recomputation
+    # silently assumed D_origin==D_destination (D^2 active A cells), which is only true under
+    # destination_sample=:all_legacy; d20_real_setup_design's pivot-reduced free_idx already
+    # encodes the correct D*D_dest-1 dimension for :exclude_row (context_real_d20.jl), so deriving
+    # n from the vector the caller actually built is correct under BOTH regimes without needing to
+    # branch on destination_sample here at all.
+    D = ctx.D; n = length(zfree_start); D2 = n + 1
     rsc = build_ranged_screen_context(ctx)
     resolved_backend = resolve_price_cache_backend(label, use_pooled_gradient, price_cache_backend)
     # one pool/workspace per ctx (built ONCE here), not per gradient call -- see docs/
     # fullA_factorized_price_production_gate.md for A+/C+'s own persistence/aliasing design.
     grad_pool = resolved_backend in (:pooled, :aplus, :cplus, :kbplus) ? build_grad_workspace_pool(W) : nothing
     lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, W) : nothing
-    lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, W) : nothing
+    lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, ctx.D_dest, W) : nothing
     lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " price_cache_backend=", resolved_backend,
@@ -587,6 +594,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     end
 
     sc = ScreenCounters()
+    print_active_layout_banner(ctx, "unrestricted")
     println("[screen-stack] mode=unrestricted enabled=true")
     println("[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners, ",
             "envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE), winning_range, safety_net_moment_range")
@@ -964,13 +972,16 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         pe = build_pivot_elimination(ctx)
         rsc = build_ranged_screen_context(ctx)
     end
-    D = ctx.D; D2 = D^2
+    # exclude-ROW-destination production release (2026-07-24): D2 = 1(gp) + length(zfree_start) --
+    # see the identical fix/rationale in run_profile_checkpointed above (D^2 silently assumed
+    # D_origin==D_destination, only true under :all_legacy).
+    D = ctx.D; D2 = 1 + length(zfree_start)
     resolved_backend = resolve_price_cache_backend(label, use_pooled_gradient, price_cache_backend)
     # one pool/workspace per ctx (built ONCE here), not per gradient call -- see docs/
     # fullA_factorized_price_production_gate.md for A+/C+'s own persistence/aliasing design.
     grad_pool = resolved_backend in (:pooled, :aplus, :cplus, :kbplus) ? build_grad_workspace_pool(W) : nothing
     lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, W) : nothing
-    lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, W) : nothing
+    lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, ctx.D_dest, W) : nothing
     lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " price_cache_backend=", resolved_backend,
@@ -1008,6 +1019,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     end
 
     sc = ScreenCounters()
+    print_active_layout_banner(ctx, "unrestricted")
     println("[screen-stack] mode=unrestricted enabled=true")
     println("[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners, ",
             "envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE), winning_range, safety_net_moment_range")
