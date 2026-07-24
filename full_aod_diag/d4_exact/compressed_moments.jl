@@ -51,6 +51,19 @@
 using LinearAlgebra: dot
 using SpecialFunctions: gamma as spgamma
 
+# core-moment-cache-benchmark task (2026-07-24): defensive self-include, matching this codebase's
+# own convention (oracle_fast.jl:60, winner_certificate.jl:48) of each file pulling in its own
+# @prof/PROF_ENABLED dependency rather than relying on include order -- this file is included
+# (c10_d20_production_driver.jl) BEFORE oracle_fast.jl, so @prof would otherwise be undefined here.
+include(joinpath(@__DIR__, "instrumentation.jl"))
+
+# Canonical winner engine (2026-07-24 unification task): defensive self-include (see
+# fast_range_screen.jl's identical `isdefined(Main, :CompressedFactual) || include(...)` pattern)
+# -- this file loads before winner_certificate.jl's normal load point in the driver's include
+# chain, so canonical_price_precompute/canonical_winner_argmin must be pulled in explicitly here
+# for build_compressed_factual to use.
+isdefined(Main, :WinnerRefCache) || include(joinpath(@__DIR__, "winner_certificate.jl"))
+
 """
     CompressedFactual
 
@@ -118,17 +131,15 @@ function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool
     oci = ctx.obj.outer_constr_index
 
     # ---- draw-independent per-cell constants (D x D_dest) ----
-    # lambda/Aod_θ reshape conventions match oracle_fast.jl's own rectangular gravity-compute
-    # block bit-for-bit (D_dest-fast for γo.P/lambda -- the "moments" stride; D-fast, i.e. the
-    # natural `reshape(v, D, Ddest)`, for the Aod parameter block -- see MEMORY
-    # moments-vs-aod-linear-index-convention; the two conventions coincide when D==Ddest).
-    lambda = reshape(γo.P, (Ddest, D))'                    # lambda[o,s] : observed shares
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
-    Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
-    AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    constCons = [γo.wHat[o] * AodPow[o, s] * γo.τ[o, s] for o in 1:D, s in 1:Ddest]
-    wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
-    constConsσ = [wPow[o] * (AodPow[o, s] * γo.τ[o, s])^(1 - σ) for o in 1:D, s in 1:Ddest]
+    # Canonical winner engine (2026-07-24): shared precompute, replacing this function's own
+    # hand-derived Aod/AodPow/constCons/constConsσ/UPow/UσPow block -- byte-identical formula to
+    # canonical_price_precompute (winner_certificate.jl), now the single shared source also used by
+    # screen_hard_winners/screen_hard_winners_ranged. (lambda/Aod_θ reshape conventions unchanged:
+    # D_dest-fast for γo.P/lambda, the "moments" stride; D-fast for the Aod parameter block -- see
+    # MEMORY moments-vs-aod-linear-index-convention.)
+    pp = canonical_price_precompute(θ_full, ctx)
+    constCons = pp.constCons; constConsσ = pp.constConsσ; logCC = pp.logCC
+    mulU = pp.mulU; UPow = pp.UPow; UσPow = pp.UσPow; AodPow = pp.AodPow
     # denom is a per-COUNTRY (γo.wHat/γo.L are GLOBAL, length-D, country-indexed) quantity, so the
     # active-destination slot s must be mapped to its GLOBAL country index -- global_destination(ctx,s)
     # -- NOT used as a global index directly (that would be wrong whenever the omitted destination
@@ -137,26 +148,17 @@ function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool
     denom = [γo.wHat[global_destination(ctx, s)] * γo.L[global_destination(ctx, s)] for s in 1:Ddest]  # γ_d ≡ 1
     Pmat = [γo.P[s + (o - 1) * Ddest] for o in 1:D, s in 1:Ddest]  # Pmat[o,s]=P[a(o,s)], already slot-local
 
-    # BIT-IDENTICAL to hFunction!/MinInd!: price = constCons/UPow, UPow=U^{-μ}
-    # (NOT constCons*U^μ -- the division form is what MinInd! compares, so the
-    #  winner index and the exact-tie boundary match the dense path bit-for-bit).
-    UPow = U .^ (-μ)                                       # W x D  (UoModel==1: o1=o; origins never restricted)
-    UσPow = γo.Uσ .^ (-μ)                                  # W x D
-
     winner = Matrix{Int}(undef, W, Ddest)
     wval = Matrix{Float64}(undef, W, Ddest)
     tied = Tuple{Int,Int}[]
     n_tied = 0
     @inbounds for s in 1:Ddest
         for w in 1:W
-            # first pass: exact row-min (matches MinInd!'s minimum(x))
-            best = constCons[1, s] / UPow[w, 1]; bo = 1
-            for o in 2:D
-                p = constCons[o, s] / UPow[w, o]
-                if p < best
-                    best = p; bo = o
-                end
-            end
+            # Winner IDENTIFICATION via the shared fast log-additive argmin (canonical_winner_argmin)
+            # -- see fast_range_screen.jl::screen_hard_winners_ranged's identical swap for the full
+            # rationale/correctness argument. `check_ties` below is UNCHANGED (still price-space).
+            bo, _ = canonical_winner_argmin(logCC, mulU, w, s, D)
+            best = constCons[bo, s] / UPow[w, bo]
             winner[w, s] = bo
             wval[w, s] = constConsσ[bo, s] / UσPow[w, bo]
             if check_ties

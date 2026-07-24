@@ -299,20 +299,18 @@ in `order` (same early-exit discipline as `screen_hard_winners`).
 function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::AbstractMatrix, ep::EnvelopePrecomp;
         order::AbstractVector{Int} = 1:(hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D), full_scan::Bool = false, safety_mult::Float64 = 50.0)
     γo = ctx.γ
-    D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D; U = ctx.U; W = size(U, 1)
-    μ = θ_full[1]; σ = θ_full[2]
     # `order` (from order_destinations, called with the LOCAL destination-slot count) and `d` below
     # are LOCAL active-destination slots throughout, matching Pmat's own D x D_dest convention --
     # NOT global country indices. See cc_algo/active_layout.jl / compressed_moments.jl.
-    lambda = reshape(γo.P, (Ddest, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
-    Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
-    AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:Ddest]
-    wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
-    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:Ddest]
-    UPow = U .^ (-μ)
-    UσPow = γo.Uσ .^ (-μ)
+    # Canonical winner engine (2026-07-24): shared precompute -- was this function's own hand-derived
+    # Aod/AodPow/constCons/constConsσ/UPow/UσPow block, byte-identical formula to
+    # canonical_price_precompute (winner_certificate.jl), now the single shared source (see that
+    # function's docstring -- this consolidates what were three near-duplicate derivations of the
+    # SAME quantity across this file, infeasibility_screen.jl, and compressed_moments.jl).
+    pp = canonical_price_precompute(θ_full, ctx)
+    D = pp.D; Ddest = pp.Ddest; W = pp.W
+    constCons = pp.constCons; constConsσ = pp.constConsσ; logCC = pp.logCC
+    mulU = pp.mulU; UPow = pp.UPow; UσPow = pp.UσPow
     denom = [γo.wHat[global_destination(ctx, dd)] * γo.L[global_destination(ctx, dd)] for dd in 1:Ddest]
 
     winner = Matrix{Int}(undef, W, Ddest)
@@ -338,13 +336,16 @@ function screen_hard_winners_ranged(θ_full::AbstractVector, ctx, Pmat::Abstract
         Hmax_d = fill(-Inf, D)
         tie_d = falses(D)
         @inbounds for s in 1:W
-            best = constCons[1, d] / UPow[s, 1]; bo = 1
-            for o in 2:D
-                p = constCons[o, d] / UPow[s, o]
-                if p < best
-                    best = p; bo = o
-                end
-            end
+            # Canonical winner engine (2026-07-24): winner IDENTIFICATION via the shared fast
+            # log-additive argmin (canonical_winner_argmin, winner_certificate.jl) -- addition
+            # instead of division per candidate, same algorithm build_winner_ref/top3_scan already
+            # use for the C+ backend. Bit-identical `bo` to the old price-space
+            # `constCons[o,d]/UPow[s,o]` argmin (log is a strictly increasing transform of a
+            # positive price, mu>0) -- see this task's own correctness gates.
+            bo, _ = canonical_winner_argmin(logCC, mulU, s, d, D)
+            best = constCons[bo, d] / UPow[s, bo]   # price-space winning value, needed unchanged
+            # below by the tie-safe win-count pass (AUD-06 exactness requirement -- NOT re-derived
+            # in log space, see winner_certificate.jl's canonical_winner_argmin docstring).
             winner[s, d] = bo
             hval = constConsσ[bo, d] / UσPow[s, bo]
             wval[s, d] = hval

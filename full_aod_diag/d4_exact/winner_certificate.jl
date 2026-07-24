@@ -76,6 +76,83 @@ function constCons_matrix(θ_full::AbstractVector, ctx)
     return constCons, log.(constCons), AodPow
 end
 
+# ============================================================================
+# Canonical winner engine (2026-07-24 unification task): a SINGLE shared
+# precompute + a SINGLE shared fast argmin, replacing what were previously
+# three independently hand-written, near-identical O(D^2)-setup /
+# O(W*D)-scan blocks (screen_hard_winners's own, screen_hard_winners_ranged's
+# own, build_compressed_factual's own -- each re-derived the SAME
+# Aod/AodPow/constCons/constConsσ formula from theta_full, and each computed
+# the winner argmin via a price-space DIVISION comparison instead of this
+# module's own faster log-space ADDITION comparison, already proven bit-
+# identical -- see CORE_MOMENT_REPRESENTATION_BENCHMARK_2026-07-24.md's
+# winner_hash/wval agreement gates and this task's own correctness gates).
+#
+# SCOPE: this ONLY replaces the winner-IDENTIFICATION sub-step (finding
+# argmin_o price_{s,o,d}). Every consumer's own certificate-specific logic
+# (screen_hard_winners_ranged's Hmax fusion, both screens' tie-safe
+# win-count pass) is UNCHANGED -- those still re-derive the price-space
+# value via `constCons`/`UPow` (also returned here, from the SAME precompute,
+# not duplicated) because the win-count/tie certificate's own EXACTNESS
+# requirement (AUD-06, see infeasibility_screen.jl's screen_hard_winners
+# docstring) is a price-space comparison, not provably preserved by a
+# log-space round-trip at the exact-tie boundary -- deliberately NOT
+# touched here. See CANONICAL_WINNER_ENGINE_ARCHITECTURE_2026-07-24.md §3.
+# ============================================================================
+
+"""
+    canonical_price_precompute(θ_full, ctx) -> NamedTuple
+
+Single source of truth for the theta-dependent price constants every winner-
+identification consumer needs: wraps `constCons_matrix` (unchanged) and adds
+the sigma-power (`constConsσ`) / draw-level (`mulU`, `UPow`, `UσPow`) pieces
+`screen_hard_winners`/`screen_hard_winners_ranged`/`build_compressed_factual`
+each used to re-derive independently. O(D*Ddest) setup + O(W*D) elementwise
+draw terms, identical cost to what each caller paid before -- this only
+removes the DUPLICATION (same formula, one call site), not the underlying
+per-call work.
+"""
+function canonical_price_precompute(θ_full::AbstractVector, ctx)
+    γo = ctx.γ
+    D = ctx.D; U = ctx.U; W = size(U, 1)
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    μ = θ_full[1]; σ = θ_full[2]
+    constCons, logCC, AodPow = constCons_matrix(θ_full, ctx)
+    wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
+    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:Ddest]
+    mulU = μ .* log.(U)
+    UPow = U .^ (-μ)
+    UσPow = γo.Uσ .^ (-μ)
+    return (D = D, Ddest = Ddest, W = W, μ = μ, σ = σ,
+            constCons = constCons, constConsσ = constConsσ, logCC = logCC,
+            mulU = mulU, UPow = UPow, UσPow = UσPow, AodPow = AodPow)
+end
+
+"""
+    canonical_winner_argmin(logCC, mulU, s, d, D) -> (bo::Int, bs::Float64)
+
+The single fast per-cell argmin: `bo = argmin_o (logCC[o,d]+mulU[s,o])`, the
+SAME log-additive score `WinnerRefCache`/`top3_scan` already use (destination-
+fast convention, first-occurrence-strict-`<` tie-break, matching MinInd!'s
+own tie-break up to the log transform). Bit-identical winner assignment to
+the price-space `constCons[o,d]/UPow[s,o]` argmin at every point this
+codebase's correctness gates have checked (log is a strictly increasing
+transform of a positive price since mu>0) -- callers needing an EXACT
+tie-safe win count must still run their own price-space verification (this
+function only returns the single argmin, not tie information).
+"""
+@inline function canonical_winner_argmin(logCC::AbstractMatrix, mulU::AbstractMatrix, s::Int, d::Int, D::Int)
+    bo = 1
+    bs = logCC[1, d] + mulU[s, 1]
+    @inbounds for o in 2:D
+        v = logCC[o, d] + mulU[s, o]
+        if v < bs
+            bs = v; bo = o
+        end
+    end
+    return bo, bs
+end
+
 # ---- reference cache --------------------------------------------------------
 
 """

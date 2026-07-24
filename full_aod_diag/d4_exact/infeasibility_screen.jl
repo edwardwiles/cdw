@@ -102,6 +102,17 @@
 
 using SpecialFunctions: gamma as spgamma
 
+# Canonical winner engine (2026-07-24 unification task): defensive self-include, matching this
+# codebase's own convention (fast_range_screen.jl's `isdefined(Main, :CompressedFactual) ||
+# include(...)`) -- this file loads very early (transitively via draw_design.jl, before
+# winner_certificate.jl's normal load point at composite_gradient_fast.jl/lfix_factorized_
+# workspace.jl), so `canonical_price_precompute`/`canonical_winner_argmin` must be pulled in
+# explicitly here for `screen_hard_winners` (below) to use them. Double-include-safe: this
+# codebase's driver already includes winner_certificate.jl twice unconditionally (lfix_factorized.jl
+# + composite_gradient_fast.jl) with no redefinition issue, since nothing is called until every
+# top-level include has finished (see CANONICAL_WINNER_ENGINE_ARCHITECTURE_2026-07-24.md).
+isdefined(Main, :WinnerRefCache) || include(joinpath(@__DIR__, "winner_certificate.jl"))
+
 # ============================================================================
 # SECTION 2 (implemented first -- Section 1's winner construction reuses its
 # output for destination ordering): draw-free pairwise impossibility
@@ -331,19 +342,16 @@ work is skipped.
 """
 function screen_hard_winners(θ_full::AbstractVector, ctx, Pmat::AbstractMatrix;
         order::AbstractVector{Int} = 1:(hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D), full_scan::Bool = false)
-    γo = ctx.γ
-    D = ctx.D; U = ctx.U; W = size(U, 1)
-    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D   # Part A, 2026-07-23
-    μ = θ_full[1]; σ = θ_full[2]
-    lambda = reshape(γo.P, (Ddest, D))'
-    Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], (D, Ddest))
-    Aod = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
-    AodPow = (Aod ./ γo.cHat) .^ (-μ)
-    constCons = [γo.wHat[o] * AodPow[o, d] * γo.τ[o, d] for o in 1:D, d in 1:Ddest]
-    wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
-    constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:Ddest]
-    UPow = U .^ (-μ)
-    UσPow = γo.Uσ .^ (-μ)
+    # Canonical winner engine (2026-07-24): shared precompute, replacing this function's own
+    # hand-derived Aod/AodPow/constCons/constConsσ/UPow/UσPow block -- byte-identical formula to
+    # canonical_price_precompute (winner_certificate.jl), now the single shared source also used by
+    # screen_hard_winners_ranged (fast_range_screen.jl) and build_compressed_factual
+    # (compressed_moments.jl). This is the SAME function CM/CM+ZC/origin-ZC call via
+    # cm_screen_bridge.jl::cm_screen_precheck! -- restricted families get this speedup for free.
+    pp = canonical_price_precompute(θ_full, ctx)
+    D = pp.D; Ddest = pp.Ddest; W = pp.W
+    constCons = pp.constCons; constConsσ = pp.constConsσ; logCC = pp.logCC
+    mulU = pp.mulU; UPow = pp.UPow; UσPow = pp.UσPow
 
     winner = Matrix{Int}(undef, W, Ddest)
     wval = Matrix{Float64}(undef, W, Ddest)
@@ -352,13 +360,12 @@ function screen_hard_winners(θ_full::AbstractVector, ctx, Pmat::AbstractMatrix;
     for (stage, d) in enumerate(order)
         wc = zeros(Int, D)
         @inbounds for s in 1:W
-            best = constCons[1, d] / UPow[s, 1]; bo = 1
-            for o in 2:D
-                p = constCons[o, d] / UPow[s, o]
-                if p < best
-                    best = p; bo = o
-                end
-            end
+            # Winner IDENTIFICATION via the shared fast log-additive argmin (canonical_winner_argmin)
+            # -- see fast_range_screen.jl::screen_hard_winners_ranged's identical swap for the full
+            # rationale/correctness argument. The tie-safe win-count pass below is UNCHANGED
+            # (still price-space, AUD-06 exactness requirement).
+            bo, _ = canonical_winner_argmin(logCC, mulU, s, d, D)
+            best = constCons[bo, d] / UPow[s, bo]
             winner[s, d] = bo
             wval[s, d] = constConsσ[bo, d] / UσPow[s, bo]
             # tie-safe win credit (see docstring): count every o at the exact row-min, not just bo

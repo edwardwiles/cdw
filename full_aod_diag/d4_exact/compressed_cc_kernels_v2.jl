@@ -36,6 +36,26 @@
 # ADDITIVE ONLY: new function names (`_v2` suffix), zero changes to
 # compressed_moments.jl / compressed_cc_inner.jl / compressed_live.jl.
 # Verified equivalent before being benchmarked or wired anywhere.
+#
+# *** NON-PRODUCTION / UNREACHABLE / SQUARE-ONLY -- DO NOT WIRE UNDER :exclude_row ***
+# Canonical winner engine task (2026-07-24): confirmed, by direct code inspection, that this
+# entire file is:
+#   (a) UNREACHABLE from every production entry point -- c10_d20_production_driver.jl's include
+#       chain never includes this file; a repo-wide grep for its `include(...)` finds only
+#       benchmark/test files (c9_phase4_kernels_v2_d20_bench.jl, c9_phase4_v2_e2e_d20_bench.jl,
+#       test_compressed_cc_kernels_v2.jl).
+#   (b) SQUARE-ONLY -- every function below reads `D = cf.D` and never references `cf.D_dest`,
+#       using the legacy `j = d + (o-1)*D` bilateral-column formula. Under
+#       destination_sample=:exclude_row (D_dest = D-1), `cf.winner`/`cf.wval` are `W x D_dest`
+#       matrices -- indexing them with a destination axis of length D (as `for d in 1:D` does
+#       throughout) reads a nonexistent column: silently WRONG, not merely slow, with no prior
+#       `@assert D==D_dest` guard.
+# The functions below now hard-error (rather than silently reading a nonexistent column) if ever
+# called against a rectangular `cf` (cf.D != cf.D_dest). This is a deprecation/safety guard only;
+# this file is NOT rectangularized here -- it is confirmed dead code with no production caller, so
+# the engineering cost of generalizing it is not justified. Do not remove this guard to "make it
+# work" under :exclude_row without first rectangularizing every loop below and re-validating
+# against test_compressed_cc_kernels_v2.jl at D_dest != D.
 # ============================================================================
 
 """
@@ -48,6 +68,9 @@ reimplementation of `compressed_dual_contraction`. Bit-identical output
 only the O(W*D) main loop is restructured.
 """
 function compressed_dual_contraction_v2(β::AbstractVector, cf::CompressedFactual)
+    cf.D == cf.D_dest || error("compressed_dual_contraction_v2: square-only, but cf.D=$(cf.D) != cf.D_dest=$(cf.D_dest) " *
+        "(destination_sample=:exclude_row or another rectangular regime) -- this file was never rectangularized " *
+        "(confirmed unreachable from production). Do not call it under a rectangular cf.")
     D = cf.D; W = cf.W
     length(β) == cf.oci - 1 || error("β length $(length(β)) != oci-1 = $(cf.oci-1)")
 
@@ -112,6 +135,9 @@ from -- confirmed empirically below, not assumed from the scatter-add
 argument alone (that part is identical cost either way).
 """
 function compressed_transpose_contraction_v2(weights::AbstractVector, cf::CompressedFactual)
+    cf.D == cf.D_dest || error("compressed_transpose_contraction_v2: square-only, but cf.D=$(cf.D) != cf.D_dest=$(cf.D_dest) " *
+        "(destination_sample=:exclude_row or another rectangular regime) -- this file was never rectangularized " *
+        "(confirmed unreachable from production). Do not call it under a rectangular cf.")
     D = cf.D; W = cf.W; ncol = cf.oci - 1
     length(weights) == W || error("weights length $(length(weights)) != W=$W")
 
