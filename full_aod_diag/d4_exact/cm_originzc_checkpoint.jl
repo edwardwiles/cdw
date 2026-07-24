@@ -29,6 +29,15 @@ const CM_CHECKPOINT_SCHEMA_V5 = 5
 # never silently combines them (out of scope for this task).
 const ORIGINZC_MOMENT_LAYOUT_VERSION = 1   # wrap_moments_with_originzc's column order, cm_originzc_moments.jl
 
+const CM_CHECKPOINT_SCHEMA_V7 = 7
+# Bumped 5 -> 7 (destination_sample production wiring, exclude-ROW-destination release,
+# 2026-07-24): adds destination_sample, row_idx, D_dest -- same rationale/fields as
+# cm_checkpoint.jl's CMCheckpointV4->V6 bump (see that file's CM_CHECKPOINT_SCHEMA comment for the
+# full "why not D^2 vs D*D_dest" explanation). Skips 6 deliberately: cm_checkpoint.jl's OWN
+# destination_sample bump already claimed CMCheckpointV6 for the CM-family schema (extending V4);
+# this file's origin-family schema extends V5 instead, so it takes the next globally-unused
+# number, V7, keeping every CMCheckpoint* type name/schema number in this codebase distinct.
+
 """
     CMCheckpointV5
 
@@ -123,20 +132,181 @@ function upgrade_schema4(old::CMCheckpointV4)
 end
 
 """
+Drops the schema-6-only fields (`destination_sample`/`row_idx`/`D_dest`) to view a
+`CMCheckpointV6` as a `CMCheckpointV5` -- lossless for every V5-only reader (a V6 file's other 27
+fields describe the SAME CM-family run a V5 file would; `destination_sample` is simply extra
+metadata a V5-only caller never asked about). Needed because `cm_checkpoint.jl`'s
+`load_cm_checkpoint` now returns `CMCheckpointV6` (destination_sample production wiring,
+2026-07-24), not `CMCheckpointV4` -- `load_cm_checkpoint_v5`'s own fallback below must adapt to
+that.
+"""
+function downgrade_v6_to_v5(v6::CMCheckpointV6)
+    power_layout = v6.cm_extension === :cm_only ? :none : :shared_by_power
+    return CMCheckpointV5(v6.schema, v6.run_id, v6.label, v6.branch, v6.find_smallest, v6.delta,
+        v6.W, v6.draw_seed, v6.draw_design, v6.draw_checksum_uniform, v6.draw_checksum_transformed,
+        v6.cm_L, v6.cm_probs, v6.cm_contrasts, v6.cm_grid_rule, v6.cm_basis, v6.cm_hessian_backend,
+        v6.cm_gradient_backend, v6.cm_extension, v6.meanzc_K_mean, v6.meanzc_K_pair, v6.meanzc_basis,
+        v6.moment_layout_version,
+        :unrestricted, 0, 0, power_layout, 0, 0,
+        v6.g, v6.zfree, v6.eta_nu, v6.logA_full, v6.dual_warm_start, v6.bandwidth_cache, v6.best_feasible,
+        v6.n_eval, v6.n_grad, v6.wall_elapsed, v6.wall_budget_remaining, v6.checkpoint_reason,
+        v6.knitro_version)
+end
+
+"""
     load_cm_checkpoint_v5(path) -> CMCheckpointV5
 
 Tries schema-5 (`CMCheckpointV5`) first; falls back to `load_cm_checkpoint`
-(cm_checkpoint.jl, itself a V4/V3/legacy fallback chain) upgraded via
-`upgrade_schema4`. Always returns a `CMCheckpointV5`. This is the loader
-`run_originzc_upper_checkpointed` uses; plain CM-family callers continue to
-use `load_cm_checkpoint` (V4) unchanged.
+(cm_checkpoint.jl, itself a V6/V4/V3/legacy fallback chain as of the 2026-07-24 destination_sample
+release) downgraded via `downgrade_v6_to_v5`. Always returns a `CMCheckpointV5`. SUPERSEDED as
+`run_originzc_upper_checkpointed`'s own loader by `load_cm_checkpoint_v7` below (which also
+carries destination_sample/row_idx/D_dest) -- kept for any caller that specifically wants a V5
+view.
 """
 function load_cm_checkpoint_v5(path::AbstractString)
     try
         return deserialize(path)::CMCheckpointV5
     catch e
         (e isa TypeError || e isa EOFError || e isa MethodError) || rethrow()
-        return upgrade_schema4(load_cm_checkpoint(path))
+        return downgrade_v6_to_v5(load_cm_checkpoint(path))
+    end
+end
+
+"""
+    CMCheckpointV7
+
+Schema-7 checkpoint layout (destination_sample production wiring, exclude-ROW-destination
+release, 2026-07-24): `CMCheckpointV5`'s complete field set (CM-family + origin-family
+restrictions, unchanged), PLUS `destination_sample`, `row_idx`, `D_dest` (same fields/rationale as
+cm_checkpoint.jl's `CMCheckpointV6` -- see `CM_CHECKPOINT_SCHEMA_V7`'s comment for why this skips
+6, already claimed by that unrelated CM-family bump).
+"""
+struct CMCheckpointV7
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    distribution_restriction::Symbol
+    origin_K_mean::Int
+    origin_K_pair::Int
+    power_target_layout::Symbol
+    origin_D::Int
+    origin_moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    # ---- NEW (schema 7): omit-ROW-destination true-shrink production option ----
+    destination_sample::Symbol
+    row_idx::Union{Nothing,Int}
+    D_dest::Int
+end
+
+"Atomic-ish checkpoint write for CMCheckpointV7 (same discipline/assertion as the V5 method above)."
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV7)
+    (ckpt.cm_extension === :cm_only || ckpt.distribution_restriction === :unrestricted) ||
+        error("save_cm_checkpoint: a single checkpoint must use exactly one restriction family non-trivially -- " *
+              "got cm_extension=:$(ckpt.cm_extension) AND distribution_restriction=:$(ckpt.distribution_restriction) " *
+              "both active. Combining CM with the origin-specific restriction is out of scope for this task.")
+    tmp = path * ".tmp"
+    serialize(tmp, ckpt)
+    mv(tmp, path; force = true)
+    return path
+end
+
+"""
+Upgrades a schema-5 `CMCheckpointV5` (destination_sample did not exist as a runtime option at that
+schema) to `CMCheckpointV7`, filling destination_sample=:all_legacy, row_idx=nothing, D_dest=20 --
+CORRECT (not a guess), same reasoning as cm_checkpoint.jl's `upgrade_schema4_to_v6`:
+`run_originzc_upper_checkpointed` hardcodes `d20_real_setup_design` (D=20-only by construction),
+and every schema-5 file was written before `destination_sample` existed anywhere in this codebase.
+"""
+function upgrade_schema5_to_v7(old::CMCheckpointV5)
+    return CMCheckpointV7(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
+        old.moment_layout_version,
+        old.distribution_restriction, old.origin_K_mean, old.origin_K_pair, old.power_target_layout,
+        old.origin_D, old.origin_moment_layout_version,
+        old.g, old.zfree, old.eta_nu, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version,
+        :all_legacy, nothing, 20)
+end
+
+"""
+Upgrades a schema-6 `CMCheckpointV6` (CM-family only -- a V6 file is never an origin-family run,
+`run_cm_upper_checkpointed` never writes distribution_restriction) to `CMCheckpointV7`. UNLIKE
+`upgrade_schema5_to_v7`, this carries the REAL `destination_sample`/`row_idx`/`D_dest` straight
+across (a V6 file may genuinely have `destination_sample=:exclude_row` -- routing through
+`downgrade_v6_to_v5`'s lossy V5 view, which drops those fields, would silently and incorrectly
+reset a real :exclude_row provenance back to :all_legacy).
+"""
+function upgrade_schema6_to_v7(v6::CMCheckpointV6)
+    power_layout = v6.cm_extension === :cm_only ? :none : :shared_by_power
+    return CMCheckpointV7(v6.schema, v6.run_id, v6.label, v6.branch, v6.find_smallest, v6.delta,
+        v6.W, v6.draw_seed, v6.draw_design, v6.draw_checksum_uniform, v6.draw_checksum_transformed,
+        v6.cm_L, v6.cm_probs, v6.cm_contrasts, v6.cm_grid_rule, v6.cm_basis, v6.cm_hessian_backend,
+        v6.cm_gradient_backend, v6.cm_extension, v6.meanzc_K_mean, v6.meanzc_K_pair, v6.meanzc_basis,
+        v6.moment_layout_version,
+        :unrestricted, 0, 0, power_layout, 0, 0,
+        v6.g, v6.zfree, v6.eta_nu, v6.logA_full, v6.dual_warm_start, v6.bandwidth_cache, v6.best_feasible,
+        v6.n_eval, v6.n_grad, v6.wall_elapsed, v6.wall_budget_remaining, v6.checkpoint_reason,
+        v6.knitro_version,
+        v6.destination_sample, v6.row_idx, v6.D_dest)
+end
+
+"""
+    load_cm_checkpoint_v7(path) -> CMCheckpointV7
+
+Tries schema-7 (`CMCheckpointV7`) first; falls back to schema-5 (`CMCheckpointV5`, upgraded via
+`upgrade_schema5_to_v7`, correctly implying destination_sample=:all_legacy since V5 predates that
+option entirely); falls back to `load_cm_checkpoint` (cm_checkpoint.jl's own V6/V4/V3/legacy
+fallback chain, always returns `CMCheckpointV6`) upgraded via `upgrade_schema6_to_v7` (which
+carries a REAL destination_sample straight across, unlike routing through the lossy V5 view).
+Always returns a `CMCheckpointV7`. This is the loader `run_originzc_upper_checkpointed` uses
+(superseding `load_cm_checkpoint_v5` for that call site).
+"""
+function load_cm_checkpoint_v7(path::AbstractString)
+    try
+        return deserialize(path)::CMCheckpointV7
+    catch e1
+        (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
+        try
+            return upgrade_schema5_to_v7(deserialize(path)::CMCheckpointV5)
+        catch e2
+            (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
+            return upgrade_schema6_to_v7(load_cm_checkpoint(path))
+        end
     end
 end
 
@@ -167,7 +337,10 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         distribution_restriction::Symbol,   # REQUIRED, no default -- explicit opt-in (task brief Section 12)
         K_mean::Int, K_pair::Int = 0,
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
-        nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing)
+        nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
+        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
+        # (2026-07-24): same option/semantics/production-default as run_cm_upper_checkpointed's
+        # own destination_sample kwarg.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, section 4.1): resolve ckpt_dir to an absolute path
     # BEFORE any real-data/model setup runs. A relative ckpt_dir silently
@@ -187,14 +360,17 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
               "unrestricted driver directly instead.")
     cm_gradient_backend in (:reference, :cplus) ||
         error("run_originzc_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("run_originzc_upper_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
     lp("[", label, "] distribution_restriction=", distribution_restriction, " power_target_layout=", power_target_layout,
-       " K_mean=", K_mean, " K_pair=", K_pair, " cm_gradient_backend=", cm_gradient_backend)
+       " K_mean=", K_mean, " K_pair=", K_pair, " cm_gradient_backend=", cm_gradient_backend,
+       " destination_sample=", destination_sample, destination_sample == :exclude_row ? " (production default)" : " (legacy/reproduction-only)")
 
     cfg = OriginZCConfig(distribution_restriction = distribution_restriction, K_mean = K_mean, K_pair = K_pair,
                           power_target_layout = power_target_layout, meanzc_basis = meanzc_basis, nu_bounds = nu_bounds)
     K_mean_r, K_pair_r = originzc_resolve_K(cfg)   # raises on any config inconsistency
 
-    resumed = resume_from === nothing ? nothing : load_cm_checkpoint_v5(resume_from)
+    resumed = resume_from === nothing ? nothing : load_cm_checkpoint_v7(resume_from)
     find_smallest = true
     backend_switched = false
 
@@ -210,6 +386,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         resumed.origin_moment_layout_version == ORIGINZC_MOMENT_LAYOUT_VERSION ||
             error("run_originzc_upper_checkpointed($label): origin_moment_layout_version MISMATCH -- checkpoint=" *
                   "$(resumed.origin_moment_layout_version), current=$(ORIGINZC_MOMENT_LAYOUT_VERSION). Refusing to resume.")
+        resumed.destination_sample == destination_sample ||
+            error("run_originzc_upper_checkpointed($label): destination_sample MISMATCH on resume -- " *
+                  "checkpoint was written with destination_sample=:$(resumed.destination_sample), this " *
+                  "call requests :$destination_sample -- refusing to resume under a different " *
+                  "destination-sample regime.")
         W = resumed.W; delta = resumed.delta; draw_design = resumed.draw_design; draw_seed = resumed.draw_seed
         lp("[", label, "] RESUMING from ", resume_from, " (n_eval=", resumed.n_eval, " n_grad=", resumed.n_grad,
            " wall_elapsed=", round(resumed.wall_elapsed, digits = 1), "s)")
@@ -221,7 +402,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
     pe = build_pivot_elimination(ctx)
     D = ctx.D
     layout = originzc_make_layout(cfg, D)
@@ -254,7 +435,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     lp("[", label, "] eta box (per coordinate, log-nu units): n=", length(bounds))
 
     cplus_pool = cm_gradient_backend == :cplus ? build_grad_workspace_pool(size(ctx.obj.U, 1)) : nothing
-    cplus_ws = cm_gradient_backend == :cplus ? build_lfix_factorized_workspace(ctx.D, size(ctx.obj.U, 1)) : nothing
+    cplus_ws = cm_gradient_backend == :cplus ? build_lfix_factorized_workspace(ctx.D, ctx.D_dest, size(ctx.obj.U, 1)) : nothing
 
     if backend_switched && resumed.best_feasible !== nothing
         xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
@@ -305,14 +486,15 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         eta_now = w_current[D2_econ+1:end]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = pcx.ctx_cm.obj.x
-        ckpt = CMCheckpointV5(CM_CHECKPOINT_SCHEMA_V5, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV7(CM_CHECKPOINT_SCHEMA_V7, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             0, Float64[], :anchored, :equal, :cumulative, :dense_reference, cm_gradient_backend,
             :cm_only, 0, 0, :direct, 0,
             distribution_restriction, K_mean_r, K_pair_r, power_target_layout, layout_D(layout), ORIGINZC_MOMENT_LAYOUT_VERSION,
             w_current[1], copy(zfree_now), copy(eta_now), logA_full, copy(dual_warm_src), copy(bandwidth_cache),
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
-            maxtime_real - (time() - t_start), reason, knitro_version)
+            maxtime_real - (time() - t_start), reason, knitro_version,
+            destination_sample, ctx.row_idx, ctx.D_dest)
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
         save_cm_checkpoint(path, ckpt)
         last_ckpt_t[] = time()

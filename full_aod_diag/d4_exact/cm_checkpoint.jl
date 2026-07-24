@@ -27,7 +27,20 @@
 # ============================================================================
 using Serialization, Dates
 
-const CM_CHECKPOINT_SCHEMA = 4
+const CM_CHECKPOINT_SCHEMA = 6
+# Bumped 4 -> 6 (destination_sample production wiring, exclude-ROW-destination release,
+# 2026-07-24): adds destination_sample, row_idx, D_dest to the persisted schema, so a checkpoint
+# records WHICH destination-sample regime (:all_legacy square D x D vs :exclude_row true-shrink
+# D x (D-1)) it was written under -- required because the two regimes have DIFFERENT n_free (D^2
+# vs D*D_dest), so resuming under a mismatched regime would silently misinterpret the persisted
+# `zfree` vector's length/meaning. New type name for the same Julia-Serialization reason
+# CMCheckpointV3/V4 themselves exist (see the 2->3 bump's comment below). NOTE: the natural next
+# name "CMCheckpointV5" is ALREADY TAKEN -- cm_originzc_checkpoint.jl (a separate, already-existing
+# extension for the origin-specific-ZC restriction family) defines `CMCheckpointV5` for an
+# unrelated field set (distribution_restriction/origin_K_mean/etc.). Reusing that name here would
+# silently redefine/shadow a DIFFERENT struct with a DIFFERENT field layout, so this bump jumps
+# straight to `CMCheckpointV6`, skipping 5. cm_originzc_checkpoint.jl's own destination_sample bump
+# (this same release) similarly uses `CMCheckpointV7` (extending V5), not V6.
 # Bumped 3 -> 4 (CM+moments(+ZC) production integration, 2026-07-23): adds cm_extension,
 # meanzc_K_mean, meanzc_K_pair, meanzc_basis, eta_nu, moment_layout_version to the persisted
 # schema, generalizing the checkpoint to cover the (:cm_only | :cm_plus_equal_means |
@@ -198,10 +211,64 @@ struct CMCheckpointV4
     knitro_version::String
 end
 
+"""
+    CMCheckpointV6
+
+CM-production checkpoint layout, schema>=6 (destination_sample production wiring, exclude-ROW-
+destination release, 2026-07-24). Identical to `CMCheckpointV4` except three new fields, appended
+at the end: `destination_sample`, `row_idx`, `D_dest`. New type name for the Julia-Serialization
+reason documented at `CM_CHECKPOINT_SCHEMA` above (also explains why this skips V5, already taken
+by cm_originzc_checkpoint.jl's unrelated struct) -- `CMCheckpointV4` is retained permanently,
+read-only, for every schema-4 file the CM-C+/meanzc campaigns already wrote (all of which are, by
+construction, :all_legacy -- destination_sample did not exist as a runtime option at schema 4).
+"""
+struct CMCheckpointV6
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    # ---- NEW (schema 6): omit-ROW-destination true-shrink production option ----
+    destination_sample::Symbol         # :all_legacy | :exclude_row
+    row_idx::Union{Nothing,Int}        # nothing for :all_legacy; the excluded destination's index otherwise
+    D_dest::Int                        # destination count; D_dest==D for :all_legacy
+end
+
 const MEANZC_MOMENT_LAYOUT_VERSION = 1   # wrap_moments_with_cm_meanzc's column order, cm_meanzc_moments.jl
 
 "Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
-function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV4)
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV6)
     tmp = path * ".tmp"
     serialize(tmp, ckpt)
     mv(tmp, path; force = true)
@@ -231,35 +298,55 @@ function upgrade_schema3(old::CMCheckpointV3)
         old.knitro_version)
 end
 
-"""
-    load_cm_checkpoint(path) -> CMCheckpointV4
+"Upgrades a schema-4 `CMCheckpointV4` (destination_sample did not exist as a runtime option at that schema) to `CMCheckpointV6`, filling destination_sample=:all_legacy, row_idx=nothing, D_dest=20 -- CORRECT (not a guess): `run_cm_upper_checkpointed` hardcodes `d20_real_setup_design` (this checkpoint system is D=20-only by construction), and every schema-4 file was written before `destination_sample` existed as a real option anywhere in this codebase, so :all_legacy/D_dest=20 is the only value consistent with those files' own provenance."
+function upgrade_schema4_to_v6(old::CMCheckpointV4)
+    return CMCheckpointV6(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
+        old.moment_layout_version,
+        old.g, old.zfree, old.eta_nu, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version,
+        :all_legacy, nothing, 20)
+end
 
-Tries the CURRENT (schema>=4, `CMCheckpointV4`) shape first; falls back to schema-3
-(`CMCheckpointV3`, upgraded via `upgrade_schema3`) then legacy schema-1/2 (`CMCheckpoint`,
-upgraded via `upgrade_schema2` then `upgrade_schema3`). Schema-1 files are still hard-refused
-below (semantically untrustworthy Delta) -- this fallback chain only concerns byte LAYOUT, not
-schema-1's own known defect. Always returns a `CMCheckpointV4` (uniform shape for every caller
-downstream of this function, regardless of which schema the file on disk actually is).
+"""
+    load_cm_checkpoint(path) -> CMCheckpointV6
+
+Tries the CURRENT (schema>=6, `CMCheckpointV6`) shape first; falls back to schema-4
+(`CMCheckpointV4`, upgraded via `upgrade_schema4_to_v6`), then schema-3 (`CMCheckpointV3`,
+upgraded via `upgrade_schema3` then `upgrade_schema4_to_v6`), then legacy schema-1/2
+(`CMCheckpoint`, upgraded via `upgrade_schema2` then `upgrade_schema3` then
+`upgrade_schema4_to_v6`). Schema-1 files are still hard-refused below (semantically untrustworthy
+Delta) -- this fallback chain only concerns byte LAYOUT, not schema-1's own known defect. Always
+returns a `CMCheckpointV6` (uniform shape for every caller downstream of this function, regardless
+of which schema the file on disk actually is).
 """
 function load_cm_checkpoint(path::AbstractString)
     ckpt = try
-        deserialize(path)::CMCheckpointV4
-    catch e1
-        (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
+        deserialize(path)::CMCheckpointV6
+    catch e0
+        (e0 isa TypeError || e0 isa EOFError || e0 isa MethodError) || rethrow()
         try
-            upgrade_schema3(deserialize(path)::CMCheckpointV3)
-        catch e2
-            (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
-            local old
+            upgrade_schema4_to_v6(deserialize(path)::CMCheckpointV4)
+        catch e1
+            (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
             try
-                old = deserialize(path)::CMCheckpoint
-            catch
-                error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV4, " *
-                      "CMCheckpointV3, AND the legacy CMCheckpoint (schema 1/2) layout -- this file " *
-                      "is not a recognized CM checkpoint (corrupt, truncated, or an even older/" *
-                      "unrelated format).")
+                upgrade_schema4_to_v6(upgrade_schema3(deserialize(path)::CMCheckpointV3))
+            catch e2
+                (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
+                local old
+                try
+                    old = deserialize(path)::CMCheckpoint
+                catch
+                    error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV6, " *
+                          "CMCheckpointV4, CMCheckpointV3, AND the legacy CMCheckpoint (schema 1/2) " *
+                          "layout -- this file is not a recognized CM checkpoint (corrupt, truncated, " *
+                          "or an even older/unrelated format).")
+                end
+                upgrade_schema4_to_v6(upgrade_schema3(upgrade_schema2(old)))
             end
-            upgrade_schema3(upgrade_schema2(old))
         end
     end
     if ckpt.schema == 1
@@ -271,8 +358,8 @@ function load_cm_checkpoint(path::AbstractString)
               "START POINT only, then cold-re-evaluate it with cm_production_value_verified before " *
               "trusting any Delta/feasibility for it.")
     end
-    ckpt.schema in (2, 3, CM_CHECKPOINT_SCHEMA) ||
-        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, or $(CM_CHECKPOINT_SCHEMA) -- " *
+    ckpt.schema in (2, 3, 4, CM_CHECKPOINT_SCHEMA) ||
+        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, 4, or $(CM_CHECKPOINT_SCHEMA) -- " *
               "this checkpoint predates the CM checkpoint-schema unification (task §11), e.g. a bare " *
               "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
               "run instead of resuming from an incompatible checkpoint.")
@@ -366,7 +453,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # CMMeanZCConfig uses, not re-derived here.
         meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,   # only consulted when cm_extension=:cm_plus_moments
         meanzc_basis::Symbol = :direct,
-        meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing)
+        meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
+        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
+        # (2026-07-24): :exclude_row (PRODUCTION DEFAULT -- true D_origin/D_dest dimension shrink,
+        # ROW dropped as a destination only; validated real D=20/W=80000 both cm_gradient_backend
+        # values, see lfix_cplus_exclude_row_validation.jl) | :all_legacy (square D x D, explicit
+        # reproduction-only opt-out, byte-identical to every pre-existing CM production run).
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -378,8 +470,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
 
     cm_gradient_backend in (:reference, :cplus) ||
         error("run_cm_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("run_cm_upper_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
     lp("[", label, "] cm_gradient_backend=", cm_gradient_backend,
-       cm_gradient_backend == :cplus ? " (production default)" : " (fallback/validation backend)")
+       cm_gradient_backend == :cplus ? " (production default)" : " (fallback/validation backend)",
+       " destination_sample=", destination_sample, destination_sample == :exclude_row ? " (production default)" : " (legacy/reproduction-only)")
     write(joinpath(ckpt_dir, "$(label)_gradient_backend.txt"),
           "cm_gradient_backend=$(cm_gradient_backend)\nrun_id=$(run_id)\nrecorded_at=$(Dates.now())\n")
 
@@ -414,6 +509,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                   "meanzc_basis=:$meanzc_basis -- refusing to resume under a different moment-column " *
                   "layout (the outer vector's own dimension/meaning depends on K_mean; there is no safe " *
                   "override for this, unlike cm_gradient_backend).")
+        # exclude-ROW-destination release (2026-07-24): destination_sample changes n_free (D^2 vs
+        # D*D_dest) exactly like cm_extension/K_mean does -- no safe override, hard-refuse on
+        # mismatch (same discipline as the meanzc check just above).
+        resumed.destination_sample == destination_sample ||
+            error("run_cm_upper_checkpointed($label): destination_sample MISMATCH on resume -- " *
+                  "checkpoint was written with destination_sample=:$(resumed.destination_sample), this " *
+                  "call requests :$destination_sample -- refusing to resume under a different " *
+                  "destination-sample regime (D^2 vs D*D_dest free-parameter dimension differs).")
         W = resumed.W; delta = resumed.delta; draw_design = resumed.draw_design; draw_seed = resumed.draw_seed
         L = resumed.cm_L; probs = resumed.cm_probs; contrasts = resumed.cm_contrasts
         cm_hessian_backend = resumed.cm_hessian_backend; cm_grid_rule = resumed.cm_grid_rule
@@ -457,7 +560,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
     pe = build_pivot_elimination(ctx)
 
     if resumed !== nothing
@@ -499,7 +602,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # pool/workspace for cm_gradient_backend=:cplus only -- zero cost (nothing allocated) when
     # the :reference fallback backend is explicitly selected instead.
     cplus_pool = cm_gradient_backend == :cplus ? build_grad_workspace_pool(size(ctx.obj.U, 1)) : nothing
-    cplus_ws = cm_gradient_backend == :cplus ? build_lfix_factorized_workspace(ctx.D, size(ctx.obj.U, 1)) : nothing
+    cplus_ws = cm_gradient_backend == :cplus ? build_lfix_factorized_workspace(ctx.D, ctx.D_dest, size(ctx.obj.U, 1)) : nothing
 
     # Production integration 2026-07-23: an explicit, audited backend switch on resume must cold-
     # verify the resumed incumbent before it is trusted going forward, not merely inherit whatever
@@ -579,13 +682,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         eta_nu_now = is_meanzc ? w_current[D2_econ+1:end] : Float64[]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = is_meanzc ? pcx.ctx_cm.obj.x : ctx.obj.x
-        ckpt = CMCheckpointV4(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV6(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
             cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, MEANZC_MOMENT_LAYOUT_VERSION,
             w_current[1], copy(zfree_now), copy(eta_nu_now), logA_full, copy(dual_warm_src), copy(bandwidth_cache),
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
-            maxtime_real - (time() - t_start), reason, knitro_version)
+            maxtime_real - (time() - t_start), reason, knitro_version,
+            destination_sample, ctx.row_idx, ctx.D_dest)
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
         save_cm_checkpoint(path, ckpt)
         last_ckpt_t[] = time()
