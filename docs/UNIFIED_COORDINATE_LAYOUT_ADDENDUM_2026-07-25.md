@@ -82,7 +82,29 @@ Full log: `docs/key_results/unified_layout_d4_gate_log_2026-07-25.txt`.
 
 ### D=20 (fixed-theta unified layout, real post-omit-ROW data)
 
-**[PENDING — running]**
+**ALL GATES PASS** at real D=20/D_dest=19/W=80,000/seed=20260719:
+
+- Gate 1 (unified fixed+legacy_z vs EXISTING unmodified production driver): `xf` agreement
+  `max|diff|=6.3e-8`, `Delta_dual` agreement to 12 significant digits
+  (`0.00248677347794064` vs `0.002486773477940639`).
+- Gate 2 (fixed+powered_aspace vs fixed+legacy_z, same economic point): gravity residual
+  `8.98e-18`, `Delta_dual` agreement to 12 significant digits.
+- Gate 3 (**DECISIVE** chain-rule check, direct FD comparison, no `composite_gradient`
+  dependency): **`rel_err = 8.53e-13`** — essentially machine precision, at real D=20 production
+  scale. This is the single strongest correctness result in the entire port (original +
+  addendum): confirms the theta-decoupled a-space coordinate is an exact reparametrization of
+  production's existing z-space coordinate at fixed theta, on the real calibrated economy.
+- Gate 4 (cache A/B/A): exact hit, cache size unchanged, `Delta_dual` bit-identical.
+
+Full log: `docs/key_results/unified_layout_d20_gate_log_2026-07-25.txt`.
+
+**Driver-level smoke test** (`run_polish_checkpointed_unified`, the actual KNITRO-wired driver,
+as opposed to the decode/gradient primitives the gates above exercise directly): first attempt
+(run concurrently with the D=20 gate battery above, competing for the same host's CPU) hit its
+200s wall-clock cap before even finishing context construction — no error, just contention-driven
+slowness, confirmed by the log showing no output past the startup banner (not even the usual
+verbose context-build diagnostics that appear within the first ~10s of any real D=20 run).
+Relaunched in isolation with a longer timeout — result below.
 
 ## Matched comparisons (addendum §6/§7)
 

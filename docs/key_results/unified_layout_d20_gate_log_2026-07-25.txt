@@ -1,0 +1,17 @@
+>>> D20 unified layout gates: theta_star=8.75566037620977 D=20 Ddest=19
+>>> Gate 1: fixed+legacy_z+raw reproduces EXISTING production driver's own numbers
+PASS  xf agreement (unified fixed+legacy_z vs existing x_free_from_w)  (max|diff|=6.332993507385254e-8)
+PASS  Delta_dual agreement (unified fixed+legacy_z vs existing driver)  (unified=0.00248677347794064 legacy=0.002486773477940639)
+PASS  both feasible
+>>> Gate 2: fixed+powered_aspace+raw reproduces the SAME economic point
+PASS  xf agreement (a-space vs z-space at fixed theta_star)  (max|diff|=0.0018310546875)
+PASS  a-space feasible at real D=20 calibration point
+PASS  a-space gravity residual < 1e-6  (gravity=8.97947651906942e-18)
+PASS  a-space Delta_dual matches z-space/legacy  (a=0.0024867734779406383 legacy=0.002486773477940639)
+>>> Gate 3: DECISIVE chain-rule check at real D=20 scale (fixed theta)
+  fd_a=0.025414336926434314 fd_z(scaled)=0.025414336926455998 rel_err=8.532209009607203e-13
+PASS  decisive chain-rule check rel_err < 1e-4  (rel_err=8.532209009607203e-13)
+>>> Gate 4: cache A/B/A
+PASS  cache size unchanged after identical re-eval  (sizes: 1 -> 1)
+PASS  Delta_dual bit-identical on cache hit
+ALL D20 UNIFIED-LAYOUT GATES PASS
