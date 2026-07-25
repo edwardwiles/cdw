@@ -171,8 +171,14 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     # ---- H_EC raw, then optional R congruence (right-multiply by R per threshold block) ----
     # (verbatim from cm_hessian_architectures.jl::hessian_cm_structured! -- see that file's own
     # comment for why the transposed mirror below is necessary)
+    # Allocation/Hessian port task §4.2/§6.1: this v2 file was ported BEFORE the production §4.2
+    # fix existed, so it still had the original fresh-Hraw_EC/Hraw_CC-per-call allocation pattern
+    # (including the L^2-iteration H_CC congruence product, ~1.28 GB/callback at real L=50) --
+    # applying the SAME fix here (persistent cctx.Hraw_EC/block_ec/Hraw_CC/RtHraw_CC/block_cc,
+    # mul! instead of *) so the threaded-vs-serial benchmark below compares threading itself, not
+    # a confound from one side having stale unfixed allocation the other doesn't.
     CS_ = cctx.CScum
-    Hraw_EC = Matrix{Float64}(undef, NCORE, nO)
+    Hraw_EC = cctx.Hraw_EC
     @inbounds for l in 1:L
         for (oi, o) in enumerate(origins)
             for j in 1:NCORE
@@ -180,14 +186,18 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
             end
         end
         cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-        block_ec = cctx.R === nothing ? Hraw_EC : Hraw_EC * cctx.R
+        block_ec = if cctx.R === nothing
+            Hraw_EC
+        else
+            mul!(cctx.block_ec, Hraw_EC, cctx.R)
+        end
         @views Hfull[1:NCORE, cols] .= block_ec
         @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
     end
 
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
     CT = cctx.CT
-    Hraw_CC = Matrix{Float64}(undef, nO, nO)
+    Hraw_CC = cctx.Hraw_CC
     @inbounds for l in 1:L
         for lp in 1:L
             for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
@@ -195,7 +205,12 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
             end
             rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
             cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
-            block = cctx.R === nothing ? Hraw_CC : (cctx.R' * Hraw_CC * cctx.R)
+            block = if cctx.R === nothing
+                Hraw_CC
+            else
+                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
+                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
+            end
             @views Hfull[rows, cols] .= block
         end
     end
