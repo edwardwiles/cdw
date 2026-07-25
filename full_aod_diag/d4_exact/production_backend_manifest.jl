@@ -56,6 +56,7 @@ function resolve_unrestricted_manifest(; hessian_backend::Symbol = UNRESTRICTED_
         # H_EE IS the whole Hessian for this family -- no cross/restriction block exists to report.
         core_hessian_backend = UNRESTRICTED_CORE_HESSIAN_BACKEND[],
         core_hessian_workers = UNRESTRICTED_CORE_HESSIAN_WORKERS[],
+        core_hessian_worker_policy = core_hessian_worker_policy_label(),
         core_hessian_storage = UNRESTRICTED_CORE_HESSIAN_STORAGE[],
         cross_hessian_backend = :none,
         restriction_hessian_backend = :none,
@@ -102,6 +103,7 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
         threaded_bins = cctx.use_threaded_bins,
         core_hessian_backend = cctx.core_hessian_backend,
         core_hessian_workers = cctx.core_hessian_workers,
+        core_hessian_worker_policy = core_hessian_worker_policy_label(),
         core_hessian_storage = cctx.core_hessian_storage,
         cross_hessian_backend = :cm_bin_prefix,          # H_EC -- unchanged (Phase B audit: already near-optimal, see docs)
         restriction_hessian_backend = is_meanzc ? :cm_bin_prefix_plus_congruence : :cm_bin_prefix,   # H_CC
@@ -139,6 +141,7 @@ function resolve_origin_zc_manifest(; octx = nothing, blas_threads::Union{Nothin
         hessian_backend = core_configured ? :partitioned_winner_pair_core_dense_restriction : :dense_architecture_a,
         core_hessian_backend = octx === nothing ? :dense_reference : octx.core_hessian_backend,
         core_hessian_workers = octx === nothing ? 0 : octx.core_hessian_workers,
+        core_hessian_worker_policy = core_hessian_worker_policy_label(),
         core_hessian_storage = octx === nothing ? :none : octx.core_hessian_storage,
         cross_hessian_backend = :dense_exact,      # H_ER -- retained dense (task §4.4/§12), computed once, H_RE never independently
         restriction_hessian_backend = :dense_exact, # H_RR -- retained dense

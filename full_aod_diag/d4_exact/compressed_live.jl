@@ -42,9 +42,9 @@
 # rationale). Self-include-guarded, this codebase's own convention.
 isdefined(Main, :fill_core_hessian_upper!) || include(joinpath(@__DIR__, "core_exact_hessian.jl"))
 
-"Resolved backend/workers/storage for the UNRESTRICTED family's core Hessian -- read by `_callbackEvalH_inner_compressed!` and by `resolve_unrestricted_manifest` so the two can never silently diverge. Production default is the validated port_ready_10_workers destination-pair-owned parallel kernel; set to :dense_reference for anti-regression / emergency-revert comparisons (see task §5)."
+"Resolved backend/workers/storage for the UNRESTRICTED family's core Hessian -- read by `_callbackEvalH_inner_compressed!` and by `resolve_unrestricted_manifest` so the two can never silently diverge. Production default is the validated destination-pair-owned parallel kernel; set to :dense_reference for anti-regression / emergency-revert comparisons (see task §5). Worker count defaults via `resolve_core_hessian_workers_default()` (2026-07-25 final gate): 20 when >=20 Julia threads are available (measured 13-20% faster than 10, not a tie), else 10, else the bounded available count."
 const UNRESTRICTED_CORE_HESSIAN_BACKEND = Ref{Symbol}(:exact_winner_pair_parallel)
-const UNRESTRICTED_CORE_HESSIAN_WORKERS = Ref{Int}(10)
+const UNRESTRICTED_CORE_HESSIAN_WORKERS = Ref{Int}(resolve_core_hessian_workers_default())
 const UNRESTRICTED_CORE_HESSIAN_STORAGE = Ref{Symbol}(:full_stride)
 
 # ---- fallback counter (Ref{Int}, per the task brief's explicit requirement) ----

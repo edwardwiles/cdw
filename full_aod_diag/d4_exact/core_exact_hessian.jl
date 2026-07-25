@@ -64,6 +64,34 @@ const CORE_HESSIAN_COUNTERS = Ref(CoreHessianCallCounters())
 reset_core_hessian_counters!() = (CORE_HESSIAN_COUNTERS[] = CoreHessianCallCounters())
 
 """
+    resolve_core_hessian_workers_default() :: Int
+
+2026-07-25 final-gate continuation (task §3, worker-count policy): the winner-pair parallel
+kernel's own 20-thread sweep (`docs/WINNER_PAIR_20_THREAD_WORKER_SELECTION_2026-07-25.md`) found
+`workers=20` genuinely (not tied-within-noise) 13-20% faster than `workers=10` at BOTH a
+near-`delta=1` feasible point and a harder point, once 20 real Julia threads are actually
+available -- so a hard-coded `10` is leaving real throughput on the table whenever
+`JULIA_NUM_THREADS>=20`, and is retained ONLY as the safe fallback below that. `workers` can never
+legally exceed `Threads.nthreads()` (see the parallel kernel's own `max_workers` bound), so this
+also protects any environment with fewer available threads from a default that would silently
+degrade or error.
+"""
+function resolve_core_hessian_workers_default()
+    n = nthreads()
+    n >= 20 && return 20
+    n >= 10 && return 10
+    return max(1, n)
+end
+
+"Human-readable label for which branch of `resolve_core_hessian_workers_default()`'s piecewise rule is currently active -- printed in every public startup manifest (task §3) alongside the resolved worker count itself, so a manifest reader sees WHY that count was chosen, not just the number."
+function core_hessian_worker_policy_label()
+    n = nthreads()
+    n >= 20 && return :ge20_threads_use_20
+    n >= 10 && return :ge10_lt20_threads_use_10
+    return :lt10_threads_use_available
+end
+
+"""
     CM_CORE_HESSIAN_BACKEND_DEFAULT / ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT
 
 2026-07-25 continuation (task §6, matched outer A/B): CM/CM+meanZC and origin-ZC build their
@@ -77,10 +105,10 @@ benchmark/gate script can flip ONE global before calling the real public driver,
 for all four families.
 """
 const CM_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
-const CM_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(10)
+const CM_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_workers_default())
 const CM_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
 const ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
-const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(10)
+const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_workers_default())
 const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
 
 """
