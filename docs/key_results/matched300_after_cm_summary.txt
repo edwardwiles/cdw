@@ -1,0 +1,69 @@
+>>> matched_outer_benchmark_cm_2026-07-25 starting 2026-07-25T16:03:45.819
+>>> Julia threads=20 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+>>> host load (uptime): 
+>>> outer algorithm=2 (Interior/CG) hessopt=6 (L-BFGS) -- see knitro_outer_algorithm.jl
+>>> active Hessian backend=:structured, contrasts=orthonormal cm_extension=cm_only cm_gradient_backend=cplus destination_sample=exclude_row
+>>> context build wall = 73.172s  D=20 Ddest=19 n_free=380 g0=0.9877737671465882 ||zfree0||=292.0660281073053
+[warmup] cm_gradient_backend=cplus (production default) destination_sample=exclude_row (production default)
+[active-layout] mode=cm_flexible destination_sample=exclude_row origins=20 destinations=19 active_A_cells=380 free_reduced_A_dim=381 gravity_sample_version=2 theta_calibration_version=2
+[winner-engine] core_top1_engine=canonical_log_additive outer_gradient_top3_engine=cplus winner_cache_policy=top1_plus_second_scan
+[screen-stack] mode=cm_flexible enabled=true
+[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners
+[screen-stack] restriction policy: pairwise=on hard-winner=on witness=off
+[threshold-config] mode=cm_flexible requested_delta=1.0 resolved_active_threshold=10.0 stored_in_objective_bundle=10.0
+[backend-manifest] family=flexible_cm
+[backend-manifest]   core_top1_engine=canonical_log_additive
+[backend-manifest]   outer_gradient_top3_engine=cplus
+[backend-manifest]   core_moment_representation=compressed_winner_form
+[backend-manifest]   cm_restriction_basis=cumulative
+[backend-manifest]   cm_internal_storage=bin_index
+[backend-manifest]   hessian_backend=threaded_architecture_c
+[backend-manifest]   threaded_bins=true
+[backend-manifest]   julia_threads=20
+[backend-manifest]   blas_threads=1
+[backend-manifest]   checkpoint_schema=6
+[backend-manifest]   screen_stack=pairwise_certificate,screen_hard_winners
+Final objective value               =   9.87773767146588e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   9.95e-02 / 9.95e-02
+# of iterations                     =          0 
+# of CG iterations                  =          0 
+# of function evaluations           =          1
+# of gradient evaluations           =          1
+Total program time (secs)           =      29.72543 (    64.251 CPU time)
+Time spent in evaluations (secs)    =       0.00000
+[screen-summary] warmup calls=2 pairwise_hits=0 hard_winner_hits=0 witness_hits=0 points_passed=2 inner_solves_avoided=0 screen_wall_s=0.9051
+>>> warm-up wall = 68.595s  n_eval=1 n_grad=1 status=-401
+[measured] cm_gradient_backend=cplus (production default) destination_sample=exclude_row (production default)
+[active-layout] mode=cm_flexible destination_sample=exclude_row origins=20 destinations=19 active_A_cells=380 free_reduced_A_dim=381 gravity_sample_version=2 theta_calibration_version=2
+[winner-engine] core_top1_engine=canonical_log_additive outer_gradient_top3_engine=cplus winner_cache_policy=top1_plus_second_scan
+[screen-stack] mode=cm_flexible enabled=true
+[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners
+[screen-stack] restriction policy: pairwise=on hard-winner=on witness=off
+[threshold-config] mode=cm_flexible requested_delta=1.0 resolved_active_threshold=10.0 stored_in_objective_bundle=10.0
+[backend-manifest] family=flexible_cm
+[backend-manifest]   core_top1_engine=canonical_log_additive
+[backend-manifest]   outer_gradient_top3_engine=cplus
+[backend-manifest]   core_moment_representation=compressed_winner_form
+[backend-manifest]   cm_restriction_basis=cumulative
+[backend-manifest]   cm_internal_storage=bin_index
+[backend-manifest]   hessian_backend=threaded_architecture_c
+[backend-manifest]   threaded_bins=true
+[backend-manifest]   julia_threads=20
+[backend-manifest]   blas_threads=1
+[backend-manifest]   checkpoint_schema=6
+[backend-manifest]   screen_stack=pairwise_certificate,screen_hard_winners
+Final objective value               =   9.72293626115371e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   2.16e-02 / 2.16e-02
+# of iterations                     =          3 
+# of CG iterations                  =         14 
+# of function evaluations           =         13
+# of gradient evaluations           =          4
+Total program time (secs)           =     320.60605 (  1393.470 CPU time)
+Time spent in evaluations (secs)    =     309.42096
+[screen-summary] measured calls=14 pairwise_hits=0 hard_winner_hits=0 witness_hits=0 points_passed=14 inner_solves_avoided=0 screen_wall_s=5.4793
+>>> MEASURED RUN DONE wall=361.391s alloc_bytes=19652031376 (19.652 GB) gc_time_s=1.655 n_eval=4 n_grad=4 status=-401 peak_rss_kb=1200
+>>> best=Delta=0.8273639659845686 gp=0.9696667119297765 n_eval=3 t=108.38549995422363
+>>> COLD-VERIFY best incumbent: wall=15.079s Delta_dual=0.8273639659845686 (vs reported 0.8273639659845686, diff=0.0) ok=true
+>>> RUN_CM_DONE

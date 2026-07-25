@@ -1,0 +1,21 @@
+>>> [BEFORE/cm] context build wall = 95.168s
+[before_cm_measured] cm_gradient_backend=cplus (production default) destination_sample=exclude_row (production default)
+[active-layout] mode=cm_flexible destination_sample=exclude_row origins=20 destinations=19 active_A_cells=380 free_reduced_A_dim=381 gravity_sample_version=2 theta_calibration_version=2
+[winner-engine] core_top1_engine=canonical_log_additive outer_gradient_top3_engine=cplus winner_cache_policy=top1_plus_second_scan
+[screen-stack] mode=cm_flexible enabled=true
+[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners
+[screen-stack] restriction policy: pairwise=on hard-winner=on witness=off
+[threshold-config] mode=cm_flexible requested_delta=1.0 resolved_active_threshold=10.0 stored_in_objective_bundle=10.0
+Final objective value               =   9.66743290194135e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   8.65e-03 / 8.65e-03
+# of iterations                     =          9 
+# of CG iterations                  =          0 
+# of function evaluations           =         13
+# of gradient evaluations           =         10
+Total program time (secs)           =     352.69366 (   408.644 CPU time)
+Time spent in evaluations (secs)    =     316.53473
+[screen-summary] before_cm_measured calls=14 pairwise_hits=0 hard_winner_hits=0 witness_hits=0 points_passed=14 inner_solves_avoided=0 screen_wall_s=5.2282
+>>> [BEFORE/cm] wall=392.207s alloc_bytes=41701908488 gc_time_s=2.307 peak_rss_kb=9706000 n_eval=11 n_grad=10 knitro_status=-401
+>>> [BEFORE/cm] best=gp=0.9667432901941345 Delta=0.9874973076819769 t=352.0240218639374
+>>> [BEFORE/cm] DONE

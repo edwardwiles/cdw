@@ -1,0 +1,19 @@
+>>> [BEFORE/u] context build wall = 79.867s
+[before_u_measured] ctx built, D=20 W=80000 draw_seed=20260719 draw_design=pseudorandom price_cache_backend=cplus draw_checksum=(fb009073ce939d1df21001d2c8ec32f54133da2fd5afc9b8150cf2726bc77ad7,6d5a0545f86fe02f9c8de5dbc905d29b9f44d0fd13c21c829c71d3a05b77f90f) screen_setup_wall=(pairwise = 0.079080629, witness = 2.440476922) inner_opt=default envelope_screen_supported=true
+[active-layout] mode=unrestricted destination_sample=exclude_row origins=20 destinations=19 active_A_cells=380 free_reduced_A_dim=381 gravity_sample_version=2 theta_calibration_version=2
+[winner-engine] core_top1_engine=canonical_log_additive outer_gradient_top3_engine=cplus winner_cache_policy=top1_plus_second_scan
+[screen-stack] mode=unrestricted enabled=true
+[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners, envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE), winning_range, safety_net_moment_range
+[threshold-config] mode=unrestricted requested_delta=1.0 resolved_active_threshold=10.0 stored_in_objective_bundle=10.0
+[before_u_measured] polish start point: inner_status=0 Delta=0.002486773477940639
+Final objective value               =   9.59524537427783e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.08e-03 / 1.08e-03
+# of iterations                     =         19 
+# of CG iterations                  =          2 
+# of function evaluations           =         43
+# of gradient evaluations           =         20
+Total program time (secs)           =     308.00449 (   411.048 CPU time)
+Time spent in evaluations (secs)    =     299.76736
+[before_u_measured] POLISH DONE: status=-401 (KN_RC_TIME_LIMIT_FEAS/limit_feasible) wall_ext=308.1s n_eval=37 kappa=0.0665448086689463 native_outer_iters=19 native_outer_fc_evals=43 native_outer_ga_evals=20 screens(pw/wt/wn/env/wr/sn/pass)=0/0/0/0/0/0/44 n_cold_retries(F)=6 n_rejected(F)=6 n_g_recompute=0
+>>> [BEFORE/u] wall=355.365s alloc_bytes=30262176216 gc_time_s=2.229 peak_rss_kb=5125488 n_eval=37 n_grad=20 knitro_status=-401

@@ -1,0 +1,65 @@
+>>> matched_outer_benchmark_u_2026-07-25 starting 2026-07-25T15:55:16.532
+>>> Julia threads=20 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+>>> host load (uptime): 
+>>> outer algorithm=2 (Interior/CG) hessopt=6 (L-BFGS) -- see knitro_outer_algorithm.jl
+[active-layout] mode=unrestricted destination_sample=exclude_row origins=20 destinations=19 active_A_cells=380 free_reduced_A_dim=381 gravity_sample_version=2 theta_calibration_version=2
+[winner-engine] core_top1_engine=canonical_log_additive outer_gradient_top3_engine=cplus winner_cache_policy=top1_plus_second_scan
+>>> context build wall = 71.794s  D=20 Ddest=19 n_free=380 g0=0.9877737671465882 ||zfree0||=292.0660281073053
+[warmup] ctx built, D=20 W=80000 draw_seed=20260719 draw_design=pseudorandom price_cache_backend=cplus draw_checksum=(fb009073ce939d1df21001d2c8ec32f54133da2fd5afc9b8150cf2726bc77ad7,6d5a0545f86fe02f9c8de5dbc905d29b9f44d0fd13c21c829c71d3a05b77f90f) screen_setup_wall=(pairwise = 0.081148105, witness = 2.355258623) inner_opt=default envelope_screen_supported=true
+[active-layout] mode=unrestricted destination_sample=exclude_row origins=20 destinations=19 active_A_cells=380 free_reduced_A_dim=381 gravity_sample_version=2 theta_calibration_version=2
+[winner-engine] core_top1_engine=canonical_log_additive outer_gradient_top3_engine=cplus winner_cache_policy=top1_plus_second_scan
+[screen-stack] mode=unrestricted enabled=true
+[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners, envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE), winning_range, safety_net_moment_range
+[threshold-config] mode=unrestricted requested_delta=1.0 resolved_active_threshold=10.0 stored_in_objective_bundle=10.0
+[backend-manifest] family=unrestricted
+[backend-manifest]   core_top1_engine=canonical_log_additive
+[backend-manifest]   outer_gradient_top3_engine=cplus
+[backend-manifest]   core_moment_representation=compressed
+[backend-manifest]   hessian_backend=dense_exact
+[backend-manifest]   julia_threads=20
+[backend-manifest]   blas_threads=1
+[backend-manifest]   checkpoint_schema=4
+[backend-manifest]   screen_stack=pairwise_certificate,screen_hard_winners,envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE),winning_range,safety_net_moment_range
+[warmup] polish start point: inner_status=0 Delta=0.002486773477940639
+Final objective value               =   9.87773767146588e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   9.99e-02 / 9.99e-02
+# of iterations                     =          0 
+# of CG iterations                  =          3 
+# of function evaluations           =          3
+# of gradient evaluations           =          1
+Total program time (secs)           =      20.66453 (    28.840 CPU time)
+Time spent in evaluations (secs)    =      12.50588
+[warmup] POLISH DONE: status=-401 (KN_RC_TIME_LIMIT_FEAS/limit_feasible) wall_ext=20.8s n_eval=1 kappa=0.020293896607184836 native_outer_iters=0 native_outer_fc_evals=3 native_outer_ga_evals=1 screens(pw/wt/wn/env/wr/sn/pass)=0/0/0/0/0/0/4 n_cold_retries(F)=2 n_rejected(F)=2 n_g_recompute=0
+>>> warm-up wall = 69.582s  n_eval=1 n_grad=1 status=-401
+[measured] ctx built, D=20 W=80000 draw_seed=20260719 draw_design=pseudorandom price_cache_backend=cplus draw_checksum=(fb009073ce939d1df21001d2c8ec32f54133da2fd5afc9b8150cf2726bc77ad7,6d5a0545f86fe02f9c8de5dbc905d29b9f44d0fd13c21c829c71d3a05b77f90f) screen_setup_wall=(pairwise = 0.069546904, witness = 2.363627019) inner_opt=default envelope_screen_supported=true
+[active-layout] mode=unrestricted destination_sample=exclude_row origins=20 destinations=19 active_A_cells=380 free_reduced_A_dim=381 gravity_sample_version=2 theta_calibration_version=2
+[winner-engine] core_top1_engine=canonical_log_additive outer_gradient_top3_engine=cplus winner_cache_policy=top1_plus_second_scan
+[screen-stack] mode=unrestricted enabled=true
+[screen-stack] ordered active screens: pairwise_certificate, screen_hard_winners, envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE), winning_range, safety_net_moment_range
+[threshold-config] mode=unrestricted requested_delta=1.0 resolved_active_threshold=10.0 stored_in_objective_bundle=10.0
+[backend-manifest] family=unrestricted
+[backend-manifest]   core_top1_engine=canonical_log_additive
+[backend-manifest]   outer_gradient_top3_engine=cplus
+[backend-manifest]   core_moment_representation=compressed
+[backend-manifest]   hessian_backend=dense_exact
+[backend-manifest]   julia_threads=20
+[backend-manifest]   blas_threads=1
+[backend-manifest]   checkpoint_schema=4
+[backend-manifest]   screen_stack=pairwise_certificate,screen_hard_winners,envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE),winning_range,safety_net_moment_range
+[measured] polish start point: inner_status=0 Delta=0.002486773477940639
+Final objective value               =   9.56547085820102e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   7.57e-04 / 7.57e-04
+# of iterations                     =         18 
+# of CG iterations                  =        112 
+# of function evaluations           =         48
+# of gradient evaluations           =         19
+Total program time (secs)           =     304.47830 (   414.029 CPU time)
+Time spent in evaluations (secs)    =     302.44995
+[measured] POLISH DONE: status=-401 (KN_RC_TIME_LIMIT_FEAS/limit_feasible) wall_ext=304.5s n_eval=46 kappa=0.07167130070027139 native_outer_iters=18 native_outer_fc_evals=48 native_outer_ga_evals=19 screens(pw/wt/wn/env/wr/sn/pass)=0/0/0/0/0/0/49 n_cold_retries(F)=2 n_rejected(F)=2 n_g_recompute=0
+>>> MEASURED RUN DONE wall=328.39s alloc_bytes=13418157816 (13.418 GB) gc_time_s=1.103 n_eval=46 n_grad=19 status=-401 peak_rss_kb=1192
+>>> screens(pw/wt/wn/env/wr/sn/pass)=(pairwise = 0, witness = 0, winner = 0, envelope = 0, winning_range = 0, safety_net = 0, passed = 50)
+>>> best_feasible=gp=0.9563592574154475 Delta=0.9983518350775261 n_eval=45 t=300.16529297828674
+>>> COLD-VERIFY best incumbent: wall=6.958s status=0 Delta_dual=0.9983518350775249 (vs reported 0.9983518350775261, diff=1.2212453270876722e-15) ok=true
+>>> RUN_U_DONE
