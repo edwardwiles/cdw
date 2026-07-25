@@ -60,6 +60,9 @@ performance contract).
 function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair::Int = 0,
                                              contrasts::Symbol = :orthonormal, meanzc_basis::Symbol = :direct,
                                              probs::Union{Nothing,AbstractVector{Float64}} = nothing)
+    println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")
+    println(stdout, "cm_internal_feature_storage [CM+mean/ZC] = bin_indices")
+    flush(stdout)
     aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, K_pair = K_pair,
         contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs)
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))

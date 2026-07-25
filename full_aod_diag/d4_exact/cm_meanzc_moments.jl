@@ -208,6 +208,40 @@ pair_columns(Zpair::AbstractMatrix{Float64}, ν::Float64) = Zpair .- ν^2
 d_pair_dnu(ν::Float64, npair::Int) = fill(-2ν, npair)
 
 """
+    mean_columns_direct!(dest, Z, ν)
+    mean_columns_anchored!(dest, Z, ν, refIndex1)
+    pair_columns!(dest, Zpair, ν)
+
+In-place analogs of `mean_columns_direct`/`mean_columns_anchored`/
+`pair_columns`: write the centered/target-corrected block directly into
+`dest` (expected to be a view into the destination moment matrix `G`) via a
+single broadcast, with NO intermediate `W x D`/`W x npair` temporary
+allocation. Mathematically identical output to the allocating versions
+(same formula, `Z .- ν` / `Zpair .- ν^2`) -- these exist purely to avoid the
+B5/B6 "materialize-then-copy" pattern (`G[:,cols] .= mean_columns_direct(...)`
+allocates the RHS, then copies it into the view) for the immutable-feature
+restriction operators (`Φ_R = Z`, target `t_R(η) = ν` or `ν^2`).
+"""
+function mean_columns_direct!(dest::AbstractMatrix{Float64}, Z::AbstractMatrix{Float64}, ν::Float64)
+    @. dest = Z - ν
+    return dest
+end
+function mean_columns_anchored!(dest::AbstractMatrix{Float64}, Z::AbstractMatrix{Float64}, ν::Float64, refIndex1::Int)
+    D = size(Z, 2)
+    @views dest[:, refIndex1] .= Z[:, refIndex1] .- ν
+    for o in 1:D
+        o == refIndex1 && continue
+        @views dest[:, o] .= Z[:, o] .- Z[:, refIndex1]
+    end
+    return dest
+end
+function pair_columns!(dest::AbstractMatrix{Float64}, Zpair::AbstractMatrix{Float64}, ν::Float64)
+    ν2 = ν^2
+    @. dest = Zpair - ν2
+    return dest
+end
+
+"""
     wrap_moments_with_cm_meanzc(core_moments!, ncore_econ, CM, Zraw_all, Zpairraw_all; meanzc_basis=:direct, refIndex1=1) -> Function
 
 Returns a `moments!`-signature closure `(K, G, θ_ext, U, obj) -> nothing`
@@ -220,11 +254,87 @@ longer than what `core_moments!` itself expects (file header: this is how ν_k
 reaches this closure without any shared mutable state). Built ONCE per
 production context and reused, exactly like the CM-only path's own
 `wrap_moments_with_cm`/`wrap_moments_with_cm_archB` closures.
+
+B2/B5/B6 immutable-restriction-operator implementation (2026-07-24, Phase B
+rescoped per the live B1 audit -- see
+docs/CURRENT_CM_BASIS_AND_STORAGE_AUDIT_2026-07-24.md for why flexible CM's
+own CM-grid block already has this treatment via Architecture B/C and is NOT
+touched here): (1) `G_tmp` is now a closure-captured cache (`Gtmp_cache`,
+keyed on `n`, mirroring `wrap_moments_with_cm_archB`'s pattern) instead of a
+fresh `similar(G, n, ncore_econ)` allocation on every call -- at D=20/
+W=80,000 this buffer is O(W x ncore_econ) ~ tens of MB, previously
+reallocated every outer evaluation; (2) the mean/pair centered blocks
+(`Φ_R - t_R(η)`, `Φ_R = Zraw_all[k]`/`Zpairraw_all[k]`, `t_R(η) = ν_k`/`ν_k^2`)
+are now written DIRECTLY into the destination `G` view via
+`mean_columns_direct!`/`mean_columns_anchored!`/`pair_columns!` (a single
+in-place broadcast), instead of allocating a full temporary `W x D`/
+`W x npair` matrix via the old allocating helpers and then copying it into
+`G` (`G[:,cols] .= mean_columns_direct(...)`, which builds and immediately
+discards a same-sized temporary on every call). `Zraw_all`/`Zpairraw_all`
+themselves are unchanged: already-immutable, already-precomputed-once
+per context (`build_raw_mean_pair_matrix_levels`), reused as-is -- this
+function does not touch that part of the design, only the per-call fill.
+The dense/allocating reference path (`wrap_moments_with_cm_meanzc_dense`,
+below) is retained byte-for-byte for validation.
 """
 function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, CM::Matrix{Float64},
                                       Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}};
                                       meanzc_basis::Symbol = :direct, refIndex1::Int = 1)
     meanzc_basis in (:direct, :anchored) || error("wrap_moments_with_cm_meanzc: meanzc_basis must be :direct or :anchored, got $meanzc_basis")
+    pregrav = ncore_econ - 1
+    D = size(Zraw_all[1], 2)
+    K_mean = length(Zraw_all)
+    K_pair = length(Zpairraw_all)
+    n_mean_total = K_mean * D
+    npair = D * (D - 1) ÷ 2
+    n_pair_total = K_pair * npair
+    ncm = size(CM, 2)
+    Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
+    return function (K, G, θ_ext, U, obj)
+        n = size(U, 1)
+        θ_econ = @view θ_ext[1:end-K_mean]
+        νs = @view θ_ext[end-K_mean+1:end]
+        if size(Gtmp_cache[], 1) != n
+            Gtmp_cache[] = Matrix{Float64}(undef, n, ncore_econ)
+        end
+        G_tmp = Gtmp_cache[]
+        core_moments!(K, G_tmp, θ_econ, U, obj)
+        @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
+        for k in 1:K_mean
+            cols = pregrav+(k-1)*D+1 : pregrav+k*D
+            dest = @view G[:, cols]
+            Zk = @view Zraw_all[k][1:n, :]
+            meanzc_basis === :direct ? mean_columns_direct!(dest, Zk, νs[k]) :
+                                        mean_columns_anchored!(dest, Zk, νs[k], refIndex1)
+        end
+        mean_end = pregrav + n_mean_total
+        for k in 1:K_pair
+            cols = mean_end+(k-1)*npair+1 : mean_end+k*npair
+            dest = @view G[:, cols]
+            Zpk = @view Zpairraw_all[k][1:n, :]
+            pair_columns!(dest, Zpk, νs[k])
+        end
+        cm_cols = mean_end+n_pair_total+1 : mean_end+n_pair_total+ncm
+        @views G[:, cm_cols] .= CM[1:n, :]
+        @views G[:, end] .= G_tmp[:, end]
+        return nothing
+    end
+end
+
+"""
+    wrap_moments_with_cm_meanzc_dense(core_moments!, ncore_econ, CM, Zraw_all, Zpairraw_all; meanzc_basis=:direct, refIndex1=1) -> Function
+
+Slow dense reference path, preserved byte-for-byte from the pre-2026-07-24
+Phase B implementation (fresh `G_tmp` allocation every call, mean/pair blocks
+built via the allocating `mean_columns_direct`/`mean_columns_anchored`/
+`pair_columns` then copied into `G`). Kept ONLY for before/after correctness
+and benchmark comparison against `wrap_moments_with_cm_meanzc` above -- not
+used by any production entry point.
+"""
+function wrap_moments_with_cm_meanzc_dense(core_moments!::Function, ncore_econ::Int, CM::Matrix{Float64},
+                                            Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}};
+                                            meanzc_basis::Symbol = :direct, refIndex1::Int = 1)
+    meanzc_basis in (:direct, :anchored) || error("wrap_moments_with_cm_meanzc_dense: meanzc_basis must be :direct or :anchored, got $meanzc_basis")
     pregrav = ncore_econ - 1
     D = size(Zraw_all[1], 2)
     K_mean = length(Zraw_all)
