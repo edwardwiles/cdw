@@ -224,12 +224,22 @@ not run given that confound. This is a genuine gap against the brief's full chec
 something to paper over: the brief requires the 2-hour step not to "reveal immediate collapse,"
 and that requirement cannot be marked PASS when the step itself was not run.
 
-**Given this, the local merge+tag proceeds** (per explicit instruction received mid-session to
-continue to the merge decision after §6/§7, and because every gate that COULD be run passed,
-often decisively) **but is recorded as `port-ready` scope, not a "fully validated at long
-horizon" claim** — the tag and this document both flag the delta=2/2-hour gap explicitly so a
-reviewer does not mistake "merged" for "the practical-value case is airtight at every delta and
-horizon." See the tag message itself for the same caveat, verbatim.
+**Given this, the branch is NOT merged into `production/fullA-exact`.** The brief's own §16
+checklist is a CONJUNCTION ("may merge... only if" every listed condition holds), and one
+condition — the 2-hour delta=2 comparison not revealing collapse — cannot be marked satisfied
+when the step itself was never run. Marking it merged would require either quietly dropping that
+condition or asserting something not actually verified; neither is acceptable given this
+project's own standing emphasis on verifying before making claims (see CLAUDE.md /
+`feedback-verify-before-causal-claims`). Instead, this session applies a lightweight **local,
+descriptive tag** (`flexible-theta-aspace-port-ready-2026-07-25`, NOT the brief's own
+merge-implying `flexible-theta-aspace-production-ready-2026-07-25` name) on the port branch's
+own tip, marking the state this report describes for later reference — it does NOT fast-forward
+or merge into `production/fullA-exact`, and nothing is pushed to any remote. The concrete
+unblocking path to an actual merge is: (1) a clean, non-interrupted delta=2 matched-comparison
+rerun (both the original flexible-vs-fixed and/or the addendum's coordinate-mode arms) with a
+watchdog that reliably terminates a hung `KN_solve`, (2) if that confirms delta=1's favorable
+direction (or at minimum shows no regression), the 2-hour follow-up, (3) then the brief's full
+checklist is satisfiable and a real merge is appropriate.
 
 ## §17. Deliverables manifest
 
