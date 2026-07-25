@@ -350,7 +350,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         end
 
         t_a0 = time()
-        xf_reduced = vcat(d.gp, d.xf[layout.trade_elasticity_mode == :flexible ? 3 : 2:end])
+        xf_reduced = vcat(d.gp, d.xf[(layout.trade_elasticity_mode == :flexible ? 3 : 2):end])
         if layout.trade_elasticity_mode == :flexible
             ctx_frozen = freeze_theta_ctx(ctx, d.mu)
             pe_here = pivot_elim_from_cache(pgc, d.mu)
