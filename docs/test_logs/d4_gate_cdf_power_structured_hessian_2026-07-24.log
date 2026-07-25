@@ -1,0 +1,78 @@
+====================================================================================================
+SETUP
+====================================================================================================
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+D=4 W=8000 L=8
+=== Fixed-Fréchet reference targets ===
+  destination_sample   = unknown
+  D (origins)          = 4
+  D_dest (destinations)= 4
+  L (grid size)        = 8
+  theta_star (=1/muHat)= 5.999999999999999   [LIVE, not the draft's historical 6.8]
+  muHat                = 0.16666666666666669
+  sigma                = 2.5
+  feature_set          = cdf_power
+  basis                = cumulative
+  contrasts            = orthonormal
+  target_sha256 (CDF)  = 388b76238bcbe6bc522816b6c39b296c505613145ddb1ad76f96e6cb949177a0
+  target_sha256 (POW)  = c2741c395851c6735c01385f4b0279234fafef1d579c9212491d67149e11a4ad
+  feature_layout_ver   = 2
+  NOTE: this run implements the same restriction FAMILY as the paper draft, evaluated
+        at this codebase's own live calibration -- it does not reproduce any historical
+        figure/theta* value.
+====================================================================================================
+GATE P0: dimension-safety assertions (task brief §2/§4)
+====================================================================================================
+  PASS: ctx.D == 4 (origin count)
+  PASS: size(ctx.U,2) == ctx.D (targets built off origin count, not D_dest)
+  PASS: targets.D == ctx.D
+  PASS: build_frechet_reference_targets rejects a U with D_dest-shaped (not D-shaped) column count
+====================================================================================================
+GATE P1: CDF-only structured (Architecture C) vs dense (Architecture A) Hessian
+====================================================================================================
+  PASS: CDF-only dense solve feasible
+max|H_dense_CDF - H_struct_CDF| = 4.926614671774132e-16
+  PASS: CDF-only dense vs structured Hessian match to 1e-8 abs
+====================================================================================================
+GATE P2 (NEW deliverable): CDF+POWER structured (Architecture C) vs dense (Architecture A) Hessian
+====================================================================================================
+ncore=18  ncm=64  (expect 2*D*L = 64)
+  PASS: ncm == 2*D*L under feature_set=:cdf_power
+  PASS: CDF+POWER dense solve feasible
+max|H_dense_CDF+POWER - H_struct_CDF+POWER| = 2.3314683517128287e-15  (relative: 2.3314683517128276e-15)
+  PASS: CDF+POWER dense vs structured Hessian match to 1e-8 abs
+  PASS: CDF+POWER structured-solve feasible
+  PASS: Delta*: CDF+POWER dense-solve == structured-solve  [a=0.005815690471817282 b=0.005815690471817282 diff=0.0]
+====================================================================================================
+GATE P3: nested Delta* ordering  flexible <= frechet(cdf_only) <= frechet(cdf_power)
+====================================================================================================
+Delta*_flexible           = 0.0029670556
+Delta*_frechet(cdf_only)  = 0.0035655480
+Delta*_frechet(cdf_power) = 0.0058156905
+  PASS: Delta*_flexible <= Delta*_frechet(cdf_only) (+1e-8 slack)
+  PASS: Delta*_frechet(cdf_only) <= Delta*_frechet(cdf_power) (+1e-8 slack)
+
+====================================================================================================
+TOTAL: 13 PASS, 0 FAIL
+====================================================================================================

@@ -1,0 +1,20 @@
+[124.6s] ctx built  D=20 D_dest=19  VmHWM=2.66GB
+[148.8s] fpcx built in 22.0s  ncore=382 ncm=1000  n_inner=1383  VmHWM=7.73GB
+[149.7s] P0 gp=0.9877737671 (calib)  P1 gp=0.9877132718 (kappa*+1e-4)  P2 gp=0.9876527740 (kappa*+2e-4)  kappa*=0.0202938966
+fingerprint P0[1:5] = [0.9877737671465882, 5.2474180912541725e7, 5.2474180912541725e7, 5.2474180912541725e7, 5.2474180912541725e7]
+fingerprint P1[1:5] = [0.9877132718248147, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7]
+fingerprint P2[1:5] = [0.9876527740328012, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7]
+D=20 CORRECTNESS GATE: threaded/syrk vs serial structured Hessian (direct diff, no solve)
+D=20 max|H_serial - H_threaded/syrk| = 6.821e-13  (n=1382 nh=955653)
+PASS: D=20 threaded/syrk Hessian matches serial reference
+serial (legacy)      : median=4.9934s min=4.9147s max=5.4612s allocs=18680200 bytes
+v2 serial/syrk       : median=5.1718s min=4.9199s max=5.7460s allocs=18680168 bytes
+v2 threaded( 8)/syrk : median=1.6454s min=1.2553s max=1.8079s allocs=18709080 bytes  speedup_vs_serial=3.03x
+P1 serial-Hess KNITRO-nt1 COLD (obj.x reset, true baseline) wall=   62.38s  knitro=   58.01s (93.0%)  nStatus=0    outcome=feasible   n_fg=10   n_hess=9    iters=9    avg_iter=6.445s  VmHWM=7.79GB
+P0 serial-Hess  KNITRO-nt1 (warm from P1)        wall=   34.07s  knitro=   31.00s (91.0%)  nStatus=0    outcome=feasible   n_fg=6    n_hess=5    iters=5    avg_iter=6.199s  VmHWM=7.79GB
+P0 thread(8)-Hess KNITRO-nt1 (warm, same theta as prev) wall=    4.14s  knitro=    0.71s (17.1%)  nStatus=0    outcome=feasible   n_fg=1    n_hess=0    iters=0    avg_iter=0.708s  VmHWM=7.79GB
+P1 thread(8)-Hess KNITRO-nt1 (warm from P0)      wall=   13.58s  knitro=   10.86s (80.0%)  nStatus=0    outcome=feasible   n_fg=6    n_hess=5    iters=5    avg_iter=2.172s  VmHWM=7.79GB
+P2 thread(8)-Hess KNITRO-nt1 (warm from P1)      wall=   15.34s  knitro=   12.24s (79.8%)  nStatus=0    outcome=feasible   n_fg=6    n_hess=5    iters=5    avg_iter=2.448s  VmHWM=7.79GB
+Hessian callback (threaded/syrk, warmed): 18699032 bytes = 18.6990 MB
+FG/moments! callback (warmed): 1369101784 bytes = 1369.1018 MB
+SUMMARY  label=nt8  nthreads=8  total_wall=403.0s  VmHWM=7.79GB  finished=2026-07-24T22:22:23.458

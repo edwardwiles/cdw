@@ -1,0 +1,20 @@
+[93.0s] ctx built  D=20 D_dest=19
+[109.1s] fpcx built  ncore=382 ncm=1000
+[109.7s] kappa*=0.020293896607184836  target kappa=0.020393896607184835  gp*=0.9877737671465882  gp_target=0.9877132718248147
+[109.7s] warm-up: verifying starting point (gp_target, zfree*) is cold-solvable...
+[139.6s] warm-up outcome=feasible  verified=true  Delta=0.008920180760516032
+[139.7s] launching run_frechet_upper_cdf_only, maxtime_real=1800.0 ...
+WARNING:  Option 'par_blasnumthreads' deprecated, please use 'blas_numthreads'.
+WARNING:  Option 'par_lsnumthreads' deprecated, please use 'linsolver_numthreads'.
+  eval 1 t=3.0s gp=0.9877132718248147 Delta=0.008920180760516032 feasible=true verified=true
+numthreads:              1
+outlev:                  3
+  eval 5 t=380.1s gp=0.9807920074295227 Delta=1.3993626131689427 feasible=false verified=false
+  eval 10 t=941.0s gp=0.980950424011783 Delta=0.5224152825972022 feasible=true verified=false
+  eval 15 t=1809.5s gp=0.9708840879092421 Delta=1.3514058338141228 feasible=false verified=false
+SHAKEDOWN RESULT
+knitro_status=-401  wall=1974.7s
+n_eval=16  n_grad=5  n_new_point_solve=12
+BEST: gp=0.9877132718248147  Delta=0.008920180760516032  kappa=0.020393896607184825  n_eval=1  t=3.0s
+[2115.3s] cold-verifying best incumbent...
+cold-verify: outcome=feasible  verified=true  Delta=0.008920180760516032

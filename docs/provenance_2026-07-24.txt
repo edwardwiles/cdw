@@ -1,0 +1,64 @@
+=== Fixed-Frechet post-omit-ROW port-prep: provenance ===
+Generated: 2026-07-25T01:23:33Z
+
+branch: feature/fixed-frechet-post-omit-row-port-prep-2026-07-24
+HEAD: cbb7cbc23f5e8c81543cd2f011cfec044c8441d9
+base (production/fullA-exact): c55e81ea6c32797ca24f9397ceff7846f4c3b1f7
+
+=== commits on this branch (base..HEAD) ===
+cbb7cbc Diagnose and document root cause of slow D=20/L=50 inner solves; abandon shakedown per user direction
+9bac448 Fill in D=20/shakedown results in port-readiness report; add performance report
+b7ff143 Fix real bugs found via live D=20/W=80000/L=50 execution
+9eae5ab Port fixed-Frechet CDF+power marginals onto post-omit-ROW production (prep)
+
+=== diff --stat vs base ===
+ ...CM_PRODUCTION_HOOK_INTERFACE_SPEC_2026-07-24.md | 473 ++++++++++++
+ ..._CM_QUANTILE_IMPLEMENTATION_AUDIT_2026-07-24.md | 315 ++++++++
+ ...NICAL_WINNER_INTEGRATION_MANIFEST_2026-07-24.md |  99 +++
+ ...RECHET_FULL_SPEC_MATH_AND_TARGETS_2026-07-24.md | 182 +++++
+ .../FIXED_FRECHET_PERFORMANCE_REPORT_2026-07-24.md |  89 +++
+ ...CHET_POST_OMIT_ROW_PORT_READINESS_2026-07-24.md | 250 +++++++
+ ...RECHET_SLOW_INNER_SOLVE_DIAGNOSIS_2026-07-24.md | 147 ++++
+ ..._FRECHET_STRUCTURED_POWER_HESSIAN_2026-07-24.md | 108 +++
+ ...HET_TIMEOUT_AND_STATE_REUSE_AUDIT_2026-07-24.md |  85 +++
+ docs/generate_manifest.sh                          |  36 +
+ ...0_w80000_l50_cdf_power_full_gate_2026-07-24.log | 283 ++++++++
+ .../d4_gate_basis_invariance_2026-07-24.log        |  54 ++
+ ...ate_cdf_power_structured_hessian_2026-07-24.log |  78 ++
+ ...ate_rectangular_dimension_safety_2026-07-24.log | 296 ++++++++
+ ...ded_generic_not_frechet_specific_2026-07-24.log | 238 ++++++
+ ...xible_cm_regression_smoke_w80000_2026-07-24.log | 232 ++++++
+ .../gradient_wrapper_validation_2026-07-24.log     | 246 +++++++
+ ..._solve_diagnosis_iteration_table_2026-07-24.log | 120 +++
+ full_aod_diag/d4_exact/cm_frechet_bases.jl         | 378 ++++++++++
+ full_aod_diag/d4_exact/cm_frechet_bases_q2.jl      | 117 +++
+ .../d4_exact/cm_frechet_bases_structured.jl        | 174 +++++
+ full_aod_diag/d4_exact/cm_frechet_checkpoint.jl    | 168 +++++
+ full_aod_diag/d4_exact/cm_frechet_config.jl        |  74 ++
+ full_aod_diag/d4_exact/cm_frechet_hessian.jl       | 165 +++++
+ full_aod_diag/d4_exact/cm_frechet_lfix_aware.jl    |  89 +++
+ full_aod_diag/d4_exact/cm_frechet_moments.jl       | 200 +++++
+ .../cm_frechet_power_hessian_structured.jl         | 400 ++++++++++
+ .../d4_exact/cm_frechet_production_bundle.jl       | 329 +++++++++
+ .../d4_exact/diag_frechet_gradient_error.jl        |  71 ++
+ .../d4_exact/diag_frechet_slow_solve_breakdown.jl  | 129 ++++
+ .../diag_frechet_unbounded_at_d20_smallw.jl        |  41 ++
+ full_aod_diag/d4_exact/ek_inner_diag_verbose.opt   | 805 +++++++++++++++++++++
+ .../d4_exact/frechet_reference_targets.jl          | 143 ++++
+ full_aod_diag/d4_exact/launch_frechet_shakedown.jl |  98 +++
+ full_aod_diag/d4_exact/run_frechet_upper.jl        | 134 ++++
+ .../d4_exact/test_flexible_cm_regression_smoke.jl  |  83 +++
+ .../test_frechet_basis_invariance_d4_gates.jl      | 122 ++++
+ .../d4_exact/test_frechet_d20_production_gates.jl  | 146 ++++
+ .../test_frechet_power_hessian_d4_gates.jl         | 158 ++++
+ .../d4_exact/test_frechet_rectangular_d20_smoke.jl | 122 ++++
+ 40 files changed, 7477 insertions(+)
+
+=== working tree status ===
+ M docs/generate_manifest.sh
+?? docs/provenance_2026-07-24.txt
+
+=== environment ===
+julia: not on PATH in this shell
+hostname: demand.mit.edu
+load average at manifest time:  21:23:34 up 22 days, 13:02,  5 users,  load average: 168.33, 152.75, 149.66

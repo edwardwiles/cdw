@@ -1,0 +1,29 @@
+frechet_cdf_only_tolerance_study.jl  base_nt=1  nthreads=20  started=2026-07-24T22:37:26.499
+[112.0s] ctx built  D=20 D_dest=19
+[135.2s] fpcx built
+
+----------------------------------------------------------------------------------------------------
+tolerance=1e-6  (/bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/frechet_bench_opts/tol_variants/ek_inner_nt1_tol6.opt)
+----------------------------------------------------------------------------------------------------
+P1(cold)   wall=  25.08s nStatus=0    Delta_dual=0.0089201808 Delta_primal=0.0089201824 |gap|=1.677e-09 max_kkt=3.960e-07
+P2(warm)   wall=   9.99s nStatus=0    Delta_dual=0.0089789031 Delta_primal=0.0089789034 |gap|=3.366e-10 max_kkt=1.423e-09
+
+----------------------------------------------------------------------------------------------------
+tolerance=1e-8  (/bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/frechet_bench_opts/tol_variants/ek_inner_nt1_tol8.opt)
+----------------------------------------------------------------------------------------------------
+P1(cold)   wall=  17.25s nStatus=0    Delta_dual=0.0089201808 Delta_primal=0.0089201808 |gap|=3.202e-11 max_kkt=2.482e-10
+P2(warm)   wall=   9.29s nStatus=0    Delta_dual=0.0089789031 Delta_primal=0.0089789034 |gap|=3.367e-10 max_kkt=1.424e-09
+
+----------------------------------------------------------------------------------------------------
+tolerance=1e-10  (/bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/frechet_bench_opts/tol_variants/ek_inner_nt1_tol10.opt)
+----------------------------------------------------------------------------------------------------
+P1(cold)   wall=  19.35s nStatus=0    Delta_dual=0.0089201808 Delta_primal=0.0089201808 |gap|=5.574e-13 max_kkt=4.321e-12
+P2(warm)   wall=   9.55s nStatus=0    Delta_dual=0.0089789031 Delta_primal=0.0089789031 |gap|=6.136e-12 max_kkt=2.587e-11
+
+----------------------------------------------------------------------------------------------------
+tolerance=1e-12  (/bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/frechet_bench_opts/tol_variants/ek_inner_nt1_tol12.opt)
+----------------------------------------------------------------------------------------------------
+P1(cold)   wall=  20.08s nStatus=0    Delta_dual=0.0089201808 Delta_primal=0.0089201808 |gap|=9.786e-15 max_kkt=7.523e-14
+P2(warm)   wall=  14.14s nStatus=0    Delta_dual=0.0089789031 Delta_primal=0.0089789031 |gap|=1.117e-13 max_kkt=4.705e-13
+
+SUMMARY total_wall=266.0s  finished=2026-07-24T22:41:52.779

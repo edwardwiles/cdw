@@ -1,0 +1,16 @@
+  PASS: archB CDF-only solve feasible
+  PASS: dense aug ncm == archB aug ncm (same layout)
+  PASS: dense aug ncore == archB aug ncore
+max|out_lookup - out_dense| = 1.1102230246251565e-16  (relative: 3.819130533668859e-16,  W=8000)
+  PASS: frechet_fixed_contribution_archB matches dense reference to 1e-8 abs
+  PASS: cm_frechet_production_gradient_cdf_only returns finite gradient of correct length
+coord 1: analytic g=0.09215577947209866
+coord 2: analytic g=-0.03478220985933336
+coord 3: analytic g=-0.009468577896011908
+  PASS: coord 1: analytic gradient matches SOME finite-diff h to 1e-3 abs (best-of-sweep=7.4282496542732446e-9)
+  FAIL: coord 2: analytic gradient matches SOME finite-diff h to 1e-3 abs (best-of-sweep=0.001699627383734581)
+  PASS: coord 3: analytic gradient matches SOME finite-diff h to 1e-3 abs (best-of-sweep=0.0005928680258144772)
+coord 1: analytic g_cdf_power=-0.7690826614844541
+coord 2: analytic g_cdf_power=-0.029574141404303592
+coord 3: analytic g_cdf_power=-0.011515372610100766
+RESULT: 7 passed, 1 failed

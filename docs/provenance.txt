@@ -1,0 +1,49 @@
+=== Git provenance: FIXED_FRECHET_CDF_ONLY production-feasibility task, 2026-07-24 ===
+Branch: experiment/fixed-frechet-cdf-only-production-feasible-2026-07-24
+Base:   feature/fixed-frechet-post-omit-row-port-prep-2026-07-24 @ 14e080a
+
+--- git log (this branch vs base) ---
+14e080a Add SHA256 manifest and git provenance for the port-prep deliverable package
+cbb7cbc Diagnose and document root cause of slow D=20/L=50 inner solves; abandon shakedown per user direction
+9bac448 Fill in D=20/shakedown results in port-readiness report; add performance report
+b7ff143 Fix real bugs found via live D=20/W=80000/L=50 execution
+9eae5ab Port fixed-Frechet CDF+power marginals onto post-omit-ROW production (prep)
+
+--- git status ---
+?? docs/FIXED_FRECHET_CDF_ONLY_30MIN_OUTER_SHAKEDOWN_2026-07-24.md
+?? docs/FIXED_FRECHET_CDF_ONLY_PRODUCTION_FEASIBILITY_VERDICT_2026-07-24.md
+?? docs/FIXED_FRECHET_CDF_POWER_EXPERIMENTAL_STATUS_2026-07-24.md
+?? docs/FIXED_FRECHET_INNER_SOLVER_ARCHITECTURE_AUDIT_2026-07-24.md
+?? docs/FIXED_FRECHET_TRIAL_TOLERANCE_STUDY_2026-07-24.md
+?? docs/KNITRO_THREAD_LINEAR_SOLVER_BENCHMARK_2026-07-24.md
+?? docs/MATCHED_FLEXIBLE_CM_VS_CDF_ONLY_COMPARISON_2026-07-24.md
+?? docs/THREADED_CDF_ONLY_HESSIAN_BENCHMARK_2026-07-24.md
+?? docs/key_results/bench_nt1_summary.txt
+?? docs/key_results/bench_nt20_summary.txt
+?? docs/key_results/bench_nt4_summary.txt
+?? docs/key_results/bench_nt8_summary.txt
+?? docs/key_results/grad_gate3_summary.txt
+?? docs/key_results/matched_summary.txt
+?? docs/key_results/shakedown30_summary.txt
+?? docs/key_results/tol_study_summary.txt
+?? docs/provenance.txt
+?? full_aod_diag/d4_exact/cm_frechet_cdf_only_gradient.jl
+?? full_aod_diag/d4_exact/cm_frechet_hessian_threaded.jl
+?? full_aod_diag/d4_exact/cm_frechet_production_bundle_threaded.jl
+?? full_aod_diag/d4_exact/frechet_bench_opts/
+?? full_aod_diag/d4_exact/frechet_cdf_only_bench.jl
+?? full_aod_diag/d4_exact/frechet_cdf_only_tolerance_study.jl
+?? full_aod_diag/d4_exact/launch_frechet_cdf_only_shakedown.jl
+?? full_aod_diag/d4_exact/matched_cm_vs_frechet_cdf_only_bench.jl
+?? full_aod_diag/d4_exact/run_frechet_upper_cdf_only.jl
+?? full_aod_diag/d4_exact/test_frechet_cdf_only_gradient_d4_gates.jl
+?? full_aod_diag/d4_exact/test_frechet_hessian_threaded_gates.jl
+?? results/fixed_frechet_cdf_only_bench_2026-07-24/
+
+--- environment ---
+Julia: julia version 1.12.6
+KNITRO: 13.0.1 (KNITRODIR=/opt/shared_sw/knitro/13.0.1)
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 exported for every Julia launch
+Machine load average at session start: ~140-150/208 cores (uptime); varied 105-166 across the session
+Host: demand.mit.edu
+Date: 2026-07-24

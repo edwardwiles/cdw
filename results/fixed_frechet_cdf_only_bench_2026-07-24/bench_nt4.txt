@@ -1,0 +1,39 @@
+frechet_cdf_only_bench.jl  label=nt4  run_knitro_sweep=false  commit=14e080a  nthreads=4  started=2026-07-24T22:07:39.575
+[133.2s] ctx built  D=20 D_dest=19  VmHWM=2.82GB
+[157.0s] fpcx built in 21.8s  ncore=382 ncm=1000  n_inner=1383  VmHWM=7.72GB
+[157.9s] P0 gp=0.9877737671 (calib)  P1 gp=0.9877132718 (kappa*+1e-4)  P2 gp=0.9876527740 (kappa*+2e-4)  kappa*=0.0202938966
+fingerprint P0[1:5] = [0.9877737671465882, 5.2474180912541725e7, 5.2474180912541725e7, 5.2474180912541725e7, 5.2474180912541725e7]
+fingerprint P1[1:5] = [0.9877132718248147, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7]
+fingerprint P2[1:5] = [0.9876527740328012, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7, 5.247418091254167e7]
+
+====================================================================================================
+D=20 CORRECTNESS GATE: threaded/syrk vs serial structured Hessian (direct diff, no solve)
+====================================================================================================
+D=20 max|H_serial - H_threaded/syrk| = 6.821e-13  (n=1382 nh=955653)
+PASS: D=20 threaded/syrk Hessian matches serial reference
+
+====================================================================================================
+HESSIAN-CALLBACK-ONLY MICROBENCHMARK (no KNITRO, direct repeated calls)
+====================================================================================================
+serial (legacy)      : median=5.9782s min=5.2552s max=6.6019s allocs=18680168 bytes
+v2 serial/syrk       : median=5.7351s min=5.3445s max=6.1748s allocs=18680200 bytes
+v2 threaded( 4)/syrk : median=2.1714s min=2.0510s max=2.2444s allocs=18695608 bytes  speedup_vs_serial=2.75x
+
+====================================================================================================
+FULL INNER-SOLVE BENCHMARK (through KNITRO)
+====================================================================================================
+P1 serial-Hess KNITRO-nt1 COLD (obj.x reset, true baseline) wall=   67.28s  knitro=   63.29s (94.1%)  nStatus=0    outcome=feasible   n_fg=10   n_hess=9    iters=9    avg_iter=7.033s  VmHWM=7.81GB
+P0 serial-Hess  KNITRO-nt1 (warm from P1)        wall=   35.83s  knitro=   32.45s (90.6%)  nStatus=0    outcome=feasible   n_fg=6    n_hess=5    iters=5    avg_iter=6.490s  VmHWM=7.81GB
+P0 thread(4)-Hess KNITRO-nt1 (warm, same theta as prev) wall=    3.72s  knitro=    0.54s (14.6%)  nStatus=0    outcome=feasible   n_fg=1    n_hess=0    iters=0    avg_iter=0.542s  VmHWM=7.81GB
+P1 thread(4)-Hess KNITRO-nt1 (warm from P0)      wall=   16.26s  knitro=   13.39s (82.3%)  nStatus=0    outcome=feasible   n_fg=6    n_hess=5    iters=5    avg_iter=2.678s  VmHWM=7.81GB
+P2 thread(4)-Hess KNITRO-nt1 (warm from P1)      wall=   17.75s  knitro=   14.31s (80.6%)  nStatus=0    outcome=feasible   n_fg=6    n_hess=5    iters=5    avg_iter=2.863s  VmHWM=7.81GB
+
+====================================================================================================
+ALLOCATION AUDIT (warmed callbacks, @allocated)
+====================================================================================================
+Hessian callback (threaded/syrk, warmed): 18695576 bytes = 18.6956 MB
+FG/moments! callback (warmed): 1369000792 bytes = 1369.0008 MB
+
+====================================================================================================
+SUMMARY  label=nt4  nthreads=4  total_wall=440.1s  VmHWM=7.81GB  finished=2026-07-24T22:14:59.998
+====================================================================================================

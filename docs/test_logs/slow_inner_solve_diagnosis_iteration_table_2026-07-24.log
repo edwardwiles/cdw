@@ -1,0 +1,120 @@
+opttol_abs:              1e-12
+outlev:                  4
+restarts:                0
+The problem is identified as unconstrained.
+Knitro changing algorithm from AUTO to 1.
+Knitro changing bar_initpt from AUTO to 3.
+Knitro changing bar_murule from AUTO to 4.
+Knitro changing bar_penaltycons from AUTO to 0.
+Knitro changing bar_penaltyrule from AUTO to 2.
+Knitro changing bar_switchrule from AUTO to 0.
+Knitro changing linesearch from AUTO to 2.
+Knitro changing linsolver from AUTO to 2.
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                               2382 (        2382)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                          0 (           0)
+    fixed:                                            0 (           0)
+    free:                                          2382 (        2382)
+Number of constraints:                                0 (           0)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                    0 (           0)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                       0 (           0)
+Number of nonzeros in Hessian:                  2838153 (     2838153)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+  Iter     fCount     Objective      FeasError   OptError    ||Step||    CGits 
+--------  --------  --------------  ----------  ----------  ----------  -------
+       0         1    0.000000e+00   0.000e+00
+       1         2   -1.647298e-02   0.000e+00   1.032e-01   7.824e+02        0
+       2         3   -1.664716e-02   0.000e+00   8.689e-03   9.552e-03        0
+       3         4   -1.669796e-02   0.000e+00   2.486e-03   8.344e-03        0
+       4         5   -1.671640e-02   0.000e+00   7.046e-04   9.087e-03        0
+       5         6   -1.674013e-02   0.000e+00   3.438e-03   3.368e+01        0
+       6         7   -1.674883e-02   0.000e+00   7.273e-05   2.664e-02        0
+       7         8   -1.681497e-02   0.000e+00   5.698e-04   1.240e+01        0
+       8         9   -1.681715e-02   0.000e+00   1.395e-05   1.852e+00        0
+       9        10   -1.681732e-02   0.000e+00   3.561e-06   3.886e-01        0
+      10        11   -1.681736e-02   0.000e+00   1.785e-06   1.878e-01        0
+      11        12   -1.681737e-02   0.000e+00   9.011e-07   9.352e-02        0
+      12        13   -1.681737e-02   0.000e+00   4.563e-07   4.705e-02        0
+      13        14   -1.681737e-02   0.000e+00   2.315e-07   2.378e-02        0
+
+[4502] signal 15: Terminated
+in expression starting at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/diag_frechet_slow_solve_breakdown.jl:90
+pthread_cond_wait at /lib64/libpthread.so.0 (unknown line)
+uv_cond_wait at /workspace/srcdir/libuv/src/unix/thread.c:822
+ijl_task_get_next at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/scheduler.c:523
+poptask at ./task.jl:1216
+wait at ./task.jl:1228
+task_done_hook at ./task.jl:868
+jfptr_task_done_hook_59905.1 at /bbkinghome/edav/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/lib/julia/sys.so (unknown line)
+jl_apply at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+jl_finish_task at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/task.c:341
+start_task at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/task.c:1263
+unknown function (ip: (nil)) at (unknown file)
+dgemm_kernel_SKYLAKEX at /bbkinghome/edav/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/bin/../lib/julia/libopenblas64_.so (unknown line)
+dgemm_tn at /bbkinghome/edav/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/bin/../lib/julia/libopenblas64_.so (unknown line)
+dgemm_64_ at /bbkinghome/edav/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/bin/../lib/julia/libopenblas64_.so (unknown line)
+gemm! at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/usr/share/julia/stdlib/v1.12/LinearAlgebra/src/blas.jl:1642
+hessian_cm_frechet_cdf_power_structured! at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_frechet_power_hessian_structured.jl:210
+macro expansion at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_frechet_power_hessian_structured.jl:395 [inlined]
+macro expansion at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/instrumentation.jl:43 [inlined]
+#archC_frechet_cdf_power_hess_cb_builder##0 at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_frechet_power_hessian_structured.jl:393
+unknown function (ip: 0x7f1c7afad8ee) at (unknown file)
+#_eval_hess_wrapper##0 at /bbkinghome/edav/.julia/packages/KNITRO/LHqTK/src/C_wrapper.jl:314
+_try_catch_handler at /bbkinghome/edav/.julia/packages/KNITRO/LHqTK/src/C_wrapper.jl:280
+_eval_hess_wrapper at /bbkinghome/edav/.julia/packages/KNITRO/LHqTK/src/C_wrapper.jl:308
+unknown function (ip: 0x7f1c7af86f69) at (unknown file)
+KN_load_qcqp at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+KTR_lsq_set_jac_callback64 at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+.text at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+.text at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+KTR_solve at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+KTR_solve at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+KTR_solve at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+KN_solve at /opt/shared_sw/knitro/13.0.1/lib/libknitro.so (unknown line)
+KN_solve at /bbkinghome/edav/.julia/packages/KNITRO/LHqTK/src/libknitro.jl:1957 [inlined]
+KN_solve at /bbkinghome/edav/.julia/packages/KNITRO/LHqTK/src/C_wrapper.jl:186 [inlined]
+macro expansion at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_hessian_architectures.jl:453 [inlined]
+macro expansion at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/instrumentation.jl:43 [inlined]
+#inner_loop_KNITRO_archgeneric#448 at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_hessian_architectures.jl:452
+inner_loop_KNITRO_archgeneric at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_hessian_architectures.jl:422
+unknown function (ip: 0x7f1c7af88109) at (unknown file)
+#inner_loop_internal_archgeneric#449 at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_hessian_architectures.jl:472
+inner_loop_internal_archgeneric at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/cm_hessian_architectures.jl:465
+unknown function (ip: 0x7f1c7af702b5) at (unknown file)
+macro expansion at /bbkinghome/edav/gravity_robustness/worktrees/fixed-frechet-post-omit-row-port-prep-2026-07-24/full_aod_diag/d4_exact/diag_frechet_slow_solve_breakdown.jl:91 [inlined]
+top-level scope at ./timing.jl:461
+jl_toplevel_eval_flex at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/toplevel.c:1024
+jl_toplevel_eval_flex at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/toplevel.c:975
+ijl_toplevel_eval at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/toplevel.c:1047
+ijl_toplevel_eval_in at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/toplevel.c:1092
+eval at ./boot.jl:489
+include_string at ./loading.jl:2874
+_include at ./loading.jl:2934
+include at ./Base.jl:306
+exec_options at ./client.jl:317
+_start at ./client.jl:550
+jfptr__start_63319.1 at /bbkinghome/edav/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/lib/julia/sys.so (unknown line)
+jl_apply at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+true_main at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/jlapi.c:971
+jl_repl_entrypoint at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/src/jlapi.c:1139
+main at /cache/build/builder-amdci5-4/julialang/julia-release-1-dot-12/cli/loader_exe.c:58
+__libc_start_main at /lib64/libc.so.6 (unknown line)
+unknown function (ip: 0x4010b8) at /workspace/srcdir/glibc-2.17/csu/../sysdeps/x86_64/start.S
+unknown function (ip: (nil)) at (unknown file)
+Allocations: 147815886 (Pool: 147813426; Big: 2460); GC: 97

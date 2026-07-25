@@ -1,0 +1,11 @@
+[134.9s] ctx built (SHARED)  D=20 D_dest=19  VmHWM=2.62GB
+[152.5s] flexible-CM pcx built in 17.1s  ncore=382 ncm=950  n_inner=1332  VmHWM=8.09GB
+[170.8s] CDF-only fpcx built in 17.3s  ncore=382 ncm=1000  n_inner=1382  VmHWM=11.96GB
+DIMENSION COMPARISON: flexible-CM n=1332 (ncore=382 ncm=(D-1)*L=950)  vs  CDF-only n=1382 (ncore=382 ncm=D*L=1000)  ratio(n)=1.038
+flexible-CM                    FG callback: 3.0868s  1369404104 bytes (1369.404MB)
+CDF-only fixed-Frechet         FG callback: 3.3322s  1369404104 bytes (1369.404MB)
+flexible-CM                    Hessian callback (threaded/syrk, nt=20): 1.6885s  18179168 bytes (18.179MB)
+CDF-only fixed-Frechet         Hessian callback (threaded/syrk, nt=20): 1.3946s  18711240 bytes (18.711MB)
+flexible-CM (threaded/syrk)    wall=17.67s  knitro=14.08s  nStatus=0  n_fg=6  n_hess=5  iters=5  VmHWM=12.31GB
+CDF-only Frechet (threaded/syrk) wall=23.42s  knitro=19.77s  nStatus=0  n_fg=10  n_hess=9  iters=9  VmHWM=12.32GB
+SUMMARY total_wall=257.3s  VmHWM=12.32GB  finished=2026-07-24T22:47:00.708
