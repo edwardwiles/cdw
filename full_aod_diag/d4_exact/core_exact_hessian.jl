@@ -34,6 +34,104 @@ isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_mo
 
 using Base.Threads: nthreads
 
+# ============================================================================
+# Runtime backend-use counters (2026-07-25 continuation, task §2). The
+# startup manifest states which backend was REQUESTED; these counters prove
+# which backend actually RAN, per Hessian-callback execution -- mirrors this
+# codebase's own existing convention for such counters
+# (oracle_fast.jl's InnerCallCounters/_INNER_CALL_COUNTERS,
+# compressed_live.jl's COMPRESSED_FALLBACK_COUNT).
+# ============================================================================
+
+"Explicit, closed set of dense-fallback reasons -- `:other` is the only catch-all, and its use should be rare/investigated, not routine."
+const CORE_HESSIAN_FALLBACK_REASONS = (:compressed_state_unavailable, :tied_winner, :unsupported_layout,
+    :debug_reference_requested, :workspace_mismatch, :other)
+
+mutable struct CoreHessianCallCounters
+    winner_pair_hessian_calls::Int
+    winner_pair_serial_calls::Int
+    winner_pair_parallel_calls::Int
+    dense_core_fallback_calls::Int
+    dense_fallback_reason_counts::Dict{Symbol,Int}
+    compressed_core_rebuilds::Int
+end
+
+CoreHessianCallCounters() = CoreHessianCallCounters(0, 0, 0, 0, Dict(r => 0 for r in CORE_HESSIAN_FALLBACK_REASONS), 0)
+
+const CORE_HESSIAN_COUNTERS = Ref(CoreHessianCallCounters())
+
+"Reset the core-Hessian backend-use counters -- call at the start of a fresh run/benchmark (same discipline as `reset_compressed_fallback_count!`)."
+reset_core_hessian_counters!() = (CORE_HESSIAN_COUNTERS[] = CoreHessianCallCounters())
+
+"""
+    CM_CORE_HESSIAN_BACKEND_DEFAULT / ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT
+
+2026-07-25 continuation (task §6, matched outer A/B): CM/CM+meanZC and origin-ZC build their
+`CMBinHessCtx`/`OriginZCCoreHessCtx` INSIDE their own checkpointed driver
+(`run_cm_upper_checkpointed`/`run_originzc_upper_checkpointed`), with no `core_hessian_backend`
+kwarg threaded through the driver's own public signature. Rather than add and thread a new kwarg
+through every driver (a larger, riskier interface change than this task needs), these two central
+Refs are what `build_cm_bin_ctx`/`build_cm_meanzc_bin_ctx`/`build_originzc_core_hess_ctx` default
+to -- mirroring `UNRESTRICTED_CORE_HESSIAN_BACKEND` (`compressed_live.jl`) exactly, so an external
+benchmark/gate script can flip ONE global before calling the real public driver, same discipline
+for all four families.
+"""
+const CM_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
+const CM_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(10)
+const CM_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
+const ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
+const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(10)
+const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
+
+"""
+    record_core_hessian_call!(backend; fallback_reason=nothing)
+
+Record ONE Hessian-callback EXECUTION at the given backend -- called from
+inside `fill_core_hessian_upper!` (CM/CM+meanZC/origin-ZC) and directly from
+unrestricted's `_callbackEvalH_inner_compressed!` (which bypasses
+`fill_core_hessian_upper!` for its packed-direct fast path), so every
+production Hessian callback that touches the shared core goes through this
+one function, not four independent copies of the same counter logic.
+`fallback_reason` is required for any non-winner-pair backend value; an
+unrecognized or missing reason is recorded as `:other` (never silently
+dropped -- `:other`'s own count is a signal something needs a real reason
+added to `CORE_HESSIAN_FALLBACK_REASONS`).
+"""
+function record_core_hessian_call!(backend::Symbol; fallback_reason::Union{Nothing,Symbol} = nothing)
+    c = CORE_HESSIAN_COUNTERS[]
+    if backend === :exact_winner_pair_serial
+        c.winner_pair_hessian_calls += 1
+        c.winner_pair_serial_calls += 1
+    elseif backend === :exact_winner_pair_parallel
+        c.winner_pair_hessian_calls += 1
+        c.winner_pair_parallel_calls += 1
+    else
+        reason = fallback_reason === nothing ? :other : fallback_reason
+        reason in CORE_HESSIAN_FALLBACK_REASONS || (reason = :other)
+        c.dense_core_fallback_calls += 1
+        c.dense_fallback_reason_counts[reason] = get(c.dense_fallback_reason_counts, reason, 0) + 1
+    end
+    return nothing
+end
+
+"Record that a `CoreExactHessianWorkspace` was (re)built from a FRESH `CompressedFactual` object (a new outer point) -- not a call that reused an already-built workspace because the `cf` object identity was unchanged."
+record_compressed_core_rebuild!() = (CORE_HESSIAN_COUNTERS[].compressed_core_rebuilds += 1; nothing)
+
+"Human-readable print of the counters, flushed immediately -- same discipline as `print_production_backend_manifest`. Only prints fallback-reason lines with a nonzero count."
+function print_core_hessian_counters(c::CoreHessianCallCounters = CORE_HESSIAN_COUNTERS[])
+    println("[core-hessian-counters] winner_pair_hessian_calls=", c.winner_pair_hessian_calls)
+    println("[core-hessian-counters]   winner_pair_serial_calls=", c.winner_pair_serial_calls)
+    println("[core-hessian-counters]   winner_pair_parallel_calls=", c.winner_pair_parallel_calls)
+    println("[core-hessian-counters] dense_core_fallback_calls=", c.dense_core_fallback_calls)
+    for r in CORE_HESSIAN_FALLBACK_REASONS
+        n = get(c.dense_fallback_reason_counts, r, 0)
+        n > 0 && println("[core-hessian-counters]   fallback_reason[", r, "]=", n)
+    end
+    println("[core-hessian-counters] compressed_core_rebuilds=", c.compressed_core_rebuilds)
+    flush(stdout)
+    return nothing
+end
+
 # ----------------------------------------------------------------------------
 # Serial kernel (correctness oracle / :exact_winner_pair_serial backend).
 # Ported verbatim from diag/compressed-hessian-operator-audit-2026-07-25
@@ -637,10 +735,13 @@ function fill_core_hessian_upper!(Hdense::AbstractMatrix, curvature_weights, obj
 
     if backend === :exact_winner_pair_parallel
         hessian_core_winner_pair!(packed, curvature_weights, obj, workspace.parallel_ws; workers = workers, storage = storage)
+        record_core_hessian_call!(:exact_winner_pair_parallel)
     elseif backend === :exact_winner_pair_serial
         winner_pair_hessian!(packed, obj, serial_ctx(workspace))
+        record_core_hessian_call!(:exact_winner_pair_serial)
     else # :dense_reference
         _dense_reference_core_hessian!(packed, obj, n)
+        record_core_hessian_call!(:dense_reference; fallback_reason = :debug_reference_requested)
     end
 
     k = 1

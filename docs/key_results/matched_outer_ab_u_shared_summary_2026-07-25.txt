@@ -1,0 +1,25 @@
+RUN U (unrestricted, matched min g_p s.t. Delta*<=1 formulation) summary -- 2026-07-25T19:16:14.762
+outer_algorithm=2 outer_hessopt=6
+setup_wall_s=60.52891707420349
+warmup_wall_s=60.76440119743347 warmup_n_eval=6 warmup_n_grad=6
+measured_wall_s=320.8103811740875
+measured_alloc_bytes=52269767392
+measured_alloc_gb=52.269767392
+measured_gc_time_s=5.667781562
+measured_gc_count=179
+peak_rss_kb=1156
+n_eval=197
+n_grad=81
+n_checkpoint_reuse_hits=80
+knitro_status=-401 (KN_RC_TIME_LIMIT_FEAS)
+native_outer_iters=80
+screen_counts=(pairwise = 0, witness = 0, winner = 0, envelope = 0, winning_range = 0, safety_net = 0, passed = 226)
+best_gp=0.9520639685252824
+best_Delta=0.9995278105678371
+best_n_eval=193
+best_t_elapsed=292.671758890152
+cold_verify_wall_s=1.3683230876922607
+cold_verify_Delta_dual=0.9995278105678377
+cold_verify_ok=true
+avg_alloc_bytes_per_eval=2.6532876848730963e8
+avg_alloc_bytes_per_grad=6.453057702716049e8

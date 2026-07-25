@@ -66,6 +66,21 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
                                       # only comparison against the original serial implementation.
     aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
+    # 2026-07-25 continuation (task §2 runtime counters investigation): `build_cm_production_context`
+    # -- the function `run_cm_upper_checkpointed` (the REAL production driver) actually calls --
+    # wraps `wrap_moments_with_cm_archB` INLINE here rather than via `build_cm_augmented_obj_archB`
+    # (a separate, parallel construction path). The 2026-07-25 port session threaded `core_cf_ref`
+    # through `build_cm_augmented_obj_archB` but MISSED this inline call site entirely: without an
+    # explicit `core_cf_ref` here, `wrap_moments_with_cm_archB` silently builds its OWN throwaway
+    # default `Ref{Any}(nothing)`, DIFFERENT from the one `build_cm_bin_ctx` below would also
+    # default to absent an explicit value -- two disconnected Refs, so `cctx.core_cf_ref[]` stayed
+    # `nothing` forever and CM's Hessian callback silently fell back to dense BLAS on every call,
+    # UNDETECTED until this session's new runtime backend-use counters (task §2) caught it (0
+    # winner-pair calls AND 0 recorded dense-fallback calls on a real solve is impossible -- that
+    # contradiction is what surfaced this). Confirmed via a direct D=4 repro:
+    # `pcx.cctx.core_cf_ref[] === nothing` after a real feasible archC_base_state solve, before this
+    # fix. Fixed by building ONE `core_cf_ref` here and threading it to BOTH call sites.
+    core_cf_ref = Ref{Any}(nothing)
     if use_archB_moments
         # NOTE: common_marginals_interval.jl and cm_hessian_architectures.jl both define
         # `compute_bin_indices(U,z)` with overlapping-but-distinct signatures (z::Vector{Float64}
@@ -76,7 +91,7 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
         Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
         R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
         moments_archB! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
-                                                     use_compressed_core = use_compressed_core)
+                                                     use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref)
         obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj_cm.δ, find_smallest = obj_cm.find_smallest,
             γ = obj_cm.γ, (moments!) = moments_archB!, moments_jacobian! = error,
             d = obj_cm.d, outer_constr_index = obj_cm.outer_constr_index,
@@ -89,6 +104,7 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     end
     ctx_cm = merge(ctx, (obj = obj_cm,))
     bins = cm_bin_indices_for(ctx, aug)
+    aug = merge(aug, (core_cf_ref = core_cf_ref,))   # so build_cm_bin_ctx's hasproperty(aug,:core_cf_ref) picks up the SAME ref the moments closure writes to
     cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins)
     return (ctx_cm = ctx_cm, aug = aug, bins = bins, cctx = cctx)
 end

@@ -223,11 +223,11 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             catch e
                 e isa TiedWinnerError || rethrow()
                 core_moments!(K, Gtmp, θ, U, obj)
-                core_cf_ref[] = nothing   # dense fallback for this point -- Hessian must also fall back
+                core_cf_ref[] = :tied_winner   # dense fallback for this point -- Hessian must also fall back
             end
         else
             core_moments!(K, Gtmp, θ, U, obj)
-            core_cf_ref[] = nothing   # use_compressed_core=false: no winner-form cf built this call, Hessian must fall back to dense
+            core_cf_ref[] = :compressed_state_unavailable   # use_compressed_core=false: no winner-form cf built this call, Hessian must fall back to dense
         end
         @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         @views G[:, end] .= Gtmp[:, end]
@@ -391,8 +391,8 @@ taken from `aug` itself so this is guaranteed to use IDENTICAL thresholds to
 whatever CM matrix Architecture A is using.
 """
 function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
-        core_hessian_backend::Symbol = :exact_winner_pair_parallel,
-        core_hessian_workers::Int = 10, core_hessian_storage::Symbol = :full_stride)
+        core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
+        core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[])
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE = aug.ncore; ncm = aug.ncm
@@ -490,11 +490,12 @@ or `cctx.core_hessian_backend === :dense_reference`.
 function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cctx::CMBinHessCtx, E::AbstractMatrix{Float64}, M)
     ncore = cctx.ncore_core
     NCORE = cctx.NCORE
-    cf = cctx.core_cf_ref[]
-    if cf !== nothing && cctx.core_hessian_backend !== :dense_reference
+    cf = cctx.core_cf_ref[]   # a CompressedFactual (success) OR a Symbol fallback reason (:tied_winner / :compressed_state_unavailable)
+    if cf isa CompressedFactual && cctx.core_hessian_backend !== :dense_reference
         if cctx.core_ws === nothing || cctx.core_ws_for !== cf
             cctx.core_ws = build_core_exact_hessian_workspace(cf)
             cctx.core_ws_for = cf
+            record_compressed_core_rebuild!()
         end
         HEE_core = @view HEE[1:ncore, 1:ncore]
         fill_core_hessian_upper!(HEE_core, w, obj, cctx.core_ws;
@@ -518,6 +519,9 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
         Ews = cctx.Ews
         @views Ews[:, 1:NCORE] .= E[:, 1:NCORE] .* sqrt.(w)
         BLAS.gemm!('T', 'N', 1 / M, @view(Ews[:, 1:NCORE]), @view(Ews[:, 1:NCORE]), 0.0, HEE)
+        reason = cctx.core_hessian_backend === :dense_reference ? :debug_reference_requested :
+                  (cf isa Symbol ? cf : :other)
+        record_core_hessian_call!(:dense_inline_fallback; fallback_reason = reason)
     end
     return HEE
 end
@@ -764,8 +768,8 @@ end
 `CompressedFactual` into every outer point, mirroring flexible CM's
 `core_cf_ref`).
 """
-function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = :exact_winner_pair_parallel,
-        core_hessian_workers::Int = 10, core_hessian_storage::Symbol = :full_stride)
+function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT[],
+        core_hessian_workers::Int = ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT[])
     n_eta_total = aug.obj_cm.outer_constr_index - aug.ncore_econ
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
     return OriginZCCoreHessCtx(aug.ncore_econ, n_eta_total, core_cf_ref, nothing, nothing,
@@ -791,11 +795,12 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
             @unpack H, H_copy, M, arg0, arg2, ddPsi!, ∂∂f_∂∂x = obj
             ddPsi!(arg2, arg0)
             NCORE = octx.NCORE; n_eta_total = octx.n_eta; n = NCORE + n_eta_total
-            cf = octx.core_cf_ref[]
-            if cf !== nothing && octx.core_hessian_backend !== :dense_reference
+            cf = octx.core_cf_ref[]   # a CompressedFactual (success) OR a Symbol fallback reason
+            if cf isa CompressedFactual && octx.core_hessian_backend !== :dense_reference
                 if octx.core_ws === nothing || octx.core_ws_for !== cf
                     octx.core_ws = build_core_exact_hessian_workspace(cf)
                     octx.core_ws_for = cf
+                    record_compressed_core_rebuild!()
                 end
                 HEE = @view ∂∂f_∂∂x[1:NCORE, 1:NCORE]
                 fill_core_hessian_upper!(HEE, arg2, obj, octx.core_ws;
@@ -815,6 +820,9 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                 @views H_copy[:, 2:1+n] .= H[:, 2:1+n]
                 @views H_copy[:, 2:1+n] .*= .√arg2
                 BLAS.gemm!('T', 'N', 1 / M, @view(H_copy[:, 2:1+n]), @view(H_copy[:, 2:1+n]), 0.0, ∂∂f_∂∂x)
+                reason = octx.core_hessian_backend === :dense_reference ? :debug_reference_requested :
+                          (cf isa Symbol ? cf : :other)
+                record_core_hessian_call!(:dense_inline_fallback; fallback_reason = reason)
             end
             k = 1
             @inbounds for i in 1:n

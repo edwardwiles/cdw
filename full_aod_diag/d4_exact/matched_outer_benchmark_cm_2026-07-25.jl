@@ -42,7 +42,15 @@ mkpath(OUTDIR)
 mkpath(joinpath(OUTDIR, "ckpt_warmup"))
 mkpath(joinpath(OUTDIR, "ckpt_measured"))
 
+# 2026-07-25 continuation (task §6): additive ENV-based core-Hessian backend override, same
+# discipline as matched_outer_benchmark_u_2026-07-25.jl -- unset leaves behavior unchanged.
+if haskey(ENV, "BENCH_CORE_HESSIAN_BACKEND")
+    CM_CORE_HESSIAN_BACKEND_DEFAULT[] = Symbol(ENV["BENCH_CORE_HESSIAN_BACKEND"])
+end
+haskey(ENV, "BENCH_CORE_HESSIAN_WORKERS") && (CM_CORE_HESSIAN_WORKERS_DEFAULT[] = parse(Int, ENV["BENCH_CORE_HESSIAN_WORKERS"]))
+
 lp(">>> matched_outer_benchmark_cm_2026-07-25 starting ", now())
+lp(">>> core_hessian_backend=", CM_CORE_HESSIAN_BACKEND_DEFAULT[], " core_hessian_workers=", CM_CORE_HESSIAN_WORKERS_DEFAULT[])
 lp(">>> Julia threads=", Threads.nthreads(), " OPENBLAS_NUM_THREADS=", get(ENV, "OPENBLAS_NUM_THREADS", "unset"),
    " OMP_NUM_THREADS=", get(ENV, "OMP_NUM_THREADS", "unset"))
 lp(">>> host load (uptime): "); run(`uptime`)

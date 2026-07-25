@@ -128,11 +128,11 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
             catch e
                 e isa TiedWinnerError || rethrow()
                 core_moments!(K, G_tmp, θ_econ, U, obj)
-                core_cf_ref[] = nothing
+                core_cf_ref[] = :tied_winner
             end
         else
             core_moments!(K, G_tmp, θ_econ, U, obj)
-            core_cf_ref[] = nothing
+            core_cf_ref[] = :compressed_state_unavailable
         end
         @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
         for k in 1:K_mean

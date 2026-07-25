@@ -54,7 +54,15 @@ _, txt = capture_stdout() do
         ckpt_dir = joinpath(OUTDIR, "u"), checkpoint_interval_s = 9999.0)
 end
 check("prints [backend-manifest] family=unrestricted", occursin("[backend-manifest] family=unrestricted", txt))
-check("unrestricted.hessian_backend=dense_exact", occursin("hessian_backend=dense_exact", txt))
+# 2026-07-25 continuation: was asserting the PRE-PORT literal (`dense_exact`) -- the manifest print
+# call sites in c10_d20_production_driver.jl were hardcoding `hessian_backend = :dense_exact`
+# regardless of what actually ran, a real bug this session found and fixed (now reads the live
+# UNRESTRICTED_CORE_HESSIAN_BACKEND[] default). Updated to assert the shared winner-pair backend
+# this family now actually resolves to by default.
+check("unrestricted.hessian_backend=exact_winner_pair_parallel", occursin("hessian_backend=exact_winner_pair_parallel", txt))
+check("unrestricted.core_hessian_backend=exact_winner_pair_parallel", occursin("core_hessian_backend=exact_winner_pair_parallel", txt))
+check("unrestricted.core_hessian_workers=10", occursin("core_hessian_workers=10", txt))
+check("unrestricted.core_hessian_storage=full_stride", occursin("core_hessian_storage=full_stride", txt))
 check("unrestricted.checkpoint_schema=4", occursin("checkpoint_schema=4", txt))
 check("unrestricted.core_moment_representation=compressed", occursin("core_moment_representation=compressed", txt))
 check("unrestricted screen_stack has 5 screens", occursin("screen_stack=pairwise_certificate,screen_hard_winners,envelope", txt))

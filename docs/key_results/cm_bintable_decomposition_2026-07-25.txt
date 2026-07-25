@@ -1,0 +1,15 @@
+δ_grid = [1]
+δ_grid_filtered = [1]
+nStatus=0
+==========================================================================================
+Stab-only (core-CM cross ingredient, O(W*D*NCORE)): 1.7156s, 0.00 MB
+Ttab-only (CM-CM ingredient, O(W*D^2)):              0.1067s, 0.00 MB
+Combined build_bin_tables! (production, both):      2.1251s
+prefix_sum_tables!:                                  0.0135s
+Full Hessian callback (dense-reference core):        2.5169s
+
+Share of Stab within combined build_bin_tables!: 80.7%
+Share of Ttab within combined build_bin_tables!: 5.0%
+Share of Stab within FULL Hessian callback: 68.2%
+Share of combined bin-table build within FULL Hessian callback: 84.4%
+D=20, NCORE=382, L=50, W=80000 -- D*NCORE=7640 vs D^2=400 (per-draw op-count ratio Stab:Ttab = 19.1:1)

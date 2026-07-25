@@ -1,0 +1,23 @@
+RUN CM (flexible common marginals, matched min g_p s.t. Delta*<=1 formulation) summary -- 2026-07-25T19:34:37.527
+outer_algorithm=2 outer_hessopt=6
+cm_hessian_backend=structured
+setup_wall_s=62.70041108131409
+warmup_wall_s=57.02199101448059 warmup_n_eval=1 warmup_n_grad=1
+measured_wall_s=451.0054590702057
+measured_alloc_bytes=23661214632
+measured_alloc_gb=23.661214632
+measured_gc_time_s=1.547045178
+measured_gc_count=40
+peak_rss_kb=1220
+n_eval=8
+n_grad=6
+knitro_status=-401
+kappa=0.05004256829842468
+best_Delta=0.8273639659845682
+best_n_eval=3
+best_t=65.91241788864136
+cold_verify_wall_s=9.349095821380615
+cold_verify_Delta_dual=0.8273639659845682
+cold_verify_ok=true
+avg_alloc_bytes_per_eval=2.957651829e9
+avg_alloc_bytes_per_grad=3.943535772e9

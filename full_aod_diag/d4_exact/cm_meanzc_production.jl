@@ -34,8 +34,8 @@ layout) -- `CMBinHessCtx`, `hessian_cm_structured!`, and
 independent of K_mean/K_pair.
 """
 function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
-        core_hessian_backend::Symbol = :exact_winner_pair_parallel,
-        core_hessian_workers::Int = 10, core_hessian_storage::Symbol = :full_stride)
+        core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
+        core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[])
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE_ext = aug.ncore_econ + aug.n_mean + aug.n_pair

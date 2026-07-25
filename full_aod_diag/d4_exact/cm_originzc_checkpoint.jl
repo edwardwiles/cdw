@@ -438,7 +438,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     println("[threshold-config] mode=origin_zc requested_delta=", delta,
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
-    print_production_backend_manifest(resolve_origin_zc_manifest(; blas_threads = blas_threads))   # allocation/Hessian port task §2
+    print_production_backend_manifest(resolve_origin_zc_manifest(; octx = pcx.octx, blas_threads = blas_threads))   # 2026-07-25 continuation: pass the REAL octx this driver just built via build_originzc_production_context -- was previously called with no octx at all, so it always fell back to reporting the pre-port dense_architecture_a path regardless of what actually ran
     D2_econ = length(w0) - n_eta(layout)
 
     bounds = cfg.nu_bounds === nothing ? originzc_default_nu_bounds(ctx, layout) : cfg.nu_bounds

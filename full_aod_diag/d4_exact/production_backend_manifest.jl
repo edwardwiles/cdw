@@ -79,13 +79,16 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
         cm_extension::Symbol = :cm_only, meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0)
     is_meanzc = cm_extension !== :cm_only
     family = is_meanzc ? :cm_meanzc : :flexible_cm
-    # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §5): reads cctx's OWN live
-    # fields (core_cf_ref[] !== nothing decides whether the shared backend is actually active for
-    # this point, not merely configured) -- resolved backend can legitimately fall back to dense
-    # for a point that hit a TiedWinnerError, so this reports what cctx will ACTUALLY do next call,
-    # not just its static default.
-    core_active = cctx.core_cf_ref[] !== nothing && cctx.core_hessian_backend !== :dense_reference
-    resolved_core_backend = core_active ? cctx.core_hessian_backend : :dense_reference_fallback_this_point
+    # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §5), CORRECTED 2026-07-25
+    # continuation: this manifest is printed at DRIVER STARTUP, before any inner solve has run --
+    # `cctx.core_cf_ref[]` is thus *always* still `nothing`/unset at print time regardless of
+    # whether the shared backend will be used (a real bug this session found: `core_active` was
+    # always false here, so every startup manifest print silently claimed
+    # `dense_reference_fallback_this_point` even when `:exact_winner_pair_parallel` was correctly
+    # configured and WOULD be used from the very first Hessian callback onward). Report the
+    # CONFIGURED backend directly -- whether it's actually reached on every call is what the
+    # runtime counters (task §2, `CORE_HESSIAN_COUNTERS`/`resolve_core_hessian_counters_manifest`)
+    # are for, checked AFTER a solve, not at this startup print.
     threaded_label = cctx.use_threaded_bins ? :threaded_architecture_c_with_winner_pair_core : :architecture_c_with_winner_pair_core
     nt = (
         family = family,
@@ -94,9 +97,10 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
         core_moment_representation = :compressed_winner_form,   # allocation/Hessian port task §5
         cm_restriction_basis = :cumulative,
         cm_internal_storage = :bin_index,
-        hessian_backend = core_active ? threaded_label : (cctx.use_threaded_bins ? :threaded_architecture_c : :serial_architecture_c),
+        hessian_backend = cctx.core_hessian_backend === :dense_reference ?
+            (cctx.use_threaded_bins ? :threaded_architecture_c : :serial_architecture_c) : threaded_label,
         threaded_bins = cctx.use_threaded_bins,
-        core_hessian_backend = resolved_core_backend,
+        core_hessian_backend = cctx.core_hessian_backend,
         core_hessian_workers = cctx.core_hessian_workers,
         core_hessian_storage = cctx.core_hessian_storage,
         cross_hessian_backend = :cm_bin_prefix,          # H_EC -- unchanged (Phase B audit: already near-optimal, see docs)
@@ -113,41 +117,61 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
 end
 
 """
-    resolve_origin_zc_manifest(; blas_threads)
-
-Resolves the origin-specific-ZC family's backend manifest. Always Architecture A (generic dense
-Hessian) -- see ORIGIN_ZC_HESSIAN_DIAGNOSIS_2026-07-25.md for why this is retained rather than
-forcing Architecture C onto a restriction basis it was never designed for.
-"""
-"""
     resolve_origin_zc_manifest(; octx, blas_threads)
 
 port/shared-winner-pair-core-hessian-production-2026-07-25: `octx` is the
-real `OriginZCCoreHessCtx` the driver built (`ctx_cm.octx`) -- reads its live
-`core_cf_ref[]`/backend fields directly, same discipline as
-`resolve_flexible_cm_manifest`. `octx=nothing` (a caller that built `ctx_cm`
-before this port, or via some other path) reports the pre-port monolithic
-dense Architecture A unconditionally.
+real `OriginZCCoreHessCtx` the driver built (`ctx_cm.octx`). `octx=nothing`
+(a caller that built `ctx_cm` before this port, or via some other path)
+reports the pre-port monolithic dense Architecture A unconditionally.
+
+CORRECTED 2026-07-25 continuation: reports `octx`'s CONFIGURED backend
+directly (not gated on whether a `CompressedFactual` has been built yet) --
+this manifest prints at driver STARTUP, before any inner solve, so
+`octx.core_cf_ref[]` is always still unset at print time regardless of what
+backend will actually run. See `resolve_flexible_cm_manifest`'s identical fix.
 """
 function resolve_origin_zc_manifest(; octx = nothing, blas_threads::Union{Nothing,Int})
-    core_active = octx !== nothing && octx.core_cf_ref[] !== nothing && octx.core_hessian_backend !== :dense_reference
+    core_configured = octx !== nothing && octx.core_hessian_backend !== :dense_reference
     return (
         family = :origin_zc,
-        core_representation = core_active ? :compressed_winner_form : :compressed,
+        core_representation = core_configured ? :compressed_winner_form : :compressed,
         restriction_representation = :pairwise_zero_covariance,
-        hessian_backend = core_active ? :partitioned_winner_pair_core_dense_restriction : :dense_architecture_a,
-        core_hessian_backend = core_active ? octx.core_hessian_backend : :dense_reference_fallback_this_point,
+        hessian_backend = core_configured ? :partitioned_winner_pair_core_dense_restriction : :dense_architecture_a,
+        core_hessian_backend = octx === nothing ? :dense_reference : octx.core_hessian_backend,
         core_hessian_workers = octx === nothing ? 0 : octx.core_hessian_workers,
         core_hessian_storage = octx === nothing ? :none : octx.core_hessian_storage,
         cross_hessian_backend = :dense_exact,      # H_ER -- retained dense (task §4.4/§12), computed once, H_RE never independently
         restriction_hessian_backend = :dense_exact, # H_RR -- retained dense
-        full_hessian_assembly = core_active ? :dense_scratch_partitioned_then_pack : :dense_scratch_monolithic_then_pack,
+        full_hessian_assembly = core_configured ? :dense_scratch_partitioned_then_pack : :dense_scratch_monolithic_then_pack,
         knitro_hessian_format = :dense_rowmajor_packed_upper_triangle,
         julia_threads = Threads.nthreads(),
         blas_threads = something(blas_threads, BLAS.get_num_threads()),
         checkpoint_schema = CM_CHECKPOINT_SCHEMA_V7,
         screen_stack = production_screen_stack(:origin_zc),
     )
+end
+
+"""
+    resolve_core_hessian_counters_manifest() -> NamedTuple
+
+2026-07-25 continuation (task §2): the RUNTIME counterpart to the (static, resolved-at-setup)
+manifest above -- proves which backend actually EXECUTED, not just which one was requested.
+Reads `CORE_HESSIAN_COUNTERS[]` (`core_exact_hessian.jl`) live; call this AFTER a solve/benchmark
+run, not at setup time (unlike `resolve_*_manifest`, which is meaningful before any callback has
+fired). `dense_fallback_reason_counts` is flattened into individual `fallback_<reason>` fields
+(zero-valued reasons included) so the JSON writer's generic NamedTuple serialization handles it
+without a special case.
+"""
+function resolve_core_hessian_counters_manifest()
+    c = CORE_HESSIAN_COUNTERS[]
+    reason_fields = NamedTuple(Symbol("fallback_", r) => get(c.dense_fallback_reason_counts, r, 0) for r in CORE_HESSIAN_FALLBACK_REASONS)
+    return merge((
+        winner_pair_hessian_calls = c.winner_pair_hessian_calls,
+        winner_pair_serial_calls = c.winner_pair_serial_calls,
+        winner_pair_parallel_calls = c.winner_pair_parallel_calls,
+        dense_core_fallback_calls = c.dense_core_fallback_calls,
+        compressed_core_rebuilds = c.compressed_core_rebuilds,
+    ), reason_fields)
 end
 
 "Human-readable startup print of a resolved manifest NamedTuple -- flushed immediately, same discipline as the existing [winner-engine]/[screen-stack]/[threshold-config] banners this supplements."

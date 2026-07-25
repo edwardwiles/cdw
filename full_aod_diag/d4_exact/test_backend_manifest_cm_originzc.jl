@@ -72,7 +72,13 @@ _, txt = capture_stdout() do
         label = "assert_cm", checkpoint_interval_s = 9999.0, destination_sample = :exclude_row)
 end
 check("prints [backend-manifest] family=flexible_cm", occursin("[backend-manifest] family=flexible_cm", txt))
-check("cm.hessian_backend=threaded_architecture_c (production default)", occursin("hessian_backend=threaded_architecture_c", txt))
+# 2026-07-25 continuation: hessian_backend now carries the "_with_winner_pair_core" suffix (this
+# session found + fixed the bug that silently kept core_hessian_backend reporting
+# dense_reference_fallback_this_point at startup -- see production_backend_manifest.jl's
+# resolve_flexible_cm_manifest docstring). core_hessian_backend is the field that actually matters.
+check("cm.hessian_backend=threaded_architecture_c_with_winner_pair_core (production default)", occursin("hessian_backend=threaded_architecture_c_with_winner_pair_core", txt))
+check("cm.core_hessian_backend=exact_winner_pair_parallel", occursin("core_hessian_backend=exact_winner_pair_parallel", txt))
+check("cm.core_hessian_workers=10", occursin("core_hessian_workers=10", txt))
 check("cm.threaded_bins=true", occursin("threaded_bins=true", txt))
 check("cm.checkpoint_schema=6", occursin("checkpoint_schema=6", txt))
 check("cm.cm_restriction_basis=cumulative", occursin("cm_restriction_basis=cumulative", txt))
@@ -88,7 +94,8 @@ _, txt = capture_stdout() do
         cm_extension = :cm_plus_equal_means, meanzc_K_mean = 1)
 end
 check("prints [backend-manifest] family=cm_meanzc", occursin("[backend-manifest] family=cm_meanzc", txt))
-check("cm_meanzc.hessian_backend=threaded_architecture_c", occursin("hessian_backend=threaded_architecture_c", txt))
+check("cm_meanzc.hessian_backend=threaded_architecture_c_with_winner_pair_core", occursin("hessian_backend=threaded_architecture_c_with_winner_pair_core", txt))
+check("cm_meanzc.core_hessian_backend=exact_winner_pair_parallel", occursin("core_hessian_backend=exact_winner_pair_parallel", txt))
 check("cm_meanzc.K_mean=1", occursin("K_mean=1", txt))
 
 println("="^78); println("3. run_originzc_upper_checkpointed (origin-specific ZC, K_mean=1)"); println("="^78)
@@ -108,7 +115,9 @@ _, txt = capture_stdout() do
         K_mean = 1, destination_sample = :exclude_row)
 end
 check("prints [backend-manifest] family=origin_zc", occursin("[backend-manifest] family=origin_zc", txt))
-check("origin_zc.hessian_backend=dense_architecture_a (retained, not threaded_architecture_c)", occursin("hessian_backend=dense_architecture_a", txt))
+check("origin_zc.hessian_backend=partitioned_winner_pair_core_dense_restriction", occursin("hessian_backend=partitioned_winner_pair_core_dense_restriction", txt))
+check("origin_zc.core_hessian_backend=exact_winner_pair_parallel", occursin("core_hessian_backend=exact_winner_pair_parallel", txt))
+check("origin_zc.cross_hessian_backend=dense_exact (H_ER retained dense)", occursin("cross_hessian_backend=dense_exact", txt))
 check("origin_zc.checkpoint_schema=7", occursin("checkpoint_schema=7", txt))
 
 println("="^78)

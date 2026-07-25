@@ -42,7 +42,17 @@ mkpath(OUTDIR)
 mkpath(joinpath(OUTDIR, "ckpt_warmup"))
 mkpath(joinpath(OUTDIR, "ckpt_measured"))
 
+# 2026-07-25 continuation (task §6): additive ENV-based core-Hessian backend override -- unset
+# (default) leaves this file's behavior completely unchanged (UNRESTRICTED_CORE_HESSIAN_BACKEND[]
+# stays at its own production default, :exact_winner_pair_parallel). Set BENCH_CORE_HESSIAN_BACKEND
+# to run the "before" (dense-reference) arm of the matched A/B through this SAME unmodified harness.
+if haskey(ENV, "BENCH_CORE_HESSIAN_BACKEND")
+    UNRESTRICTED_CORE_HESSIAN_BACKEND[] = Symbol(ENV["BENCH_CORE_HESSIAN_BACKEND"])
+end
+haskey(ENV, "BENCH_CORE_HESSIAN_WORKERS") && (UNRESTRICTED_CORE_HESSIAN_WORKERS[] = parse(Int, ENV["BENCH_CORE_HESSIAN_WORKERS"]))
+
 lp(">>> matched_outer_benchmark_u_2026-07-25 starting ", now())
+lp(">>> core_hessian_backend=", UNRESTRICTED_CORE_HESSIAN_BACKEND[], " core_hessian_workers=", UNRESTRICTED_CORE_HESSIAN_WORKERS[])
 lp(">>> Julia threads=", Threads.nthreads(), " OPENBLAS_NUM_THREADS=", get(ENV, "OPENBLAS_NUM_THREADS", "unset"),
    " OMP_NUM_THREADS=", get(ENV, "OMP_NUM_THREADS", "unset"))
 lp(">>> host load (uptime): "); run(`uptime`)

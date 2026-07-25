@@ -155,23 +155,18 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     # ---- H_EE: shared exact winner-pair backend (port/shared-winner-pair-core-hessian-
     # production-2026-07-25), same `_fill_cm_HEE!` helper the serial Architecture C callback uses
     # (cm_hessian_architectures.jl) -- task §4.2's "Do not implement a second winner-pair variant
-    # for this family". The syrk-vs-gemm choice below now only applies to the DENSE :dense_reference
-    # fallback path (`use_syrk` is otherwise unused when the winner-pair backend is active).
+    # for this family". 2026-07-25 continuation fix: this used to have its OWN duplicate
+    # winner-pair-vs-dense branch here (checking `cctx.core_cf_ref[] !== nothing` -- stale even on
+    # its own terms post-Symbol-fallback-reasons -- with its own inline syrk/gemm dense fallback
+    # that never called `record_core_hessian_call!`), so this path's dense-vs-winner-pair choice
+    # was invisible to the runtime backend-use counters (task §2) and diverged from
+    # `_fill_cm_HEE!`'s own logic. Now calls `_fill_cm_HEE!` unconditionally -- ONE decision point,
+    # ONE counter-recording site, for both the serial and threaded Architecture-C callers.
+    # `use_syrk` no longer has an effect (the shared dense fallback inside `_fill_cm_HEE!` always
+    # uses `gemm!`) -- kept as a no-op parameter rather than a breaking signature change for
+    # existing callers.
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    if cctx.core_cf_ref[] !== nothing && cctx.core_hessian_backend !== :dense_reference
-        _fill_cm_HEE!(HEE, w, obj, cctx, E, M)
-    else
-        Ews = cctx.Ews
-        @views Ews .= E .* sqrt.(w)
-        if use_syrk
-            BLAS.syrk!('U', 'T', 1 / M, Ews, 0.0, HEE)
-            @inbounds for i in 1:NCORE, j in 1:(i-1)
-                HEE[i, j] = HEE[j, i]
-            end
-        else
-            BLAS.gemm!('T', 'N', 1 / M, Ews, Ews, 0.0, HEE)
-        end
-    end
+    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)
 
     # ---- H_EC raw, then optional R congruence (right-multiply by R per threshold block) ----
     # (verbatim from cm_hessian_architectures.jl::hessian_cm_structured! -- see that file's own

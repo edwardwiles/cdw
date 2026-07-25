@@ -217,15 +217,19 @@ function _callbackEvalH_inner_compressed!(kc, cb, evalRequest, evalResult, userP
                 st.dense_materialized = true
             end
             CS.hessian!(evalResult.hess, obj)
+            record_core_hessian_call!(:dense_reference; fallback_reason = :debug_reference_requested)
         else
             if st.core_ws === nothing
                 st.core_ws = build_core_exact_hessian_workspace(st.cf)
+                record_compressed_core_rebuild!()
             end
             if backend === :exact_winner_pair_parallel
                 hessian_core_winner_pair!(evalResult.hess, obj.arg2, obj, st.core_ws.parallel_ws;
                     workers = UNRESTRICTED_CORE_HESSIAN_WORKERS[], storage = UNRESTRICTED_CORE_HESSIAN_STORAGE[])
+                record_core_hessian_call!(:exact_winner_pair_parallel)
             elseif backend === :exact_winner_pair_serial
                 winner_pair_hessian!(evalResult.hess, obj, serial_ctx(st.core_ws))
+                record_core_hessian_call!(:exact_winner_pair_serial)
             else
                 error("_callbackEvalH_inner_compressed!: unknown UNRESTRICTED_CORE_HESSIAN_BACKEND[] = :$backend")
             end

@@ -3,9 +3,17 @@
 Phase B, task §9-11. Independent of the shared H_EE release (Phase A) — this document is an
 audit-and-decide pass on flexible CM's `H_EC` cross block, not a dependency of Phase A.
 
+**CORRECTION (2026-07-25 continuation session)**: the original version of this document (prior
+session) hedged that the `Stab` share of `build_bin_tables!` was "not isolated or measured finely
+enough... unquantified." This continuation session actually instrumented it
+(`bench_cm_bintable_decomposition.jl`, §2 below) — the result changes the verdict from
+"not_justified" to **"justified_future_task."** `CM_CROSS_BLOCK_FOLLOWUP` below reflects the
+corrected verdict; §9-11 of `SHARED_WINNER_PAIR_FINAL_PRODUCTION_GATE_2026-07-25.md` cites this
+correction.
+
 ## 1. What H_EC actually does today (verified against the current port branch tip)
 
-`hessian_cm_structured!` (`cm_hessian_architectures.jl:459-482`) computes `H_EC` entirely from
+`hessian_cm_structured!` (`cm_hessian_architectures.jl`) computes `H_EC` entirely from
 already-aggregated prefix-sum tables — it never reads a dense `W×m_E` core moment matrix at the
 H_EC step itself:
 
@@ -24,75 +32,78 @@ end
 
 This is `O(L·nO·NCORE)` — a read off `CScum` (already prefix-summed), not a `W`-scale loop. The
 **only** `W`-scale operation anywhere in the callback is `build_bin_tables!`/
-`build_bin_tables_threaded!` (`cm_hessian_architectures.jl:375-397`, `cm_hessian_threaded.jl:20-...`),
-which builds `Ttab` (bin×bin counts, needed for `H_CC`) **and** `Stab` (bin×core-column sums,
-needed for `H_EC` via `CScum`) in the same per-draw pass. That pass does read the dense `E` view
-(`@view H[:, 2:1+NCORE]`) once per draw — this is the step that touches core data at `W` scale,
-not the `H_EC` assembly step itself.
+`build_bin_tables_threaded!`, which builds `Ttab` (bin×bin counts, needed for `H_CC`) **and**
+`Stab` (bin×core-column sums, needed for `H_EC` via `CScum`) in the same per-draw pass. That pass
+reads the dense `E` view (`@view H[:, 2:1+NCORE]`) once per draw — this is the step that touches
+core data at `W` scale, not the `H_EC` assembly step itself.
 
-## 2. Measured cost breakdown
+## 2. Measured cost breakdown — CORRECTED, decomposed this session
 
-Production profile at D=20/L=50/W=80,000 (`docs/fullA_archC_hessian_profile_d20_L50_W80000.csv`,
-cited in `docs/fullA_common_marginals_production_integration.md:214-223`, dated 2026-07-21 —
-confirmed the referenced function names/line structure are still current on this branch tip):
+Real D=20/L=50/W=80,000 measurement (`bench_cm_bintable_decomposition.jl`,
+`docs/key_results/cm_bintable_decomposition_2026-07-25.txt`), replaying `Stab`'s and `Ttab`'s
+per-draw loop blocks standalone (they are structurally separate blocks within
+`build_bin_tables!`'s single `for s in 1:W` loop, not fused — separable without touching
+production code):
 
-| Stage | Share of Hessian callback |
-|---|---|
-| `build_bin_tables!` (bin accumulation, reads dense `E`) | 80.2% |
-| H_EE (now: shared winner-pair backend; was: small dense gemm) | 19.1% |
-| H_EC assembly (`CScum` reads only) | **0.2%** (≈5ms / 3.14s) |
-| H_CC assembly | 0.2% |
-| prefix sums | 0.6% |
+| Stage | Wall time | Share of `build_bin_tables!` | Share of full Hessian callback |
+|---|---|---|---|
+| `Stab` (core-CM cross ingredient, `O(W·D·NCORE)`) | 1.716s | **80.7%** | **68.2%** |
+| `Ttab` (CM-CM ingredient, `O(W·D²)`) | 0.107s | 5.0% | 4.2% |
+| Combined `build_bin_tables!` (production) | 2.125s | — | 84.4% |
+| `prefix_sum_tables!` | 0.014s | — | 0.5% |
+| Full Hessian callback (dense-reference core) | 2.517s | — | 100% |
 
-No 2026-07-25 doc/CSV isolates H_EC further — none needed to; the 2026-07-21 breakdown already
-shows H_EC assembly is negligible next to bin accumulation.
+`D·NCORE=7,640` vs `D²=400` at D=20/NCORE=382 — an a-priori 19.1:1 per-draw operation-count ratio
+that matches the measured ~15:1 wall-time ratio (1.716s vs 0.107s) closely. **`Stab`, not `Ttab`,
+dominates `build_bin_tables!`** — the prior session's doc had this backwards (it speculated the
+opportunity was bounded by "at most" an unmeasured `Stab` fraction of an 80.2%-of-callback line
+"dominated by `Ttab`'s D²-scale counting" — measurement shows the reverse: `Ttab` is only 5% of
+that line, `Stab` is 80.7% of it and 68.2% of the ENTIRE Hessian callback).
 
 ## 3. Does `E = Q - νπ'` already appear in the cross-block code?
 
-No. `E` is read as a plain dense `E[s,j]` element inside `build_bin_tables!`'s per-draw loop
-(`cm_hessian_architectures.jl:380-395`) — no rank-one/winner-scatter shortcut is applied at that
-step. A related decomposition (`materialize_dense_factual_structured!`,
-`structured_moment_build.jl`) already exists and is used to **build** the dense `E` matrix cheaply
-for the moments/gradient step (`wrap_moments_with_cm_archB`, now shared with H_EE via this port's
-own `core_cf_ref` plumbing) — but that is a different call site (the moments closure), not the
-Hessian's own `build_bin_tables!` pass.
+No. `E` is read as a plain dense `E[s,j]` element inside `build_bin_tables!`'s per-draw loop — no
+rank-one/winner-scatter shortcut is applied at that step. A related decomposition
+(`materialize_dense_factual_structured!`, `structured_moment_build.jl`) already exists and is used
+to **build** the dense `E` matrix cheaply for the moments/gradient step (`wrap_moments_with_cm_archB`,
+now shared with H_EE via this port's own `core_cf_ref` plumbing) — but that is a different call
+site (the moments closure), not the Hessian's own `build_bin_tables!` pass.
 
-## 4. Derivation attempted, and why it is not worth merging
+## 4. The candidate, and why it was NOT implemented this session (though now justified)
 
-The task's suggested candidate (`Q'SC - π(ν'SC)`, "winner-bin cross operator") would target the
-**bin-accumulation** pass's `Stab` computation, not the H_EC assembly step per se — i.e., it would
-replace `build_bin_tables!`'s dense-`E` read (the 80.2% line) with a winner-scatter accumulation
-into `Stab`, analytically split into "the winning column's contribution" plus the rank-one
-`-π(ν'S·)` correction, mirroring how the winner-pair kernel avoids materializing `E` for `H_EE`.
+The task's suggested candidate (`H_EC = Q'SC - π(ν'SC)`, "winner-bin cross operator") targets
+exactly the `Stab` computation just measured at 68.2% of the full Hessian callback:
+`Stab[x,j,k] = Σ_w S[w]·1{bin(U[w,x])=k}·ν[w]·Q̃[w,j] - π[j]·Σ_w S[w]·1{bin(U[w,x])=k}·ν[w]`, where
+the first term only needs the SINGLE winning `(w,x)`-pair's column per draw (not all `NCORE`
+columns) and the second term is a rank-one correction computable once per bin. This is real,
+derivable, and — per §2's correction — the underlying `Stab` pass it would replace is now known to
+be MATERIAL (68.2% ≫ the task's own 10% threshold), not negligible.
 
-This is a real, derivable operator (`E[w,j] = ν[w]·(Q̃[w,j] - π[j])`, so
-`Stab[x,j,k] = Σ_w S[w]·1{bin(U[w,x])=k}·ν[w]·Q̃[w,j] - π[j]·Σ_w S[w]·1{bin(U[w,x])=k}·ν[w]`, and the
-first term only needs the single winning `(w,x)`-pair's column per draw, not all `NCORE` columns).
-**It was not implemented**, for a concrete, decisive reason:
-
-- `build_bin_tables!` accumulates **both** `Ttab` (for H_CC, genuinely needs no core data) **and**
-  `Stab` (for H_EC, the only piece a winner-scatter rewrite would touch) in the **same** per-draw
-  loop, over the **same** bin lookups (`Bidx`). A winner-scatter rewrite of the `Stab` half alone
-  would not reduce the loop's `W`-scale iteration count (still one pass over all `W` draws for
-  `Ttab`); it would only reduce the per-draw work from `O(D·NCORE)` (all `NCORE` columns) to
-  `O(D)` (the winning column only) **for the `Stab` half only**. Given `Stab`'s own share of the
-  profiled 80.2% bin-accumulation time was not separately isolated in the 2026-07-21 profile (only
-  the combined `Ttab`+`Stab` pass was measured), and H_EC's own assembly is already 0.2%, any gain
-  from this rewrite is bounded by, at most, the `Stab`-only fraction of an 80.2% line that itself
-  is dominated by `Ttab`'s `D²`-scale bin-pair counting (independent of `NCORE`) — i.e. the
-  achievable upside is real but small and unquantified without instrumenting `Stab` separately,
-  which was judged not worth the implementation and validation cost this session given H_EC's own
-  assembly step (the thing actually named "H_EC" in the task) is already 0.2%.
+**Still not implemented this session**, per the task's own explicit instruction ("Do not implement
+a large new cross-block backend in this merge task unless it is trivial and independently
+committed"): this is not trivial — it requires a new winner-scatter accumulation INTO `Stab`'s
+`(D, NCORE, L+1)` bin-indexed layout (different from the winner-pair H_EE kernel's own `(D,Ddest)`-
+indexed accumulation target), which needs its own design, implementation, and D=4/D=20 correctness
+gates before it could be trusted — a genuinely separate, bounded follow-up task, not a same-session
+addition on top of everything else this port already gates.
 
 ## 5. Verdict
 
-**`CM_H_EC = retained_bin_prefix`.** The current bin/contingency-table/prefix-sum implementation
-is already effectively optimal for the H_EC assembly step itself (0.2% of callback time); the
-`E = Q - νπ'` factorization is a real, derivable but SEPARATE opportunity inside
-`build_bin_tables!`'s bin-accumulation pass (the 80.2% line), which shares its per-draw loop with
-`Ttab` (H_CC's ingredient, not reducible by this factorization) and was not isolated or measured
-finely enough this session to justify implementing and validating a change to it. Not merged; no
-`CM_WINNER_BIN_CROSS_BENCHMARK_2026-07-25.md` produced (the task's own escape hatch: "if implemented").
+**`CM_H_EC = retained_bin_prefix` for THIS release** (the shared H_EE port is not blocked on this),
+**but `CM_CROSS_BLOCK_FOLLOWUP = justified_future_task`** (corrected from the prior session's
+`not_justified` now that `Stab`'s real cost share — 68.2% of the full CM Hessian callback — is
+measured, not speculated). A follow-up session should:
+1. Design a winner-scatter `Stab` accumulator (bin-indexed target, not destination-indexed like
+   the existing H_EE kernel — a genuinely different accumulation shape).
+2. Validate it against the current dense-`E`-read `Stab` at D=4 and D=20 to machine/near-machine
+   precision, the same discipline this session's H_EE gates used.
+3. Re-run this session's `bench_cm_bintable_decomposition.jl` with the new accumulator substituted
+   for `stab_only!` to measure the REAL achievable gain (this session did not implement the
+   candidate, so no such number exists yet — do not assume a gain proportional to 68.2% without
+   measuring the winner-scatter version's own real cost, which is not free either).
+4. If validated and a genuine complete-callback/complete-solve gain is confirmed, merge as its own
+   commit under its own tag (e.g. `cm-winner-bin-cross-hessian-production-ready-2026-07-25` or a
+   later date), per the task's own separate-tag instruction.
 
 **This does not block or gate the Phase A (shared H_EE) release** — it is an independent decision
 per the task's own instruction (§Independent Phase B).

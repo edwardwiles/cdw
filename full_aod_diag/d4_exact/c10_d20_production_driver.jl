@@ -720,7 +720,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     println("[threshold-config] mode=unrestricted requested_delta=", delta_in,
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
-    print_production_backend_manifest(resolve_unrestricted_manifest(; hessian_backend = :dense_exact, blas_threads = blas_threads))   # allocation/Hessian port task §2
+    print_production_backend_manifest(resolve_unrestricted_manifest(; blas_threads = blas_threads))   # 2026-07-25 continuation: read the LIVE UNRESTRICTED_CORE_HESSIAN_BACKEND[] default instead of hardcoding :dense_exact -- was silently misreporting the shared winner-pair backend as dense_exact regardless of what actually ran
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
     exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)
@@ -1175,7 +1175,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     println("[threshold-config] mode=unrestricted requested_delta=", delta_in,
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
-    print_production_backend_manifest(resolve_unrestricted_manifest(; hessian_backend = :dense_exact, blas_threads = blas_threads))   # allocation/Hessian port task §2
+    print_production_backend_manifest(resolve_unrestricted_manifest(; blas_threads = blas_threads))   # 2026-07-25 continuation: read the LIVE UNRESTRICTED_CORE_HESSIAN_BACKEND[] default instead of hardcoding :dense_exact -- was silently misreporting the shared winner-pair backend as dense_exact regardless of what actually ran
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
     exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)

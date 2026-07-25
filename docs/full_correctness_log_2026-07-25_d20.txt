@@ -1,0 +1,381 @@
+Building D=20 real context: :exclude_row, W=80000, seed=20260719 ...
+diffPreStep = diff = 1.4854166091639391
+diffPreStep = diff = 1.7072681224306052e-7
+diffPreStep = diff = 1.7072621538716248e-7
+diffPreStep = diff = 1.7072524549632817e-7
+diffPreStep = diff = 1.707242773818507e-7
+diffPreStep = diff = 1.7072330749101639e-7
+diffPreStep = diff = 1.707223393765389e-7
+diffPreStep = diff = 1.7072137126206144e-7
+diffPreStep = diff = 1.707203995948703e-7
+diffPreStep = diff = 1.7071943148039281e-7
+diffPreStep = diff = 1.707184615895585e-7
+diffPreStep = diff = 1.707174970277947e-7
+diffPreStep = diff = 1.7071653068967407e-7
+diffPreStep = diff = 1.7071555902248292e-7
+diffPreStep = diff = 1.7071458735529177e-7
+diffPreStep = diff = 1.7071361746445746e-7
+diffPreStep = diff = 1.7071265290269366e-7
+diffPreStep = diff = 1.707116812355025e-7
+diffPreStep = diff = 1.7071071312102504e-7
+diffPreStep = diff = 1.7070974323019072e-7
+diffPreStep = diff = 1.707087733393564e-7
+diffPreStep = diff = 1.707078034485221e-7
+diffPreStep = diff = 1.707068388867583e-7
+diffPreStep = diff = 1.7070586721956715e-7
+diffPreStep = diff = 1.7070489910508968e-7
+diffPreStep = diff = 1.707039256615417e-7
+diffPreStep = diff = 1.7070295754706422e-7
+diffPreStep = diff = 1.7070199120894358e-7
+diffPreStep = diff = 1.7070101954175243e-7
+diffPreStep = diff = 1.7070005142727496e-7
+diffPreStep = diff = 1.7069908331279748e-7
+diffPreStep = diff = 1.7069811697467685e-7
+diffPreStep = diff = 1.7069714886019938e-7
+diffPreStep = diff = 1.7069617541665139e-7
+diffPreStep = diff = 1.706952108548876e-7
+diffPreStep = diff = 1.706942374113396e-7
+diffPreStep = diff = 1.706932728495758e-7
+diffPreStep = diff = 1.7069230118238465e-7
+diffPreStep = diff = 1.7069133484426402e-7
+diffPreStep = diff = 1.706903649534297e-7
+diffPreStep = diff = 1.7068939683895223e-7
+diffPreStep = diff = 1.7068842872447476e-7
+diffPreStep = diff = 1.7068745528092677e-7
+diffPreStep = diff = 1.7068649071916298e-7
+diffPreStep = diff = 1.706855226046855e-7
+diffPreStep = diff = 1.706845527138512e-7
+diffPreStep = diff = 1.7068358282301688e-7
+diffPreStep = diff = 1.706826147085394e-7
+diffPreStep = diff = 1.7068164659406193e-7
+diffPreStep = diff = 1.7068067670322762e-7
+diffPreStep = diff = 1.7067971214146382e-7
+diffPreStep = diff = 1.7067873869791583e-7
+diffPreStep = diff = 1.7067777058343836e-7
+diffPreStep = diff = 1.7067680246896089e-7
+diffPreStep = diff = 1.7067583435448341e-7
+diffPreStep = diff = 1.7067486268729226e-7
+diffPreStep = diff = 1.7067389634917163e-7
+diffPreStep = diff = 1.70672930011051e-7
+diffPreStep = diff = 1.7067195834385984e-7
+diffPreStep = diff = 1.7067099022938237e-7
+diffPreStep = diff = 1.7067002389126174e-7
+diffPreStep = diff = 1.706690486713569e-7
+diffPreStep = diff = 1.7066808588594995e-7
+diffPreStep = diff = 1.7066711599511564e-7
+diffPreStep = diff = 1.7066614432792448e-7
+diffPreStep = diff = 1.7066517798980385e-7
+diffPreStep = diff = 1.7066420809896954e-7
+diffPreStep = diff = 1.7066323998449207e-7
+diffPreStep = diff = 1.7066227009365775e-7
+diffPreStep = diff = 1.7066130375553712e-7
+diffPreStep = diff = 1.706603338647028e-7
+diffPreStep = diff = 1.7065936752658217e-7
+diffPreStep = diff = 1.7065839763574786e-7
+diffPreStep = diff = 1.706574295212704e-7
+diffPreStep = diff = 1.7065645963043607e-7
+diffPreStep = diff = 1.7065548973960176e-7
+diffPreStep = diff = 1.7065452517783797e-7
+diffPreStep = diff = 1.7065355173428998e-7
+diffPreStep = diff = 1.706525836198125e-7
+diffPreStep = diff = 1.7065161728169187e-7
+diffPreStep = diff = 1.706506491672144e-7
+diffPreStep = diff = 1.7064967750002324e-7
+diffPreStep = diff = 1.7064870760918893e-7
+diffPreStep = diff = 1.7064773949471146e-7
+diffPreStep = diff = 1.7064677315659083e-7
+diffPreStep = diff = 1.7064580504211335e-7
+diffPreStep = diff = 1.7064483515127904e-7
+diffPreStep = diff = 1.7064387058951525e-7
+diffPreStep = diff = 1.7064289536961041e-7
+diffPreStep = diff = 1.7064192903148978e-7
+diffPreStep = diff = 1.7064095736429863e-7
+diffPreStep = diff = 1.7063998924982116e-7
+diffPreStep = diff = 1.7063902291170052e-7
+diffPreStep = diff = 1.706380530208662e-7
+diffPreStep = diff = 1.706370831300319e-7
+diffPreStep = diff = 1.7063611679191126e-7
+diffPreStep = diff = 1.7063514690107695e-7
+diffPreStep = diff = 1.7063418056295632e-7
+diffPreStep = diff = 1.7063321422483568e-7
+diffPreStep = diff = 1.7063224433400137e-7
+diffPreStep = diff = 1.7063127444316706e-7
+diffPreStep = diff = 1.7063030988140326e-7
+diffPreStep = diff = 1.7062933999056895e-7
+diffPreStep = diff = 1.7062837187609148e-7
+diffPreStep = diff = 1.7062740198525717e-7
+diffPreStep = diff = 1.7062643564713653e-7
+diffPreStep = diff = 1.7062546575630222e-7
+diffPreStep = diff = 1.706244958654679e-7
+diffPreStep = diff = 1.706235259746336e-7
+diffPreStep = diff = 1.7062255786015612e-7
+diffPreStep = diff = 1.7062158974567865e-7
+diffPreStep = diff = 1.7062062163120117e-7
+diffPreStep = diff = 1.706196535167237e-7
+diffPreStep = diff = 1.706186836258894e-7
+diffPreStep = diff = 1.7061771728776876e-7
+diffPreStep = diff = 1.7061674739693444e-7
+diffPreStep = diff = 1.706157810588138e-7
+diffPreStep = diff = 1.706148111679795e-7
+diffPreStep = diff = 1.7061384127714518e-7
+diffPreStep = diff = 1.706128767153814e-7
+diffPreStep = diff = 1.7061190504819024e-7
+diffPreStep = diff = 1.706109387100696e-7
+diffPreStep = diff = 1.706099652665216e-7
+diffPreStep = diff = 1.7060900070475782e-7
+diffPreStep = diff = 1.7060803259028035e-7
+diffPreStep = diff = 1.7060706447580287e-7
+diffPreStep = diff = 1.7060609458496856e-7
+diffPreStep = diff = 1.7060512469413425e-7
+diffPreStep = diff = 1.7060416013237045e-7
+diffPreStep = diff = 1.706031884651793e-7
+diffPreStep = diff = 1.7060222035070183e-7
+diffPreStep = diff = 1.7060125223622435e-7
+diffPreStep = diff = 1.7060028412174688e-7
+diffPreStep = diff = 1.705993195599831e-7
+diffPreStep = diff = 1.7059834966914877e-7
+diffPreStep = diff = 1.705973815546713e-7
+diffPreStep = diff = 1.7059641344019383e-7
+diffPreStep = diff = 1.7059544354935952e-7
+diffPreStep = diff = 1.705944736585252e-7
+diffPreStep = diff = 1.7059350732040457e-7
+diffPreStep = diff = 1.705925392059271e-7
+diffPreStep = diff = 1.7059156931509278e-7
+diffPreStep = diff = 1.7059060830604267e-7
+diffPreStep = diff = 1.7058963663885152e-7
+diffPreStep = diff = 1.7058866319530352e-7
+diffPreStep = diff = 1.7058769863353973e-7
+diffPreStep = diff = 1.705867322954191e-7
+diffPreStep = diff = 1.7058576240458478e-7
+diffPreStep = diff = 1.705847942901073e-7
+diffPreStep = diff = 1.7058382262291616e-7
+diffPreStep = diff = 1.7058285806115236e-7
+diffPreStep = diff = 1.705818863939612e-7
+diffPreStep = diff = 1.7058092005584058e-7
+diffPreStep = diff = 1.7057994838864943e-7
+diffPreStep = diff = 1.7057898382688563e-7
+diffPreStep = diff = 1.7057801571240816e-7
+diffPreStep = diff = 1.7057704937428753e-7
+diffPreStep = diff = 1.7057607948345321e-7
+diffPreStep = diff = 1.7057511136897574e-7
+diffPreStep = diff = 1.7057414325449827e-7
+diffPreStep = diff = 1.705731751400208e-7
+diffPreStep = diff = 1.7057220524918648e-7
+diffPreStep = diff = 1.705712406874227e-7
+diffPreStep = diff = 1.7057027079658837e-7
+diffPreStep = diff = 1.7056930445846774e-7
+diffPreStep = diff = 1.7056833456763343e-7
+diffPreStep = diff = 1.705673682295128e-7
+diffPreStep = diff = 1.7056640011503532e-7
+diffPreStep = diff = 1.7056543200055785e-7
+diffPreStep = diff = 1.7056445678065302e-7
+diffPreStep = diff = 1.7056349399524606e-7
+diffPreStep = diff = 1.705625258807686e-7
+diffPreStep = diff = 1.7056155421357744e-7
+diffPreStep = diff = 1.705605878754568e-7
+diffPreStep = diff = 1.70559623313693e-7
+diffPreStep = diff = 1.7055865519921554e-7
+diffPreStep = diff = 1.7055768353202438e-7
+diffPreStep = diff = 1.7055671364119007e-7
+diffPreStep = diff = 1.7055574907942628e-7
+diffPreStep = diff = 1.705547809649488e-7
+diffPreStep = diff = 1.7055381285047133e-7
+diffPreStep = diff = 1.7055284473599386e-7
+diffPreStep = diff = 1.7055187839787322e-7
+diffPreStep = diff = 1.7055090495432523e-7
+diffPreStep = diff = 1.7054994039256144e-7
+diffPreStep = diff = 1.7054897583079764e-7
+diffPreStep = diff = 1.7054800238724965e-7
+diffPreStep = diff = 1.7054703782548586e-7
+diffPreStep = diff = 1.705460661582947e-7
+diffPreStep = diff = 1.705451015965309e-7
+diffPreStep = diff = 1.7054412815298292e-7
+diffPreStep = diff = 1.705431671439328e-7
+diffPreStep = diff = 1.7054219902945533e-7
+diffPreStep = diff = 1.7054122736226418e-7
+diffPreStep = diff = 1.705402592477867e-7
+diffPreStep = diff = 1.7053929113330923e-7
+diffPreStep = diff = 1.705383247951886e-7
+diffPreStep = diff = 1.705373549043543e-7
+diffPreStep = diff = 1.7053638501351998e-7
+diffPreStep = diff = 1.705354168990425e-7
+-9999999999999999999 = -9999999999999999999
+κ = 0.020293896607184836
+κ_upper = 0.020293896607184836
+κ_lower = 0.020293896607184836
+θ_initial = [0.11421183063668455, 2.5, 0.2957838950556271, 0.39231396862949, 0.4543996680955525, 0.47837289005755745, 0.5340693860213697, 0.1578257922302054, 0.30493829483796003, 0.4909403252326441, 0.36377885339090443, 0.4672706754842744, 0.3248839701857655, 0.4025659983707946, 0.26291474971159107, 0.3339023660038388, 0.6371243703536217, 0.5067502903436804, 0.4856254357202209, 0.6051969073262736, 0.19192763155857337, 0.15804061456398197, 0.3875174466973797, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.11421183063668455, 2.5, 0.2957838950556271, 0.39231396862949, 0.4543996680955525, 0.47837289005755745, 0.5340693860213697, 0.1578257922302054, 0.30493829483796003, 0.4909403252326441, 0.36377885339090443, 0.4672706754842744, 0.3248839701857655, 0.4025659983707946, 0.26291474971159107, 0.3339023660038388, 0.6371243703536217, 0.5067502903436804, 0.4856254357202209, 0.6051969073262736, 0.19192763155857337, 0.15804061456398197, 0.3875174466973797, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.11421183063668455, 2.5, 0.2957838950556271, 0.39231396862949, 0.4543996680955525, 0.47837289005755745, 0.5340693860213697, 0.1578257922302054, 0.30493829483796003, 0.4909403252326441, 0.36377885339090443, 0.4672706754842744, 0.3248839701857655, 0.4025659983707946, 0.26291474971159107, 0.3339023660038388, 0.6371243703536217, 0.5067502903436804, 0.4856254357202209, 0.6051969073262736, 0.19192763155857337, 0.15804061456398197, 0.3875174466973797, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 382
+numMomentInnerSimple = 381
+inequality_index = Int64[]
+PMM = [0.00028493597062508513 -0.00017629892420009053 -2.2612386746398137e-5 7.363744786477195e-5 -3.435586134970836e-6 0.0003523238750020926 -4.8561295623905934e-5 1.872886811787364e-5 5.17357013600831e-5 0.0004442101234831527 0.00027717691838975895 -0.00012255218668206694 0.0002542386062382864 0.00022612825003414763 -0.00013301134728593714 0.0002060727369026532 4.994137313054341e-5 -0.00020996651164758 -9.417006386201709e-6 -3.389794071350046e-5 0.003603624513042405 0.00035165742666015784 0.00035804998158295694 0.00011858569972828992 0.00032823912813181 0.0010887512134168868 0.0001709876196939872 0.0006466523015745982 0.0002610771598172811 8.242182101756971e-5 0.0006146116742485323 8.977095706988805e-5 0.0004963929478409823 0.0009101821463368019 0.00031837387077325043 -1.7934568737718102e-5 0.0004983344091091183 6.135051271153368e-5 -2.8864609133852652e-5 2.82290457882166e-5 0.002346443518361826 6.5800872528004375e-6 0.00011474291064776829 5.562620799769382e-5 0.00022709901602708954 -0.00021844242779323942 5.855051404280035e-5 -3.158965476219538e-5 -3.331402290295121e-5 -0.0001853887286951207 -0.00020870365612740528 -7.894885857713584e-5 8.475125491704609e-5 -2.445368818403586e-5 6.010103912056168e-5 0.00011619926594076637 -6.0476644022328395e-5 -0.00010868196957487582 0.0001282006120786904 -7.250955542400046e-5 -0.0015035132229778438 -5.332775658074609e-5 -0.0001451525716481276 0.00019658552667544692 -4.99710871485799e-5 -0.0001572635897420824 -0.00023189452010183062 -3.9298240462205956e-5 -0.0002315015117346902 -0.00022433524896157042 9.497512811584605e-5 0.0003275611203034381 -0.0002464305742307418 -0.00018584949911633136 -0.00019391382164143958 -0.0007741454620419105 -9.855865242275573e-5 -0.0007737020043780968 -9.391663107769963e-5 1.1982633138168341e-5 8.988407577420379e-5 -6.165826135354808e-5 -0.00034250643631325133 -0.0003824213891279025 -0.00012125895037055845 -0.00014622367673660844 -0.00023673568554599642 -0.0003595098983680937 -7.478399673723998e-5 -0.00010667033326006075 -0.00025681266511333776 -0.0005489198796015452 0.00016056514893514925 -0.000273378507912812 4.7210666801512515e-5 0.0005894718725100194 0.000926352471042789 0.0005410424287236812 -0.00019256207913727504 0.0004569694212838444 0.00013547878391602754 0.002054879411386947 0.00027299456303507037 0.0008359656244114955 0.001095522056358245 0.0006705712932618895 0.0007252438249458074 0.0005943389622495716 0.00011098355558784773 -0.0001701573838374043 0.0005079510135001177 0.0016881230782471277 0.0019589317491642442 0.002317914886880174 -0.00019199670191936667 -0.002330365804746884 -0.0020443667396351528 -0.0006660472028605412 -0.002000350239104592 -0.0008444822154613462 -0.00476237107752702 -0.0023093026371825273 -0.0017039415915782886 -0.00045032066437452977 -0.00047029068669303663 -0.003328021977014865 -0.0010045108526126998 -0.000979126868357803 -0.0014641293199006524 -0.0028666795301495176 -0.002631177158939864 -0.0010335866751435298 -0.0007645209338877313 -0.0001171354484254193 0.000990171078752371 -8.05507984712316e-5 -4.1988324027899054e-5 0.00022404139204301946 1.9931608245901213e-5 -0.0007326799600691027 -0.0013271808974047886 -0.00028620265408764683 -1.2163664041231226e-5 -9.457421505727776e-5 0.00023541672829566863 -0.00011074782409511972 -9.654920683680806e-5 -0.0002274744705725932 0.00017938044341909355 -0.0006527586714950659 0.0002650607194760716 -4.8931555386096924e-5 7.390072034085697e-5 0.0003901731131623677 -0.0001886370791693481 -0.00013566088968554595 4.374951171272467e-6 -0.000196041714995992 -4.909343194315277e-5 0.00011657567770156602 0.004804763092616435 -0.00013290418208836407 0.0001684194853107378 -0.00014179092608456064 -0.00016324651464755813 -0.00041903773355247954 -0.000656168978869395 0.0005930729671553526 -0.0001793041653720688 0.0005386417295770495 -0.0005879315813675826 2.4971146047690484e-5 0.0005516162600665947 0.00041822929390348255 0.0004238432974706533 0.0005956921555499998 0.00015712074673909 0.00032214699707782703 0.00032792432770422557 0.00036066281138800234 0.00026213197012860785 7.441564828961903e-5 0.0003878757787250322 0.00013549955914559625 0.0004971981462575668 0.0003113067396084258 0.00016136627642318192 0.0006430516242234472 0.00038886048257624723 0.0005821078208636052 9.128062927995069e-5 -5.078716381742909e-5 0.0002233943649515584 0.0002542295095293839 0.00022898216623841528 -0.00013639399363528967 8.757616861871371e-5 0.0004194313169743406 -0.00018442239977059107 9.50772642940379e-5 0.001471913438405315 -0.00020113944718134195 0.00011079621053401476 8.252672930413987e-5 -0.00018261393940676278 0.0003147977030091713 -0.0002854222933971639 0.0008838478237272751 0.00039739768985568534 -3.311207430315712e-5 0.0005968428961122353 -0.0003850469675549201 -4.059881015460636e-5 0.0006645886108248623 -7.474360375735848e-5 -0.0002358667182682928 0.0016519471425544723 -3.7982496072470906e-5 -0.0002961684243328154 -0.00025958710566134917 0.003699966838250815 -1.5127391156011716e-5 -0.0002684634282245133 -0.0003455693185061606 -6.865891437673426e-5 -8.781663911565563e-6 -9.065371684705519e-5 -0.000378958405697152 2.71030270221706e-7 9.176416039876659e-5 5.3176760246064345e-5 -0.0002377696587224632 0.00034166920411916635 5.218452513459369e-5 -6.815462647811899e-6 3.6210228997125625e-5 0.00033216248787645467 -0.00021024471997822358 -3.0323233757207958e-5 0.0003230107963378405 0.002863037833947321 0.0006952680710958532 -0.00042969146730595365 0.0007050032694461549 0.0011909723580796738 2.8988714298811934e-5 0.0003537686965312335 -6.92226300826326e-5 -8.63470117200042e-5 0.0001957638099745001 0.0002002080141342648 0.0001909646405769814 0.0006898331524303949 0.00025087595799061393 0.0001598987608755681 7.751908386578187e-5 0.00015205700917996553 -3.842330485670251e-5 0.0002493502751517683 0.000320689949261612 0.0018524896898465008 0.0003032129421357752 -0.00018301633456114743 -0.00015940395363939924 -1.2631085022724253e-5 -7.078397143027757e-5 -0.00011838495375563207 -0.0002582976193854587 -6.841975173277093e-5 9.257437623544122e-5 -0.00033358771761549 -0.00017426950418463893 3.969609964886839e-5 -0.00013947613209685437 -0.00010339684835709715 -0.00010987327467705794 3.4782046322800383e-6 4.5175555103476525e-5 -9.043495108903942e-5 -0.00015966034906556402 0.004519762426737196 1.4363178117497283e-5 -3.445609596479968e-5 -0.00012859083135273902 5.523359650517161e-5 -3.064290922569864e-5 0.00046219586504854835 0.0011222917019405062 0.0001820472177991308 0.0003766897131023562 5.1013901314549235e-5 -1.0688573326102002e-5 0.0005114133659264344 0.0008795547586317178 0.00010854609950100506 -9.51335966472471e-6 -0.0006455016471750274 -1.9461706707483924e-5 0.00013271549501328098 0.00028939614778311114 -0.0020043231419720063 0.0004798497611505019 0.00030464606807485266 -7.827073702422294e-5 1.435273959316537e-5 0.00018458882584485457 0.0001501606231826781 0.0002776338370774474 5.430977002817581e-5 0.00024753400092612354 -0.00014399446185800414 0.0004098651146635636 -1.964331709837488e-5 0.00035854689663071613 0.00031909261592588244 0.0001846274319394207 0.0003276816522218203 6.98997722805667e-5 0.00016357501009567373 0.0009537938032651514 0.0007600306125046555 -0.0003565184963943307 4.361872011957654e-5 -5.05960162721731e-5 -0.00010327174208253749 -0.0001700102106001348 -0.00025740768768765234 -9.801839080939797e-5 -0.00011056303125164934 0.0002599041082562332 4.0446340493876345e-5 -0.00043010162390354987 -0.00010055081694108801 -9.759852658313483e-5 9.759470325132931e-5 -5.087144778499071e-5 -0.00019740995814390735 1.0414422142209012e-5 -0.0003322797069233393 -3.9346148757998e-5 -0.001836641198914953 5.196334975964911e-6 8.764713824586085e-5 -0.000595114384699619 -0.0010942279145507653 0.0024448500366178534 -0.001920124158278222 0.0006518305042549703 -0.0006723162645820925 -9.361703793506612e-5 -0.0006344716057277971 0.00040450768149386034 0.0002808625724800934 0.0003077080284157754 0.00018104337811276428 -5.709074613491732e-5 0.0010145507910858038 -1.0855721904319004e-5 -0.00044337016416993416 0.0005997319023201635 -0.0004870892393412432 -0.0004223854030496312 -0.0025566374164861833 -0.0009425703643206407 -0.0007387816463436369 -0.0012106670119101494 -0.0006116877146914335 -0.0004296648267676229 -0.0010441187954534686 -0.0019271852793178652 -0.0003740608960757471 -0.0007550495199612509 0.0011907526443212721 -0.0013366015340387815 -0.0011810608764089821 -0.0005871613054001698 0.00014958707556524359 -0.00015068204142704177 -0.0003979464139324346 -0.0002921039518604688 0.001704621440270062 1.2533377113932431e-16]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381]
+moments_without_var = Int64[]
+δ_star_initial = -0.002486773477940599
+val = 0.002486773477940599
+δ_star_initial_low = -0.002486773477940599
+val = 0.002486773477940599
+δ_star_initial_up = -0.002486773477940599
+δ_star_initial = -0.002486773477940599
+δ_grid = [1]
+δ_grid_filtered = [1]
+====================================================================================================
+FLEXIBLE CM, L=50
+====================================================================================================
+  >>> flexibleCM_L50/P0_calib: starting dense-reference arm
+  >>> flexibleCM_L50/P0_calib: dense-reference arm done, nStatus=0
+  >>> flexibleCM_L50/P0_calib: starting winner-pair arm
+  >>> flexibleCM_L50/P0_calib: winner-pair arm done, nStatus=0
+PASS  flexibleCM_L50/P0_calib: both backends feasible
+PASS  flexibleCM_L50/P0_calib: dual solution agrees (zeta)
+PASS  flexibleCM_L50/P0_calib: dual solution agrees (lambda)
+PASS  flexibleCM_L50/P0_calib: Delta_dual agrees
+PASS  flexibleCM_L50/P0_calib: max_abs_moment_kkt_resid agrees
+PASS  flexibleCM_L50/P0_calib: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  flexibleCM_L50/P0_calib: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  flexibleCM_L50/P0_calib: winner-pair arm had ZERO unexplained dense fallback
+  flexibleCM_L50/P0_calib: max|ΔH|=4.161e-10 (rel 1.048e-13) at (362,362); Delta_dual d=0.0086604953 p=0.0086604953; KKT d=7.127e-16 p=7.127e-16; n=1332
+  flexibleCM_L50/P0_calib: winner_hash=13914259185255138926  dense-arm counters: wp=0 dense_fb=5 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+  >>> flexibleCM_L50/P1_near_delta1: starting dense-reference arm
+  >>> flexibleCM_L50/P1_near_delta1: dense-reference arm done, nStatus=0
+  >>> flexibleCM_L50/P1_near_delta1: starting winner-pair arm
+  >>> flexibleCM_L50/P1_near_delta1: winner-pair arm done, nStatus=0
+PASS  flexibleCM_L50/P1_near_delta1: both backends feasible
+PASS  flexibleCM_L50/P1_near_delta1: dual solution agrees (zeta)
+PASS  flexibleCM_L50/P1_near_delta1: dual solution agrees (lambda)
+PASS  flexibleCM_L50/P1_near_delta1: Delta_dual agrees
+PASS  flexibleCM_L50/P1_near_delta1: max_abs_moment_kkt_resid agrees
+PASS  flexibleCM_L50/P1_near_delta1: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  flexibleCM_L50/P1_near_delta1: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  flexibleCM_L50/P1_near_delta1: winner-pair arm had ZERO unexplained dense fallback
+  flexibleCM_L50/P1_near_delta1: max|ΔH|=3.615e-10 (rel 1.414e-13) at (102,102); Delta_dual d=0.4747510183 p=0.4747510183; KKT d=2.810e-14 p=2.810e-14; n=1332
+  flexibleCM_L50/P1_near_delta1: winner_hash=8110024741742939701  dense-arm counters: wp=0 dense_fb=8 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+====================================================================================================
+CM+mean/ZC
+====================================================================================================
+cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts
+cm_internal_feature_storage [CM+mean/ZC] = bin_indices
+  >>> cmMeanZC_K1_mean_only/P0_calib: starting dense-reference arm
+  >>> cmMeanZC_K1_mean_only/P0_calib: dense-reference arm done, nStatus=0
+  >>> cmMeanZC_K1_mean_only/P0_calib: starting winner-pair arm
+  >>> cmMeanZC_K1_mean_only/P0_calib: winner-pair arm done, nStatus=0
+PASS  cmMeanZC_K1_mean_only/P0_calib: both backends feasible
+PASS  cmMeanZC_K1_mean_only/P0_calib: dual solution agrees (zeta)
+PASS  cmMeanZC_K1_mean_only/P0_calib: dual solution agrees (lambda)
+PASS  cmMeanZC_K1_mean_only/P0_calib: Delta_dual agrees
+PASS  cmMeanZC_K1_mean_only/P0_calib: max_abs_moment_kkt_resid agrees
+PASS  cmMeanZC_K1_mean_only/P0_calib: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  cmMeanZC_K1_mean_only/P0_calib: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  cmMeanZC_K1_mean_only/P0_calib: winner-pair arm had ZERO unexplained dense fallback
+  cmMeanZC_K1_mean_only/P0_calib: max|ΔH|=7.403e-10 (rel 1.865e-13) at (102,102); Delta_dual d=0.0087975479 p=0.0087975479; KKT d=2.657e-16 p=2.657e-16; n=1352
+  cmMeanZC_K1_mean_only/P0_calib: winner_hash=13914259185255138926  dense-arm counters: wp=0 dense_fb=5 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+  >>> cmMeanZC_K1_mean_only/P1_near_delta1: starting dense-reference arm
+  >>> cmMeanZC_K1_mean_only/P1_near_delta1: dense-reference arm done, nStatus=0
+  >>> cmMeanZC_K1_mean_only/P1_near_delta1: starting winner-pair arm
+  >>> cmMeanZC_K1_mean_only/P1_near_delta1: winner-pair arm done, nStatus=0
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: both backends feasible
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: dual solution agrees (zeta)
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: dual solution agrees (lambda)
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: Delta_dual agrees
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: max_abs_moment_kkt_resid agrees
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  cmMeanZC_K1_mean_only/P1_near_delta1: winner-pair arm had ZERO unexplained dense fallback
+  cmMeanZC_K1_mean_only/P1_near_delta1: max|ΔH|=1.786e-10 (rel 7.079e-14) at (362,102); Delta_dual d=0.4837313721 p=0.4837313721; KKT d=4.486e-14 p=4.486e-14; n=1352
+  cmMeanZC_K1_mean_only/P1_near_delta1: winner_hash=8110024741742939701  dense-arm counters: wp=0 dense_fb=8 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts
+cm_internal_feature_storage [CM+mean/ZC] = bin_indices
+  >>> cmMeanZC_K1_mean_zc/P0_calib: starting dense-reference arm
+  >>> cmMeanZC_K1_mean_zc/P0_calib: dense-reference arm done, nStatus=0
+  >>> cmMeanZC_K1_mean_zc/P0_calib: starting winner-pair arm
+  >>> cmMeanZC_K1_mean_zc/P0_calib: winner-pair arm done, nStatus=0
+PASS  cmMeanZC_K1_mean_zc/P0_calib: both backends feasible
+PASS  cmMeanZC_K1_mean_zc/P0_calib: dual solution agrees (zeta)
+PASS  cmMeanZC_K1_mean_zc/P0_calib: dual solution agrees (lambda)
+PASS  cmMeanZC_K1_mean_zc/P0_calib: Delta_dual agrees
+PASS  cmMeanZC_K1_mean_zc/P0_calib: max_abs_moment_kkt_resid agrees
+PASS  cmMeanZC_K1_mean_zc/P0_calib: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  cmMeanZC_K1_mean_zc/P0_calib: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  cmMeanZC_K1_mean_zc/P0_calib: winner-pair arm had ZERO unexplained dense fallback
+  cmMeanZC_K1_mean_zc/P0_calib: max|ΔH|=3.034e-10 (rel 7.643e-14) at (362,102); Delta_dual d=0.0097890290 p=0.0097890290; KKT d=2.331e-16 p=2.331e-16; n=1542
+  cmMeanZC_K1_mean_zc/P0_calib: winner_hash=13914259185255138926  dense-arm counters: wp=0 dense_fb=5 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+  >>> cmMeanZC_K1_mean_zc/P1_near_delta1: starting dense-reference arm
+  >>> cmMeanZC_K1_mean_zc/P1_near_delta1: dense-reference arm done, nStatus=0
+  >>> cmMeanZC_K1_mean_zc/P1_near_delta1: starting winner-pair arm
+  >>> cmMeanZC_K1_mean_zc/P1_near_delta1: winner-pair arm done, nStatus=0
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: both backends feasible
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: dual solution agrees (zeta)
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: dual solution agrees (lambda)
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: Delta_dual agrees
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: max_abs_moment_kkt_resid agrees
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  cmMeanZC_K1_mean_zc/P1_near_delta1: winner-pair arm had ZERO unexplained dense fallback
+  cmMeanZC_K1_mean_zc/P1_near_delta1: max|ΔH|=7.208e-10 (rel 2.857e-13) at (102,102); Delta_dual d=0.4904444159 p=0.4904444159; KKT d=1.458e-14 p=1.458e-14; n=1542
+  cmMeanZC_K1_mean_zc/P1_near_delta1: winner_hash=8110024741742939701  dense-arm counters: wp=0 dense_fb=8 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+====================================================================================================
+ORIGIN-ZC
+====================================================================================================
+cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)
+cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)
+  >>> originZC_K1_mean_only/P0_calib: starting dense-reference arm
+  >>> originZC_K1_mean_only/P0_calib: dense-reference arm done, nStatus=0
+  >>> originZC_K1_mean_only/P0_calib: starting winner-pair arm
+  >>> originZC_K1_mean_only/P0_calib: winner-pair arm done, nStatus=0
+PASS  originZC_K1_mean_only/P0_calib: both backends feasible
+PASS  originZC_K1_mean_only/P0_calib: dual solution agrees (zeta)
+PASS  originZC_K1_mean_only/P0_calib: dual solution agrees (lambda)
+PASS  originZC_K1_mean_only/P0_calib: Delta_dual agrees
+PASS  originZC_K1_mean_only/P0_calib: max_abs_moment_kkt_resid agrees
+PASS  originZC_K1_mean_only/P0_calib: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  originZC_K1_mean_only/P0_calib: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  originZC_K1_mean_only/P0_calib: winner-pair arm had ZERO unexplained dense fallback
+  originZC_K1_mean_only/P0_calib: max|ΔH|=1.072e-09 (rel 2.701e-13) at (102,102); Delta_dual d=0.0026170727 p=0.0026170727; KKT d=5.230e-16 p=5.230e-16; n=402
+  originZC_K1_mean_only/P0_calib: winner_hash=13914259185255138926  dense-arm counters: wp=0 dense_fb=5 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+  >>> originZC_K1_mean_only/P1_near_delta1: starting dense-reference arm
+  >>> originZC_K1_mean_only/P1_near_delta1: dense-reference arm done, nStatus=0
+  >>> originZC_K1_mean_only/P1_near_delta1: starting winner-pair arm
+  >>> originZC_K1_mean_only/P1_near_delta1: winner-pair arm done, nStatus=0
+PASS  originZC_K1_mean_only/P1_near_delta1: both backends feasible
+PASS  originZC_K1_mean_only/P1_near_delta1: dual solution agrees (zeta)
+PASS  originZC_K1_mean_only/P1_near_delta1: dual solution agrees (lambda)
+PASS  originZC_K1_mean_only/P1_near_delta1: Delta_dual agrees
+PASS  originZC_K1_mean_only/P1_near_delta1: max_abs_moment_kkt_resid agrees
+PASS  originZC_K1_mean_only/P1_near_delta1: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  originZC_K1_mean_only/P1_near_delta1: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  originZC_K1_mean_only/P1_near_delta1: winner-pair arm had ZERO unexplained dense fallback
+  originZC_K1_mean_only/P1_near_delta1: max|ΔH|=4.811e-10 (rel 1.204e-13) at (102,102); Delta_dual d=0.0366237326 p=0.0366237326; KKT d=1.113e-15 p=1.113e-15; n=402
+  originZC_K1_mean_only/P1_near_delta1: winner_hash=8110024741742939701  dense-arm counters: wp=0 dense_fb=5 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)
+cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)
+  >>> originZC_K1_mean_zc/P0_calib: starting dense-reference arm
+  >>> originZC_K1_mean_zc/P0_calib: dense-reference arm done, nStatus=0
+  >>> originZC_K1_mean_zc/P0_calib: starting winner-pair arm
+  >>> originZC_K1_mean_zc/P0_calib: winner-pair arm done, nStatus=0
+PASS  originZC_K1_mean_zc/P0_calib: both backends feasible
+PASS  originZC_K1_mean_zc/P0_calib: dual solution agrees (zeta)
+PASS  originZC_K1_mean_zc/P0_calib: dual solution agrees (lambda)
+PASS  originZC_K1_mean_zc/P0_calib: Delta_dual agrees
+PASS  originZC_K1_mean_zc/P0_calib: max_abs_moment_kkt_resid agrees
+PASS  originZC_K1_mean_zc/P0_calib: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  originZC_K1_mean_zc/P0_calib: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  originZC_K1_mean_zc/P0_calib: winner-pair arm had ZERO unexplained dense fallback
+  originZC_K1_mean_zc/P0_calib: max|ΔH|=6.316e-10 (rel 1.591e-13) at (362,362); Delta_dual d=0.0036095731 p=0.0036095731; KKT d=3.773e-16 p=3.773e-16; n=592
+  originZC_K1_mean_zc/P0_calib: winner_hash=13914259185255138926  dense-arm counters: wp=0 dense_fb=5 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+  >>> originZC_K1_mean_zc/P1_near_delta1: starting dense-reference arm
+  >>> originZC_K1_mean_zc/P1_near_delta1: dense-reference arm done, nStatus=0
+  >>> originZC_K1_mean_zc/P1_near_delta1: starting winner-pair arm
+  >>> originZC_K1_mean_zc/P1_near_delta1: winner-pair arm done, nStatus=0
+PASS  originZC_K1_mean_zc/P1_near_delta1: both backends feasible
+PASS  originZC_K1_mean_zc/P1_near_delta1: dual solution agrees (zeta)
+PASS  originZC_K1_mean_zc/P1_near_delta1: dual solution agrees (lambda)
+PASS  originZC_K1_mean_zc/P1_near_delta1: Delta_dual agrees
+PASS  originZC_K1_mean_zc/P1_near_delta1: max_abs_moment_kkt_resid agrees
+PASS  originZC_K1_mean_zc/P1_near_delta1: full assembled Hessian agrees (max|Δ|<1e-6)
+PASS  originZC_K1_mean_zc/P1_near_delta1: dense arm used dense/inline backend only (0 winner-pair calls)
+PASS  originZC_K1_mean_zc/P1_near_delta1: winner-pair arm had ZERO unexplained dense fallback
+  originZC_K1_mean_zc/P1_near_delta1: max|ΔH|=4.297e-10 (rel 1.075e-13) at (362,362); Delta_dual d=0.0380632003 p=0.0380632003; KKT d=2.502e-15 p=2.502e-15; n=592
+  originZC_K1_mean_zc/P1_near_delta1: winner_hash=8110024741742939701  dense-arm counters: wp=0 dense_fb=5 rebuilds=0 | winner-pair-arm counters: wp=0(serial=0,par=0) dense_fb=0 rebuilds=0
+====================================================================================================
+ALL D=20 RESTRICTED FULL-HESSIAN GATES PASSED

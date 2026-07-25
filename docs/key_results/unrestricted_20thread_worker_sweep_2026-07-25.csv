@@ -1,0 +1,17 @@
+point,backend,workers,min_wall_seconds,n_hess,speedup_vs_dense
+P1_near_delta1,dense_reference,none,3.6087,7,1.00
+P1_near_delta1,winner_pair_serial,none,0.4724,7,7.64
+P1_near_delta1,winner_pair_parallel,1,0.5890,7,6.13
+P1_near_delta1,winner_pair_parallel,2,0.3736,7,9.66
+P1_near_delta1,winner_pair_parallel,4,0.3417,7,10.56
+P1_near_delta1,winner_pair_parallel,8,0.2840,7,12.71
+P1_near_delta1,winner_pair_parallel,10,0.2875,7,12.55
+P1_near_delta1,winner_pair_parallel,20,0.2484,7,14.53
+P2_hard,dense_reference,none,5.2208,10,1.00
+P2_hard,winner_pair_serial,none,0.6149,9,8.49
+P2_hard,winner_pair_parallel,1,0.7055,9,7.40
+P2_hard,winner_pair_parallel,2,0.5607,10,9.31
+P2_hard,winner_pair_parallel,4,0.4797,10,10.88
+P2_hard,winner_pair_parallel,8,0.3715,9,14.05
+P2_hard,winner_pair_parallel,10,0.3855,9,13.54
+P2_hard,winner_pair_parallel,20,0.3378,9,15.46

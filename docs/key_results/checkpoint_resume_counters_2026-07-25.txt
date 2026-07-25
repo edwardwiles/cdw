@@ -1,0 +1,21 @@
+[core-hessian-counters] winner_pair_hessian_calls=72
+[core-hessian-counters]   winner_pair_serial_calls=0
+[core-hessian-counters]   winner_pair_parallel_calls=72
+[core-hessian-counters] dense_core_fallback_calls=0
+[core-hessian-counters] compressed_core_rebuilds=8
+[shq_stage1] RESUMING from /tmp/jl_aWvxcr/ckpt_u/shq_stage1_latest.jls (reason=stage_complete n_eval=6 knitro_iter=4)
+diffPreStep = diff = 1.4854166091639391
+diffPreStep = diff = 1.7072681224306052e-7
+diffPreStep = diff = 1.7072621538716248e-7
+diffPreStep = diff = 1.7072524549632817e-7
+--
+[core-hessian-counters] winner_pair_hessian_calls=106
+[core-hessian-counters]   winner_pair_serial_calls=0
+[core-hessian-counters]   winner_pair_parallel_calls=106
+[core-hessian-counters] dense_core_fallback_calls=0
+[core-hessian-counters] compressed_core_rebuilds=9
+PASS  resumed run did not lose the checkpointed incumbent
+==========================================================================================
+FLEXIBLE CM: checkpoint -> resume, shared backend stays active
+==========================================================================================
+[shq_cm_stage1] cm_gradient_backend=cplus (production default) destination_sample=exclude_row (production default)
