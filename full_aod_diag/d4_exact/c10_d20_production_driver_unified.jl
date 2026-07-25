@@ -21,6 +21,8 @@ isdefined(Main, :run_polish_checkpointed) || error("c10_d20_production_driver_un
 isdefined(Main, :make_layout) || error("c10_d20_production_driver_unified.jl requires outer_coordinate_layout.jl to already be included.")
 isdefined(Main, :make_flexible_theta) || error("c10_d20_production_driver_unified.jl requires flexible_theta.jl (freeze_theta_ctx) to already be included.")
 isdefined(Main, :theta_fixed_dual_delta_pivot_A) || error("c10_d20_production_driver_unified.jl requires flexible_theta_aspace_production.jl to already be included.")
+isdefined(Main, :print_production_backend_manifest) || error("c10_d20_production_driver_unified.jl requires production_backend_manifest.jl to already be included.")
+isdefined(Main, :set_production_outer_algorithm!) || error("c10_d20_production_driver_unified.jl requires knitro_outer_algorithm.jl to already be included.")
 
 const CHECKPOINT_SCHEMA_UNIFIED = 1
 
@@ -141,7 +143,13 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         h_theta::Float64 = 1e-3, a_halfwidth::Float64 = 30.0,
         skip_cold_retry::Bool = true,
         use_neg_cache::Bool = false, neg_cache_code_version::String = "unified_v1",
-        destination_sample::Symbol = :exclude_row)
+        destination_sample::Symbol = :exclude_row,
+        blas_threads::Union{Nothing,Int} = nothing,   # reconciliation (task §1/Phase 1): same
+        # kwarg/semantics as run_polish_checkpointed's -- process-scoped BLAS thread count, set
+        # once right after ctx build, nothing (default) leaves the ambient count untouched.
+        pin_outer_algorithm::Bool = false)   # reconciliation: same kwarg/semantics as
+        # run_polish_checkpointed's -- opt-in explicit algorithm=2(Interior/CG)+hessopt=6(L-BFGS)
+        # via knitro_outer_algorithm.jl, for matched benchmark A/Bs only.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
     destination_sample in (:exclude_row, :all_legacy) ||
         error("run_polish_checkpointed_unified($label): destination_sample must be :exclude_row or :all_legacy.")
@@ -181,6 +189,14 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
     ctx_base = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
                                       draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
+    # Reconciliation (task §1/Phase 1): the same three campaign-lifetime workspace attaches and
+    # BLAS-thread pin that run_polish_checkpointed itself carries -- attached to ctx_base BEFORE
+    # build_unified_ctx so a flexible-mode `merge(ctx, (...))` (flexible_theta.jl:make_flexible_
+    # theta) inherits them unchanged (merge keeps every field not explicitly overridden).
+    ctx_base = attach_compressed_factual_workspace(ctx_base, ctx_base.D, ctx_base.D_dest, W)
+    ctx_base = attach_canonical_price_precompute_workspace(ctx_base)
+    ctx_base = attach_hard_score_b_cache(ctx_base)
+    blas_threads !== nothing && BLAS.set_num_threads(blas_threads)
     ctx = build_unified_ctx(layout, ctx_base; theta_lo = layout.trade_elasticity_mode == :flexible ? theta_lo : nothing,
                              theta_hi = layout.trade_elasticity_mode == :flexible ? theta_hi : nothing)
     xy = precompute_aspace_XY(ctx)
@@ -191,14 +207,11 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     grad_pool = build_grad_workspace_pool(W)
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, Ddest, W) : nothing
 
-    lp("[", label, "] ============================================================")
-    lp("[", label, "] trade_elasticity_mode = ", layout.trade_elasticity_mode)
-    lp("[", label, "] A_coordinate_mode = ", layout.A_coordinate_mode)
-    lp("[", label, "] gp_coordinate_mode = ", layout.gp_coordinate_mode)
-    lp("[", label, "] outer_dimension = ", n_outer)
-    lp("[", label, "] core_top1_engine = canonical_log_additive")
-    lp("[", label, "] outer_gradient_top3_engine = ", resolved_backend)
-    lp("[", label, "] ============================================================")
+    print_production_backend_manifest(resolve_unrestricted_manifest(; hessian_backend = :dense_exact, blas_threads = blas_threads,
+        trade_elasticity_mode = layout.trade_elasticity_mode, A_coordinate_mode = layout.A_coordinate_mode,
+        gp_coordinate_mode = layout.gp_coordinate_mode,
+        theta_bounds = layout.trade_elasticity_mode == :flexible ? (theta_lo, theta_hi) : nothing,
+        outer_dimension = n_outer))
     print_active_layout_banner(ctx, "unified_$(layout.trade_elasticity_mode)_$(layout.A_coordinate_mode)")
     flush(stdout)
 
@@ -243,6 +256,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
+    pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves the .opt file's algorithm=auto in effect
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
     xIndices = KNITRO.KN_add_vars(kc, n_outer)
@@ -290,7 +304,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         d = decode_outer_unified(w, ctx, layout, pgc, xy, gp_scale)
-        r, _ = screened_eval(d.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = d.z_nonpivot, exact_cache = exact_cache, neg_cache = neg_cache)
+        r, _ = screened_eval(d.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = dual_bank_zfree(d, layout), exact_cache = exact_cache, neg_cache = neg_cache)
         if !(r.inner_status in FEASIBLE_CODES)
             n_cold_retries[] += 1
             if !skip_cold_retry
@@ -340,7 +354,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         if base === nothing || d === nothing
             n_g_recompute[] += 1
             d = decode_outer_unified(w, ctx, layout, pgc, xy, gp_scale)
-            r_g, _ = screened_eval(d.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = d.z_nonpivot, exact_cache = exact_cache, neg_cache = neg_cache)
+            r_g, _ = screened_eval(d.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = dual_bank_zfree(d, layout), exact_cache = exact_cache, neg_cache = neg_cache)
             if !(r_g.inner_status in FEASIBLE_CODES)
                 r_g, _ = screened_eval(d.xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
             end
@@ -396,7 +410,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         d_now = (shared !== nothing && shared.w == x) ? shared.d : nothing
         if r_now === nothing
             d_now = decode_outer_unified(collect(x), ctx, layout, pgc, xy, gp_scale)
-            r_now, _ = screened_eval(d_now.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = d_now.z_nonpivot, exact_cache = exact_cache)
+            r_now, _ = screened_eval(d_now.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = dual_bank_zfree(d_now, layout), exact_cache = exact_cache)
         end
         r_now.inner_status in FEASIBLE_CODES && isfinite(r_now.Delta_dual) && do_checkpoint(:iteration, collect(x), r_now, d_now)
         return 0
@@ -406,6 +420,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], n_outer), jacIndexVars = xIndices)
     KNITRO.KN_set_newpt_callback(kc, cb_newpt!)
 
+    pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_polish_checkpointed_unified($label)")
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus_code, _, xsol, _ = KNITRO.KN_get_solution(kc)
@@ -420,7 +435,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
     w_final = collect(xsol)
     d_final = decode_outer_unified(w_final, ctx, layout, pgc, xy, gp_scale)
-    r_final, _ = screened_eval(d_final.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = d_final.z_nonpivot, exact_cache = exact_cache)
+    r_final, _ = screened_eval(d_final.xf, ctx, rsc, sc, n_eval; warm = true, bank = bank, zfree = dual_bank_zfree(d_final, layout), exact_cache = exact_cache)
     final_ckpt = do_checkpoint((!(r_final.inner_status in FEASIBLE_CODES) || !is_verified_success(r_final)) ? :stage_complete_unverified : :stage_complete, w_final, r_final, d_final)
 
     return (label = label, find_smallest = find_smallest, ctx = ctx, ctx_base = ctx_base, xy = xy, pgc = pgc, layout = layout,
