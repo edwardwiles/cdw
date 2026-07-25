@@ -43,6 +43,14 @@ using LinearAlgebra: BLAS, mul!
 isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
 isdefined(Main, :materialize_dense_factual_structured!) || include(joinpath(@__DIR__, "structured_moment_build.jl"))
 isdefined(Main, :compressed_gravity_raw) || include(joinpath(@__DIR__, "compressed_live.jl"))
+# Allocation/Hessian port task §6.1/6.2: threaded Architecture-C Hessian (ThreadLocalBinScratch/
+# build_thread_local_scratch/hessian_cm_structured_v2!). Safe to include here despite
+# cm_hessian_threaded.jl's own functions referencing CMBinHessCtx-shaped objects: neither file's
+# top-level code CALLS into the other (only type/function DEFINITIONS), so there is no genuine
+# circular load-order requirement -- only genuine requirement is both are loaded before either is
+# actually CALLED, which this guard (placed before CMBinHessCtx's own struct, which now carries a
+# tls::ThreadLocalBinScratch field) guarantees.
+isdefined(Main, :ThreadLocalBinScratch) || include(joinpath(@__DIR__, "cm_hessian_threaded.jl"))
 
 # ----------------------------------------------------------------------------
 # Shared: per-draw bin indices w.r.t. the SAME thresholds `z` that
@@ -325,6 +333,13 @@ mutable struct CMBinHessCtx
     Hraw_CC::Matrix{Float64}
     RtHraw_CC::Union{Nothing,Matrix{Float64}}
     block_cc::Union{Nothing,Matrix{Float64}}
+    # Allocation/Hessian port task §6.1/6.2: threaded Architecture-C Hessian, validated (see
+    # test_cm_threaded_hessian.jl) to agree with the serial Hessian to ~1e-13 and measured 3.52x
+    # faster at a real, hard D=20/W=80,000/L=50 point (5.39s/call serial -> 1.53s/call threaded).
+    # `tls` is `nothing` (and use_threaded_bins is false) only if a caller explicitly opts out via
+    # build_cm_bin_ctx(...; threaded_bins=false) -- production default is true.
+    tls::Union{Nothing,ThreadLocalBinScratch}
+    use_threaded_bins::Bool
 end
 
 """
@@ -335,7 +350,7 @@ an existing `aug = build_cm_augmented_obj(...)` result. `z`/`origins` are
 taken from `aug` itself so this is guaranteed to use IDENTICAL thresholds to
 whatever CM matrix Architecture A is using.
 """
-function build_cm_bin_ctx(ctx, aug)
+function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true)
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE = aug.ncore; ncm = aug.ncm
@@ -343,11 +358,17 @@ function build_cm_bin_ctx(ctx, aug)
     Bidx = compute_bin_indices(ctx.U, z)
     W = size(ctx.U, 1)
     L1 = L + 1
-    return CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
+    cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE, L1), zeros(D, D, L, L), zeros(D, NCORE, L),
         Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm),
         Matrix{Float64}(undef, NCORE, nO), R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO),
-        Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO))
+        Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
+        nothing, false)
+    if threaded_bins
+        cctx.tls = build_thread_local_scratch(cctx)
+        cctx.use_threaded_bins = true
+    end
+    return cctx
 end
 
 "Build the D x D and D x NCORE x (L+1) weighted bin tables from CURRENT weights `w` (obj.arg2) and economic block `E`. O(W*(D*NCORE + D^2))."
@@ -616,8 +637,32 @@ end
 "Architecture A's hess_cb_builder: the unchanged generic `hessian!`, wired via the profiled callback exactly as oracle_fast.jl does."
 archA_hess_cb_builder(obj) = _callbackEvalH_inner_profiled!
 
-"Architecture C's hess_cb_builder: closes over a CMBinHessCtx."
+"""
+Architecture C's hess_cb_builder: closes over a CMBinHessCtx.
+
+Allocation/Hessian port task §6.1/6.2: dispatches to the threaded Hessian
+(hessian_cm_structured_v2!, cm_hessian_threaded.jl) when `cctx.use_threaded_bins` is true (the
+production default as of this port, set by build_cm_bin_ctx/build_cm_meanzc_bin_ctx) -- validated
+to agree with the serial path to ~1e-13 and measured 3.52x faster at a real, hard D=20/W=80,000/
+L=50 point (test_cm_threaded_hessian.jl). Falls back to the original serial hessian_cm_structured!
+unchanged when `cctx.use_threaded_bins` is false (an explicit opt-out, e.g.
+build_cm_bin_ctx(ctx, aug; threaded_bins=false)). Every existing caller of archC_hess_cb_builder
+(archC_base_state/archC_verified_state, cm_production_bundle.jl) needs no changes -- the dispatch
+is entirely internal to this function.
+"""
 function archC_hess_cb_builder(cctx::CMBinHessCtx)
+    if cctx.use_threaded_bins
+        return (kc, cb, evalRequest, evalResult, userParams) -> begin
+            o = userParams
+            xloc = evalRequest.x
+            @prof "inner_dual_hessian_callback_archC" begin
+                _archC_prep_for_hessian!(o, xloc)
+                hessian_cm_structured_v2!(evalResult.hess, o, cctx; threaded_bins = true, tls = cctx.tls, use_syrk = true)
+            end
+            _INNER_CALL_COUNTERS[].n_hess_calls += 1
+            return 0
+        end
+    end
     return (kc, cb, evalRequest, evalResult, userParams) -> begin
         o = userParams
         xloc = evalRequest.x

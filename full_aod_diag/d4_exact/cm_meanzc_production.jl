@@ -33,7 +33,7 @@ layout) -- `CMBinHessCtx`, `hessian_cm_structured!`, and
 `archC_hess_cb_builder` themselves are reused completely unmodified,
 independent of K_mean/K_pair.
 """
-function build_cm_meanzc_bin_ctx(ctx, aug)
+function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true)
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE_ext = aug.ncore_econ + aug.n_mean + aug.n_pair
@@ -42,11 +42,17 @@ function build_cm_meanzc_bin_ctx(ctx, aug)
     Bidx = compute_bin_indices(ctx.U, z)
     W = size(ctx.U, 1)
     L1 = L + 1
-    return CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE_ext, ncm, aug.contrasts, R,
+    cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE_ext, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE_ext, L1), zeros(D, D, L, L), zeros(D, NCORE_ext, L),
         Matrix{Float64}(undef, W, NCORE_ext), Matrix{Float64}(undef, NCORE_ext + ncm, NCORE_ext + ncm),
         Matrix{Float64}(undef, NCORE_ext, nO), R === nothing ? nothing : Matrix{Float64}(undef, NCORE_ext, nO),
-        Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO))
+        Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
+        nothing, false)
+    if threaded_bins
+        cctx.tls = build_thread_local_scratch(cctx)
+        cctx.use_threaded_bins = true
+    end
+    return cctx
 end
 
 """
