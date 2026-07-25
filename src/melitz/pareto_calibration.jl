@@ -1118,7 +1118,11 @@ and NO `PsiObjectiveBundleDelta` construction -- everything `melitz_reduce_theta
 function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
         outer_parameterization::Symbol=:logf,
         inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
-        outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"))
+        outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
+        moment_backend::Symbol=:dense_reference, z_draws::Union{Nothing,AbstractMatrix}=nothing)
+    moment_backend in (:dense_reference, :sorted_tail_serial) || throw(ArgumentError(
+        "melitz_calibration_outer_ctx: moment_backend must be :dense_reference or " *
+        ":sorted_tail_serial, got $moment_backend"))
     D = calib.D
     j = calib.target_country
     p = MelitzPrimitives(D, calib.sigma, calib.theta_star, j, calib.tau, calib.w, calib.A, calib.f, calib.gamma_prime_target)
@@ -1129,11 +1133,21 @@ function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
     c_full, A_pivot = build_gravity_pivots(p.tau, j)
     outer_layout = melitz_outer_layout(D, j)
 
+    if moment_backend == :sorted_tail_serial
+        z_draws === nothing && throw(ArgumentError(
+            "melitz_calibration_outer_ctx: moment_backend=:sorted_tail_serial requires " *
+            "the SAME z_draws the bundle will use, passed via the z_draws kwarg"))
+        sorted_tail_ctx = build_melitz_sorted_tail_context(z_draws, p.sigma; theta_star=p.theta_star)
+    else
+        sorted_tail_ctx = nothing
+    end
+
     ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
            w_prime=cf.w_prime, L=calib.L, expenditure=eq.expenditure, benchmark_cutoff=eq.cutoff,
            moment_layout=moment_layout, X_data=eq.trade_flow, c_full=c_full, A_pivot=A_pivot,
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
-           outer_parameterization=outer_parameterization, inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
+           outer_parameterization=outer_parameterization, inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+           moment_backend=moment_backend, sorted_tail_ctx=sorted_tail_ctx)
     return p, eq, cf, ctx
 end
 
@@ -1210,13 +1224,15 @@ function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration
         inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
         outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
         needs_outer_moment_jacobian::Bool=false,
-        inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing)
+        inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
+        moment_backend::Symbol=:dense_reference)
     D = calib.D
     j = calib.target_country
     z_draws = pareto_draws(W, D, calib.theta_star; seed=seed, mode=draw_mode)
 
     p, eq, cf, ctx = melitz_calibration_outer_ctx(calib; outer_parameterization=:logf,
-        inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
+        inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+        moment_backend=moment_backend, z_draws=z_draws)
 
     theta_free = melitz_reduce_theta(p, ctx)
 

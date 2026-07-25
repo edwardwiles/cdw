@@ -34,6 +34,7 @@ include(joinpath(MELITZ_DIR, "pareto.jl"))
 include(joinpath(MELITZ_DIR, "firm_quantities.jl"))
 include(joinpath(MELITZ_DIR, "equilibrium.jl"))
 include(joinpath(MELITZ_DIR, "moments.jl"))
+include(joinpath(MELITZ_DIR, "sorted_tail.jl"))
 include(joinpath(MELITZ_DIR, "delta_star.jl"))
 include(joinpath(MELITZ_DIR, "affine_cutoff.jl"))
 include(joinpath(MELITZ_DIR, "log_cutoff_param.jl"))
@@ -532,6 +533,316 @@ end
 end
 
 # ============================================================================
+# 6.5. Sorted-tail moment construction optimization (2026-07-25 session).
+# See docs/melitz_sorted_tail_optimization_2026-07-25.md.
+# ============================================================================
+@testset "Sorted-tail moment construction (2026-07-25)" begin
+    using LinearAlgebra: svdvals, rank
+
+    @testset "Phase 1: MelitzSortedTailContext invariants" begin
+        p, eq = FIXTURE.primitives, FIXTURE.equilibrium
+        D = p.D
+        z = FIXTURE.z_draws
+        z_copy_before = copy(z)
+        sctx = build_melitz_sorted_tail_context(z, p.sigma; theta_star=p.theta_star)
+
+        @testset "construction does not modify the original draws" begin
+            @test z == z_copy_before
+            @test sctx.z_original == z_copy_before
+        end
+
+        @testset "every origin-specific permutation is a valid bijection on 1:W" begin
+            for o in 1:D
+                @test sort(sctx.permutation[:, o]) == collect(1:sctx.W)
+            end
+        end
+
+        @testset "sorted_z is nondecreasing and matches z_original[permutation[:,o],o]" begin
+            for o in 1:D
+                @test issorted(sctx.sorted_z[:, o])
+                @test sctx.sorted_z[:, o] == z[sctx.permutation[:, o], o]
+                @test sctx.sorted_log_z[:, o] == log.(z[sctx.permutation[:, o], o])
+                @test sctx.sorted_z_power[:, o] == z[sctx.permutation[:, o], o] .^ (p.sigma - 1)
+            end
+        end
+
+        @testset "joint-row pairing is preserved -- NOT re-paired across origins" begin
+            # The permutation is origin-LOCAL. Using origin 1's permutation to index origin
+            # 2's column must NOT produce a sorted sequence in general (guards against the
+            # exact anti-pattern the governing prompt forbids: independently sorting every
+            # origin and pairing the k-th sorted observation as a new joint draw).
+            @test sctx.permutation[:, 1] != sctx.permutation[:, 2]
+            cross_paired = z[sctx.permutation[:, 1], 2]
+            @test !issorted(cross_paired)
+            # Direct joint-row check: for every ORIGINAL row s, the row (z[s,1],...,z[s,D])
+            # recovered via any origin's permutation-and-scatter-back round trip must equal
+            # the original row exactly (the row itself, not just origin 1's own value).
+            for o in 1:D
+                perm_o = sctx.permutation[:, o]
+                scattered = similar(z[:, o])
+                scattered[perm_o] .= sctx.sorted_z[:, o]
+                @test scattered == z[:, o]
+            end
+        end
+
+        @testset "fingerprint changes under changed draws / sigma; stable under no change" begin
+            sctx2 = build_melitz_sorted_tail_context(z, p.sigma; theta_star=p.theta_star)
+            @test sctx.fingerprint == sctx2.fingerprint
+
+            z_perturbed = copy(z)
+            z_perturbed[1, 1] *= 1.0000001
+            sctx_pert = build_melitz_sorted_tail_context(z_perturbed, p.sigma)
+            @test sctx_pert.fingerprint != sctx.fingerprint
+
+            sctx_sigma = build_melitz_sorted_tail_context(z, p.sigma + 0.1)
+            @test sctx_sigma.fingerprint != sctx.fingerprint
+        end
+    end
+
+    @testset "Phase 2: active-tail binary search vs Boolean mask" begin
+        rng2 = MersenneTwister(4242)
+        for trial in 1:2000
+            Wt = rand(rng2, 5:200)
+            col = sort(rand(rng2, Wt) .* 10 .+ 0.5)
+            cutoff = rand(rng2) * 11
+            k = melitz_active_tail_start(col, cutoff)
+            mask = col .> cutoff
+            n_active_mask = count(mask)
+            n_active_tail = Wt - k + 1
+            @test n_active_tail == n_active_mask
+            if n_active_mask > 0
+                first_active_idx = findfirst(mask)
+                @test k == first_active_idx
+                @test all(col[k:end] .> cutoff)
+            end
+            if k > 1
+                @test all(col[1:k-1] .<= cutoff)
+            end
+        end
+
+        @testset "edge cases" begin
+            col = collect(1.0:10.0)
+            @test melitz_active_tail_start(col, -Inf) == 1
+            @test melitz_active_tail_start(col, Inf) == 11
+            @test melitz_active_tail_start(col, 0.5) == 1   # below all draws -> everyone active
+            @test melitz_active_tail_start(col, 10.5) == 11 # above all draws -> nobody active
+            @test_throws ArgumentError melitz_active_tail_start(col, NaN)
+        end
+
+        @testset "exact ties: a draw AT the cutoff is INACTIVE (strict >, matches melitz_firm)" begin
+            col = [1.0, 2.0, 3.0, 3.0, 3.0, 4.0, 5.0]
+            @test melitz_active_tail_start(col, 3.0) == 6  # both exact 3.0's excluded
+            @test melitz_active_tail_start(col, 3.0 - 1e-12) == 3
+            @test melitz_active_tail_start(col, 3.0 + 1e-12) == 6
+        end
+
+        @testset "against real production cutoffs and the real melitz_firm active flag (D=4)" begin
+            p, eq = FIXTURE.primitives, FIXTURE.equilibrium
+            D = p.D
+            z = FIXTURE.z_draws
+            sctx = build_melitz_sorted_tail_context(z, p.sigma)
+            for o in 1:D, d in 1:D
+                cutoff_od = eq.cutoff[o, d]
+                sorted_z_o = @view sctx.sorted_z[:, o]
+                perm_o = sctx.permutation[:, o]
+                k = melitz_active_tail_start(sorted_z_o, cutoff_od)
+                active_tail = falses(sctx.W)
+                active_tail[perm_o[k:end]] .= true
+                active_direct = [melitz_firm(p.w[o], p.tau[o, d], p.A[o, d], p.f[o, d], p.sigma,
+                                              eq.expenditure[d], 1.0, z[w, o]).active for w in 1:sctx.W]
+                @test active_tail == active_direct
+            end
+        end
+    end
+
+    @testset "Phase 3: sorted-tail vs dense moment construction, D=4" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        D = p.D
+        Wt = 3000
+        z = FIXTURE.z_draws[1:Wt, :]
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+
+        function compare_backends(p_, eq_, cf_, sctx_, label)
+            @testset "$label" begin
+                Kd = zeros(Wt); Gd = zeros(Wt, LAYOUT.num_moments)
+                Ks = zeros(Wt); Gs = zeros(Wt, LAYOUT.num_moments)
+                melitz_moments!(Kd, Gd, p_, eq_, cf_, z, LAYOUT)
+                melitz_moments_sorted_tail!(Ks, Gs, p_, eq_, cf_, sctx_, LAYOUT)
+                @test Kd == Ks
+                @test isapprox(Gd, Gs; atol=1e-10, rtol=1e-10)
+                @test maximum(abs.(Gd .- Gs)) < 1e-9
+                for c in 1:LAYOUT.num_moments
+                    @test isapprox(minimum(Gd[:, c]), minimum(Gs[:, c]); atol=1e-10)
+                    @test isapprox(maximum(Gd[:, c]), maximum(Gs[:, c]); atol=1e-10)
+                    @test isapprox(mean(Gd[:, c]), mean(Gs[:, c]); atol=1e-10)
+                end
+                @test rank(Gd; atol=1e-8) == rank(Gs; atol=1e-8)
+                @test isapprox(svdvals(Gd), svdvals(Gs); atol=1e-6)
+            end
+        end
+
+        compare_backends(p, eq, cf, sctx, "calibrated fixture point")
+
+        rng3 = MersenneTwister(777)
+        for trial in 1:5
+            A2 = p.A .* exp.(0.05 .* randn(rng3, D, D))
+            p2 = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, A2, p.f, p.gamma_prime_target)
+            cutoff2 = melitz_baseline_cutoff(A2, p.f, p.w, p.tau, eq.expenditure, p.sigma)
+            eq2 = MelitzEquilibrium(eq.expenditure, eq.price_power, cutoff2, eq.trade_flow)
+            compare_backends(p2, eq2, cf, sctx, "random A perturbation $trial")
+        end
+
+        @testset "focal-origin (target_country) perturbation" begin
+            j = p.target_country
+            f2 = copy(p.f)
+            f2[j, mod1(j + 1, D)] *= 1.3
+            p2 = MelitzPrimitives(D, p.sigma, p.theta_star, j, p.tau, p.w, p.A, f2, p.gamma_prime_target)
+            cutoff2 = melitz_baseline_cutoff(p.A, f2, p.w, p.tau, eq.expenditure, p.sigma)
+            eq2 = MelitzEquilibrium(eq.expenditure, eq.price_power, cutoff2, eq.trade_flow)
+            compare_backends(p2, eq2, cf, sctx, "focal f perturbation")
+        end
+
+        @testset "near-cutoff tie: a draw placed exactly at a real cutoff" begin
+            o, d = 2, 3
+            z_tie = copy(z)
+            z_tie[1, o] = eq.cutoff[o, d]
+            sctx_tie = build_melitz_sorted_tail_context(z_tie, p.sigma)
+            Kd = zeros(Wt); Gd = zeros(Wt, LAYOUT.num_moments)
+            Ks = zeros(Wt); Gs = zeros(Wt, LAYOUT.num_moments)
+            melitz_moments!(Kd, Gd, p, eq, cf, z_tie, LAYOUT)
+            melitz_moments_sorted_tail!(Ks, Gs, p, eq, cf, sctx_tie, LAYOUT)
+            @test isapprox(Gd, Gs; atol=1e-10, rtol=1e-10)
+            # The tied draw itself must be INACTIVE in both backends for cell (o,d).
+            @test Gd[1, LAYOUT.trade_index[o, d]] == -(eq.trade_flow[o, d] / eq.expenditure[d])
+            @test Gs[1, LAYOUT.trade_index[o, d]] == -(eq.trade_flow[o, d] / eq.expenditure[d])
+        end
+
+        @testset "engineered zero-active and all-active cells" begin
+            o, d = 3, 4
+            f_huge = copy(p.f); f_huge[o, d] = 1e6   # nobody can afford to enter -> zero-active
+            p_huge = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, p.A, f_huge, p.gamma_prime_target)
+            cutoff_huge = melitz_baseline_cutoff(p.A, f_huge, p.w, p.tau, eq.expenditure, p.sigma)
+            eq_huge = MelitzEquilibrium(eq.expenditure, eq.price_power, cutoff_huge, eq.trade_flow)
+            diag_huge = melitz_sorted_tail_diagnostics(eq_huge, sctx, LAYOUT)
+            @test diag_huge.active_count[o, d] == 0
+            compare_backends(p_huge, eq_huge, cf, sctx, "engineered zero-active cell")
+
+            f_tiny = copy(p.f); f_tiny[o, d] = 1e-8   # everyone active
+            p_tiny = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, p.A, f_tiny, p.gamma_prime_target)
+            cutoff_tiny = melitz_baseline_cutoff(p.A, f_tiny, p.w, p.tau, eq.expenditure, p.sigma)
+            eq_tiny = MelitzEquilibrium(eq.expenditure, eq.price_power, cutoff_tiny, eq.trade_flow)
+            diag_tiny = melitz_sorted_tail_diagnostics(eq_tiny, sctx, LAYOUT)
+            @test diag_tiny.active_count[o, d] == sctx.W
+            compare_backends(p_tiny, eq_tiny, cf, sctx, "engineered all-active cell")
+        end
+
+        @testset "stale-sigma sorted context is rejected, not silently reused" begin
+            sctx_wrong_sigma = build_melitz_sorted_tail_context(z, p.sigma + 1.0)
+            Ks = zeros(Wt); Gs = zeros(Wt, LAYOUT.num_moments)
+            @test_throws ArgumentError melitz_moments_sorted_tail!(Ks, Gs, p, eq, cf, sctx_wrong_sigma, LAYOUT)
+        end
+    end
+
+    @testset "Phase 4: parallel sorted-tail backend agrees with serial (D=4, D=10)" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        Wt = 3000
+        z = FIXTURE.z_draws[1:Wt, :]
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        Ks = zeros(Wt); Gs = zeros(Wt, LAYOUT.num_moments)
+        Kp = zeros(Wt); Gp = zeros(Wt, LAYOUT.num_moments)
+        melitz_moments_sorted_tail!(Ks, Gs, p, eq, cf, sctx, LAYOUT)
+        melitz_moments_sorted_tail_parallel!(Kp, Gp, p, eq, cf, sctx, LAYOUT)
+        @test Ks == Kp
+        @test Gs == Gp  # disjoint per-origin column writes -> bit-identical, no reduction
+
+        f10 = generate_fake_melitz_data(; D=10, sigma=2.5, theta_star=6.8, target_country=3, seed=8, W=4000)
+        p10, eq10, cf10 = f10.primitives, f10.equilibrium, f10.counterfactual
+        layout10 = MelitzMomentLayout(p10.D)
+        z10 = f10.z_draws
+        sctx10 = build_melitz_sorted_tail_context(z10, p10.sigma)
+        Ks10 = zeros(size(z10, 1)); Gs10 = zeros(size(z10, 1), layout10.num_moments)
+        Kp10 = zeros(size(z10, 1)); Gp10 = zeros(size(z10, 1), layout10.num_moments)
+        melitz_moments_sorted_tail!(Ks10, Gs10, p10, eq10, cf10, sctx10, layout10)
+        melitz_moments_sorted_tail_parallel!(Kp10, Gp10, p10, eq10, cf10, sctx10, layout10)
+        @test Ks10 == Kp10
+        @test Gs10 == Gp10
+    end
+
+    @testset "Phase 3: sorted-tail vs dense moment construction, D=10 (fresh fixture)" begin
+        f10 = generate_fake_melitz_data(; D=10, sigma=2.5, theta_star=6.8, target_country=3, seed=8, W=4000)
+        p, eq, cf = f10.primitives, f10.equilibrium, f10.counterfactual
+        layout10 = MelitzMomentLayout(p.D)
+        Wt = f10.z_draws === nothing ? 0 : size(f10.z_draws, 1)
+        z = f10.z_draws
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        K1 = zeros(Wt); G1 = zeros(Wt, layout10.num_moments)
+        K2 = zeros(Wt); G2 = zeros(Wt, layout10.num_moments)
+        melitz_moments!(K1, G1, p, eq, cf, z, layout10)
+        melitz_moments_sorted_tail!(K2, G2, p, eq, cf, sctx, layout10)
+        @test K1 == K2
+        @test isapprox(G1, G2; atol=1e-10, rtol=1e-10)
+
+        diag_sorted = melitz_sorted_tail_diagnostics(eq, sctx, layout10)
+        for o in 1:p.D, d in 1:p.D
+            n_direct = count(>(eq.cutoff[o, d]), @view(z[:, o]))
+            @test diag_sorted.active_count[o, d] == n_direct
+            @test isapprox(diag_sorted.active_fraction[o, d], n_direct / Wt; atol=1e-12)
+        end
+    end
+
+    @testset "Phase 5: fused diagnostics vs dense reference (D=4)" begin
+        p, eq = FIXTURE.primitives, FIXTURE.equilibrium
+        z = FIXTURE.z_draws
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        diag_sorted = melitz_sorted_tail_diagnostics(eq, sctx, LAYOUT)
+        diag_dense = cell_participation_diagnostics(p, eq, z)
+        @test diag_sorted.active_count == diag_dense.count_active
+        mc, worst = min_active_draw_count(p, eq, z)
+        @test minimum(diag_sorted.active_count) == mc
+    end
+
+    begin
+        @testset "Phase 3/real D=20: sorted-tail vs dense at real calibration" begin
+            real_dir = joinpath(dirname(dirname(dirname(@__DIR__))), "real_data", "noah_D20")
+            if isdir(real_dir)
+                lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
+                LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
+                tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
+                countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
+                focal20 = findfirst(==("fra"), countries)
+                observed20 = MelitzObservedData(; lambda=lambdaData, L=LData, tau=tauData, countries=countries, atol=2e-3)
+                calib20 = calibrate_melitz_pareto(observed20; sigma=2.5, theta_star=:estimate,
+                    focal_country=focal20, p_min=0.001, wage_tol=1e-6, gravity_tol=1e-6)
+                p20 = MelitzPrimitives(calib20.D, calib20.sigma, calib20.theta_star, calib20.target_country,
+                    calib20.tau, calib20.w, calib20.A, calib20.f, calib20.gamma_prime_target)
+                eq20 = MelitzEquilibrium(calib20.E, ones(calib20.D), calib20.q, calib20.X)
+                cf20 = MelitzCounterfactual(calib20.target_country, calib20.w_prime,
+                    calib20.w_prime * calib20.L[calib20.target_country], 1.0, calib20.w_prime * calib20.L[calib20.target_country])
+                layout20 = MelitzMomentLayout(calib20.D)
+
+                Wt = 20_000
+                z20 = pareto_draws(Wt, calib20.D, calib20.theta_star; seed=1)
+                sctx20 = build_melitz_sorted_tail_context(z20, p20.sigma; theta_star=p20.theta_star)
+                K1 = zeros(Wt); G1 = zeros(Wt, layout20.num_moments)
+                K2 = zeros(Wt); G2 = zeros(Wt, layout20.num_moments)
+                melitz_moments!(K1, G1, p20, eq20, cf20, z20, layout20)
+                melitz_moments_sorted_tail!(K2, G2, p20, eq20, cf20, sctx20, layout20)
+                @test K1 == K2
+                @test isapprox(G1, G2; atol=1e-9, rtol=1e-9)
+                @test maximum(abs.(G1 .- G2)) < 1e-8
+                @test rank(G1; atol=1e-6) == rank(G2; atol=1e-6)
+
+                diag_sorted20 = melitz_sorted_tail_diagnostics(eq20, sctx20, layout20)
+                diag_dense20 = cell_participation_diagnostics(p20, eq20, z20)
+                @test diag_sorted20.active_count == diag_dense20.count_active
+            else
+                @warn "Skipping real D=20 sorted-tail equivalence test -- real_data/noah_D20 not found"
+            end
+        end
+    end
+end
+
+# ============================================================================
 # 7. Population-Pareto construction identities (addendum Sections 2, 6, 8) -- REPLACES the
 # superseded exact-sample-correction benchmark. `fstar_solver.jl`/`solve_fstar` is ARCHIVED
 # per addendum Section 1 ("do not force exact-sample feasibility") -- kept in the repo as an
@@ -825,6 +1136,36 @@ end
             check = check_profiled_melitz_equilibrium(p_calib, eq_calib, cf_calib, obj.U, lfd.weights)
             @test abs(check.residual_autarky_cutoff) < 1e-6
             @test check.N_prime_diff_rel < 1e-4
+        end
+
+        @testset "Phase 11 (2026-07-25): :sorted_tail_serial backend reproduces :dense_reference through a real KNITRO inner solve" begin
+            obj_dense, theta_dense = build_melitz_psi_bundle_from_calibration(calib; W=20_000, seed=1,
+                moment_backend=:dense_reference)
+            obj_sorted, theta_sorted = build_melitz_psi_bundle_from_calibration(calib; W=20_000, seed=1,
+                moment_backend=:sorted_tail_serial)
+            @test obj_dense.γ.moment_backend == :dense_reference
+            @test obj_sorted.γ.moment_backend == :sorted_tail_serial
+            @test obj_sorted.γ.sorted_tail_ctx !== nothing
+            @test theta_dense == theta_sorted
+            @test obj_dense.U == obj_sorted.U
+
+            lfd_dense = melitz_recover_lfd(obj_dense, theta_dense)
+            lfd_sorted = melitz_recover_lfd(obj_sorted, theta_sorted)
+            @test lfd_dense.nStatus == 0
+            @test lfd_sorted.nStatus == 0
+            @test lfd_dense.lfd_ok
+            @test lfd_sorted.lfd_ok
+            @test isapprox(lfd_dense.Delta, lfd_sorted.Delta; atol=1e-8, rtol=1e-8)
+            @test isapprox(lfd_dense.weights, lfd_sorted.weights; atol=1e-8, rtol=1e-8)
+            @test isapprox(lfd_dense.maximum_weighted_moment_residual, lfd_sorted.maximum_weighted_moment_residual;
+                atol=1e-8, rtol=1e-8)
+
+            # A genuinely mismatched U (wrong shape) must be rejected, not silently reused.
+            obj_bad = build_melitz_psi_bundle_from_calibration(calib; W=20_000, seed=1,
+                moment_backend=:sorted_tail_serial)[1]
+            obj_bad.U = pareto_draws(15_000, calib.D, calib.theta_star; seed=2)
+            K_bad = zeros(calib.D^2 + 1); G_bad = zeros(15_000, calib.D^2 + 1)
+            @test_throws ArgumentError melitz_moments_adapter!(K_bad, G_bad, theta_sorted, obj_bad.U, obj_bad)
         end
     else
         @info "Skipping calibration-context real-KNITRO testset (cc_algo/KNITRO not available)"

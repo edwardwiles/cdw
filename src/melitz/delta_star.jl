@@ -334,7 +334,34 @@ function melitz_moments_adapter!(K, G, theta, U, obj)
     cf = MelitzCounterfactual(ctx.target_country, ctx.w_prime, expenditure_prime,
                                1.0, expenditure_prime)
 
-    melitz_moments!(K, G, primitives, eq, cf, U, ctx.moment_layout; X_data=ctx.X_data)
+    # 2026-07-25 sorted-tail session (docs/melitz_sorted_tail_optimization_2026-07-25.md):
+    # additive, opt-in backend dispatch -- `get(ctx, :moment_backend, :dense_reference)`
+    # means every ctx built BEFORE this session (or any caller not passing
+    # `moment_backend`) is byte-for-byte unaffected, always taking the unchanged
+    # `melitz_moments!` path. `:sorted_tail_serial` requires `ctx.sorted_tail_ctx` to have
+    # been built once at construction time (`build_melitz_psi_bundle`/
+    # `build_melitz_psi_bundle_from_calibration`'s own `moment_backend` kwarg) -- never
+    # built lazily inside a callback. The dimension check below guards against the
+    # bounded residual risk that a caller reassigns `obj.U` to a DIFFERENT draw matrix of
+    # the SAME shape after construction without rebuilding `sorted_tail_ctx` (no production
+    # script surveyed this session does this; `MelitzSortedTailContext`'s own content
+    # fingerprint is available to a caller wanting a stronger, if costlier, guard).
+    backend = get(ctx, :moment_backend, :dense_reference)
+    if backend == :sorted_tail_serial
+        sorted_ctx = ctx.sorted_tail_ctx
+        sorted_ctx === nothing && throw(ArgumentError(
+            "melitz_moments_adapter!: ctx.moment_backend=:sorted_tail_serial but " *
+            "ctx.sorted_tail_ctx is nothing -- was the ctx built without moment_backend " *
+            "passed to build_melitz_psi_bundle/build_melitz_psi_bundle_from_calibration?"))
+        size(U) == (sorted_ctx.W, sorted_ctx.D) || throw(ArgumentError(
+            "melitz_moments_adapter!: U is $(size(U)) but sorted_tail_ctx was built for " *
+            "($(sorted_ctx.W), $(sorted_ctx.D)) -- stale sorted context"))
+        melitz_moments_sorted_tail!(K, G, primitives, eq, cf, sorted_ctx, ctx.moment_layout; X_data=ctx.X_data)
+    elseif backend == :dense_reference
+        melitz_moments!(K, G, primitives, eq, cf, U, ctx.moment_layout; X_data=ctx.X_data)
+    else
+        throw(ArgumentError("melitz_moments_adapter!: unknown ctx.moment_backend=$backend"))
+    end
     return nothing
 end
 
@@ -377,9 +404,13 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
                                   outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
                                   needs_outer_moment_jacobian::Bool=false,
-                                  inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing)
+                                  inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
+                                  moment_backend::Symbol=:dense_reference)
     outer_parameterization in (:logf, :logcutoff) || throw(ArgumentError(
         "outer_parameterization must be :logf or :logcutoff, got $outer_parameterization"))
+    moment_backend in (:dense_reference, :sorted_tail_serial) || throw(ArgumentError(
+        "build_melitz_psi_bundle: moment_backend must be :dense_reference or " *
+        ":sorted_tail_serial, got $moment_backend"))
     p, eq, cf = data.primitives, data.equilibrium, data.counterfactual
     D = p.D
     j = p.target_country
@@ -389,6 +420,12 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
     c_full, A_pivot = build_gravity_pivots(p.tau, j)
     outer_layout = melitz_outer_layout(D, j)
 
+    # 2026-07-25 sorted-tail session: built ONCE here (never inside a callback) from the
+    # SAME z_draws the bundle itself will carry as obj.U -- see melitz_moments_adapter!'s
+    # docstring for the dispatch and its residual-risk caveat.
+    sorted_tail_ctx = moment_backend == :sorted_tail_serial ?
+        build_melitz_sorted_tail_context(z_draws, p.sigma; theta_star=p.theta_star) : nothing
+
     ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
            w_prime=cf.w_prime, L=data.L, expenditure=eq.expenditure,
            benchmark_cutoff=eq.cutoff,  # reporting ONLY (Section 1.2) -- never read for
@@ -397,7 +434,8 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
            moment_layout=moment_layout, X_data=X_data, c_full=c_full, A_pivot=A_pivot,
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
            outer_parameterization=outer_parameterization,
-           inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
+           inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+           moment_backend=moment_backend, sorted_tail_ctx=sorted_tail_ctx)
 
     theta_free = melitz_reduce_theta(p, ctx)
 
