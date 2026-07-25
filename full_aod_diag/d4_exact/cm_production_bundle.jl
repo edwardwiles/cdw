@@ -54,11 +54,16 @@ independent of theta).
 function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :anchored,
                                       probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                       use_archB_moments::Bool = true,
-                                      use_compressed_core::Bool = true)   # allocation/Hessian port task §5:
+                                      use_compressed_core::Bool = true,   # allocation/Hessian port task §5:
                                       # compressed winner-form core moments (default) vs the original
                                       # dense EK_moments_gammanorm_directgp! path (false, kept for
                                       # correctness comparison/emergency revert) -- see
                                       # wrap_moments_with_cm_archB's own docstring.
+                                      threaded_bins::Bool = true)   # allocation/Hessian port task §6:
+                                      # pass-through to build_cm_bin_ctx -- true (production default,
+                                      # matches build_cm_bin_ctx's own default) selects the threaded
+                                      # Architecture-C Hessian; false is an explicit opt-out/benchmark-
+                                      # only comparison against the original serial implementation.
     aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
     if use_archB_moments
@@ -84,7 +89,7 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     end
     ctx_cm = merge(ctx, (obj = obj_cm,))
     bins = cm_bin_indices_for(ctx, aug)
-    cctx = build_cm_bin_ctx(ctx, aug)
+    cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins)
     return (ctx_cm = ctx_cm, aug = aug, bins = bins, cctx = cctx)
 end
 

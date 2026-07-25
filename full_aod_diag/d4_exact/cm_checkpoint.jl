@@ -408,6 +408,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
         L::Int = 10, contrasts::Symbol = :anchored, probs::Union{Nothing,AbstractVector{Float64}} = nothing,
         cm_hessian_backend::Symbol = :structured, cm_grid_rule::Symbol = :equal,
+        threaded_bins::Bool = true,   # allocation/Hessian port task §6: pass-through to
+        # build_cm_production_context/build_cm_bin_ctx -- true (production default) selects the
+        # threaded Architecture-C Hessian; false is an explicit benchmark-only opt-out.
         blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3: set once
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
@@ -591,7 +594,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     pcx = is_meanzc ?
         build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
             contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs) :
-        build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+        build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
