@@ -35,9 +35,19 @@ function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout)
     println(stdout, "cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)")
     flush(stdout)
     aug = build_originzc_augmented_obj(ctx, CS, layout)
-    ctx_cm = merge(ctx, (obj = aug.obj_cm,))
-    return (ctx_cm = ctx_cm, aug = aug)
+    # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.4): `octx` rides on
+    # `ctx_cm` itself (rather than as a new positional argument to
+    # `archOZ_base_state`/`archOZ_verified_state`) so every EXISTING caller of those two
+    # functions across the codebase (cm_screen_bridge.jl, cm_originzc_profile.jl,
+    # cm_originzc_cplus.jl, and a dozen+ diagnostic/test scripts) needs zero signature-call
+    # changes and automatically picks up the shared H_EE backend.
+    octx = build_originzc_core_hess_ctx(aug)
+    ctx_cm = merge(ctx, (obj = aug.obj_cm, octx = octx))
+    return (ctx_cm = ctx_cm, aug = aug, octx = octx)
 end
+
+"port/shared-winner-pair-core-hessian-production-2026-07-25: resolves to the shared-H_EE partitioned callback when `ctx_cm` carries an `octx` (every current production caller does, via `build_originzc_production_context`), else the original unpartitioned dense Architecture A (a caller that built `ctx_cm` some other way, or a diagnostic script that never rebuilt it after this port)."
+_originzc_hess_cb_builder(ctx_cm) = hasproperty(ctx_cm, :octx) ? archA_partitioned_hess_cb_builder(ctx_cm.octx) : archA_hess_cb_builder(ctx_cm.obj)
 
 """
     archOZ_base_state(x_free0, νfull, ctx_cm) -> BaseDualState
@@ -51,7 +61,7 @@ function archOZ_base_state(x_free0::AbstractVector, νfull::AbstractVector{Float
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νfull)
-    K, x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0; hess_cb_builder = archA_hess_cb_builder)
+    K, x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0; hess_cb_builder = _ -> _originzc_hess_cb_builder(ctx_cm))
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archOZ_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, copy(obj.arg1), nStatus)
@@ -67,7 +77,7 @@ function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{F
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νfull)
-    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0; hess_cb_builder = archA_hess_cb_builder)
+    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0; hess_cb_builder = _ -> _originzc_hess_cb_builder(ctx_cm))
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archOZ_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])

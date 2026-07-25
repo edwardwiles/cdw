@@ -191,7 +191,8 @@ correctness comparison / emergency revert; byte-identical to pre-port production
 function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
                                      Bidx::Matrix{Int}, origins::Vector{Int}, refIndex1::Int, L::Int,
                                      R::Union{Nothing,Matrix{Float64}}, ctx; chunk_size::Int = 2000,
-                                     use_compressed_core::Bool = true)
+                                     use_compressed_core::Bool = true,
+                                     core_cf_ref::Ref{Any} = Ref{Any}(nothing))
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
@@ -213,12 +214,20 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
                 grav_raw = compressed_gravity_raw(θ, ctx)
                 fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
                 fill_K_directgp!(K, θ, ctx)
+                # port/shared-winner-pair-core-hessian-production-2026-07-25: publish the
+                # freshly-built `cf` for `hessian_cm_structured!`/`_v2!` (via `cctx.core_cf_ref`,
+                # the SAME shared box) to pick up -- KNITRO always calls the FG/moments! callback
+                # at a new point before the first Hessian call there, so this is set before any
+                # Hessian callback that needs it runs.
+                core_cf_ref[] = cf
             catch e
                 e isa TiedWinnerError || rethrow()
                 core_moments!(K, Gtmp, θ, U, obj)
+                core_cf_ref[] = nothing   # dense fallback for this point -- Hessian must also fall back
             end
         else
             core_moments!(K, Gtmp, θ, U, obj)
+            core_cf_ref[] = nothing   # use_compressed_core=false: no winner-form cf built this call, Hessian must fall back to dense
         end
         @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         @views G[:, end] .= Gtmp[:, end]
@@ -253,7 +262,12 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
 
     d_new = ncore + ncm
     outer_constr_index_new = obj0.outer_constr_index + ncm
-    moments_cm! = wrap_moments_with_cm_archB(obj0.moments!, ncore, Bidx, origins, refIndex1, L, R, ctx; chunk_size = chunk_size)
+    # port/shared-winner-pair-core-hessian-production-2026-07-25: shared box the moments! closure
+    # publishes its freshly-built `cf` into, for `build_cm_bin_ctx`/`hessian_cm_structured!` to
+    # pick up -- see CMBinHessCtx's own `core_cf_ref` field docstring for the full rationale.
+    core_cf_ref = Ref{Any}(nothing)
+    moments_cm! = wrap_moments_with_cm_archB(obj0.moments!, ncore, Bidx, origins, refIndex1, L, R, ctx;
+        chunk_size = chunk_size, core_cf_ref = core_cf_ref)
 
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_cm!, moments_jacobian! = error,
@@ -267,7 +281,7 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
     @assert obj_cm.outer_constr_index == obj_cm.d
 
     return (obj_cm = obj_cm, z = z, origins = origins, ncore = ncore, ncm = ncm, L = L,
-            contrasts = contrasts, refIndex1 = refIndex1, Bidx = Bidx)
+            contrasts = contrasts, refIndex1 = refIndex1, Bidx = Bidx, core_cf_ref = core_cf_ref)
 end
 
 # ============================================================================
@@ -340,6 +354,32 @@ mutable struct CMBinHessCtx
     # build_cm_bin_ctx(...; threaded_bins=false) -- production default is true.
     tls::Union{Nothing,ThreadLocalBinScratch}
     use_threaded_bins::Bool
+    # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.2/§4.3): H_EE now goes
+    # through the shared exact winner-pair backend instead of a small dense BLAS gemm/syrk. The
+    # `CompressedFactual` needed to build the winner-pair workspace is theta-DEPENDENT (winner
+    # assignments change every outer point) but `CMBinHessCtx` itself is built ONCE PER CAMPAIGN
+    # (`build_cm_production_context`'s own docstring: "reused for every subsequent inner solve...
+    # bin indices are fixed once the draws U are fixed -- independent of theta"), so the workspace
+    # cannot be precomputed here. Instead `core_cf_ref` is a SHARED box also closed over by
+    # `wrap_moments_with_cm_archB`'s moments! closure (same pattern this codebase already uses to
+    # pass FG-computed state to the Hessian callback, e.g. compressed_live.jl's
+    # `obj.arg0 .= q` written by the FG callback for the Hessian callback to read) -- every moments!
+    # call (which KNITRO always issues before the first Hessian call at a new point) refreshes
+    # `core_cf_ref[]` with the freshly-built `cf` for the CURRENT theta; `hessian_cm_structured!`/
+    # `_v2!` below rebuild `core_ws` only when the `cf` object identity changes (`core_ws_for`).
+    # `core_cf_ref[]` is `nothing` (falls back to dense BLAS unconditionally) whenever the caller
+    # built `aug` with `use_compressed_core=false` or via the non-archB `build_cm_augmented_obj`.
+    core_cf_ref::Ref{Any}
+    core_ws::Union{Nothing,CoreExactHessianWorkspace}
+    core_ws_for::Any
+    core_hessian_backend::Symbol
+    core_hessian_workers::Int
+    core_hessian_storage::Symbol
+    # CM+mean/ZC widens NCORE to include the mean/pair columns IN THE SAME dense "economic" block
+    # (cm_meanzc_moments.jl's own column layout -- mean/pair are NOT a separate CM-grid-style
+    # restriction block there). The true winner-pair core is only the first `ncore_core` of those
+    # `NCORE` columns; `ncore_core == NCORE` for plain flexible CM (no widening).
+    ncore_core::Int
 end
 
 """
@@ -350,7 +390,9 @@ an existing `aug = build_cm_augmented_obj(...)` result. `z`/`origins` are
 taken from `aug` itself so this is guaranteed to use IDENTICAL thresholds to
 whatever CM matrix Architecture A is using.
 """
-function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true)
+function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
+        core_hessian_backend::Symbol = :exact_winner_pair_parallel,
+        core_hessian_workers::Int = 10, core_hessian_storage::Symbol = :full_stride)
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE = aug.ncore; ncm = aug.ncm
@@ -358,12 +400,19 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true)
     Bidx = compute_bin_indices(ctx.U, z)
     W = size(ctx.U, 1)
     L1 = L + 1
+    # port/shared-winner-pair-core-hessian-production-2026-07-25: `aug.core_cf_ref` exists only
+    # when `aug` came from `build_cm_augmented_obj_archB(...; use_compressed_core=true)` (the
+    # production default); anything else (the plain `build_cm_augmented_obj`, or
+    # `use_compressed_core=false`) falls back to dense BLAS for H_EE unconditionally.
+    core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE, L1), zeros(D, D, L, L), zeros(D, NCORE, L),
         Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm),
         Matrix{Float64}(undef, NCORE, nO), R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO),
         Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
-        nothing, false)
+        nothing, false,
+        core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
+        NCORE)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -423,6 +472,57 @@ function prefix_sum_tables!(cctx::CMBinHessCtx)
 end
 
 """
+    _fill_cm_HEE!(HEE, w, obj, cctx::CMBinHessCtx, E, M)
+
+Shared H_EE fill for BOTH `hessian_cm_structured!` (serial Architecture C)
+and `hessian_cm_structured_v2!` (threaded Architecture C, cm_hessian_threaded.jl)
+-- task §4.2's "Do not implement a second winner-pair variant for this
+family" -- one helper, called from both. Uses the shared exact winner-pair
+backend when `cctx.core_cf_ref[]` holds a valid `CompressedFactual` for the
+CURRENT theta (production default, `use_compressed_core=true` in
+`wrap_moments_with_cm_archB`), rebuilding `cctx.core_ws` only when the `cf`
+object identity has changed since the last call (a new outer point); falls
+back to the original small dense BLAS gemm on `E` (task §5's named,
+explicitly opt-in fallback) whenever no compressed core is available for
+this point (`use_compressed_core=false`, or a `TiedWinnerError` this point),
+or `cctx.core_hessian_backend === :dense_reference`.
+"""
+function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cctx::CMBinHessCtx, E::AbstractMatrix{Float64}, M)
+    ncore = cctx.ncore_core
+    NCORE = cctx.NCORE
+    cf = cctx.core_cf_ref[]
+    if cf !== nothing && cctx.core_hessian_backend !== :dense_reference
+        if cctx.core_ws === nothing || cctx.core_ws_for !== cf
+            cctx.core_ws = build_core_exact_hessian_workspace(cf)
+            cctx.core_ws_for = cf
+        end
+        HEE_core = @view HEE[1:ncore, 1:ncore]
+        fill_core_hessian_upper!(HEE_core, w, obj, cctx.core_ws;
+            backend = cctx.core_hessian_backend, workers = cctx.core_hessian_workers, storage = cctx.core_hessian_storage)
+        if ncore < NCORE
+            # CM+mean/ZC only: mean/pair columns are folded into this SAME widened "economic"
+            # block by cm_meanzc_moments.jl's own column layout (not a separate CM-grid-style
+            # restriction block) -- task §4.3's "retain the existing method for the non-core
+            # blocks" applies to exactly this cross (core x mean/pair) and (mean/pair x mean/pair)
+            # corner, computed via the SAME dense BLAS this whole block used before the port.
+            Ews = cctx.Ews
+            @views Ews[:, 1:NCORE] .= E[:, 1:NCORE] .* sqrt.(w)
+            EC = @view Ews[:, 1:ncore]; EM = @view Ews[:, ncore+1:NCORE]
+            HEM = @view HEE[1:ncore, ncore+1:NCORE]
+            BLAS.gemm!('T', 'N', 1 / M, EC, EM, 0.0, HEM)
+            @views HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)
+            HMM = @view HEE[ncore+1:NCORE, ncore+1:NCORE]
+            BLAS.gemm!('T', 'N', 1 / M, EM, EM, 0.0, HMM)
+        end
+    else
+        Ews = cctx.Ews
+        @views Ews[:, 1:NCORE] .= E[:, 1:NCORE] .* sqrt.(w)
+        BLAS.gemm!('T', 'N', 1 / M, @view(Ews[:, 1:NCORE]), @view(Ews[:, 1:NCORE]), 0.0, HEE)
+    end
+    return HEE
+end
+
+"""
     hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
 
 Architecture C Hessian callback. Requires `obj.arg0` to already reflect the
@@ -444,12 +544,8 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
 
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
-
-    # ---- H_EE: small dense BLAS on E only (NCORE x NCORE, cheap regardless of L) ----
-    Ews = cctx.Ews
-    @views Ews .= E .* sqrt.(w)
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    BLAS.gemm!('T', 'N', 1 / M, Ews, Ews, 0.0, HEE)
+    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)
 
     # ---- H_EC raw, then optional R congruence (right-multiply by R per threshold block) ----
     # Allocation/Hessian port task §4.2: Hraw_EC/block_ec now live in cctx (persistent,
@@ -634,8 +730,104 @@ function inner_loop_internal_archgeneric(obj, θ; hess_cb_builder = nothing, hvp
     end
 end
 
-"Architecture A's hess_cb_builder: the unchanged generic `hessian!`, wired via the profiled callback exactly as oracle_fast.jl does."
+"Architecture A's hess_cb_builder: the unchanged generic `hessian!`, wired via the profiled callback exactly as oracle_fast.jl does. Retained as the :dense_reference / emergency-revert path (task §5) -- origin-ZC's production default is `archA_partitioned_hess_cb_builder` below."
 archA_hess_cb_builder(obj) = _callbackEvalH_inner_profiled!
+
+"""
+    OriginZCCoreHessCtx
+
+port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.4):
+origin-ZC's per-context state for the H_EE/H_ER/H_RR partition --
+`H = [[H_EE H_ER];[H_ER' H_RR]]`, H_EE = the shared exact winner-pair
+backend, H_ER/H_RR = the ORIGINAL dense BLAS contraction Architecture A
+already did, now restricted to just those two blocks instead of one
+monolithic gemm over core+restriction columns combined. H_ER computed once,
+H_RE never computed independently (mirrored via `transpose`).
+"""
+mutable struct OriginZCCoreHessCtx
+    NCORE::Int      # = ncore_econ (winner-pair core width, INCLUDING the zeta/intercept column)
+    n_eta::Int      # restriction (origin-specific mean/pairwise-ZC) column count
+    core_cf_ref::Ref{Any}
+    core_ws::Union{Nothing,CoreExactHessianWorkspace}
+    core_ws_for::Any
+    core_hessian_backend::Symbol
+    core_hessian_workers::Int
+    core_hessian_storage::Symbol
+end
+
+"""
+    build_originzc_core_hess_ctx(aug; core_hessian_backend=:exact_winner_pair_parallel, core_hessian_workers=10, core_hessian_storage=:full_stride) -> OriginZCCoreHessCtx
+
+`aug` is `build_originzc_augmented_obj(...)`'s return value -- needs
+`aug.ncore_econ` and `aug.core_cf_ref` (the shared box
+`wrap_moments_with_originzc`'s moments! closure publishes a fresh
+`CompressedFactual` into every outer point, mirroring flexible CM's
+`core_cf_ref`).
+"""
+function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = :exact_winner_pair_parallel,
+        core_hessian_workers::Int = 10, core_hessian_storage::Symbol = :full_stride)
+    n_eta_total = aug.obj_cm.outer_constr_index - aug.ncore_econ
+    core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
+    return OriginZCCoreHessCtx(aug.ncore_econ, n_eta_total, core_cf_ref, nothing, nothing,
+        core_hessian_backend, core_hessian_workers, core_hessian_storage)
+end
+
+"""
+    archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
+
+Origin-ZC's production hess_cb_builder: partitions the Hessian into
+H_EE (shared exact winner-pair backend) and H_ER/H_RR (existing dense BLAS,
+restricted to those two blocks -- never a combined core+restriction gemm).
+Falls back to the fully dense combined gemm (byte-identical to pre-port
+Architecture A) whenever `octx.core_cf_ref[]` is unavailable for this point
+or `octx.core_hessian_backend === :dense_reference`.
+"""
+function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
+    return (kc, cb, evalRequest, evalResult, userParams) -> begin
+        obj = userParams
+        xloc = evalRequest.x
+        @prof "inner_dual_hessian_callback_archA_partitioned" begin
+            _archC_prep_for_hessian!(obj, xloc)   # same generic prep as Architecture C -- refreshes obj.arg0 from the current dual point, precondition for ddPsi!(arg2,arg0) below
+            @unpack H, H_copy, M, arg0, arg2, ddPsi!, ∂∂f_∂∂x = obj
+            ddPsi!(arg2, arg0)
+            NCORE = octx.NCORE; n_eta_total = octx.n_eta; n = NCORE + n_eta_total
+            cf = octx.core_cf_ref[]
+            if cf !== nothing && octx.core_hessian_backend !== :dense_reference
+                if octx.core_ws === nothing || octx.core_ws_for !== cf
+                    octx.core_ws = build_core_exact_hessian_workspace(cf)
+                    octx.core_ws_for = cf
+                end
+                HEE = @view ∂∂f_∂∂x[1:NCORE, 1:NCORE]
+                fill_core_hessian_upper!(HEE, arg2, obj, octx.core_ws;
+                    backend = octx.core_hessian_backend, workers = octx.core_hessian_workers, storage = octx.core_hessian_storage)
+                if n_eta_total > 0
+                    @views H_copy[:, 2:1+n] .= H[:, 2:1+n]
+                    @views H_copy[:, 2:1+n] .*= .√arg2
+                    HC_core = @view H_copy[:, 2:1+NCORE]
+                    HC_eta = @view H_copy[:, 2+NCORE:1+n]
+                    HER = @view ∂∂f_∂∂x[1:NCORE, NCORE+1:n]
+                    BLAS.gemm!('T', 'N', 1 / M, HC_core, HC_eta, 0.0, HER)
+                    @views ∂∂f_∂∂x[NCORE+1:n, 1:NCORE] .= transpose(HER)
+                    HRR = @view ∂∂f_∂∂x[NCORE+1:n, NCORE+1:n]
+                    BLAS.gemm!('T', 'N', 1 / M, HC_eta, HC_eta, 0.0, HRR)
+                end
+            else
+                @views H_copy[:, 2:1+n] .= H[:, 2:1+n]
+                @views H_copy[:, 2:1+n] .*= .√arg2
+                BLAS.gemm!('T', 'N', 1 / M, @view(H_copy[:, 2:1+n]), @view(H_copy[:, 2:1+n]), 0.0, ∂∂f_∂∂x)
+            end
+            k = 1
+            @inbounds for i in 1:n
+                for j in i:n
+                    evalResult.hess[k] = ∂∂f_∂∂x[i, j]
+                    k += 1
+                end
+            end
+        end
+        _INNER_CALL_COUNTERS[].n_hess_calls += 1
+        return 0
+    end
+end
 
 """
 Architecture C's hess_cb_builder: closes over a CMBinHessCtx.

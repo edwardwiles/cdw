@@ -1,0 +1,655 @@
+# ============================================================================
+# port/shared-winner-pair-core-hessian-production-2026-07-25
+#
+# ONE shared exact core-Hessian backend (H_EE, the common Ricardian
+# economic/trade-share moment block) for every production restriction family
+# (unrestricted, flexible CM, CM+mean/ZC, origin-specific ZC).
+#
+# This file ports the validated winner-pair kernels from
+# diag/compressed-hessian-operator-audit-2026-07-25 (serial: correctness
+# oracle, workers=1-equivalent code path; parallel: destination-pair-owned,
+# validated port_ready_10_workers) essentially UNCHANGED -- see
+# docs/SHARED_WINNER_PAIR_CORE_HESSIAN_PRODUCTION_PORT_2026-07-25.md for the
+# exact provenance/diff against the diag branch -- and adds the ONE genuine
+# gap that branch's own docs flagged as unbuilt (HVP_OPERATOR_READINESS_MAP,
+# HESSIAN_BLOCK_OPERATOR_GAP_ANALYSIS): insertion of the core block into a
+# LARGER family-level Hessian (CM/CM+meanZC/origin-ZC all have restriction
+# columns beyond the core).
+#
+# Design decision (see deliverable doc for the alternative considered and
+# rejected): every family already materializes a DENSE symmetric scratch
+# matrix before packing into KNITRO's row-major upper-triangle format
+# (obj.∂∂f_∂∂x for unrestricted/origin-ZC's generic `hessian!`; cctx.Hfull for
+# CM/CM+meanZC's Architecture C). So "insertion into the correct locations of
+# a larger family Hessian" is handled by simply writing into a `@view` of
+# that EXISTING dense scratch at the right offset -- Julia's own view
+# indexing IS the local-to-global map, exact and allocation-free, with no
+# hand-rolled index table that could drift from the real packing convention.
+# `fill_core_hessian_upper!` below is deliberately dense-in/dense-out for
+# this reason; each family's OWN existing pack-to-KNITRO-triangle step is
+# left completely untouched.
+# ============================================================================
+
+isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
+
+using Base.Threads: nthreads
+
+# ----------------------------------------------------------------------------
+# Serial kernel (correctness oracle / :exact_winner_pair_serial backend).
+# Ported verbatim from diag/compressed-hessian-operator-audit-2026-07-25
+# (winner_pair_hessian.jl, commit 3fceb71) -- CompressedFactual's field set is
+# byte-identical between that branch's base (b7435ee) and this port's base
+# (production tip 39b89c5; `git diff b7435ee..HEAD -- compressed_moments.jl`
+# is empty), so no adaptation was needed beyond this file's own header.
+# ----------------------------------------------------------------------------
+
+"""
+    WinnerPairHessCtx
+
+Precomputed, theta-fixed scratch for the winner-pair Hessian. Built once per
+outer point (same lifetime as `CompressedFactual`), reused across every
+Hessian-callback call within one inner KNITRO solve (only `obj.arg2`, i.e.
+S, changes call to call).
+"""
+struct WinnerPairHessCtx
+    D::Int
+    Ddest::Int
+    W::Int
+    ncolI::Int              # = cf.oci - 1 (bilateral + optional cf column)
+    has_cf::Bool
+    kappa0::Vector{Float64}      # length ncolI
+    pi_vec::Vector{Float64}      # length ncolI
+    nu::Vector{Float64}          # = SW, length W (REAL sampling weights, not assumed uniform)
+    y::Matrix{Float64}           # W x Ddest, kappa0-scaled winner value
+    winner::Matrix{Int}          # W x Ddest (alias of cf.winner)
+    cf_raw_scaled::Vector{Float64}  # kappa0[cf_col]*cf_raw[w], length W (empty if !has_cf)
+    Snu_buf::Vector{Float64}
+    Snu2_buf::Vector{Float64}
+    u_buf::Vector{Float64}
+    r_buf::Vector{Float64}
+    QQ_buf::Matrix{Float64}
+end
+
+"""
+    build_winner_pair_ctx(cf::CompressedFactual) -> WinnerPairHessCtx
+
+O(W*Ddest) construction (dominated by computing `y`), theta-fixed -- build
+once per outer point/inner solve.
+"""
+function build_winner_pair_ctx(cf::CompressedFactual)
+    D = cf.D; Ddest = cf.D_dest; W = cf.W; ncolI = cf.oci - 1
+    has_cf = cf.cf_col > 0
+
+    kappa0 = Vector{Float64}(undef, ncolI)
+    pi_vec = Vector{Float64}(undef, ncolI)
+    @inbounds for slot in 1:Ddest, o in 1:D
+        j = slot + (o - 1) * Ddest
+        k0 = cf.nrm[j] * cf.gdiv[j]
+        kappa0[j] = k0
+        pi_vec[j] = k0 * cf.Pmat[o, slot] * cf.denom[slot] + cf.nrm[j] * cf.usePMM * cf.PMM[j]
+    end
+
+    y = Matrix{Float64}(undef, W, Ddest)
+    @inbounds for slot in 1:Ddest
+        for w in 1:W
+            o = cf.winner[w, slot]
+            j = slot + (o - 1) * Ddest
+            y[w, slot] = kappa0[j] * cf.wval[w, slot]
+        end
+    end
+
+    cf_raw_scaled = Float64[]
+    if has_cf
+        jcf = cf.cf_col
+        k0cf = cf.nrm[jcf] * cf.gdiv[jcf]
+        kappa0[jcf] = k0cf
+        pi_vec[jcf] = cf.nrm[jcf] * cf.usePMM * cf.PMM[jcf]
+        cf_raw_scaled = k0cf .* cf.cf_raw
+    end
+
+    return WinnerPairHessCtx(D, Ddest, W, ncolI, has_cf, kappa0, pi_vec, copy(cf.SW), y, cf.winner, cf_raw_scaled,
+        Vector{Float64}(undef, W), Vector{Float64}(undef, W),
+        Vector{Float64}(undef, ncolI), Vector{Float64}(undef, ncolI),
+        Matrix{Float64}(undef, ncolI, ncolI))
+end
+
+"""
+    winner_pair_hessian!(h::AbstractVector, obj, wctx::WinnerPairHessCtx)
+
+Fills the packed row-major upper-triangular Hessian `h` (length
+n*(n+1)/2, n = 1 + wctx.ncolI), IDENTICAL packing convention to
+`hessian!`/`hessian_cm_structured!`. O(W*Ddest^2 + W*Ddest) total,
+O(Ddest^2) extra memory -- never allocates or touches a W x m array.
+"""
+function winner_pair_hessian!(h::AbstractVector, obj, wctx::WinnerPairHessCtx)
+    CS._enter_callback!(obj)
+    try
+    ddPsi! = obj.ddPsi!
+    ddPsi!(obj.arg2, obj.arg0)
+    S = obj.arg2
+    M = obj.M
+    Ddest = wctx.Ddest; W = wctx.W
+    ncolI = wctx.ncolI
+    n = 1 + ncolI
+    kappa0 = wctx.kappa0; pi_vec = wctx.pi_vec; nu = wctx.nu; y = wctx.y
+
+    length(h) == n * (n + 1) ÷ 2 || error("winner_pair_hessian!: length(h)=$(length(h)) != n(n+1)/2 for n=$n")
+
+    S_sum = 0.0; t0 = 0.0; s0 = 0.0
+    Snu = wctx.Snu_buf
+    Snu2 = wctx.Snu2_buf
+    @inbounds for w in 1:W
+        Sw = S[w]; nuw = nu[w]
+        S_sum += Sw
+        snu = Sw * nuw
+        Snu[w] = snu
+        t0 += snu
+        snu2 = snu * nuw
+        Snu2[w] = snu2
+        s0 += snu2
+    end
+
+    u = wctx.u_buf; r = wctx.r_buf
+    fill!(u, 0.0); fill!(r, 0.0)
+    @inbounds for slot in 1:Ddest
+        for w in 1:W
+            o = wctx.winner[w, slot]
+            j = slot + (o - 1) * Ddest
+            yv = y[w, slot]
+            u[j] += Snu[w] * yv
+            r[j] += Snu2[w] * yv
+        end
+    end
+    if wctx.has_cf
+        jcf = ncolI
+        crs = wctx.cf_raw_scaled
+        uu = 0.0; rr = 0.0
+        @inbounds for w in 1:W
+            uu += Snu[w] * crs[w]
+            rr += Snu2[w] * crs[w]
+        end
+        u[jcf] = uu; r[jcf] = rr
+    end
+
+    QQ = wctx.QQ_buf
+    fill!(QQ, 0.0)
+    @inbounds for slot in 1:Ddest
+        for slotp in slot:Ddest
+            if slot == slotp
+                for w in 1:W
+                    o = wctx.winner[w, slot]
+                    j = slot + (o - 1) * Ddest
+                    QQ[j, j] += Snu2[w] * y[w, slot] * y[w, slot]
+                end
+            else
+                for w in 1:W
+                    o = wctx.winner[w, slot]; op = wctx.winner[w, slotp]
+                    j = slot + (o - 1) * Ddest
+                    jp = slotp + (op - 1) * Ddest
+                    v = Snu2[w] * y[w, slot] * y[w, slotp]
+                    if j <= jp
+                        QQ[j, jp] += v
+                    else
+                        QQ[jp, j] += v
+                    end
+                end
+            end
+        end
+    end
+    if wctx.has_cf
+        jcf = ncolI
+        crs = wctx.cf_raw_scaled
+        qcc = 0.0
+        @inbounds for w in 1:W
+            qcc += Snu2[w] * crs[w] * crs[w]
+        end
+        QQ[jcf, jcf] += qcc
+        @inbounds for slot in 1:Ddest
+            for w in 1:W
+                o = wctx.winner[w, slot]
+                j = slot + (o - 1) * Ddest
+                v = Snu2[w] * y[w, slot] * crs[w]
+                if j <= jcf
+                    QQ[j, jcf] += v
+                else
+                    QQ[jcf, j] += v
+                end
+            end
+        end
+    end
+
+    invM = 1.0 / M
+    k = 1
+    h[k] = S_sum * invM; k += 1
+    @inbounds for j in 1:ncolI
+        h[k] = (u[j] - t0 * pi_vec[j]) * invM
+        k += 1
+    end
+    @inbounds for i in 1:ncolI
+        for j in i:ncolI
+            qq = i == j ? QQ[i, i] : (i <= j ? QQ[i, j] : QQ[j, i])
+            val = qq - r[i] * pi_vec[j] - pi_vec[i] * r[j] + s0 * pi_vec[i] * pi_vec[j]
+            h[k] = val * invM
+            k += 1
+        end
+    end
+    return h
+    finally
+        CS._exit_callback!(obj)
+    end
+end
+
+# ----------------------------------------------------------------------------
+# Parallel kernel (destination-pair-ownership, validated port_ready_10_workers
+# in diag/compressed-hessian-operator-audit-2026-07-25). Ported verbatim from
+# winner_pair_hessian_parallel.jl (commit 3fceb71). The draw-partitioned
+# `_threaded`/`_threaded_nomacro` variants are DELIBERATELY NOT ported -- that
+# branch's own docs record an unresolved correctness bug once nthreads()>1 for
+# that design; only the pair-ownership design (proven bug-free at D=4 and
+# D=20, including non-last omitted destination) is brought into production.
+# ----------------------------------------------------------------------------
+
+"One destination-group: either a bilateral destination slot (D possible winning origins) or the counterfactual column (1 'origin', no winner structure)."
+struct WPGroup
+    is_cf::Bool
+    slot::Int
+    cols::Vector{Int}
+end
+
+"Balanced partition of `1:N` into `nchunks` contiguous, size-differ-by-at-most-1 ranges."
+function wp_balanced_ranges(N::Int, nchunks::Int)
+    base_len, rem = divrem(N, nchunks)
+    ranges = Vector{UnitRange{Int}}(undef, nchunks)
+    start = 1
+    for t in 1:nchunks
+        len = base_len + (t <= rem ? 1 : 0)
+        ranges[t] = start:(start + len - 1)
+        start += len
+    end
+    return ranges
+end
+
+"""
+    WinnerPairParallelWorkspace
+
+Persistent, theta-fixed workspace for the pair-ownership parallel kernel.
+Built once per outer point, reused across every Hessian-callback call within
+one inner solve.
+"""
+struct WinnerPairParallelWorkspace
+    base::WinnerPairHessCtx
+    ngroups::Int
+    groups::Vector{WPGroup}
+    pairs::Vector{Tuple{Int,Int}}
+    QQ::Matrix{Float64}
+    u::Vector{Float64}
+    r::Vector{Float64}
+    PackIdx::Matrix{Int}
+    Snu::Vector{Float64}
+    Snu2::Vector{Float64}
+    draw_ranges_by_workers::Dict{Int,Vector{UnitRange{Int}}}
+    group_chunks_by_workers::Dict{Int,Vector{UnitRange{Int}}}
+    pair_chunks_by_workers::Dict{Int,Vector{UnitRange{Int}}}
+    Ssum_local::Vector{Float64}
+    t0_local::Vector{Float64}
+    s0_local::Vector{Float64}
+    tasks::Vector{Task}
+    max_workers::Int
+end
+
+"""
+    build_winner_pair_parallel_workspace(cf::CompressedFactual; worker_counts, max_workers) -> WinnerPairParallelWorkspace
+
+`worker_counts` (default the standard scaling sweep, including the validated
+production default 10) is precomputed ONCE so `hessian_core_winner_pair!`
+never builds a partition inside a timed call.
+"""
+function build_winner_pair_parallel_workspace(cf::CompressedFactual;
+        worker_counts::Vector{Int} = [1, 2, 4, 8, 10, 19, 20],
+        max_workers::Int = max(nthreads(), maximum(worker_counts)))
+    base = build_winner_pair_ctx(cf)
+    D = base.D; Ddest = base.Ddest; ncolI = base.ncolI; has_cf = base.has_cf; W = base.W
+    ngroups = Ddest + (has_cf ? 1 : 0)
+    groups = Vector{WPGroup}(undef, ngroups)
+    for slot in 1:Ddest
+        cols = [slot + (o - 1) * Ddest for o in 1:D]
+        groups[slot] = WPGroup(false, slot, cols)
+    end
+    if has_cf
+        groups[Ddest + 1] = WPGroup(true, 0, [ncolI])
+    end
+    pairs = Tuple{Int,Int}[]
+    for g in 1:ngroups, gp in g:ngroups
+        push!(pairs, (g, gp))
+    end
+
+    n = 1 + ncolI
+    PackIdx = fill(0, n, n)
+    k = 1
+    @inbounds for i in 1:n
+        for j in i:n
+            PackIdx[i, j] = k
+            k += 1
+        end
+    end
+
+    draw_by_w = Dict{Int,Vector{UnitRange{Int}}}()
+    group_by_w = Dict{Int,Vector{UnitRange{Int}}}()
+    pair_by_w = Dict{Int,Vector{UnitRange{Int}}}()
+    for wc in unique(vcat(worker_counts, 1))
+        draw_by_w[wc] = wp_balanced_ranges(W, wc)
+        group_by_w[wc] = wp_balanced_ranges(ngroups, wc)
+        pair_by_w[wc] = wp_balanced_ranges(length(pairs), wc)
+    end
+
+    return WinnerPairParallelWorkspace(base, ngroups, groups, pairs,
+        zeros(ncolI, ncolI), zeros(ncolI), zeros(ncolI), PackIdx,
+        Vector{Float64}(undef, W), Vector{Float64}(undef, W),
+        draw_by_w, group_by_w, pair_by_w,
+        zeros(max_workers), zeros(max_workers), zeros(max_workers),
+        Vector{Task}(undef, max_workers), max_workers)
+end
+
+@inline function wp_accumulate_pair!(QQ::Matrix{Float64}, g1::WPGroup, g2::WPGroup, Snu2::Vector{Float64},
+        winner::Matrix{Int}, y::Matrix{Float64}, cf_raw_scaled::Vector{Float64}, W::Int, Ddest::Int)
+    if !g1.is_cf && !g2.is_cf && g1.slot == g2.slot
+        slot = g1.slot
+        @inbounds for w in 1:W
+            o = winner[w, slot]
+            j = slot + (o - 1) * Ddest
+            QQ[j, j] += Snu2[w] * y[w, slot] * y[w, slot]
+        end
+    elseif !g1.is_cf && !g2.is_cf
+        s1 = g1.slot; s2 = g2.slot
+        @inbounds for w in 1:W
+            o1 = winner[w, s1]; o2 = winner[w, s2]
+            j1 = s1 + (o1 - 1) * Ddest
+            j2 = s2 + (o2 - 1) * Ddest
+            v = Snu2[w] * y[w, s1] * y[w, s2]
+            if j1 <= j2
+                QQ[j1, j2] += v
+            else
+                QQ[j2, j1] += v
+            end
+        end
+    elseif !g1.is_cf && g2.is_cf
+        s1 = g1.slot; jcf = g2.cols[1]
+        @inbounds for w in 1:W
+            o1 = winner[w, s1]
+            j1 = s1 + (o1 - 1) * Ddest
+            QQ[j1, jcf] += Snu2[w] * y[w, s1] * cf_raw_scaled[w]
+        end
+    else
+        jcf = g1.cols[1]
+        @inbounds for w in 1:W
+            QQ[jcf, jcf] += Snu2[w] * cf_raw_scaled[w] * cf_raw_scaled[w]
+        end
+    end
+    return nothing
+end
+
+@inline function wp_accumulate_group!(u::Vector{Float64}, r::Vector{Float64}, g::WPGroup,
+        Snu::Vector{Float64}, Snu2::Vector{Float64}, winner::Matrix{Int}, y::Matrix{Float64},
+        cf_raw_scaled::Vector{Float64}, W::Int, Ddest::Int)
+    if g.is_cf
+        jcf = g.cols[1]
+        acc_u = 0.0; acc_r = 0.0
+        @inbounds for w in 1:W
+            acc_u += Snu[w] * cf_raw_scaled[w]
+            acc_r += Snu2[w] * cf_raw_scaled[w]
+        end
+        u[jcf] += acc_u; r[jcf] += acc_r
+    else
+        slot = g.slot
+        @inbounds for w in 1:W
+            o = winner[w, slot]
+            j = slot + (o - 1) * Ddest
+            yv = y[w, slot]
+            u[j] += Snu[w] * yv
+            r[j] += Snu2[w] * yv
+        end
+    end
+    return nothing
+end
+
+"""
+    hessian_core_winner_pair!(hess_packed, curvature_weights, obj, workspace; workers=1, storage=:full_stride)
+
+Shared serial/parallel interface. `workers=1` runs the SAME code path as
+workers>1 (2 spawn rounds of 1 task each), so there is no separate "fast
+path" that could silently drift from the parallel path.
+"""
+function hessian_core_winner_pair!(hess_packed::AbstractVector, curvature_weights, obj, workspace::WinnerPairParallelWorkspace;
+        workers::Int = 1, storage::Symbol = :full_stride)
+    storage in (:full_stride, :direct_packed) || error("hessian_core_winner_pair!: storage must be :full_stride or :direct_packed, got :$storage")
+    haskey(workspace.draw_ranges_by_workers, workers) || error("hessian_core_winner_pair!: workers=$workers not in workspace's precomputed worker_counts")
+    CS._enter_callback!(obj)
+    try
+    base = workspace.base
+    ddPsi! = obj.ddPsi!
+    ddPsi!(obj.arg2, obj.arg0)
+    S = obj.arg2; M = obj.M
+    Ddest = base.Ddest; ncolI = base.ncolI; W = base.W
+    nu = base.nu; y = base.y; winner = base.winner; cf_raw_scaled = base.cf_raw_scaled
+    pi_vec = base.pi_vec
+    n = 1 + ncolI
+    length(hess_packed) == n * (n + 1) ÷ 2 || error("hessian_core_winner_pair!: length mismatch")
+
+    QQ = workspace.QQ; u = workspace.u; r = workspace.r
+    Snu = workspace.Snu; Snu2 = workspace.Snu2
+    fill!(QQ, 0.0); fill!(u, 0.0); fill!(r, 0.0)
+
+    draw_ranges = workspace.draw_ranges_by_workers[workers]
+    group_chunks = workspace.group_chunks_by_workers[workers]
+    pair_chunks = workspace.pair_chunks_by_workers[workers]
+    tasks = workspace.tasks
+
+    for wk in 1:workers
+        rng = draw_ranges[wk]
+        tasks[wk] = Threads.@spawn begin
+            Ss = 0.0; t0 = 0.0; s0 = 0.0
+            @inbounds for w in rng
+                Sw = S[w]; nuw = nu[w]
+                snu = Sw * nuw
+                Snu[w] = snu
+                snu2 = snu * nuw
+                Snu2[w] = snu2
+                Ss += Sw; t0 += snu; s0 += snu2
+            end
+            (Ss, t0, s0)
+        end
+    end
+    S_sum = 0.0; t0_tot = 0.0; s0_tot = 0.0
+    for wk in 1:workers
+        Ss, t0v, s0v = fetch(tasks[wk])
+        S_sum += Ss; t0_tot += t0v; s0_tot += s0v
+    end
+
+    for wk in 1:workers
+        gr = group_chunks[wk]; pr = pair_chunks[wk]
+        tasks[wk] = Threads.@spawn begin
+            for gi in gr
+                wp_accumulate_group!(u, r, workspace.groups[gi], Snu, Snu2, winner, y, cf_raw_scaled, W, Ddest)
+            end
+            for pidx in pr
+                (g, gp) = workspace.pairs[pidx]
+                wp_accumulate_pair!(QQ, workspace.groups[g], workspace.groups[gp], Snu2, winner, y, cf_raw_scaled, W, Ddest)
+            end
+            nothing
+        end
+    end
+    for wk in 1:workers
+        fetch(tasks[wk])
+    end
+
+    invM = 1.0 / M
+    if storage == :full_stride
+        k = 1
+        hess_packed[k] = S_sum * invM; k += 1
+        @inbounds for j in 1:ncolI
+            hess_packed[k] = (u[j] - t0_tot * pi_vec[j]) * invM
+            k += 1
+        end
+        @inbounds for i in 1:ncolI
+            for j in i:ncolI
+                val = QQ[i, j] - r[i] * pi_vec[j] - pi_vec[i] * r[j] + s0_tot * pi_vec[i] * pi_vec[j]
+                hess_packed[k] = val * invM
+                k += 1
+            end
+        end
+    else
+        PackIdx = workspace.PackIdx
+        hess_packed[PackIdx[1, 1]] = S_sum * invM
+        @inbounds for j in 1:ncolI
+            hess_packed[PackIdx[1, 1 + j]] = (u[j] - t0_tot * pi_vec[j]) * invM
+        end
+        @inbounds for i in 1:ncolI
+            for j in i:ncolI
+                val = QQ[i, j] - r[i] * pi_vec[j] - pi_vec[i] * r[j] + s0_tot * pi_vec[i] * pi_vec[j]
+                hess_packed[PackIdx[1 + i, 1 + j]] = val * invM
+            end
+        end
+    end
+    return hess_packed
+    finally
+        CS._exit_callback!(obj)
+    end
+end
+
+# ============================================================================
+# Section 2 of the task: the ONE shared production abstraction every family
+# calls -- CoreExactHessianWorkspace + fill_core_hessian_upper!.
+# ============================================================================
+
+const CORE_HESSIAN_BACKENDS = (:exact_winner_pair_parallel, :exact_winner_pair_serial, :dense_reference)
+
+"""
+    CoreExactHessianWorkspace
+
+Wraps BOTH the serial ctx and the parallel workspace (they share the same
+`base::WinnerPairHessCtx`-shaped precompute -- `parallel_ws.base` IS a
+`WinnerPairHessCtx`, so there is exactly one copy of the theta-fixed
+precompute, not two), plus a persistent packed scratch buffer used as the
+common local output format before unpacking into whatever dense view the
+caller supplies. Built once per outer point (same cadence as
+`CompressedFactual`/`CMBinHessCtx`/`WinnerPairHessCtx` itself).
+"""
+struct CoreExactHessianWorkspace
+    parallel_ws::WinnerPairParallelWorkspace
+    packed_scratch::Vector{Float64}
+    ncolI::Int
+end
+
+function build_core_exact_hessian_workspace(cf::CompressedFactual;
+        worker_counts::Vector{Int} = [1, 2, 4, 8, 10, 19, 20],
+        max_workers::Int = max(nthreads(), maximum(worker_counts)))
+    parallel_ws = build_winner_pair_parallel_workspace(cf; worker_counts = worker_counts, max_workers = max_workers)
+    ncolI = parallel_ws.base.ncolI
+    n = 1 + ncolI
+    return CoreExactHessianWorkspace(parallel_ws, Vector{Float64}(undef, n * (n + 1) ÷ 2), ncolI)
+end
+
+"Serial ctx accessor (workers=1 through the SAME parallel code path is preferred for the production default; this returns the base ctx for the standalone :exact_winner_pair_serial oracle/fallback backend, which uses the dedicated non-threaded `winner_pair_hessian!` kernel, not `hessian_core_winner_pair!(...; workers=1)`)."
+serial_ctx(ws::CoreExactHessianWorkspace) = ws.parallel_ws.base
+
+"""
+    _dense_reference_core_hessian!(packed, obj, n)
+
+Generic dense-BLAS reference/debug backend (`:dense_reference`): recomputes
+the SAME (1+ncolI)x(1+ncolI) core block via the ordinary weighted Gram matrix
+`(1/M) Ĝ'SĜ`, `Ĝ = obj.H[:, 2:1+n]` (n columns: `H`'s own column 2 is
+ALREADY the literal zeta ones-column -- populated by the caller, e.g.
+`inner_loop_internal_archgeneric`'s `obj.H[:, 2] .= 1.0` -- NOT manufactured
+here; columns 3:1+n are the n-1 core bilateral/cf columns), exactly the
+pattern every family used before this port
+(`cc_algo/PsiObjectiveBundle.jl::hessian!`'s `H_copy[:, 2:1+outer_constr_index]
+.= H[:, 2:1+outer_constr_index]` with `outer_constr_index == n` here --
+`cm_hessian_architectures.jl::hessian_cm_structured!`'s H_EE carve-out reads
+the analogous `E = H[:, 2:1+NCORE]` view). Preserved as a NAMED,
+explicitly-opt-in fallback per task §5 ("acceptable to preserve dense BLAS as
+a named fallback... must not remain the silent default"), and as the
+anti-regression comparison target.
+"""
+function _dense_reference_core_hessian!(packed::AbstractVector, obj, n::Int)
+    CS._enter_callback!(obj)
+    try
+    @unpack H, H_copy, M, arg0, arg2, ddPsi! = obj
+    ddPsi!(arg2, arg0)
+    @views H_copy[:, 2:1+n] .= H[:, 2:1+n]
+    @views H_copy[:, 2:1+n] .*= .√arg2
+    Hd = Matrix{Float64}(undef, n, n)
+    BLAS.gemm!('T', 'N', 1 / M, @view(H_copy[:, 2:1+n]), @view(H_copy[:, 2:1+n]), 0.0, Hd)
+    k = 1
+    @inbounds for i in 1:n
+        for j in i:n
+            packed[k] = Hd[i, j]
+            k += 1
+        end
+    end
+    return packed
+    finally
+        CS._exit_callback!(obj)
+    end
+end
+
+"""
+    fill_core_hessian_upper!(Hdense, curvature_weights, compressed_core, workspace, global_layout=nothing;
+                              backend=:exact_winner_pair_parallel, workers=10, storage=:full_stride)
+
+THE shared entry point every family calls to get the common core Hessian
+block H_EE (extended with the zeta row/column and, when active, the
+counterfactual column). Fills the SYMMETRIC dense `(1+ncolI) x (1+ncolI)`
+block into `Hdense`, which may be:
+  - the family's ENTIRE dense Hessian scratch (unrestricted: H_EE is the
+    whole moment block, no restriction columns exist to carve off), or
+  - a `@view` into the top-left corner of a LARGER family scratch
+    (`cctx.Hfull[1:NCORE,1:NCORE]` for CM/CM+meanZC; a top-left corner view
+    of `obj.∂∂f_∂∂x` for origin-ZC) -- the view's own offset bookkeeping IS
+    the local-to-global packed-index map (task §2's "precomputed
+    local-to-global packed-index maps" requirement), so there is no separate
+    hand-rolled index table to keep in sync with each family's packing order.
+
+`curvature_weights` is accepted (and expected to already equal `obj.arg2`
+post-`ddPsi!`) purely for interface-contract documentation, matching every
+other Hessian backend's calling convention in this codebase -- every backend
+here re-derives it from `obj` internally (same as `winner_pair_hessian!`/
+`hessian_cm_structured!`), so a stale value passed here has no effect.
+
+`global_layout` is accepted for interface-contract symmetry with the task
+brief's specified signature. Unused today (this implementation's
+local-to-global map is `Hdense`'s own view offset, see above) -- kept as an
+explicit no-op parameter, not silently dropped, so a future backend that DOES
+need an explicit index table has a place to plug in without an interface
+change.
+
+Computation of the exact core upper triangle (this function, into
+`workspace.packed_scratch`) is kept SEPARATE from assembly into the caller's
+larger Hessian (the final unpack loop below) per task §2's explicit
+instruction not to let family-specific code reimplement the core algebra.
+"""
+function fill_core_hessian_upper!(Hdense::AbstractMatrix, curvature_weights, obj,
+        workspace::CoreExactHessianWorkspace, global_layout = nothing;
+        backend::Symbol = :exact_winner_pair_parallel, workers::Int = 10, storage::Symbol = :full_stride)
+    backend in CORE_HESSIAN_BACKENDS || error("fill_core_hessian_upper!: unknown backend :$backend (expected one of $CORE_HESSIAN_BACKENDS)")
+    n = 1 + workspace.ncolI
+    size(Hdense) == (n, n) || error("fill_core_hessian_upper!: Hdense size $(size(Hdense)) != ($n,$n)")
+    packed = workspace.packed_scratch
+
+    if backend === :exact_winner_pair_parallel
+        hessian_core_winner_pair!(packed, curvature_weights, obj, workspace.parallel_ws; workers = workers, storage = storage)
+    elseif backend === :exact_winner_pair_serial
+        winner_pair_hessian!(packed, obj, serial_ctx(workspace))
+    else # :dense_reference
+        _dense_reference_core_hessian!(packed, obj, n)
+    end
+
+    k = 1
+    @inbounds for i in 1:n
+        for j in i:n
+            v = packed[k]; k += 1
+            Hdense[i, j] = v
+            Hdense[j, i] = v
+        end
+    end
+    return Hdense
+end

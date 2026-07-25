@@ -279,7 +279,9 @@ below) is retained byte-for-byte for validation.
 """
 function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, CM::Matrix{Float64},
                                       Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}};
-                                      meanzc_basis::Symbol = :direct, refIndex1::Int = 1)
+                                      meanzc_basis::Symbol = :direct, refIndex1::Int = 1,
+                                      ctx = nothing, use_compressed_core::Bool = true,
+                                      core_cf_ref::Ref{Any} = Ref{Any}(nothing))
     meanzc_basis in (:direct, :anchored) || error("wrap_moments_with_cm_meanzc: meanzc_basis must be :direct or :anchored, got $meanzc_basis")
     pregrav = ncore_econ - 1
     D = size(Zraw_all[1], 2)
@@ -290,6 +292,13 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
     n_pair_total = K_pair * npair
     ncm = size(CM, 2)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
+    # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.3): CM+mean/ZC must
+    # reuse the SAME shared H_EE backend as flexible CM, not a second winner-pair variant -- that
+    # requires a `CompressedFactual` here too, exactly mirroring `wrap_moments_with_cm_archB`
+    # (cm_hessian_architectures.jl). `ctx===nothing` (a caller not passing the plain pre-CM
+    # context) or `use_compressed_core=false` preserves the ORIGINAL dense `core_moments!` path
+    # byte-for-byte -- this is an ADDITIVE capability, not a behavior change for existing callers.
+    can_compress = ctx !== nothing && use_compressed_core
     return function (K, G, θ_ext, U, obj)
         n = size(U, 1)
         θ_econ = @view θ_ext[1:end-K_mean]
@@ -298,7 +307,23 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
             Gtmp_cache[] = Matrix{Float64}(undef, n, ncore_econ)
         end
         G_tmp = Gtmp_cache[]
-        core_moments!(K, G_tmp, θ_econ, U, obj)
+        if can_compress
+            try
+                cf = build_compressed_factual(collect(θ_econ), ctx; check_ties = true)
+                materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
+                grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
+                fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
+                fill_K_directgp!(K, collect(θ_econ), ctx)
+                core_cf_ref[] = cf
+            catch e
+                e isa TiedWinnerError || rethrow()
+                core_moments!(K, G_tmp, θ_econ, U, obj)
+                core_cf_ref[] = nothing
+            end
+        else
+            core_moments!(K, G_tmp, θ_econ, U, obj)
+            core_cf_ref[] = nothing
+        end
         @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
         for k in 1:K_mean
             cols = pregrav+(k-1)*D+1 : pregrav+k*D
@@ -410,8 +435,10 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
 
     d_new = ncore_econ + n_mean + n_pair + ncm
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair + ncm
+    core_cf_ref = Ref{Any}(nothing)
     moments_meanzc! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
-                                                   meanzc_basis = meanzc_basis, refIndex1 = refIndex1)
+                                                   meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
+                                                   ctx = ctx, core_cf_ref = core_cf_ref)
 
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_meanzc!, moments_jacobian! = error,
@@ -428,7 +455,7 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
             L = L, contrasts = contrasts, refIndex1 = refIndex1,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, K_mean = K_mean, K_pair = K_pair,
             n_mean = n_mean, n_pair = n_pair, meanzc_basis = meanzc_basis,
-            ncore_econ = ncore_econ)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref)
 end
 
 """

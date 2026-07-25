@@ -92,7 +92,9 @@ cm_checkpoint.jl).
 """
 function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
                                      Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}},
-                                     layout::MeanZCTargetLayout)
+                                     layout::MeanZCTargetLayout;
+                                     ctx = nothing, use_compressed_core::Bool = true,
+                                     core_cf_ref::Ref{Any} = Ref{Any}(nothing))
     pregrav = ncore_econ - 1
     D = size(Zraw_all[1], 2)
     K_mean = layout.K_mean
@@ -102,6 +104,11 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
     n_pair_total = K_pair * npair
     n_eta_total = n_eta(layout)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
+    # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.4): origin-ZC's H_EE
+    # needs the SAME shared winner-pair backend, which needs a `CompressedFactual` for the current
+    # theta -- built here, mirroring `wrap_moments_with_cm_archB`/`wrap_moments_with_cm_meanzc`,
+    # and published via `core_cf_ref` for `archA_partitioned_hess_cb_builder` to pick up.
+    can_compress = ctx !== nothing && use_compressed_core
     return function (K, G, θ_ext, U, obj)
         n = size(U, 1)
         θ_econ = @view θ_ext[1:end-n_eta_total]
@@ -110,7 +117,23 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
             Gtmp_cache[] = Matrix{Float64}(undef, n, ncore_econ)
         end
         G_tmp = Gtmp_cache[]
-        core_moments!(K, G_tmp, θ_econ, U, obj)
+        if can_compress
+            try
+                cf = build_compressed_factual(collect(θ_econ), ctx; check_ties = true)
+                materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
+                grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
+                fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
+                fill_K_directgp!(K, collect(θ_econ), ctx)
+                core_cf_ref[] = cf
+            catch e
+                e isa TiedWinnerError || rethrow()
+                core_moments!(K, G_tmp, θ_econ, U, obj)
+                core_cf_ref[] = nothing
+            end
+        else
+            core_moments!(K, G_tmp, θ_econ, U, obj)
+            core_cf_ref[] = nothing
+        end
         @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
         for k in 1:K_mean
             cols = pregrav+(k-1)*D+1 : pregrav+k*D
@@ -207,7 +230,9 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout)
 
     d_new = ncore_econ + n_mean + n_pair
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair
-    moments_originzc! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout)
+    core_cf_ref = Ref{Any}(nothing)
+    moments_originzc! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
+        ctx = ctx, core_cf_ref = core_cf_ref)
 
     obj_oz = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_originzc!, moments_jacobian! = error,
@@ -223,7 +248,7 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout)
     return (obj_cm = obj_oz, ncore = ncore_econ,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, layout = layout,
             K_mean = K_mean, K_pair = K_pair, n_mean = n_mean, n_pair = n_pair,
-            ncore_econ = ncore_econ)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref)
 end
 
 """

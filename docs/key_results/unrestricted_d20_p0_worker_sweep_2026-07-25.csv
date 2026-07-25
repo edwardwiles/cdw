@@ -1,0 +1,8 @@
+family,workers,storage,wall_seconds,nStatus,n_fg,n_hess
+unrestricted,dense_reference,none,3.0934,0,7,6
+unrestricted,1,full_stride,0.5495,0,7,6
+unrestricted,2,full_stride,0.4063,0,7,6
+unrestricted,4,full_stride,0.3160,0,7,6
+unrestricted,8,full_stride,0.3205,0,7,6
+unrestricted,10,full_stride,0.3207,0,7,6
+unrestricted,serial,none,0.5686,0,7,6

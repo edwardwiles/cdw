@@ -36,6 +36,17 @@
 # silent, never a different tie resolution.
 # ============================================================================
 
+# port/shared-winner-pair-core-hessian-production-2026-07-25: the shared exact
+# core-Hessian backend (replaces this file's own lazy-dense-materialize +
+# CS.hessian! path below -- see core_exact_hessian.jl header for the full
+# rationale). Self-include-guarded, this codebase's own convention.
+isdefined(Main, :fill_core_hessian_upper!) || include(joinpath(@__DIR__, "core_exact_hessian.jl"))
+
+"Resolved backend/workers/storage for the UNRESTRICTED family's core Hessian -- read by `_callbackEvalH_inner_compressed!` and by `resolve_unrestricted_manifest` so the two can never silently diverge. Production default is the validated port_ready_10_workers destination-pair-owned parallel kernel; set to :dense_reference for anti-regression / emergency-revert comparisons (see task §5)."
+const UNRESTRICTED_CORE_HESSIAN_BACKEND = Ref{Symbol}(:exact_winner_pair_parallel)
+const UNRESTRICTED_CORE_HESSIAN_WORKERS = Ref{Int}(10)
+const UNRESTRICTED_CORE_HESSIAN_STORAGE = Ref{Symbol}(:full_stride)
+
 # ---- fallback counter (Ref{Int}, per the task brief's explicit requirement) ----
 const COMPRESSED_FALLBACK_COUNT = Ref(0)
 
@@ -92,7 +103,14 @@ function compressed_gravity_raw(θ_full::AbstractVector, ctx)
     # not just :exclude_row, since compressed_live.jl was never touched by the omit-ROW work and
     # so never got updated to match). ctx.D_dest == ctx.D under :all_legacy, so this fix is a
     # no-op there and only changes behavior (from "crash") under a rectangular ctx.
-    newGravityMoment!(G1, ctx.τ, ctx.D, ctx.D_dest, 1, ones(ctx.D), AodPow, @view(ctx.U[1:1, :]), ind.GravityMomentFirstApproach, ind.UoModel)
+    # port/shared-winner-pair-core-hessian-production-2026-07-25: `hasproperty` guard added -- this
+    # was the ONE remaining unguarded `ctx.D_dest` access in this file (every other access already
+    # used this pattern), a real latent gap flagged but deliberately left untouched by the
+    # diag/compressed-hessian-operator-audit-2026-07-25 D=4 validation script's own comments; now a
+    # genuine blocker for this port's D=4 gates once CM/CM+meanZC/origin-ZC also call this function
+    # from their own new compressed-core paths, so fixed here rather than left as a known gap.
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    newGravityMoment!(G1, ctx.τ, ctx.D, Ddest, 1, ones(ctx.D), AodPow, @view(ctx.U[1:1, :]), ind.GravityMomentFirstApproach, ind.UoModel)
     return G1[1, 1]
 end
 
@@ -127,8 +145,13 @@ mutable struct CompressedCBState
     obj::Any                    # PsiObjectiveBundleImplicit
     cf::CompressedFactual
     grav_raw::Float64
-    dense_materialized::Bool    # true once obj.H's G columns have been filled from cf (lazy, once per inner solve)
+    dense_materialized::Bool    # true once obj.H's G columns have been filled from cf (lazy, once per inner solve; only needed by the :dense_reference core-Hessian backend now)
+    core_ws::Union{Nothing,CoreExactHessianWorkspace}   # built lazily from `cf` on first Hessian call this inner solve (port/shared-winner-pair-core-hessian-production-2026-07-25)
 end
+
+"Backward-compatible outer constructor for the 4 existing call sites that predate the shared core-Hessian workspace field (compressed_live.jl/compressed_live_v2.jl/fast_range_screen.jl/infeasibility_screen.jl/compressed_inner_alt_solvers.jl) -- none of them need to change."
+CompressedCBState(obj, cf::CompressedFactual, grav_raw::Float64, dense_materialized::Bool) =
+    CompressedCBState(obj, cf, grav_raw, dense_materialized, nothing)
 
 """
     _callbackEvalFG_inner_compressed!
@@ -160,28 +183,53 @@ end
 """
     _callbackEvalH_inner_compressed!
 
-Dense Hessian callback (see the "HESSIAN-CALLBACK ADAPTER DECISION" note in
-compressed_cc_inner.jl for why this stays dense). Lazily materializes
-`obj.H`'s G columns (bilateral+CF block from `cf.winner`/`cf.wval` via
-`materialize_dense_factual!`; the one extra gravity column via
-`fill_gravity_column!`) EXACTLY ONCE per inner solve (theta -- hence G -- is
-fixed for the whole solve), then calls the UNCHANGED production `hessian!`.
+port/shared-winner-pair-core-hessian-production-2026-07-25: for the
+UNRESTRICTED family the entire Hessian IS the common core block H_EE (there
+are no CM/ZC restriction columns to carve off), so this callback now calls
+the shared exact winner-pair backend DIRECTLY on `evalResult.hess`
+(`hessian_core_winner_pair!`/`winner_pair_hessian!` already produce KNITRO's
+packed row-major upper triangle natively -- no dense round-trip needed here,
+unlike the restricted families whose H_EE is only a SUB-block of a larger
+packed Hessian). Built from `st.cf` (already available, no rebuild), lazily,
+once per inner solve -- same cadence the old dense-materialize step used.
+
+The dense `obj.H` materialization (`materialize_dense_factual_structured!` +
+`fill_gravity_column!`) this replaced is now SKIPPED for the production
+default backend (it cost real time -- see
+docs/UNRESTRICTED_WINNER_PAIR_VS_DENSE_BLAS_BENCHMARK_2026-07-25.md's
+isolated-callback numbers -- and nothing else in this inner solve reads
+`obj.H`'s G columns; the FG callback above already gets everything it needs
+from `st.cf` directly). It is still run, and `CS.hessian!` still called, when
+`UNRESTRICTED_CORE_HESSIAN_BACKEND[] === :dense_reference` (anti-regression /
+emergency-revert path, task §5) so that named fallback stays byte-identical
+to pre-port production.
 """
 function _callbackEvalH_inner_compressed!(kc, cb, evalRequest, evalResult, userParams)
     st = userParams
     obj = st.obj
     @prof "inner_dual_hessian_callback_compressed" begin
-        if !st.dense_materialized
-            ncolI = st.cf.oci - 1
-            # Continuation 10 Section 9: structured (rank-one + winner-scatter) construction
-            # replaces the generic materialize_dense_factual! here -- this IS the actual
-            # Hessian-callback moment-materialization step (docs/fullA_D20_structured_moment_report.md,
-            # ~4-23x isolated / ~1.32x full-cold-inner-solve, bit-identical).
-            materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
-            fill_gravity_column!(obj, st.grav_raw)
-            st.dense_materialized = true
+        backend = UNRESTRICTED_CORE_HESSIAN_BACKEND[]
+        if backend === :dense_reference
+            if !st.dense_materialized
+                ncolI = st.cf.oci - 1
+                materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
+                fill_gravity_column!(obj, st.grav_raw)
+                st.dense_materialized = true
+            end
+            CS.hessian!(evalResult.hess, obj)
+        else
+            if st.core_ws === nothing
+                st.core_ws = build_core_exact_hessian_workspace(st.cf)
+            end
+            if backend === :exact_winner_pair_parallel
+                hessian_core_winner_pair!(evalResult.hess, obj.arg2, obj, st.core_ws.parallel_ws;
+                    workers = UNRESTRICTED_CORE_HESSIAN_WORKERS[], storage = UNRESTRICTED_CORE_HESSIAN_STORAGE[])
+            elseif backend === :exact_winner_pair_serial
+                winner_pair_hessian!(evalResult.hess, obj, serial_ctx(st.core_ws))
+            else
+                error("_callbackEvalH_inner_compressed!: unknown UNRESTRICTED_CORE_HESSIAN_BACKEND[] = :$backend")
+            end
         end
-        CS.hessian!(evalResult.hess, obj)
     end
     _INNER_CALL_COUNTERS[].n_hess_calls += 1
     return 0

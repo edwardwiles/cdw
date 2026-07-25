@@ -152,20 +152,25 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
 
-    # ---- H_EE: syrk (symmetric rank-k update -- Ews'*Ews is a genuine Gram matrix) or gemm ----
-    Ews = cctx.Ews
-    @views Ews .= E .* sqrt.(w)
+    # ---- H_EE: shared exact winner-pair backend (port/shared-winner-pair-core-hessian-
+    # production-2026-07-25), same `_fill_cm_HEE!` helper the serial Architecture C callback uses
+    # (cm_hessian_architectures.jl) -- task §4.2's "Do not implement a second winner-pair variant
+    # for this family". The syrk-vs-gemm choice below now only applies to the DENSE :dense_reference
+    # fallback path (`use_syrk` is otherwise unused when the winner-pair backend is active).
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    if use_syrk
-        BLAS.syrk!('U', 'T', 1 / M, Ews, 0.0, HEE)
-        # syrk! only fills the upper triangle (uplo='U'); mirror it now so the symmetrize-by-
-        # averaging step below (which reads both Hfull[i,j] and Hfull[j,i]) sees a full matrix,
-        # matching gemm!'s behavior of writing both triangles of this symmetric product.
-        @inbounds for i in 1:NCORE, j in 1:(i-1)
-            HEE[i, j] = HEE[j, i]
-        end
+    if cctx.core_cf_ref[] !== nothing && cctx.core_hessian_backend !== :dense_reference
+        _fill_cm_HEE!(HEE, w, obj, cctx, E, M)
     else
-        BLAS.gemm!('T', 'N', 1 / M, Ews, Ews, 0.0, HEE)
+        Ews = cctx.Ews
+        @views Ews .= E .* sqrt.(w)
+        if use_syrk
+            BLAS.syrk!('U', 'T', 1 / M, Ews, 0.0, HEE)
+            @inbounds for i in 1:NCORE, j in 1:(i-1)
+                HEE[i, j] = HEE[j, i]
+            end
+        else
+            BLAS.gemm!('T', 'N', 1 / M, Ews, Ews, 0.0, HEE)
+        end
     end
 
     # ---- H_EC raw, then optional R congruence (right-multiply by R per threshold block) ----
