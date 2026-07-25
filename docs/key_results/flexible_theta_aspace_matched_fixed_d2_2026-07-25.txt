@@ -1,0 +1,3 @@
+[matched_fixed_delta2.0] POLISH DONE: status=-401 (KN_RC_TIME_LIMIT_FEAS/limit_feasible) wall_ext=611.4s n_eval=31 kappa=0.07548157117725163 native_outer_iters=14 native_outer_fc_evals=38 native_outer_ga_evals=15 screens(pw/wt/wn/env/wr/sn/pass)=0/0/0/0/0/0/39 n_cold_retries(F)=7 n_rejected(F)=7 n_g_recompute=0
+>>> FIXED cold-verify: inner_status=0 Delta_dual=1.8947889850170165 (vs live 1.894788985017012)
+>>> ARM_DONE arm=fixed delta=2.0 kappa=0.07548157117725163 wall=611.3876740932465 n_eval=31
