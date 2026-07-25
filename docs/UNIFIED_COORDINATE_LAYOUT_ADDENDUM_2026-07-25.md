@@ -108,8 +108,61 @@ Relaunched in isolation with a longer timeout — result below.
 
 ## Matched comparisons (addendum §6/§7)
 
-**[PENDING]**
+### §6: legacy_z vs powered_aspace, fixed theta, 300s each, real D=20 post-omit-ROW
+
+Both arms via the SAME unified driver (`run_polish_checkpointed_unified`), differing ONLY in
+`A_coordinate_mode` — identical calibrated start, draws, screens, cache, incumbent logic,
+`algorithm=auto+SR1`. **2 of 4 runs hit the same KNITRO hang-past-timeout failure mode already
+documented in this session** (`gravity-robustness-knitro-hang-past-timeout.md`) — confirmed by a
+native `KTR_solve` backtrace at the moment of forced termination, not a driver bug. Both
+interrupted arms were reconciled from their last checkpoint's `best_feasible` incumbent via
+`reconcile_checkpoint_unified.jl`, independently cold-verified (fresh `warm=false` evaluation).
+
+| Coordinate mode | delta | kappa | n_eval | wall (s) | status | cold-verify Delta_dual |
+|---|---|---|---|---|---|---|
+| legacy_z | 1 | 0.05428070 | 9 | 232.4 | **reconciled** (hung, killed) | 0.9926526198876648 (checkpoint-identical) |
+| powered_aspace | 1 | 0.07102523 | 20 | 311.9 | clean finish | 0.9967846060282045 (bit-identical to live) |
+| legacy_z | 2 | 0.05627694 | 11 | 313.0 | clean finish | 1.8582754742297887 (13 sig figs) |
+| powered_aspace | 2 | 0.07118083 | 7 | 248.0 | **reconciled** (hung, killed) | 1.88095331469541 (checkpoint-identical) |
+
+**delta=1 comparison is CONFOUNDED**: `legacy_z` was interrupted at only 9 evaluations (vs
+`powered_aspace`'s clean 20) — a smaller search budget alone would be expected to find a worse
+(smaller) kappa regardless of coordinate choice, so the raw +30% gap in `powered_aspace`'s favor
+at delta=1 is not read as a clean coordinate-choice effect.
+
+**delta=2 comparison is the more informative one**: here `powered_aspace` (interrupted at 7
+evals) STILL beats `legacy_z` (clean finish, 11 evals) — `powered_aspace` found a BETTER kappa
+(+26.5%: 0.07118 vs 0.05628) despite having FEWER evaluations available, not more. This is
+consistent with (though — given only n=1 per cell and one confounded/one clean comparison, not
+proof of) the theta-decoupling mechanism producing a more favorable search landscape even at
+fixed theta, matching this port's own §3 argument for why a-space should help: the OLD z-space
+coordinate mechanically couples every A-cell to a magnitude-rescaling channel a theta-flexible
+search would exploit, but which even a fixed-theta search must still navigate as ill-conditioning
+in the (gp, A) landscape itself.
+
+**Not treated as decisive** given the 2-of-4 interruption rate — a clean rerun of all 4 arms
+(with a watchdog that reliably force-kills hung `KN_solve` calls, not just `timeout
+--kill-after`, which itself needed its own 30s grace period to actually terminate the hung
+process this round) is the recommended follow-up before treating fixed-theta powered_aspace as
+strictly better than legacy_z with full confidence. The DIRECTIONAL signal (powered_aspace ahead
+at both deltas, including the less-confounded delta=2 comparison) is consistent with — not
+contradicted by — the interruptions.
+
+Full logs: `docs/key_results/s6_powered_aspace_d1_2026-07-25.txt`,
+`docs/key_results/s6_legacy_z_d2_2026-07-25.txt`,
+`docs/key_results/s6_reconcile_legacy_z_d1_2026-07-25.txt`,
+`docs/key_results/s6_reconcile_powered_aspace_d2_2026-07-25.txt`.
+
+### §7: gp raw vs scaled-log (bounded confirmation)
+
+**[Deferred given session time constraints and the KNITRO reliability issue observed in §6 —
+running further experimental confirmation runs is lower priority than closing out the core
+verdict. `gp_coordinate_mode=:scaled_log` remains implemented, unit-tested (D=4/D=20 gates §5
+above both PASS its encode/decode/gradient-chain-rule checks), and available as an opt-in, but
+NOT experimentally confirmed to help or hurt kappa search in a real campaign, and NOT changed
+from `:raw` as the default per §7's own instruction.]**
 
 ## Verdict
 
-**[PENDING — integrated with the original port's own verdict in the final production-port doc.]**
+See the integrated final verdict in `docs/FLEXIBLE_THETA_ASPACE_PRODUCTION_PORT_2026-07-25.md`
+(covers both the original flexible-theta brief and this addendum together).
