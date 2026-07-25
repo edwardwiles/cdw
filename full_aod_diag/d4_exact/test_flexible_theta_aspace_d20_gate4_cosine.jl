@@ -79,7 +79,10 @@ lp("g_comp length=", length(g_comp), " h_used length=", length(meta.h_used))
 z0 = log.(reshape(xf_reduced[2:end], D, Ddest))
 w0_z = vcat(xf_reduced[1], pivot_reduce(z0, pe_here))   # [gp; z_nonpivot], length D*Ddest
 n = length(w0_z)
-const N_SAMPLE = 40
+const N_SAMPLE = 12   # reduced from 40: live-measured ~20-25s per coordinate (2 warm evals each) at
+# real D=20/W=80,000 scale (see debug run: 10 coords took 206.5s) -- 40 coords would need ~800-1000s,
+# exceeding a 600s budget; 12 coords fits comfortably (~250-300s) while still giving a genuine
+# multi-coordinate cosine-similarity signal, not a single point.
 rng_sub = MersenneTwister(2026)
 sample_idx = sort(unique(vcat(2, randperm(rng_sub, n - 1)[1:N_SAMPLE-1] .+ 1)))   # always include coord 2 (first A-cell), rest random, excluding index 1 (gp, handled separately)
 lp("subsampled ", length(sample_idx), " of ", n - 1, " A-block coordinates for the matched-h reference gradient")
