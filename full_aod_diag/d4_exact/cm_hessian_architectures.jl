@@ -315,6 +315,16 @@ mutable struct CMBinHessCtx
     # `nothing` when `R === nothing` (that branch uses Hraw_EC directly, no product needed).
     Hraw_EC::Matrix{Float64}
     block_ec::Union{Nothing,Matrix{Float64}}
+    # Same fix, found live while investigating §6.1's threaded Hessian port: `Hraw_CC` (nO x nO)
+    # was ALSO reallocated once per call (missed in the original §4.2 pass, which only named
+    # Hraw_EC/block_ec), and its OWN R-congruence product `cctx.R' * Hraw_CC * cctx.R` allocated
+    # TWO fresh matrices (the R'*Hraw_CC intermediate, then the final product) on EVERY one of the
+    # L^2=2500 (l,l') threshold-block-PAIR iterations within that same call -- 50x more iterations
+    # than H_EC's own L=50, making this potentially the single largest CM Hessian-callback
+    # allocation site, larger than the one actually named in the original audit.
+    Hraw_CC::Matrix{Float64}
+    RtHraw_CC::Union{Nothing,Matrix{Float64}}
+    block_cc::Union{Nothing,Matrix{Float64}}
 end
 
 """
@@ -336,7 +346,8 @@ function build_cm_bin_ctx(ctx, aug)
     return CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE, L1), zeros(D, D, L, L), zeros(D, NCORE, L),
         Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm),
-        Matrix{Float64}(undef, NCORE, nO), R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO))
+        Matrix{Float64}(undef, NCORE, nO), R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO),
+        Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO))
 end
 
 "Build the D x D and D x NCORE x (L+1) weighted bin tables from CURRENT weights `w` (obj.arg2) and economic block `E`. O(W*(D*NCORE + D^2))."
@@ -450,8 +461,13 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     end
 
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
+    # Allocation/Hessian port task §4.2 (extended): Hraw_CC/RtHraw_CC/block_cc now live in cctx
+    # (persistent) instead of Hraw_CC being reallocated once per call and `cctx.R' * Hraw_CC *
+    # cctx.R` allocating TWO fresh matrices on EVERY one of the L^2 (l,l') iterations within that
+    # call -- found live while porting §6.1's threaded Hessian backend (missed in the original
+    # §4.2 pass, which only named the smaller H_EC-side allocation).
     CT = cctx.CT
-    Hraw_CC = Matrix{Float64}(undef, nO, nO)
+    Hraw_CC = cctx.Hraw_CC
     @inbounds for l in 1:L
         for lp in 1:L
             for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
@@ -459,7 +475,12 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
             end
             rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
             cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
-            block = cctx.R === nothing ? Hraw_CC : (cctx.R' * Hraw_CC * cctx.R)
+            block = if cctx.R === nothing
+                Hraw_CC
+            else
+                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
+                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
+            end
             @views Hfull[rows, cols] .= block
         end
     end

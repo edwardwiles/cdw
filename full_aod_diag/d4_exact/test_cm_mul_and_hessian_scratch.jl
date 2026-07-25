@@ -106,6 +106,37 @@ check("new path allocates strictly less", b_new < b_old)
 check("block_ec values bit-identical (same inputs, mul! vs *)", block_old == block_new)
 
 println("="^78)
+println("Section 3: Hraw_CC/RtHraw_CC/block_cc (found live during §6.1 investigation -- L^2 iterations, not L)")
+println("="^78)
+GC.gc()
+b_old_cc = @allocated begin
+    global Hraw_CC_old = Matrix{Float64}(undef, cctx.nO, cctx.nO)
+    fill!(Hraw_CC_old, 1.0)
+    global block_cc_old = cctx.R === nothing ? Hraw_CC_old : (cctx.R' * Hraw_CC_old * cctx.R)
+end
+GC.gc()
+b_new_cc = @allocated begin
+    fill!(cctx.Hraw_CC, 1.0)
+    global block_cc_new = if cctx.R === nothing
+        cctx.Hraw_CC
+    else
+        mul!(cctx.RtHraw_CC, cctx.R', cctx.Hraw_CC)
+        mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
+    end
+end
+lp(">>> @allocated OLD (Matrix(undef)+R'*Hraw_CC*R):  ", b_old_cc, " bytes")
+lp(">>> @allocated NEW (persistent Hraw_CC + mul! into persistent block_cc): ", b_new_cc, " bytes")
+lp(">>> per-callback estimate: OLD ", b_old_cc * cctx.L^2, " bytes (x L^2=", cctx.L^2, "), NEW ", b_new_cc * cctx.L^2, " bytes")
+check("new H_CC path allocates strictly less", b_new_cc < b_old_cc)
+check("block_cc values bit-identical (same inputs, mul! vs *)", block_cc_old == block_cc_new)
+
+# Full real Hessian callback still produces a correct, finite result with both fixes in place.
+base2, verify2 = archC_verified_state(x_free_calib, pcx.ctx_cm, pcx.cctx)
+check("full archC inner solve still feasible with Hraw_CC fix", base2.inner_status in (0, -100, -101, -103))
+check("full archC Delta_dual still finite", isfinite(verify2.Delta_dual))
+check("full archC Delta_dual unchanged by the fix", isapprox(verify2.Delta_dual, verify.Delta_dual; rtol = 1e-10))
+
+println("="^78)
 if isempty(FAILURES)
     println("ALL TESTS PASSED")
 else
