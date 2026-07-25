@@ -64,15 +64,29 @@ end
 # precalc'd-once-then-copied path) -- validated, not assumed.
 # ============================================================================
 
-"Fill `Gdest` (a W x ncm view, threshold-major layout matching precalc_common_marginals_cdf) directly from bin indices, in row-chunks of `chunk_size`. Never materializes a persistent W x ncm matrix."
+"""
+Fill `Gdest` (a W x ncm view, threshold-major layout matching precalc_common_marginals_cdf)
+directly from bin indices, in row-chunks of `chunk_size`. Never materializes a persistent W x ncm
+matrix.
+
+Allocation/Hessian port task §4.1: `Gdest[rows,cols] .= bview * R` previously allocated a fresh
+`n x nO` product EVERY (chunk, threshold-level) iteration -- `(W/chunk_size)*L` times per call
+(e.g. 40 chunks x L=50 at real D=20/W=80,000), reproducing the audit's own reported ~608 MB/call.
+`prod_scratch`, when given (sized `chunk_size x nO`, built once per outer-solve process and
+reused across every call -- see `wrap_moments_with_cm_archB` below), lets this use `mul!` into a
+persistent buffer instead. Falls back to the original fresh-allocation behavior, unchanged, when
+`prod_scratch === nothing`.
+"""
 function fill_cm_columns_from_bins!(Gdest::AbstractMatrix{Float64}, Bidx::AbstractMatrix{Int},
                                      origins::Vector{Int}, refIndex1::Int, L::Int,
-                                     R::Union{Nothing,Matrix{Float64}}; chunk_size::Int = 2000)
+                                     R::Union{Nothing,Matrix{Float64}}; chunk_size::Int = 2000,
+                                     prod_scratch::Union{Nothing,Matrix{Float64}} = nothing)
     W = size(Gdest, 1)
     nO = length(origins)
     @assert size(Gdest, 2) == L * nO
     cs = min(chunk_size, W)
     buf = Matrix{Float64}(undef, cs, nO)
+    use_scratch = R !== nothing && prod_scratch !== nothing && size(prod_scratch, 1) >= cs && size(prod_scratch, 2) == nO
     start = 1
     @inbounds while start <= W
         stop = min(start + cs - 1, W)
@@ -88,6 +102,10 @@ function fill_cm_columns_from_bins!(Gdest::AbstractMatrix{Float64}, Bidx::Abstra
             cols = (l - 1) * nO + 1 : l * nO
             if R === nothing
                 @views Gdest[rows, cols] .= bview
+            elseif use_scratch
+                pview = @view prod_scratch[1:n, :]
+                mul!(pview, bview, R)
+                @views Gdest[rows, cols] .= pview
             else
                 @views Gdest[rows, cols] .= bview * R
             end
@@ -114,6 +132,11 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
+    # Allocation/Hessian port task §4.1: persistent bview*R product scratch, built once (per
+    # closure lifetime -- this closure itself is built once per outer-solve process, see
+    # build_cm_production_context) and reused across every fill_cm_columns_from_bins! call.
+    cs = min(chunk_size, size(Bidx, 1))
+    prod_scratch = R === nothing ? nothing : Matrix{Float64}(undef, cs, nO)
     return function (K, G, θ, U, obj)
         n = size(U, 1)
         if size(Gtmp_cache[], 1) != n
@@ -124,7 +147,8 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
         @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         @views G[:, end] .= Gtmp[:, end]
         cm_cols = pregrav + 1 : pregrav + L * nO
-        fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R; chunk_size = chunk_size)
+        fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
+                                    chunk_size = chunk_size, prod_scratch = prod_scratch)
         return nothing
     end
 end
@@ -216,6 +240,13 @@ mutable struct CMBinHessCtx
     CScum::Array{Float64,3}    # D x NCORE x L
     Ews::Matrix{Float64}       # W x NCORE scratch for sqrt(w)-scaled E
     Hfull::Matrix{Float64}     # (NCORE+ncm) x (NCORE+ncm) scratch
+    # Allocation/Hessian port task §4.2: NCORE x nO scratch for the H_EC raw block and its
+    # (optional) R-congruence product -- were `Matrix{Float64}(undef,...)` (Hraw_EC) allocated
+    # once per hessian_cm_structured! call, and `Hraw_EC * cctx.R` (block_ec) allocated FRESH on
+    # every one of the L=50 threshold-block iterations within that same call. `block_ec` is
+    # `nothing` when `R === nothing` (that branch uses Hraw_EC directly, no product needed).
+    Hraw_EC::Matrix{Float64}
+    block_ec::Union{Nothing,Matrix{Float64}}
 end
 
 """
@@ -236,7 +267,8 @@ function build_cm_bin_ctx(ctx, aug)
     L1 = L + 1
     return CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE, L1), zeros(D, D, L, L), zeros(D, NCORE, L),
-        Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm))
+        Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm),
+        Matrix{Float64}(undef, NCORE, nO), R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO))
 end
 
 "Build the D x D and D x NCORE x (L+1) weighted bin tables from CURRENT weights `w` (obj.arg2) and economic block `E`. O(W*(D*NCORE + D^2))."
@@ -320,8 +352,12 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     BLAS.gemm!('T', 'N', 1 / M, Ews, Ews, 0.0, HEE)
 
     # ---- H_EC raw, then optional R congruence (right-multiply by R per threshold block) ----
+    # Allocation/Hessian port task §4.2: Hraw_EC/block_ec now live in cctx (persistent,
+    # campaign-lifetime, sized once in build_cm_bin_ctx/build_cm_meanzc_bin_ctx) instead of
+    # Hraw_EC being reallocated per hessian_cm_structured! call and block_ec = Hraw_EC * cctx.R
+    # reallocating fresh on EVERY one of the L threshold-block iterations within that call.
     CS_ = cctx.CScum
-    Hraw_EC = Matrix{Float64}(undef, NCORE, nO)   # reused per threshold block
+    Hraw_EC = cctx.Hraw_EC   # reused per threshold block
     @inbounds for l in 1:L
         for (oi, o) in enumerate(origins)
             for j in 1:NCORE
@@ -329,7 +365,11 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
             end
         end
         cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-        block_ec = cctx.R === nothing ? Hraw_EC : Hraw_EC * cctx.R
+        block_ec = if cctx.R === nothing
+            Hraw_EC
+        else
+            mul!(cctx.block_ec, Hraw_EC, cctx.R)
+        end
         @views Hfull[1:NCORE, cols] .= block_ec
         # BUG FIX (found via c13_debug_archC.jl: uniform 2x discrepancy in H_EC vs
         # Architecture A): the symmetrize-by-averaging step below reads BOTH

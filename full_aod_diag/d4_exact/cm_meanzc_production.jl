@@ -44,7 +44,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug)
     L1 = L + 1
     return CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE_ext, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE_ext, L1), zeros(D, D, L, L), zeros(D, NCORE_ext, L),
-        Matrix{Float64}(undef, W, NCORE_ext), Matrix{Float64}(undef, NCORE_ext + ncm, NCORE_ext + ncm))
+        Matrix{Float64}(undef, W, NCORE_ext), Matrix{Float64}(undef, NCORE_ext + ncm, NCORE_ext + ncm),
+        Matrix{Float64}(undef, NCORE_ext, nO), R === nothing ? nothing : Matrix{Float64}(undef, NCORE_ext, nO))
 end
 
 """
