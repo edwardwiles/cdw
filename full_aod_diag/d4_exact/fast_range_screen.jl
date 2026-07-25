@@ -634,7 +634,17 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
         st.dense_materialized = true
     end
 
-    K, G = (copy(@view(obj.H[:, 1])), copy(CS.select_G_from_H(obj, obj.H)))
+    # Allocation/Hessian port task §3.2: this was `copy(@view(obj.H[:,1])), copy(CS.select_G_
+    # from_H(obj, obj.H))` -- the single largest hot-path allocation site found in the audit's
+    # own Profile.Allocs by-site trace (980 MB / 8 events at real D=20/W=80,000). Both copies were
+    # unnecessary: `K` (the first) is never read again in this function -- removed outright.
+    # `G` is read-only downstream (kkt_residual_blas/moment_resid_blas each call BLAS `mul!` on a
+    # view of it, which accepts any StridedMatrix including this contiguous column-slice
+    # SubArray) and never escapes this function (not part of the returned `result`), and nothing
+    # between this line and G's last use mutates `obj.H` (confirmed: the `obj(inner_x,
+    # constr=...)` functor call below only READS `H`, per PsiObjectiveBundle.jl's callable
+    # method) -- so a view is lifetime-safe here, not just cheaper.
+    G = CS.select_G_from_H(obj, obj.H)
 
     ncon = obj.d - obj.outer_constr_index + 2
     cbuf = zeros(ncon)
