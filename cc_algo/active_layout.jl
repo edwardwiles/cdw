@@ -142,5 +142,13 @@ function print_active_layout_banner(ctx, mode_label::AbstractString)
             " free_reduced_A_dim=", free_dim,
             " gravity_sample_version=", hasproperty(ctx, :gravity_sample_version) ? ctx.gravity_sample_version : 1,
             " theta_calibration_version=", hasproperty(ctx, :theta_calibration_version) ? ctx.theta_calibration_version : 1)
+    # Canonical top-1 winner engine (2026-07-24 production port): fixed identifiers, not derived
+    # from ctx -- there is exactly one live core top-1 engine, one outer-gradient top-3 backend,
+    # and one winner-cache policy across every family. See
+    # CANONICAL_WINNER_ENGINE_ARCHITECTURE_2026-07-24.md -- do NOT read this as evidence of a
+    # persistent shared top-3 cache; there isn't one (each call site still runs its own scan).
+    println("[winner-engine] core_top1_engine=canonical_log_additive",
+            " outer_gradient_top3_engine=cplus",
+            " winner_cache_policy=top1_plus_second_scan")
     flush(stdout)
 end
