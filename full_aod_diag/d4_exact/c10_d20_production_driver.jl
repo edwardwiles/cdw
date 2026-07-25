@@ -92,6 +92,7 @@ include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # allocation
 include(joinpath(@__DIR__, "canonical_price_precompute_workspace.jl"))   # allocation/Hessian port task §3.3: CanonicalPricePrecomputeWorkspace + attach_canonical_price_precompute_workspace
 include(joinpath(@__DIR__, "hard_score_b_cache.jl"))   # allocation/Hessian port task §3.3: attach_hard_score_b_cache
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3
+isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
 include(joinpath(@__DIR__, "structured_moment_build.jl"))   # Continuation 10 Section 9: structured dense-materialize, used by compressed_live.jl / infeasibility_screen.jl
 include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
@@ -567,9 +568,13 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
         # a validity gate on the caller's own g). See direction_bounds.jl.
         destination_sample::Symbol = :exclude_row,
-        blas_threads::Union{Nothing,Int} = nothing)   # allocation/Hessian port task §6.3: set once
+        blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3: set once
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
+        pin_outer_algorithm::Bool = false)   # allocation/Hessian port task §1.3/§4: opt-in explicit
+        # algorithm=2(Interior/CG)+hessopt=6(L-BFGS) via knitro_outer_algorithm.jl, for matched
+        # benchmark A/Bs only. false (default): unchanged existing behavior (hardcoded algorithm=3
+        # below, as before this kwarg existed).
         # ****************************************************
         # **** exclude-ROW-destination UNRESTRICTED-CORE release (2026-07-24): the unrestricted   ****
         # **** family's real per-point evaluation path (moment_representation=:compressed, the    ****
@@ -730,7 +735,11 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
-    KNITRO.KN_set_param_by_name(kc, "algorithm", 3)
+    if pin_outer_algorithm
+        set_production_outer_algorithm!(kc)   # overrides the algorithm=3 default below -- opt-in only
+    else
+        KNITRO.KN_set_param_by_name(kc, "algorithm", 3)
+    end
     xIndices = KNITRO.KN_add_vars(kc, n)
     z_halfwidth = 30.0   # see c9_phase8_d20_pilot.jl's box-bounds root-cause comment
     KNITRO.KN_set_var_lobnds_all(kc, zfree_start .- z_halfwidth)
@@ -915,6 +924,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!)
     KNITRO.KN_set_newpt_callback(kc, cb_newpt!)
 
+    pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_profile_checkpointed($label)")
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus_code, _, xsol, _ = KNITRO.KN_get_solution(kc)
@@ -1033,6 +1043,10 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3: set once
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
+        pin_outer_algorithm::Bool = false,   # allocation/Hessian port task §1.3/§4: opt-in explicit
+        # algorithm=2(Interior/CG)+hessopt=6(L-BFGS) via knitro_outer_algorithm.jl, for matched
+        # benchmark A/Bs only. false (default): unchanged existing behavior (.opt file's
+        # algorithm=auto, as before this kwarg existed).
         )   # exclude-ROW-destination UNRESTRICTED-CORE
         # release (2026-07-24): see run_profile_checkpointed's identical kwarg/scope-note -- default
         # flipped to :exclude_row, matching every other production entry point; :all_legacy remains
@@ -1187,6 +1201,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
+    pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves the .opt file's algorithm=auto in effect
     xIndices = KNITRO.KN_add_vars(kc, D2)
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
     KNITRO.KN_set_var_upbnds_all(kc, w_hi)
@@ -1401,6 +1416,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
     KNITRO.KN_set_newpt_callback(kc, cb_newpt!)
 
+    pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_polish_checkpointed")
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus_code, _, xsol, _ = KNITRO.KN_get_solution(kc)

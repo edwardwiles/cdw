@@ -28,6 +28,7 @@
 using Serialization, Dates
 
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3
+isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
 
 const CM_CHECKPOINT_SCHEMA = 6
 # Bumped 4 -> 6 (destination_sample production wiring, exclude-ROW-destination release,
@@ -409,6 +410,10 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3: set once
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
+        pin_outer_algorithm::Bool = false,   # allocation/Hessian port task §1.3/§4: opt-in explicit
+        # algorithm=2(Interior/CG)+hessopt=6(L-BFGS) via knitro_outer_algorithm.jl, for matched
+        # benchmark A/Bs only. false (default): unchanged existing behavior (.opt file's
+        # algorithm=auto, as before this kwarg existed).
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
@@ -647,6 +652,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", 1_000_000)
+    pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves opt_file's algorithm=auto in effect
     xIndices = KNITRO.KN_add_vars(kc, D2)
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
     KNITRO.KN_set_var_upbnds_all(kc, w_hi)
@@ -792,6 +798,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
 
+    pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_cm_upper_checkpointed($label)")
     try
         KNITRO.KN_solve(kc)
     finally

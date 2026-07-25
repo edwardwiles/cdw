@@ -11,9 +11,9 @@
 # run_cm_upper_checkpointed (matched_outer_benchmark_cm_2026-07-25.jl), from the SAME genuine
 # calibrated point (ctx.θ0_up -- see CLAUDE.md: A_od==1/zfree==0 is NOT this point, do not
 # construct or compare against that reparameterization reference by mistake), with the SAME
-# explicit outer algorithm (knitro_outer_algorithm.jl's set_production_outer_algorithm!, applied
-# automatically inside run_polish_checkpointed/run_cm_upper_checkpointed as of this port --
-# neither family relies on algorithm=auto).
+# explicit outer algorithm (knitro_outer_algorithm.jl's set_production_outer_algorithm!, requested
+# via pin_outer_algorithm=true on both run_polish_checkpointed and run_cm_upper_checkpointed below --
+# this is opt-in, NOT each driver's own production default; see that file's module docstring).
 #
 # Config matches section 11 exactly: D=20, D_dest=19 (destination_sample=:exclude_row), W=80000,
 # seed=20260719, delta=1, calibrated start, 20 Julia threads, one process at a time, 300s budget
@@ -74,7 +74,7 @@ t_warm0 = time()
 res_warm = run_polish_checkpointed("warmup", true, g0, zfree0;
     maxtime_real = T_WARMUP, W_in = W, delta_in = DELTA, draw_seed_in = DRAW_SEED,
     ckpt_dir = joinpath(OUTDIR, "ckpt_warmup"), checkpoint_interval_s = 9999.0,
-    destination_sample = DESTINATION_SAMPLE, blas_threads = BLAS_THREADS)
+    destination_sample = DESTINATION_SAMPLE, blas_threads = BLAS_THREADS, pin_outer_algorithm = true)
 t_warm = time() - t_warm0
 lp(">>> warm-up wall = ", round(t_warm, digits = 3), "s  n_eval=", res_warm.n_eval,
    " n_grad=", res_warm.n_grad_calls, " status=", res_warm.knitro_status)
@@ -91,7 +91,7 @@ alloc_meas = @allocated begin
     global res_meas = run_polish_checkpointed("measured", true, g0, zfree0;
         maxtime_real = T_MEASURED, W_in = W, delta_in = DELTA, draw_seed_in = DRAW_SEED,
         ckpt_dir = joinpath(OUTDIR, "ckpt_measured"), checkpoint_interval_s = 30.0,
-        destination_sample = DESTINATION_SAMPLE, blas_threads = BLAS_THREADS)
+        destination_sample = DESTINATION_SAMPLE, blas_threads = BLAS_THREADS, pin_outer_algorithm = true)
 end
 t_meas = time() - t_meas0
 gc_num_after = Base.gc_num()

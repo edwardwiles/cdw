@@ -7,9 +7,10 @@
 # problem (min_{A,g_p} g_p s.t. Delta*(A,g_p) <= 1) from the same genuine calibrated point
 # (ctx.θ0_up), with the same explicit outer algorithm. CM already used this formulation via
 # run_cm_upper_checkpointed in the original 2026-07-25 audit (audit_run_cm_2026-07-25.jl) --
-# this port carries that config forward unchanged except for defaulting the outer algorithm to
-# the explicit choice (knitro_outer_algorithm.jl, applied automatically inside
-# run_cm_upper_checkpointed as of this port) instead of algorithm=auto.
+# this port carries that config forward unchanged except for requesting the explicit outer
+# algorithm choice (knitro_outer_algorithm.jl) via pin_outer_algorithm=true below, instead of
+# leaving run_cm_upper_checkpointed at its own default (the .opt file's algorithm=auto) -- this
+# is opt-in for this matched-benchmark harness only, not a change to the driver's own default.
 #
 # Config matches section 11 exactly: D=20, D_dest=19 (destination_sample=:exclude_row), W=80000,
 # seed=20260719, delta=1, L=50, calibrated start, 20 Julia threads, one process at a time, 300s
@@ -88,7 +89,8 @@ res_warm = run_cm_upper_checkpointed(w_calib;
     maxtime_real = T_WARMUP, ckpt_dir = joinpath(OUTDIR, "ckpt_warmup"),
     run_id = "matched_bench_cm_warmup", label = "warmup", checkpoint_interval_s = 9999.0,
     cm_gradient_backend = CM_GRADIENT_BACKEND, cm_extension = CM_EXTENSION,
-    destination_sample = CM_DESTINATION_SAMPLE, verbose = true, blas_threads = BLAS_THREADS)
+    destination_sample = CM_DESTINATION_SAMPLE, verbose = true, blas_threads = BLAS_THREADS,
+    pin_outer_algorithm = true)
 t_warm = time() - t_warm0
 lp(">>> warm-up wall = ", round(t_warm, digits = 3), "s  n_eval=", res_warm.n_eval,
    " n_grad=", res_warm.n_grad, " status=", res_warm.knitro_status)
@@ -109,7 +111,8 @@ alloc_meas = @allocated begin
         maxtime_real = T_MEASURED, ckpt_dir = joinpath(OUTDIR, "ckpt_measured"),
         run_id = "matched_bench_cm_measured", label = "measured", checkpoint_interval_s = 30.0,
         cm_gradient_backend = CM_GRADIENT_BACKEND, cm_extension = CM_EXTENSION,
-        destination_sample = CM_DESTINATION_SAMPLE, verbose = true, blas_threads = BLAS_THREADS)
+        destination_sample = CM_DESTINATION_SAMPLE, verbose = true, blas_threads = BLAS_THREADS,
+        pin_outer_algorithm = true)
 end
 t_meas = time() - t_meas0
 gc_num_after = Base.gc_num()
