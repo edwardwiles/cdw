@@ -31,6 +31,9 @@ Analog of `build_cm_meanzc_production_context`, minus the CM-specific
 precompute for it). `ctx_cm.obj` is `aug.obj_cm`.
 """
 function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout)
+    println(stdout, "cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)")
+    println(stdout, "cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)")
+    flush(stdout)
     aug = build_originzc_augmented_obj(ctx, CS, layout)
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))
     return (ctx_cm = ctx_cm, aug = aug)

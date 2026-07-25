@@ -47,6 +47,24 @@ for pair `(o,p)` (new AbstractVector method alongside the existing
 pair_columns(Zpair::AbstractMatrix{Float64}, νprod::AbstractVector{Float64}) = Zpair .- νprod'
 
 """
+    mean_columns_direct!(dest, Z, νtargets)
+    pair_columns!(dest, Zpair, νprod)
+
+In-place, no-intermediate-allocation analogs of the `AbstractVector`-target
+methods above (mirrors `cm_meanzc_moments.jl`'s own `mean_columns_direct!`/
+`pair_columns!`). `dest` is expected to be a view directly into the
+destination moment matrix `G`.
+"""
+function mean_columns_direct!(dest::AbstractMatrix{Float64}, Z::AbstractMatrix{Float64}, νtargets::AbstractVector{Float64})
+    @. dest = Z - νtargets'
+    return dest
+end
+function pair_columns!(dest::AbstractMatrix{Float64}, Zpair::AbstractMatrix{Float64}, νprod::AbstractVector{Float64})
+    @. dest = Zpair - νprod'
+    return dest
+end
+
+"""
     n_originzc_moments(D, K_mean, K_pair) -> Int
 
 Total new inner moments for the no-CM origin-specific arm:
@@ -75,6 +93,56 @@ cm_checkpoint.jl).
 function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
                                      Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}},
                                      layout::MeanZCTargetLayout)
+    pregrav = ncore_econ - 1
+    D = size(Zraw_all[1], 2)
+    K_mean = layout.K_mean
+    K_pair = layout.K_pair
+    n_mean_total = K_mean * D
+    npair = D * (D - 1) ÷ 2
+    n_pair_total = K_pair * npair
+    n_eta_total = n_eta(layout)
+    Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
+    return function (K, G, θ_ext, U, obj)
+        n = size(U, 1)
+        θ_econ = @view θ_ext[1:end-n_eta_total]
+        νfull = @view θ_ext[end-n_eta_total+1:end]
+        if size(Gtmp_cache[], 1) != n
+            Gtmp_cache[] = Matrix{Float64}(undef, n, ncore_econ)
+        end
+        G_tmp = Gtmp_cache[]
+        core_moments!(K, G_tmp, θ_econ, U, obj)
+        @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
+        for k in 1:K_mean
+            cols = pregrav+(k-1)*D+1 : pregrav+k*D
+            dest = @view G[:, cols]
+            νo_k = mean_targets(layout, νfull, k, D)
+            mean_columns_direct!(dest, (@view Zraw_all[k][1:n, :]), νo_k)
+        end
+        mean_end = pregrav + n_mean_total
+        for k in 1:K_pair
+            cols = mean_end+(k-1)*npair+1 : mean_end+k*npair
+            dest = @view G[:, cols]
+            νprod_k = pair_targets(layout, νfull, k, D)
+            pair_columns!(dest, (@view Zpairraw_all[k][1:n, :]), νprod_k)
+        end
+        @views G[:, end] .= G_tmp[:, end]
+        return nothing
+    end
+end
+
+"""
+    wrap_moments_with_originzc_dense(core_moments!, ncore_econ, Zraw_all, Zpairraw_all, layout) -> Function
+
+Slow dense reference path, preserved byte-for-byte from the pre-2026-07-24
+Phase B implementation (fresh `G_tmp` allocation every call, mean/pair
+blocks built via the allocating `AbstractVector`-target
+`mean_columns_direct`/`pair_columns` then copied into `G`). Kept ONLY for
+before/after correctness and benchmark comparison against
+`wrap_moments_with_originzc` above -- not used by any production entry point.
+"""
+function wrap_moments_with_originzc_dense(core_moments!::Function, ncore_econ::Int,
+                                           Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}},
+                                           layout::MeanZCTargetLayout)
     pregrav = ncore_econ - 1
     D = size(Zraw_all[1], 2)
     K_mean = layout.K_mean
