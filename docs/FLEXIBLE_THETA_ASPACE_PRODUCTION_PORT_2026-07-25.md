@@ -272,6 +272,39 @@ checklist is satisfiable and a real merge is appropriate.
 - Git provenance: `provenance.txt` in the Dropbox package (branch/HEAD/log/`git diff --stat`).
 - SHA256 manifest: `MANIFEST.sha256` in the Dropbox package.
 
+## §16c. Related concurrent work: `port/production-allocation-and-hessian-optimizations-2026-07-25`
+
+**Correction to an error made during this session's own closing check.** An initial pass to
+locate this branch (via `git branch -a` inside this worktree, `git worktree list` from this
+worktree's own context, and a filesystem `find` scoped with `-maxdepth 1` directly under
+`/bbkinghome/edav/gravity_robustness`) found nothing and was reported as "the branch does not
+exist anywhere in this repo." That conclusion was **wrong**, caused by a scoping bug: the `find`
+excluded one level too few — the actual worktree lives one directory deeper, under
+`/bbkinghome/edav/gravity_robustness/worktrees/`, which `-maxdepth 1` from the parent never
+reached; separately, `git worktree list` run from this worktree's own context does not surface
+worktrees registered against a different bare-repo clone, which this one apparently is.
+
+**Corrected finding**: the worktree
+`/bbkinghome/edav/gravity_robustness/worktrees/port-production-allocation-hessian-2026-07-25`
+exists, has branch `port/production-allocation-and-hessian-optimizations-2026-07-25` checked
+out, and was **still actively being committed to at the time of this check** — its latest commit
+(`9d67cdd`, "Wire BLAS thread policy at the inner-solve level (section 6.3, mechanism)") is
+timestamped 2026-07-25 10:46:40, only minutes before this correction was written. Separately,
+`cdw/production/fullA-exact` (the actual remote tip) has independently advanced 8 commits past
+this port's own fork point (`c55e81e`), in a clean linear fast-forward, with allocation/workspace
+-themed content (`RESTRICTED_WORKSPACE_ALLOCATION_PROFILE_2026-07-24.md`,
+`IMMUTABLE_WORKSPACE_PRODUCTION_PORT_2026-07-24.md`) and zero file overlap with anything this
+port touches — that portion of the earlier finding was accurate and stands.
+
+**The decision to defer any rebase is unchanged and, on the corrected facts, is now correctly
+grounded**: per the addendum's own §8 instruction, a rebase onto in-progress, not-yet-finalized
+work is exactly the case to defer — the branch being LIVE (not absent) is the actual reason,
+not the mistaken "doesn't exist" claim originally given. No action beyond this correction is
+needed; when `port/production-allocation-and-hessian-optimizations-2026-07-25` is finalized and
+merged into `production/fullA-exact`, this port branch can rebase cleanly (already-confirmed zero
+file conflicts with the 8 commits merged so far) and its own gate suite should be re-run against
+the new base before any actual merge — the same conclusion as before, just for the right reason.
+
 ---
 
 ## FINAL VERDICT
