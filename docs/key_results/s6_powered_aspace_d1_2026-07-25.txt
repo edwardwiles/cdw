@@ -1,0 +1,6 @@
+>>> FIXED-COORDINATE-MODE COMPARISON A_coordinate_mode=powered_aspace delta=1.0 budget=300.0s
+>>> Julia threads: 12
+[matched_fixed_powered_aspace_delta1.0s6] UNIFIED POLISH DONE: status=-401 (KN_RC_TIME_LIMIT_FEAS/limit_feasible) wall_ext=311.9s n_eval=20 kappa=0.07102522774379849 n_grad_calls=13
+>>> RESULT A_coordinate_mode=powered_aspace: knitro_status=-401 wall=311.9 n_eval=20 kappa=0.07102522774379849 best=gp=0.956758550389053 Delta=0.9967846060282045
+>>> cold-verify: inner_status=0 Delta_dual=0.9967846060282045 (vs live 0.9967846060282045)
+>>> ARM_DONE A_coordinate_mode=powered_aspace delta=1.0 kappa=0.07102522774379849 wall=311.89930391311646 n_eval=20
