@@ -53,7 +53,12 @@ independent of theta).
 """
 function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :anchored,
                                       probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                      use_archB_moments::Bool = true)
+                                      use_archB_moments::Bool = true,
+                                      use_compressed_core::Bool = true)   # allocation/Hessian port task §5:
+                                      # compressed winner-form core moments (default) vs the original
+                                      # dense EK_moments_gammanorm_directgp! path (false, kept for
+                                      # correctness comparison/emergency revert) -- see
+                                      # wrap_moments_with_cm_archB's own docstring.
     aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
     if use_archB_moments
@@ -65,7 +70,8 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
         # the Int-typed variant explicitly rather than depend on ambient method resolution.
         Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
         R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
-        moments_archB! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R)
+        moments_archB! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
+                                                     use_compressed_core = use_compressed_core)
         obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj_cm.δ, find_smallest = obj_cm.find_smallest,
             γ = obj_cm.γ, (moments!) = moments_archB!, moments_jacobian! = error,
             d = obj_cm.d, outer_constr_index = obj_cm.outer_constr_index,

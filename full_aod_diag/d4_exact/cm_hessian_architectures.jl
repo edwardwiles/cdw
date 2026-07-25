@@ -32,6 +32,18 @@
 
 using LinearAlgebra: BLAS, mul!
 
+# Allocation/Hessian port task §5: compressed winner-form core-moment representation
+# (build_compressed_factual/materialize_dense_factual_structured!/fill_K_directgp!/
+# compressed_gravity_raw) -- not previously needed by the CM include stack. Self-include-guarded
+# (this codebase's own convention, e.g. infeasibility_screen.jl's winner_certificate.jl guard) so
+# this file works regardless of which driver's include stack pulls it in. Dependency order matches
+# c10_d20_production_driver.jl's own (compressed_moments.jl -> structured_moment_build.jl ->
+# compressed_live.jl, the last of which requires oracle_fast.jl already loaded -- true in every
+# real caller of this file).
+isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
+isdefined(Main, :materialize_dense_factual_structured!) || include(joinpath(@__DIR__, "structured_moment_build.jl"))
+isdefined(Main, :compressed_gravity_raw) || include(joinpath(@__DIR__, "compressed_live.jl"))
+
 # ----------------------------------------------------------------------------
 # Shared: per-draw bin indices w.r.t. the SAME thresholds `z` that
 # `precalc_common_marginals_cdf` uses (reused, not re-derived -- see
@@ -116,7 +128,28 @@ function fill_cm_columns_from_bins!(Gdest::AbstractMatrix{Float64}, Bidx::Abstra
 end
 
 """
-    wrap_moments_with_cm_archB(core_moments!, ncore_full, Bidx, origins, refIndex1, L, R; chunk_size)
+    fill_gravity_column_into!(Gcol, grav_raw, ctx, d)
+
+Generic form of `compressed_live.jl`'s `fill_gravity_column!(obj, grav_raw)`, parameterized on an
+arbitrary target column view and column index `d` (rather than assuming `obj.H`/`obj.d`) --
+needed because CM's compressed-core swap (`wrap_moments_with_cm_archB` below) writes gravity into
+`Gtmp[:, ncore_full]`, a plain temporary matrix, at the BASE (pre-CM-augmentation) object's own
+column index `ncore_full` -- not `obj_cm.d` (the CM-augmented object's, which is larger by `ncm`).
+Same formula/post-processing as `fill_gravity_column!` (SamplingWeights/NormalizeMoments/usePMM);
+verified bit-identical to it directly in test_cm_compressed_core.jl.
+"""
+function fill_gravity_column_into!(Gcol::AbstractVector{Float64}, grav_raw::Float64, ctx, d::Int)
+    γo = ctx.γ
+    W = length(Gcol)
+    ind = γo.indicators
+    nrm_g = (ind.NormalizeMoments == 1 && !(d in γo.moments_without_var)) ? 1.0 / γo.σ_Moments[d] : 1.0
+    pmm_g = ind.usePMM == 1 ? γo.PMM[d] : 0.0
+    @views @. Gcol = γo.SamplingWeights[1:W] * nrm_g * (grav_raw - pmm_g)
+    return nothing
+end
+
+"""
+    wrap_moments_with_cm_archB(core_moments!, ncore_full, Bidx, origins, refIndex1, L, R, ctx; chunk_size, use_compressed_core)
 
 Architecture B analogue of `wrap_moments_with_cm` (common_marginals_moments.jl).
 Same external contract (a `moments!`-signature closure), same column layout,
@@ -125,10 +158,32 @@ reallocated only if `n` changes) instead of `similar`-ing a fresh one every
 call, and (b) builds the CM columns fresh from bin indices in row-chunks
 (`fill_cm_columns_from_bins!`) instead of copying from a persistent dense CM
 matrix.
+
+Allocation/Hessian port task §5 (largest remaining allocation change): when `use_compressed_core=
+true` (default), the "pregrav" (economic) + gravity columns of `Gtmp` -- previously built by
+calling the DENSE `core_moments!` (`EK_moments_gammanorm_directgp!` in production, an O(W*D^2)
+`hFunction!`/`hFunctionCounter!` pass, ~734 MB/call per the audit) -- are instead built via the
+SAME compressed winner-form representation the unrestricted family already uses
+(`build_compressed_factual`/`materialize_dense_factual_structured!`/`fill_K_directgp!`/
+`compressed_gravity_raw`). Provably the same quantity: `pregrav == cf.oci-1 == D*Ddest+1` exactly
+(`cf.oci = ctx.obj.outer_constr_index`, and the base/pre-CM ctx satisfies `ctx.obj.
+outer_constr_index == ctx.obj.d == D*Ddest+2`, matching `EK_moments_gammanorm_directgp!`'s own
+`simple_end = D*Ddest+1` -- see docs/CM_COMPRESSED_CORE_PORT_2026-07-25.md §1 for the full
+derivation). Requires `ctx` to be the PLAIN, pre-CM-augmentation context (`ctx.obj.
+outer_constr_index` must equal `ncore_full`, NOT `obj_cm`'s own larger `outer_constr_index`) --
+callers already have this available (it is the same `ctx` `Bidx`/`R` are derived from).
+
+Falls back to the ORIGINAL dense `core_moments!` call, for that one point only, on a
+`TiedWinnerError` (an exact price tie the compressed winner-argmin does not tolerate but the
+dense `hFunction!`/`MinInd!` convention handles silently) -- matches the unrestricted family's own
+documented fallback discipline (compressed_live.jl's `COMPRESSED_FALLBACK_COUNT`). Set
+`use_compressed_core=false` to force the original dense path unconditionally (kept for
+correctness comparison / emergency revert; byte-identical to pre-port production).
 """
 function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
                                      Bidx::Matrix{Int}, origins::Vector{Int}, refIndex1::Int, L::Int,
-                                     R::Union{Nothing,Matrix{Float64}}; chunk_size::Int = 2000)
+                                     R::Union{Nothing,Matrix{Float64}}, ctx; chunk_size::Int = 2000,
+                                     use_compressed_core::Bool = true)
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
@@ -143,7 +198,20 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             Gtmp_cache[] = Matrix{Float64}(undef, n, ncore_full)
         end
         Gtmp = Gtmp_cache[]
-        core_moments!(K, Gtmp, θ, U, obj)
+        if use_compressed_core
+            try
+                cf = build_compressed_factual(θ, ctx; check_ties = true)
+                materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
+                grav_raw = compressed_gravity_raw(θ, ctx)
+                fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
+                fill_K_directgp!(K, θ, ctx)
+            catch e
+                e isa TiedWinnerError || rethrow()
+                core_moments!(K, Gtmp, θ, U, obj)
+            end
+        else
+            core_moments!(K, Gtmp, θ, U, obj)
+        end
         @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         @views G[:, end] .= Gtmp[:, end]
         cm_cols = pregrav + 1 : pregrav + L * nO
@@ -177,7 +245,7 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
 
     d_new = ncore + ncm
     outer_constr_index_new = obj0.outer_constr_index + ncm
-    moments_cm! = wrap_moments_with_cm_archB(obj0.moments!, ncore, Bidx, origins, refIndex1, L, R; chunk_size = chunk_size)
+    moments_cm! = wrap_moments_with_cm_archB(obj0.moments!, ncore, Bidx, origins, refIndex1, L, R, ctx; chunk_size = chunk_size)
 
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_cm!, moments_jacobian! = error,
