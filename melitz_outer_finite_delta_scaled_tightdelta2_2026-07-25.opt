@@ -1,0 +1,15 @@
+# Same as melitz_outer_finite_delta_scaled_tightdelta_2026-07-25.opt but a second, tighter
+# delta candidate (0.01, one order of magnitude tighter still) -- second Phase 5.2 data
+# point, matched everything else.
+algorithm       0
+eval_fcga       no
+gradopt         exact
+hessopt         2
+feastol         1e-7
+feastol_abs     1e-8
+opttol          1e-3
+opttol_abs      1e-4
+maxit           25
+outlev          3
+honorbnds       always
+delta           0.01

@@ -69,3 +69,47 @@ function melitz_lru_evict_until!(order::MelitzLRUOrder, store::Dict, max_size::I
     end
     return n_evicted
 end
+
+"""
+    melitz_context_fingerprint(ctx, U=nothing) -> UInt
+
+Closure-audit session (2026-07-24), Phase D: a stable CONTENT-based fingerprint for a
+Melitz outer context `ctx`, replacing `objectid(ctx)` as the SOLE cache-staleness key
+(`MelitzExactPointCache`, `finite_delta_outer.jl`). `objectid` changes across every fresh
+reconstruction of an otherwise-identical `ctx` (a new NamedTuple is a new object even with
+byte-identical fields), so it can never recognize a "recreated context" as the SAME context
+for caching purposes -- this function can, because it hashes the fields that actually
+determine the economic problem: `D`/`sigma`/`theta_star`/`target_country` (economic
+version/dimension), `tau`/`w`/`X_data` (data), `outer_parameterization` (parameterization),
+`inner_loop_opt`/`outer_loop_opt` (solver options). `U` (the Monte Carlo draws) is threaded
+through as a SEPARATE optional argument rather than read off `ctx`, because `U` lives on the
+bundle (`obj.U`), not on `ctx`, in this codebase's data model -- a caller with only a bare
+`ctx` still gets a genuine content fingerprint over everything else; a caller that also
+supplies `U` (as the one production call site in `finite_delta_outer.jl` does) gets full
+coverage including the draws.
+
+Falls back to `objectid(ctx)` when `ctx` does not expose the expected field set (checked via
+`hasproperty` on `:D`/`:X_data`/`:tau`/`:sigma`/`:outer_parameterization`/`:inner_loop_opt`/
+`:outer_loop_opt`) -- covers this repo's own synthetic cache-mechanics test doubles (plain
+`Ref{Symbol}` placeholders in `test/melitz/runtests.jl`'s LRU/eviction tests), which were
+never meant to model a real Melitz context and have no stable content to hash.
+"""
+function melitz_context_fingerprint(ctx, U::Union{Nothing,AbstractMatrix}=nothing)
+    has_shape = hasproperty(ctx, :D) && hasproperty(ctx, :X_data) && hasproperty(ctx, :tau) &&
+                hasproperty(ctx, :sigma) && hasproperty(ctx, :outer_parameterization) &&
+                hasproperty(ctx, :inner_loop_opt) && hasproperty(ctx, :outer_loop_opt)
+    has_shape || return UInt(objectid(ctx))
+    h = hash(:melitz_ctx_fingerprint_v1)
+    h = hash(ctx.D, h)
+    h = hash(ctx.sigma, h)
+    h = hash(ctx.theta_star, h)
+    h = hash(ctx.target_country, h)
+    h = hash(ctx.outer_parameterization, h)
+    h = hash(ctx.inner_loop_opt, h)
+    h = hash(ctx.outer_loop_opt, h)
+    h = hash(ctx.tau, h)
+    h = hash(ctx.w, h)
+    h = hash(ctx.X_data, h)
+    U !== nothing && (h = hash(U, h))
+    return UInt(h)
+end

@@ -289,36 +289,67 @@ Constructs the SAME `PsiObjectiveBundleImplicit` struct the Ricardian model uses
 see this file's header), `l = length(theta_free_init)`, `U = z_draws` (the SAME reference
 draws the inner Delta(theta) solve uses).
 
-`lower_limit_guard` (main prompt Section 9/11): `cc_algo`'s shared functor
-(`PsiObjectiveBundle.jl`'s `(Q::PsiObjectiveBundleImplicit)(...)`) already contains an
-objective-threshold early-stop mechanism -- `if f <= lower_limit; return
--KNITRO.KN_INFINITY; else; return f; end`, where `f` is the raw dual objective KNITRO
-minimizes (`f = -Delta` at the optimum, and `-f(x) <= Delta` for EVERY dual point `x` by
-weak duality, since the CC dual here is unconstrained -- see inner_screening.jl's header).
-The Ricardian model wires this up (`cc_algo/ccOuter.jl`/`ccInner.jl`: `lower_limit=-50`,
-a fixed constant); Melitz's own bundle construction never set it at all, leaving it at the
-struct default (`-KNITRO.KN_INFINITY`, i.e. permanently disabled) -- so EVERY Melitz inner
-solve runs to KNITRO's own convergence/iteration-limit criteria with no early bailout,
-unlike Ricardian's. Passing a real `lower_limit_guard` sets `lower_limit =
--(delta + lower_limit_guard)`: the FIRST barrier iterate whose raw objective drops to or
-below this (equivalently, whose OWN valid Delta lower bound `-f` reaches `delta +
-lower_limit_guard`) makes the functor report `-KNITRO.KN_INFINITY`, KNITRO terminates as
-"unbounded" (a real, fast KNITRO-native mid-solve stop, not merely a pre-solve screen),
-and the classifier above sees a rejected `nStatus` -- NOT yet mapped to a distinct
-`BudgetInfeasible` status code this session (see report Section D), so it currently
-surfaces as `NumericalFailure`, correctly still rejected either way. Default `nothing`
-(disabled, matching the tested pre-change behavior) -- see the report's own before/after
-benchmark for whether enabling this is recommended as the production default.
+`lower_limit_guard`/`delta_evaluation_cap` (2026-07-24 evaluation-cap-correction session,
+governing prompt Sections 2-3, superseding this docstring's own prior `delta`-coupled
+description): `cc_algo`'s shared functor (`PsiObjectiveBundle.jl`'s
+`(Q::PsiObjectiveBundleImplicit)(...)`) already contains an objective-threshold early-stop
+mechanism -- `if f <= lower_limit; return -KNITRO.KN_INFINITY; else; return f; end`, where
+`f` is the raw dual objective KNITRO minimizes (`f = -Delta` at the optimum, and `-f(x) <=
+Delta` for EVERY dual point `x` by weak duality, since the CC dual here is unconstrained --
+see inner_screening.jl's header). The PRIOR session tied this to the OUTER BUDGET `delta`
+(`lower_limit = -(delta + lower_limit_guard)`) -- diagnosed as the central conceptual error
+this session corrects: a certified lower bound above the CURRENT outer budget is not
+evidence the point is unsolvable, only that it exceeds that one budget, so aborting there
+threw away an ordinary finite, fully-solvable point (Case A: `FiniteSolved`,
+`inner_screening.jl`). This early-stop must instead be gated on the SEPARATE
+`delta_evaluation_cap` (governing prompt Section 2's evaluation cap, e.g. `10.0` --
+routine solves are never aborted merely for exceeding `delta`, only for certifiably
+exceeding this cap): `lower_limit = -(delta_evaluation_cap + lower_limit_guard)`.
+`lower_limit_guard === nothing` (default) leaves the mechanism permanently disabled
+(`-KNITRO.KN_INFINITY`), matching the pre-existing opt-in behavior; passing a real
+`lower_limit_guard` NOW REQUIRES an explicit `delta_evaluation_cap` too (an
+`ArgumentError` otherwise) -- deliberately fail-fast rather than silently falling back to
+the old, incorrect `delta`-coupling if a caller forgets to pass it. The KNITRO-native
+mid-solve stop this produces is classified `AboveEvaluationCap(...,:live_dual_threshold,...)`
+by `melitz_classified_inner_solve` (inner_screening.jl), never `NumericalFailure` and never
+`BudgetInfeasible` (that name/type no longer exists as of this session).
 """
 function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_init::AbstractVector;
                                        delta::Real, find_smallest::Bool,
                                        gradient_backend::Symbol=:B, h::Real=1e-4,
                                        inner_loop_opt::AbstractString,
                                        outer_loop_opt::AbstractString,
-                                       lower_limit_guard::Union{Nothing,Real}=nothing)
+                                       lower_limit_guard::Union{Nothing,Real}=nothing,
+                                       delta_evaluation_cap::Union{Nothing,Real}=nothing,
+                                       inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing)
     d = ctx.moment_layout.num_moments
     l = length(theta_free_init)
-    lower_limit = lower_limit_guard === nothing ? -KNITRO.KN_INFINITY : -(Float64(delta) + Float64(lower_limit_guard))
+    # 2026-07-25 local-geometry/continuation session: this arithmetic now routes through the
+    # ONE authoritative `melitz_configure_lower_limit` (inner_solve_config.jl) instead of
+    # duplicating the guard/cap logic here -- `inner_solve_config`, if supplied, takes
+    # priority and is the PREFERRED way to specify the cap going forward (see that file's own
+    # header for why the legacy `lower_limit_guard`/`delta_evaluation_cap` kwargs are kept,
+    # not removed: ~90 existing D=4 unit-test call sites rely on their exact current
+    # behavior). Passing BOTH `inner_solve_config` and the legacy kwargs is an error, not a
+    # silent precedence choice.
+    local lower_limit
+    if inner_solve_config !== nothing
+        (lower_limit_guard !== nothing || delta_evaluation_cap !== nothing) && throw(ArgumentError(
+            "build_melitz_implicit_bundle: pass EITHER inner_solve_config OR the legacy " *
+            "lower_limit_guard/delta_evaluation_cap kwargs, not both"))
+        lower_limit = inner_solve_config.lower_limit
+    elseif lower_limit_guard === nothing
+        lower_limit = -KNITRO.KN_INFINITY
+    else
+        delta_evaluation_cap === nothing && throw(ArgumentError(
+            "build_melitz_implicit_bundle: lower_limit_guard requires an explicit " *
+            "delta_evaluation_cap -- the 2026-07-24 evaluation-cap-correction session " *
+            "removed the prior default of silently using the OUTER BUDGET `delta` as the " *
+            "KNITRO-native early-abort threshold (see this function's own docstring: that " *
+            "coupling is exactly the conceptual error this session corrects)."))
+        lower_limit = melitz_configure_lower_limit(:evaluation_cap;
+            delta_evaluation_cap=delta_evaluation_cap, guard=lower_limit_guard, outer_delta=delta)
+    end
 
     # ADDITIVE (continuation4, Section 4): the two new "direct" backends never touch
     # moments_jacobian!/jac_h at all -- cb_G! (below) bypasses this bundle's own theta-branch
@@ -477,13 +508,24 @@ struct MelitzFiniteDeltaOuterResult
     cutoff_constraint_backend::Symbol   # Section 3.3/4: :linear or :nonlinear_reference
     n_fc_calls::Int                     # Section 4 benchmark: total cb_F! invocations
     n_ga_calls::Int                     # Section 4 benchmark: total cb_G! invocations
-    # Addendum Section 16: per-stage rejection counts for the typed classifier
-    # (inner_screening.jl). Every FC/GA call that is not an exact-cache hit resolves to
-    # exactly one of: n_inner_solved, n_moment_infeasible_reject, n_budget_infeasible_reject,
+    # 2026-07-24 evaluation-cap-correction session: the cap this specific solve used, carried
+    # on the result itself so a report never has to cross-reference the call site to know
+    # which threshold produced these counts. There is no "policy" field: an
+    # AboveEvaluationCap/InfiniteDeltaCertified point ALWAYS reports the SAME fixed sentinel
+    # constraint value (`delta_evaluation_cap/delta`) with a ZERO gradient, as an ordinary
+    # successful evaluation -- see `melitz_build_finite_delta_callbacks`'s own docstring for
+    # why this fixed, self-consistent sentinel is not the same class of error as the original
+    # bug (which reported the certificate's own path-dependent value/gradient). Only
+    # `NumericalFailure` remains a genuine KNITRO evaluation error.
+    delta_evaluation_cap::Float64
+    # Addendum Section 16, RENAMED this session (governing prompt Section 11: never keep the
+    # old `n_moment_infeasible_reject`/`n_budget_infeasible_reject` names -- they described
+    # the pre-correction semantics). Every FC/GA call that is not an exact-cache hit resolves
+    # to exactly one of: n_inner_solved, n_infinite_delta_reject, n_above_cap_reject,
     # n_numerical_failure_reject.
     n_inner_solved::Int
-    n_moment_infeasible_reject::Int
-    n_budget_infeasible_reject::Int
+    n_infinite_delta_reject::Int
+    n_above_cap_reject::Int
     n_numerical_failure_reject::Int
 end
 
@@ -524,60 +566,159 @@ the governing prompt's "do not retain every full moment matrix indefinitely," at
 suited to their own distinct access patterns; see docs/melitz_optimization_report_2026-07-23_continuation3.md
 Section C for the full before/after memory accounting and rationale.
 
-`fp` (an `objectid(ctx)`-based fingerprint) is stored alongside every entry and checked on
-lookup: a hit whose fingerprint does not match the QUERYING call's own `ctx` is treated as a
-miss (and the stale entry is dropped) rather than silently restoring `obj.H` from a
-different context's moment layout -- a defensive guard against exactly the class of bug this
-session's own stale-context test exercises (see `test/melitz/runtests.jl`), even though in
-the CURRENT production call pattern `ctx` is always the same object for the lifetime of one
-`MelitzExactPointCache`.
+`fp` is a fingerprint stored alongside every COMPACT entry and checked on lookup: a hit
+whose fingerprint does not match the QUERYING call's own is treated as a miss (and the
+stale entry is dropped) rather than silently restoring `obj.H` from a different context's
+moment layout -- a defensive guard against exactly the class of bug this session's own
+stale-context test exercises (see `test/melitz/runtests.jl`).
+
+Closure-audit session (2026-07-24), Phase D: two changes on top of the memory-scalability
+continuation's own design above.
+
+1. **Content-based fingerprint, not `objectid(ctx)` alone** (governing prompt: "Replace
+   `objectid(ctx)` as the sole key with a stable content fingerprint covering: draws, data,
+   economic version, parameterization, divergence, moment scaling, solver options").
+   `melitz_context_fingerprint(ctx, U=nothing)` (`bounded_cache.jl`) hashes `ctx`'s own
+   `D`/`sigma`/`theta_star`/`target_country`/`tau`/`w`/`X_data`/`outer_parameterization`/
+   `inner_loop_opt`/`outer_loop_opt` fields (everything Phase D's list names EXCEPT the
+   Monte Carlo draws, which are not a field of `ctx` in this codebase's data model -- `U`
+   lives on the bundle, one level up -- so `U` is threaded through as an OPTIONAL extra
+   argument instead: the production call site below passes `obj.U`, giving full coverage,
+   while a caller that only has a bare `ctx` still gets a genuine content fingerprint over
+   everything else). A `ctx`-like object missing the expected fields (e.g. this file's own
+   synthetic test doubles, `Ref(:ctxA)`) falls back to `objectid(ctx)` -- `objectid` is
+   RETAINED, just no longer the ONLY mechanism: two DIFFERENT (freshly reconstructed)
+   real Melitz `ctx` objects with IDENTICAL content now fingerprint identically (a
+   "recreated-context" cache hit becomes possible), which `objectid` alone could never do.
+
+2. **Compact/heavy-state split** (governing prompt Phase D: "Compact cache: theta, Delta,
+   dual, status/residual summary, stable context fingerprint. Heavy-state cache: G or
+   compact moment state... Use capacity 1-4 for heavy states and a configurable byte
+   limit."). `cache.store` (COMPACT: `theta -> (Delta, x, nStatus, fp)`) keeps its own
+   large default capacity (`max_size=256`) -- these entries are a few dozen bytes each, not
+   the ~206GB-at-D=20/W=80,000 problem Phase D's own memory projection is about. The full
+   `H` matrix (the actual "heavy state," `~W*(d+2)*8` bytes -- ~258MB per entry at
+   D=20/W=80,000) now lives in a SEPARATE `heavy_store`, bounded independently by BOTH
+   `heavy_max_size` (default 4, per Phase D's literal "capacity 1-4") and `heavy_max_bytes`
+   (a configurable byte budget, default 4GB -- whichever limit binds first evicts). A
+   COMPACT hit whose heavy entry has since been evicted is NOT a full cache miss: `H` is a
+   pure DETERMINISTIC function of `theta` (`obj.moments!` needs no KNITRO dual, only
+   `theta`/`obj.U`/`ctx`), so `melitz_exact_cache_get` recomputes it cheaply from `theta`
+   alone when an `obj` is supplied (`heavy_recomputes` counts this path) -- preserving the
+   COMPACT tier's entire benefit (skipping the ~milliseconds-to-minutes KNITRO solve) even
+   when the heavy tier's small capacity has evicted the matching `H`. Without an `obj`
+   (e.g. the pre-existing synthetic unit tests below, which never construct a real bundle),
+   a heavy-miss safely degenerates to a full cache miss -- never wrong, just not maximally
+   efficient, and byte-for-byte the pre-existing behavior for every call site that does not
+   opt into the new `obj=` keyword.
 """
 mutable struct MelitzExactPointCache
-    store::Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64},UInt}}
+    store::Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,UInt}}
     order::MelitzLRUOrder
     max_size::Int
     evictions::Int
+    heavy_store::Dict{Vector{Float64},Matrix{Float64}}
+    heavy_order::MelitzLRUOrder
+    heavy_max_size::Int
+    heavy_max_bytes::Int
+    heavy_bytes::Int
+    heavy_evictions::Int
+    heavy_recomputes::Int
 end
-MelitzExactPointCache(max_size::Int=256) = MelitzExactPointCache(
-    Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,Matrix{Float64},UInt}}(),
-    MelitzLRUOrder(), max_size, 0)
+function MelitzExactPointCache(max_size::Int=256; heavy_max_size::Int=4,
+                                heavy_max_bytes::Int=4_000_000_000)
+    MelitzExactPointCache(
+        Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,UInt}}(), MelitzLRUOrder(), max_size, 0,
+        Dict{Vector{Float64},Matrix{Float64}}(), MelitzLRUOrder(), heavy_max_size, heavy_max_bytes, 0, 0, 0)
+end
 
 """
-    melitz_exact_cache_get(cache, key, ctx) -> Union{Nothing,Tuple{Float64,Vector{Float64},Int,Matrix{Float64}}}
+    melitz_heavy_evict_until!(cache) -> n_evicted
+
+Pops LRU heavy entries until BOTH `heavy_max_size` and `heavy_max_bytes` are satisfied
+(mirrors `melitz_lru_evict_until!`, but also tracks `heavy_bytes` since heavy entries are not
+uniformly sized across different `(W, K)` fixtures sharing one cache -- unlikely in practice,
+guarded against anyway).
+"""
+function melitz_heavy_evict_until!(cache::MelitzExactPointCache)
+    n_evicted = 0
+    while length(cache.heavy_order.keys) > 0 &&
+          (length(cache.heavy_order.keys) > cache.heavy_max_size || cache.heavy_bytes > cache.heavy_max_bytes)
+        oldest = popfirst!(cache.heavy_order.keys)
+        H_old = pop!(cache.heavy_store, oldest, nothing)
+        H_old === nothing || (cache.heavy_bytes -= sizeof(H_old))
+        n_evicted += 1
+    end
+    return n_evicted
+end
+
+"""
+    melitz_exact_cache_get(cache, key, ctx, U=nothing; obj=nothing)
+        -> Union{Nothing,Tuple{Float64,Vector{Float64},Int,Matrix{Float64}}}
 
 Looks up `key` in `cache`, applying the stale-context guard (see `MelitzExactPointCache`'s
-own docstring): a hit whose stored fingerprint disagrees with `objectid(ctx)` is dropped and
-treated as `nothing`. A genuine hit is moved to MRU position.
+own docstring): a compact hit whose stored fingerprint disagrees with
+`melitz_context_fingerprint(ctx, U)` is dropped and treated as `nothing`. A genuine compact
+hit then tries the heavy tier; on a heavy MISS, if `obj` is supplied, `H` is recomputed
+directly from `key`/`obj.U`/`ctx` (no KNITRO) and reinserted; otherwise the lookup degrades
+to `nothing` (a full miss). A genuine full hit moves both tiers to MRU position.
 """
-function melitz_exact_cache_get(cache::MelitzExactPointCache, key::Vector{Float64}, ctx)
+function melitz_exact_cache_get(cache::MelitzExactPointCache, key::Vector{Float64}, ctx,
+                                 U::Union{Nothing,AbstractMatrix}=nothing; obj=nothing)
     hit = get(cache.store, key, nothing)
     hit === nothing && return nothing
-    Delta_hit, x_hit, nStatus_hit, H_hit, fp = hit
-    if fp != objectid(ctx)
+    Delta_hit, x_hit, nStatus_hit, fp = hit
+    if fp != melitz_context_fingerprint(ctx, U)
         delete!(cache.store, key)
         melitz_lru_forget!(cache.order, key)
+        delete!(cache.heavy_store, key)
+        melitz_lru_forget!(cache.heavy_order, key)
         return nothing
     end
     melitz_lru_touch!(cache.order, key)
+
+    H_hit = get(cache.heavy_store, key, nothing)
+    if H_hit === nothing
+        obj === nothing && return nothing   # compact hit, heavy miss, no way to recompute: full miss
+        H_hit = zeros(size(obj.H))
+        obj.moments!(@view(H_hit[:, 1]), CounterfactualSensitivity.select_G_from_H(obj, H_hit), key, obj.U, obj)
+        H_hit[:, 2] .= 1.0
+        cache.heavy_recomputes += 1
+        cache.heavy_store[key] = H_hit
+        cache.heavy_bytes += sizeof(H_hit)
+        melitz_lru_touch!(cache.heavy_order, key)
+        cache.heavy_evictions += melitz_heavy_evict_until!(cache)
+    else
+        melitz_lru_touch!(cache.heavy_order, key)
+    end
     return (Delta_hit, x_hit, nStatus_hit, H_hit)
 end
 
 """
-    melitz_exact_cache_insert!(cache, key, Delta, x, nStatus, H, ctx) -> nothing
+    melitz_exact_cache_insert!(cache, key, Delta, x, nStatus, H, ctx, U=nothing) -> nothing
 
-Inserts/overwrites `key`, moves it to MRU, and evicts LRU entries beyond `cache.max_size`.
+Inserts/overwrites `key` in BOTH tiers, moves both to MRU, and evicts LRU entries beyond
+each tier's own capacity independently (`cache.max_size` for the compact tier,
+`cache.heavy_max_size`/`cache.heavy_max_bytes` for the heavy tier).
 """
 function melitz_exact_cache_insert!(cache::MelitzExactPointCache, key::Vector{Float64},
                                      Delta::Float64, x::Vector{Float64}, nStatus::Int,
-                                     H::Matrix{Float64}, ctx)
-    cache.store[key] = (Delta, x, nStatus, H, objectid(ctx))
+                                     H::Matrix{Float64}, ctx, U::Union{Nothing,AbstractMatrix}=nothing)
+    cache.store[key] = (Delta, x, nStatus, melitz_context_fingerprint(ctx, U))
     melitz_lru_touch!(cache.order, key)
     cache.evictions += melitz_lru_evict_until!(cache.order, cache.store, cache.max_size)
+
+    haskey(cache.heavy_store, key) && (cache.heavy_bytes -= sizeof(cache.heavy_store[key]))
+    cache.heavy_store[key] = H
+    cache.heavy_bytes += sizeof(H)
+    melitz_lru_touch!(cache.heavy_order, key)
+    cache.heavy_evictions += melitz_heavy_evict_until!(cache)
     return nothing
 end
 
 """
     melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
+        delta_evaluation_cap=10.0,
         n_live_candidates_tracked=5, exact_cache=nothing) -> NamedTuple
 
 Section 6/7: factors the finite-delta outer NLP's combined callback pair (objective +
@@ -590,11 +731,56 @@ registered bounds, not merely call helper functions") -- rather than duplicating
 logic a second time, which would risk exactly the production/test drift Section 6 warns
 against.
 
+2026-07-24 evaluation-cap-correction session (governing prompt Sections 3-4): `delta`
+remains what it always was -- the OUTER budget, used ONLY to form the dimensionless
+constraint row `c(theta) = DeltaStar(theta)/delta` from a GENUINELY-solved `FiniteSolved`
+result (Case A, `inner_screening.jl`), whether that solved value is within or over this
+budget. `delta_evaluation_cap` (new, default `10.0` -- the governing prompt's own initial
+production candidate) is the SEPARATE threshold that gates early-abort inside the routine
+inner evaluation (`inner_solve_verified_or_fail` below, and threaded down into
+`melitz_classified_inner_solve`/`build_melitz_implicit_bundle`'s `lower_limit`) -- `delta`
+itself plays NO role in whether an inner solve is aborted early, only in how a solved
+value is scaled for the outer constraint.
+
+For an `AboveEvaluationCap`/`InfiniteDeltaCertified` trial point, `cb_F!`/`cb_G!` (below)
+install a FIXED SENTINEL constraint value `delta_evaluation_cap/delta` (a CONSTANT,
+identical for every such point, independent of `theta`/solve path/iteration/screen) with a
+ZERO gradient, reported to KNITRO as an ORDINARY SUCCESSFUL evaluation -- not an eval-error.
+This is deliberately analogous to the pre-existing Ricardian model's own `lower_limit=-50`
+convention (`cc_algo/ccOuter.jl`/`ccInner.jl`): a fixed, numerically-motivated threshold
+beyond which the model is treated as certainly-bad, reported as a real (if extreme)
+constraint violation -- giving the outer search actual magnitude/direction information
+rather than a blind eval-error backtrack. This repo's own prior (pre-this-session) work
+found empirically that switching FROM eval-errors TO a real finite value here "measurably
+changed exploration (a real, evolving trajectory rather than backtrack-to-near-zero)" --
+motivating this choice over a bare eval-error.
+
+This is NOT a reintroduction of the original bug. The original bug reported the
+CERTIFICATE's own value (`result.certified_lower_bound`, which varies depending on which
+screen/iteration happened to trip -- two points with the SAME true, possibly-infinite
+`DeltaStar` could report different numbers) paired with the certificate's own fixed-dual
+gradient AT THAT ARBITRARY point -- a real derivative of an unstable, path-dependent
+quantity, mismatched with the value it accompanied. Here, the SAME constant is reported for
+every point in this bucket, and the gradient (zero) is the EXACT, self-consistent derivative
+of "always report this constant" -- value and gradient agree with each other, and neither
+claims to know anything about the true `DeltaStar(theta)` beyond "this point is at least as
+bad as the cap."
+
+Only `NumericalFailure` (no certificate of any kind -- not even a lower bound) remains a
+genuine eval-error: the callback throws a `DomainError`, caught by KNITRO.jl's own
+`_try_catch_handler` and converted to a proper evaluation-error return code, matching the
+pre-existing Ricardian convention for genuinely-unresolved failures.
+
 Returns a `NamedTuple` `(cb_F!, cb_G!, live_candidates, n_inner_eval_failures,
 signed_objective)`. `live_candidates`/`n_inner_eval_failures` are mutated in place by the
 callbacks as KNITRO calls them -- the caller reads them AFTER `KN_solve` returns.
+`n_inner_eval_failures` counts every trial point whose `DeltaStar` was NOT resolved to an
+exact value (`AboveEvaluationCap`+`InfiniteDeltaCertified`+`NumericalFailure`) -- as of this
+session, only the `NumericalFailure` subset of that count corresponds to an actual KNITRO
+evaluation error; the other two are successful (sentinel) evaluations.
 """
 function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smallest::Bool;
+                                              delta_evaluation_cap::Float64=10.0,
                                               n_live_candidates_tracked::Int=5,
                                               cutoff_constraint_backend::Symbol=:nonlinear_reference,
                                               on_inner_result=nothing,
@@ -632,8 +818,8 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     # entry points too (`MelitzDualBank` itself has always been bounded via `max_size`/
     # `policy` eviction, Phase I.6 -- this just threads the knob through one more layer).
     dual_bank = MelitzDualBank(dual_bank_max_size)
-    n_moment_infeasible_reject = Ref(0)
-    n_budget_infeasible_reject = Ref(0)
+    n_infinite_delta_reject = Ref(0)
+    n_above_cap_reject = Ref(0)
     n_numerical_failure_reject = Ref(0)
     n_inner_solved = Ref(0)
 
@@ -703,87 +889,105 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         return nothing
     end
 
-    # ADDENDUM Sections 1-6 (supersedes the prior warm-then-cold-retry policy documented
-    # below in spirit, kept here as the historical rationale for WHY eval failures convert
-    # to a `DomainError`): a genuine inner-solve rejection -- whether a screen certificate
-    # (MomentInfeasible/BudgetInfeasible) or an uncertified numerical failure
-    # (NumericalFailure) -- is an EVALUATION failure from KNITRO's point of view, not a
-    # model value, and is thrown as a `DomainError` immediately, with NO routine cold retry
-    # (addendum Section 1: warm/cold initialization was verified this session, see the
-    # report's "no-rescue benchmark," to affect only SPEED, never success vs. failure, so a
-    # blanket cold retry on every failure was pure wasted wall-clock). KNITRO.jl's own
-    # `_try_catch_handler` catches the `DomainError` and converts it to a proper
-    # evaluation-error return code (KN_RC_EVAL_ERR), telling KNITRO to reject/backtrack from
-    # this trial point -- matching `full_aod_diag/d4_exact/c9_phase8_d20_pilot.jl`'s
-    # documented convention for the Ricardian model. Cold-start solves remain available, but
-    # ONLY at the explicit `:full_value`/diagnostic call sites this function does not touch
-    # (`evaluate_melitz_delta(...; cold=true)`, used for the initial incumbent and
-    # end-of-run reverification).
+    # 2026-07-24 evaluation-cap-correction session, SECOND revision (user review):
+    # `AboveEvaluationCap`/`InfiniteDeltaCertified` report a FIXED SENTINEL constraint value
+    # `delta_evaluation_cap/delta` (a CONSTANT, independent of `theta`/solve path/iteration)
+    # with a ZERO gradient, as an ORDINARY SUCCESSFUL evaluation -- NOT an eval-error. This
+    # is deliberately analogous to the pre-existing Ricardian `lower_limit=-50` convention
+    # (`cc_algo/ccOuter.jl`/`ccInner.jl`): a fixed, numerically-motivated threshold beyond
+    # which the model is treated as certainly-bad, reported to KNITRO as a real (if extreme)
+    # constraint violation, giving the outer search actual magnitude/direction information
+    # rather than a blind eval-error backtrack -- this repo's own prior session found
+    # empirically that switching FROM eval-errors TO a real finite value "measurably changed
+    # exploration (a real, evolving trajectory rather than backtrack-to-near-zero)."
+    #
+    # This is NOT the original bug. The original bug reported `result.certified_lower_bound`
+    # -- a value that depends on WHICH screen/iteration happened to trip, so two points with
+    # the SAME true (possibly infinite) `DeltaStar` could report different numbers -- paired
+    # with the fixed-dual gradient AT THAT ARBITRARY certifying point, a real derivative of
+    # an unstable, path-dependent quantity. The fix here reports the SAME constant for every
+    # point in this bucket, with a gradient (zero) that is the EXACT, self-consistent
+    # derivative of "always report this constant" -- value and gradient agree with each
+    # other and with nothing else, unlike the original bug's mismatched pairing.
+    #
+    # `NumericalFailure` remains a genuine KNITRO evaluation failure -- thrown as a
+    # `DomainError`, caught by KNITRO.jl's own `_try_catch_handler` and converted to a proper
+    # evaluation-error return code (KN_RC_EVAL_ERR), no routine cold retry (addendum Section
+    # 1, unaffected). This is the ONE case with NO certificate of any kind, not even a lower
+    # bound -- matching the pre-existing Ricardian convention for genuinely-unresolved
+    # failures (`full_aod_diag/d4_exact/c9_phase8_d20_pilot.jl`).
     function inner_solve_verified_or_fail(theta::AbstractVector)
         # Section 5.1/4.2: exact-point cache check -- before touching KNITRO at all. Restores
         # `obj.H` (see the correctness-fix comment above this closure's cache declaration)
         # so every downstream reader of `obj.H` sees state consistent with `theta`, exactly
         # as if a real solve had just run at this point. `key` uses a concrete `Vector{Float64}`
         # (not the possibly-view `theta` itself) so Dict hashing/equality is well-defined and
-        # consistent between the lookup here and the insert below.
+        # consistent between the lookup here and the insert below. Cache entries are ONLY ever
+        # inserted from a verified FiniteSolved result (below), so a hit is always `:solved`.
         key = Vector{Float64}(theta)
-        hit = melitz_exact_cache_get(exact_cache, key, ctx)
+        hit = melitz_exact_cache_get(exact_cache, key, ctx, obj.U; obj=obj)
         if hit !== nothing
             n_exact_cache_hits[] += 1
             melitz_record_seconds_outcome!(:inner_solve, :cache_hit, 0.0)
             Delta_hit, x_hit, nStatus_hit, H_hit = hit
             obj.H .= H_hit
-            return (Delta_hit, x_hit, nStatus_hit)
+            return (Delta_hit, x_hit, nStatus_hit, :solved)
         end
         n_exact_cache_misses[] += 1
 
-        # Addendum Section 3/6: `melitz_classified_inner_solve` (inner_screening.jl) runs
-        # the front-loaded range + stored-dual screens BEFORE attempting KNITRO, and makes
-        # exactly ONE KNITRO attempt (no cold retry) if neither screen rejects.
+        # Addendum Section 3/6, CORRECTED this session: `melitz_classified_inner_solve`
+        # (inner_screening.jl) now takes `delta_evaluation_cap`, NEVER `delta` -- the routine
+        # inner evaluation solves fully for every finite value up to the cap, regardless of
+        # the outer budget (governing prompt Section 3). Front-loaded range + stored-dual
+        # screens run BEFORE attempting KNITRO; exactly ONE KNITRO attempt (no cold retry) if
+        # neither screen rejects.
         t0 = time_ns()
-        result = melitz_classified_inner_solve(obj, theta, ctx; delta=delta, bank=dual_bank,
-            on_result=on_inner_result, dual_polish_screen=dual_polish_screen,
+        result = melitz_classified_inner_solve(obj, theta, ctx; delta_evaluation_cap=delta_evaluation_cap,
+            bank=dual_bank, on_result=on_inner_result, dual_polish_screen=dual_polish_screen,
             dual_polish_steps=dual_polish_steps, origin_block_screen=origin_block_screen,
             screen_order=screen_order, warm_start_source=warm_start_source)
         elapsed = (time_ns() - t0) / 1e9
 
-        if result isa InnerSolved
+        if result isa FiniteSolved
             n_inner_solved[] += 1
             melitz_record_seconds_outcome!(:inner_solve, :warm_success, elapsed)
             # Section 5.1/4.2: cache ONLY a verified result. `obj.H` is snapshotted too (see
             # the correctness-fix comment above) -- it was JUST populated at this exact
             # `theta` by `melitz_classified_inner_solve`. Keyed into the SHARED `exact_cache`
             # (Section 4.2), so a later call passed the same cache object -- even at a
-            # DIFFERENT outer `delta` -- can reuse this entry (`Delta(theta)` does not depend
-            # on the outer budget).
+            # DIFFERENT outer `delta`/`delta_evaluation_cap` -- can reuse this entry
+            # (`DeltaStar(theta)` does not depend on the outer budget OR the evaluation cap).
             melitz_exact_cache_insert!(exact_cache, key, result.Delta, result.x, result.nStatus,
-                copy(obj.H), ctx)
-            return (result.Delta, result.x, result.nStatus)
-        elseif result isa MomentInfeasible
-            n_moment_infeasible_reject[] += 1
+                copy(obj.H), ctx, obj.U)
+            return (result.Delta, result.x, result.nStatus, :solved)
+        elseif result isa InfiniteDeltaCertified
+            n_infinite_delta_reject[] += 1
             n_inner_eval_failures[] += 1
-            melitz_record_seconds_outcome!(:inner_solve, :moment_infeasible, elapsed)
-            throw(DomainError(theta[1],
-                "melitz finite-delta outer callback: MomentInfeasible -- moment column " *
-                "$(result.column)'s draw-level range [$(result.lo), $(result.hi)] excludes " *
-                "0, an exact finite-support separation certificate (addendum Section 4.1) " *
-                "-- rejecting without a KNITRO solve"))
-        elseif result isa BudgetInfeasible
-            n_budget_infeasible_reject[] += 1
+            melitz_record_seconds_outcome!(:inner_solve, :infinite_delta_certified, elapsed)
+            # A PROVEN Delta*(theta)=+infinity is, if anything, an even STRONGER certificate
+            # than AboveEvaluationCap -- reported via the SAME fixed-sentinel path (below),
+            # not thrown. `x`/`nStatus` are unused placeholders on this branch (`kind` alone
+            # tells cb_F!/cb_G! what to do; no dual point exists for this certificate at all).
+            return (NaN, Float64[], -1, :certified_bad)
+        elseif result isa AboveEvaluationCap
+            n_above_cap_reject[] += 1
             n_inner_eval_failures[] += 1
-            melitz_record_seconds_outcome!(:inner_solve, :budget_infeasible, elapsed)
-            throw(DomainError(theta[1],
-                "melitz finite-delta outer callback: BudgetInfeasible -- stored-dual lower " *
-                "bound $(result.lower_bound) > delta=$delta (source=$(result.source), " *
-                "addendum Section 4.3/8.1) -- rejecting without a KNITRO solve"))
+            melitz_record_seconds_outcome!(:inner_solve, :above_evaluation_cap, elapsed)
+            # `result.certified_lower_bound`/`result.x` are DELIBERATELY NOT propagated here
+            # -- cb_F!/cb_G! install the SAME fixed sentinel for every `:certified_bad` point
+            # regardless of the exact certificate level, never this path-dependent value.
+            return (NaN, Float64[], -1, :certified_bad)
         else   # NumericalFailure
             n_numerical_failure_reject[] += 1
             n_inner_eval_failures[] += 1
             melitz_record_seconds_outcome!(:inner_solve, :numerical_failure, elapsed)
             throw(DomainError(theta[1],
                 "melitz finite-delta outer callback: NumericalFailure -- inner CC dual " *
-                "solve returned nStatus=$(result.nStatus) with no certificate obtained, no " *
-                "routine cold retry (addendum Section 1) -- rejecting this trial point"))
+                "solve returned nStatus=$(result.nStatus) with no certificate obtained (not a " *
+                "finite optimum, not an evaluation-cap certificate -- possibly a routine " *
+                "inner time/iteration cap reached with no certificate already in hand, " *
+                "governing prompt Section 7), no routine cold retry (addendum Section 1) -- " *
+                "rejecting this trial point, no DeltaStar value invented"))
         end
     end
 
@@ -802,18 +1006,45 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         outcome = :callback_success
         try
             theta = collect(evalRequest.x)
-            objSol, x, nStatus = inner_solve_verified_or_fail(theta)
+            objSol, x, nStatus, kind = inner_solve_verified_or_fail(theta)
 
             # Section 3.1: the outer objective is ALWAYS the finite, deterministic gamma
             # coordinate -- never the inner solve's own return value or a failure sentinel.
             evalResult.obj[1] = signed_objective(theta)
 
+            # `kind == :certified_bad` (AboveEvaluationCap/InfiniteDeltaCertified):
+            # install the FIXED sentinel `delta_evaluation_cap/delta` -- the SAME constant
+            # for every such point, regardless of the exact certificate level (never
+            # `result.certified_lower_bound`, which is path-dependent -- see
+            # `inner_solve_verified_or_fail`'s own comment for the full reasoning). Reported
+            # as an ORDINARY successful evaluation (return 0), not an eval-error.
+            if kind == :certified_bad
+                evalResult.c[1] = delta_evaluation_cap / delta
+                if cutoff_constraint_backend == :nonlinear_reference
+                    g_d, g_e = @melitz_profile :fc_cutoff_nonlinear melitz_cutoff_constraints_at(theta, obj.γ)
+                    nd = length(g_d)
+                    evalResult.c[2:1+nd] .= g_d
+                    evalResult.c[2+nd:end] .= g_e
+                end
+                return 0
+            end
+
+            # `kind == :solved` from here on: `inner_solve_verified_or_fail` throws ONLY for
+            # `NumericalFailure` (no certificate of any kind) -- every other outcome is
+            # handled above. `x` is the GENUINE optimum -- `obj(x, constr=local_c)` computes
+            # `1e10*(-f(x;obj.H))` under the CURRENTLY-loaded `obj.H` (already fresh at
+            # `theta`), which at the true optimum equals `1e10*DeltaStar(theta)` exactly
+            # (Section 18).
             local_c = zeros(1)
-            obj(x, constr=local_c)   # raw functor call: local_c[1] == +1e10*Delta(theta) (Section 18)
+            obj(x, constr=local_c)
             Delta_theta = local_c[1] / 1e10
-            # Section 4.1: c_delta(theta) = Delta(theta)/delta <= 1 -- dimensionless, O(1) at
-            # the budget boundary regardless of delta's own scale (replaces the old
-            # 1e10-scaled row).
+            # Section 4.1: c_delta(theta) = DeltaStar(theta)/delta <= 1 -- dimensionless, O(1)
+            # at the budget boundary regardless of delta's own scale. This is now the TRUE,
+            # fully-optimized DeltaStar(theta) at every point that reaches here -- including
+            # points genuinely OVER the outer budget (Delta_theta/delta > 1) but still below
+            # delta_evaluation_cap (governing prompt Case A: these are FiniteSolved, not
+            # intercepted early) -- giving KNITRO's own line search real, non-path-dependent
+            # magnitude/direction information at every evaluated point, on-budget or not.
             evalResult.c[1] = Delta_theta / delta
 
             # Section 3.3/4 (backend comparison): under :linear, the D+D*(D-1) cutoff rows are
@@ -848,17 +1079,44 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         try
             theta = collect(evalRequest.x)
             n_ = length(theta)
-            objSol, x, nStatus = inner_solve_verified_or_fail(theta)
+            objSol, x, nStatus, kind = inner_solve_verified_or_fail(theta)
 
             # Section 3.1: d(±theta[1])/dtheta -- exact, trivial, independent of the inner
             # solve (which is still needed below, for the constraint Jacobian only).
             evalResult.objGrad .= 0.0
             evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
 
+            # `kind == :certified_bad`: the SAME fixed sentinel's own gradient is EXACTLY
+            # ZERO -- the true derivative of "always report the constant
+            # delta_evaluation_cap/delta," self-consistent with cb_F!'s matching branch
+            # (never the certificate's own fixed-dual gradient at an arbitrary, path-
+            # dependent point).
+            if kind == :certified_bad
+                evalResult.jac[1:n_] .= 0.0
+                if cutoff_constraint_backend == :nonlinear_reference
+                    J_d, J_e = @melitz_profile :ga_cutoff_jacobian_nonlinear melitz_cutoff_constraint_jacobian(theta, obj.γ)
+                    nd, ne = size(J_d, 1), size(J_e, 1)
+                    @inbounds for kk in 1:nd
+                        evalResult.jac[kk*n_+1:(kk+1)*n_] .= @view J_d[kk, :]
+                    end
+                    off = 1 + nd
+                    @inbounds for kk in 1:ne
+                        evalResult.jac[(off+kk-1)*n_+1:(off+kk)*n_] .= @view J_e[kk, :]
+                    end
+                end
+                return 0
+            end
+
+            # `kind == :solved` from here on: `x` is the GENUINE optimum, so both gradient
+            # paths below compute the EXACT derivative of the true `DeltaStar(theta)` via the
+            # envelope theorem (no fixed-dual/suboptimal-point caveat applies anymore: the
+            # prior session's `:budget_infeasible` branch, which computed this same formula
+            # at a possibly-suboptimal certifying dual, no longer exists on this path -- see
+            # `inner_solve_verified_or_fail`'s own comment).
             local_jac = zeros(n_)
             if direct_gradient_fn === nothing
                 dummy_g = zeros(n_)
-                @melitz_profile :ga_divergence_gradient obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*Delta)/dtheta at fixed x
+                @melitz_profile :ga_divergence_gradient obj(x, dummy_g, theta; jac=local_jac)   # local_jac == d(1e10*DeltaStar)/dtheta
             else
                 # Section 4: direct fixed-dual gradient-vector backend -- computes
                 # d(1e10*Delta)/dtheta directly (direct_gradient.jl), bypassing the shared
@@ -891,11 +1149,12 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     return (cb_F! = cb_F!, cb_G! = cb_G!, live_candidates = live_candidates,
             n_inner_eval_failures = n_inner_eval_failures, signed_objective = signed_objective,
             cutoff_constraint_backend = cutoff_constraint_backend,
+            delta_evaluation_cap = delta_evaluation_cap,
             n_fc_calls = n_fc_calls, n_ga_calls = n_ga_calls,
             n_exact_cache_hits = n_exact_cache_hits, n_exact_cache_misses = n_exact_cache_misses,
             exact_cache = exact_cache,
-            dual_bank = dual_bank, n_moment_infeasible_reject = n_moment_infeasible_reject,
-            n_budget_infeasible_reject = n_budget_infeasible_reject,
+            dual_bank = dual_bank, n_infinite_delta_reject = n_infinite_delta_reject,
+            n_above_cap_reject = n_above_cap_reject,
             n_numerical_failure_reject = n_numerical_failure_reject,
             n_inner_solved = n_inner_solved)
 end
@@ -994,6 +1253,23 @@ Three corrections vs. the prior (2026-07-23, pre-repair) version of this functio
      `full_aod_diag/d4_exact/c9_phase8_d20_pilot.jl`'s documented convention for the
      Ricardian model, not a hand-invented constraint value.
 
+2026-07-24 evaluation-cap-correction session (fourth correction, layered on top of the three
+above): `delta_evaluation_cap` (default `10.0`) is a NEW kwarg threaded straight into
+`build_melitz_implicit_bundle`/`melitz_build_finite_delta_callbacks` -- see those functions'
+own docstrings for the full Case A/B/C/D semantics this introduces. In one sentence: `delta`
+no longer plays any role in whether an inner evaluation is aborted early (only
+`delta_evaluation_cap` does), so a trial point with genuine `DeltaStar` between `delta` and
+`delta_evaluation_cap` is now solved to a real optimum and returned to KNITRO as an
+ordinary, informative, over-budget constraint value -- not intercepted and replaced with a
+path-dependent certificate the way the pre-correction session's `BudgetInfeasible` handling
+did. A point that is `AboveEvaluationCap` or `InfiniteDeltaCertified` is reported to outer
+KNITRO as a FIXED sentinel constraint value `delta_evaluation_cap/delta` with a ZERO
+gradient (an ordinary successful evaluation, not an eval-error) -- see
+`melitz_build_finite_delta_callbacks`'s own docstring for the full reasoning (this constant,
+self-consistent sentinel is NOT the original bug's path-dependent certificate value; only
+`NumericalFailure`, the one case with no certificate of any kind, remains a genuine
+eval-error).
+
 Also implements Section 2's incumbent bookkeeping: `theta_init` is cold-evaluated and
 installed as `initial_incumbent` BEFORE `KN_solve` runs (survives even a
 zero/one-iteration KNITRO run, Section 2.1); every outer-feasible point evaluated during
@@ -1027,9 +1303,37 @@ neighborhood) to reuse verified inner-solve/evaluation results across DIFFERENT 
 budgets -- valid because `Delta(theta)` (and everything derived from it: dual, LFD,
 moments, equilibrium checks) is a function of `theta` alone, never of the outer budget
 `delta` itself.
+
+`external_incumbent` (2026-07-24 outer-benchmark-correction session, main prompt Section 4):
+an optional, separately-known feasible `theta_free` point (e.g. the fixed-A/f scalar
+profile's own verified boundary point) to be cold-evaluated and folded into the SAME
+incumbent-selection logic as `theta_init`'s own initial incumbent and the trajectory's best
+cold-reverified live candidate -- `cold_verified_incumbent` (the field callers already treat
+as "the answer") is the argmin of SIGNED objective over every outer-feasible candidate among
+these three, so the full flexible search can never be reported as worse than a
+DELIBERATELY-passed known-good restricted incumbent, even if KNITRO's own trajectory never
+rediscovers it (main prompt Section 4's explicit requirement). Default `nothing`: no
+externally-supplied incumbent, byte-for-byte the pre-existing selection logic (argmin over
+just the trajectory-derived and initial candidates).
+
+`var_scale`/`var_center` (2026-07-25 scaled-KNITRO session): ADDITIVE, length-`n` vectors
+passed straight to KNITRO's own native `KN_set_var_scalings_all(kc, var_scale, var_center)`
+(`theta[i] = var_center[i] + var_scale[i]*y[i]`, KNITRO's own documented convention --
+`include/knitro.h`'s own header comment on `KN_set_var_scalings`). Both default `nothing`:
+no call is made at all, byte-for-byte the pre-existing unscaled behavior. Verified live
+(standalone synthetic-NLP audit, 2026-07-25 session) that this is a PURE reparameterization
+of KNITRO's own internal step/trust-region machinery -- callbacks (`cb_F!`/`cb_G!`, already
+built by `melitz_build_finite_delta_callbacks` above) always receive/return `theta` in RAW
+economic units regardless of `var_scale`/`var_center`, so NO change to any callback,
+Jacobian, or the affine cutoff system's `C`/`b` registration (`melitz_register_finite_delta_knitro_problem!`)
+is needed -- KNITRO performs the chain rule internally. `var_scale` entries must be strictly
+positive (KNITRO's own convention: a non-positive entry silently disables scaling for that
+one coordinate rather than erroring -- this function does not additionally validate that,
+matching KNITRO's own documented behavior).
 """
 function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVector;
                                           delta::Real, direction::Symbol,
+                                          delta_evaluation_cap::Real=10.0,
                                           gradient_backend::Symbol=:B, h::Real=1e-4,
                                           theta_box::Union{Real,AbstractVector}=2.0,
                                           n_live_candidates_tracked::Int=5,
@@ -1045,18 +1349,26 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           warm_start_source::Symbol=:previous,
                                           exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
                                           eval_cache::Union{Nothing,MelitzDeltaEvalCache}=nothing,
-                                          dual_bank_max_size::Int=8)
+                                          dual_bank_max_size::Int=8,
+                                          external_incumbent::Union{Nothing,AbstractVector}=nothing,
+                                          var_scale::Union{Nothing,AbstractVector}=nothing,
+                                          var_center::Union{Nothing,AbstractVector}=nothing)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     t0 = time()
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
     D = ctx.D
     n = length(theta_init)
     delta = Float64(delta)
+    delta_evaluation_cap = Float64(delta_evaluation_cap)
 
+    # 2026-07-24 evaluation-cap-correction session: `lower_limit_guard`, when enabled, is now
+    # ALWAYS paired with THIS call's own `delta_evaluation_cap` (never the outer budget
+    # `delta`) -- see `build_melitz_implicit_bundle`'s docstring for why the two must not be
+    # conflated.
     obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta_init; delta=delta,
         find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
-        lower_limit_guard=lower_limit_guard)
+        lower_limit_guard=lower_limit_guard, delta_evaluation_cap=delta_evaluation_cap)
 
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
 
@@ -1079,11 +1391,25 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         MelitzOuterCandidate(signed_objective(theta_init), initial_eval, initial_classification, :initial) :
         nothing
 
+    # Section 4 (this session): cold-evaluate the externally-supplied known-good incumbent
+    # (if any) BEFORE KN_solve too, on the exact same footing as theta_init's own initial
+    # incumbent -- see this function's own docstring.
+    external_incumbent_candidate = nothing
+    if external_incumbent !== nothing
+        external_theta = collect(Float64.(external_incumbent))
+        external_eval = evaluate_melitz_delta(external_theta, ctx, obj_inner; cold=true, cache=eval_cache)
+        external_classification = melitz_classify_outer_feasibility(external_eval, delta)
+        external_incumbent_candidate = external_classification.outer_feasible ?
+            MelitzOuterCandidate(signed_objective(external_theta), external_eval, external_classification, :external) :
+            nothing
+    end
+
     # Section 6/7: the SAME callback pair a fixed-point test would register directly.
     # `on_inner_result`, if given, is a diagnostic hook (see inner_screening.jl) invoked
     # on every classified inner-solve outcome -- default `nothing`, zero risk to production
     # callers.
     cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
+        delta_evaluation_cap=delta_evaluation_cap,
         n_live_candidates_tracked=n_live_candidates_tracked,
         cutoff_constraint_backend=cutoff_constraint_backend, on_inner_result=on_inner_result,
         dual_polish_screen=dual_polish_screen, dual_polish_steps=dual_polish_steps,
@@ -1098,6 +1424,12 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     KNITRO.KN_set_var_lobnds_all(kc, collect(theta_init) .- theta_box)
     KNITRO.KN_set_var_upbnds_all(kc, collect(theta_init) .+ theta_box)
     KNITRO.KN_set_var_primal_init_values_all(kc, collect(theta_init))
+    if var_scale !== nothing
+        length(var_scale) == n || throw(ArgumentError("var_scale must have length n=$n, got $(length(var_scale))"))
+        vc = var_center === nothing ? collect(Float64.(theta_init)) : collect(Float64.(var_center))
+        length(vc) == n || throw(ArgumentError("var_center must have length n=$n, got $(length(vc))"))
+        KNITRO.KN_set_var_scalings_all(kc, collect(Float64.(var_scale)), vc)
+    end
 
     cIndices, cutoff_sys = melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, n, D, obj;
         cutoff_constraint_backend=cutoff_constraint_backend)
@@ -1135,6 +1467,16 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         cold_verified_incumbent = initial_incumbent
     end
 
+    # Section 4 (this session): fold the externally-supplied known-good incumbent (if any)
+    # into the SAME final selection -- argmin of signed objective over every outer-feasible
+    # candidate in hand (trajectory-derived, theta_init's own initial point, and the external
+    # one). This is what makes "the result returned by the full procedure must never be worse
+    # than a known feasible incumbent" an ENFORCED property of this function's return value,
+    # not merely something a caller has to remember to check afterward.
+    all_candidates = filter(!isnothing, (cold_verified_incumbent, initial_incumbent, external_incumbent_candidate))
+    cold_verified_incumbent = isempty(all_candidates) ? nothing :
+        reduce((a, b) -> b.objective < a.objective ? b : a, all_candidates)
+
     best_live_incumbent = isempty(live_candidates) ? nothing : first(live_candidates)
 
     return MelitzFiniteDeltaOuterResult(collect(theta_init), delta, direction,
@@ -1142,8 +1484,9 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         initial_incumbent, best_live_incumbent, cold_verified_incumbent,
         nStatus, solve_inner_count, solve_infeas_count, cbset.n_inner_eval_failures[], time() - t0,
         cutoff_constraint_backend, cbset.n_fc_calls[], cbset.n_ga_calls[],
-        cbset.n_inner_solved[], cbset.n_moment_infeasible_reject[],
-        cbset.n_budget_infeasible_reject[], cbset.n_numerical_failure_reject[])
+        delta_evaluation_cap,
+        cbset.n_inner_solved[], cbset.n_infinite_delta_reject[],
+        cbset.n_above_cap_reject[], cbset.n_numerical_failure_reject[])
 end
 
 # ============================================================================

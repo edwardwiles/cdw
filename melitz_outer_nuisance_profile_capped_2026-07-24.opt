@@ -1,0 +1,21 @@
+# KNITRO options for the Melitz Delta_profile(g) = min_eta Delta(g,eta) nuisance-minimization
+# outer NLP (Stage 2, 2026-07-24 outer-benchmark-correction session,
+# src/melitz/nuisance_profile.jl). Modeled directly on melitz_outer_finite_delta.opt (same
+# algorithm/eval_fcga/hessopt/feastol/opttol rationale -- the objective gradient here comes
+# from the SAME direct fixed-dual backend, now evaluated at a genuinely converged optimal
+# dual since this problem has no divergence-budget constraint to reject against) but with a
+# larger default maxit: a real minimization over the nuisance coordinates may need more
+# outer iterations than the finite-delta search's own budget-rejection-dominated trajectory.
+algorithm       0
+eval_fcga       no
+gradopt         exact
+hessopt         2
+feastol         1e-7
+feastol_abs     1e-8
+opttol          1e-3
+opttol_abs      1e-4
+maxit           40
+outlev          3
+honorbnds       always
+
+maxtime_real    240

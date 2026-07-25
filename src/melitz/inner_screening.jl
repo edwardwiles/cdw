@@ -38,52 +38,117 @@ using LinearAlgebra: I, norm
 
 # ============================================================================
 # Section 2: typed inner-solve result.
+#
+# 2026-07-24 evaluation-cap-correction session (governing prompt:
+# docs/melitz_real_d20_evaluation_cap_correction_2026-07-24.md): RENAMED from the prior
+# session's `InnerSolved`/`BudgetInfeasible`/`MomentInfeasible` vocabulary to the corrected
+# four-way taxonomy the governing prompt specifies. This is not a cosmetic rename -- the old
+# name `BudgetInfeasible` was itself part of the conceptual error being corrected: it
+# conflated "we aborted before certifying DeltaStar(theta) against the CURRENT outer budget
+# delta" with "the point is economically infeasible," which is false whenever the true
+# DeltaStar is merely finite-and-over-budget (an ordinary, fully solvable case under the
+# corrected semantics, Case A below). The new names describe exactly what was PROVEN, no
+# more:
+#
+#   FiniteSolved            -- DeltaStar(theta) IS finite and this IS its optimized value
+#                              (whether <= or > the outer budget delta -- budget-relative
+#                              status is a property the CALLER derives from `.Delta`, never
+#                              a reason to withhold or substitute this result).
+#   AboveEvaluationCap      -- only `DeltaStar(theta) > delta_evaluation_cap` is certified;
+#                              the true value is UNKNOWN (finite-above-cap, or infinite).
+#   InfiniteDeltaCertified  -- DeltaStar(theta) = +infinity, PROVEN by an exact certificate
+#                              (no evaluation cap involved at all -- the feasible set is
+#                              empty regardless of any cap).
+#   NumericalFailure        -- no certificate of any kind was obtained.
 # ============================================================================
 
 "Abstract supertype for a classified inner-solve outcome."
 abstract type MelitzInnerResult end
 
-"Verified inner solve: divergence `Delta`, dual vector `x`, KNITRO `nStatus` (in the accepted set {0,-100,-101,-103})."
-struct InnerSolved <: MelitzInnerResult
+"""
+Case A (governing prompt Section 2): the inner CC dual problem was genuinely solved to
+KNITRO's accepted optimal status. `Delta` is the ACTUAL, fully-optimized `DeltaStar(theta)`
+-- finite by construction of reaching this branch -- `x` is the optimal dual at that
+optimum, `nStatus` is KNITRO's own accepted status code. Returned IDENTICALLY whether
+`Delta <= delta_evaluation_cap`'s outer budget or not: a point with true `DeltaStar` of
+1.5, 2, or 5 must be reported here with its genuine solved value, dual, and (via the
+existing envelope-theorem-exact gradient machinery) gradient -- never intercepted early
+merely because it exceeds some OUTER budget `delta` (that budget plays no role in whether
+this branch is reached; only `delta_evaluation_cap`, Case B below, can abort a solve before
+this point).
+"""
+struct FiniteSolved <: MelitzInnerResult
     Delta::Float64
     x::Vector{Float64}
     nStatus::Int
 end
 
 """
-Certified `Delta(theta) > delta` obtained WITHOUT a completed KNITRO inner solve (or, in
-principle, from a KNITRO solve terminated early on a certified threshold -- not
-implemented this session, see report Section 11/D). `lower_bound` is a valid lower bound
-on `Delta(theta)`; `source` records which screen produced it (this session implements
-only `:stored_dual`; `:scalar` and `:origin_block`, main prompt Sections 8.2/8.3, are
-documented as future work, report Section C).
+Case B (governing prompt Section 2): a valid dual lower bound certifies
+`DeltaStar(theta) > delta_evaluation_cap`, obtained WITHOUT ever converging the inner dual
+problem to a genuine optimum -- either the KNITRO-native mid-solve bailout
+(`source=:live_dual_threshold`) or a cheap pre-solve screen against an already-known dual
+(`source in (:stored_dual, :dual_polish)`).
+
+`certified_lower_bound` is a VALID, FINITE lower bound (unconditional weak duality, file
+header) on the TRUE `DeltaStar(theta)` -- it is NOT `DeltaStar(theta)` itself, and must
+NEVER be reported/logged as `delta_star`/`Delta=<value>` (governing prompt Section 11: write
+`certified_lower_bound=...; delta_star_solved=false`, never `Delta=<value>` for this case).
+The true `DeltaStar(theta)` may be ANY finite value `>= certified_lower_bound` (including
+values far above the cap) or `+infinity` -- this result proves only the ONE inequality
+`DeltaStar(theta) > delta_evaluation_cap`, nothing more precise.
+
+`x` is the finite dual vector that CERTIFIES `certified_lower_bound` (weak duality holds at
+ANY finite dual point, not only an optimum) -- kept so a caller that deliberately wants a
+fixed-dual surrogate gradient AT THIS CERTIFICATE (Policy B in `finite_delta_outer.jl`, NOT
+the default) has it available, though the default outer-callback policy (Policy A) does not
+use it at all.
+
+`crossing_time_s`/`crossing_iteration` (governing prompt Section 2's "threshold-crossing
+iteration, threshold-crossing time"): populated only for `source==:live_dual_threshold`
+(the one genuinely ITERATIVE producer -- `crossing_time_s` is wall-clock elapsed from this
+inner-solve attempt's own start to the KNITRO-native bailout) and `:dual_polish` (the damped-
+Newton polish loop's own step index at certification, and its own elapsed wall time).
+`:stored_dual` is a single, static bank lookup with no iteration to time a "crossing"
+against -- reported as `crossing_time_s=0.0, crossing_iteration=0` by convention (documented
+here, not a real "first-iteration" claim). `crossing_iteration=-1` for `:live_dual_threshold`
+specifically is a DISCLOSED LIMITATION, not a silent omission: `cc_algo/PsiObjectiveBundle.jl`
+(deliberately unmodified, shared with the Ricardian model) does not expose a barrier-
+iteration counter to its own early-bailout branch, only a timestamp
+(`threshold_crossing_time_ns`) -- threading a genuine iteration count through would require
+touching that shared file, out of scope for this session.
 """
-struct BudgetInfeasible <: MelitzInnerResult
-    lower_bound::Float64
+struct AboveEvaluationCap <: MelitzInnerResult
+    certified_lower_bound::Float64
     source::Symbol
+    x::Vector{Float64}
+    crossing_time_s::Float64
+    crossing_iteration::Int
 end
 
 """
-    MELITZ_BUDGET_INFEASIBLE_SOURCES
+    MELITZ_ABOVE_EVALUATION_CAP_SOURCES
 
-Every `source` symbol a `BudgetInfeasible` result may carry, for validation/testing.
-`:stored_dual` (Section 3.3 above) and `:live_dual_threshold` (main prompt Section 11/this
-session's Phase I.1: the KNITRO-native `lower_limit` mid-solve early stop, now correctly
-classified instead of folding into `NumericalFailure` -- see
-`melitz_classified_inner_solve`'s docstring below and
-`cc_algo/PsiObjectiveBundle.jl`'s `threshold_crossed` fields).
+Every `source` symbol an `AboveEvaluationCap` result may carry, for validation/testing.
+`:stored_dual`/`:dual_polish` (single-shot screens against an already-known dual) and
+`:live_dual_threshold` (the KNITRO-native `lower_limit` mid-solve early stop -- see
+`melitz_classified_inner_solve`'s docstring below and `cc_algo/PsiObjectiveBundle.jl`'s
+`threshold_crossed` fields).
 """
-const MELITZ_BUDGET_INFEASIBLE_SOURCES = (:stored_dual, :live_dual_threshold)
+const MELITZ_ABOVE_EVALUATION_CAP_SOURCES = (:stored_dual, :dual_polish, :live_dual_threshold)
 
 """
-Exact finite-support separation certificate (main prompt Section 3/6): moment column
-`column`'s achievable range `[lo, hi]` across all `W` draws does not contain 0, so no
-probability vector over the draws can satisfy that moment -- the point is infeasible
-independent of any KNITRO attempt. `kind` is currently always `:range` (this session's
-only implemented certificate; the K-dimensional convex-hull LP, main prompt Sections 5-6,
-is documented but not implemented, see report Section C).
+Case C (governing prompt Section 2): `DeltaStar(theta) = +infinity`, PROVEN (not merely
+suspected, and independent of any `delta_evaluation_cap`) by an exact finite-support
+separation certificate -- moment column `column`'s achievable range `[lo, hi]` across all
+`W` draws does not contain 0, so no probability vector over the draws can satisfy that
+moment: the inner CC feasible set is EMPTY, no finite divergence value exists at all. `kind`
+is currently `:range` (the always-on O(W*K) screen) or `:origin_block` (the compressed
+origin-block LP screen, `origin_block_screen.jl`) -- both exact certificates; the general
+K-dimensional convex-hull LP (main prompt Sections 5-6 of the PRIOR session) is documented
+but not implemented, see that session's report Section C.
 """
-struct MomentInfeasible <: MelitzInnerResult
+struct InfiniteDeltaCertified <: MelitzInnerResult
     column::Int
     lo::Float64
     hi::Float64
@@ -103,7 +168,20 @@ struct BoundaryFeasible <: MelitzInnerResult
     note::String
 end
 
-"No mathematical certificate was obtained: the (single, no-retry) KNITRO attempt returned a status outside the accepted set, and no screen rejected the point first."
+"""
+Case D (governing prompt Section 2/7): no mathematical certificate of any kind was
+obtained -- the (single, no-retry) KNITRO attempt returned a status outside the accepted
+set, no screen rejected the point first, and no cap-crossing certificate fired either. This
+INCLUDES a routine inner time/iteration cap being reached (governing prompt Section 7:
+"timeout does not imply infinite DeltaStar... timeout does not imply AboveEvaluationCap...
+timeout is NumericalFailure unless a valid lower-bound or infeasibility certificate already
+exists") -- `nStatus` in that case is whatever code KNITRO's own `maxtime_real`/`maxit`
+inner-solve option reports; if the KNITRO-native threshold ALSO happened to fire before the
+time limit was reached, `melitz_classified_inner_solve` returns `AboveEvaluationCap`
+instead (checked first, see that function's body) -- a genuine certificate already in hand
+is never downgraded to `NumericalFailure` merely because the SAME attempt also ran out of
+time. No `DeltaStar` value is ever invented for this case.
+"""
 struct NumericalFailure <: MelitzInnerResult
     nStatus::Int
 end
@@ -113,7 +191,7 @@ end
 # ============================================================================
 
 """
-    melitz_range_screen(G::AbstractMatrix; guard=0.0) -> Union{Nothing,MomentInfeasible}
+    melitz_range_screen(G::AbstractMatrix; guard=0.0) -> Union{Nothing,InfiniteDeltaCertified}
 
 For every column `k` of `G` (`W x num_moments`), tests `min(G[:,k]) <= guard <= max(G[:,k])`.
 Returns the FIRST violated column's certificate, or `nothing` if every column's range
@@ -128,7 +206,7 @@ function melitz_range_screen(G::AbstractMatrix{<:Real}; guard::Real=0.0)
     @inbounds for k in 1:K
         lo, hi = extrema(@view G[:, k])
         if !(lo <= guard <= hi)
-            return MomentInfeasible(k, lo, hi, :range)
+            return InfiniteDeltaCertified(k, lo, hi, :range)
         end
     end
     return nothing
@@ -233,23 +311,67 @@ function melitz_bank_nearest_theta(bank::MelitzDualBank, theta::AbstractVector)
 end
 
 """
+    melitz_without_lower_limit_bailout(f, obj)
+
+2026-07-24 outer-benchmark-correction session, main prompt Section 3 (bug found LIVE while
+validating the corrected `lower_limit_guard`): `cc_algo/PsiObjectiveBundle.jl`'s shared
+functor (`(Q::PsiObjectiveBundleImplicit)(...)`) applies its `if f <= lower_limit; return
+-KNITRO.KN_INFINITY` early-bailout UNCONDITIONALLY on every call to `obj(...)` -- not only
+during a genuine NESTED KN_solve barrier iteration (its intended use, `:live_dual_threshold`
+above) but also during a bare DIAGNOSTIC/screening call
+(`melitz_stored_dual_lower_bound`/`melitz_bank_best`/`melitz_dual_polish_screen`, all called
+OUTSIDE of any KN_solve). Once `lower_limit_guard` is set to a small NUMERICAL value (main
+prompt Section 2's own correction, vs. the old `49.0` margin), an ordinary, only-modestly-
+infeasible point's TRUE `-f` routinely exceeds `delta+guard` too -- so these screens silently
+received `-KNITRO.KN_INFINITY` (`-floatmax(Float64)`) as `f`, i.e. `lb=-f=floatmax(Float64)`,
+instead of the TRUE, modest, informative lower bound -- corrupting exactly the constraint
+value the main prompt's Section 3 says must never be `floatmax`/a sentinel. Confirmed live:
+guard in `{1e-8,1e-6,1e-4}` all reproduced `certified_bound == floatmax(Float64)` exactly for
+the stored-dual screen at a genuinely `Delta≈1.06` point.
+
+Root cause is the shared functor's own unconditional check, which this repo's convention
+(documented throughout this file and `finite_delta_outer.jl`) deliberately never modifies
+(`cc_algo/PsiObjectiveBundle.jl` stays byte-for-byte reusable by the Ricardian model). Fix,
+scoped entirely to Melitz's own screening code: temporarily set `obj.lower_limit = -Inf`
+(the bailout condition `f <= -Inf` is then unreachable for any finite `f`) around exactly the
+bare diagnostic call(s) `fn` makes, then restore the REAL guard-based limit afterward in a
+`finally` block -- so a genuinely nested nStatus check inside `CS.inner_loop_internal`
+(called separately, never inside this wrapper) still sees and uses the real
+`lower_limit`/`threshold_crossed` mechanism exactly as before, unaffected.
+"""
+function melitz_without_lower_limit_bailout(fn, obj)
+    saved_limit = obj.lower_limit
+    obj.lower_limit = -Inf
+    try
+        return fn()
+    finally
+        obj.lower_limit = saved_limit
+    end
+end
+
+"""
     melitz_stored_dual_lower_bound(obj, bank) -> Float64
 
 Evaluates every dual vector in `bank` against the CURRENTLY-loaded `obj.H` (caller must
 have already run `obj.moments!` for the query `theta`) via the bare functor call
 `obj(x)` (no gradient/constraint request -- the cheapest possible call). Returns the
 TIGHTEST (maximum) `-f(x)` over the bank, a valid lower bound on `Delta` at this `theta`
-(see file header); `-Inf` if the bank is empty.
+(see file header); `-Inf` if the bank is empty. Wrapped in
+`melitz_without_lower_limit_bailout` (see that function's docstring) so a tight
+`lower_limit_guard` never corrupts this TRUE lower bound with the live-solve
+`-KNITRO.KN_INFINITY` sentinel.
 """
 function melitz_stored_dual_lower_bound(obj, bank::MelitzDualBank)
     isempty(bank.entries) && return -Inf
-    best = -Inf
-    for x in bank.entries
-        f = obj(x)
-        lb = -f
-        lb > best && (best = lb)
+    melitz_without_lower_limit_bailout(obj) do
+        best = -Inf
+        for x in bank.entries
+            f = obj(x)
+            lb = -f
+            lb > best && (best = lb)
+        end
+        best
     end
-    return best
 end
 
 # ============================================================================
@@ -257,8 +379,8 @@ end
 # ============================================================================
 
 """
-    melitz_dual_polish_screen(obj, x0; delta, guard=1e-6, max_steps=3, damping=1e-6,
-        max_backtrack=4) -> Union{Nothing,BudgetInfeasible}
+    melitz_dual_polish_screen(obj, x0; delta_evaluation_cap, guard=1e-6, max_steps=3,
+        damping=1e-6, max_backtrack=4) -> Union{Nothing,AboveEvaluationCap}
 
 A small, fixed number of damped Newton steps on the CANONICAL exact dual functor in
 `(zeta,lambda)`-space -- `obj(x, g; h=H)` returns the raw objective `f` and fills the exact
@@ -269,8 +391,8 @@ from `x0` (typically the stored-dual bank's own best-lower-bound entry).
 No convergence claim is made or needed: by the SAME unconditional weak-duality argument as
 `melitz_stored_dual_lower_bound` (file header above), EVERY finite dual iterate visited --
 including `x0` itself, before any step is taken -- gives a valid `Delta(theta)` lower bound
-`-f(x)`. The moment ANY visited iterate's bound exceeds `delta+guard`, this function returns
-immediately with a certified `BudgetInfeasible(lb, :dual_polish)`; if `max_steps` damped
+`-f(x)`. The moment ANY visited iterate's bound exceeds `delta_evaluation_cap+guard`, this
+function returns immediately with a certified `AboveEvaluationCap(lb, :dual_polish, ...)`; if `max_steps` damped
 Newton steps complete without a certified rejection, returns `nothing` (not a claim of
 feasibility -- merely "this screen did not reject").
 
@@ -279,47 +401,52 @@ only if it is FINITE and does not increase the raw objective (`f_try <= f`, i.e.
 WORSEN the lower bound) -- halved up to `max_backtrack` times, else the polish stops (not
 an error; the caller proceeds to a real KNITRO attempt).
 """
-function melitz_dual_polish_screen(obj, x0::AbstractVector; delta::Real, guard::Real=1e-6,
+function melitz_dual_polish_screen(obj, x0::AbstractVector; delta_evaluation_cap::Real, guard::Real=1e-6,
                                     max_steps::Int=3, damping::Real=1e-6, max_backtrack::Int=4)
-    n = length(x0)
-    x = collect(Float64.(x0))
-    all(isfinite, x) || return nothing
-    g = zeros(n)
-    H = zeros(n, n)
-    f = obj(x, g; h=H)
-    isfinite(f) || return nothing
-    lb = -f
-    lb > delta + guard && return BudgetInfeasible(lb, :dual_polish)
-
-    for _ in 1:max_steps
-        local dir
-        try
-            dir = -((H + damping * I) \ g)
-        catch
-            break   # singular/ill-conditioned Hessian at this iterate -- stop polishing, not an error
-        end
-        (isempty(dir) || any(!isfinite, dir)) && break
-
-        accepted = false
-        step_scale = 1.0
-        for _ in 1:max_backtrack
-            x_try = x .+ step_scale .* dir
-            g_try = zeros(n)
-            H_try = zeros(n, n)
-            f_try = obj(x_try, g_try; h=H_try)
-            if isfinite(f_try) && f_try <= f
-                x, g, H, f = x_try, g_try, H_try, f_try
-                accepted = true
-                break
-            end
-            step_scale /= 2
-        end
-        accepted || break
-
+    melitz_without_lower_limit_bailout(obj) do   # see melitz_without_lower_limit_bailout's docstring
+        t0 = time_ns()
+        n = length(x0)
+        x = collect(Float64.(x0))
+        all(isfinite, x) || return nothing
+        g = zeros(n)
+        H = zeros(n, n)
+        f = obj(x, g; h=H)
+        isfinite(f) || return nothing
         lb = -f
-        lb > delta + guard && return BudgetInfeasible(lb, :dual_polish)
+        lb > delta_evaluation_cap + guard &&
+            return AboveEvaluationCap(lb, :dual_polish, copy(x), (time_ns() - t0) / 1e9, 0)
+
+        for step in 1:max_steps
+            local dir
+            try
+                dir = -((H + damping * I) \ g)
+            catch
+                break   # singular/ill-conditioned Hessian at this iterate -- stop polishing, not an error
+            end
+            (isempty(dir) || any(!isfinite, dir)) && break
+
+            accepted = false
+            step_scale = 1.0
+            for _ in 1:max_backtrack
+                x_try = x .+ step_scale .* dir
+                g_try = zeros(n)
+                H_try = zeros(n, n)
+                f_try = obj(x_try, g_try; h=H_try)
+                if isfinite(f_try) && f_try <= f
+                    x, g, H, f = x_try, g_try, H_try, f_try
+                    accepted = true
+                    break
+                end
+                step_scale /= 2
+            end
+            accepted || break
+
+            lb = -f
+            lb > delta_evaluation_cap + guard &&
+                return AboveEvaluationCap(lb, :dual_polish, copy(x), (time_ns() - t0) / 1e9, step)
+        end
+        return nothing
     end
-    return nothing
 end
 
 # ============================================================================
@@ -333,20 +460,24 @@ Scans `bank` once, returning both the tightest stored-dual lower bound (main pro
 Section 8.1, `melitz_stored_dual_lower_bound`'s own computation) AND the entry that
 attains it -- the natural starting point for the dual-polish screen (Phase I.5: "starting
 from the stored dual with the best current lower bound"). `(-Inf, nothing)` if the bank is
-empty.
+empty. Wrapped in `melitz_without_lower_limit_bailout` (see that function's docstring) so a
+tight `lower_limit_guard` never corrupts this TRUE lower bound with the live-solve
+`-KNITRO.KN_INFINITY` sentinel.
 """
 function melitz_bank_best(obj, bank::MelitzDualBank)
     isempty(bank.entries) && return (-Inf, nothing)
-    best_lb = -Inf
-    best_x = bank.entries[1]
-    for xb in bank.entries
-        lb = -obj(xb)
-        if lb > best_lb
-            best_lb = lb
-            best_x = xb
+    melitz_without_lower_limit_bailout(obj) do
+        best_lb = -Inf
+        best_x = bank.entries[1]
+        for xb in bank.entries
+            lb = -obj(xb)
+            if lb > best_lb
+                best_lb = lb
+                best_x = xb
+            end
         end
+        (best_lb, best_x)
     end
-    return (best_lb, best_x)
 end
 
 """
@@ -407,7 +538,7 @@ function melitz_resolve_warm_start!(obj, bank::MelitzDualBank, theta::AbstractVe
 end
 
 """
-    melitz_classified_inner_solve(obj, theta, ctx; delta, bank, guard=1e-6,
+    melitz_classified_inner_solve(obj, theta, ctx; delta_evaluation_cap, bank, guard=1e-6,
         range_screen=true, stored_dual_screen=true, dual_polish_screen=false,
         dual_polish_steps=3, origin_block_screen=false, screen_order=:A,
         warm_start_source=:previous, on_result=nothing) -> MelitzInnerResult
@@ -429,6 +560,22 @@ reusing the caller's existing `obj.use_cached_x`/`obj.x` exactly as before this 
 existed) -- NO routine cold retry on a numerical failure (addendum Section 1), regardless of
 `warm_start_source`.
 
+2026-07-24 evaluation-cap-correction session (governing prompt Section 3, THE central fix
+of this session): every early-abort threshold in this function -- the two pre-solve screens
+AND the KNITRO-native mid-solve `lower_limit` bailout (via `obj.lower_limit`, set by the
+CALLER of this function, `build_melitz_implicit_bundle`) -- is now gated on
+`delta_evaluation_cap` ONLY. The prior session's version took a `delta::Real` kwarg here
+(the OUTER BUDGET) and rejected as soon as a certified lower bound exceeded `delta+guard` --
+this is EXACTLY the conceptual error the governing prompt diagnoses: a certificate that
+`DeltaStar(theta) > delta` (the CURRENT outer budget) is not evidence the point is
+unsolvable or that `DeltaStar` is large/infinite, only that it exceeds THIS budget -- a
+value of 1.5 at `delta=1` is an ordinary, fully solvable finite point (Case A) that the old
+code intercepted and mislabeled before ever finding out. This function therefore no longer
+accepts a `delta` argument at all (governing prompt Section 3: "the budget delta is used
+only by the outer nonlinear constraint... it is not the routine inner stopping threshold" --
+the caller, `finite_delta_outer.jl`'s `cb_F!`/`cb_G!`, is the ONLY place `delta` is still
+used, to form `c(theta)=DeltaStar(theta)/delta` from a GENUINELY-solved `FiniteSolved.Delta`).
+
 `dual_polish_screen`/`origin_block_screen` (Phase I.5/I.3, default `false` each -- opt-in
 until the Phase I.8 screen-order benchmark decides a production default): the former runs
 `melitz_dual_polish_screen` from `melitz_bank_best`'s own best-lower-bound entry for
@@ -441,7 +588,7 @@ benchmark, which needs a representative sample of thetas that produced `Numerica
 during a real trajectory) without adding any collection state to this function itself.
 """
 function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
-                                        delta::Real, bank::MelitzDualBank,
+                                        delta_evaluation_cap::Real, bank::MelitzDualBank,
                                         guard::Real=1e-6,
                                         range_screen::Bool=true,
                                         stored_dual_screen::Bool=true,
@@ -482,8 +629,12 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     function try_stored_dual()
         (!stored_dual_screen || isempty(bank.entries)) && return nothing
         t0_sd = time_ns()
-        lb, _ = melitz_bank_best(obj, bank)
-        result = lb > delta + guard ? BudgetInfeasible(lb, :stored_dual) : nothing
+        lb, x_best = melitz_bank_best(obj, bank)
+        # Governing prompt Section 3: threshold is `delta_evaluation_cap`, never the outer
+        # budget `delta` -- "do not reject merely because a stored dual proves
+        # DeltaStar>delta" (that is now an ordinary Case A point, solved fully below).
+        result = lb > delta_evaluation_cap + guard ?
+            AboveEvaluationCap(lb, :stored_dual, copy(x_best), 0.0, 0) : nothing
         melitz_record_seconds_outcome!(:screen_stored_dual, result === nothing ? :passed : :rejected,
             (time_ns() - t0_sd) / 1e9)
         result
@@ -492,8 +643,8 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
         (!dual_polish_screen || isempty(bank.entries)) && return nothing
         t0_dp = time_ns()
         _, best_x = melitz_bank_best(obj, bank)
-        result = best_x === nothing ? nothing : melitz_dual_polish_screen(obj, best_x; delta=delta,
-            guard=guard, max_steps=dual_polish_steps)
+        result = best_x === nothing ? nothing : melitz_dual_polish_screen(obj, best_x;
+            delta_evaluation_cap=delta_evaluation_cap, guard=guard, max_steps=dual_polish_steps)
         melitz_record_seconds_outcome!(:screen_dual_polish, result === nothing ? :passed : :rejected,
             (time_ns() - t0_dp) / 1e9)
         result
@@ -528,6 +679,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     # the one real KNITRO attempt -- never a routine cold retry, addendum Section 1's policy
     # is otherwise unchanged.
     melitz_resolve_warm_start!(obj, bank, theta, warm_start_source)
+    t_solve_start_ns = time_ns()   # evaluation-cap-correction session: base for crossing_time_s below
     objSol, x, nStatus = CS.inner_loop_internal(obj, theta)
     accepted = nStatus in (0, -100, -101, -103)
     if !accepted
@@ -541,9 +693,14 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
             # start; must not enter a failed-solve counter"). The crossing dual is also a valid
             # (if not necessarily optimal) finite dual point, so it is eligible for the
             # screening bank on the same weak-duality basis as any verified solve.
+            # `obj.lower_limit` (set by the CALLER, `build_melitz_implicit_bundle`, from
+            # `delta_evaluation_cap`, NOT `delta` -- see that function's docstring) is what
+            # made this branch a genuine `delta_evaluation_cap` certificate, not a budget one.
             x_crossing = obj.threshold_crossing_x[]
             melitz_dual_bank_insert!(bank, x_crossing; theta=theta)
-            result = BudgetInfeasible(obj.threshold_crossing_bound[], :live_dual_threshold)
+            crossing_time_s = (obj.threshold_crossing_time_ns[] - t_solve_start_ns) / 1e9
+            result = AboveEvaluationCap(obj.threshold_crossing_bound[], :live_dual_threshold,
+                                         copy(x_crossing), crossing_time_s, -1)
             on_result !== nothing && on_result(theta, result)
             return result
         end
@@ -554,6 +711,13 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
         # lower-bound evaluation by the same unconditional weak-duality argument (file
         # header) regardless of why the solve failed; `melitz_dual_bank_insert!` itself
         # refuses a non-finite vector, so this is always safe to attempt.
+        #
+        # Governing prompt Section 7: this branch is ALSO reached when a genuine routine
+        # inner time/iteration cap (KNITRO's own `maxtime_real`/`maxit` inner-solve options,
+        # `nStatus` outside the accepted set) is hit WITHOUT the threshold above having fired
+        # first -- correctly `NumericalFailure`, never an invented `AboveEvaluationCap`/
+        # `InfiniteDeltaCertified` value: "timeout is NumericalFailure unless a valid
+        # lower-bound or infeasibility certificate already exists" (checked above, in order).
         melitz_dual_bank_insert!(bank, x; theta=theta)
         result = NumericalFailure(Int(nStatus))
         on_result !== nothing && on_result(theta, result)
@@ -564,7 +728,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     Delta_theta = localc[1] / 1e10
     x_copy = collect(Float64.(x))
     melitz_dual_bank_insert!(bank, x_copy; theta=theta)
-    result = InnerSolved(Delta_theta, x_copy, Int(nStatus))
+    result = FiniteSolved(Delta_theta, x_copy, Int(nStatus))
     on_result !== nothing && on_result(theta, result)
     return result
 end

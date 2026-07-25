@@ -76,8 +76,8 @@ end
 
 Builds and solves the Phase I.3 compressed origin-block feasibility LP for origin `o`.
 Returns `true` iff the LP is feasible (no certificate); `false` iff INFEASIBLE (a valid
-`MomentInfeasible` certificate for this origin's own trade-share moments -- and, for the
-focal origin, the focal-link moment too).
+`InfiniteDeltaCertified` certificate for this origin's own trade-share moments -- and, for
+the focal origin, the focal-link moment too).
 """
 function melitz_origin_block_lp(o::Int, theta::AbstractVector, ctx, obj; optimizer=HiGHS.Optimizer)
     D = ctx.D
@@ -146,18 +146,19 @@ function melitz_origin_block_lp(o::Int, theta::AbstractVector, ctx, obj; optimiz
 end
 
 """
-    melitz_origin_block_screen(theta, ctx, obj; optimizer=HiGHS.Optimizer) -> Union{Nothing,MomentInfeasible}
+    melitz_origin_block_screen(theta, ctx, obj; optimizer=HiGHS.Optimizer) -> Union{Nothing,InfiniteDeltaCertified}
 
 Runs `melitz_origin_block_lp` for every origin `o=1..D`; returns the FIRST origin's
-infeasibility as a `MomentInfeasible(o, NaN, NaN, :origin_block)` certificate (the `lo`/`hi`
-fields are not meaningful for this multi-column certificate -- `column` records the ORIGIN,
-not a single moment column), or `nothing` if every origin's block LP is feasible.
+infeasibility as an `InfiniteDeltaCertified(o, NaN, NaN, :origin_block)` certificate (the
+`lo`/`hi` fields are not meaningful for this multi-column certificate -- `column` records
+the ORIGIN, not a single moment column), or `nothing` if every origin's block LP is
+feasible.
 """
 function melitz_origin_block_screen(theta::AbstractVector, ctx, obj; optimizer=HiGHS.Optimizer)
     D = ctx.D
     for o in 1:D
         if !melitz_origin_block_lp(o, theta, ctx, obj; optimizer=optimizer)
-            return MomentInfeasible(o, NaN, NaN, :origin_block)
+            return InfiniteDeltaCertified(o, NaN, NaN, :origin_block)
         end
     end
     return nothing
@@ -223,7 +224,7 @@ The main prompt's MINIMUM required check (Section 3, "at minimum, verify the nec
 monotonicity"): for origin `o`, if `zhat[o,a] <= zhat[o,b]` then `H[o,a] >= H[o,b]` (a
 lower cutoff's tail moment must be at least as large as a higher cutoff's, since the lower
 cutoff's active set is a SUPERSET with the same nonnegative `y` integrand). Returns `true`
-if the monotonicity holds for every pair; a `false` is itself a cheap `MomentInfeasible`
+if the monotonicity holds for every pair; a `false` is itself a cheap `InfiniteDeltaCertified`
 certificate (implied by, but far cheaper than, the full LP above).
 """
 function melitz_origin_block_monotonicity_check(o::Int, theta::AbstractVector, ctx, obj)

@@ -1,0 +1,22 @@
+# 2026-07-25 scaled-KNITRO session, Phase 5.2 (step-control comparison): IDENTICAL to
+# melitz_outer_finite_delta.opt (same algorithm/tolerances/maxit), with ONE addition --
+# `delta` (KN_PARAM_DELTA, "initial trust region radius scaling factor," default 1.0) set
+# tighter, per the governing prompt's own suggested candidate set {0.1, 0.25, 0.5, 1.0}.
+# Motivation: this session's first scaled pilot (s_g=1e-4, s_A=s_fq=1e-5, default delta=1.0)
+# showed the scaled-Euclidean step jump from O(1) to O(1e4) between outer iterations 5 and 6
+# (||Step|| column), landing the trajectory on the AboveEvaluationCap sentinel
+# (FeasError frozen at exactly 9.0 = delta_evaluation_cap/delta - 1 = 10-1) for the
+# remaining 19 iterations, ending infeasible -- i.e. scaling ALONE, without a tightened
+# initial trust region, did not prevent (and arguably worsened) the runaway-step problem.
+algorithm       0
+eval_fcga       no
+gradopt         exact
+hessopt         2
+feastol         1e-7
+feastol_abs     1e-8
+opttol          1e-3
+opttol_abs      1e-4
+maxit           25
+outlev          3
+honorbnds       always
+delta           0.1
