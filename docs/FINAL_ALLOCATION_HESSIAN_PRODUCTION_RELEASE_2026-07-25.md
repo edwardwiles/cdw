@@ -1,5 +1,13 @@
 # Final allocation/Hessian production release — 2026-07-25
 
+**SHA note**: this document and `POST_MERGE_PRODUCTION_SMOKE_2026-07-25.md` were drafted against
+release tip `e061134`; one purely-additive commit (this deliverable-doc set itself) landed after,
+making `6f1d2c537d285d78cc0500e1c3ce0bfb2fbfa004` the actual final `production/fullA-exact` HEAD
+(verified ancestor of both the local and `origin` branch, both re-fast-forwarded and re-tagged to
+this final commit — see `PROVENANCE.txt` in the pushed deliverable package for the authoritative
+final SHAs/tag targets). No code or test content differs between `e061134` and `6f1d2c5` — only
+these docs were added.
+
 Master summary for the selective productionization of
 `port/production-allocation-and-hessian-optimizations-2026-07-25` (base `b7435ee`, feature HEAD
 `588adf3`) and `audit-unrestricted-allocation-gap-2026-07-25` (snapshot `2a555fb`) onto canonical
@@ -97,10 +105,13 @@ for `<sha> = e061134533464e4921397168b1630cc8032870ac` (the release branch tip /
   allocation fix (~80% of a call's allocation is one-time context setup, not hot-path) but not
   implemented — flagged as `future_task` per task §9's own instruction not to delay this release
   for it.
-- **A `pin_outer_algorithm=false` "after" arm** at the 300s budget, which would have cleanly
-  isolated the allocation fixes from the outer-algorithm change for CM's 300s comparison
-  specifically — not run given overall session time budget; the P0/P1/P2 sweep (algorithm-matched
-  throughout) is the load-bearing evidence for the CM Hessian-threading decision instead.
+- **A `pin_outer_algorithm=false` "after" arm for CM was added on review** (a `BENCH_PIN_OUTER_ALGORITHM`
+  toggle on the CM harness, plus a second 300s run) after the first pass's confounded result was
+  questioned — see `MATCHED_300S_BEFORE_AFTER_2026-07-25.md`'s "Second CM pass" for the clean
+  result (allocation −49.8%, n_eval +45.5%, essentially identical best answer). **The equivalent
+  unrestricted arm was not run** — unrestricted's own 300s table still uses `pin_outer_algorithm=true`
+  on "after" only, carrying the same theoretical (unverified) confound; flagged explicitly in that
+  doc's reconciliation section rather than left as a silent asymmetry.
 - **Repeated trials**: every benchmark in this release is a single real run per configuration
   (real, reproducible via recorded seeds/fixtures), not averaged over repeats.
 - **A genuine forced exact-tie exercise**: the `TiedWinnerError` fallback mechanism's type/catch
