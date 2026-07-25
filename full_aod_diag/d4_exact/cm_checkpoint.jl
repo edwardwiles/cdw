@@ -29,6 +29,7 @@ using Serialization, Dates
 
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3
 isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
+isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
 
 const CM_CHECKPOINT_SCHEMA = 6
 # Bumped 4 -> 6 (destination_sample production wiring, exclude-ROW-destination release,
@@ -600,6 +601,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             " requested_delta=", delta, " resolved_active_threshold=", th.threshold,
             " stored_in_objective_bundle=", pcx.ctx_cm.obj.threshold_state.threshold)
     flush(stdout)
+    print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = blas_threads,
+        cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair))   # allocation/Hessian port task §2
 
     # D2_econ = length of the (gp, zfree) economic block only -- length(w0) itself is
     # D2_econ + meanzc_K_mean when is_meanzc, matching cm_meanzc_production.jl's own convention

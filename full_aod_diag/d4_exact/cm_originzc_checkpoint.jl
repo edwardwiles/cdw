@@ -15,6 +15,9 @@
 # by name to reach this restriction family at all.
 # ============================================================================
 using Serialization, Dates
+using LinearAlgebra: BLAS
+isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3/§7
+isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
 # Bumped 4 -> 5 (origin-specific-ZC integration, 2026-07-23): adds
@@ -338,9 +341,13 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         K_mean::Int, K_pair::Int = 0,
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
         nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
-        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
+        destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): same option/semantics/production-default as run_cm_upper_checkpointed's
         # own destination_sample kwarg.
+        blas_threads::Union{Nothing,Int} = nothing)   # allocation/Hessian port task §6.3/§7: set once
+        # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
+        # process BLAS thread count untouched, zero behavior change. Added for section 7's bounded
+        # origin-ZC BLAS benchmark; origin-ZC retains Architecture A (dense) regardless of this.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, section 4.1): resolve ckpt_dir to an absolute path
     # BEFORE any real-data/model setup runs. A relative ckpt_dir silently
@@ -424,12 +431,14 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
 
     pcx = build_originzc_production_context(ctx, CS, layout)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3/§7 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, "origin_zc")
     print_screen_startup_banner("origin_zc")
     th = pcx.ctx_cm.obj.threshold_state
     println("[threshold-config] mode=origin_zc requested_delta=", delta,
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
+    print_production_backend_manifest(resolve_origin_zc_manifest(; blas_threads = blas_threads))   # allocation/Hessian port task §2
     D2_econ = length(w0) - n_eta(layout)
 
     bounds = cfg.nu_bounds === nothing ? originzc_default_nu_bounds(ctx, layout) : cfg.nu_bounds

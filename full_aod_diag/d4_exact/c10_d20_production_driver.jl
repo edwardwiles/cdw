@@ -93,6 +93,7 @@ include(joinpath(@__DIR__, "canonical_price_precompute_workspace.jl"))   # alloc
 include(joinpath(@__DIR__, "hard_score_b_cache.jl"))   # allocation/Hessian port task §3.3: attach_hard_score_b_cache
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3
 isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
+isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
 include(joinpath(@__DIR__, "structured_moment_build.jl"))   # Continuation 10 Section 9: structured dense-materialize, used by compressed_live.jl / infeasibility_screen.jl
 include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
@@ -719,6 +720,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     println("[threshold-config] mode=unrestricted requested_delta=", delta_in,
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
+    print_production_backend_manifest(resolve_unrestricted_manifest(; hessian_backend = :dense_exact, blas_threads = blas_threads))   # allocation/Hessian port task §2
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
     exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)
@@ -1173,6 +1175,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     println("[threshold-config] mode=unrestricted requested_delta=", delta_in,
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
+    print_production_backend_manifest(resolve_unrestricted_manifest(; hessian_backend = :dense_exact, blas_threads = blas_threads))   # allocation/Hessian port task §2
     n_eval = Ref(resumed !== nothing ? resumed.n_eval : 0)
     bank = use_dual_bank ? DualBank(dual_bank_size) : nothing
     exact_cache = exact_cache_override !== nothing ? exact_cache_override : (use_exact_cache ? SafeExactCache() : nothing)
