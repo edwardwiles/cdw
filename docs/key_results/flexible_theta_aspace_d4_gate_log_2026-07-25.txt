@@ -1,0 +1,13 @@
+=== D4 gate log (test_flexible_theta_aspace_d4.jl, run2 - the corrected/passing run) ===
+SQUARE case: theta_star=5.999999999999999 theta_min=3.1500000000000004 theta_max=11.999999999999998 D=4 D_dest=4
+start point: Delta_dual_z=0.0017025019654566464 Delta_dual_a=0.0017025019654565423 gravity_a=-1.307520814082638e-18
+directional derivative: analytic(rescaled)=0.4252082533233321 finite-diff=0.5118231787988136 rel_err=0.1692282199464981
+decisive check: fd_a=-0.291102588930699 fd_z(scaled dir)=-0.2911025889298718 rel_err=2.8417032589410867e-12
+  h=0.001: analytic=0.03160241469271749 resolved-inner=0.03740906994440386 rel_err=0.15522051898953995
+  h=0.00025: analytic=-0.020062959888508466 resolved-inner=-0.017524701191741054 rel_err=0.1448389144554219
+theta secant (a-space, holding a fixed): rel_err(h=1e-3)=0.15522051898953995 rel_err(h=2.5e-4)=0.1448389144554219
+RECT case: theta_star=6.000000000000002 D=4 D_dest=3 (D*Ddest-1=11 free A coords)
+rect start point: Delta_dual_z=0.0009662387552909866 Delta_dual_a=0.0009662387552909862 gravity_a=-1.426907873465977e-18
+rect decisive check: fd_a=-0.1912809318847054 fd_z(scaled dir)=-0.19128093188427986 rel_err=2.2247303019010207e-12
+Test Summary:                                                                         | Pass  Total     Time
+ALL GATES PASS

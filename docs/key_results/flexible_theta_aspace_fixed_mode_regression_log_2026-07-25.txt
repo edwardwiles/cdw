@@ -1,0 +1,28 @@
+=== Fixed-mode regression logs (3 existing production tests, unmodified) ===
+--- test_gravity_elimination.jl ---
+TEST 6: transformed gradient of gravity itself is exactly zero (analytic == FD)
+==============================================================================
+max|FD gradient of gravity, pivot coords| = 2.4463974149735425e-13  (expect ~0, analytic=exactly 0)
+max|FD gradient of gravity, nullspace coords| = 3.6782672500265536e-13  (expect ~0)
+PASS: both eliminations correctly zero out the gravity direction (analytic and FD agree)
+
+==============================================================================
+ALL GRAVITY ELIMINATION TESTS PASSED
+==============================================================================
+
+NOTE (documented, not resolved this test): log-A box bounds under either
+reparameterization are NOT independent per-coordinate anymore (task sec 10's own
+warning: 'do not pretend transformed box bounds remain independent when they do not').
+Bound-handling for a constrained KNITRO run in reduced coordinates is deferred to
+the short-solver-run phase (task sec 18), not implemented in this diagnostic.
+--- test_exclude_row_gateA_layout.jl ---
+28
+PASS count above; FAIL count:
+0
+--- test_composite_gradient.jl ---
+point                        gamma_relerr   A_cosine  A_normrat   full_cos dir_agree
+upper_maxit40 (headline)         3.24e-07   0.972894     0.7560        NaN      3/6
+lower_stalled                     1.8e-06   0.999671     0.9941        NaN      4/6
+
+gamma component matches Delta_FD to <0.1% relative at all points: true
+A-block cosine > 0.9 at all points: true

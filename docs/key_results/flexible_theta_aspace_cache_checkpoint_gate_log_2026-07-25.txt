@@ -1,0 +1,28 @@
+=== Cache/checkpoint gate log ===
+>>> S10: cache fingerprint composition
+PASS  flexible-mode fingerprint differs from fixed-mode-tagged fingerprint (same ctx otherwise)
+PASS  different theta bounds -> different fingerprint
+PASS  SAME ctx -> IDENTICAL fingerprint (deterministic)
+>>> S10: exact-point cache A/B/A -- solve at theta A, solve at theta B, return to theta A, require exact hit
+PASS  A/B/A step 1 (theta A) feasible
+PASS  A/B/A step 2 (theta B) feasible
+PASS  cache grew after a genuinely new (theta B) point
+PASS  A/B/A step 3 (theta A again): cache size UNCHANGED (exact hit, no new solve)  (sizes: 1 -> 2 -> 2)
+PASS  A/B/A step 3: Delta_dual IDENTICAL to step 1 (exact cache hit, not a fresh solve)  (step1=0.0009662387552909862 step3=0.0009662387552909862)
+PASS  A/B/A step 3: xf IDENTICAL to step 1
+PASS  A/B/A cache_hit flag set on step 3
+>>> S10: identical theta+A+gp+draws+layout+valid-optimum -> exact cache hit (no re-solve), re-verified via a SECOND independent cache instance
+PASS  identical outer coordinates hit cache on 2nd call (fresh cache instance)
+PASS  identical outer coordinates: Delta_dual bit-identical
+>>> S11: checkpoint save/resume at theta_star and off theta_star
+PASS  checkpoint round-trips at theta_star: eta_theta bit-identical
+PASS  checkpoint round-trips at theta_star: a_nonpivot bit-identical
+PASS  checkpoint round-trips at theta_star: logA_full bit-identical
+PASS  checkpoint round-trips OFF theta_star: theta bit-identical
+PASS  off-theta checkpoint theta != theta_star (genuinely off)
+>>> S11: deliberate mismatch rejections
+PASS  load_checkpoint_flexA rejects a non-D20CheckpointFlexA file loudly (not silently)
+PASS  load_checkpoint_flexA rejects a wrong-schema checkpoint loudly
+>>> S17 side-effect: DualBank record/select smoke (theta-blind by design, documented limitation)
+PASS  DualBank warm-start wiring: no crash on record/select through screened_eval_flexible_A
+ALL CACHE/CHECKPOINT GATES PASS

@@ -1,0 +1,55 @@
+=== D20 gate log ===
+>>> Gate 0: build fixed-theta ctx (calibration reference) + flexible-theta ctx
+  theta_star=8.75566037620977 sigma=2.5 theta_bounds=[3.1500000000000004,26.26698112862931]
+[startup] trade_elasticity_mode = flexible
+[startup] A_coordinate_mode = theta_decoupled_aspace
+[startup] theta_star = 8.75566037620977
+[startup] theta_bounds = [3.1500000000000004, 26.26698112862931]
+[startup] outer_dimension = 381
+[startup] core_top1_engine = canonical_log_additive
+[startup] outer_gradient_top3_engine = cplus
+PASS  outer_dimension == 381 at real D=20 post-omit-ROW  (D=20 Ddest=19)
+PASS  envelope screen correctly DISABLED under flexible theta  (mu is not fixed to a point in this ctx (theta_lo[1] != theta_hi[1]) -- the a_od(A) factorization this screen relies on assumes mu is outer-loop-constant; re-derive before using this screen with mu free.)
+>>> Gate 1: calibration equivalence -- a-space start point reproduces fixed-production Delta/gravity
+  cold eval: 41.1s inner_status=0 Delta_dual=0.002486773477940643 gravity=7.080410819052705e-18
+PASS  a-space start point feasible
+PASS  gravity restriction satisfied at start (< 1e-6)  (gravity=7.080410819052705e-18)
+PASS  z-space vs a-space Delta_dual agreement at theta_star  (z=0.0024867734779406357 a=0.002486773477940643)
+PASS  z-space vs a-space xf agreement at theta_star  (max|diff|=0.0018310546875)
+PASS  flexible a-space start Delta_dual matches GENUINE fixed-mode production Delta_dual  (fixed_prod=0.002486773477940639 flexA=0.002486773477940643)
+>>> Gate 2: feasible theta +-5% probes (a_nonpivot fixed)
+PASS  theta up(+5%) probe feasible
+PASS  theta up(+5%) gravity satisfied
+PASS  theta down(-5%) probe feasible
+PASS  theta down(-5%) gravity satisfied
+>>> Gate 3: D=20 theta derivative accuracy -- fixed-dual secant vs fully-resolved FD, two step sizes
+PASS  theta secant h=0.001: both probes feasible (winners stable)
+PASS  theta secant h=0.00025: both probes feasible (winners stable)
+PASS  theta secant error shrinks as h shrinks (discretization signature)  (rel_errs=[0.13934125680289222, 0.040590411837880716])
+>>> Gate 4: full A-gradient C+ vs slow reference (finite-difference envelope) on flexible ctx
+FAIL  C+ gradient full length == D*Ddest+1
+FAIL  C+ A-gradient (rescaled) matches stable-winner FD to <20% (informational-noise band, matches D=4 gate 4's own tolerance)  (rel_err=1.0609596147778946)
+>>> Gate 5: mixed directional derivative (theta AND A moving together)
+PASS  mixed theta+A directional probe both feasible
+>>> Gate 6: no callback errors across all above evaluations (all inner_status codes recorded above are FEASIBLE_CODES or a clean rejection, no exception escaped)
+PASS  no exceptions escaped Gate 0-5 (this line only reached if true)
+>>> SUMMARY
+  z-space vs a-space Delta_dual agreement at theta_star                 PASS
+  envelope screen correctly DISABLED under flexible theta               PASS
+  flexible a-space start Delta_dual matches GENUINE fixed-mode production Delta_dualPASS
+  outer_dimension == 381 at real D=20 post-omit-ROW                     PASS
+  z-space vs a-space xf agreement at theta_star                         PASS
+  gravity restriction satisfied at start (< 1e-6)                       PASS
+  no exceptions escaped Gate 0-5 (this line only reached if true)       PASS
+  theta secant h=0.001: both probes feasible (winners stable)           PASS
+  a-space start point feasible                                          PASS
+  theta up(+5%) probe feasible                                          PASS
+  theta secant h=0.00025: both probes feasible (winners stable)         PASS
+  theta up(+5%) gravity satisfied                                       PASS
+  mixed theta+A directional probe both feasible                         PASS
+  C+ A-gradient (rescaled) matches stable-winner FD to <20% (informational-noise band, matches D=4 gate 4's own tolerance)FAIL
+  theta down(-5%) probe feasible                                        PASS
+  C+ gradient full length == D*Ddest+1                                  FAIL
+  theta secant error shrinks as h shrinks (discretization signature)    PASS
+  theta down(-5%) gravity satisfied                                     PASS
+D=20 FAILURES: C+ gradient full length == D*Ddest+1; C+ A-gradient (rescaled) matches stable-winner FD to <20% (informational-noise band, matches D=4 gate 4's own tolerance)
