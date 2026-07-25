@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-07-25T16:36:05.946",
+  "manifests": [
+  {
+    "family": "unrestricted",
+    "core_top1_engine": "canonical_log_additive",
+    "outer_gradient_top3_engine": "cplus",
+    "core_moment_representation": "compressed",
+    "hessian_backend": "dense_exact",
+    "julia_threads": 20,
+    "blas_threads": 1,
+    "checkpoint_schema": 4,
+    "screen_stack": ["pairwise_certificate", "screen_hard_winners", "envelope(EXACT_INFEASIBLE_PREWINNER_ENVELOPE)", "winning_range", "safety_net_moment_range"]
+  },
+  {
+    "family": "flexible_cm",
+    "core_top1_engine": "canonical_log_additive",
+    "outer_gradient_top3_engine": "cplus",
+    "core_moment_representation": "compressed_winner_form",
+    "cm_restriction_basis": "cumulative",
+    "cm_internal_storage": "bin_index",
+    "hessian_backend": "threaded_architecture_c",
+    "threaded_bins": true,
+    "julia_threads": 20,
+    "blas_threads": 1,
+    "checkpoint_schema": 6,
+    "screen_stack": ["pairwise_certificate", "screen_hard_winners"]
+  },
+  {
+    "family": "cm_meanzc",
+    "core_top1_engine": "canonical_log_additive",
+    "outer_gradient_top3_engine": "cplus",
+    "core_moment_representation": "compressed_winner_form",
+    "cm_restriction_basis": "cumulative",
+    "cm_internal_storage": "bin_index",
+    "hessian_backend": "threaded_architecture_c",
+    "threaded_bins": true,
+    "julia_threads": 20,
+    "blas_threads": 1,
+    "checkpoint_schema": 6,
+    "screen_stack": ["pairwise_certificate", "screen_hard_winners"],
+    "K_mean": 1,
+    "K_pair": 0
+  },
+  {
+    "family": "origin_zc",
+    "core_representation": "compressed",
+    "restriction_representation": "pairwise_zero_covariance",
+    "hessian_backend": "dense_architecture_a",
+    "julia_threads": 20,
+    "blas_threads": 1,
+    "checkpoint_schema": 7,
+    "screen_stack": ["pairwise_certificate", "screen_hard_winners"]
+  }
+  ]
+}
