@@ -62,11 +62,27 @@ exercise the genuinely NEW code with no ctx dependency (`z<->a` round trip, `gra
 unified` vs manual `-theta` rescale, `gp_coordinate_mode=:scaled_log` encode/decode, `reduce_to_w_
 unified`/`decode_outer_unified` round trip) all passed cleanly on the FIRST run.
 
-Fixed and rerun: **[RESULT PENDING — filled once the rerun completes]**
+Fixed (added the same `merge(ctx, (pairwise=nothing, witness=nothing))` guard) and rerun:
+**ALL 21/21 GATES PASS** (21 individual `@test` assertions across the 8 named testsets). Key
+numbers:
+- Gate 1 (unified fixed+legacy_z reproduces the EXISTING unmodified production driver's own
+  `x_free_from_w`/`Delta_dual`): `max|xf_unified - xf_legacy| = 2.22e-15`, `Delta_dual` agreement
+  to 11 significant digits (`0.0009662387552909997` vs `0.0009662387552910123`).
+- Gate 2 (fixed+powered_aspace reproduces the same economic point as fixed+legacy_z):
+  `max|xf_a - xf_z| = 8.88e-16`, `Delta_dual` **bit-identical** (`0.0009662387552909997` both),
+  gravity residual `-8.6e-18`.
+- Gate 4 (DECISIVE chain-rule check, direct FD in a-space vs direct FD in z-space along the
+  scaled direction, no `composite_gradient` dependency): **`rel_err = 4.32e-12`** — near machine
+  precision, the strongest correctness signal in this battery (mirrors the original flexible-
+  theta port's own D=4 decisive check at `2.22e-12`).
+- Gates 6/7 (round trips, `legacy_z`/`powered_aspace`): exact to `0.0` / `2.78e-17`.
+- Gate 8 (cache A/B/A): exact hit confirmed, cache size unchanged, `Delta_dual` bit-identical.
+
+Full log: `docs/key_results/unified_layout_d4_gate_log_2026-07-25.txt`.
 
 ### D=20 (fixed-theta unified layout, real post-omit-ROW data)
 
-**[PENDING]**
+**[PENDING — running]**
 
 ## Matched comparisons (addendum §6/§7)
 

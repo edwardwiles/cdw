@@ -1,0 +1,10 @@
+  max|xf_unified - xf_legacy| = 2.220446049250313e-15
+  Delta_dual: unified=0.0009662387552909997 legacy=0.0009662387552910123
+  max|xf_a - xf_z| = 8.881784197001252e-16
+  Delta_dual: a-space=0.0009662387552909997 z-space=0.0009662387552909997 gravity_a=-8.61459890654629e-18
+  decisive fixed-theta chain-rule check: fd_a=-0.19532413487974548 fd_z(scaled dir)=-0.19532413488058897 rel_err=4.3184214970394206e-12
+  [legacy_z] round-trip max|diff| = 0.0
+  [powered_aspace] round-trip max|diff| = 2.7755575615628914e-17
+  cache sizes: 1 -> 1 (exact hit confirmed)
+Test Summary:                                        | Pass  Total   Time
+ALL UNIFIED-LAYOUT D=4 GATES PASS
