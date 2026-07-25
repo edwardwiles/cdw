@@ -34,17 +34,27 @@ only if the parent is measured around the nested call, i.e. nested `@prof`
 blocks double-count inclusive time by design -- this is standard for a
 simple label-sum profiler and is called out explicitly in
 docs/fullA_performance_profile.md rather than silently assumed away).
+
+Exception-safe: `prof_record!` runs in a `finally` block, so a label's own
+time/allocation is still recorded even if `expr` throws (e.g. a KNITRO
+callback rejecting a trial point). The exception itself still propagates
+unchanged. See docs/PRODUCTION_ALLOCATION_FIXES_PORT_REPORT_2026-07-25.md for
+why this mattered: without it, a rejected point silently dropped its own
+outer-label time while completed nested sub-calls still recorded theirs,
+producing an otherwise-impossible "child total > parent total" pattern.
 """
 macro prof(label, expr)
     quote
         if PROF_ENABLED[]
             local gcstats0 = Base.gc_num()
             local t0 = time_ns()
-            local result = $(esc(expr))
-            local t1 = time_ns()
-            local gcdiff = Base.GC_Diff(Base.gc_num(), gcstats0)
-            prof_record!($(esc(label)), (t1 - t0) / 1e9, gcdiff.allocd, gcdiff.total_time / 1e9)
-            result
+            try
+                $(esc(expr))
+            finally
+                local t1 = time_ns()
+                local gcdiff = Base.GC_Diff(Base.gc_num(), gcstats0)
+                prof_record!($(esc(label)), (t1 - t0) / 1e9, gcdiff.allocd, gcdiff.total_time / 1e9)
+            end
         else
             $(esc(expr))
         end
