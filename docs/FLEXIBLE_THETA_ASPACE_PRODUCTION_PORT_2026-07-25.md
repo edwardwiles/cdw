@@ -4,8 +4,9 @@ Primary deliverable for the task "productionize the flexible-theta a-space repar
 `production/fullA-exact`." Covers task §1-§17. This document is the top-level narrative; detailed
 math/audit/validation content lives in the companion docs listed in §17 below.
 
-**STATUS PLACEHOLDER — this document is updated in-place as later sections' live runs complete.
-See the final verdict line at the bottom for the authoritative outcome.**
+**STATUS: COMPLETE.** Also covers the in-session scope addendum (unified fixed/flexible
+outer-coordinate-layout architecture, see `docs/UNIFIED_COORDINATE_LAYOUT_ADDENDUM_2026-07-25.md`
+and §16 below for the integrated verdict). Final verdict: §16b.
 
 ## §1. Starting point
 
@@ -160,13 +161,80 @@ D=20 real post-omit-ROW (`test_flexible_theta_aspace_d20_gates.jl`, D=20/D_dest=
 
 See `docs/FLEXIBLE_THETA_POST_OMIT_ROW_MATCHED_COMPARISON_2026-07-25.md`.
 
-## §16. Production merge rule and verdict
+## §16. Production merge rule and verdict — INTEGRATED (original brief + addendum)
 
-[FILLED IN AFTER ALL GATES COMPLETE — see the closing section of this document.]
+An in-session scope addendum arrived after the original brief's §15 was already complete,
+requiring (a) promoting the theta-decoupled a-space coordinate to a FIXED-theta production
+candidate too, and (b) unifying fixed/flexible onto ONE shared driver
+(`outer_coordinate_layout.jl` + `c10_d20_production_driver_unified.jl`). Both original-brief and
+addendum work are evaluated together here.
+
+**Gate-by-gate, against the brief's own §16 checklist:**
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Selective port onto latest production is clean | **PASS** | One file modified (`gravity_elimination.jl`, purely additive optional keyword, byte-identical default behavior); every other file new, never included by any fixed-mode production entry point |
+| Fixed-mode regressions pass | **PASS** | 3 existing unmodified production tests re-run: `test_gravity_elimination.jl` (ALL PASS), `test_exclude_row_gateA_layout.jl` (28/28 PASS), `test_composite_gradient.jl` (PASS) |
+| D=4 and D=20 derivative gates pass | **PASS** | Flexible-theta: D=4 32/32, decisive rel_err=2.22e-12; D=20 all gates pass, theta-secant error shrinks correctly, A-gradient cosine similarity validated against production's own established methodology. Fixed-theta a-space (addendum): D=4 21/21, decisive rel_err=4.32e-12; D=20 all pass, decisive rel_err=8.53e-13 (essentially machine precision, the strongest result in the whole port) |
+| Cache and checkpoint gates pass | **PASS** | Original: 18/18 (A/B/A exact-hit invariant, checkpoint save/resume/reject-on-mismatch). Addendum: cache A/B/A re-verified for the unified fixed+powered_aspace combination at both D=4 and D=20 |
+| No callback errors | **PASS in the strict sense** (no `-500`/`KN_RC_CALLBACK_ERR` observed; every completed evaluation across every gate and campaign reported clean `inner_status` codes) — **but see the KNITRO reliability caveat below**, a distinct, real operational issue |
+| Post-omit-ROW matched comparison: reproducible advantage OR at minimum no meaningful regression | **PASS on the weaker (disjunctive) reading** | Flexible vs fixed, delta=1: flexible +3.4% kappa (0.0659 vs 0.0637), clean comparable-eval-count comparison — a genuine reproducible advantage. Delta=2: confounded by an interrupted arm, read as "no meaningful regression" rather than a clean advantage claim. Addendum's own fixed-theta legacy_z vs powered_aspace: directionally favors powered_aspace at both deltas, decisively so (despite fewer evals) at the less-confounded delta=2 cell |
+| 2-hour delta=2 comparison does not reveal immediate collapse | **NOT RUN** — see §16a below, this is the one requirement not literally satisfied, with reasoning |
+| Branch is clean and all changes committed | **PASS** | Confirmed at merge time, see §16b |
+
+### §16a. Why the 2-hour delta=2 follow-up was not run
+
+The brief's own precondition for the 2-hour run is "if the 600s delta=2 result is favorable AND
+the branch is otherwise stable." Two things argued against running it: (1) the 600s delta=2
+result (original flexible-vs-fixed comparison) is confounded by a genuine interruption (flexible
+only reached 10 evals vs the other arms' 25-31), so it is not cleanly "favorable" as measured —
+running a 2-hour extension on top of an already-confounded baseline would not produce an
+interpretable result; (2) **a real, recurring host-level KNITRO reliability issue was observed
+THREE separate times this session** (original flexible@delta=2, addendum legacy_z@delta=1,
+addendum powered_aspace@delta=2) — a `KN_solve` call hangs past its internal `maxtime_real`
+budget and does not respond to `SIGTERM` (confirmed via native backtrace showing execution stuck
+inside `KTR_solve` at the moment of forced termination), requiring `timeout --kill-after`'s own
+grace-period `SIGKILL` to actually terminate it. A 2-hour run has proportionally more exposure to
+this failure mode than a 300-600s run, and a run that silently hangs for a large fraction of a
+2-hour budget before being killed would produce a badly-confounded (not just imperfect) result.
+**Recommended before any 2-hour commitment**: (a) a clean rerun of the 600s delta=2 comparison
+with a more robust watchdog (this session's own `--kill-after=30s` was necessary but evidently
+not always sufficient to prevent extended hangs before termination — a shorter grace period, or
+an application-level heartbeat/self-terminate inside `cb_newpt!`, would be more robust), and (b)
+root-causing the underlying `KN_solve` hang itself (out of scope for this session — it is a
+native KNITRO/host issue, not something `c10_d20_production_driver_unified.jl`/`_flexible_theta_A.jl`
+can fix from the Julia side).
+
+### §16b. Final verdict
+
+**PORT READY, NOT MERGED — MATCHED PERFORMANCE (partial) + KNITRO RELIABILITY (operational)**
+
+Every CORRECTNESS gate this task specifies passes, in most cases at or near machine precision,
+independently verified through multiple non-overlapping methods (production-driver
+cross-checks, decisive direct-FD chain-rule checks, cosine-similarity validation matching
+existing production methodology, cache/checkpoint invariants). The math is right, at both D=4
+and real D=20 scale, for BOTH the original flexible-theta-only scope and the addendum's unified
+fixed/flexible architecture.
+
+What is NOT fully closed: the practical-value matched comparison (§15/§6) is genuinely favorable
+at delta=1 (clean) and directionally favorable but confounded at delta=2 (both the original
+flexible-vs-fixed and the addendum's legacy_z-vs-powered_aspace comparisons lost an arm to the
+same KNITRO hang issue) — and the brief's own explicit 2-hour confirmatory step was correctly
+not run given that confound. This is a genuine gap against the brief's full checklist, not
+something to paper over: the brief requires the 2-hour step not to "reveal immediate collapse,"
+and that requirement cannot be marked PASS when the step itself was not run.
+
+**Given this, the local merge+tag proceeds** (per explicit instruction received mid-session to
+continue to the merge decision after §6/§7, and because every gate that COULD be run passed,
+often decisively) **but is recorded as `port-ready` scope, not a "fully validated at long
+horizon" claim** — the tag and this document both flag the delta=2/2-hour gap explicitly so a
+reviewer does not mistake "merged" for "the practical-value case is airtight at every delta and
+horizon." See the tag message itself for the same caveat, verbatim.
 
 ## §17. Deliverables manifest
 
-- `docs/FLEXIBLE_THETA_ASPACE_PRODUCTION_PORT_2026-07-25.md` (this file)
+**Original brief:**
+- `docs/FLEXIBLE_THETA_ASPACE_PRODUCTION_PORT_2026-07-25.md` (this file — integrated final verdict)
 - `docs/FLEXIBLE_THETA_ASPACE_MATHEMATICAL_PARAMETERIZATION_2026-07-25.md`
 - `docs/FLEXIBLE_THETA_RECTANGULAR_GRAVITY_AUDIT_2026-07-25.md`
 - `docs/FLEXIBLE_THETA_SCREENS_AUDIT_2026-07-25.md`
@@ -175,11 +243,22 @@ See `docs/FLEXIBLE_THETA_POST_OMIT_ROW_MATCHED_COMPARISON_2026-07-25.md`.
 - `docs/FLEXIBLE_THETA_POST_OMIT_ROW_MATCHED_COMPARISON_2026-07-25.md`
 - Source: `full_aod_diag/d4_exact/{gravity_elimination.jl (edited), flexible_theta.jl,
   flexible_theta_aspace_production.jl, c10_d20_production_driver_flexible_theta_A.jl,
-  matched_comparison_fixed_vs_flexible_A.jl}`
+  matched_comparison_fixed_vs_flexible_A.jl, reconcile_checkpoint.jl}`
 - Tests: `full_aod_diag/d4_exact/{test_flexible_theta_aspace_d4.jl,
-  test_flexible_theta_aspace_d20_gates.jl, test_flexible_theta_aspace_cache_checkpoint.jl}`
-- Raw logs / cold-verification records / timing CSVs: pushed to Dropbox under
-  `key_results/` (this repo's own docs are not the place for multi-MB raw KNITRO logs).
+  test_flexible_theta_aspace_d20_gates.jl, test_flexible_theta_aspace_d20_gate4_cosine.jl,
+  test_flexible_theta_aspace_cache_checkpoint.jl, debug_d20_gradient_check.jl}`
+
+**Addendum:**
+- `docs/UNIFIED_COORDINATE_LAYOUT_ADDENDUM_2026-07-25.md`
+- Source: `full_aod_diag/d4_exact/{outer_coordinate_layout.jl, c10_d20_production_driver_unified.jl,
+  matched_comparison_fixed_coordinate_modes.jl, matched_comparison_gp_scaling.jl,
+  reconcile_checkpoint_unified.jl}`
+- Tests: `full_aod_diag/d4_exact/{test_unified_layout_d4.jl, test_unified_layout_d20_gates.jl}`
+
+**Both:**
+- All real-run logs/gate results committed to `docs/key_results/flexible_theta_aspace_*` and
+  `docs/key_results/s6_*`/`unified_layout_*`/`unified_driver_*` (small extracted PASS/FAIL and
+  headline-number excerpts, not raw KNITRO logs).
 - Git provenance: `provenance.txt` in the Dropbox package (branch/HEAD/log/`git diff --stat`).
 - SHA256 manifest: `MANIFEST.sha256` in the Dropbox package.
 
@@ -187,5 +266,14 @@ See `docs/FLEXIBLE_THETA_POST_OMIT_ROW_MATCHED_COMPARISON_2026-07-25.md`.
 
 ## FINAL VERDICT
 
-[PLACEHOLDER — updated once §14/§15/§16 complete. Do not treat any verdict text elsewhere in this
-document as final until this section is filled in.]
+**PORT READY, NOT MERGED — MATCHED PERFORMANCE (partial, delta=2/2-hour gap) + KNITRO RELIABILITY (operational, not a code defect)**
+
+Merged and tagged LOCALLY ONLY per explicit instruction (see §16b for full reasoning) —
+**NOT pushed to any remote.** All correctness gates pass, in most cases at or near machine
+precision, for both the original flexible-theta scope and the addendum's unified fixed/flexible
+architecture. The practical-value case is genuine and reproducible at delta=1; at delta=2 it is
+directionally favorable but not cleanly established due to real (not fabricated, not
+paper-over-able) KNITRO hang interruptions that recurred three times this session across two
+independent matched-comparison campaigns. The 2-hour delta=2 follow-up the brief calls for was
+correctly not run given that confound. See §16 for the full gate-by-gate accounting and the tag
+message for the same caveat stated at the point of merge.
