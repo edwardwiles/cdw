@@ -88,6 +88,7 @@ include(joinpath(@__DIR__, "gravity_elimination.jl"))
 include(joinpath(@__DIR__, "three_way_derivatives.jl"))
 include(joinpath(@__DIR__, "lfix_incremental.jl"))
 include(joinpath(@__DIR__, "compressed_moments.jl"))
+include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # allocation/Hessian port task §3.1: CompressedFactualWorkspace + build_compressed_factual! + attach_compressed_factual_workspace -- reused-buffer alternative to build_compressed_factual's fresh W*Ddest allocation every call
 include(joinpath(@__DIR__, "structured_moment_build.jl"))   # Continuation 10 Section 9: structured dense-materialize, used by compressed_live.jl / infeasibility_screen.jl
 include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
@@ -389,8 +390,16 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
     # abort a real optimization callback.
     if warm && bank !== nothing && zfree !== nothing
         θ_full_score = CS.reconstruct_full(xf, ctx.m)
+        # allocation/Hessian port task §3.1: this scoring build fires on essentially every warm
+        # callback (use_dual_bank=true is the production default) and its result is used only
+        # transiently (select_warm_start below, never retained past this call -- confirmed against
+        # dual_bank.jl's select_warm_start/cheap_score, which only ever read `cf`, never store it),
+        # so it is safe to serve from the campaign-lifetime workspace when one is attached to ctx.
+        # Falls back to the original fresh-allocation path unchanged for any ctx without one.
+        cf_ws = hasproperty(ctx, :cf_workspace) ? ctx.cf_workspace : nothing
         cf_score = try
-            build_compressed_factual(θ_full_score, ctx; check_ties = true)
+            cf_ws === nothing ? build_compressed_factual(θ_full_score, ctx; check_ties = true) :
+                build_compressed_factual!(cf_ws, θ_full_score, ctx; check_ties = true)
         catch e
             e isa TiedWinnerError ? nothing : rethrow()
         end
@@ -613,6 +622,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
 
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
                                  draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
+    ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # allocation/Hessian port task §3.1
     pe = build_pivot_elimination(ctx)
     # exclude-ROW-destination production release (2026-07-24): D2/n derived from zfree_start's OWN
     # length (n = length(zfree_start)) rather than recomputed as D^2-1 -- that recomputation
@@ -1076,6 +1086,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         pe = build_pivot_elimination(ctx)
         rsc = build_ranged_screen_context(ctx)
     end
+    ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # allocation/Hessian port task §3.1 -- no-op reuse if `ctx_reused` already carries a matching-shape workspace
     # exclude-ROW-destination production release (2026-07-24): D2 = 1(gp) + length(zfree_start) --
     # see the identical fix/rationale in run_profile_checkpointed above (D^2 silently assumed
     # D_origin==D_destination, only true under :all_legacy).
