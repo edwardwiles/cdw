@@ -89,6 +89,8 @@ include(joinpath(@__DIR__, "three_way_derivatives.jl"))
 include(joinpath(@__DIR__, "lfix_incremental.jl"))
 include(joinpath(@__DIR__, "compressed_moments.jl"))
 include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # allocation/Hessian port task §3.1: CompressedFactualWorkspace + build_compressed_factual! + attach_compressed_factual_workspace -- reused-buffer alternative to build_compressed_factual's fresh W*Ddest allocation every call
+include(joinpath(@__DIR__, "canonical_price_precompute_workspace.jl"))   # allocation/Hessian port task §3.3: CanonicalPricePrecomputeWorkspace + attach_canonical_price_precompute_workspace
+include(joinpath(@__DIR__, "hard_score_b_cache.jl"))   # allocation/Hessian port task §3.3: attach_hard_score_b_cache
 include(joinpath(@__DIR__, "structured_moment_build.jl"))   # Continuation 10 Section 9: structured dense-materialize, used by compressed_live.jl / infeasibility_screen.jl
 include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
@@ -623,6 +625,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
                                  draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # allocation/Hessian port task §3.1
+    ctx = attach_canonical_price_precompute_workspace(ctx)   # allocation/Hessian port task §3.3
+    ctx = attach_hard_score_b_cache(ctx)   # allocation/Hessian port task §3.3
     pe = build_pivot_elimination(ctx)
     # exclude-ROW-destination production release (2026-07-24): D2/n derived from zfree_start's OWN
     # length (n = length(zfree_start)) rather than recomputed as D^2-1 -- that recomputation
@@ -1087,6 +1091,8 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         rsc = build_ranged_screen_context(ctx)
     end
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # allocation/Hessian port task §3.1 -- no-op reuse if `ctx_reused` already carries a matching-shape workspace
+    ctx = attach_canonical_price_precompute_workspace(ctx)   # allocation/Hessian port task §3.3
+    ctx = attach_hard_score_b_cache(ctx)   # allocation/Hessian port task §3.3
     # exclude-ROW-destination production release (2026-07-24): D2 = 1(gp) + length(zfree_start) --
     # see the identical fix/rationale in run_profile_checkpointed above (D^2 silently assumed
     # D_origin==D_destination, only true under :all_legacy).

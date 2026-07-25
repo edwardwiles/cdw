@@ -120,9 +120,30 @@ function canonical_price_precompute(θ_full::AbstractVector, ctx)
     constCons, logCC, AodPow = constCons_matrix(θ_full, ctx)
     wPow = [γo.wHat[o]^(1 - σ) for o in 1:D]
     constConsσ = [wPow[o] * (AodPow[o, d] * γo.τ[o, d])^(1 - σ) for o in 1:D, d in 1:Ddest]
-    mulU = μ .* log.(U)
-    UPow = U .^ (-μ)
-    UσPow = γo.Uσ .^ (-μ)
+    # Allocation/Hessian port task §3.3: mulU/UPow/UσPow were freshly allocated (and mulU's own
+    # log.(U) recomputed from scratch, even though U -- and hence log.(U) -- never changes for the
+    # whole campaign) on every call. Served from a persistent workspace when `ctx` carries one (see
+    # canonical_price_precompute_workspace.jl); falls back to the original computation, unchanged,
+    # for any ctx without one. Reentrancy across this function's several call sites verified safe --
+    # see that file's header comment. ALIASING WARNING (same discipline as build_compressed_
+    # factual!): when `ctx` carries a workspace, the returned mulU/UPow/UσPow ALIAS the workspace's
+    # own mutable buffers, not fresh copies -- a caller that retains this function's result across a
+    # SUBSEQUENT call to this function with the SAME ctx will see its earlier result silently
+    # overwritten (verified/exercised in test_canonical_precompute_and_hard_score_b_workspaces.jl).
+    # Safe as used in every real production call site (screen_hard_winners_ranged,
+    # screen_hard_winners, build_compressed_factual!): each fully consumes pp within its own
+    # function scope and returns before any other call to this function happens.
+    ws = hasproperty(ctx, :canonical_price_ws) ? ctx.canonical_price_ws : nothing
+    if ws !== nothing && ws.W == W && ws.D == D
+        ws.mulU .= μ .* ws.logU
+        ws.UPow .= U .^ (-μ)
+        ws.UσPow .= γo.Uσ .^ (-μ)
+        mulU, UPow, UσPow = ws.mulU, ws.UPow, ws.UσPow
+    else
+        mulU = μ .* log.(U)
+        UPow = U .^ (-μ)
+        UσPow = γo.Uσ .^ (-μ)
+    end
     return (D = D, Ddest = Ddest, W = W, μ = μ, σ = σ,
             constCons = constCons, constConsσ = constConsσ, logCC = logCC,
             mulU = mulU, UPow = UPow, UσPow = UσPow, AodPow = AodPow)

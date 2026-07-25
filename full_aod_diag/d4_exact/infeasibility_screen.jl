@@ -119,8 +119,15 @@ isdefined(Main, :WinnerRefCache) || include(joinpath(@__DIR__, "winner_certifica
 # certificate.
 # ============================================================================
 
-"B[s,o] = -log(U[s,o]) -- the fixed (draw-only) part of the hard score S_sod = B_so + a_od."
-hard_score_B(ctx) = -log.(ctx.U)   # W x D
+"""
+B[s,o] = -log(U[s,o]) -- the fixed (draw-only) part of the hard score S_sod = B_so + a_od.
+Depends ONLY on ctx.U, which never changes for the whole outer-solve process -- yet this was
+recomputed (fresh W x D allocation + a full transcendental pass) on EVERY witness-screen call
+(allocation/Hessian port task §3.3). Serves a cached copy directly when `ctx` carries one (see
+`attach_hard_score_b_cache` in hard_score_b_cache.jl), falling back to the original recomputation
+unchanged for any ctx without one.
+"""
+hard_score_B(ctx) = hasproperty(ctx, :hard_score_B_cache) ? ctx.hard_score_B_cache : -log.(ctx.U)   # W x D
 
 struct PairwiseCertificate
     D::Int
