@@ -27,6 +27,8 @@
 # ============================================================================
 using Serialization, Dates
 
+isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3
+
 const CM_CHECKPOINT_SCHEMA = 6
 # Bumped 4 -> 6 (destination_sample production wiring, exclude-ROW-destination release,
 # 2026-07-24): adds destination_sample, row_idx, D_dest to the persisted schema, so a checkpoint
@@ -404,6 +406,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
         L::Int = 10, contrasts::Symbol = :anchored, probs::Union{Nothing,AbstractVector{Float64}} = nothing,
         cm_hessian_backend::Symbol = :structured, cm_grid_rule::Symbol = :equal,
+        blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3: set once
+        # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
+        # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
@@ -582,6 +587,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs) :
         build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
     print_screen_startup_banner(is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
     th = pcx.ctx_cm.obj.threshold_state

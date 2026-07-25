@@ -91,6 +91,7 @@ include(joinpath(@__DIR__, "compressed_moments.jl"))
 include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # allocation/Hessian port task §3.1: CompressedFactualWorkspace + build_compressed_factual! + attach_compressed_factual_workspace -- reused-buffer alternative to build_compressed_factual's fresh W*Ddest allocation every call
 include(joinpath(@__DIR__, "canonical_price_precompute_workspace.jl"))   # allocation/Hessian port task §3.3: CanonicalPricePrecomputeWorkspace + attach_canonical_price_precompute_workspace
 include(joinpath(@__DIR__, "hard_score_b_cache.jl"))   # allocation/Hessian port task §3.3: attach_hard_score_b_cache
+isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3
 include(joinpath(@__DIR__, "structured_moment_build.jl"))   # Continuation 10 Section 9: structured dense-materialize, used by compressed_live.jl / infeasibility_screen.jl
 include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 include(joinpath(@__DIR__, "oracle_fast.jl"))
@@ -565,7 +566,11 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # resumed) on the wrong side of the Frechet benchmark for its own direction is REJECTED with a
         # hard error (this stage fixes g, so there is no zfree-only box to widen -- the check is purely
         # a validity gate on the caller's own g). See direction_bounds.jl.
-        destination_sample::Symbol = :exclude_row)   # ****************************************************
+        destination_sample::Symbol = :exclude_row,
+        blas_threads::Union{Nothing,Int} = nothing)   # allocation/Hessian port task §6.3: set once
+        # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
+        # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
+        # ****************************************************
         # **** exclude-ROW-destination UNRESTRICTED-CORE release (2026-07-24): the unrestricted   ****
         # **** family's real per-point evaluation path (moment_representation=:compressed, the    ****
         # **** production default every real cb_F!/cb_G!/cb_newpt! callback uses) is now           ****
@@ -627,6 +632,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # allocation/Hessian port task §3.1
     ctx = attach_canonical_price_precompute_workspace(ctx)   # allocation/Hessian port task §3.3
     ctx = attach_hard_score_b_cache(ctx)   # allocation/Hessian port task §3.3
+    blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     pe = build_pivot_elimination(ctx)
     # exclude-ROW-destination production release (2026-07-24): D2/n derived from zfree_start's OWN
     # length (n = length(zfree_start)) rather than recomputed as D^2-1 -- that recomputation
@@ -1023,7 +1029,11 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
         # pushes copy(xf) (the exact free-parameter vector the gradient backend is dispatched on) into
         # this Ref'd vector, for a same-trajectory backend replay (c34_phase5_same_trajectory_replay.jl).
         # Purely additive; nothing read here unless explicitly passed.
-        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination UNRESTRICTED-CORE
+        destination_sample::Symbol = :exclude_row,
+        blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3: set once
+        # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
+        # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
+        )   # exclude-ROW-destination UNRESTRICTED-CORE
         # release (2026-07-24): see run_profile_checkpointed's identical kwarg/scope-note -- default
         # flipped to :exclude_row, matching every other production entry point; :all_legacy remains
         # a fully supported, explicit opt-out.
@@ -1093,6 +1103,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # allocation/Hessian port task §3.1 -- no-op reuse if `ctx_reused` already carries a matching-shape workspace
     ctx = attach_canonical_price_precompute_workspace(ctx)   # allocation/Hessian port task §3.3
     ctx = attach_hard_score_b_cache(ctx)   # allocation/Hessian port task §3.3
+    blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     # exclude-ROW-destination production release (2026-07-24): D2 = 1(gp) + length(zfree_start) --
     # see the identical fix/rationale in run_profile_checkpointed above (D^2 silently assumed
     # D_origin==D_destination, only true under :all_legacy).

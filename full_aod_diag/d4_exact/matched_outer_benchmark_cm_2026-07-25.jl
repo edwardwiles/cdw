@@ -56,6 +56,7 @@ const CM_EXTENSION = Symbol(get(ENV, "BENCH_CM_EXTENSION", "cm_only"))
 const CM_GRADIENT_BACKEND = :cplus  # production default
 const CM_DESTINATION_SAMPLE = Symbol(get(ENV, "BENCH_DESTINATION_SAMPLE", "exclude_row"))
 const CM_HESSIAN_BACKEND = Symbol(get(ENV, "BENCH_CM_HESSIAN_BACKEND", "structured"))
+const BLAS_THREADS = haskey(ENV, "BENCH_BLAS_THREADS") ? parse(Int, ENV["BENCH_BLAS_THREADS"]) : nothing   # allocation/Hessian port task §6.3
 lp(">>> active Hessian backend=:", CM_HESSIAN_BACKEND, ", contrasts=", CM_CONTRASTS,
    " cm_extension=", CM_EXTENSION, " cm_gradient_backend=", CM_GRADIENT_BACKEND, " destination_sample=", CM_DESTINATION_SAMPLE)
 
@@ -87,7 +88,7 @@ res_warm = run_cm_upper_checkpointed(w_calib;
     maxtime_real = T_WARMUP, ckpt_dir = joinpath(OUTDIR, "ckpt_warmup"),
     run_id = "matched_bench_cm_warmup", label = "warmup", checkpoint_interval_s = 9999.0,
     cm_gradient_backend = CM_GRADIENT_BACKEND, cm_extension = CM_EXTENSION,
-    destination_sample = CM_DESTINATION_SAMPLE, verbose = true)
+    destination_sample = CM_DESTINATION_SAMPLE, verbose = true, blas_threads = BLAS_THREADS)
 t_warm = time() - t_warm0
 lp(">>> warm-up wall = ", round(t_warm, digits = 3), "s  n_eval=", res_warm.n_eval,
    " n_grad=", res_warm.n_grad, " status=", res_warm.knitro_status)
@@ -108,7 +109,7 @@ alloc_meas = @allocated begin
         maxtime_real = T_MEASURED, ckpt_dir = joinpath(OUTDIR, "ckpt_measured"),
         run_id = "matched_bench_cm_measured", label = "measured", checkpoint_interval_s = 30.0,
         cm_gradient_backend = CM_GRADIENT_BACKEND, cm_extension = CM_EXTENSION,
-        destination_sample = CM_DESTINATION_SAMPLE, verbose = true)
+        destination_sample = CM_DESTINATION_SAMPLE, verbose = true, blas_threads = BLAS_THREADS)
 end
 t_meas = time() - t_meas0
 gc_num_after = Base.gc_num()

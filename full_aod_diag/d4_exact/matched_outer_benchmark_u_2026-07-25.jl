@@ -37,6 +37,7 @@ const W = parse(Int, get(ENV, "BENCH_W", "80000"))
 const DELTA = parse(Float64, get(ENV, "BENCH_DELTA", "1.0"))
 const DRAW_SEED = parse(Int, get(ENV, "BENCH_SEED", "20260719"))
 const DESTINATION_SAMPLE = Symbol(get(ENV, "BENCH_DESTINATION_SAMPLE", "exclude_row"))
+const BLAS_THREADS = haskey(ENV, "BENCH_BLAS_THREADS") ? parse(Int, ENV["BENCH_BLAS_THREADS"]) : nothing   # allocation/Hessian port task §6.3
 mkpath(OUTDIR)
 mkpath(joinpath(OUTDIR, "ckpt_warmup"))
 mkpath(joinpath(OUTDIR, "ckpt_measured"))
@@ -73,7 +74,7 @@ t_warm0 = time()
 res_warm = run_polish_checkpointed("warmup", true, g0, zfree0;
     maxtime_real = T_WARMUP, W_in = W, delta_in = DELTA, draw_seed_in = DRAW_SEED,
     ckpt_dir = joinpath(OUTDIR, "ckpt_warmup"), checkpoint_interval_s = 9999.0,
-    destination_sample = DESTINATION_SAMPLE)
+    destination_sample = DESTINATION_SAMPLE, blas_threads = BLAS_THREADS)
 t_warm = time() - t_warm0
 lp(">>> warm-up wall = ", round(t_warm, digits = 3), "s  n_eval=", res_warm.n_eval,
    " n_grad=", res_warm.n_grad_calls, " status=", res_warm.knitro_status)
@@ -90,7 +91,7 @@ alloc_meas = @allocated begin
     global res_meas = run_polish_checkpointed("measured", true, g0, zfree0;
         maxtime_real = T_MEASURED, W_in = W, delta_in = DELTA, draw_seed_in = DRAW_SEED,
         ckpt_dir = joinpath(OUTDIR, "ckpt_measured"), checkpoint_interval_s = 30.0,
-        destination_sample = DESTINATION_SAMPLE)
+        destination_sample = DESTINATION_SAMPLE, blas_threads = BLAS_THREADS)
 end
 t_meas = time() - t_meas0
 gc_num_after = Base.gc_num()
