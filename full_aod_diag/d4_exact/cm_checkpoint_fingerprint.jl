@@ -69,6 +69,9 @@ struct RestrictedWorkspaceBenchmarkSeed
     cm_L::Int
     # ---- payload ----
     w::Vector{Float64}
+    nu::Vector{Float64}              # solved nu/eta_nu vector at this point; Float64[] when the
+    # family has no nu block (e.g. :calibration). REQUIRED for :cm_meanzc/:origin_zc -- a P1 point
+    # for those families is only reproducible together with its own solved nu, not a fixed nu0.
     Delta_dual::Float64
     delta_budget::Float64
     verified_at::String
@@ -94,7 +97,7 @@ end
 Builds and atomically writes a fully-fingerprinted `RestrictedWorkspaceBenchmarkSeed`. Atomic
 write (serialize-to-.tmp-then-mv) mirrors `save_cm_checkpoint`'s own discipline.
 """
-function save_benchmark_seed(path::AbstractString, ctx, pe, w::Vector{Float64};
+function save_benchmark_seed(path::AbstractString, ctx, pe, w::Vector{Float64}, nu::Vector{Float64} = Float64[];
                               family::Symbol, K_mean::Int = 0, K_pair::Int = 0,
                               mean_target_layout::String = "none",
                               contrasts::Symbol = :orthonormal, cm_L::Int = 0,
@@ -107,7 +110,7 @@ function save_benchmark_seed(path::AbstractString, ctx, pe, w::Vector{Float64};
         hasproperty(ctx, :destination_sample) ? ctx.destination_sample : :all_legacy,
         ctx.D, Ddest, ctx.D * Ddest, pe.D * pe.Ddest - 1,
         pe.pivot_lin, K_mean, K_pair, mean_target_layout, contrasts, cm_L,
-        copy(w), Delta_dual, delta_budget, string(now()))
+        copy(w), copy(nu), Delta_dual, delta_budget, string(now()))
     tmp = path * ".tmp"
     serialize(tmp, s)
     mv(tmp, path; force = true)
@@ -120,13 +123,15 @@ end
 Base.showerror(io::IO, e::BenchmarkSeedMismatch) = print(io, "BenchmarkSeedMismatch: ", e.msg)
 
 """
-    load_and_validate_benchmark_seed(path, ctx, pe; expected_family=nothing) -> Vector{Float64}
+    load_and_validate_benchmark_seed(path, ctx, pe; expected_family=nothing) -> (x_free=Vector{Float64}, nu=Vector{Float64})
 
 Deserializes a `RestrictedWorkspaceBenchmarkSeed` and validates EVERY fingerprint field against
 the live `ctx`/`pe` before calling `x_free_from_w`. Throws `BenchmarkSeedMismatch` (listing every
 field that disagrees, old vs new) on any mismatch -- never pads, truncates, or reinterprets the
 stored vector. This is the single call production/benchmark scripts should use in place of raw
-`deserialize(path)` + a partial `@assert`.
+`deserialize(path)` + a partial `@assert`. Returns `nu = Float64[]` for families with no nu block
+(e.g. :calibration) -- callers for :cm_meanzc/:origin_zc must use the returned `nu`, not a fixed
+nu0, since a P1 point is only reproducible together with its own solved nu.
 """
 function load_and_validate_benchmark_seed(path::AbstractString, ctx, pe; expected_family::Union{Nothing,Symbol} = nothing)
     isfile(path) || throw(BenchmarkSeedMismatch("no file at $path"))
@@ -170,5 +175,5 @@ function load_and_validate_benchmark_seed(path::AbstractString, ctx, pe; expecte
             join(mismatches, "\n  ") *
             "\nFile fingerprint: " * benchmark_seed_fingerprint_string(raw)))
     end
-    return x_free_from_w(raw.w, pe)
+    return (x_free = x_free_from_w(raw.w, pe), nu = copy(raw.nu))
 end

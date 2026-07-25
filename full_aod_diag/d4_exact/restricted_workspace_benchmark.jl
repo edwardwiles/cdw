@@ -51,6 +51,7 @@ include(joinpath(@__DIR__, "cm_originzc_production.jl"))
 include(joinpath(@__DIR__, "cm_originzc_cplus.jl"))
 include(joinpath(@__DIR__, "cm_originzc_config.jl"))
 include(joinpath(@__DIR__, "cm_basis_diagnostic.jl"))
+include(joinpath(@__DIR__, "cm_checkpoint_fingerprint.jl"))
 using Printf, LinearAlgebra, Statistics, Dates, Serialization
 
 lp(xs...) = (println(xs...); flush(stdout))
@@ -59,7 +60,7 @@ const W = 80_000
 const L = 50
 const DRAW_SEED = 20260719
 const CONTRASTS = :orthonormal
-const N_REPS = 5
+const N_REPS = 20   # task section 6: >=20 reps for isolated moment-construction/fixed-point benchmarks
 
 report_cm_basis_diagnostic()
 
@@ -67,30 +68,40 @@ lp(">>> [", now(), "] building D=20/W=", W, " real-data context (draw_seed=", DR
 t_ctx = @elapsed ctx = d20_real_setup_design(W = W, δ = 1.0, find_smallest = true,
     draw_design = :pseudorandom, draw_seed = DRAW_SEED)
 lp(">>> context built in ", round(t_ctx, digits = 1), "s. D=", ctx.D, " bi=", ctx.bi)
+pe = build_pivot_elimination(ctx)
 
 snaps = nested_grid_sequence([10, 20, 50])
 probs = snaps[L]
 x_free_calib = ctx.θ0_up[ctx.free_idx]
+points_P0 = Dict{String,Vector{Float64}}("P0_calibration" => x_free_calib)
 
-# Point B: same cold-verified CM incumbent d20_meanzc_release_gates.jl uses, if present.
-const SEED_PATH = "/bbkinghome/edav/gravity_robustness/production_runs/cm_campaign_2026-07-22/chain1/delta_1.0/cold_verified_seed.jls"
-points = Dict{String,Vector{Float64}}("A_calibration" => x_free_calib)
-try
-    if isfile(SEED_PATH)
-        pe_tmp = build_pivot_elimination(ctx)
-        seedB = deserialize(SEED_PATH)
-        if seedB.W == W && seedB.draw_seed == DRAW_SEED && seedB.cm_L == L && seedB.contrasts == CONTRASTS
-            points["B_cm_incumbent_delta1"] = x_free_from_w(seedB.w, pe_tmp)
-            lp(">>> Point B loaded from cold-verified seed.")
-        else
-            lp(">>> Point B seed provenance mismatch -- skipping, using Point A only.")
-        end
-    else
-        lp(">>> No Point B seed file found at ", SEED_PATH, " -- using Point A only.")
+"""
+    load_family_points(env_var, family, nu0_fallback) -> Dict{String,Tuple{Vector{Float64},Vector{Float64}}}
+
+P0 (calibration, paired with `nu0_fallback` -- the calibration point has no
+solved nu of its own, so the caller's usual nu0 convention is used there)
+plus P1 (a fresh, fingerprinted, cold-verified near-budget seed for this
+specific family, paired with ITS OWN solved nu -- never nu0_fallback) if the
+seed path named by `env_var` is set, exists, and passes
+load_and_validate_benchmark_seed against the live ctx/pe (task section 4:
+never falls back to the pre-2026-07-24 ad-hoc stale checkpoint, and never
+pads/truncates/reinterprets a mismatched one).
+"""
+function load_family_points(env_var::String, family::Symbol, nu0_fallback::Vector{Float64})
+    pts = Dict{String,Tuple{Vector{Float64},Vector{Float64}}}("P0_calibration" => (points_P0["P0_calibration"], nu0_fallback))
+    path = get(ENV, env_var, "")
+    if isempty(path)
+        lp(">>> ", env_var, " not set -- ", family, " benchmark uses P0 only.")
+        return pts
     end
-catch e
-    lp(">>> Point B load failed (", sprint(showerror, e), ") -- using Point A only. Not fatal: B8's headline",
-       " comparison only needs one valid feasible point per family.")
+    try
+        recovered = load_and_validate_benchmark_seed(path, ctx, pe; expected_family = family)
+        pts["P1_$(family)"] = (recovered.x_free, recovered.nu)
+        lp(">>> P1 loaded for ", family, " from ", path, " (nu=", recovered.nu, ")")
+    catch e
+        lp(">>> P1 load FAILED for ", family, " (", sprint(showerror, e), ") -- using P0 only.")
+    end
+    return pts
 end
 
 rows = NamedTuple[]
@@ -137,7 +148,7 @@ end
 # this task's change; re-measured only to confirm the B1 audit's claim that
 # archB is already the production default and already cheap).
 # ---------------------------------------------------------------------------
-for (plabel, xfree) in points
+for (plabel, xfree) in points_P0
     for (variant, use_archB) in (("archA_dense", false), ("archB_cached", true))
         pcx = build_cm_production_context(ctx, CS; L = L, contrasts = CONTRASTS, probs = probs, use_archB_moments = use_archB)
         prof_reset!()
@@ -154,7 +165,8 @@ end
 # Family 2: CM+mean/ZC, K_mean=1, K_pair=1 (matches production release-gate config)
 # ---------------------------------------------------------------------------
 nu0_meanzc = [1.0]
-for (plabel, xfree) in points
+points_cmmeanzc = load_family_points("CMMEANZC_P1_PATH", :cm_meanzc, nu0_meanzc)
+for (plabel, (xfree, nuvec)) in points_cmmeanzc
     aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = 1, K_pair = 1, contrasts = CONTRASTS,
         meanzc_basis = :direct, probs = probs)
     for (variant, dense) in (("dense", true), ("cached", false))
@@ -179,7 +191,7 @@ for (plabel, xfree) in points
         prof_reset!()
         wall = Float64[]; deltas = Float64[]
         for _ in 1:N_REPS
-            t = @elapsed (base, verify) = archC_meanzc_verified_state(xfree, nu0_meanzc, ctx_cm, cctx)
+            t = @elapsed (base, verify) = archC_meanzc_verified_state(xfree, nuvec, ctx_cm, cctx)
             push!(wall, t); push!(deltas, verify.Delta_dual)
         end
         summarize_and_record!(rows, "CM+meanZC", variant, plabel, size(ctx.U,1), wall, deltas, peak_rss_kb())
@@ -187,11 +199,24 @@ for (plabel, xfree) in points
 end
 
 # ---------------------------------------------------------------------------
-# Family 3: origin-ZC, K_mean=1, K_pair=1 (SharedByPowerLayout, matches K=1 production config)
+# Family 3: origin-ZC, K_mean=1, K_pair=1, OriginByPowerLayout (production
+# default power_target_layout=:origin_by_power -- see
+# run_originzc_upper_checkpointed's own default. NOTE: an earlier version of
+# this script used SharedByPowerLayout(1,1) here, which is NOT the
+# origin-specific restriction this family is named for (n_eta=1, every origin
+# sharing one nu, vs OriginByPowerLayout's n_eta=K_mean*D, one nu per origin)
+# -- fixed to match what run_originzc_upper_checkpointed actually ships.
 # ---------------------------------------------------------------------------
-layout1 = SharedByPowerLayout(1, 1)
-nu0_oz = [mean(ctx.U .^ k) for k in 1:layout1.K_mean]   # feasible: literal data mean, matches d20_originzc_fixedpoint_gates.jl's own init convention
-for (plabel, xfree) in points
+layout1 = OriginByPowerLayout(ctx.D, 1, 1)
+nu0_oz = Vector{Float64}(undef, n_eta(layout1))
+for k in 1:1
+    Uk = ctx.U .^ k
+    for o in 1:ctx.D
+        nu0_oz[target_index(layout1, o, k)] = mean(@view Uk[:, o])
+    end
+end
+points_originzc = load_family_points("ORIGINZC_P1_PATH", :origin_zc, nu0_oz)
+for (plabel, (xfree, nuvec)) in points_originzc
     aug = build_originzc_augmented_obj(ctx, CS, layout1)
     for (variant, dense) in (("dense", true), ("cached", false))
         local obj_use

@@ -78,7 +78,7 @@ bad = RestrictedWorkspaceBenchmarkSeed(
     ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
     :all_legacy, ctx.D, ctx.D, ctx.D * ctx.D, ctx.D * ctx.D - 1,   # WRONG: old square convention
     pe.pivot_lin, 0, 0, "none", :orthonormal, 0,
-    w_calib, 0.0, 1.0, string(now()))
+    w_calib, Float64[], 0.0, 1.0, string(now()))
 bad_path = tempname()
 serialize(bad_path, bad)
 try
@@ -109,8 +109,8 @@ lp("--- Test 3: fresh correctly-fingerprinted seed round-trips exactly (serializ
 x_free_direct = x_free_from_w(w_calib, pe)
 fresh_path = tempname()
 save_benchmark_seed(fresh_path, ctx, pe, w_calib; family = :calibration, Delta_dual = 0.0, delta_budget = 1.0)
-xf_recovered = load_and_validate_benchmark_seed(fresh_path, ctx, pe; expected_family = :calibration)
-max_diff = maximum(abs.(xf_recovered .- x_free_direct))
+recovered = load_and_validate_benchmark_seed(fresh_path, ctx, pe; expected_family = :calibration)
+max_diff = maximum(abs.(recovered.x_free .- x_free_direct))
 if max_diff < 1e-12
     lp("PASS: round-trip exact (vs direct x_free_from_w(w_calib,pe)), max_diff=", max_diff)
 else
