@@ -40,12 +40,23 @@ function production_screen_stack(family::Symbol)
 end
 
 """
-    resolve_unrestricted_manifest(; hessian_backend, blas_threads, julia_threads=Threads.nthreads())
+    resolve_unrestricted_manifest(; hessian_backend, blas_threads, julia_threads=Threads.nthreads(),
+        trade_elasticity_mode=:fixed, A_coordinate_mode=:legacy_z, gp_coordinate_mode=:raw,
+        theta_bounds=nothing, outer_dimension=nothing)
 
 Resolves the unrestricted family's backend manifest from values the calling driver
-(`run_profile_checkpointed`/`run_polish_checkpointed`) already has in scope.
+(`run_profile_checkpointed`/`run_polish_checkpointed`/`run_polish_checkpointed_unified`) already
+has in scope. The `trade_elasticity_mode`/`A_coordinate_mode`/`gp_coordinate_mode`/
+`theta_*`/`outer_dimension` fields (transformed-A/flexible-theta production port task §20) all
+default to the pre-port fixed/legacy-z/raw values, so `run_profile_checkpointed`/
+`run_polish_checkpointed`'s existing unqualified calls are byte-identical in every field they
+already emitted -- only `run_polish_checkpointed_unified` passes the non-default values.
 """
-function resolve_unrestricted_manifest(; hessian_backend::Symbol = UNRESTRICTED_CORE_HESSIAN_BACKEND[], blas_threads::Union{Nothing,Int})
+function resolve_unrestricted_manifest(; hessian_backend::Symbol = UNRESTRICTED_CORE_HESSIAN_BACKEND[], blas_threads::Union{Nothing,Int},
+        trade_elasticity_mode::Symbol = :fixed, A_coordinate_mode::Symbol = :legacy_z,
+        gp_coordinate_mode::Symbol = :raw,
+        theta_bounds::Union{Nothing,Tuple{Float64,Float64}} = nothing,
+        outer_dimension::Union{Nothing,Int} = nothing)
     return (
         family = :unrestricted,
         core_top1_engine = :canonical_log_additive,           # print_active_layout_banner's own literal
@@ -66,6 +77,15 @@ function resolve_unrestricted_manifest(; hessian_backend::Symbol = UNRESTRICTED_
         blas_threads = something(blas_threads, BLAS.get_num_threads()),
         checkpoint_schema = CHECKPOINT_SCHEMA_UNRESTRICTED,
         screen_stack = production_screen_stack(:unrestricted),
+        trade_elasticity_mode = trade_elasticity_mode,
+        A_coordinate_mode = A_coordinate_mode,
+        A_coordinate_mapping_version = A_coordinate_mode == :legacy_z ? nothing : AMAP_VERSION,
+        gp_coordinate_mode = gp_coordinate_mode,
+        theta_coordinate = trade_elasticity_mode == :flexible ? :eta_theta : nothing,
+        theta_bounds = theta_bounds,
+        theta_derivative_backend = trade_elasticity_mode == :flexible ? :fixed_dual_secant : nothing,
+        theta_aware_dual_bank = trade_elasticity_mode == :flexible,   # dual_bank_zfree, outer_coordinate_layout.jl (task §12 fix)
+        outer_dimension = outer_dimension,
     )
 end
 

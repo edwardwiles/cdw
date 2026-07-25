@@ -216,3 +216,29 @@ function layout_fingerprint(layout::OuterCoordinateLayout, gs::Union{Nothing,GpS
 end
 
 const AMAP_VERSION = 1   # "exact mapping version" (addendum §4) -- bump if z<->a formula changes
+
+"""
+    dual_bank_zfree(d, layout) -> Vector{Float64}
+
+Reconciliation fix (transformed-A/flexible-theta production port task §12): production port
+`port/flexible-theta-aspace-production-2026-07-25`'s `DualBank` warm-start selection was
+theta-blind by construction -- `select_warm_start`'s scaled nearest-neighbor search
+(`dual_bank.jl`) operates on whatever `zfree` vector it is handed, and every prior flexible-mode
+call site handed it `d.z_nonpivot` alone (the A-block only), so two points differing only in
+theta always distance-collapsed to `d==0` and could be selected as "nearest" regardless of how
+far apart their thetas actually were.
+
+Fix: in flexible mode, prepend `eta_theta=log(theta)` to the vector DualBank is keyed on, so its
+existing per-coordinate scaled-distance metric (`dual_bank.jl`: `std` over bank history once
+>=3 points exist, else unweighted) naturally extends to penalize theta distance on the same
+footing as A-block distance. No change to `dual_bank.jl` itself -- it was already generic over
+the length/content of `zfree`, only production's own call sites were passing an incomplete key.
+`eta_theta=log(theta)` is O(1) (theta is O(1)-O(10) in this model), i.e. already roughly the same
+order of magnitude as the log-A_od entries it's concatenated with, so the unweighted (<3-point)
+fallback case is not badly scaled even before the std-normalization kicks in.
+
+In fixed mode this is the identity (`d.z_nonpivot` unchanged) -- theta never varies within a
+fixed-theta run, so there is nothing to distinguish.
+"""
+dual_bank_zfree(d, layout::OuterCoordinateLayout) =
+    layout.trade_elasticity_mode == :flexible ? vcat(d.eta_theta, d.z_nonpivot) : d.z_nonpivot
