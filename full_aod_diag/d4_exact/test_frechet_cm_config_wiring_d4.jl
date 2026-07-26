@@ -44,14 +44,26 @@ println("  (nothing printed above this line for :common_flexible -- correct)")
 
 println()
 println("== config validation guard ==")
+# Part III (winner-pair Architecture-C Hessian for the level block) landed after this test was
+# first written -- (:common_frechet, :structured) is now a VALID, supported combination, so
+# _cm_validate must NOT error on it. The remaining real guard is cm_basis=:interval, still
+# unsupported for :common_frechet.
+no_error_for_structured = true
+try
+    CMConfig(common_marginals = true, marginal_restriction = :common_frechet, cm_hessian_backend = :structured) |> _cm_validate
+catch e
+    global no_error_for_structured = false
+end
+check(":common_frechet + :structured is now valid (Part III landed)", no_error_for_structured)
+
 guard_tripped = false
 try
     global guard_tripped
-    CMConfig(common_marginals = true, marginal_restriction = :common_frechet, cm_hessian_backend = :structured) |> _cm_validate
+    CMConfig(common_marginals = true, marginal_restriction = :common_frechet, cm_basis = :interval) |> _cm_validate
 catch e
     global guard_tripped = e isa ErrorException
 end
-check(":common_frechet + :structured raises an error (Part III not yet wired)", guard_tripped)
+check(":common_frechet + cm_basis=:interval still raises an error (unsupported)", guard_tripped)
 
 println()
 println("== real KNITRO inner solves via build_cm_production_context_v2 ==")
