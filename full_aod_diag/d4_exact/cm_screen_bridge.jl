@@ -179,9 +179,10 @@ Screened drop-in replacement for `archC_verified_state`, same contract as
 """
 function archC_verified_state_screened(x_free0::AbstractVector, ctx_cm, cctx;
                                         counters::Union{Nothing,CMScreenCounters} = nothing,
-                                        use_witness::Bool = false)
+                                        use_witness::Bool = false,
+                                        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     cm_screen_precheck!(x_free0, ctx_cm; counters = counters, use_witness = use_witness)
-    return archC_verified_state(x_free0, ctx_cm, cctx)
+    return archC_verified_state(x_free0, ctx_cm, cctx; dual_bank = dual_bank, eval_id = eval_id)
 end
 
 """
@@ -193,8 +194,10 @@ file's call sites). Same return contract.
 """
 function cm_production_value_verified_screened(x_free0::AbstractVector, pcx;
                                                  counters::Union{Nothing,CMScreenCounters} = nothing,
-                                                 use_witness::Bool = false)
-    base, verify = archC_verified_state_screened(x_free0, pcx.ctx_cm, pcx.cctx; counters = counters, use_witness = use_witness)
+                                                 use_witness::Bool = false,
+                                                 dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
+    base, verify = archC_verified_state_screened(x_free0, pcx.ctx_cm, pcx.cctx; counters = counters, use_witness = use_witness,
+        dual_bank = dual_bank, eval_id = eval_id)
     K = pcx.ctx_cm.obj.H_save
     return K, base, verify
 end
@@ -208,9 +211,10 @@ wrapper above, then falls through to the existing `archC_meanzc_verified_state` 
 """
 function cm_meanzc_production_value_verified_screened(x_free0::AbstractVector, νvec::AbstractVector{Float64}, pcx;
                                                         counters::Union{Nothing,CMScreenCounters} = nothing,
-                                                        use_witness::Bool = false)
+                                                        use_witness::Bool = false,
+                                                        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     cm_screen_precheck!(x_free0, pcx.ctx_cm; counters = counters, use_witness = use_witness)
-    base, verify = archC_meanzc_verified_state(x_free0, νvec, pcx.ctx_cm, pcx.cctx)
+    base, verify = archC_meanzc_verified_state(x_free0, νvec, pcx.ctx_cm, pcx.cctx; dual_bank = dual_bank, eval_id = eval_id)
     K = pcx.ctx_cm.obj.H_save
     return K, base, verify
 end
@@ -224,9 +228,10 @@ pre-check, then falls through to the existing `archOZ_verified_state` unchanged.
 """
 function cm_originzc_production_value_verified_screened(x_free0::AbstractVector, νfull::AbstractVector{Float64}, pcx;
                                                           counters::Union{Nothing,CMScreenCounters} = nothing,
-                                                          use_witness::Bool = false)
+                                                          use_witness::Bool = false,
+                                                          dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     cm_screen_precheck!(x_free0, pcx.ctx_cm; counters = counters, use_witness = use_witness)
-    base, verify = archOZ_verified_state(x_free0, νfull, pcx.ctx_cm)
+    base, verify = archOZ_verified_state(x_free0, νfull, pcx.ctx_cm; dual_bank = dual_bank, eval_id = eval_id)
     K = pcx.ctx_cm.obj.H_save
     return K, base, verify
 end

@@ -611,6 +611,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
+        use_dual_bank::Bool = true, dual_bank_size::Int = 8,   # Phase D remediation (2026-07-26):
+        # RestrictedDualBank/cm_dual_bank_production.jl -- distance-only warm-start selection (see
+        # that file's header for why this differs from the unrestricted family's own KKT-scored
+        # DualBank). true (new default): a nearby prior successful dual is offered as the inner
+        # solve's warm start instead of always using the single obj.x slot. false: zero overhead,
+        # byte-identical to every pre-existing production run.
         use_exact_cache::Bool = true,   # Phase C remediation (2026-07-26): exact-point cache
         # (CMProductionEvalKey/cm_exact_cache_production.jl) for this driver's own real
         # (ctx_cm,cctx) shape -- previously unwired despite cm_config.jl's SafeExactCache{CMEvalKey}
@@ -884,6 +890,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
     family_tag = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
+    dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, mode_label)
     print_screen_startup_banner(mode_label)
@@ -1028,11 +1035,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         try
             base, verify = cm_cache_lookup_or_compute!(exact_cache, cache_key, () -> begin
                 if is_meanzc
-                    _, b, v = cm_meanzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
+                    _, b, v = cm_meanzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters,
+                        dual_bank = dual_bank, eval_id = n_eval[])
                 elseif is_frechet
-                    _, b, v = cm_frechet_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
+                    _, b, v = cm_frechet_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters,
+                        dual_bank = dual_bank, eval_id = n_eval[])
                 else
-                    _, b, v = cm_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
+                    _, b, v = cm_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters,
+                        dual_bank = dual_bank, eval_id = n_eval[])
                 end
                 return b, v
             end)

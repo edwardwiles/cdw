@@ -194,12 +194,23 @@ Level-aware analog of `cm_production_bundle.jl::archC_verified_state`, using
 Every other line (KKT residual, Delta_dual/Delta_primal, weight-norm checks) is IDENTICAL and
 copied verbatim -- none of it is restriction-family-specific.
 """
-function archC_frechet_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64})
+function archC_frechet_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64};
+        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
+    warm_label = :unset
+    if dual_bank !== nothing
+        x0, warm_label, _ = select_warm_start_restricted(dual_bank, obj, collect(x_free0))
+        obj.x = x0
+        warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
+                                  (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
+    end
     K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
         hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
-    nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_frechet_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
+    if nStatus ∉ (0, -100, -101, -103)
+        dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
+        throw(CMExpectedSolveFailure("archC_frechet_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
+    end
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
     W = size(obj.U, 1)
@@ -223,6 +234,7 @@ function archC_frechet_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMB
               weight_norm_resid = abs(sum(p_weights) - 1.0),
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+    dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, collect(x_free0), inner_x)
     return base, verify
 end
 
@@ -233,9 +245,10 @@ Level-aware analog of `cm_screen_bridge.jl::archC_verified_state_screened`. `cm_
 reused UNCHANGED.
 """
 function archC_frechet_verified_state_screened(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64};
-                                                counters::Union{Nothing,CMScreenCounters} = nothing, use_witness::Bool = false)
+                                                counters::Union{Nothing,CMScreenCounters} = nothing, use_witness::Bool = false,
+                                                dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     cm_screen_precheck!(x_free0, ctx_cm; counters = counters, use_witness = use_witness)
-    return archC_frechet_verified_state(x_free0, ctx_cm, cctx, level_targets)
+    return archC_frechet_verified_state(x_free0, ctx_cm, cctx, level_targets; dual_bank = dual_bank, eval_id = eval_id)
 end
 
 """
@@ -246,11 +259,12 @@ Level-aware analog of `cm_screen_bridge.jl::cm_production_value_verified_screene
 `cm_hessian_backend=:structured` so `pcx.cctx !== nothing`).
 """
 function cm_frechet_production_value_verified_screened(x_free0::AbstractVector, pcx;
-                                                         counters::Union{Nothing,CMScreenCounters} = nothing, use_witness::Bool = false)
+                                                         counters::Union{Nothing,CMScreenCounters} = nothing, use_witness::Bool = false,
+                                                         dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     pcx.cctx === nothing && error("cm_frechet_production_value_verified_screened: pcx.cctx is nothing -- " *
         "requires cm_hessian_backend=:structured (the public driver's screened/verified path is Architecture-C-only).")
     base, verify = archC_frechet_verified_state_screened(x_free0, pcx.ctx_cm, pcx.cctx, pcx.aug.level_targets;
-        counters = counters, use_witness = use_witness)
+        counters = counters, use_witness = use_witness, dual_bank = dual_bank, eval_id = eval_id)
     K = pcx.ctx_cm.obj.H_save
     return K, base, verify
 end

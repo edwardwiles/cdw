@@ -73,12 +73,23 @@ end
 AUD-04-style verified analog of `archOZ_base_state`, mirroring
 `archC_meanzc_verified_state`.
 """
-function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{Float64}, ctx_cm)
+function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{Float64}, ctx_cm;
+        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νfull)
+    warm_label = :unset
+    if dual_bank !== nothing
+        x0, warm_label, _ = select_warm_start_restricted(dual_bank, obj, vcat(collect(x_free0), νfull))
+        obj.x = x0
+        warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
+                                  (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
+    end
     K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0; hess_cb_builder = _ -> _originzc_hess_cb_builder(ctx_cm))
-    nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archOZ_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
+    if nStatus ∉ (0, -100, -101, -103)
+        dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
+        throw(CMExpectedSolveFailure("archOZ_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
+    end
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
     W = size(obj.U, 1)
@@ -102,6 +113,7 @@ function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{F
               weight_norm_resid = abs(sum(p_weights) - 1.0),
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+    dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, vcat(collect(x_free0), νfull), inner_x)
     return base, verify
 end
 

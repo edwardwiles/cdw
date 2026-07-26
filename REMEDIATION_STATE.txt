@@ -11,3 +11,4 @@ State log (append-only, one line per transition):
 STATE: IMPLEMENTED_ON_FEATURE_BRANCH -> VALIDATED_THROUGH_PUBLIC_ENTRY_POINT -> MATCHED_AB_PASSED (Phase A)
 2026-07-26 Phase B1 (flexible-CM lookup FG): IMPLEMENTED_ON_FEATURE_BRANCH -> VALIDATED_THROUGH_PUBLIC_ENTRY_POINT -> MATCHED_AB_PASSED. Correctness ALL PASS (D4+D20). Default NOT flipped (allocation criterion failed) -- inner_fg_backend=:cm_lookup available, :dense_reference remains default.
 2026-07-26 Phase C (restricted exact-point cache, all 4 families): IMPLEMENTED_ON_FEATURE_BRANCH -> VALIDATED_THROUGH_PUBLIC_ENTRY_POINT -> MATCHED_AB_PASSED. same_point_inner_resolves=0 confirmed. use_exact_cache=true is new default.
+2026-07-26 Phase D (restricted dual-bank, all 4 families): IMPLEMENTED_ON_FEATURE_BRANCH -> VALIDATED_THROUGH_PUBLIC_ENTRY_POINT -> MATCHED_AB_PASSED. Distance-only selection (scope decision, not KKT-proxy). use_dual_bank=true is new default.

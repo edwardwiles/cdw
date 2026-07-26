@@ -456,6 +456,8 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "originzc_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
+        use_dual_bank::Bool = true, dual_bank_size::Int = 8,   # Phase D remediation (2026-07-26): same
+        # RestrictedDualBank/cm_dual_bank_production.jl as run_cm_upper_checkpointed.
         use_exact_cache::Bool = true,   # Phase C remediation (2026-07-26): same
         # CMProductionEvalKey/cm_exact_cache_production.jl exact-point cache as
         # run_cm_upper_checkpointed. true (new default): identical outer point + identical
@@ -597,6 +599,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     pcx = build_originzc_production_context(ctx, CS, layout)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
+    dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3/§7 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, "origin_zc")
     print_screen_startup_banner("origin_zc")
@@ -690,7 +693,8 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
                 :origin_zc, 0, :none, K_mean, K_pair, A_coordinate_mode, context_fingerprint(pcx.ctx_cm))
         try
             base, verify = cm_cache_lookup_or_compute!(exact_cache, cache_key, () -> begin
-                _, b, v = cm_originzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
+                _, b, v = cm_originzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters,
+                    dual_bank = dual_bank, eval_id = n_eval[])
                 return b, v
             end)
         catch e

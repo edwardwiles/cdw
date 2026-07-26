@@ -1,6 +1,8 @@
 isdefined(Main, :CMLookupState) || include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
 isdefined(Main, :_callbackEvalFG_inner_cmlookup!) || include(joinpath(@__DIR__, "cm_lookup_live_knitro.jl"))
 isdefined(Main, :inner_loop_internal_cmlookup_production) || include(joinpath(@__DIR__, "cm_lookup_production.jl"))
+isdefined(Main, :DualBank) || include(joinpath(@__DIR__, "dual_bank.jl"))
+isdefined(Main, :RestrictedDualBank) || include(joinpath(@__DIR__, "cm_dual_bank_production.jl"))   # Phase D remediation (2026-07-26)
 
 # ============================================================================
 # Continuation 13, Sections 3A + 5: production combined bundle.
@@ -161,15 +163,27 @@ rather than re-derived: no extra recompute needed, `obj.arg1` is trustworthy
 immediately after `KN_solve` converges (KNITRO's own last FG call is always
 made AT the reported solution).
 """
-function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx)
+function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
+        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
+    warm_label = :unset
+    if dual_bank !== nothing
+        x0, warm_label, _ = select_warm_start_restricted(dual_bank, obj, collect(x_free0))
+        obj.x = x0
+        warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
+                                  (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
+    end
     K, x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
         inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
         inner_loop_internal_archgeneric(obj, θ_full0;
             hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
-    nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
+    if nStatus ∉ (0, -100, -101, -103)
+        dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
+        throw(CMExpectedSolveFailure("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
+    end
     ζstar = x[1]; λstar = collect(x[2:end])
+    dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, collect(x_free0), x)
     return BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, copy(obj.arg1), nStatus)
 end
 
@@ -199,14 +213,25 @@ returns (same inner solve, same fields); `verify` is a plain NamedTuple directly
 Callers that need the AUD-04 gate (e.g. `cm_checkpoint.jl`'s `cb_F!`/final `:stage_complete`
 decision, via `cm_production_value_verified` below) should call this, not `archC_base_state`.
 """
-function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx)
+function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
+        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
+    warm_label = :unset
+    if dual_bank !== nothing
+        x0, warm_label, _ = select_warm_start_restricted(dual_bank, obj, collect(x_free0))
+        obj.x = x0
+        warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
+                                  (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
+    end
     K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
         inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
         inner_loop_internal_archgeneric(obj, θ_full0;
             hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
-    nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
+    if nStatus ∉ (0, -100, -101, -103)
+        dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
+        throw(CMExpectedSolveFailure("archC_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
+    end
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
     W = size(obj.U, 1)
@@ -233,6 +258,7 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
               weight_norm_resid = abs(sum(p_weights) - 1.0),
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+    dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, collect(x_free0), inner_x)
     return base, verify
 end
 
