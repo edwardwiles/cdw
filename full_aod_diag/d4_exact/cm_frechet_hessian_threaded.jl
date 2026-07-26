@@ -1,0 +1,207 @@
+# Phase 0 gate closure (2026-07-26, production-audit task): threaded Architecture-C Hessian
+# variant for the common-Fréchet level block. Closes the disclosed gap in
+# `cm_frechet_hessian.jl::archC_frechet_hess_cb_builder`'s own docstring: "The threaded bin-table
+# variant (hessian_cm_structured_v2!) is NOT extended for the level block yet".
+#
+# Design: per COMMON_FRECHET_HESSIAN_ARCHITECTURE_2026-07-25.md, the level block's three new
+# Hessian sub-blocks (H_E,level / H_CM,level / H_level,level) are pure linear combinations of the
+# SAME Ttab/CT/Stab/CScum tables the CM block already reads -- no separate O(W) pass. This means
+# threading the bin-table construction (`build_bin_tables_threaded!`/`prefix_sum_tables_threaded!`,
+# cm_hessian_threaded.jl, UNCHANGED) automatically threads the dominant cost for the level block
+# too; only the small O(D*NCORE*L + D^2*L^2) assembly tail stays serial, exactly as it does for
+# plain CM's own H_EC/H_CC in `hessian_cm_structured_v2!`.
+#
+# Both the H_EC/H_CC tail and the three level-block correction terms below are copied VERBATIM from
+# `hessian_cm_structured_v2!` (cm_hessian_threaded.jl) and `hessian_cm_frechet_structured!`
+# (cm_frechet_hessian.jl) respectively -- not re-derived -- per this project's own stated
+# methodology for this feature ("reuse, don't rebuild the bin-contingency tables"; "the H_EC/H_CC
+# tail is copied verbatim from the original to minimize the chance of a second divergent bug
+# site"). Only the dispatch on `threaded_bins`/`tls` is new.
+#
+# Depends on (must already be included): cm_hessian_architectures.jl (CMBinHessCtx, build_bin_tables!,
+# prefix_sum_tables!, _fill_cm_HEE!), cm_hessian_threaded.jl (ThreadLocalBinScratch,
+# build_bin_tables_threaded!, prefix_sum_tables_threaded!), cm_frechet_hessian.jl (this file's
+# serial sibling, for the docstring cross-reference and the level_targets semantics).
+
+"""
+    hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_targets; threaded_bins=false, tls=nothing)
+
+Threaded-bin-table Architecture-C Hessian callback for `marginal_restriction=:common_frechet`,
+producing the byte-identical packed Hessian as `hessian_cm_frechet_structured!` (serial) up to
+floating-point summation-order noise -- see `test_cm_frechet_threaded_hessian_gates.jl` for the
+correctness gate. `use_syrk` is intentionally omitted (matching `hessian_cm_structured_v2!`'s own
+note: `_fill_cm_HEE!`'s shared dense fallback always uses `gemm!`; H_EE dispatch is identical
+either way).
+"""
+function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64};
+                                            threaded_bins::Bool = false,
+                                            tls::Union{Nothing,ThreadLocalBinScratch} = nothing)
+    @unpack H, M, arg0, arg2, ddPsi! = obj
+    ddPsi!(arg2, arg0)
+    w = arg2
+    NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
+    refIndex1 = cctx.refIndex1; origins = cctx.origins
+    ncm_cm = nO * L
+    ncm_level = ncm - ncm_cm
+    @assert ncm_level == L "hessian_cm_frechet_structured_v2!: cctx.ncm=$(cctx.ncm) inconsistent with D*L (got ncm_level=$ncm_level, expected L=$L) -- was cctx built from a :common_frechet aug?"
+    invsqrtD = 1.0 / sqrt(D)
+
+    E = @view H[:, 2:1+NCORE]
+    if threaded_bins
+        tls === nothing && error("hessian_cm_frechet_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
+        build_bin_tables_threaded!(cctx, tls, E, w)
+        prefix_sum_tables_threaded!(cctx)
+    else
+        build_bin_tables!(cctx, E, w)
+        prefix_sum_tables!(cctx)
+    end
+
+    Hfull = cctx.Hfull
+    fill!(Hfull, 0.0)
+    HEE = @view Hfull[1:NCORE, 1:NCORE]
+    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # UNCHANGED -- shared winner-pair backend
+
+    CS_ = cctx.CScum
+    CT = cctx.CT
+
+    # ---- H_EC, H_CC: verbatim from hessian_cm_structured_v2! ----
+    Hraw_EC = cctx.Hraw_EC
+    @inbounds for l in 1:L
+        for (oi, o) in enumerate(origins)
+            for j in 1:NCORE
+                Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+            end
+        end
+        cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
+        block_ec = if cctx.R === nothing
+            Hraw_EC
+        else
+            mul!(cctx.block_ec, Hraw_EC, cctx.R)
+        end
+        @views Hfull[1:NCORE, cols] .= block_ec
+        @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
+    end
+
+    Hraw_CC = cctx.Hraw_CC
+    @inbounds for l in 1:L
+        for lp in 1:L
+            for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
+                Hraw_CC[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
+            end
+            rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
+            cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
+            block = if cctx.R === nothing
+                Hraw_CC
+            else
+                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
+                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
+            end
+            @views Hfull[rows, cols] .= block
+        end
+    end
+
+    # ---- level-block terms: verbatim from hessian_cm_frechet_structured! ----
+    Bidx = cctx.Bidx
+    Wraw = size(Bidx, 1)
+    Wtab = zeros(D, L + 1)
+    @inbounds for s in 1:Wraw
+        ws = w[s]
+        for x in 1:D
+            Wtab[x, Bidx[s, x]] += ws
+        end
+    end
+    T1 = zeros(D, L)
+    @inbounds for x in 1:D
+        acc = 0.0
+        for l in 1:L
+            acc += Wtab[x, l]
+            T1[x, l] = acc
+        end
+    end
+    Wtot = sum(w)
+    Esum = Vector{Float64}(undef, NCORE)
+    mul!(Esum, E', w)
+
+    level_off = NCORE + ncm_cm
+    @inbounds for l in 1:L
+        tl = level_targets[l]
+        for j in 1:NCORE
+            acc = 0.0
+            for o in 1:D
+                acc += CS_[o, j, l]
+            end
+            v = invsqrtD * acc / M - tl * Esum[j] / M
+            Hfull[j, level_off + l] = v
+            Hfull[level_off + l, j] = v
+        end
+    end
+
+    Hraw_cmlevel = Vector{Float64}(undef, nO)
+    @inbounds for l in 1:L
+        for lp in 1:L
+            tlp = level_targets[lp]
+            for (oi, o) in enumerate(origins)
+                acc_o = 0.0
+                acc_ref = 0.0
+                for p in 1:D
+                    acc_o += CT[o, p, l, lp]
+                    acc_ref += CT[refIndex1, p, l, lp]
+                end
+                Hraw_cmlevel[oi] = invsqrtD * (acc_o - acc_ref) / M - tlp * (T1[o, l] - T1[refIndex1, l]) / M
+            end
+            cm_rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
+            col = level_off + lp
+            block_cmlevel = cctx.R === nothing ? Hraw_cmlevel : cctx.R' * Hraw_cmlevel
+            @views Hfull[cm_rows, col] .= block_cmlevel
+            @views Hfull[col, cm_rows] .= block_cmlevel
+        end
+    end
+
+    invD = 1.0 / D
+    @inbounds for l in 1:L
+        tl = level_targets[l]
+        sum_T1_l = sum(@view T1[:, l])
+        for lp in 1:L
+            tlp = level_targets[lp]
+            acc = 0.0
+            for o in 1:D, p in 1:D
+                acc += CT[o, p, l, lp]
+            end
+            sum_T1_lp = sum(@view T1[:, lp])
+            Hfull[level_off + l, level_off + lp] =
+                invD * acc / M - tlp * invsqrtD * sum_T1_l / M - tl * invsqrtD * sum_T1_lp / M + tl * tlp * Wtot / M
+        end
+    end
+
+    n = NCORE + ncm
+    k = 1
+    @inbounds for i in 1:n
+        for j in i:n
+            h[k] = 0.5 * (Hfull[i, j] + Hfull[j, i])
+            k += 1
+        end
+    end
+    return h
+end
+
+"""
+    archC_frechet_hess_cb_builder_v2(cctx, level_targets; threaded_bins=false, tls=nothing)
+
+KNITRO Hessian-callback builder wrapping `hessian_cm_frechet_structured_v2!`, mirroring
+`archC_hess_cb_builder_v2`'s wiring exactly (same `@prof` label suffixed `_v2`,
+`_INNER_CALL_COUNTERS[].n_hess_calls` bookkeeping).
+"""
+function archC_frechet_hess_cb_builder_v2(cctx::CMBinHessCtx, level_targets::Vector{Float64};
+                                           threaded_bins::Bool = false,
+                                           tls::Union{Nothing,ThreadLocalBinScratch} = nothing)
+    return (kc, cb, evalRequest, evalResult, userParams) -> begin
+        o = userParams
+        xloc = evalRequest.x
+        @prof "inner_dual_hessian_callback_archC_frechet_v2" begin
+            _archC_prep_for_hessian!(o, xloc)
+            hessian_cm_frechet_structured_v2!(evalResult.hess, o, cctx, level_targets; threaded_bins = threaded_bins, tls = tls)
+        end
+        _INNER_CALL_COUNTERS[].n_hess_calls += 1
+        return 0
+    end
+end

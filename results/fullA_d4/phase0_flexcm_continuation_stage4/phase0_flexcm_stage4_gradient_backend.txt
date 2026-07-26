@@ -1,0 +1,3 @@
+cm_gradient_backend=cplus
+run_id=phase0_flexcm_stage4
+recorded_at=2026-07-26T12:48:32.319

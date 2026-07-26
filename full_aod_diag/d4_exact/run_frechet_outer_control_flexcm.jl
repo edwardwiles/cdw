@@ -7,11 +7,11 @@ const D4X = @__DIR__
 for f in ["draw_design.jl","context_real_d20.jl","winners.jl","oracle.jl","common_marginals_moments.jl","common_marginals_interval.jl",
           "instrumentation.jl","oracle_fast.jl","gravity_elimination.jl","three_way_derivatives.jl",
           "lfix_incremental.jl","composite_gradient.jl","composite_gradient_fast.jl","cm_lookup_kernels.jl",
-          "lfix_cm_aware.jl","cm_hessian_architectures.jl","cm_production_bundle.jl","cm_screen_bridge.jl",
+          "lfix_cm_aware.jl","cm_hessian_architectures.jl","cm_hessian_threaded.jl","cm_production_bundle.jl","cm_screen_bridge.jl",
           "gradient_workspace.jl","lfix_factorized.jl","lfix_factorized_workspace.jl",
           "lfix_cm_cplus.jl","nested_quantile_grids.jl","cm_outer_driver.jl","cm_config.jl",
           "cm_meanzc_moments.jl","cm_meanzc_config.jl","cm_meanzc_production.jl","cm_meanzc_cplus.jl",
-          "cm_frechet_level.jl","cm_frechet_hessian.jl","cm_frechet_cplus.jl","cm_checkpoint.jl"]
+          "cm_frechet_level.jl","cm_frechet_hessian.jl","cm_frechet_hessian_threaded.jl","cm_frechet_cplus.jl","cm_checkpoint.jl"]
     include(joinpath(D4X, f))
 end
 println("=== includes OK ==="); flush(stdout)

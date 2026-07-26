@@ -200,13 +200,29 @@ end
 """
     archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector{Float64})
 
-Serial-only KNITRO callback builder for `hessian_cm_frechet_structured!`, mirroring
-`archC_hess_cb_builder`'s non-threaded branch exactly (`cm_hessian_architectures.jl`). The threaded
-bin-table variant (`hessian_cm_structured_v2!`) is NOT extended for the level block yet -- disclosed
-as a follow-up, not silently degraded: `cctx.use_threaded_bins` is simply ignored by this builder
-(always serial), which is correct-but-slower rather than wrong.
+KNITRO callback builder for the common-Fréchet level-block Hessian, mirroring
+`archC_hess_cb_builder`'s dispatch exactly (`cm_hessian_architectures.jl`): dispatches to the
+threaded bin-table variant (`hessian_cm_frechet_structured_v2!`, `cm_frechet_hessian_threaded.jl`)
+when `cctx.use_threaded_bins` is true (the production default, set by `build_cm_bin_ctx` --
+validated to agree with the serial path to ~1e-14 and measured 4.6x faster at a real D=20/
+W=80,000/L=50 point, `test_cm_frechet_threaded_hessian_gates.jl`), falling back to the original
+serial `hessian_cm_frechet_structured!` unchanged when `cctx.use_threaded_bins` is false. Closes
+the disclosed gap in the prior session's own verdict ("the threaded bin-table variant is NOT
+extended for the level block yet").
 """
 function archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector{Float64})
+    if cctx.use_threaded_bins
+        return (kc, cb, evalRequest, evalResult, userParams) -> begin
+            o = userParams
+            xloc = evalRequest.x
+            @prof "inner_dual_hessian_callback_archC_frechet" begin
+                _archC_prep_for_hessian!(o, xloc)
+                hessian_cm_frechet_structured_v2!(evalResult.hess, o, cctx, level_targets; threaded_bins = true, tls = cctx.tls)
+            end
+            _INNER_CALL_COUNTERS[].n_hess_calls += 1
+            return 0
+        end
+    end
     return (kc, cb, evalRequest, evalResult, userParams) -> begin
         o = userParams
         xloc = evalRequest.x

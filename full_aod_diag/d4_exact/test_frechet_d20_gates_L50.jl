@@ -28,7 +28,7 @@ function check(name, cond)
 end
 
 W = 80000
-L = 10
+L = 50   # production default grid size (Phase 0 gate 1 rerun, 2026-07-26)
 ctx = d20_real_setup(W = W, δ = 1.0, find_smallest = true, destination_sample = :exclude_row)
 D = ctx.D
 x_free0 = ctx.θ0_up[ctx.free_idx]
