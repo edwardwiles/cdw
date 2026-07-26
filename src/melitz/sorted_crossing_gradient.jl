@@ -242,3 +242,90 @@ function make_melitz_gradient_delta_direct_sorted_serial(h::Real)
     end
     return melitz_gradient_delta_direct_sorted_serial!
 end
+
+"""
+    make_melitz_gradient_delta_direct_sorted_parallel(h) -> Function
+
+Backend `:B_direct_argument_sorted_parallel`: the `Threads.@threads :static` coordinate
+sweep on top of the sorted crossing-slice serial backend above -- same thread-safety
+discipline as `direct_gradient.jl`'s own `:B_direct_argument_parallel` (shared, READ-ONLY
+`arg0_base` built once BEFORE the parallel region; `g[r]` writes disjoint per coordinate,
+no synchronization needed; thread-local `(W,maxcols)` probe buffers AND a thread-local
+`union_start` vector, keyed by `Threads.maxthreadid()`, not `Threads.nthreads()`; BLAS
+forced to 1 thread for the sweep and restored via `try/finally`;
+`cc_algo/parallelism_guards.jl`'s `guard_enter_coord_pool!`/`guard_exit_coord_pool!` reused;
+no inner KNITRO solve reachable from a coordinate thread). Requires
+`ctx.sorted_tail_ctx !== nothing`, same as the serial variant.
+"""
+function make_melitz_gradient_delta_direct_sorted_parallel(h::Real)
+    compact_cache = Ref{Union{Nothing,Vector{MelitzCompactColumns}}}(nothing)
+    ctx_cache = Ref{Any}(nothing)
+    arg0_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    Gp_bufs = Ref{Union{Nothing,Vector{Matrix{Float64}}}}(nothing)
+    Gm_bufs = Ref{Union{Nothing,Vector{Matrix{Float64}}}}(nothing)
+    union_start_bufs = Ref{Union{Nothing,Vector{Vector{Int}}}}(nothing)
+    linkp_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    linkm_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    profit_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    uplus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    uminus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    psi_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    nthreads_alloc = Ref(0)
+
+    function melitz_gradient_delta_direct_sorted_parallel!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
+                                                             ctx, obj, x::AbstractVector{Float64})
+        sorted_ctx = get(ctx, :sorted_tail_ctx, nothing)
+        sorted_ctx === nothing && throw(ArgumentError(
+            "melitz_gradient_delta_direct_sorted_parallel!: ctx.sorted_tail_ctx is nothing -- " *
+            "build the bundle with moment_backend=:sorted_tail_serial or :sorted_tail_parallel " *
+            "before selecting gradient_backend=:B_direct_argument_sorted_parallel"))
+        n = length(theta)
+        W = size(obj.U, 1)
+        nt = Threads.maxthreadid()
+
+        if compact_cache[] === nothing || ctx_cache[] !== ctx
+            compact_cache[] = melitz_compact_columns_map(ctx)
+            ctx_cache[] = ctx
+        end
+        compact = compact_cache[]
+        maxcols = maximum(length(c.direct_cols) for c in compact)
+        if arg0_buf[] === nothing || length(arg0_buf[]) != W ||
+           nthreads_alloc[] != nt || size(Gp_bufs[][1]) != (W, maxcols)
+            arg0_buf[] = zeros(Float64, W)
+            Gp_bufs[] = [zeros(Float64, W, maxcols) for _ in 1:nt]
+            Gm_bufs[] = [zeros(Float64, W, maxcols) for _ in 1:nt]
+            union_start_bufs[] = [zeros(Int, maxcols) for _ in 1:nt]
+            linkp_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            linkm_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            profit_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            uplus_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            uminus_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            psi_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            nthreads_alloc[] = nt
+        end
+        arg0_base = arg0_buf[]
+        _base_arg0!(arg0_base, obj, x)
+        lambda = @view x[2:end]
+
+        prev_blas_threads = BLAS.get_num_threads()
+        guards_on = isdefined(Main, :CounterfactualSensitivity)
+        BLAS.set_num_threads(1)
+        guards_on && Main.CounterfactualSensitivity.guard_enter_coord_pool!()
+        try
+            Threads.@threads :static for r in 1:n
+                tid = Threads.threadid()
+                cc = compact[r]
+                theta_p = copy(theta); theta_p[r] += h
+                theta_m = copy(theta); theta_m[r] -= h
+                g[r] = _direct_coordinate_grad_sorted(cc, theta_p, theta_m, ctx, obj, sorted_ctx, lambda, arg0_base, h,
+                    Gp_bufs[][tid], Gm_bufs[][tid], union_start_bufs[][tid], linkp_bufs[][tid], linkm_bufs[][tid],
+                    profit_bufs[][tid], uplus_bufs[][tid], uminus_bufs[][tid], psi_bufs[][tid])
+            end
+        finally
+            guards_on && Main.CounterfactualSensitivity.guard_exit_coord_pool!()
+            BLAS.set_num_threads(prev_blas_threads)
+        end
+        return nothing
+    end
+    return melitz_gradient_delta_direct_sorted_parallel!
+end

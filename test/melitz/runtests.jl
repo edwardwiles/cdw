@@ -35,6 +35,7 @@ include(joinpath(MELITZ_DIR, "firm_quantities.jl"))
 include(joinpath(MELITZ_DIR, "equilibrium.jl"))
 include(joinpath(MELITZ_DIR, "moments.jl"))
 include(joinpath(MELITZ_DIR, "sorted_tail.jl"))
+include(joinpath(MELITZ_DIR, "sorted_dual_argument.jl"))
 include(joinpath(MELITZ_DIR, "delta_star.jl"))
 include(joinpath(MELITZ_DIR, "affine_cutoff.jl"))
 include(joinpath(MELITZ_DIR, "log_cutoff_param.jl"))
@@ -802,6 +803,72 @@ end
         @test minimum(diag_sorted.active_count) == mc
     end
 
+    @testset "Phase 8 (2026-07-26): sorted dual-argument construction vs dense G*mu (D=4)" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        Wt = 3000
+        z = FIXTURE.z_draws[1:Wt, :]
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        K = zeros(Wt); G = zeros(Wt, LAYOUT.num_moments)
+        melitz_moments!(K, G, p, eq, cf, z, LAYOUT)
+
+        @testset "random (zeta, mu) trials" begin
+            rng8 = MersenneTwister(2026)
+            for trial in 1:30
+                zeta = randn(rng8) * 100
+                mu = randn(rng8, LAYOUT.num_moments)
+                u_dense = melitz_dense_dual_argument(zeta, mu, K, G)
+                u_sorted = melitz_sorted_dual_argument(zeta, mu, p, eq, cf, sctx, LAYOUT)
+                @test isapprox(u_dense, u_sorted; atol=1e-8, rtol=1e-8)
+            end
+        end
+
+        @testset "isolated components: single trade cell, link-only, zeta-only, all-ones" begin
+            mu_cell = zeros(LAYOUT.num_moments); mu_cell[LAYOUT.trade_index[2, 3]] = 1.0
+            @test isapprox(melitz_dense_dual_argument(0.0, mu_cell, K, G),
+                            melitz_sorted_dual_argument(0.0, mu_cell, p, eq, cf, sctx, LAYOUT); atol=1e-8)
+
+            mu_link = zeros(LAYOUT.num_moments); mu_link[LAYOUT.focal_link_index] = 1.0
+            @test isapprox(melitz_dense_dual_argument(0.0, mu_link, K, G),
+                            melitz_sorted_dual_argument(0.0, mu_link, p, eq, cf, sctx, LAYOUT); atol=1e-8)
+
+            mu_zero = zeros(LAYOUT.num_moments)
+            u_z1 = melitz_dense_dual_argument(7.0, mu_zero, K, G)
+            u_z2 = melitz_sorted_dual_argument(7.0, mu_zero, p, eq, cf, sctx, LAYOUT)
+            @test all(u_z1 .== -7.0)
+            @test u_z1 == u_z2
+
+            mu_ones = ones(LAYOUT.num_moments)
+            @test isapprox(melitz_dense_dual_argument(3.0, mu_ones, K, G),
+                            melitz_sorted_dual_argument(3.0, mu_ones, p, eq, cf, sctx, LAYOUT); atol=1e-8)
+        end
+
+        @testset "stale sigma / shape guards" begin
+            sctx_bad_sigma = build_melitz_sorted_tail_context(z, p.sigma + 1.0)
+            @test_throws ArgumentError melitz_sorted_dual_argument(0.0, ones(LAYOUT.num_moments), p, eq, cf,
+                sctx_bad_sigma, LAYOUT)
+            @test_throws ArgumentError melitz_sorted_dual_argument(0.0, ones(LAYOUT.num_moments - 1), p, eq, cf,
+                sctx, LAYOUT)
+        end
+    end
+
+    @testset "Phase 8 (2026-07-26): sorted dual-argument construction vs dense, D=10 (fresh fixture)" begin
+        f10b = generate_fake_melitz_data(; D=10, sigma=2.5, theta_star=6.8, target_country=3, seed=8, W=4000)
+        p10, eq10, cf10 = f10b.primitives, f10b.equilibrium, f10b.counterfactual
+        layout10 = MelitzMomentLayout(p10.D)
+        z10 = f10b.z_draws
+        sctx10 = build_melitz_sorted_tail_context(z10, p10.sigma)
+        K10 = zeros(size(z10, 1)); G10 = zeros(size(z10, 1), layout10.num_moments)
+        melitz_moments!(K10, G10, p10, eq10, cf10, z10, layout10)
+        rng10 = MersenneTwister(11)
+        for trial in 1:10
+            zeta = randn(rng10) * 50
+            mu = randn(rng10, layout10.num_moments)
+            u_dense = melitz_dense_dual_argument(zeta, mu, K10, G10)
+            u_sorted = melitz_sorted_dual_argument(zeta, mu, p10, eq10, cf10, sctx10, layout10)
+            @test isapprox(u_dense, u_sorted; atol=1e-8, rtol=1e-8)
+        end
+    end
+
     begin
         @testset "Phase 3/real D=20: sorted-tail vs dense at real calibration" begin
             real_dir = joinpath(dirname(dirname(dirname(@__DIR__))), "real_data", "noah_D20")
@@ -1222,6 +1289,36 @@ end
                 rel = abs(g_ref_d20[r] - g_sorted_d20[r]) / max(abs(g_ref_d20[r]), 1.0)
                 @test rel < 1e-6
             end
+
+            # 2026-07-26 continuation: parallel crossing-slice backend, real D=20/W=80,000.
+            direct_sorted_parallel_d20 = make_melitz_gradient_delta_direct_sorted_parallel(1e-4)
+            g_sorted_par_d20 = zeros(n_d20)
+            direct_sorted_parallel_d20(g_sorted_par_d20, theta_d20, ctx_d20, obj_d20, x_d20)
+            @test g_sorted_par_d20 == g_sorted_d20   # disjoint per-coordinate writes -> bit-identical
+
+            # Phase 8 (2026-07-26): sorted dual-argument construction, exact vs dense at real
+            # D=20/W=80,000, using the SAME converged dual x_d20 and a genuinely random mu.
+            Kbuf_d20 = zeros(size(obj_d20.U, 1))
+            Gbuf_d20 = zeros(size(obj_d20.U, 1), ctx_d20.moment_layout.num_moments)
+            melitz_moments_adapter!(Kbuf_d20, Gbuf_d20, theta_d20, obj_d20.U, obj_d20)
+            rng_mu = MersenneTwister(321)
+            mu_d20 = randn(rng_mu, ctx_d20.moment_layout.num_moments)
+            zeta_d20 = 4.2
+            u_dense_d20 = melitz_dense_dual_argument(zeta_d20, mu_d20, Kbuf_d20, Gbuf_d20)
+            p_d20, eq_d20, cf_d20 = let
+                A20, f20, gpj20, _ = melitz_expand_theta(theta_d20, ctx_d20)
+                pr = MelitzPrimitives(ctx_d20.D, ctx_d20.sigma, ctx_d20.theta_star, ctx_d20.target_country,
+                    ctx_d20.tau, ctx_d20.w, A20, f20, gpj20)
+                cutoff20 = melitz_baseline_cutoff(A20, f20, ctx_d20.w, ctx_d20.tau, ctx_d20.expenditure, ctx_d20.sigma)
+                eqx = MelitzEquilibrium(ctx_d20.expenditure, ones(ctx_d20.D), cutoff20, ctx_d20.X_data)
+                expprime = ctx_d20.w_prime * ctx_d20.L[ctx_d20.target_country]
+                cfx = MelitzCounterfactual(ctx_d20.target_country, ctx_d20.w_prime, expprime, 1.0, expprime)
+                (pr, eqx, cfx)
+            end
+            u_sorted_d20 = melitz_sorted_dual_argument(zeta_d20, mu_d20, p_d20, eq_d20, cf_d20,
+                ctx_d20.sorted_tail_ctx, ctx_d20.moment_layout)
+            maxrel_dual = maximum(abs.(u_dense_d20 .- u_sorted_d20) ./ max.(abs.(u_dense_d20), 1.0))
+            @test maxrel_dual < 1e-6
         end
     else
         @info "Skipping calibration-context real-KNITRO testset (cc_algo/KNITRO not available)"
@@ -2014,6 +2111,41 @@ if KNITRO_AVAILABLE
             @test get(ctx_plain, :sorted_tail_ctx, nothing) === nothing
             g_bad = zeros(n_cg)
             @test_throws ArgumentError direct_sorted_cg(g_bad, theta_plain, ctx_plain, obj_cg, x_cg)
+        end
+
+        # ====================================================================
+        # 2026-07-26 continuation ("try one of Phase 8-10" + "check outer-loop
+        # parallelization" session): :B_direct_argument_sorted_parallel, the threaded
+        # analogue of the sorted crossing-slice backend above, and its production wiring.
+        # ====================================================================
+        @testset "2026-07-26: :B_direct_argument_sorted_parallel is bit-identical to the sorted serial backend" begin
+            direct_sorted_parallel_cg = make_melitz_gradient_delta_direct_sorted_parallel(1e-4)
+            g_sorted_par = zeros(n_cg)
+            direct_sorted_parallel_cg(g_sorted_par, theta_cg, ctx_cg, obj_cg, x_cg)
+            @test g_sorted_par == g_sorted   # disjoint per-coordinate writes -> bit-identical, no reduction
+
+            g_bad_par = zeros(n_cg)
+            obj_plain_inner2, theta_plain2 = build_melitz_psi_bundle(fixture_cg; inner_loop_opt=inner_opt_cg,
+                needs_outer_moment_jacobian=false)
+            ctx_plain2 = obj_plain_inner2.γ
+            @test_throws ArgumentError direct_sorted_parallel_cg(g_bad_par, theta_plain2, ctx_plain2, obj_cg, x_cg)
+        end
+
+        @testset "2026-07-26: both sorted gradient backends wired end-to-end through melitz_fixed_point_probe" begin
+            r_probe_ref = melitz_fixed_point_probe(ctx_cg, obj_cg_inner, theta_cg; delta=1e-2,
+                direction=:upper, gradient_backend=:B_direct_argument_serial, inner_loop_opt=inner_opt_cg)
+            @test r_probe_ref.nStatus == 0
+            @test !r_probe_ref.eval_failed
+
+            r_probe_sorted_serial = melitz_fixed_point_probe(ctx_cg, obj_cg_inner, theta_cg; delta=1e-2,
+                direction=:upper, gradient_backend=:B_direct_argument_sorted_serial, inner_loop_opt=inner_opt_cg)
+            @test r_probe_sorted_serial.nStatus == 0
+            @test r_probe_sorted_serial.obj_value == r_probe_ref.obj_value
+
+            r_probe_sorted_parallel = melitz_fixed_point_probe(ctx_cg, obj_cg_inner, theta_cg; delta=1e-2,
+                direction=:upper, gradient_backend=:B_direct_argument_sorted_parallel, inner_loop_opt=inner_opt_cg)
+            @test r_probe_sorted_parallel.nStatus == 0
+            @test r_probe_sorted_parallel.obj_value == r_probe_ref.obj_value
         end
     end
 

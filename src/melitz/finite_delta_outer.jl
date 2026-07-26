@@ -358,7 +358,13 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
     # path, never invoked) and needs_outer_moment_jacobian=false skips the dense jac_h
     # allocation on this (outer Implicit) bundle -- the genuinely memory-scalable case the
     # governing prompt's Section 4 asks for (no W x K x n tensor anywhere, not even zeroed).
-    is_direct = gradient_backend in (:B_direct_argument_serial, :B_direct_argument_parallel)
+    # 2026-07-26 sorted-tail continuation: :B_direct_argument_sorted_serial/_parallel
+    # (src/melitz/sorted_crossing_gradient.jl) join the "direct" family -- same no-jac_h
+    # path as the pre-existing two, requiring ctx.sorted_tail_ctx (built via
+    # build_melitz_psi_bundle*'s own moment_backend kwarg) to be present; that check happens
+    # inside the gradient closure itself (a clear ArgumentError there), not here.
+    is_direct = gradient_backend in (:B_direct_argument_serial, :B_direct_argument_parallel,
+                                      :B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel)
     mj! = gradient_backend == :B ? make_melitz_moments_jacobian_b(h) :
           gradient_backend == :B_localized ? make_melitz_moments_jacobian_b_localized(h) :
           gradient_backend == :B_localized_parallel ? make_melitz_moments_jacobian_b_localized_parallel(h) :
@@ -368,7 +374,8 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
           is_direct ? error :
           error("gradient_backend must be :B, :B_localized, :B_localized_parallel, " *
                 ":B_argument_localized_serial, :B_argument_localized_parallel, " *
-                ":B_direct_argument_serial, :B_direct_argument_parallel, or :D for " *
+                ":B_direct_argument_serial, :B_direct_argument_parallel, " *
+                ":B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel, or :D for " *
                 "the KNITRO-native Implicit path (Backend R does not fit the moments_jacobian! hook -- see file header)")
 
     obj = PsiObjectiveBundleImplicit(
@@ -802,6 +809,8 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     # before -- purely additive, zero behavior change for every existing gradient_backend value.
     direct_gradient_fn = gradient_backend == :B_direct_argument_serial ? make_melitz_gradient_delta_direct_serial(h) :
                          gradient_backend == :B_direct_argument_parallel ? make_melitz_gradient_delta_direct_parallel(h) :
+                         gradient_backend == :B_direct_argument_sorted_serial ? make_melitz_gradient_delta_direct_sorted_serial(h) :
+                         gradient_backend == :B_direct_argument_sorted_parallel ? make_melitz_gradient_delta_direct_sorted_parallel(h) :
                          nothing
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
     live_candidates = MelitzOuterCandidate[]
