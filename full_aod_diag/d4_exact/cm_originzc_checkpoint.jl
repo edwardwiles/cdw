@@ -446,8 +446,18 @@ task brief Section 12: callers must call a DIFFERENT function by name to
 reach this restriction at all; `run_cm_upper_checkpointed` itself is
 untouched). Structural analog of `run_cm_upper_checkpointed`, minus
 everything CM-specific (no `L`/`probs`/`contrasts`/`cm_hessian_backend`
-kwargs -- this arm has no CM-grid block and always uses Architecture A,
-cm_originzc_production.jl).
+kwargs -- this arm has no CM-grid block).
+
+Production-audit remediation correction (2026-07-26, baseline static audit finding, docs/
+PRODUCTION_5X7_AUDIT_BASELINE_AND_REMEDIATION_SIZING_2026-07-26.md): the previous version of this
+docstring claimed this arm "always uses Architecture A" -- stale relative to the
+shared-winner-pair-core-hessian-production-2026-07-25 port. H_EE (the economic-core Hessian block)
+dispatches to the SAME shared `exact_winner_pair_parallel` backend every other family uses by
+default (`cm_originzc_production.jl`'s `_originzc_hess_cb_builder`/`archA_partitioned_hess_cb_builder`,
+`core_exact_hessian.jl`) -- only H_ER/H_RR (the restriction and cross Hessian blocks) remain dense
+("Architecture A" in the narrower sense of that dense BLAS gemm), because this family's restriction
+dimension is small and fixed-size (no CM threshold grid to structure), not because H_EE itself is
+dense.
 """
 function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
