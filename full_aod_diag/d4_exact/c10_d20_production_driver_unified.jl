@@ -438,6 +438,12 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     κ = b !== nothing ? 1 - b.gp^(σ / (σ - 1)) : NaN
     lp("[", label, "] UNIFIED POLISH DONE: status=", nStatus_code, " (", native_outer_diag.status_name, "/", native_outer_diag.status_category,
        ") wall_ext=", round(wall_ext, digits = 1), "s n_eval=", n_eval[], " kappa=", κ, " n_grad_calls=", n_grad_calls[])
+    if theta_ws !== nothing
+        lp("[", label, "] theta_derivative_backend = cplus_fixed_dual_secant")
+        lp("[", label, "] theta_generic_moments_calls = ", theta_ws.generic_moments_calls, " (must be 0)")
+        lp("[", label, "] theta_secant_calls = ", theta_ws.n_calls, "  theta_winner_changes_total(plus_vs_minus) = ", theta_ws.n_winner_changes_total,
+           "  theta_wall_total = ", round(theta_total_wall[], digits = 3), "s")
+    end
 
     w_final = collect(xsol)
     d_final = decode_outer_unified(w_final, ctx, layout, pgc, xy, gp_scale)
