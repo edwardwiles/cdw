@@ -86,5 +86,6 @@ lp(">>> STAGE result: knitro_status=", res.knitro_status, " wall=", round(res.wa
    " n_eval=", res.n_eval,
    " best=", res.best === nothing ? "nothing" : "Delta_dual=$(res.best.Delta_dual) n_eval=$(res.best.n_eval)")
 lp(">>> checkpoint: ", res.ckpt_path)
+print_core_hessian_counters()   # final-gate continuation 2026-07-25 (task §2): prove the shared H_EE backend actually ran, not just that it was requested
 lp(">>> screens(pw/wt/wn/env/wr/sn/pass)=", res.screen_counts)
 lp(">>> STAGE_DONE")

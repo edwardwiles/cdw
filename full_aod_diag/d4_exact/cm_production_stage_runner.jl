@@ -285,4 +285,5 @@ lp(">>> STAGE result: knitro_status=", res.knitro_status, " wall=", round(res.wa
    " best=", res.best === nothing ? "nothing" : "gp=$(res.best.gp) Delta=$(res.best.Delta)",
    " kappa=", res.kappa)
 lp(">>> checkpoint: ", res.ckpt_path)
+print_core_hessian_counters()   # final-gate continuation 2026-07-25 (task §2): prove the shared H_EE backend actually ran, not just that it was requested
 lp(">>> STAGE_DONE")   # sentinel line the supervisor greps for to distinguish "finished" from "hung/killed"

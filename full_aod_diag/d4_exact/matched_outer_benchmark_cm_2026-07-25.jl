@@ -62,6 +62,7 @@ const DELTA = parse(Float64, get(ENV, "BENCH_DELTA", "1.0"))
 const DRAW_SEED = parse(Int, get(ENV, "BENCH_SEED", "20260719"))
 const CM_CONTRASTS = :orthonormal   # approved production contrast basis (2026-07-22 review)
 const CM_EXTENSION = Symbol(get(ENV, "BENCH_CM_EXTENSION", "cm_only"))
+const IS_MEANZC = CM_EXTENSION !== :cm_only
 const CM_GRADIENT_BACKEND = :cplus  # production default
 const CM_DESTINATION_SAMPLE = Symbol(get(ENV, "BENCH_DESTINATION_SAMPLE", "exclude_row"))
 const CM_HESSIAN_BACKEND = Symbol(get(ENV, "BENCH_CM_HESSIAN_BACKEND", "structured"))
@@ -87,9 +88,22 @@ pe0 = build_pivot_elimination(ctx0)
 D = ctx0.D; Ddest = ctx0.D_dest
 x_free_calib = ctx0.θ0_up[ctx0.free_idx]
 w_calib = vcat(x_free_calib[1], pivot_reduce(log.(reshape(x_free_calib[2:end], D, Ddest)), pe0))
+# final-gate continuation 2026-07-25: this harness originally only supported cm_extension=:cm_only
+# (w_calib has no eta_nu component at all). When BENCH_CM_EXTENSION selects a meanZC arm,
+# run_cm_upper_checkpointed expects w0=[gp;zfree;eta_nu_1..eta_nu_K_mean] (see
+# cm_production_stage_runner.jl's own calibration-mode w0 construction) -- omitting eta_nu made
+# KNITRO unable to even evaluate the initial point (nStatus=-502, n_eval=0) at both arms of the
+# CM+mean/ZC A/B until this fix. eta_nu0 = log(k!) matches the stage runner's own default
+# (E_F[z^k]=k! for the Exp(1) draws), not a new convention.
+if IS_MEANZC
+    K_mean_calib, _ = meanzc_extension_to_K(CM_EXTENSION)
+    eta_nu0_calib = log.(Float64.(factorial.(1:K_mean_calib)))
+    w_calib = vcat(w_calib, eta_nu0_calib)
+end
 t_setup = time() - t_setup0
 lp(">>> context build wall = ", round(t_setup, digits = 3), "s  D=", D, " Ddest=", Ddest,
-   " n_free=", length(w_calib), " g0=", w_calib[1], " ||zfree0||=", norm(w_calib[2:end]))
+   " n_free=", length(w_calib), " g0=", w_calib[1], " ||zfree0||=", norm(w_calib[2:end]),
+   IS_MEANZC ? " eta_nu0=$(w_calib[end])" : "")
 
 # ---------------------------------------------------------------------------
 # Warm-up at the calibrated start (throwaway ckpt dir).
@@ -109,6 +123,7 @@ lp(">>> warm-up wall = ", round(t_warm, digits = 3), "s  n_eval=", res_warm.n_ev
    " n_grad=", res_warm.n_grad, " status=", res_warm.knitro_status)
 
 prof_reset!()
+reset_core_hessian_counters!()   # final-gate continuation 2026-07-25 (task §2): isolate the MEASURED run's own backend-use counts from warm-up
 GC.gc()
 gc_num_before = Base.gc_num()
 
@@ -147,14 +162,29 @@ lp(">>> best=", res_meas.best === nothing ? "nothing" :
 # ---------------------------------------------------------------------------
 # Cold-verify the best incumbent, mirroring cm_cold_verify.jl's own production verification
 # pattern: rebuild pcx via build_cm_production_context and call cm_production_value_verified.
+# final-gate continuation 2026-07-25: branches on IS_MEANZC -- the meanZC arm's best.w carries a
+# trailing eta_nu block (see w_calib fix above) that must be split off and passed as nu, through
+# the meanZC-aware verification pair (build_cm_meanzc_production_context /
+# cm_meanzc_production_value_verified_screened), not the CM-only pair (which has no nu argument
+# at all and would either error or silently mis-slice xf_best).
 # ---------------------------------------------------------------------------
 t_verify = NaN; verify_ok = false; verify_Delta = NaN
 if res_meas.best !== nothing
-    pcxV = build_cm_production_context(ctx0, CS; L = L, contrasts = CM_CONTRASTS, probs = probs)
     w_best = res_meas.best.w
-    xf_best = x_free_from_w(w_best, pe0)
     t_verify0 = time()
-    K_v, base_v, verify_v = cm_production_value_verified(xf_best, pcxV)
+    if IS_MEANZC
+        K_mean_v, K_pair_v = meanzc_extension_to_K(CM_EXTENSION)
+        D2_econ_v = length(w_best) - K_mean_v
+        xf_best = x_free_from_w(w_best[1:D2_econ_v], pe0)
+        nu_best = exp.(w_best[D2_econ_v+1:end])
+        pcxV = build_cm_meanzc_production_context(ctx0, CS; L = L, K_mean = K_mean_v, K_pair = K_pair_v,
+            contrasts = CM_CONTRASTS, meanzc_basis = :direct, probs = probs)
+        _, _, verify_v = cm_meanzc_production_value_verified_screened(xf_best, nu_best, pcxV)
+    else
+        xf_best = x_free_from_w(w_best, pe0)
+        pcxV = build_cm_production_context(ctx0, CS; L = L, contrasts = CM_CONTRASTS, probs = probs)
+        _, _, verify_v = cm_production_value_verified(xf_best, pcxV)
+    end
     t_verify = time() - t_verify0
     verify_Delta = verify_v.Delta_dual
     verify_ok = is_verified_success(verify_v) && isfinite(verify_Delta) && verify_Delta <= DELTA + 1e-6
