@@ -34,6 +34,7 @@ function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout)
     println(stdout, "cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)")
     println(stdout, "cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)")
     flush(stdout)
+    isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_originzc_augmented_obj(ctx, CS, layout)
     # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.4): `octx` rides on
     # `ctx_cm` itself (rather than as a new positional argument to

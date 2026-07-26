@@ -19,7 +19,7 @@
 
 const _D4E = @__DIR__
 for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl", "common_marginals_interval.jl",
-          "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
+          "instrumentation.jl", "cm_feature_immutability_counters.jl", "oracle_fast.jl", "gravity_elimination.jl",
           "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
           "compressed_factual_buffer_reuse.jl", "core_exact_hessian.jl",
           "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
@@ -168,6 +168,14 @@ layout = OriginByPowerLayout(ctx0.D, 1, 1)
 pcx_oz = build_originzc_production_context(ctx0, CS, layout)
 nu0_oz = vcat([fill(Float64(factorial(k)), ctx0.D) for k in 1:1]...)
 gate_family("originZC", pcx_oz.ctx_cm, (ctx_cm -> xf -> archOZ_verified_state(xf, nu0_oz, ctx_cm)))
+
+println("="^100); println("Phase 3: CM feature immutability counters"); println("="^100)
+print_cm_feature_immutability_counters()
+fic = CM_FEATURE_IMMUTABILITY_COUNTERS[]
+check("feature immutability: exactly 4 context builds (one per family)", fic.cm_feature_context_builds == 4)
+check("feature immutability: cm_feature_rebuilds_due_to_A_or_gp = 0 (mandatory invariant, despite each family being queried at 2 genuinely distinct A/gp points x5 calls)",
+    fic.cm_feature_rebuilds_due_to_A_or_gp == 0)
+check("feature immutability: cm_feature_rebuilds_due_to_theta = 0 (fixed theta throughout)", fic.cm_feature_rebuilds_due_to_theta == 0)
 
 println("="^100)
 if isempty(FAILURES)

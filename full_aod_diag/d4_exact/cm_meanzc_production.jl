@@ -83,6 +83,7 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair
     println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")
     println(stdout, "cm_internal_feature_storage [CM+mean/ZC] = bin_indices")
     flush(stdout)
+    isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, K_pair = K_pair,
         contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs)
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))

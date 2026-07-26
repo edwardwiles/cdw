@@ -75,6 +75,7 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
                                       # remediation (2026-07-26): pass-through to build_cm_bin_ctx --
                                       # :dense_reference (default, unchanged) | :cm_lookup (plain
                                       # flexible CM only, see cm_lookup_production.jl).
+    isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
     # 2026-07-25 continuation (task §2 runtime counters investigation): `build_cm_production_context`

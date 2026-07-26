@@ -270,6 +270,7 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
                                               cm_hessian_backend::Symbol = :dense_reference)
     cm_hessian_backend in (:dense_reference, :structured) ||
         error("build_cm_frechet_production_context: cm_hessian_backend must be :dense_reference or :structured, got $cm_hessian_backend")
+    isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
 
     aug = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     D = ctx.D
