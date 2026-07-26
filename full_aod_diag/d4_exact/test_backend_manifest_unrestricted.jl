@@ -61,7 +61,12 @@ check("prints [backend-manifest] family=unrestricted", occursin("[backend-manife
 # this family now actually resolves to by default.
 check("unrestricted.hessian_backend=exact_winner_pair_parallel", occursin("hessian_backend=exact_winner_pair_parallel", txt))
 check("unrestricted.core_hessian_backend=exact_winner_pair_parallel", occursin("core_hessian_backend=exact_winner_pair_parallel", txt))
-check("unrestricted.core_hessian_workers=10", occursin("core_hessian_workers=10", txt))
+# final-gate continuation 2026-07-25 (task §3): workers now resolves dynamically
+# (resolve_core_hessian_workers_default()) instead of a hard-coded 10 -- assert against the same
+# function the manifest itself calls, so this test tracks whatever thread count it's actually run
+# under (e.g. -t 4 here resolves to 4, -t 20 resolves to 20) rather than a stale literal.
+check("unrestricted.core_hessian_workers=$(resolve_core_hessian_workers_default())",
+      occursin("core_hessian_workers=$(resolve_core_hessian_workers_default())", txt))
 check("unrestricted.core_hessian_storage=full_stride", occursin("core_hessian_storage=full_stride", txt))
 check("unrestricted.checkpoint_schema=4", occursin("checkpoint_schema=4", txt))
 check("unrestricted.core_moment_representation=compressed", occursin("core_moment_representation=compressed", txt))

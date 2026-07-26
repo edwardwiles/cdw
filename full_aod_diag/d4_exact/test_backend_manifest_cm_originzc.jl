@@ -78,7 +78,10 @@ check("prints [backend-manifest] family=flexible_cm", occursin("[backend-manifes
 # resolve_flexible_cm_manifest docstring). core_hessian_backend is the field that actually matters.
 check("cm.hessian_backend=threaded_architecture_c_with_winner_pair_core (production default)", occursin("hessian_backend=threaded_architecture_c_with_winner_pair_core", txt))
 check("cm.core_hessian_backend=exact_winner_pair_parallel", occursin("core_hessian_backend=exact_winner_pair_parallel", txt))
-check("cm.core_hessian_workers=10", occursin("core_hessian_workers=10", txt))
+# final-gate continuation 2026-07-25 (task §3): dynamic policy, not a hard-coded 10 -- see
+# test_backend_manifest_unrestricted.jl's identical fix for the rationale.
+check("cm.core_hessian_workers=$(resolve_core_hessian_workers_default())",
+      occursin("core_hessian_workers=$(resolve_core_hessian_workers_default())", txt))
 check("cm.threaded_bins=true", occursin("threaded_bins=true", txt))
 check("cm.checkpoint_schema=6", occursin("checkpoint_schema=6", txt))
 check("cm.cm_restriction_basis=cumulative", occursin("cm_restriction_basis=cumulative", txt))
