@@ -46,6 +46,25 @@ shim — it is the literal untouched production behavior when a caller doesn't o
 for new fixed-theta campaigns only after these gates") is a call for the user to make at merge
 time, not something this port changes unilaterally.
 
+## Post-rebase update, 2026-07-26
+
+Production advanced 7 commits (`39b89c5` → `61a3bd6`, shared winner-pair core-Hessian backend)
+while this branch was in progress. Rebased cleanly (one real overlapping-edit conflict in
+`production_backend_manifest.jl`, resolved by combining both sets of new fields; one stale
+`hessian_backend=:dense_exact` hardcode found and fixed to match production's own now-established
+"read the live default" pattern). All gates re-confirmed post-rebase, including the decisive D=20
+chain-rule check (`rel_err=3.4e-12`). Smoke-verified this driver automatically inherits the new
+shared winner-pair Hessian backend through the shared ctx-construction machinery
+(`hessian_backend=exact_winner_pair_parallel`, correctly reported after the fix).
+
+**CM/CM+meanZC/origin-ZC regression closed**: `test_backend_manifest_cm_originzc.jl`, real
+D=20/W=80,000 calls through the actual `run_cm_upper_checkpointed` (both `:cm_only` and
+`:cm_plus_equal_means`) and `run_originzc_upper_checkpointed` public drivers — **ALL CM/
+CM+MEANZC/ORIGIN-ZC BACKEND ASSERTIONS PASSED**, confirming zero regression to these families
+from this branch's changes. Note: this confirms *no regression to the existing families* — it
+does not mean transformed-A *works in combination with* CM/ZC/origin-ZC restrictions, which
+remains unimplemented (no driver wires that combination) and was always out of this task's scope.
+
 ## Final verdict
 
 ```
@@ -59,5 +78,6 @@ POST_MERGE_SMOKE = not_applicable   (not merged this session)
 
 Held at `PORT_READY_NOT_MERGED` because this task's standing instructions require explicit user
 confirmation before any `git push`/merge to `cdw/production/fullA-exact` — not because of any
-unmet technical gate. All correctness gates pass; the matched comparison is a clean, cold-verified
-win at both tested budgets; zero regressions found.
+unmet technical gate. All correctness gates pass, post-rebase; the matched comparison is a clean,
+cold-verified win at both tested budgets; zero regressions found, including to the three
+restriction families now explicitly checked. **Recommended for promotion.**

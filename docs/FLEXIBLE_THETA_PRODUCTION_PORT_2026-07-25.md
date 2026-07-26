@@ -55,18 +55,30 @@ workspace-reuse hardening widened that gap by improving fixed mode's throughput 
 flexible's (n_eval=48 fixed vs 35 flexible at delta=2, on top of the pre-existing per-eval cost
 asymmetry).
 
+## Post-optimization update, 2026-07-26
+
+A dedicated follow-up task replaced the brute-force theta secant with a 6.43x-faster, 99.66%-less-
+allocating fixed-dual C+ evaluator (`theta_cplus.jl` — see `THETA_CPLUS_*_2026-07-26.md` and
+`FLEXIBLE_THETA_POST_CPLUS_MATCHED_COMPARISON_2026-07-26.md`) specifically to test whether the
+old implementation's wall-clock cost was suppressing flexible theta's practical value. **It was
+not**: the matched comparison, rerun after the speedup, shows essentially identical kappa at both
+deltas despite more (or equal) evaluations fitting in the same budget. This strengthens rather
+than weakens the original verdict — the underperformance is not an artifact of a slow secant.
+
+Post-rebase onto `cdw/production/fullA-exact@61a3bd6` (shared winner-pair core-Hessian merge):
+rebased cleanly, all gates re-confirmed.
+
 ## Final verdict
 
 ```
-FLEXIBLE_THETA = PORT_READY_NOT_MERGED
+FLEXIBLE_THETA = MERGED_OPT_IN (pending explicit push confirmation)
 ```
 
 All correctness/derivative/cache/checkpoint gates pass. The practical-value case (the entire
-reason to add this complexity) is **not supported** by this session's cleanest available evidence.
-Recommend: do not promote flexible theta to any default or recommended configuration until either
-(a) the per-callback theta-secant cost is reduced, or (b) a matched comparison at a larger
-evaluation-count-matched (not wall-clock-matched) budget shows a genuine landscape advantage that
-the current wall-clock-matched methodology is masking. This is a legitimate, useful negative
-result, not a failure of this port's engineering — every mechanical piece (derivative, cache,
-checkpoint, screens) works correctly; the economics of the extra search dimension, at this budget,
-do not currently pay for themselves.
+reason to add this complexity) is **not supported** by this session's cleanest available evidence,
+confirmed twice (pre- and post-theta-speedup). Per explicit user decision (2026-07-26): merged
+into production anyway as an inert, non-default, not-recommended opt-in — available for future
+refinement, not promoted to any default or recommended configuration. This is a legitimate,
+useful negative result, not a failure of this port's engineering — every mechanical piece
+(derivative, cache, checkpoint, screens) works correctly; the economics of the extra search
+dimension, at this budget, do not currently pay for themselves.
