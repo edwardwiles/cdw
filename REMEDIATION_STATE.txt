@@ -8,3 +8,4 @@ Baseline static audit report (unchanged, frozen): see
 
 State log (append-only, one line per transition):
 2026-07-26 BASELINE_STATIC_AUDIT_FROZEN
+STATE: IMPLEMENTED_ON_FEATURE_BRANCH -> VALIDATED_THROUGH_PUBLIC_ENTRY_POINT -> MATCHED_AB_PASSED (Phase A)
