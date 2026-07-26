@@ -466,8 +466,10 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "originzc_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
-        use_dual_bank::Bool = true, dual_bank_size::Int = 8,   # Phase D remediation (2026-07-26): same
-        # RestrictedDualBank/cm_dual_bank_production.jl as run_cm_upper_checkpointed.
+        use_dual_bank::Bool = false, dual_bank_size::Int = 8,   # Phase D remediation (2026-07-26),
+        # KEEP_OPT_IN per five-family finish task §2 (2026-07-26): same RestrictedDualBank/
+        # cm_dual_bank_production.jl as run_cm_upper_checkpointed; default reverted to false here
+        # pending RESTRICTED_DUAL_BANK_FINAL_DECISION_2026-07-26.md.
         use_exact_cache::Bool = true,   # Phase C remediation (2026-07-26): same
         # CMProductionEvalKey/cm_exact_cache_production.jl exact-point cache as
         # run_cm_upper_checkpointed. true (new default): identical outer point + identical

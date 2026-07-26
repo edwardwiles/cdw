@@ -611,12 +611,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
-        use_dual_bank::Bool = true, dual_bank_size::Int = 8,   # Phase D remediation (2026-07-26):
-        # RestrictedDualBank/cm_dual_bank_production.jl -- distance-only warm-start selection (see
-        # that file's header for why this differs from the unrestricted family's own KKT-scored
-        # DualBank). true (new default): a nearby prior successful dual is offered as the inner
-        # solve's warm start instead of always using the single obj.x slot. false: zero overhead,
-        # byte-identical to every pre-existing production run.
+        use_dual_bank::Bool = false, dual_bank_size::Int = 8,   # Phase D remediation (2026-07-26),
+        # KEEP_OPT_IN per five-family finish task §2 (2026-07-26): RestrictedDualBank/
+        # cm_dual_bank_production.jl -- distance-only warm-start selection (see that file's header
+        # for why this differs from the unrestricted family's own KKT-scored DualBank). Validated
+        # only on a small D=4 sequence so far; default reverted to false (opt-in) here pending the
+        # real-trajectory benchmark in RESTRICTED_DUAL_BANK_FINAL_DECISION_2026-07-26.md. true: a
+        # nearby prior successful dual is offered as the inner solve's warm start instead of always
+        # using the single obj.x slot. false (default): zero overhead, byte-identical to every
+        # pre-existing production run.
         use_exact_cache::Bool = true,   # Phase C remediation (2026-07-26): exact-point cache
         # (CMProductionEvalKey/cm_exact_cache_production.jl) for this driver's own real
         # (ctx_cm,cctx) shape -- previously unwired despite cm_config.jl's SafeExactCache{CMEvalKey}
