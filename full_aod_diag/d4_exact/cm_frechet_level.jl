@@ -257,21 +257,19 @@ moment construction (real production speed), reusing `build_cm_frechet_level_aug
 `z`/`origins`/`level_targets` bookkeeping (computed once, theta-independent) but building the actual
 per-call `G` via bin-lookup, exactly as `build_cm_production_context` does for plain flexible CM.
 
-`cm_hessian_backend`: only `:dense_reference` (Architecture A, generic dense differentiation of the
-augmented obj -- `archA_hess_cb_builder`, unchanged, correct for any restriction family) is wired
-here. `:structured` (winner-pair-backed Architecture C) needs the CMBinHessCtx level-block extension
-(Part III of the task) -- requesting it here raises an error rather than silently falling back to
-a wrong or slow path.
+`cm_hessian_backend`: `:dense_reference` (Architecture A, generic dense differentiation of the
+augmented obj -- `archA_hess_cb_builder`, unchanged) or `:structured` (Architecture C, winner-pair
+`H_EE` + the level-block extension in `cm_frechet_hessian.jl` -- Part III). Both reuse the UNCHANGED
+`build_cm_bin_ctx` (cm_hessian_architectures.jl) for `:structured`, since that function is already
+generic on `aug.ncm` (it sizes `Hfull`/scratch from `aug.ncm` alone, with no assumption about what
+the extra columns beyond the core mean) -- only the Hessian-FILL step needed a level-aware version.
 """
 function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol = :anchored,
                                               probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                               use_compressed_core::Bool = true,
                                               cm_hessian_backend::Symbol = :dense_reference)
-    cm_hessian_backend === :dense_reference ||
-        error("build_cm_frechet_production_context: cm_hessian_backend=$cm_hessian_backend not yet " *
-              "supported for marginal_restriction=:common_frechet -- the winner-pair-backed " *
-              "structured Hessian (Part III) has not been wired for the level block yet. Use " *
-              ":dense_reference (Architecture A) for now.")
+    cm_hessian_backend in (:dense_reference, :structured) ||
+        error("build_cm_frechet_production_context: cm_hessian_backend must be :dense_reference or :structured, got $cm_hessian_backend")
 
     aug = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     D = ctx.D
@@ -295,7 +293,14 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
 
     ctx_cm = merge(ctx, (obj = obj_cm,))
     aug = merge(aug, (core_cf_ref = core_cf_ref, Bidx = Bidx))
-    hess_cb_builder = archA_hess_cb_builder
+
+    if cm_hessian_backend === :structured
+        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false)   # UNCHANGED (cm_hessian_architectures.jl); serial-only frechet Hessian for now
+        hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, aug.level_targets)
+        aug = merge(aug, (cctx = cctx,))
+    else
+        hess_cb_builder = archA_hess_cb_builder
+    end
     return (ctx_cm = ctx_cm, aug = aug, hess_cb_builder = hess_cb_builder)
 end
 
