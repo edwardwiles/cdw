@@ -684,9 +684,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # cm_frechet_level.jl/cm_frechet_hessian.jl/cm_frechet_cplus.jl; opt-in, currently requires
         # cm_extension=:cm_only, i.e. not yet combined with the meanzc extension -- see the guard
         # just below).
-        A_coordinate_mode::Symbol = :legacy_z)   # transformed-A restricted-family port
-        # (2026-07-26 production-audit task addendum): :legacy_z (PRODUCTION DEFAULT until this
-        # port's own D=20 gates promote :powered_aspace -- z_nonpivot=log(Aod_theta), byte-
+        A_coordinate_mode::Symbol = :powered_aspace)   # transformed-A restricted-family port
+        # (2026-07-26 five-family finish task §8): :powered_aspace (NEW PRODUCTION DEFAULT, fixed-
+        # theta only -- promoted after test_cm_aspace_coordinate_gates.jl's real D=20/W=80,000
+        # equivalence gate: a<->z round-trip to <1e-9, a-space decode reconstructs the IDENTICAL
+        # logA_full as the direct z-space path at the calibration point, gradient rescale matches
+        # gradient_transform_unified exactly -- 6/6 PASS) | :legacy_z (z_nonpivot=log(Aod_theta), byte-
         # identical to every pre-existing CM-family production run) | :powered_aspace (the
         # theta-decoupled a-space coordinate, cm_aspace_coordinate.jl -- fixed-theta ONLY; a
         # pointwise-affine, constant-slope-(-theta) reparametrization of z_nonpivot, reusing the
@@ -713,7 +716,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     A_coordinate_mode in (:legacy_z, :powered_aspace) ||
         error("run_cm_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
     lp("[", label, "] A_coordinate_mode=", A_coordinate_mode,
-       A_coordinate_mode == :legacy_z ? " (legacy production default)" : " (transformed-A, opt-in pending gate promotion)")
+       A_coordinate_mode == :powered_aspace ? " (transformed-A, PRODUCTION DEFAULT since five-family finish task §8)" : " (legacy-z, explicit replication mode)")
     lp("[", label, "] cm_gradient_backend=", cm_gradient_backend,
        cm_gradient_backend == :cplus ? " (production default)" : " (fallback/validation backend)",
        " destination_sample=", destination_sample, destination_sample == :exclude_row ? " (production default)" : " (legacy/reproduction-only)")

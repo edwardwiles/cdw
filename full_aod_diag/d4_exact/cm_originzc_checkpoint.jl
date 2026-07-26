@@ -488,12 +488,15 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count untouched, zero behavior change. Added for section 7's bounded
         # origin-ZC BLAS benchmark; origin-ZC retains Architecture A (dense) regardless of this.
-        A_coordinate_mode::Symbol = :legacy_z)   # transformed-A restricted-family port (2026-07-26
-        # production-audit task addendum): same option/semantics/production-default as
-        # run_cm_upper_checkpointed's own A_coordinate_mode kwarg -- :legacy_z (PRODUCTION DEFAULT,
-        # byte-identical to every pre-existing origin-ZC production run) | :powered_aspace
-        # (cm_aspace_coordinate.jl, fixed-theta only). The origin-family eta/nu restriction block
-        # is entirely orthogonal to this choice (same as CM's own eta_nu), untouched either way.
+        A_coordinate_mode::Symbol = :powered_aspace)   # transformed-A restricted-family port
+        # (2026-07-26 five-family finish task §8): same option/semantics/NEW production default as
+        # run_cm_upper_checkpointed's own A_coordinate_mode kwarg -- the shared decode/encode/
+        # gradient-rescale boundary (cm_aspace_coordinate.jl, pe::PivotGravityElim/pivot_expand/
+        # pivot_reduce) is family-agnostic and identically exercised by test_cm_aspace_coordinate_
+        # gates.jl's real D=20 equivalence gate (6/6 PASS); the origin-family eta/nu restriction
+        # block is entirely orthogonal to this choice (same as CM's own eta_nu), untouched either
+        # way. :powered_aspace (fixed-theta only) | :legacy_z (byte-identical to every pre-existing
+        # origin-ZC production run, explicit replication mode).
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, section 4.1): resolve ckpt_dir to an absolute path
     # BEFORE any real-data/model setup runs. A relative ckpt_dir silently
@@ -518,7 +521,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     A_coordinate_mode in (:legacy_z, :powered_aspace) ||
         error("run_originzc_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
     lp("[", label, "] A_coordinate_mode=", A_coordinate_mode,
-       A_coordinate_mode == :legacy_z ? " (legacy production default)" : " (transformed-A, opt-in pending gate promotion)")
+       A_coordinate_mode == :powered_aspace ? " (transformed-A, PRODUCTION DEFAULT since five-family finish task §8)" : " (legacy-z, explicit replication mode)")
     lp("[", label, "] distribution_restriction=", distribution_restriction, " power_target_layout=", power_target_layout,
        " K_mean=", K_mean, " K_pair=", K_pair, " cm_gradient_backend=", cm_gradient_backend,
        " destination_sample=", destination_sample, destination_sample == :exclude_row ? " (production default)" : " (legacy/reproduction-only)")
