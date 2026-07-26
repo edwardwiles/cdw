@@ -34,6 +34,7 @@
 # ================================================================================================
 
 using Base.Threads: nthreads as _nthreads, @threads
+using LinearAlgebra: mul!
 
 # ---- weighted histogram (Part B.2), threaded over draw chunks, thread-local buffers, no atomics ----
 
@@ -178,6 +179,108 @@ function cumulative_backward_gradient(h::AbstractMatrix{Float64}, refIndex1::Int
 end
 
 # ================================================================================================
+# Phase 5.5 remediation (2026-07-26): IN-PLACE (`!`-suffixed) analogues of the six allocating
+# helpers above, writing into caller-supplied persistent buffers. The allocating originals above
+# are UNCHANGED and kept -- they remain the public API `cm_meanzc_production.jl`/
+# `cm_frechet_cplus.jl`/`lfix_cm_aware.jl`/`c12i_benchmark_lookup.jl` call directly (once per outer
+# point, not hot). These `!` variants exist ONLY to remove the per-KNITRO-FG-callback allocations
+# `CMLookupState`'s own callable below used to incur every one of the (many, per inner solve)
+# forward/backward evaluations -- task §5.5's "no per-callback vectors, matrices, closures" ask.
+# ================================================================================================
+
+"In-place `apply_contrast`: `out .= R*M` (R!==nothing) or `out .= M` (R===nothing, :anchored). `out`/`M` both `(nO, ·)`."
+function apply_contrast!(out::AbstractMatrix{Float64}, M::AbstractMatrix{Float64}, R::Union{Nothing,AbstractMatrix{Float64}})
+    if R === nothing
+        out .= M
+    else
+        mul!(out, R, M)
+    end
+    return out
+end
+
+"In-place `suffix_sums`: writes into `P` (nO x (L+1)), `P[:,L+1]` left/forced to 0.0. `nu` is `nO x L`."
+function suffix_sums!(P::AbstractMatrix{Float64}, nu::AbstractMatrix{Float64})
+    nO, L = size(nu)
+    @inbounds for oi in 1:nO
+        acc = 0.0
+        for k in L:-1:1
+            acc += nu[oi, k]
+            P[oi, k] = acc
+        end
+        P[oi, L + 1] = 0.0
+    end
+    return P
+end
+
+"""
+    build_weighted_histogram!(h, partials, bins, weights, D, nbins) -> h
+
+In-place analogue of `build_weighted_histogram`: `partials` is a `Vector` of `nt` preallocated
+`(D, nbins)` thread-local buffers (`nt = length(partials)`, fixed at `CMLookupState` construction
+time -- sized from the live worker policy, see `cm_lookup_production.jl`), `h` the `(D, nbins)`
+output buffer. Same draw-chunk/no-atomics/deterministic-fixed-order-reduction design as the
+allocating original -- see that function's docstring for the full rationale.
+"""
+function build_weighted_histogram!(h::Matrix{Float64}, partials::Vector{Matrix{Float64}},
+                                    bins::AbstractMatrix{<:Unsigned}, weights::AbstractVector{Float64},
+                                    D::Int, nbins::Int)
+    W = length(weights)
+    nt = length(partials)
+    chunk = cld(W, nt)
+    @threads for t in 1:nt
+        lo = (t - 1) * chunk + 1
+        hi = min(t * chunk, W)
+        buf = partials[t]
+        fill!(buf, 0.0)
+        @inbounds for s in lo:hi
+            for o in 1:D
+                k = Int(bins[s, o])
+                buf[o, k] += weights[s]
+            end
+        end
+    end
+    fill!(h, 0.0)
+    @inbounds for t in 1:nt
+        h .+= partials[t]
+    end
+    return h
+end
+
+"In-place `prefix_sums`: writes into `Hpre` (D x L). `h` is `(D, nbins)` with `nbins >= L+1`."
+function prefix_sums!(Hpre::AbstractMatrix{Float64}, h::AbstractMatrix{Float64}, L::Int)
+    D = size(h, 1)
+    @inbounds for o in 1:D
+        acc = 0.0
+        for l in 1:L
+            acc += h[o, l]
+            Hpre[o, l] = acc
+        end
+    end
+    return Hpre
+end
+
+"In-place `interval_backward_gradient`: writes into `g` (nO x L)."
+function interval_backward_gradient!(g::AbstractMatrix{Float64}, h::AbstractMatrix{Float64},
+                                      refIndex1::Int, origins::Vector{Int}, L::Int, M::Int)
+    nO = length(origins)
+    @inbounds for k in 1:L, oi in 1:nO
+        g[oi, k] = -(h[origins[oi], k] - h[refIndex1, k]) / M
+    end
+    return g
+end
+
+"In-place `cumulative_backward_gradient`: writes into `g` (nO x L), using preallocated `Hpre` (D x L) scratch."
+function cumulative_backward_gradient!(g::AbstractMatrix{Float64}, Hpre::AbstractMatrix{Float64}, h::AbstractMatrix{Float64},
+                                        refIndex1::Int, origins::Vector{Int}, L::Int, M::Int)
+    prefix_sums!(Hpre, h, L)
+    nO = length(origins)
+    @inbounds for l in 1:L, oi in 1:nO
+        g[oi, l] = -(Hpre[origins[oi], l] - Hpre[refIndex1, l]) / M
+    end
+    return g
+end
+
+# ================================================================================================
 # Unified FG evaluator state + callable: replicates PsiObjectiveBundleImplicit's (ζ,λ)-gradient
 # branch EXACTLY (core columns via the SAME BLAS calls the production callable uses, on the SAME
 # dense obj.H buffer; CM columns via the lookup kernels above), for a fixed θ (one inner solve).
@@ -209,6 +312,17 @@ mutable struct CMLookupState
     cm_contrib::Vector{Float64}
     λmat_ext::Matrix{Float64}   # (nO, L+1) working buffer for forward pass -- see orientation note above
     n_fg_calls::Int
+    # Phase 5.5 remediation (2026-07-26): persistent scratch eliminating every per-FG-callback
+    # allocation the original implementation incurred (`vcat`, `apply_contrast`/`suffix_sums`'s own
+    # fresh matrix, `build_weighted_histogram`'s `partials`+`h`, `interval_backward_gradient`'s
+    # fresh (nO,L) matrix) -- all now write into these buffers instead, allocated ONCE here.
+    xsub::Vector{Float64}          # length ncore-1: [ζ; λ_core], replaces per-call `vcat`
+    λmat_block::Matrix{Float64}    # (nO, L): R-congruence-applied stored coefficients
+    hist_partials::Vector{Matrix{Float64}}   # nt x (D, nbins) thread-local histogram buffers
+    hist_h::Matrix{Float64}        # (D, nbins) reduced weighted histogram
+    Hpre::Matrix{Float64}          # (D, L) prefix-sum scratch (:suffix/cumulative method only)
+    g_block::Matrix{Float64}       # (nO, L) raw block-space backward gradient
+    g_stored::Matrix{Float64}      # (nO, L) R-congruence-applied (stored-space) backward gradient
 end
 
 function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, refIndex1::Int,
@@ -216,8 +330,16 @@ function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, 
     method in (:interval, :suffix) || error("CMLookupState: method must be :interval or :suffix, got $method")
     nO = length(origins)
     M = size(obj.U, 1)
-    CMLookupState(obj, ncore, ncm, L, nO, origins, refIndex1, bins, R, method, L + 1, nthreads_use,
-                  zeros(M), zeros(M), zeros(M), zeros(nO, L + 1), 0)
+    ncore1 = ncore - 1
+    W = size(bins, 1)
+    nbins = L + 1
+    D = size(bins, 2)
+    nt = max(1, min(nthreads_use, W))
+    hist_partials = [zeros(D, nbins) for _ in 1:nt]
+    CMLookupState(obj, ncore, ncm, L, nO, origins, refIndex1, bins, R, method, nbins, nthreads_use,
+                  zeros(M), zeros(M), zeros(M), zeros(nO, L + 1), 0,
+                  zeros(1 + ncore1), zeros(nO, L), hist_partials, zeros(D, nbins), zeros(D, L),
+                  zeros(nO, L), zeros(nO, L))
 end
 
 """
@@ -236,18 +358,22 @@ function (st::CMLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float
     λ_cm = @view x[2+ncore1:1+ncore1+st.ncm]
 
     # ---- forward: arg0 = -(ζ .+ G_core*λ_core .+ cm_contribution) ----
-    xsub = vcat(ζ, λ_core)
-    @views BLAS.gemv!('N', 1.0, obj.H[:, 2:2+ncore1], -xsub, 0.0, st.arg0)
+    # Phase 5.5: st.xsub is persistent scratch (was a fresh `vcat(ζ, λ_core)` allocation every FG
+    # call); the sign flip that used to live on `-xsub` moves onto BLAS's own alpha (-1.0) instead,
+    # since gemv!(alpha, A, x) == alpha*A*x regardless of which factor carries the sign.
+    st.xsub[1] = ζ
+    st.xsub[2:end] .= λ_core
+    @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
 
     λmat_stored = reshape(λ_cm, st.nO, st.L)  # threshold-major storage, col-major reshape: [oi,k] <-> j=(k-1)*nO+oi
-    λmat_block = apply_contrast(λmat_stored, st.R)   # block-space coefficients (nothing->no-op)
+    apply_contrast!(st.λmat_block, λmat_stored, st.R)   # block-space coefficients (R===nothing -> copy)
     if st.method == :interval
-        st.λmat_ext[:, 1:st.L] .= λmat_block
+        st.λmat_ext[:, 1:st.L] .= st.λmat_block
         st.λmat_ext[:, st.L+1] .= 0.0
         interval_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
     else # :suffix (cumulative basis diagnostic)
-        P = suffix_sums(λmat_block)
-        cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, P)
+        suffix_sums!(st.λmat_ext, st.λmat_block)   # writes the (nO, L+1) suffix-sum-extended matrix directly
+        cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
     end
     st.arg0 .-= st.cm_contrib
 
@@ -259,12 +385,14 @@ function (st::CMLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float
         g[1] = 1.0 - sum(st.arg1) / M
         @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
 
-        h = build_weighted_histogram(st.bins, st.arg1, size(st.bins, 2), st.nbins; nthreads_use = st.nthreads_use)
-        g_block = st.method == :interval ?
-            interval_backward_gradient(h, st.refIndex1, st.origins, st.L, M) :
-            cumulative_backward_gradient(h, st.refIndex1, st.origins, st.L, M)
-        g_stored = apply_contrast(g_block, st.R)
-        @views g[2+ncore1:1+ncore1+st.ncm] .= vec(g_stored)
+        build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, size(st.bins, 2), st.nbins)
+        if st.method == :interval
+            interval_backward_gradient!(st.g_block, st.hist_h, st.refIndex1, st.origins, st.L, M)
+        else
+            cumulative_backward_gradient!(st.g_block, st.Hpre, st.hist_h, st.refIndex1, st.origins, st.L, M)
+        end
+        apply_contrast!(st.g_stored, st.g_block, st.R)
+        @views g[2+ncore1:1+ncore1+st.ncm] .= vec(st.g_stored)
     end
 
     obj.arg0 .= st.arg0   # keep obj in sync for a subsequent dense Hessian callback, same trick as compressed_live.jl

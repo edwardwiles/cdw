@@ -298,7 +298,15 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
 
     cctx = nothing
     if cm_hessian_backend === :structured
-        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false)   # UNCHANGED (cm_hessian_architectures.jl); serial-only frechet Hessian for now
+        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false, inner_fg_backend = :dense_reference)   # UNCHANGED (cm_hessian_architectures.jl);
+        # serial-only frechet Hessian for now. inner_fg_backend PINNED explicitly to :dense_reference
+        # (2026-07-26 Phase 5.5 flip): common-Frechet's own inner solve (archC_frechet_base_state/
+        # archC_frechet_verified_state, cm_frechet_cplus.jl) always calls inner_loop_internal_archgeneric
+        # unconditionally -- it never reads cctx.inner_fg_backend at all, so the field is dispatch-inert
+        # here -- but leaving it on the CM_INNER_FG_BACKEND_DEFAULT[] global default (now :cm_lookup,
+        # plain-flexible-CM-only) would mislabel this context's manifest/diagnostics as using a kernel
+        # this family cannot actually use (CMLookupState has no level-anchor block, see
+        # cm_lookup_production.jl's own header).
         hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, aug.level_targets)
         aug = merge(aug, (cctx = cctx,))
     else

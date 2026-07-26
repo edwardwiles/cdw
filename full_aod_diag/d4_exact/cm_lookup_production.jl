@@ -91,18 +91,25 @@ function inner_loop_KNITRO_cmlookup_production(obj, st::CMLookupState; hess_cb_b
 end
 
 """
-    inner_loop_internal_cmlookup_production(obj, θ, ctx, cctx::CMBinHessCtx; hess_cb_builder, method=:interval, nthreads_use=1)
+    inner_loop_internal_cmlookup_production(obj, θ, ctx, cctx::CMBinHessCtx; hess_cb_builder, method=:interval, nthreads_use=Threads.nthreads())
 
 Mirrors `inner_loop_internal_archgeneric`'s contract exactly (same return shape
 `(K, x, nStatus, n_fg, n_hess)`) so `archC_base_state`/`archC_verified_state` can dispatch to
 either with no other code change. Builds the dense `obj.H` once (same `moments!` call the
 :dense_reference path uses -- CMLookupState's own core-column BLAS slice and the Hessian
-callback both need it), then a fresh `CMLookupState` for this inner solve (bin
-indices/origins/refIndex1/R come from `cctx`, already built once per outer-solve context and
-reused across every call -- NOT rebuilt here).
+callback both need it).
+
+Phase 5.5 remediation (2026-07-26): the `CMLookupState` itself is now built ONCE per `cctx`
+(cached on `cctx.cmlookup_st`, the same "built once per campaign, reused every inner solve"
+pattern `cctx`'s own `core_ws`/`tls` fields already use) and REUSED across every subsequent
+inner solve at this context, rather than rebuilt fresh here every call -- bin
+indices/origins/refIndex1/R are immutable for the life of `cctx` (task §5.5: "do not rebuild
+CMLookupState per solve if dimensions/context are fixed"). `st.n_fg_calls` is reset to 0 at the
+top of each solve so the returned `n_fg` still means "FG calls THIS inner solve", matching the
+pre-caching contract.
 """
 function inner_loop_internal_cmlookup_production(obj, θ::AbstractVector, cctx::CMBinHessCtx;
-        hess_cb_builder, method::Symbol = :suffix, nthreads_use::Int = 1)
+        hess_cb_builder, method::Symbol = :suffix, nthreads_use::Int = Threads.nthreads())
     obj.moments!(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
     obj.H[:, 2] .= 1.0
     obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
@@ -116,9 +123,14 @@ function inner_loop_internal_cmlookup_production(obj, θ::AbstractVector, cctx::
     # (an earlier version of this function) caused every real inner solve to report KNITRO nStatus=
     # -400 (infeasible) at the calibration point -- not a KNITRO/production bug, a basis mismatch in
     # this file's own first draft, caught by test_phaseB1_cmlookup_production_correctness.jl.
-    bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
-    st = CMLookupState(obj, cctx.NCORE, cctx.ncm, cctx.L, cctx.origins, cctx.refIndex1, bins_u, cctx.R;
-                        method = method, nthreads_use = nthreads_use)
+    if cctx.cmlookup_st === nothing
+        bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        cctx.cmlookup_st = CMLookupState(obj, cctx.NCORE, cctx.ncm, cctx.L, cctx.origins, cctx.refIndex1, bins_u, cctx.R;
+                                          method = method, nthreads_use = nthreads_use)
+    end
+    st = cctx.cmlookup_st::CMLookupState
+    st.method == method || error("inner_loop_internal_cmlookup_production: cached CMLookupState was built with method=$(st.method), called with method=$method -- a live method change on a reused cctx is not supported (rebuild cctx instead)")
+    st.n_fg_calls = 0
 
     nStatus, objSol, x, lambda_, n_fg, n_hess = inner_loop_KNITRO_cmlookup_production(obj, st; hess_cb_builder = hess_cb_builder)
 

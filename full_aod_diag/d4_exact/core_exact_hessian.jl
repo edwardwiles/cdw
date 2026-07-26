@@ -112,16 +112,33 @@ const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_work
 const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
 
 """
-Remediation task Phase B1 (production-audit continuation, 2026-07-26): which inner FG
-(forward/backward) callback the CM family's KNITRO inner dual solve registers.
-:dense_reference (default -- unchanged, byte-identical to every pre-existing production run) |
-:cm_lookup (validated O(W*(D-1)) lookup kernel, cm_lookup_kernels.jl/cm_lookup_production.jl --
-plain flexible CM ONLY, see cm_lookup_production.jl's own header for why common_frechet/meanzc
-are out of scope for this specific kernel). Global default + per-CMBinHessCtx override, same
-discipline as CM_CORE_HESSIAN_BACKEND_DEFAULT above -- Hessian backend selection is completely
-independent of this.
+Remediation task Phase B1 (production-audit continuation, 2026-07-26); flipped to `:cm_lookup`
+by the Phase 5.5 allocation-fix remediation (2026-07-26): which inner FG (forward/backward)
+callback the CM family's KNITRO inner dual solve registers.
+:dense_reference (legacy/reference -- byte-identical to every pre-Phase-B1 production run) |
+:cm_lookup (DEFAULT -- validated O(W*(D-1)) lookup kernel, cm_lookup_kernels.jl/
+cm_lookup_production.jl -- plain flexible CM ONLY, see cm_lookup_production.jl's own header for
+why common_frechet/meanzc are out of scope for this specific kernel). Global default + per-
+CMBinHessCtx override, same discipline as CM_CORE_HESSIAN_BACKEND_DEFAULT above -- Hessian
+backend selection is completely independent of this.
+
+Flip rationale (task §5.6 criteria, all real D=20/W=80,000/L=50 unless noted): D=4 AND D=20
+correctness (test_phaseB1_cmlookup_production_correctness.jl) ALL PASS, both contrasts, calib
++ perturbed points, KNITRO-solved quantities agreeing to ~1e-13 or tighter. Complete inner
+solve FASTER at every tested thread count (test_phaseB1_performance_gate.jl, workers=
+1/4/8/10/20): 1.108x-1.616x vs :dense_reference (previously, before the Phase 5.5 allocation
+fix, only 1.096x at the single thread count then tested). Allocation: previously :cm_lookup
+allocated ~12.6% MORE than :dense_reference per complete inner solve (the reason it shipped
+`AVAILABLE_BUT_NOT_DEFAULT`) -- the Phase 5.5 fix (persistent CMLookupState scratch buffers,
+cached across inner solves on `cctx.cmlookup_st`, zero per-FG-callback allocation) brought
+median allocation to EXACT PARITY with :dense_reference (ratio 1.000x) at every thread count,
+i.e. the lookup kernel itself is now allocation-free relative to dense -- the measured bytes are
+common `archC_verified_state`/KNITRO overhead shared by both backends. No stability regression
+(identical nStatus, Delta_dual agreement ~1e-17-1e-18). full_G_materializations=0 by
+construction (the lookup kernel never touches obj.H's CM columns). See
+docs/RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md for full results.
 """
-const CM_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const CM_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:cm_lookup)
 
 """
     record_core_hessian_call!(backend; fallback_reason=nothing)

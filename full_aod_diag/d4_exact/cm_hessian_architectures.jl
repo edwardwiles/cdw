@@ -192,7 +192,22 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
                                      Bidx::Matrix{Int}, origins::Vector{Int}, refIndex1::Int, L::Int,
                                      R::Union{Nothing,Matrix{Float64}}, ctx; chunk_size::Int = 2000,
                                      use_compressed_core::Bool = true,
-                                     core_cf_ref::Ref{Any} = Ref{Any}(nothing))
+                                     core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                                     skip_cm_fill_ref::Union{Nothing,Ref{Bool}} = nothing)   # Phase 5.5
+                                     # follow-on (2026-07-26): when non-nothing and `[]==true` at call
+                                     # time, skip materializing the dense CM columns (`G[:, cm_cols]`)
+                                     # entirely. ONLY safe when the caller is about to register the
+                                     # :cm_lookup FG callback (which never reads those columns from
+                                     # obj.H -- it recomputes the CM contribution from bin lookups) AND
+                                     # will not later read `obj.H`'s CM columns for anything else (e.g.
+                                     # archC_verified_state's post-solve KKT-residual recompute DOES
+                                     # read them, via `obj(inner_x, constr=...)` -- callers must reset
+                                     # this ref to `false` before any such use). Set/reset by
+                                     # archC_base_state/archC_verified_state (cm_production_bundle.jl)
+                                     # around each inner solve, not by this closure itself. `nothing`
+                                     # (the default) preserves the ORIGINAL unconditional-fill behavior
+                                     # for every caller that doesn't pass this (e.g. the archB diagnostic
+                                     # builder below, c13_*/c14_* benchmark scripts).
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
@@ -231,9 +246,11 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
         end
         @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         @views G[:, end] .= Gtmp[:, end]
-        cm_cols = pregrav + 1 : pregrav + L * nO
-        fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
-                                    chunk_size = chunk_size, prod_scratch = prod_scratch)
+        if skip_cm_fill_ref === nothing || !skip_cm_fill_ref[]
+            cm_cols = pregrav + 1 : pregrav + L * nO
+            fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
+                                        chunk_size = chunk_size, prod_scratch = prod_scratch)
+        end
         return nothing
     end
 end
@@ -389,6 +406,20 @@ mutable struct CMBinHessCtx
     # cm_lookup_production.jl's own header). Hessian math is completely unaffected either way --
     # this field only selects the FG callback, archC_hess_cb_builder(cctx) is reused unmodified.
     inner_fg_backend::Symbol
+    # Phase 5.5 remediation (2026-07-26, matrix-free operator FG allocation fix): lazily-built
+    # CMLookupState (cm_lookup_kernels.jl), reused across EVERY subsequent :cm_lookup inner solve
+    # at this context (bins/origins/refIndex1/R/NCORE/ncm are all fixed once `cctx` is built --
+    # same "built once per campaign, reused every inner solve" invariant this struct's own
+    # `core_ws`/`core_ws_for` fields already rely on above). `nothing` until the first :cm_lookup
+    # inner solve; typed `Any` (not `CMLookupState`) purely to avoid a forward type reference,
+    # since cm_lookup_kernels.jl is included after this file.
+    cmlookup_st::Any
+    # Phase 5.5 follow-on (2026-07-26): SAME shared box `wrap_moments_with_cm_archB`'s closure was
+    # given as `skip_cm_fill_ref` (or `nothing` if this cctx's aug wasn't built with one) --
+    # archC_base_state/archC_verified_state (cm_production_bundle.jl) toggle `[]` around each inner
+    # solve to skip the (otherwise-wasted, under :cm_lookup) dense CM-column materialization. See
+    # that kwarg's own docstring for the full safety contract.
+    skip_cm_fill_ref::Union{Nothing,Ref{Bool}}
 end
 
 """
@@ -415,6 +446,11 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     # production default); anything else (the plain `build_cm_augmented_obj`, or
     # `use_compressed_core=false`) falls back to dense BLAS for H_EE unconditionally.
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
+    # Phase 5.5 follow-on: SAME shared Ref build_cm_production_context passed into
+    # wrap_moments_with_cm_archB as skip_cm_fill_ref, if any -- absent (e.g. non-archB aug,
+    # diagnostic scripts) defaults to a fresh, permanently-false Ref (never toggled, so this
+    # cctx's own moments! closure -- if it even accepts the kwarg -- always fills CM columns).
+    skip_cm_fill_ref = hasproperty(aug, :skip_cm_fill_ref) ? aug.skip_cm_fill_ref : Ref(false)
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE, L1), zeros(D, D, L, L), zeros(D, NCORE, L),
         Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm),
@@ -422,7 +458,7 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
         nothing, false,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
-        NCORE, inner_fg_backend)
+        NCORE, inner_fg_backend, nothing, skip_cm_fill_ref)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true

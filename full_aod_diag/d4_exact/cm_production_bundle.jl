@@ -93,6 +93,11 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     # `pcx.cctx.core_cf_ref[] === nothing` after a real feasible archC_base_state solve, before this
     # fix. Fixed by building ONE `core_cf_ref` here and threading it to BOTH call sites.
     core_cf_ref = Ref{Any}(nothing)
+    # Phase 5.5 follow-on (2026-07-26): shared box archC_base_state/archC_verified_state toggle
+    # around each inner solve so wrap_moments_with_cm_archB's closure can skip materializing the
+    # dense CM columns when they are about to go completely unread (:cm_lookup FG backend AND no
+    # post-solve verified-state recompute). See wrap_moments_with_cm_archB's own kwarg docstring.
+    skip_cm_fill_ref = Ref(false)
     if use_archB_moments
         # NOTE: common_marginals_interval.jl and cm_hessian_architectures.jl both define
         # `compute_bin_indices(U,z)` with overlapping-but-distinct signatures (z::Vector{Float64}
@@ -103,7 +108,8 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
         Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
         R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
         moments_archB! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
-                                                     use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref)
+                                                     use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+                                                     skip_cm_fill_ref = skip_cm_fill_ref)
         obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj_cm.δ, find_smallest = obj_cm.find_smallest,
             γ = obj_cm.γ, (moments!) = moments_archB!, moments_jacobian! = error,
             d = obj_cm.d, outer_constr_index = obj_cm.outer_constr_index,
@@ -116,7 +122,8 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     end
     ctx_cm = merge(ctx, (obj = obj_cm,))
     bins = cm_bin_indices_for(ctx, aug)
-    aug = merge(aug, (core_cf_ref = core_cf_ref,))   # so build_cm_bin_ctx's hasproperty(aug,:core_cf_ref) picks up the SAME ref the moments closure writes to
+    aug = merge(aug, (core_cf_ref = core_cf_ref, skip_cm_fill_ref = skip_cm_fill_ref))   # so build_cm_bin_ctx's
+    # hasproperty(aug, :core_cf_ref)/hasproperty(aug, :skip_cm_fill_ref) pick up the SAME refs the moments closure reads/writes
     # inner_fg_backend=:cm_lookup is only ever reachable through THIS function (build_cm_production_context
     # is the plain flexible-CM builder -- common-Frechet and CM+meanZC each have their OWN separate
     # build_cm_frechet_production_context/build_cm_meanzc_production_context, neither of which
@@ -176,10 +183,24 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    K, x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
-        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
-        inner_loop_internal_archgeneric(obj, θ_full0;
-            hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+    # Phase 5.5 follow-on (2026-07-26): archC_base_state NEVER reads obj.H's CM columns (it only
+    # returns ζ*/λ*/obj.arg1) -- when the :cm_lookup FG backend is registered (which recomputes the
+    # CM contribution from bin lookups, never from obj.H), the dense CM-column materialization
+    # wrap_moments_with_cm_archB's closure would otherwise do is pure waste. Toggle the shared
+    # skip_cm_fill_ref true for ONLY the duration of this one moments!+inner-solve call, reset in a
+    # `finally` so it can never leak `true` into some other caller on the same cctx (in particular
+    # archC_verified_state below, which DOES need those columns for its post-solve recompute).
+    use_lookup = cctx.inner_fg_backend == :cm_lookup
+    use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = true)
+    local K, x, nStatus, n_fg, n_hess
+    try
+        K, x, nStatus, n_fg, n_hess = use_lookup ?
+            inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
+            inner_loop_internal_archgeneric(obj, θ_full0;
+                hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+    finally
+        use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
+    end
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
         throw(CMExpectedSolveFailure("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
@@ -226,6 +247,12 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
+    # Phase 5.5 follow-on (2026-07-26): UNLIKE archC_base_state, this function's own post-solve
+    # recompute below (`obj(inner_x, constr=...)`, `CS.select_G_from_H(obj, obj.H)`) DOES read
+    # obj.H's CM columns -- explicitly force skip_cm_fill_ref false (defensively, not just relying
+    # on archC_base_state's own finally-reset) so this call always gets a correctly-filled G
+    # regardless of what any prior call on this SAME cctx left the shared ref set to.
+    cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
     K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
         inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
         inner_loop_internal_archgeneric(obj, θ_full0;
