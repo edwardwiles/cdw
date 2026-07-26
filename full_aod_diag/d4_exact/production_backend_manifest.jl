@@ -126,7 +126,17 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
         core_hessian_worker_policy = core_hessian_worker_policy_label(),
         core_hessian_storage = cctx.core_hessian_storage,
         cross_hessian_backend = :cm_bin_prefix,          # H_EC -- unchanged (Phase B audit: already near-optimal, see docs)
-        restriction_hessian_backend = is_meanzc ? :cm_bin_prefix_plus_congruence : :cm_bin_prefix,   # H_CC
+        # Phase F remediation (production-audit continuation, 2026-07-26): this label was keyed on
+        # `is_meanzc` alone, but R-congruence is actually gated on `cctx.R !== nothing`, which
+        # tracks `contrasts == :orthonormal` (orthonormal_contrast_matrix), NOT on whether the
+        # meanzc extension is active. run_cm_upper_checkpointed's own default is
+        # `contrasts=:anchored` for BOTH the plain and meanzc branches, so under ordinary default
+        # settings this label previously claimed congruence was active for CM+ZC when it was not
+        # (found in the baseline static audit, docs/PRODUCTION_5X7_AUDIT_BASELINE_AND_
+        # REMEDIATION_SIZING_2026-07-26.md, item B5). Keying on the real condition fixes the label;
+        # the Hessian computation itself was already correct either way -- this is a reporting-only
+        # fix, no numerical change.
+        restriction_hessian_backend = cctx.R !== nothing ? :cm_bin_prefix_plus_congruence : :cm_bin_prefix,   # H_CC
         full_hessian_assembly = :dense_scratch_then_pack,   # cctx.Hfull dense corner-insertion, then one pack loop (unchanged)
         knitro_hessian_format = :dense_rowmajor_packed_upper_triangle,
         julia_threads = Threads.nthreads(),
@@ -136,6 +146,54 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
     )
     is_meanzc && return merge(nt, (K_mean = meanzc_K_mean, K_pair = meanzc_K_pair))
     return nt
+end
+
+"""
+    resolve_common_frechet_manifest(; cctx, blas_threads)
+
+Phase F remediation (production-audit continuation, 2026-07-26): structured, JSON-able manifest
+resolver for the common-Frechet family -- previously the ONLY family among the four restricted
+families with no such resolver (its own startup manifest went through the print-only
+`print_frechet_startup_manifest`, `cm_frechet_level.jl:322`, which cannot be serialized to JSON or
+compared programmatically the way `resolve_flexible_cm_manifest`/`resolve_origin_zc_manifest`
+already can be). Mirrors `resolve_flexible_cm_manifest`'s fields/style exactly (common-Frechet
+shares the SAME `CMBinHessCtx`/`build_cm_bin_ctx` machinery for its economic core -- confirmed in
+the baseline audit's Area 5/6 findings: H_EE dispatch is unchanged/shared, only the level-block
+Hessian differs), adding the Frechet-specific fields (`frechet_feature_set`, `frechet_basis`,
+`frechet_grid_size`, `frechet_level_count`, `level_hessian_backend`) `print_frechet_startup_manifest`
+already prints as loose strings.
+"""
+function resolve_common_frechet_manifest(; cctx, blas_threads::Union{Nothing,Int})
+    threaded_label = cctx.use_threaded_bins ? :threaded_architecture_c_with_winner_pair_core : :architecture_c_with_winner_pair_core
+    level_hessian_backend = cctx.use_threaded_bins ? :threaded_architecture_c_frechet_level : :serial_architecture_c_frechet_level
+    return (
+        family = :common_frechet,
+        core_top1_engine = :canonical_log_additive,
+        outer_gradient_top3_engine = :cplus,
+        core_moment_representation = :compressed_winner_form,
+        cm_restriction_basis = :cumulative,
+        cm_internal_storage = :bin_index,
+        frechet_feature_set = :cdf_only,
+        frechet_basis = :cm_contrasts_plus_common_level,
+        frechet_grid_size = cctx.L,
+        frechet_level_count = 1,
+        hessian_backend = cctx.core_hessian_backend === :dense_reference ?
+            (cctx.use_threaded_bins ? :threaded_architecture_c : :serial_architecture_c) : threaded_label,
+        level_hessian_backend = level_hessian_backend,   # hessian_cm_frechet_structured_v2!/_! (task Phase 0 gate: threaded is the real production dispatch, 4.6x faster, ~1e-14 agreement)
+        threaded_bins = cctx.use_threaded_bins,
+        core_hessian_backend = cctx.core_hessian_backend,
+        core_hessian_workers = cctx.core_hessian_workers,
+        core_hessian_worker_policy = core_hessian_worker_policy_label(),
+        core_hessian_storage = cctx.core_hessian_storage,
+        cross_hessian_backend = :cm_bin_prefix,          # H_EC + H_E-level share the SAME bin/prefix tables, no new O(W) pass
+        restriction_hessian_backend = :cm_bin_prefix,    # H_CC + H_level, common-Frechet has no free restriction parameters (unlike CM+ZC's eta_nu), so congruence is never applicable here
+        full_hessian_assembly = :dense_scratch_then_pack,
+        knitro_hessian_format = :dense_rowmajor_packed_upper_triangle,
+        julia_threads = Threads.nthreads(),
+        blas_threads = something(blas_threads, BLAS.get_num_threads()),
+        checkpoint_schema = CM_CHECKPOINT_SCHEMA,   # common-Frechet checkpoints/resumes through the SAME cm_checkpoint.jl infrastructure as flexible-CM
+        screen_stack = production_screen_stack(:common_frechet),
+    )
 end
 
 """
