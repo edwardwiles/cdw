@@ -18,6 +18,7 @@ using Serialization, Dates
 using LinearAlgebra: BLAS
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3/§7
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2
+isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26)
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
 # Bumped 4 -> 5 (origin-specific-ZC integration, 2026-07-23): adds
@@ -455,6 +456,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "originzc_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
+        use_exact_cache::Bool = true,   # Phase C remediation (2026-07-26): same
+        # CMProductionEvalKey/cm_exact_cache_production.jl exact-point cache as
+        # run_cm_upper_checkpointed. true (new default): identical outer point + identical
+        # scientific context + valid solved state skips the inner solve entirely. false: zero
+        # overhead, byte-identical to every pre-existing production run.
         cm_gradient_backend::Symbol = :cplus,
         allow_backend_switch::Bool = false,
         distribution_restriction::Symbol,   # REQUIRED, no default -- explicit opt-in (task brief Section 12)
@@ -590,6 +596,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
 
     pcx = build_originzc_production_context(ctx, CS, layout)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3/§7 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, "origin_zc")
     print_screen_startup_banner("origin_zc")
@@ -675,8 +682,17 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         xf = xf_from_w_econ(w[1:D2_econ])
         νvec = exp.(w[D2_econ+1:end])
         local base, verify
+        # L/contrasts have no meaning for origin-ZC (no CM grid) -- 0/:none sentinels; family_tag
+        # (:origin_zc, fixed per driver) plus a FRESH per-call cache (never shared across driver
+        # invocations/configs) are what actually prevent cross-config collision here.
+        cache_key = exact_cache === nothing ? nothing :
+            CMProductionEvalKey(collect(xf), collect(νvec), delta, find_smallest, pcx.ctx_cm.obj.inner_loop_opt,
+                :origin_zc, 0, :none, K_mean, K_pair, A_coordinate_mode, context_fingerprint(pcx.ctx_cm))
         try
-            _, base, verify = cm_originzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
+            base, verify = cm_cache_lookup_or_compute!(exact_cache, cache_key, () -> begin
+                _, b, v = cm_originzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
+                return b, v
+            end)
         catch e
             e isa CMExpectedSolveFailure || rethrow()
             reject_point(w[1], "run_originzc_upper_checkpointed($label): infeasible/failed inner solve at this point")

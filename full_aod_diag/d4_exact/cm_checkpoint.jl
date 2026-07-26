@@ -30,6 +30,7 @@ using Serialization, Dates
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3
 isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
+isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26): exact-point cache for this driver's real pcx shape
 
 const CM_CHECKPOINT_SCHEMA = 9
 # Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
@@ -610,6 +611,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
+        use_exact_cache::Bool = true,   # Phase C remediation (2026-07-26): exact-point cache
+        # (CMProductionEvalKey/cm_exact_cache_production.jl) for this driver's own real
+        # (ctx_cm,cctx) shape -- previously unwired despite cm_config.jl's SafeExactCache{CMEvalKey}
+        # infrastructure existing in the tree (built against an incompatible pcx.cfg shape this
+        # driver never constructs). true (new default): identical outer point + identical
+        # scientific context + a valid solved state skips the inner solve entirely. false: zero
+        # overhead, byte-identical to every pre-existing production run.
         cm_gradient_backend::Symbol = :cplus,   # CM-C+ production integration 2026-07-23 (docs/CM_PRODUCTION_STATE_2026-07-23.md,
         # docs/CM_GRADIENT_ALGEBRA_TRACE_2026-07-22.md): :cplus (PRODUCTION DEFAULT --
         # cm_production_gradient_cplus/composite_gradient_at_Cplus_from_cache, lfix_cm_cplus.jl;
@@ -874,6 +882,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins,
             inner_fg_backend = inner_fg_backend)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
+    family_tag = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, mode_label)
     print_screen_startup_banner(mode_label)
@@ -1011,14 +1021,21 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         xf = xf_from_w_econ(w[1:D2_econ])
         νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
         local base, verify
+        cache_key = exact_cache === nothing ? nothing :
+            CMProductionEvalKey(collect(xf), collect(νvec), delta, find_smallest, pcx.ctx_cm.obj.inner_loop_opt,
+                family_tag, L, contrasts, meanzc_K_mean, meanzc_K_pair, A_coordinate_mode,
+                context_fingerprint(pcx.ctx_cm))
         try
-            if is_meanzc
-                _, base, verify = cm_meanzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
-            elseif is_frechet
-                _, base, verify = cm_frechet_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
-            else
-                _, base, verify = cm_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
-            end
+            base, verify = cm_cache_lookup_or_compute!(exact_cache, cache_key, () -> begin
+                if is_meanzc
+                    _, b, v = cm_meanzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
+                elseif is_frechet
+                    _, b, v = cm_frechet_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
+                else
+                    _, b, v = cm_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
+                end
+                return b, v
+            end)
         catch e
             # Closure task Phase 3B: narrowed further to the dedicated CMExpectedSolveFailure
             # type (cm_production_bundle.jl) -- see cm_outer_driver.jl's identical fix for the
