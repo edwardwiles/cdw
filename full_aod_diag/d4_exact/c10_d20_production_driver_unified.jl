@@ -209,7 +209,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, Ddest, W) : nothing
     theta_ws = layout.trade_elasticity_mode == :flexible ? build_theta_cplus_workspace(D, Ddest, W; h_theta = h_theta) : nothing
 
-    print_production_backend_manifest(resolve_unrestricted_manifest(; hessian_backend = :dense_exact, blas_threads = blas_threads,
+    print_production_backend_manifest(resolve_unrestricted_manifest(; blas_threads = blas_threads,   # 2026-07-25 continuation: read the LIVE UNRESTRICTED_CORE_HESSIAN_BACKEND[] default (matching run_profile_checkpointed/run_polish_checkpointed's own fix, both of which stopped hardcoding :dense_exact for the same reason: it was silently misreporting the shared winner-pair backend)
         trade_elasticity_mode = layout.trade_elasticity_mode, A_coordinate_mode = layout.A_coordinate_mode,
         gp_coordinate_mode = layout.gp_coordinate_mode,
         theta_bounds = layout.trade_elasticity_mode == :flexible ? (theta_lo, theta_hi) : nothing,
