@@ -205,6 +205,22 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     n_outer = outer_dim(layout, D, Ddest)
     rsc = build_ranged_screen_context(ctx)
     resolved_backend = price_cache_backend === nothing ? :cplus : price_cache_backend
+    # Phase F remediation (production-audit continuation, 2026-07-26): this kwarg previously
+    # accepted ANY Symbol but only ever had a live effect on whether lfix_c_ws gets built below --
+    # cb_G! (further down this function) unconditionally calls composite_gradient_at_Cplus(...,
+    # lfix_c_ws, ...), which requires ws::LFixFactorizedWorkspace (a concrete, non-nullable type).
+    # Passing any value other than :cplus/nothing therefore set lfix_c_ws=nothing and would have
+    # crashed with a confusing MethodError deep inside cb_G! mid-solve, not a clear error at
+    # call time -- confirmed live in the baseline static audit (this driver, unlike the older
+    # c10_d20_production_driver.jl, never ported the :pooled/:aplus/:kbplus alternative gradient
+    # backends; :cplus is the only gradient kernel this unified driver's own header describes:
+    # "Reuses ... the C+ gradient kernel (composite_gradient_at_Cplus) ... exactly as both prior
+    # drivers already did"). Fail fast with an actionable message instead of a silent no-op that
+    # only surfaces as a crash later.
+    resolved_backend == :cplus ||
+        error("run_polish_checkpointed_unified: price_cache_backend=:$resolved_backend is not " *
+              "supported -- this driver's cb_G! only ever calls the C+ gradient kernel " *
+              "(composite_gradient_at_Cplus); pass :cplus or nothing (default).")
     grad_pool = build_grad_workspace_pool(W)
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, Ddest, W) : nothing
     theta_ws = layout.trade_elasticity_mode == :flexible ? build_theta_cplus_workspace(D, Ddest, W; h_theta = h_theta) : nothing

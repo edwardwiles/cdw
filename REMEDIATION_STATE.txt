@@ -17,3 +17,4 @@ STATE: IMPLEMENTED_ON_FEATURE_BRANCH -> VALIDATED_THROUGH_PUBLIC_ENTRY_POINT -> 
 2026-07-26 Phase E part 2 (dense-vs-binfill benchmark) + gap-closing e2e tests (CM+ZC, common-Frechet): MATCHED_AB_PASSED. Benchmark: CM+ZC ~10.6% slower moments! wall-time but ~equal allocation vs flexible-CM bin-fill -- consistent with CM+ZC's extra mean/pair work, not the dense-column choice itself. Representation RETAINED as-is per task's own no-stylistic-change instruction.
 2026-07-26 Phase F item 1+2 (common-Frechet manifest resolver + CM+ZC congruence-label fix): MATCHED_AB_PASSED, real D=4 tests, both ALL PASS.
 2026-07-26 Phase F item 3 (stale origin-ZC docstring): comment-only fix, zero behavior change.
+2026-07-26 Phase F item 4 (price_cache_backend fail-fast validation): MATCHED_AB_PASSED, real D=20 test, ALL PASS. Phase F items 1-4 all complete. Item 5 (transformed_a default promotion) deferred pending user input.
