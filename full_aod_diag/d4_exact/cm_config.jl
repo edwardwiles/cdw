@@ -36,6 +36,16 @@ Production configuration for the common-marginals restriction.
   lookup construction, no persistent dense `W x ncm` matrix) or
   `:dense_reference` (Architecture A's generic dense Hessian, used as the
   trusted reference / equivalence-testing baseline, not for production speed).
+- `marginal_restriction::Symbol`: `:common_flexible` (default -- plain
+  flexible CM, `(D-1)*L` restrictions, byte-for-byte the pre-existing
+  behavior) or `:common_frechet` (fixed Fréchet as CM plus a common-level
+  anchor -- `D*L` restrictions, see `cm_frechet_level.jl` and
+  `docs/FRECHET_AS_CM_PLUS_LEVEL_MATHEMATICS_2026-07-25.md`). `:common_frechet`
+  currently REQUIRES `cm_hessian_backend=:dense_reference` (Architecture A) --
+  the winner-pair-backed `:structured` Hessian has not yet been extended for
+  the level block (Part III, in progress); `_cm_validate` errors on the
+  `(:common_frechet, :structured)` combination rather than allow a wrong or
+  unimplemented Hessian to run silently.
 """
 Base.@kwdef struct CMConfig
     common_marginals::Bool = false
@@ -45,6 +55,7 @@ Base.@kwdef struct CMConfig
     cm_basis::Symbol = :cumulative
     cm_hessian_backend::Symbol = :structured
     contrasts::Symbol = :anchored
+    marginal_restriction::Symbol = :common_flexible
 end
 
 function _cm_validate(cfg::CMConfig)
@@ -54,6 +65,15 @@ function _cm_validate(cfg::CMConfig)
         error("CMConfig: cm_basis must be :cumulative or :interval, got $(cfg.cm_basis)")
     cfg.cm_hessian_backend in (:structured, :dense_reference) ||
         error("CMConfig: cm_hessian_backend must be :structured or :dense_reference, got $(cfg.cm_hessian_backend)")
+    cfg.marginal_restriction in (:common_flexible, :common_frechet) ||
+        error("CMConfig: marginal_restriction must be :common_flexible or :common_frechet, got $(cfg.marginal_restriction)")
+    if cfg.marginal_restriction === :common_frechet
+        cfg.cm_basis === :cumulative ||
+            error("CMConfig: marginal_restriction=:common_frechet only supports cm_basis=:cumulative so far")
+        cfg.cm_hessian_backend === :dense_reference ||
+            error("CMConfig: marginal_restriction=:common_frechet requires cm_hessian_backend=:dense_reference " *
+                  "until Part III (winner-pair Architecture-C extension for the level block) lands")
+    end
     if cfg.cm_grid_rule === :equal
         cfg.cm_grid_size >= 1 || error("CMConfig: cm_grid_size must be >= 1")
     else
@@ -130,6 +150,15 @@ end
 function build_cm_production_context_v2(ctx, CS, cfg::CMConfig; L::Int = cfg.cm_grid_size)
     _cm_validate(cfg)
     probs = cm_resolve_probs_for_L(cfg, L)
+
+    if cfg.marginal_restriction === :common_frechet
+        # cm_frechet_level.jl -- only :cumulative basis / :dense_reference Hessian backend so far
+        # (enforced in _cm_validate above), so this branch has just one call site, unlike the
+        # (basis x backend) dispatch below.
+        pcx = build_cm_frechet_production_context(ctx, CS; L = L, contrasts = cfg.contrasts, probs = probs,
+                                                    cm_hessian_backend = cfg.cm_hessian_backend)
+        return (ctx_cm = pcx.ctx_cm, aug = pcx.aug, hess_cb_builder = pcx.hess_cb_builder, cfg = cfg, L = L)
+    end
 
     if cfg.cm_basis === :cumulative
         pcx = build_cm_production_context(ctx, CS; L = L, contrasts = cfg.contrasts, probs = probs,

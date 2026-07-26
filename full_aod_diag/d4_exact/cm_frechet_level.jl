@@ -177,3 +177,151 @@ function build_cm_frechet_level_augmented_obj(ctx, CS; L::Int, contrasts::Symbol
             level_targets = level_targets, level_probs = level_probs,
             marginal_restriction = :common_frechet)
 end
+
+# ================================================================================================
+# Architecture-B production path (real production driver's own moment-construction speed, no
+# persistent dense W x ncm matrix beyond the throwaway one used for z/origins/target bookkeeping).
+# Mirrors wrap_moments_with_cm_archB / build_cm_production_context (cm_production_bundle.jl)
+# EXACTLY, adding only the level-block fill call. Hessian side: for now (Part II wiring) this only
+# supports `cm_hessian_backend=:dense_reference` (Architecture A -- generic, differentiates the
+# augmented obj directly via `_callbackEvalH_inner_profiled!`, unchanged, no level-block-specific
+# code needed there). `:structured` (winner-pair-backed Architecture C) requires extending
+# CMBinHessCtx for the level block -- Part III, not yet done; guarded against below rather than
+# silently producing a wrong Hessian.
+# ================================================================================================
+
+"""
+    wrap_moments_with_cm_frechet_archB(core_moments!, ncore_full, Bidx, origins, refIndex1, L, R, D,
+                                        level_targets, ctx; chunk_size, use_compressed_core, core_cf_ref)
+
+Architecture-B analogue of `wrap_moments_with_cm_archB` (cm_hessian_architectures.jl) for the
+CM-plus-level restriction: identical core-column construction (same compressed-factual / dense
+fallback discipline, same `core_cf_ref` publishing for a future Part III Hessian callback), CM
+columns via the UNCHANGED `fill_cm_columns_from_bins!`, plus the level columns via
+`fill_frechet_level_columns_from_bins!` appended immediately after. Column layout:
+`[core (pregrav) | CM ((D-1)*L) | level (L) | gravity]` -- level block placed after CM, before the
+sole trailing gravity column, matching `wrap_moments_with_cm`'s own splicing convention.
+"""
+function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full::Int,
+                                             Bidx::Matrix{Int}, origins::Vector{Int}, refIndex1::Int, L::Int,
+                                             R::Union{Nothing,Matrix{Float64}}, D::Int, level_targets::Vector{Float64},
+                                             ctx; chunk_size::Int = 2000, use_compressed_core::Bool = true,
+                                             core_cf_ref::Ref{Any} = Ref{Any}(nothing))
+    pregrav = ncore_full - 1
+    nO = length(origins)
+    Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
+    cs = min(chunk_size, size(Bidx, 1))
+    prod_scratch = R === nothing ? nothing : Matrix{Float64}(undef, cs, nO)
+    return function (K, G, θ, U, obj)
+        n = size(U, 1)
+        if size(Gtmp_cache[], 1) != n
+            Gtmp_cache[] = Matrix{Float64}(undef, n, ncore_full)
+        end
+        Gtmp = Gtmp_cache[]
+        if use_compressed_core
+            try
+                cf = build_compressed_factual(θ, ctx; check_ties = true)
+                materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
+                grav_raw = compressed_gravity_raw(θ, ctx)
+                fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
+                fill_K_directgp!(K, θ, ctx)
+                core_cf_ref[] = cf
+            catch e
+                e isa TiedWinnerError || rethrow()
+                core_moments!(K, Gtmp, θ, U, obj)
+                core_cf_ref[] = :tied_winner
+            end
+        else
+            core_moments!(K, Gtmp, θ, U, obj)
+            core_cf_ref[] = :compressed_state_unavailable
+        end
+        @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
+        @views G[:, end] .= Gtmp[:, end]
+        cm_cols = pregrav + 1 : pregrav + L * nO
+        fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
+                                    chunk_size = chunk_size, prod_scratch = prod_scratch)
+        level_cols = pregrav + L * nO + 1 : pregrav + L * nO + L
+        fill_frechet_level_columns_from_bins!(@view(G[:, level_cols]), Bidx, D, L, level_targets;
+                                               chunk_size = chunk_size)
+        return nothing
+    end
+end
+
+"""
+    build_cm_frechet_production_context(ctx, CS; L, contrasts=:anchored, probs=nothing,
+                                         use_compressed_core=true, cm_hessian_backend=:dense_reference)
+        -> (ctx_cm=..., aug=..., hess_cb_builder=...)
+
+Production entry point for the `:common_frechet` marginal restriction mode -- Architecture-B
+moment construction (real production speed), reusing `build_cm_frechet_level_augmented_obj`'s dense
+`z`/`origins`/`level_targets` bookkeeping (computed once, theta-independent) but building the actual
+per-call `G` via bin-lookup, exactly as `build_cm_production_context` does for plain flexible CM.
+
+`cm_hessian_backend`: only `:dense_reference` (Architecture A, generic dense differentiation of the
+augmented obj -- `archA_hess_cb_builder`, unchanged, correct for any restriction family) is wired
+here. `:structured` (winner-pair-backed Architecture C) needs the CMBinHessCtx level-block extension
+(Part III of the task) -- requesting it here raises an error rather than silently falling back to
+a wrong or slow path.
+"""
+function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol = :anchored,
+                                              probs::Union{Nothing,AbstractVector{Float64}} = nothing,
+                                              use_compressed_core::Bool = true,
+                                              cm_hessian_backend::Symbol = :dense_reference)
+    cm_hessian_backend === :dense_reference ||
+        error("build_cm_frechet_production_context: cm_hessian_backend=$cm_hessian_backend not yet " *
+              "supported for marginal_restriction=:common_frechet -- the winner-pair-backed " *
+              "structured Hessian (Part III) has not been wired for the level block yet. Use " *
+              ":dense_reference (Architecture A) for now.")
+
+    aug = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+    D = ctx.D
+    refIndex1 = aug.refIndex1
+    R = contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
+    Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
+
+    core_cf_ref = Ref{Any}(nothing)
+    moments_archB! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
+        refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref)
+
+    obj0 = aug.obj_cm
+    obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
+        γ = obj0.γ, (moments!) = moments_archB!, moments_jacobian! = error,
+        d = obj0.d, outer_constr_index = obj0.outer_constr_index,
+        inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
+        l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
+        use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
+        outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
+        needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
+
+    ctx_cm = merge(ctx, (obj = obj_cm,))
+    aug = merge(aug, (core_cf_ref = core_cf_ref, Bidx = Bidx))
+    hess_cb_builder = archA_hess_cb_builder
+    return (ctx_cm = ctx_cm, aug = aug, hess_cb_builder = hess_cb_builder)
+end
+
+"""
+    print_frechet_startup_manifest(cfg, D::Int, L::Int)
+
+Task Part II §6's required startup manifest, machine-readable and printed once per driver launch
+when `cfg.marginal_restriction === :common_frechet`. `frechet_level_count = 1` is PER THRESHOLD (one
+level column added per threshold, vs `cm_contrast_count = D-1` CM columns per threshold) -- the
+two multiply out to `total_marginal_moments = D*L` exactly (task §3's DL-restrictions claim).
+No-op (returns without printing) when `cfg.marginal_restriction !== :common_frechet`, so callers can
+call this unconditionally at startup without an external guard. `cfg` is untyped (not `::CMConfig`)
+so this file has no include-order dependency on `cm_config.jl` (which itself depends on this file's
+`build_cm_frechet_production_context`) -- the two files close a small mutual-reference cycle that
+resolves fine in Julia as long as neither uses the other's type at PARSE time, only at call time.
+"""
+function print_frechet_startup_manifest(cfg, D::Int, L::Int)
+    cfg.marginal_restriction === :common_frechet || return nothing
+    println("marginal_restriction = common_frechet")
+    println("frechet_feature_set = cdf_only")
+    println("frechet_basis = cm_contrasts_plus_common_level")
+    println("frechet_grid_size = $L")
+    println("cm_contrast_count = $(D - 1)")
+    println("frechet_level_count = 1")
+    println("total_marginal_moments = $(D * L)")
+    println("cm_contrasts = $(cfg.contrasts)")
+    println("core_hessian_backend = $(cfg.cm_hessian_backend === :dense_reference ? :dense_reference : :exact_winner_pair_parallel)")
+    return nothing
+end
