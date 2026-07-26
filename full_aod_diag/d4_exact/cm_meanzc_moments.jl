@@ -309,7 +309,7 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
         G_tmp = Gtmp_cache[]
         if can_compress
             try
-                cf = build_compressed_factual(collect(θ_econ), ctx; check_ties = true)
+                cf = cf_build(collect(θ_econ), ctx; check_ties = true)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
                 materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
                 grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
                 fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)

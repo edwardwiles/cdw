@@ -220,7 +220,7 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
         Gtmp = Gtmp_cache[]
         if use_compressed_core
             try
-                cf = build_compressed_factual(θ, ctx; check_ties = true)
+                cf = cf_build(θ, ctx; check_ties = true)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
                 materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
                 grav_raw = compressed_gravity_raw(θ, ctx)
                 fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)

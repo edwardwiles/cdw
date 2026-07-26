@@ -3,6 +3,7 @@ isdefined(Main, :_callbackEvalFG_inner_cmlookup!) || include(joinpath(@__DIR__, 
 isdefined(Main, :inner_loop_internal_cmlookup_production) || include(joinpath(@__DIR__, "cm_lookup_production.jl"))
 isdefined(Main, :DualBank) || include(joinpath(@__DIR__, "dual_bank.jl"))
 isdefined(Main, :RestrictedDualBank) || include(joinpath(@__DIR__, "cm_dual_bank_production.jl"))   # Phase D remediation (2026-07-26)
+isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # Phase E remediation (2026-07-26)
 
 # ============================================================================
 # Continuation 13, Sections 3A + 5: production combined bundle.

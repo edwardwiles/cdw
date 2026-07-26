@@ -164,3 +164,19 @@ function attach_compressed_factual_workspace(ctx, D::Int, Ddest::Int, W::Int)
         existing : build_compressed_factual_workspace(D, Ddest, W)
     return merge(ctx, (cf_workspace = ws,))
 end
+
+"""
+    cf_build(θ_full, ctx; check_ties=true) -> CompressedFactual
+
+Phase E remediation (production-audit continuation, 2026-07-26): dispatch helper used by the four
+restricted families' `moments!` closures (`cm_hessian_architectures.jl`, `cm_meanzc_moments.jl`,
+`cm_frechet_level.jl`, `cm_originzc_moments.jl`) -- reuses `ctx.cf_workspace` via
+`build_compressed_factual!` when the caller attached one (`attach_compressed_factual_workspace`),
+falls back to the original allocating `build_compressed_factual` otherwise (every pre-existing
+caller that never attaches a workspace is completely unaffected). Bit-identical output either way
+(same guarantee `build_compressed_factual!`'s own docstring already establishes).
+"""
+cf_build(θ_full::AbstractVector, ctx; check_ties::Bool = true) =
+    hasproperty(ctx, :cf_workspace) ?
+        build_compressed_factual!(ctx.cf_workspace, θ_full, ctx; check_ties = check_ties) :
+        build_compressed_factual(θ_full, ctx; check_ties = check_ties)
