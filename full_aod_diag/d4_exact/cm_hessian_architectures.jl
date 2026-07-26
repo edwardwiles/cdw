@@ -380,6 +380,15 @@ mutable struct CMBinHessCtx
     # restriction block there). The true winner-pair core is only the first `ncore_core` of those
     # `NCORE` columns; `ncore_core == NCORE` for plain flexible CM (no widening).
     ncore_core::Int
+    # Remediation task Phase B1 (production-audit continuation, 2026-07-26): which inner FG
+    # (forward/backward) callback the KNITRO inner dual solve registers. :dense_reference (default
+    # -- unchanged, byte-identical to every pre-existing production run) | :cm_lookup (the
+    # validated O(W*(D-1)) lookup kernel, cm_lookup_kernels.jl/cm_lookup_production.jl -- ONLY
+    # valid for plain flexible CM, marginal_restriction=:common_flexible + cm_extension=:cm_only;
+    # callers must not set this for common_frechet or meanzc configs, see
+    # cm_lookup_production.jl's own header). Hessian math is completely unaffected either way --
+    # this field only selects the FG callback, archC_hess_cb_builder(cctx) is reused unmodified.
+    inner_fg_backend::Symbol
 end
 
 """
@@ -392,7 +401,8 @@ whatever CM matrix Architecture A is using.
 """
 function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
-        core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[])
+        core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[],
+        inner_fg_backend::Symbol = CM_INNER_FG_BACKEND_DEFAULT[])
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE = aug.ncore; ncm = aug.ncm
@@ -412,7 +422,7 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
         nothing, false,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
-        NCORE)
+        NCORE, inner_fg_backend)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true

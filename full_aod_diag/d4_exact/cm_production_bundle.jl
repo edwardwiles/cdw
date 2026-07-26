@@ -1,3 +1,7 @@
+isdefined(Main, :CMLookupState) || include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
+isdefined(Main, :_callbackEvalFG_inner_cmlookup!) || include(joinpath(@__DIR__, "cm_lookup_live_knitro.jl"))
+isdefined(Main, :inner_loop_internal_cmlookup_production) || include(joinpath(@__DIR__, "cm_lookup_production.jl"))
+
 # ============================================================================
 # Continuation 13, Sections 3A + 5: production combined bundle.
 #
@@ -59,11 +63,15 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
                                       # dense EK_moments_gammanorm_directgp! path (false, kept for
                                       # correctness comparison/emergency revert) -- see
                                       # wrap_moments_with_cm_archB's own docstring.
-                                      threaded_bins::Bool = true)   # allocation/Hessian port task §6:
+                                      threaded_bins::Bool = true,   # allocation/Hessian port task §6:
                                       # pass-through to build_cm_bin_ctx -- true (production default,
                                       # matches build_cm_bin_ctx's own default) selects the threaded
                                       # Architecture-C Hessian; false is an explicit opt-out/benchmark-
                                       # only comparison against the original serial implementation.
+                                      inner_fg_backend::Symbol = CM_INNER_FG_BACKEND_DEFAULT[])   # Phase B1
+                                      # remediation (2026-07-26): pass-through to build_cm_bin_ctx --
+                                      # :dense_reference (default, unchanged) | :cm_lookup (plain
+                                      # flexible CM only, see cm_lookup_production.jl).
     aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
     # 2026-07-25 continuation (task §2 runtime counters investigation): `build_cm_production_context`
@@ -105,7 +113,12 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     ctx_cm = merge(ctx, (obj = obj_cm,))
     bins = cm_bin_indices_for(ctx, aug)
     aug = merge(aug, (core_cf_ref = core_cf_ref,))   # so build_cm_bin_ctx's hasproperty(aug,:core_cf_ref) picks up the SAME ref the moments closure writes to
-    cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins)
+    # inner_fg_backend=:cm_lookup is only ever reachable through THIS function (build_cm_production_context
+    # is the plain flexible-CM builder -- common-Frechet and CM+meanZC each have their OWN separate
+    # build_cm_frechet_production_context/build_cm_meanzc_production_context, neither of which
+    # accepts this kwarg), so the "plain flexible CM only" scope restriction from
+    # cm_lookup_production.jl's header is structural here, not enforced by an extra runtime check.
+    cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins, inner_fg_backend = inner_fg_backend)
     return (ctx_cm = ctx_cm, aug = aug, bins = bins, cctx = cctx)
 end
 
@@ -151,8 +164,10 @@ made AT the reported solution).
 function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx)
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
-    K, x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
-        hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+    K, x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
+        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
+        inner_loop_internal_archgeneric(obj, θ_full0;
+            hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, copy(obj.arg1), nStatus)
@@ -187,8 +202,10 @@ decision, via `cm_production_value_verified` below) should call this, not `archC
 function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx)
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
-    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
-        hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+    K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
+        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
+        inner_loop_internal_archgeneric(obj, θ_full0;
+            hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])

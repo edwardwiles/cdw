@@ -112,6 +112,18 @@ const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_work
 const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
 
 """
+Remediation task Phase B1 (production-audit continuation, 2026-07-26): which inner FG
+(forward/backward) callback the CM family's KNITRO inner dual solve registers.
+:dense_reference (default -- unchanged, byte-identical to every pre-existing production run) |
+:cm_lookup (validated O(W*(D-1)) lookup kernel, cm_lookup_kernels.jl/cm_lookup_production.jl --
+plain flexible CM ONLY, see cm_lookup_production.jl's own header for why common_frechet/meanzc
+are out of scope for this specific kernel). Global default + per-CMBinHessCtx override, same
+discipline as CM_CORE_HESSIAN_BACKEND_DEFAULT above -- Hessian backend selection is completely
+independent of this.
+"""
+const CM_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+
+"""
     record_core_hessian_call!(backend; fallback_reason=nothing)
 
 Record ONE Hessian-callback EXECUTION at the given backend -- called from
