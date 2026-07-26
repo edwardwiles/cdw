@@ -23,6 +23,7 @@ isdefined(Main, :make_flexible_theta) || error("c10_d20_production_driver_unifie
 isdefined(Main, :theta_fixed_dual_delta_pivot_A) || error("c10_d20_production_driver_unified.jl requires flexible_theta_aspace_production.jl to already be included.")
 isdefined(Main, :print_production_backend_manifest) || error("c10_d20_production_driver_unified.jl requires production_backend_manifest.jl to already be included.")
 isdefined(Main, :set_production_outer_algorithm!) || error("c10_d20_production_driver_unified.jl requires knitro_outer_algorithm.jl to already be included.")
+isdefined(Main, :theta_cplus_secant) || include(joinpath(@__DIR__, "theta_cplus.jl"))
 
 const CHECKPOINT_SCHEMA_UNIFIED = 1
 
@@ -206,6 +207,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     resolved_backend = price_cache_backend === nothing ? :cplus : price_cache_backend
     grad_pool = build_grad_workspace_pool(W)
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, Ddest, W) : nothing
+    theta_ws = layout.trade_elasticity_mode == :flexible ? build_theta_cplus_workspace(D, Ddest, W; h_theta = h_theta) : nothing
 
     print_production_backend_manifest(resolve_unrestricted_manifest(; hessian_backend = :dense_exact, blas_threads = blas_threads,
         trade_elasticity_mode = layout.trade_elasticity_mode, A_coordinate_mode = layout.A_coordinate_mode,
@@ -382,15 +384,19 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
         if layout.trade_elasticity_mode == :flexible
             t_theta0 = time()
-            inner_x_fixed = copy(ctx.obj.x)
-            w_plus = copy(w); w_plus[1] += h_theta
-            D_plus = theta_fixed_dual_delta_pivot_A(w_plus, inner_x_fixed, ctx, xy)
-            w_minus = copy(w); w_minus[1] -= h_theta
-            D_minus = theta_fixed_dual_delta_pivot_A(w_minus, inner_x_fixed, ctx, xy)
-            grad_eta_theta = (D_plus - D_minus) / (2 * h_theta)
-            θ_full_base = CS.reconstruct_full(d.xf, ctx.m)
-            ctx.obj.moments!(@view(ctx.obj.H[:, 1]), CS.select_G_from_H(ctx.obj, ctx.obj.H), θ_full_base, ctx.obj.U, ctx.obj)
-            ctx.obj.H[:, 2] .= 1.0
+            # theta C+ fast fixed-dual secant (2026-07-26): replaces the old theta_fixed_dual_
+            # delta_pivot_A brute-force path (generic obj.moments!/CS.reconstruct_full, ~1.4s/
+            # ~743MB per probe) with the compressed winner-form pipeline (build_compressed_
+            # factual!/compressed_cc_value_grad) -- an EXACT full re-scan of every origin at both
+            # perturbed theta values (addendum: no stability-radius shortcut), routed through
+            # already-existing/already-validated production machinery instead of the dense path.
+            # No copy(w)/w_plus/w_minus (theta_cplus_secant reads gp/a_nonpivot via a view into
+            # w), and no third base-point reconstruction: verified dead (see theta_cplus.jl header
+            # -- ctx.obj.H gets unconditionally rebuilt by inner_loop_internal at the START of the
+            # next real inner solve regardless, and hessian! -- obj.H's only reader -- never fires
+            # at the outer-gradient-callback level).
+            sec = theta_cplus_secant(w, ctx, xy, pgc, base, theta_ws)
+            grad_eta_theta = sec.grad_eta_theta
             theta_total_wall[] += time() - t_theta0
             jac_full = vcat(grad_eta_theta, gfull_reduced)
             evalResult.objGrad .= 0.0; evalResult.objGrad[2] = find_smallest ? 1.0 : -1.0
