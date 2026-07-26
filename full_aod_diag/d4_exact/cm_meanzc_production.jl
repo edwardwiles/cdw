@@ -56,7 +56,10 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
         nothing, false,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
-        aug.ncore_econ)
+        aug.ncore_econ, :dense_reference)   # Phase B1 remediation (2026-07-26): CM+ZC does not
+        # support inner_fg_backend=:cm_lookup (CMLookupState is CM-grid-only, no mean/pair block --
+        # see cm_lookup_production.jl's own header) -- hardcoded :dense_reference is the ONLY
+        # valid value here, not a caller-supplied kwarg.
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
