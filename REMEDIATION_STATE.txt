@@ -1,0 +1,10 @@
+BASELINE_STATIC_AUDIT_FROZEN
+
+Branch: port/remediate-production-5x7-audit-2026-07-26
+Base: production/fullA-exact @ f1fa8e770759c62b3f96c1024dd310f235ea463e (== origin, verified)
+Base tag: common-frechet-cdf-cm-plus-level-production-ready-2026-07-26
+Baseline static audit report (unchanged, frozen): see
+  docs/PRODUCTION_5X7_AUDIT_BASELINE_AND_REMEDIATION_SIZING_2026-07-26.md (copied in below)
+
+State log (append-only, one line per transition):
+2026-07-26 BASELINE_STATIC_AUDIT_FROZEN
