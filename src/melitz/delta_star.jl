@@ -347,16 +347,20 @@ function melitz_moments_adapter!(K, G, theta, U, obj)
     # script surveyed this session does this; `MelitzSortedTailContext`'s own content
     # fingerprint is available to a caller wanting a stronger, if costlier, guard).
     backend = get(ctx, :moment_backend, :dense_reference)
-    if backend == :sorted_tail_serial
+    if backend == :sorted_tail_serial || backend == :sorted_tail_parallel
         sorted_ctx = ctx.sorted_tail_ctx
         sorted_ctx === nothing && throw(ArgumentError(
-            "melitz_moments_adapter!: ctx.moment_backend=:sorted_tail_serial but " *
+            "melitz_moments_adapter!: ctx.moment_backend=$backend but " *
             "ctx.sorted_tail_ctx is nothing -- was the ctx built without moment_backend " *
             "passed to build_melitz_psi_bundle/build_melitz_psi_bundle_from_calibration?"))
         size(U) == (sorted_ctx.W, sorted_ctx.D) || throw(ArgumentError(
             "melitz_moments_adapter!: U is $(size(U)) but sorted_tail_ctx was built for " *
             "($(sorted_ctx.W), $(sorted_ctx.D)) -- stale sorted context"))
-        melitz_moments_sorted_tail!(K, G, primitives, eq, cf, sorted_ctx, ctx.moment_layout; X_data=ctx.X_data)
+        if backend == :sorted_tail_serial
+            melitz_moments_sorted_tail!(K, G, primitives, eq, cf, sorted_ctx, ctx.moment_layout; X_data=ctx.X_data)
+        else
+            melitz_moments_sorted_tail_parallel!(K, G, primitives, eq, cf, sorted_ctx, ctx.moment_layout; X_data=ctx.X_data)
+        end
     elseif backend == :dense_reference
         melitz_moments!(K, G, primitives, eq, cf, U, ctx.moment_layout; X_data=ctx.X_data)
     else
@@ -408,9 +412,9 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   moment_backend::Symbol=:dense_reference)
     outer_parameterization in (:logf, :logcutoff) || throw(ArgumentError(
         "outer_parameterization must be :logf or :logcutoff, got $outer_parameterization"))
-    moment_backend in (:dense_reference, :sorted_tail_serial) || throw(ArgumentError(
-        "build_melitz_psi_bundle: moment_backend must be :dense_reference or " *
-        ":sorted_tail_serial, got $moment_backend"))
+    moment_backend in (:dense_reference, :sorted_tail_serial, :sorted_tail_parallel) || throw(ArgumentError(
+        "build_melitz_psi_bundle: moment_backend must be :dense_reference, " *
+        ":sorted_tail_serial, or :sorted_tail_parallel, got $moment_backend"))
     p, eq, cf = data.primitives, data.equilibrium, data.counterfactual
     D = p.D
     j = p.target_country
@@ -422,8 +426,10 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
 
     # 2026-07-25 sorted-tail session: built ONCE here (never inside a callback) from the
     # SAME z_draws the bundle itself will carry as obj.U -- see melitz_moments_adapter!'s
-    # docstring for the dispatch and its residual-risk caveat.
-    sorted_tail_ctx = moment_backend == :sorted_tail_serial ?
+    # docstring for the dispatch and its residual-risk caveat. Both sorted backends share
+    # the SAME context (:sorted_tail_serial/:sorted_tail_parallel differ only in whether
+    # melitz_moments_adapter! threads the trade-share loop, not in what is precomputed).
+    sorted_tail_ctx = moment_backend in (:sorted_tail_serial, :sorted_tail_parallel) ?
         build_melitz_sorted_tail_context(z_draws, p.sigma; theta_star=p.theta_star) : nothing
 
     ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,

@@ -1120,9 +1120,9 @@ function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
         inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
         outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
         moment_backend::Symbol=:dense_reference, z_draws::Union{Nothing,AbstractMatrix}=nothing)
-    moment_backend in (:dense_reference, :sorted_tail_serial) || throw(ArgumentError(
-        "melitz_calibration_outer_ctx: moment_backend must be :dense_reference or " *
-        ":sorted_tail_serial, got $moment_backend"))
+    moment_backend in (:dense_reference, :sorted_tail_serial, :sorted_tail_parallel) || throw(ArgumentError(
+        "melitz_calibration_outer_ctx: moment_backend must be :dense_reference, " *
+        ":sorted_tail_serial, or :sorted_tail_parallel, got $moment_backend"))
     D = calib.D
     j = calib.target_country
     p = MelitzPrimitives(D, calib.sigma, calib.theta_star, j, calib.tau, calib.w, calib.A, calib.f, calib.gamma_prime_target)
@@ -1133,9 +1133,9 @@ function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
     c_full, A_pivot = build_gravity_pivots(p.tau, j)
     outer_layout = melitz_outer_layout(D, j)
 
-    if moment_backend == :sorted_tail_serial
+    if moment_backend in (:sorted_tail_serial, :sorted_tail_parallel)
         z_draws === nothing && throw(ArgumentError(
-            "melitz_calibration_outer_ctx: moment_backend=:sorted_tail_serial requires " *
+            "melitz_calibration_outer_ctx: moment_backend=$moment_backend requires " *
             "the SAME z_draws the bundle will use, passed via the z_draws kwarg"))
         sorted_tail_ctx = build_melitz_sorted_tail_context(z_draws, p.sigma; theta_star=p.theta_star)
     else

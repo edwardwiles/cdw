@@ -49,6 +49,7 @@ include(joinpath(MELITZ_DIR, "origin_block_screen.jl"))
 include(joinpath(MELITZ_DIR, "localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "argument_localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "direct_gradient.jl"))
+include(joinpath(MELITZ_DIR, "sorted_crossing_gradient.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(MELITZ_DIR, "nuisance_profile.jl"))
 
@@ -1167,6 +1168,61 @@ end
             K_bad = zeros(calib.D^2 + 1); G_bad = zeros(15_000, calib.D^2 + 1)
             @test_throws ArgumentError melitz_moments_adapter!(K_bad, G_bad, theta_sorted, obj_bad.U, obj_bad)
         end
+
+        @testset "Phase 11 follow-up (2026-07-25): :sorted_tail_parallel backend wired and reproduces :dense_reference" begin
+            obj_dense, theta_dense = build_melitz_psi_bundle_from_calibration(calib; W=20_000, seed=1,
+                moment_backend=:dense_reference)
+            obj_par, theta_par = build_melitz_psi_bundle_from_calibration(calib; W=20_000, seed=1,
+                moment_backend=:sorted_tail_parallel)
+            @test obj_par.γ.moment_backend == :sorted_tail_parallel
+            @test obj_par.γ.sorted_tail_ctx !== nothing
+            @test theta_dense == theta_par
+
+            lfd_dense = melitz_recover_lfd(obj_dense, theta_dense)
+            lfd_par = melitz_recover_lfd(obj_par, theta_par)
+            @test lfd_par.nStatus == 0
+            @test lfd_par.lfd_ok
+            @test isapprox(lfd_dense.Delta, lfd_par.Delta; atol=1e-8, rtol=1e-8)
+            @test isapprox(lfd_dense.weights, lfd_par.weights; atol=1e-8, rtol=1e-8)
+
+            @test_throws ArgumentError build_melitz_psi_bundle_from_calibration(calib; W=20_000, seed=1,
+                moment_backend=:bogus_backend)
+        end
+
+        @testset "Phase 6/7 (2026-07-25): sorted crossing-slice gradient at real D=20/W=80,000" begin
+            inner_opt_d20 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options_capped_2026-07-24.opt")
+            obj_d20_inner, theta_d20 = build_melitz_psi_bundle_from_calibration(calib; W=80_000, seed=1,
+                inner_loop_opt=inner_opt_d20, moment_backend=:sorted_tail_serial)
+            ctx_d20 = obj_d20_inner.γ
+            @test ctx_d20.sorted_tail_ctx !== nothing
+
+            lfd_d20 = melitz_recover_lfd(obj_d20_inner, theta_d20)
+            @test lfd_d20.nStatus == 0
+
+            obj_d20 = build_melitz_implicit_bundle(ctx_d20, obj_d20_inner.U, theta_d20; delta=1.0,
+                find_smallest=true, gradient_backend=:B_direct_argument_serial, h=1e-4,
+                inner_loop_opt=inner_opt_d20,
+                outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"))
+            obj_d20.use_cached_x = false; obj_d20.x .= NaN
+            _, x_d20, nStatus_d20 = CounterfactualSensitivity.inner_loop_internal(obj_d20, theta_d20)
+            @test nStatus_d20 == 0
+            obj_d20.x .= x_d20
+
+            n_d20 = length(theta_d20)
+            direct_serial_d20 = make_melitz_gradient_delta_direct_serial(1e-4)
+            direct_sorted_d20 = make_melitz_gradient_delta_direct_sorted_serial(1e-4)
+            g_ref_d20 = zeros(n_d20)
+            g_sorted_d20 = zeros(n_d20)
+            direct_serial_d20(g_ref_d20, theta_d20, ctx_d20, obj_d20, x_d20)
+            direct_sorted_d20(g_sorted_d20, theta_d20, ctx_d20, obj_d20, x_d20)
+
+            rng_d20 = MersenneTwister(99)
+            coords_d20 = union(Set([1]), Set(rand(rng_d20, 1:n_d20, 24)))
+            for r in coords_d20
+                rel = abs(g_ref_d20[r] - g_sorted_d20[r]) / max(abs(g_ref_d20[r]), 1.0)
+                @test rel < 1e-6
+            end
+        end
     else
         @info "Skipping calibration-context real-KNITRO testset (cc_algo/KNITRO not available)"
     end
@@ -1890,6 +1946,74 @@ if KNITRO_AVAILABLE
                 direction=:upper, gradient_backend=:B_direct_argument_parallel, inner_loop_opt=inner_opt_dg)
             @test r_probe_par.nStatus == 0
             @test r_probe_par.obj_value == r_probe.obj_value
+        end
+    end
+
+    # ========================================================================
+    # 2026-07-25 sorted-tail session continuation, Phase 6/7 (docs/melitz_sorted_tail_optimization_2026-07-25.md
+    # Section D.1): the sorted CROSSING-SLICE variant of the direct fixed-dual gradient
+    # backend (src/melitz/sorted_crossing_gradient.jl). Self-contained fixture, built WITH
+    # moment_backend=:sorted_tail_serial so ctx carries the required sorted_tail_ctx.
+    # ========================================================================
+    @testset "Phase 6/7 (2026-07-25): sorted crossing-slice direct gradient backend (:B_direct_argument_sorted_serial)" begin
+        fixture_cg = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        inner_opt_cg = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        outer_opt_cg = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+        obj_cg_inner, theta_cg = build_melitz_psi_bundle(fixture_cg; inner_loop_opt=inner_opt_cg,
+            needs_outer_moment_jacobian=false, moment_backend=:sorted_tail_serial)
+        ctx_cg = obj_cg_inner.γ
+        @test ctx_cg.sorted_tail_ctx !== nothing
+
+        obj_cg = build_melitz_implicit_bundle(ctx_cg, obj_cg_inner.U, theta_cg; delta=1.0,
+            find_smallest=true, gradient_backend=:B_direct_argument_serial, h=1e-4,
+            inner_loop_opt=inner_opt_cg, outer_loop_opt=outer_opt_cg)
+        obj_cg.use_cached_x = false; obj_cg.x .= NaN
+        _, x_cg, nStatus_cg = CounterfactualSensitivity.inner_loop_internal(obj_cg, theta_cg)
+        @test nStatus_cg in (0, -100, -101, -103)
+        obj_cg.x .= x_cg
+
+        n_cg = length(theta_cg)
+        direct_serial_cg = make_melitz_gradient_delta_direct_serial(1e-4)
+        direct_sorted_cg = make_melitz_gradient_delta_direct_sorted_serial(1e-4)
+        g_ref = zeros(n_cg)
+        g_sorted = zeros(n_cg)
+        direct_serial_cg(g_ref, theta_cg, ctx_cg, obj_cg, x_cg)
+        direct_sorted_cg(g_sorted, theta_cg, ctx_cg, obj_cg, x_cg)
+
+        @testset "EVERY coordinate at D=4 agrees with the direct serial backend to near machine precision" begin
+            for r in 1:n_cg
+                rel = abs(g_ref[r] - g_sorted[r]) / max(abs(g_ref[r]), 1.0)
+                @test rel < 1e-8
+            end
+        end
+
+        @testset "agrees with an independent frozen-x finite difference at a random coordinate" begin
+            rng_cg = MersenneTwister(4041)
+            r = rand(rng_cg, 1:n_cg)
+            h_cg = 1e-4
+            ei_cg = zeros(n_cg); ei_cg[r] = 1.0
+            Kbuf_cg = zeros(size(obj_cg.U, 1))
+            Gbuf_cg = zeros(size(obj_cg.U, 1), ctx_cg.moment_layout.num_moments)
+            melitz_moments_adapter_outer!(Kbuf_cg, Gbuf_cg, theta_cg .+ h_cg .* ei_cg, obj_cg.U, obj_cg)
+            obj_cg.H[:, 1] .= Kbuf_cg; obj_cg.H[:, 3:end] .= Gbuf_cg
+            cp_cg = zeros(1); obj_cg(x_cg, constr=cp_cg)
+            melitz_moments_adapter_outer!(Kbuf_cg, Gbuf_cg, theta_cg .- h_cg .* ei_cg, obj_cg.U, obj_cg)
+            obj_cg.H[:, 1] .= Kbuf_cg; obj_cg.H[:, 3:end] .= Gbuf_cg
+            cm_cg = zeros(1); obj_cg(x_cg, constr=cm_cg)
+            fd_grad_cg = (cp_cg[1] - cm_cg[1]) / (2h_cg)
+            @test isapprox(g_sorted[r], fd_grad_cg; rtol=1e-6, atol=1e-6)
+            melitz_moments_adapter_outer!(Kbuf_cg, Gbuf_cg, theta_cg, obj_cg.U, obj_cg)
+            obj_cg.H[:, 1] .= Kbuf_cg; obj_cg.H[:, 3:end] .= Gbuf_cg
+        end
+
+        @testset "requires ctx.sorted_tail_ctx -- rejects a ctx built without it" begin
+            obj_plain_inner, theta_plain = build_melitz_psi_bundle(fixture_cg; inner_loop_opt=inner_opt_cg,
+                needs_outer_moment_jacobian=false)  # default moment_backend=:dense_reference
+            ctx_plain = obj_plain_inner.γ
+            @test get(ctx_plain, :sorted_tail_ctx, nothing) === nothing
+            g_bad = zeros(n_cg)
+            @test_throws ArgumentError direct_sorted_cg(g_bad, theta_plain, ctx_plain, obj_cg, x_cg)
         end
     end
 

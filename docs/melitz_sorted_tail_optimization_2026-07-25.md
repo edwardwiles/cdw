@@ -3,30 +3,34 @@
 Branch: `melitz/fullD-delta-star` (`trade_robustness_modular`), continuing from
 `docs/melitz_real_d20_scaled_knitro_and_profile_2026-07-25.md`. New: `src/melitz/sorted_tail.jl`
 (`MelitzSortedTailContext`, `melitz_active_tail_start`, `melitz_moments_sorted_tail!`,
-`melitz_moments_sorted_tail_parallel!`, `melitz_sorted_tail_diagnostics`); additive
+`melitz_moments_sorted_tail_parallel!`, `melitz_sorted_tail_diagnostics`);
+`src/melitz/sorted_crossing_gradient.jl` (new, same-day continuation -- the sorted
+crossing-slice direct-gradient backend, `:B_direct_argument_sorted_serial`); additive
 `moment_backend` kwarg on `build_melitz_psi_bundle`/`build_melitz_psi_bundle_from_calibration`/
 `melitz_calibration_outer_ctx` and backend dispatch in `melitz_moments_adapter!`
-(`src/melitz/delta_star.jl`, `src/melitz/pareto_calibration.jl`); new tests
-(`test/melitz/runtests.jl`, "Sorted-tail moment construction (2026-07-25)" and "Phase 11");
-`scripts/melitz_sorted_tail_benchmark_2026-07-25.jl` (new).
+(`src/melitz/delta_star.jl`, `src/melitz/pareto_calibration.jl`, now including
+`:sorted_tail_parallel`); new tests (`test/melitz/runtests.jl`, "Sorted-tail moment
+construction (2026-07-25)", "Phase 11", "Phase 11 follow-up", "Phase 6/7");
+`scripts/melitz_sorted_tail_benchmark_2026-07-25.jl` and
+`scripts/melitz_sorted_tail_scaling_2026-07-25.jl` (new).
 
 **Scope discipline, stated up front, in the same spirit as every prior session in this
 repo's Melitz history**: the governing prompt is a 14-phase program spanning moment
 construction, outer-gradient crossing-slice updates, sorted dual-argument construction,
 suffix-sum inner-gradient construction, and same-origin Hessian structure, each with its
-own multi-D/multi-W/multi-thread benchmark grid. This session completes Phases 0-3, 5 in
-full (the sorted-tail context, the exact active-tail binary search, the serial moment
-construction backend, and fused diagnostics -- each validated at D=4/D=10/real D=20),
-completes Phase 4 (parallel backend) with correctness validation but a reduced thread-count
-sweep, completes Phase 11 with the moment-construction backend wired opt-in into the real
-production KNITRO path and validated end-to-end through a real inner solve, and completes a
-reduced Phase 12/13 (an isolated real-D20 moment-construction wall-clock comparison, not a
-full outer-KNITRO campaign or a `W`-scaling grid). **Phases 6-10 (crossing-slice
-outer-gradient updates, sorted dual-argument construction, suffix-sum inner-gradient
-construction, and Hessian same-origin-block structure) are NOT implemented this session** --
-Section D states exactly what would be required and why it was not attempted at full scope
-here, consistent with this repo's own established practice of disclosing incomplete
-sub-phases explicitly rather than extrapolating.
+own multi-D/multi-W/multi-thread benchmark grid. This is a two-part session (same day):
+the FIRST part completed Phases 0-3, 5, 11 in full and a reduced Phase 4/12/13; the
+SECOND part (this continuation, explicitly requested: "try working on some of those things
+that you deferred") completes Phase 6/7 (the sorted crossing-slice outer-gradient backend,
+proved exact via this codebase's own already-validated affine-cutoff structure, not merely
+approximated) for the DIRECT trade-cell block, extends Phase 4/13 with a genuine
+thread-count sweep (`{1,2,4,8,16,20}`) and `W`-sweep (`{20000,40000,80000,160000}`), and
+completes the parallel `moment_backend` production-dispatch wiring left as a stated
+follow-up in the first part. **Phases 8-10 (sorted dual-argument construction, suffix-sum
+inner-gradient construction, and Hessian same-origin-block structure) are STILL not
+implemented** -- Section D states exactly what each would require and why they were not
+attempted this session either, consistent with this repo's own established practice of
+disclosing incomplete sub-phases explicitly rather than extrapolating.
 
 ## Executive summary
 
@@ -84,6 +88,27 @@ sub-phases explicitly rather than extrapolating.
    threads should be weighed against KNITRO's own already-parallel internal machinery and
    this repo's own standing `BLAS.set_num_threads(1)`-during-Julia-parallelism convention
    before defaulting to it in a driver that also runs BLAS-heavy work concurrently.
+6. **Same-day continuation (Phase 6/7, Section D.1): a sorted CROSSING-SLICE variant of the
+   PRODUCTION registered outer-gradient backend (`:B_direct_argument_serial`) is now
+   implemented, PROVED exact (not merely tested), and validated live at real D=20/W=80,000**
+   -- `:B_direct_argument_sorted_serial` (`src/melitz/sorted_crossing_gradient.jl`). The
+   production backend already restricts each coordinate's probe to `O(D)` "touched" trade
+   cells (`argument_localized_gradient.jl`'s already-validated `melitz_compact_columns_map`
+   -- this session reuses that audit rather than re-deriving it), but still scans each
+   touched column densely over all `W` rows. Using this codebase's OWN already-validated
+   affine-cutoff result (`affine_cutoff.jl`), this session proves EXACTLY (a short algebraic
+   sandwich argument, Section D.1) that a symmetric `+-h` probe's own base point is bracketed
+   in cutoff space by the two displaced cutoffs, so any draw inactive under BOTH displaced
+   points is PROVABLY inactive at the base point too and contributes EXACTLY zero to the
+   gradient -- only the sorted crossing slice `min(k_plus,k_minus):W` (not `1:W`) ever needs
+   computing. Live: **machine-precision agreement** with `:B_direct_argument_serial` (max
+   relative error `1.56e-12` across all 30 coordinates at D=4; `5.79e-13` across 25
+   representative coordinates at real D=20/W=80,000) and a **`3.17x` speedup of the FULL
+   798-coordinate outer-gradient vector** at real D=20/W=80,000 (`25.84s` -> `8.16s`, one
+   real KNITRO inner solve providing the fixed dual both backends share). This is a genuine
+   outer-GRADIENT speedup, not merely moment construction -- a materially larger practical
+   contribution than item 1 alone, since prior sessions' own documented findings identify
+   the outer gradient as a real, repeated cost in every finite-delta campaign.
 
 ## 0. Environment and provenance (Phase 0)
 
@@ -101,10 +126,16 @@ sub-phases explicitly rather than extrapolating.
 - Full Melitz test suite (`test/melitz/runtests.jl`) reproduced **45/45 testsets passing**
   BEFORE any code change this session (Phase 0 baseline, ~8min wall) -- matches the prior
   session's own documented baseline exactly, confirming the checkpoint commit itself
-  introduced no regression. After this session's changes: **46/46 testsets passing**
-  (the one new top-level testset, "Sorted-tail moment construction (2026-07-25)", `8434/8434`
-  assertions passing on its own, plus 13 new assertions folded into the pre-existing
-  "Pareto data-only calibration" testset for the Phase 11 real-KNITRO equivalence check).
+  introduced no regression. After the FIRST part of this session (Phases 0-3/5/11):
+  **46/46 testsets passing** (the one new top-level testset, "Sorted-tail moment
+  construction (2026-07-25)", `8434/8434` assertions passing on its own, plus 13 new
+  assertions folded into "Pareto data-only calibration" for the Phase 11 real-KNITRO
+  equivalence check). After this SAME-DAY CONTINUATION (Phase 6/7 crossing-slice gradient +
+  parallel `moment_backend` wiring + the extended Phase 4/13 scaling sweeps): **47/47
+  testsets passing** -- the new "Phase 6/7 (2026-07-25)" testset (`35/35`, D=4 exhaustive
+  coordinate coverage) plus 27 more assertions folded into "Pareto data-only calibration"
+  (now `77/77`: the Phase 11 follow-up parallel-backend check and the real D=20/W=80,000
+  crossing-slice gradient check). Zero regressions at every stage.
 - This session's own Phase 0 benchmark was NOT the full prescribed grid (calibrated
   reference / near-boundary / over-budget / high-cutoff / low-cutoff points, each with
   complete moment-construction/FC-callback/outer-gradient/inner-solve/rejection wall-clock
@@ -217,19 +248,85 @@ second, less-exercised code path for a bounded expected return. Kept dense, reus
 IDENTICAL per-draw loop `melitz_moments!` already runs (same order, same values, bit-identical
 in practice) -- zero incremental risk to this column's correctness.
 
-## D. Phases 6-10: not implemented this session (honest scope accounting)
+## D. Outer-gradient updates (Phase 6/7, DONE this continuation) and Phases 8-10 (still not
+## implemented -- honest scope accounting)
 
-**Phase 6 (sorted crossing-slice outer-gradient updates)**: the direct fixed-dual outer
-gradient (`direct_gradient.jl`/`argument_localized_gradient.jl`) perturbs one outer
-coordinate at a time and re-evaluates the fixed-dual objective at `theta+/-h*e_r`; a
-crossing-slice update would recompute only the sorted positions between the old and new
-cutoff for the coordinate's directly-affected cell(s). This requires auditing EVERY outer
-coordinate's downstream cutoff dependencies (direct cell, gravity-pivot cell, focal-link
-effects, autarky effects) in `argument_localized_gradient.jl` (16KB) and
-`direct_gradient.jl` (15KB) -- neither file was modified this session. **Not attempted**:
-the governing prompt's own Phase 6 explicitly warns "do not assume every coordinate changes
-only its direct cell," which is precisely the kind of audit this session's remaining budget
-did not allow doing carefully rather than superficially.
+### D.1 Phase 6/7: sorted crossing-slice direct-gradient backend
+
+**Reused, not re-derived**: which physical `(o,d)` cells any given free coordinate `r`
+touches is already established and validated by `argument_localized_gradient.jl`'s own
+Gate 1/Gate 2 test battery (`melitz_compact_columns_map`, itself built from
+`melitz_localized_dependency_map` -- the governing prompt's own "audit every outer
+coordinate's downstream cutoff dependencies... do not assume every coordinate changes only
+its direct cell" concern is exactly what THAT existing, already-validated machinery answers,
+so this continuation deliberately reuses it wholesale rather than re-deriving which cells
+are touched, keeping the new work narrowly scoped to HOW each touched column's values get
+computed).
+
+**The exact argument** (not a heuristic): `affine_cutoff.jl`'s own already-validated result
+is that the full log-cutoff vector `q(theta_free) = q0 + Q*theta_free` is EXACTLY affine.
+`direct_gradient.jl`'s central-difference probe evaluates a single coordinate `r` at
+`theta+h*e_r` and `theta-h*e_r`, symmetric around the base `theta`. By affine-ness,
+`q_od(theta+h*e_r) = q_od(theta) + h*Q[od,r]` and `q_od(theta-h*e_r) = q_od(theta) -
+h*Q[od,r]` -- so `q_od(theta)` (hence `cutoff_od(theta)`, `log` being monotone) is EXACTLY
+the midpoint of the two displaced cutoffs, and therefore lies WEAKLY BETWEEN them:
+`min(cutoff_plus,cutoff_minus) <= cutoff_base <= max(cutoff_plus,cutoff_minus)`. Since
+`melitz_active_tail_start` is monotone nondecreasing in its cutoff argument, the SAME weak
+ordering carries over to sorted positions: `min(k_plus,k_minus) <= k_base <=
+max(k_plus,k_minus)`. Consequence: any sorted position strictly below `min(k_plus,k_minus)`
+is PROVABLY inactive under `theta+h*e_r`, `theta-h*e_r`, AND `theta` itself, all three
+simultaneously -- at such a position `G_plus = G_minus = G_base = -lambda_od` exactly, so it
+contributes EXACTLY zero to the central-difference gradient. Only the sorted crossing slice
+`min(k_plus,k_minus):W` (scattered back to original rows via the origin's own permutation,
+same pattern as Section C) ever needs to be computed or applied -- a genuine algebraic
+identity, made possible specifically because this codebase already builds and validates the
+affine cutoff map elsewhere, not a new approximation risk.
+
+**Implementation** (`src/melitz/sorted_crossing_gradient.jl`, new backend
+`:B_direct_argument_sorted_serial`): `_fill_compact_direct_columns_crossing_sorted!` fills
+`Gp`/`Gm` ONLY at each touched cell's own crossing slice (using its origin's sorted
+context); `_direct_coordinate_grad_sorted` applies the `u_plus`/`u_minus` fixed-dual-argument
+update over that same slice only, instead of the full `1:W` dense scan
+`_fill_compact_direct_columns!`/`_direct_coordinate_grad` (`direct_gradient.jl`) perform.
+Requires `ctx.sorted_tail_ctx !== nothing` (built via `moment_backend` in
+`(:sorted_tail_serial,:sorted_tail_parallel)`) -- throws `ArgumentError` immediately if
+absent, never silently falls back to a dense scan. The focal link column (when a coordinate
+touches it) is still filled DENSELY, reusing the unchanged `_fill_compact_link!` -- the same
+Section C.1 scope decision, re-applied here for the same reason (a single `O(D*W)` column,
+asymptotically small next to the `O(D^2*W)`-scale savings on the direct-cell block, and
+avoiding threading the more complex autarky/`gamma_prime_target` algebra through a second,
+less-exercised path).
+
+**Validated**:
+
+- **D=4, EVERY coordinate** (30/30, exhaustive, not sampled): max relative disagreement vs
+  `:B_direct_argument_serial` `1.56e-12` (`test/melitz/runtests.jl`, "Phase 6/7 (2026-07-25)").
+  Gradient values are naturally large in magnitude (this codebase's own `1e10*Delta(theta)`
+  scaling convention, `O(1e7)`-`O(1e9)`) -- the raw absolute disagreement (`~6.7e-5`) is
+  exactly what `1.56e-12` relative looks like at that scale, not a separate, looser number.
+- **Real D=20/W=80,000, 25 representative coordinates** (`g`, plus 24 random draws from the
+  full 798-coordinate space): max relative disagreement `5.79e-13` -- machine precision,
+  reproduced at production scale, not just at the small D=4 fixture.
+- **The FULL 798-coordinate gradient vector, real D=20/W=80,000, one shared real KNITRO
+  inner solve providing the fixed dual `x`**: `direct_serial=25.84s` vs
+  `direct_sorted=8.16s` -- **`3.17x` speedup**, live-measured
+  (`/tmp/.../validate_crossing_gradient_d20.jl`-derived numbers, folded into the test suite's
+  own lighter-weight 25-coordinate check to bound routine test wall-clock).
+- Cross-checked against an independent frozen-`x` finite difference at a random D=4
+  coordinate (same discipline as the existing `:B_direct_argument_serial` test).
+- The "requires `ctx.sorted_tail_ctx`" guard is tested directly (`ArgumentError` on a ctx
+  built with the default `:dense_reference` backend).
+
+**Not done this continuation**: Phase 6/7's own fuller prescription (every D=20 coordinate,
+not 25; `plus`/`minus` fixed-dual scalars and switch counts logged per coordinate;
+`:B_direct_argument_sorted_parallel`, the threaded analogue of `direct_gradient.jl`'s own
+`:B_direct_argument_parallel`; wiring `gradient_backend=:B_direct_argument_sorted_serial`
+into `solve_melitz_finite_delta_bound`/`melitz_fixed_point_probe`'s own accepted-backend
+symbol list so a real outer campaign could select it) -- a genuine, low-risk next step given
+this session's own proof and live numbers, not attempted here to keep this continuation's
+own diff bounded and fully tested rather than partially wired.
+
+### D.2 Phases 8-10: still not implemented (honest scope accounting)
 
 **Phase 8 (sorted fixed-dual scalar/dual-argument construction)**: would restructure the
 inner KNITRO callback's own per-draw dual-argument sweep (`u_s = normalization + sum_k
@@ -253,12 +350,15 @@ memory: Hessian callback dominates wall-clock 71-87% in the RELATED full-A_od gr
 model, not this Melitz model directly, but a comparable concern here) is a substantial
 undertaking on its own.
 
-**What would be required to complete Phases 6-10**: per-phase, roughly the SAME shape of
-work this session spent on Phases 1-3/5/11 (derive the exact formula, implement an
-`:experimental` backend behind an explicit opt-in, validate against the existing dense/direct
-implementation across D=4/D=10/real-D20 at the calibrated point and multiple perturbation
-families, only then consider production wiring) -- a genuine multi-session continuation, not
-a same-day extension.
+**What would be required to complete Phases 8-10**: per-phase, roughly the SAME shape of
+work this session spent on Phases 1-3/5/6/7/11 (derive the exact formula -- Phase 10's own
+same-origin block formula above is already derived, just not yet implemented/validated;
+implement an `:experimental` backend behind an explicit opt-in; validate against the
+existing dense/direct implementation across D=4/D=10/real-D20 at the calibrated point and
+multiple perturbation families; only then consider production wiring) -- Phase 8/9 in
+particular touch the shared `cc_algo` inner-loop hot path, raising the validation bar
+further (any regression there would affect the Ricardian model too, not just Melitz) --
+still a genuine future-session continuation, not attempted in this same-day extension either.
 
 ## E. Production integration (Phase 11) and its residual risk
 
@@ -350,61 +450,132 @@ prescription: "time per FC, time per GA, trial points per minute, percentage wal
 construction vs. inner solve") was NOT attempted this session -- a genuine next step, not
 run here to avoid extrapolating a number this session did not actually measure.
 
+### F.4 Outer-gradient wall-clock (Phase 6/7, this continuation)
+
+Unlike moment construction (Section F.3), the outer-GRADIENT speedup (Section D.1) WAS
+measured on the full, real object the production driver actually calls: the complete
+798-coordinate gradient vector, real D=20/W=80,000, one shared real KNITRO inner solve
+providing the fixed dual `x` (`nStatus=0`) both backends evaluate against --
+`:B_direct_argument_serial` `25.84s` vs `:B_direct_argument_sorted_serial` `8.16s`
+(**`3.17x`**). This number is directly comparable to prior sessions' own documented
+per-callback timings (`docs/melitz_real_d20_local_geometry_and_continuation_2026-07-25.md`'s
+own `~14-19s`/finite inner solve, `docs/melitz_real_d20_scaled_knitro_and_profile_2026-07-25.md`'s
+own FC/GA call-count tables) -- a `~17.7s` reduction per outer-gradient (`GA`) call is a
+material fraction of a single finite inner solve's own cost, meaning this speedup, unlike
+the isolated moment-construction number, DOES directly and proportionally reduce a real
+campaign's own wall-clock wherever `GA` calls are a non-trivial share of total campaign
+time (every campaign surveyed this repo's Melitz history has logged `n_ga_calls` as a
+sizeable fraction of `n_fc_calls`, e.g. `26` of `168`-`223` in
+`docs/melitz_real_d20_scaled_knitro_and_profile_2026-07-25.md`'s own tables).
+
 ## G. Scaling
 
-**Reduced scope, disclosed**: this session's Phase 13 did not run a dedicated `W in
-{20000,40000,80000,160000}` sweep or a `{1,2,4,8,16,20}` Julia-thread sweep (the governing
-prompt's own full grid) -- only `W=80,000` (this repo's own established real-D20 default,
-`d20-realdata-w-sensitivity`/`melitz-small-w-numerically-finicky` memory) and `t=16` Julia
-threads (this repo's own established default for real-D20 scripts) were benchmarked, at 4
-outer points (Section F.1). What IS available from that single configuration:
+### G.1 Moment construction (Phase 13, live)
 
-- **Active-fraction independence** (Section F.1's own reading): the aggregate speedup is
-  essentially flat across a `>2` order-of-magnitude range of per-cell active fractions at
-  fixed `D=20`/`W=80,000` -- consistent with the dense-write-plus-binary-search overhead
-  (not the active-tail arithmetic itself) being the dominant REMAINING cost at this scale,
-  exactly the question Phase 13's own final paragraph anticipates ("this will show whether
-  the next bottleneck is the dense `WxD^2` storage itself"). This session's own reading:
-  **yes, at `D=20`/`W=80,000`, the unavoidable dense output write is now a meaningfully
-  large share of the sorted-tail backend's own remaining cost** (a genuine follow-up
-  question for a future session with dedicated per-category timers, not directly decomposed
-  this session).
-- **Parallel efficiency**: `~1.65x` at 16 threads over 1 (serial) -- far from the
-  theoretical `16x`, consistent with Section E.3's own diagnosis (only `D=20` units of
-  parallel work, plus a serial, unparallelized focal-link tail). A `{2,4,8}`-thread
-  intermediate sweep, which would show whether the marginal per-thread return degrades
-  smoothly or saturates early, was NOT run this session.
-- **`W`/`D` scaling**: not measured this session beyond the single `D=20`/`W=80,000`
-  point plus the SEPARATE `D=4`/`D=10` correctness fixtures (which used much smaller `W`,
-  `3000`-`8000`, for test speed, not for a scaling comparison) -- a genuine `W`-sweep at
-  fixed `D=20` and a `D`-sweep at fixed `W` are natural next steps, not attempted here.
+Thread-count sweep (`W=80,000` fixed, `t in {1,2,4,8,16,20}`) and `W`-sweep (`t=16` fixed,
+`W in {20000,40000,80000,160000}`), calibrated reference point,
+`scripts/melitz_sorted_tail_scaling_2026-07-25.jl` (one process launch per cell, each
+warmed up before timing):
+
+| threads | `W` | sorted-tail context construction | `dense_reference` (median) | `sorted_tail_serial` (median) | `sorted_tail_parallel` (median) | speedup, serial | speedup, parallel |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 80,000 | 0.190s | 1.4916s | 0.1259s | 0.1237s | 11.85x | 12.06x |
+| 2 | 80,000 | 0.374s | 1.4735s | 0.1279s | 0.1021s | 11.52x | 14.43x |
+| 4 | 80,000 | 0.263s | 1.4809s | 0.1325s | 0.0881s | 11.18x | 16.82x |
+| 8 | 80,000 | 0.191s | 1.4947s | 0.1280s | 0.0790s | 11.68x | **18.93x** |
+| 16 | 80,000 | 0.235s | 1.5333s | 0.1373s | 0.0825s | 11.17x | 18.58x |
+| 20 | 80,000 | 0.230s | 1.5111s | 0.1335s | 0.0847s | 11.32x | 17.83x |
+| 16 | 20,000 | 0.045s | 0.3867s | 0.0294s | 0.0198s | 13.16x | 19.49x |
+| 16 | 40,000 | 0.106s | 0.7835s | 0.0664s | 0.0434s | 11.80x | 18.05x |
+| 16 | 80,000 | 0.241s | 1.5006s | 0.1275s | 0.0792s | 11.77x | 18.94x |
+| 16 | 160,000 | 0.529s | 3.0250s | 0.2873s | 0.1686s | 10.53x | 17.95x |
+
+**Reading -- a genuine, not-flat scaling picture, now directly measured rather than
+projected**:
+
+- **Serial speedup is remarkably stable (`~10.5x`-`13.2x`) across the entire thread and `W`
+  grid** -- expected, since `:sorted_tail_serial` does not depend on Julia thread count at
+  all (the small thread-count variation in its OWN column, e.g. `0.1259s` at `t=1` vs
+  `0.1373s` at `t=16`, is measurement noise/scheduler contention from the SORTED-CONTEXT
+  construction and other concurrent Julia machinery, not a real algorithmic dependence).
+  `W=20,000`'s own slightly HIGHER serial speedup (`13.16x` vs `~11x`-`12x` at larger `W`) is
+  consistent with Section G.1's own active-fraction-independence reading -- at smaller `W`
+  the fixed per-cell overhead (the `melitz_C`/binary-search cost, `O(D^2)`, `W`-independent)
+  is proportionally larger relative to `W`, so the dense baseline's own `O(W*D^2)` cost
+  shrinks faster than the sorted backend's own smaller fixed-cost floor, giving marginally
+  BETTER relative speedup at small `W`, not worse -- the opposite of what a naive
+  "amortization takes more draws to pay off" intuition might suggest, because the fixed cost
+  here is INDEPENDENT of the ACTIVE-TAIL arithmetic being skipped, so it does not scale away
+  the win at small `W` the way, e.g., a one-time context-construction cost would.
+- **Parallel efficiency saturates by `t=8`, then MILDLY REGRESSES at `t=16`/`t=20`**:
+  `12.06x`(t=1) -> `14.43x`(t=2) -> `16.82x`(t=4) -> `18.93x`(t=8, the observed PEAK) ->
+  `18.58x`(t=16) -> `17.83x`(t=20) -- consistent with Section E.3's own diagnosis (only
+  `D=20` units of parallel work in the `Threads.@threads for o in 1:D` region) --
+  oversubscribing threads beyond the `D=20` unit count adds scheduling overhead without
+  adding usable parallelism, and this sweep's own `t=8`-`t=20` numbers show that overhead
+  is real and measurable, not merely theoretical, though small (`18.93x` -> `17.83x`, about
+  a 6% relative regression from peak to `t=20`).
+- **`W`-scaling**: serial speedup drifts DOWN mildly at the largest `W` tested
+  (`160,000`, `10.53x`, the lowest in the grid) while parallel speedup stays roughly flat
+  (`17.95x`, within the same band as `80,000`'s own `18.94x`) -- consistent with the dense
+  baseline's own `O(W)` per-cell write cost and the sorted backend's own `O(W)` scatter-write
+  cost (Section C's "unavoidable dense-output write" observation) both growing linearly with
+  `W`, while the ACTIVE-TAIL arithmetic difference between the two backends (the actual
+  source of the speedup) is a smaller and smaller share of a larger total at bigger `W` --
+  the SAME mechanism Section G.1's original draft anticipated ("this will show whether the
+  next bottleneck is the dense `WxD^2` storage itself"), now directly confirmed by a real
+  4-point sweep rather than inferred from a single `W`.
+- **`D` scaling**: still not measured this session beyond the single `D=20` real-data point
+  plus the separate `D=4`/`D=10` correctness fixtures (which use much smaller `W`,
+  `3000`-`8000`, chosen for test speed, not for a scaling comparison) -- a genuine `D`-sweep
+  at fixed `W` (e.g. real D=10/D=20 data, matched `W`) remains a natural next step, not
+  attempted here.
+
+### G.2 Outer gradient (Phase 6/7)
+
+Not swept this continuation -- only the single real D=20/W=80,000 point (Section D.1/F.4)
+was measured. A `W`/`D`/thread-count sweep for the gradient backend (mirroring G.1's own
+grid) is a natural next step, not attempted here.
 
 ## H. Recommended production stack
 
 **`moment_backend=:sorted_tail_serial`** is RECOMMENDED as the default for any NEW real-D20
 (or real-D10, real-D4) production script in this repo going forward -- it is exact (Section
 C/F.2), validated end-to-end through a real KNITRO inner solve (Section E), and delivers an
-`~11x` moment-construction speedup with a `0.19s` one-time setup cost that is negligible
-against any campaign running more than a handful of callbacks. **This session did NOT
-change the DEFAULT** (`build_melitz_psi_bundle`/`build_melitz_psi_bundle_from_calibration`
-still default to `moment_backend=:dense_reference`) -- every existing script in this repo's
-history is therefore unaffected unless it is explicitly updated to pass
-`moment_backend=:sorted_tail_serial`, a deliberate choice to avoid silently changing the
-behavior of scripts this session did not re-run and re-verify individually.
+`~11x`-`13x` moment-construction speedup (Section G.1) with a sub-second one-time setup cost
+that is negligible against any campaign running more than a handful of callbacks.
 
-`moment_backend=:sorted_tail_parallel` is available (`:sorted_tail_parallel` is not yet
-wired into `melitz_moments_adapter!`'s dispatch -- only `:dense_reference`/
-`:sorted_tail_serial` are; adding the third dispatch arm is a small, low-risk follow-up, not
-done this session since the marginal `~1.65x` over serial did not seem worth the additional
-`BLAS.set_num_threads(1)`-discipline burden on every calling script without a
-dedicated thread-count sweep (Section G) to justify a specific recommended thread count
-first).
+**`gradient_backend`-equivalent `:B_direct_argument_sorted_serial`** (this continuation, new
+this session) is RECOMMENDED alongside it for any NEW script using
+`solve_melitz_finite_delta_bound`/`melitz_fixed_point_probe`'s own `gradient_backend`
+kwarg -- proved exact (Section D.1, not merely tested), delivering a live-measured `3.17x`
+speedup of the FULL outer-gradient vector at real D=20/W=80,000, a materially larger
+practical contribution than the moment-construction number alone (Section F.4) since the
+outer gradient is a real, repeated, previously-unoptimized cost in every finite-delta
+campaign this repo's own history has run. **Not yet wired into
+`solve_melitz_finite_delta_bound`'s own accepted-`gradient_backend`-symbol list** (Section
+D.1's own "not done this continuation" note) -- calling code must currently invoke
+`make_melitz_gradient_delta_direct_sorted_serial`/the returned closure directly, matching
+how `:B_direct_argument_serial` itself was exercised before its own eventual driver wiring.
 
-**NOT recommended for production yet**: any Phase 6-10 kernel (none exist -- Section D).
-Any campaign-level wall-clock claim beyond moment construction itself (Section F.3) -- a
-genuine matched outer-campaign comparison is the natural, well-motivated next step before
-this optimization's total practical impact on a real search campaign can be reported with
-the same confidence as the isolated moment-construction number above.
+**This continuation did NOT change either DEFAULT** (`build_melitz_psi_bundle`/
+`build_melitz_psi_bundle_from_calibration` still default to `moment_backend=:dense_reference`;
+no driver defaults to `:B_direct_argument_sorted_serial`) -- every existing script in this
+repo's history is therefore unaffected unless explicitly updated, the same deliberate
+choice the first part of this session made.
+
+`moment_backend=:sorted_tail_parallel` is now WIRED into `melitz_moments_adapter!`'s
+dispatch (this continuation's own quick-win follow-up, Section E) -- Section G.1's now-live
+thread sweep shows its own peak efficiency at `t=8` (`18.93x`), not `t=16`/`t=20` (`18.58x`/
+`17.83x`) -- a caller choosing this backend should prefer `t=8` Julia threads for the
+moment-construction region specifically if that is tunable independently of the rest of a
+campaign's own thread budget, though the difference across `t=8`-`t=20` is modest (`~6%`
+peak-to-`t=20`), not dramatic enough to force a hard rule.
+
+**NOT recommended for production yet**: any Phase 8-10 kernel (none exist -- Section D.2).
+A `:B_direct_argument_sorted_parallel` threaded analogue of the new gradient backend, or a
+full matched outer-campaign wall-clock comparison (Section F.3's own open question) -- both
+genuine, well-motivated next steps, not attempted this session.
 
 ## Required-tests checklist (cross-reference)
 
@@ -419,13 +590,19 @@ the same confidence as the isolated moment-construction number above.
    the link column).
 7. Parallel and serial sorted backends agree -- Phase 4 test, bit-identical (disjoint writes).
 8. Fused active counts/range diagnostics agree -- Phase 5 test.
-9. Crossing-slice updates match full displaced reconstruction -- N/A, Phase 6 not implemented.
+9. Crossing-slice updates match full displaced reconstruction -- **DONE this continuation**:
+   Phase 6/7 test, `:B_direct_argument_sorted_serial` vs `:B_direct_argument_serial`, EVERY
+   coordinate at D=4 (max relative error `1.56e-12`) and 25 representative coordinates at
+   real D=20/W=80,000 (`5.79e-13`).
 10. Sorted fixed-dual arguments match dense arguments -- N/A, Phase 8 not implemented.
 11. Sorted suffix-sum gradients match dense `G'v` -- N/A, Phase 9 not implemented.
 12. Cache fingerprints include the sorted context -- `MelitzSortedTailContext.fingerprint`
     tested directly (changes under changed draws/sigma).
 13. No stale sorted state reused with changed draws/W/sigma/seed -- `ArgumentError` guards
-    tested directly (D/sigma mismatch, U-shape mismatch); full-content staleness is a
-    disclosed residual risk (Section E), not eliminated.
-14. Every optimized backend preserves DeltaStar/dual/LFD/moment residuals/GT -- Phase 11 test
-    (real KNITRO inner solve, both backends, `1e-8` agreement).
+    tested directly (D/sigma mismatch, U-shape mismatch, missing `sorted_tail_ctx` for the
+    gradient backend); full-content staleness is a disclosed residual risk (Section E), not
+    eliminated.
+14. Every optimized backend preserves DeltaStar/dual/LFD/moment residuals/GT -- Phase 11 +
+    Phase 11 follow-up tests (real KNITRO inner solve, all three moment backends, `1e-8`
+    agreement); the crossing-slice gradient backend's own agreement is itself evidence for
+    this same property at the gradient level (item 9 above).
