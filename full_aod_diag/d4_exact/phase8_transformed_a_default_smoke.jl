@@ -16,7 +16,7 @@ for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments
           "gradient_workspace.jl", "lfix_factorized.jl", "lfix_factorized_workspace.jl",
           "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_aspace_coordinate.jl",
           "cm_config.jl", "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
-          "cm_originzc_target_layout.jl", "cm_originzc_config.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl",
+          "cm_originzc_target_layout.jl", "cm_originzc_config.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl",
           "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
           "cm_exact_cache_production.jl", "cm_dual_bank_production.jl",
           "cm_checkpoint.jl", "cm_originzc_checkpoint.jl"]
@@ -55,7 +55,13 @@ function smoke(label, run_fn)
     wall = time() - t0
     @printf("[%s] wall=%.1fs knitro_status=%s n_eval=%d kappa=%s\n",
         label, wall, string(res.knitro_status), res.n_eval, string(res.kappa))
-    check("$label: A_coordinate_mode=:powered_aspace DEFAULT produces a real, non-crashing KNITRO run", res.n_eval > 0)
+    # -500 (KN_RC_CALLBACK_ERR) is a genuine failure, not acceptable even under a short smoke
+    # budget -- n_eval>0 alone is too weak a check (a callback that errors out after 1 real
+    # evaluation still has n_eval=1). Acceptable outcomes for a short 45s smoke run: feasible/
+    # optimal (0,-100,-101,-103) or a time-limit status that still reflects a live, non-erroring
+    # solve (-401,-410,-411).
+    check("$label: A_coordinate_mode=:powered_aspace DEFAULT produces a real, feasible-or-timelimit KNITRO run (no callback error)",
+        res.n_eval > 0 && res.knitro_status in (0, -100, -101, -103, -401, -410, -411))
     return res
 end
 

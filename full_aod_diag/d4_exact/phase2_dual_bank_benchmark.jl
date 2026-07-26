@@ -20,7 +20,7 @@ for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments
           "gradient_workspace.jl", "lfix_factorized.jl", "lfix_factorized_workspace.jl",
           "lfix_cm_cplus.jl", "nested_quantile_grids.jl",
           "cm_config.jl", "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
-          "cm_originzc_target_layout.jl", "cm_originzc_config.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl",
+          "cm_originzc_target_layout.jl", "cm_originzc_config.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl",
           "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
           "cm_exact_cache_production.jl", "cm_dual_bank_production.jl",
           "cm_checkpoint.jl", "cm_originzc_checkpoint.jl"]
