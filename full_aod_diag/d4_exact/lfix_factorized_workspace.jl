@@ -213,7 +213,7 @@ function build_lfix_base_cache_C!(ws::LFixFactorizedWorkspace, x_free0::Abstract
         λstar, base.ζstar, q0, wPrime_bi, τPrime_bi, LPrime_bi, ws.Uσ_bi, λ_cf, ws.cf_contrib0)
 end
 
-"In-place variant of `dest_contrib_incremental_top3_C`: writes into caller-supplied `contrib_buf` instead of allocating a fresh Vector{Float64}(undef, W). Same formula/order, byte-for-byte."
+"In-place variant of `dest_contrib_incremental_top3_C`: writes into caller-supplied `contrib_buf` instead of allocating a fresh Vector{Float64}(undef, W). Same formula/order, byte-for-byte, plus one exact stable-cell shortcut (see below)."
 function dest_contrib_incremental_top3_C!(contrib_buf::AbstractVector, cache::LFixBaseCacheC, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
     D = cache.D; W = cache.W; σ = cache.σ
     ref = cache.ref
@@ -251,6 +251,25 @@ function dest_contrib_incremental_top3_C!(contrib_buf::AbstractVector, cache::LF
                 v < bs && (bs = v; bo = o)
             end
         end
+
+        # diag/hybrid-exact-secant-A-gradient-2026-07-26: certified-stable-winner shortcut.
+        # If the surviving best candidate `bo` (determined by the FULL comparison above,
+        # against every changed origin -- that comparison is NOT skipped or shortcut) is the
+        # original cached winner `r1`, AND `r1` was itself not among the changed origins (so
+        # `bs` is untouched, still exactly `ref.sw[ω,d]`), then `contrib_buf[ω]` is PROVABLY
+        # bit-identical to `cache.contrib0[ω,d]`: both were built from the identical
+        # `(winner=r1, score=ref.sw[ω,d])` pair via the identical `pTσ_from_score`/`CONST_d`/
+        # `λstar` formula below. Copy instead of re-deriving via a fresh `exp` call. Verified
+        # bit-identical (D=4 square+perturbed, D=20/W=80,000 real data, serial+threaded) against
+        # the pre-shortcut formula in docs/HYBRID_EXACT_SECANT_A_GRADIENT_CORRECTNESS_2026-07-26.md.
+        # Measured production-scale speedup was ~0% (memory-latency-bound loop, not exp-bound --
+        # docs/HYBRID_A_GRADIENT_PERFORMANCE_PROFILE_2026-07-26.md) -- this change is adopted for
+        # correctness/avoiding-redundant-work reasons, not a performance claim.
+        if bo == r1 && !(r1 in Cd)
+            contrib_buf[ω] = cache.contrib0[ω, d]
+            continue
+        end
+
         pTσ_wo = pTσ_from_score(bs, σ)
         d1w = d + (bo - 1) * cache.Ddest
         contrib_buf[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
