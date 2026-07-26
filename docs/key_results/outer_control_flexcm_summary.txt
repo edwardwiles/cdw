@@ -1,0 +1,15 @@
+Objective goal:  Minimize
+Number of variables:                                380 (         380)
+  Iter      Objective      FeasError   OptError    ||Step||    CGits 
+EXIT: Time limit reached. Current point is infeasible.
+Final objective value               =   9.58386572022950e-01
+Final feasibility error (abs / rel) =   4.27e-02 / 4.27e-02
+Final optimality error  (abs / rel) =   4.30e-03 / 4.30e-03
+# of iterations                     =         54 
+# of CG iterations                  =         30 
+# of function evaluations           =        161
+# of gradient evaluations           =         55
+Total program time (secs)           =     652.22559 (  2353.699 CPU time)
+[screen-summary] flexcm_control calls=162 pairwise_hits=1 hard_winner_hits=0 witness_hits=0 points_passed=161 inner_solves_avoided=1 screen_wall_s=57.2196
+RESULT: flexible CM control
+  wall=681.8s  n_eval=149 n_grad=55

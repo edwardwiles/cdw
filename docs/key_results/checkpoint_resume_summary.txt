@@ -1,0 +1,8 @@
+Before resume: schema=8 marginal_restriction=common_frechet n_eval=10 n_grad=6
+  (expected) rejected with: run_cm_upper_checkpointed(frechet_smoke): marginal_restriction MISMATCH on resume -- checkpoint was written with marginal_restriction=:common_frechet, this call requests :common_flexible -- refusing to resume under a different restriction family (CM-only vs CM-plus-level-anchor restriction-column co
+PASS  resume under mismatched marginal_restriction refused
+After resume: n_eval=12 n_grad=8 best=0.9701987566484552
+PASS  n_eval continues from checkpoint (10 -> 12)
+PASS  n_grad continues from checkpoint (6 -> 8)
+PASS  resumed checkpoint still marginal_restriction=common_frechet
+PASS  resumed checkpoint schema == 8

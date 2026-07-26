@@ -1,0 +1,16 @@
+  call 1: 219009480 bytes  (core_ws rebuilt this call: true)
+  call 2: 9379216 bytes  (core_ws rebuilt this call: true)
+  call 3: 9379216 bytes  (core_ws rebuilt this call: true)
+  call 4: 9379216 bytes  (core_ws rebuilt this call: true)
+  call 5: 9379216 bytes  (core_ws rebuilt this call: true)
+  call 1: 101047920 bytes  (core_ws rebuilt this call: true)
+  call 2: 9388280 bytes  (core_ws rebuilt this call: true)
+  call 3: 9388280 bytes  (core_ws rebuilt this call: true)
+  call 4: 9388280 bytes  (core_ws rebuilt this call: true)
+  call 5: 9388280 bytes  (core_ws rebuilt this call: true)
+  call 1 (fresh cf): 29498744 bytes
+  call 2 (fresh cf): 29498680 bytes
+  call 3 (fresh cf): 29498680 bytes
+  call 1 (fresh cf): 29507744 bytes
+  call 2 (fresh cf): 29507808 bytes
+  call 3 (fresh cf): 29507744 bytes

@@ -1,0 +1,17 @@
+SMOKE: marginal_restriction=:common_frechet through run_cm_upper_checkpointed
+[frechet_smoke] cm_gradient_backend=cplus (production default) destination_sample=exclude_row (production default)
+[frechet_smoke] marginal_restriction=common_frechet (fixed Frechet as CM plus a common-level anchor)
+marginal_restriction = common_frechet
+frechet_feature_set = cdf_only
+frechet_basis = cm_contrasts_plus_common_level
+frechet_grid_size = 10
+cm_contrast_count = 19
+frechet_level_count = 1
+total_marginal_moments = 200
+core_hessian_backend = exact_winner_pair_parallel
+[frechet_smoke] core_hessian_backend=exact_winner_pair_parallel (Architecture C)
+[screen-summary] frechet_smoke calls=13 pairwise_hits=0 hard_winner_hits=0 witness_hits=0 points_passed=13 inner_solves_avoided=0 screen_wall_s=4.6064
+n_eval=10  n_grad=6
+best=(gp = 0.9701987566484552, w = [... truncated, 380 entries ...]], Delta = 0.9321065356595913, n_eval = 10, t = 155.45052409172058)
+Checkpoint: schema=8 marginal_restriction=common_frechet n_eval=10 n_grad=6
+SMOKE PASS: fresh run through the real public checkpointed driver, marginal_restriction=:common_frechet

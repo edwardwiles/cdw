@@ -1,0 +1,23 @@
+=== includes OK ===
+==========================================================================================
+==========================================================================================
+  PASS  M = [C(R) u] is 20x20
+  PASS  M is full rank (20)
+  cond(M) = 4.4721  (theory: sqrt(D)=4.47213595499958)
+  PASS  cond(M) matches theory
+  max_cm_err=0.000e+00 max_level_err=8.882e-16 max_roundtrip_err=6.106e-16 (spot-checked 5/10 thresholds)
+  PASS  basis equivalence holds at real D=20 draws (< 1e-8)
+  PASS  M = [C(R) u] is 20x20
+  PASS  M is full rank (20)
+  cond(M) = 1.0000  (theory: 1.0)
+  PASS  cond(M) matches theory
+  max_cm_err=9.992e-16 max_level_err=8.882e-16 max_roundtrip_err=1.776e-15 (spot-checked 5/10 thresholds)
+  PASS  basis equivalence holds at real D=20 draws (< 1e-8)
+==========================================================================================
+==========================================================================================
+  PASS  frechet has exactly L more moments than flexible
+  PASS  flexible CM inner solve feasible
+  PASS  common Frechet inner solve feasible
+  PASS  frechet Hessian callback allocation not wildly larger (< 3x flexible)
+==========================================================================================
+TOTAL: 12 passed, 0 failed
