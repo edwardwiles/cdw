@@ -68,7 +68,7 @@ remains unimplemented (no driver wires that combination) and was always out of t
 ## Final verdict
 
 ```
-FIXED_TRANSFORMED_A = PORT_READY_NOT_MERGED
+FIXED_TRANSFORMED_A = MERGED_TO_PRODUCTION
 FIXED_DEFAULT_A_COORDINATE = legacy_z   (unchanged; :powered_aspace available opt-in,
                                           recommend switching new-campaign default at merge time
                                           given the clean matched-comparison win)

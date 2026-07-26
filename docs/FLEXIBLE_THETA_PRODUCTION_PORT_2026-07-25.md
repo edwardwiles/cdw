@@ -71,7 +71,7 @@ rebased cleanly, all gates re-confirmed.
 ## Final verdict
 
 ```
-FLEXIBLE_THETA = MERGED_OPT_IN (pending explicit push confirmation)
+FLEXIBLE_THETA = MERGED_OPT_IN
 ```
 
 All correctness/derivative/cache/checkpoint gates pass. The practical-value case (the entire
