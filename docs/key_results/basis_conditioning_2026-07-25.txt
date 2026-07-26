@@ -1,0 +1,23 @@
+Basis conditioning check -- u = ones(D)/sqrt(D) vs CM contrast column space
+Generated 2026-07-25/26, Julia (juliaup), OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+
+D=4 (ref=1)
+  max|C'u| (should be 0) = 0.0
+  u'u = 1.0   u'*ones = 2.0
+  rank(U_anchored) = 4 / D=4
+  cond(U_anchored) = 2.0000000000000004
+  max|(CR)'*(CR) - I| = 2.220446049250313e-16
+  max|U_ortho'U_ortho - I| = 2.220446049250313e-16
+  cond(U_ortho) = 1.0000000000000004
+
+D=20 (ref=1)
+  max|C'u| (should be 0) = 0.0
+  u'u = 1.0   u'*ones = 4.47213595499958
+  rank(U_anchored) = 20 / D=20
+  cond(U_anchored) = 4.47213595499958
+  max|(CR)'*(CR) - I| = 6.661338147750939e-16
+  max|U_ortho'U_ortho - I| = 6.661338147750939e-16
+  cond(U_ortho) = 1.0000000000000016
+
+Script: /tmp/.../scratchpad/check_basis.jl (anchored_C: columns e_o - e_ref for o != ref;
+orthonormal_contrast_matrix: ported verbatim from common_marginals_moments.jl:33-37)
