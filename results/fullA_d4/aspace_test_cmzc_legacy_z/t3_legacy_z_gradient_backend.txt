@@ -1,0 +1,3 @@
+cm_gradient_backend=cplus
+run_id=t3_legacy_z
+recorded_at=2026-07-26T12:34:42.340

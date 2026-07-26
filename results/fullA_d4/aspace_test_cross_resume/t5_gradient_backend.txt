@@ -1,0 +1,3 @@
+cm_gradient_backend=cplus
+run_id=t5
+recorded_at=2026-07-26T12:45:37.568

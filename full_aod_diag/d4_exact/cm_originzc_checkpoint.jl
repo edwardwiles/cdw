@@ -245,6 +245,116 @@ function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV7)
     return path
 end
 
+const CM_CHECKPOINT_SCHEMA_V10 = 10
+# Bumped 7 -> 10 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
+# whole-tree CMCheckpointV* grep: V8/V9 already claimed by cm_checkpoint.jl's own transformed-A
+# bump -- see that file's CM_CHECKPOINT_SCHEMA comment -- so this bump takes the next globally
+# unused number, V10, same interleaved-shared-namespace discipline as every prior bump on either
+# file): adds `A_coordinate_mode::Symbol` to the persisted schema. `zfree` remains ALWAYS
+# canonical z-space regardless of this field's value, same discipline as cm_checkpoint.jl's V9.
+
+"""
+    CMCheckpointV10
+
+Identical to `CMCheckpointV7` except one new field, appended at the end: `A_coordinate_mode`.
+`CMCheckpointV7` is retained permanently, read-only, for every schema-7 file already written (all
+of which are, by construction, `:legacy_z`).
+"""
+struct CMCheckpointV10
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    distribution_restriction::Symbol
+    origin_K_mean::Int
+    origin_K_pair::Int
+    power_target_layout::Symbol
+    origin_D::Int
+    origin_moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    destination_sample::Symbol
+    row_idx::Union{Nothing,Int}
+    D_dest::Int
+    # ---- NEW (schema 10): transformed-A restricted-family port ----
+    A_coordinate_mode::Symbol   # :legacy_z | :powered_aspace
+end
+
+"Atomic-ish checkpoint write for CMCheckpointV10 (same discipline/assertion as the V5/V7 methods above)."
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV10)
+    (ckpt.cm_extension === :cm_only || ckpt.distribution_restriction === :unrestricted) ||
+        error("save_cm_checkpoint: a single checkpoint must use exactly one restriction family non-trivially -- " *
+              "got cm_extension=:$(ckpt.cm_extension) AND distribution_restriction=:$(ckpt.distribution_restriction) " *
+              "both active. Combining CM with the origin-specific restriction is out of scope for this task.")
+    tmp = path * ".tmp"
+    serialize(tmp, ckpt)
+    mv(tmp, path; force = true)
+    return path
+end
+
+"Upgrades a schema-7 `CMCheckpointV7` (:powered_aspace did not exist as a runtime option at that schema) to `CMCheckpointV10`, filling A_coordinate_mode=:legacy_z -- CORRECT (not a guess), same reasoning as cm_checkpoint.jl's upgrade_schema8_to_v9."
+function upgrade_schema7_to_v10(old::CMCheckpointV7)
+    return CMCheckpointV10(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
+        old.moment_layout_version,
+        old.distribution_restriction, old.origin_K_mean, old.origin_K_pair, old.power_target_layout,
+        old.origin_D, old.origin_moment_layout_version,
+        old.g, old.zfree, old.eta_nu, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version, old.destination_sample, old.row_idx, old.D_dest,
+        :legacy_z)
+end
+
+"""
+    load_cm_checkpoint_v10(path) -> CMCheckpointV10
+
+Tries schema-10 (`CMCheckpointV10`) first; falls back to `load_cm_checkpoint_v7` (its own full
+V7/V5/CM-family fallback chain) upgraded via `upgrade_schema7_to_v10`. Always returns a
+`CMCheckpointV10`. This is the loader `run_originzc_upper_checkpointed` uses as of the
+transformed-A restricted-family port (superseding `load_cm_checkpoint_v7` for that call site,
+which remains defined/usable on its own for any other caller that still wants a plain V7 view).
+"""
+function load_cm_checkpoint_v10(path::AbstractString)
+    try
+        return deserialize(path)::CMCheckpointV10
+    catch e1
+        (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
+        return upgrade_schema7_to_v10(load_cm_checkpoint_v7(path))
+    end
+end
+
 """
 Upgrades a schema-5 `CMCheckpointV5` (destination_sample did not exist as a runtime option at that
 schema) to `CMCheckpointV7`, filling destination_sample=:all_legacy, row_idx=nothing, D_dest=20 --
@@ -267,25 +377,34 @@ function upgrade_schema5_to_v7(old::CMCheckpointV5)
 end
 
 """
-Upgrades a schema-6 `CMCheckpointV6` (CM-family only -- a V6 file is never an origin-family run,
-`run_cm_upper_checkpointed` never writes distribution_restriction) to `CMCheckpointV7`. UNLIKE
-`upgrade_schema5_to_v7`, this carries the REAL `destination_sample`/`row_idx`/`D_dest` straight
-across (a V6 file may genuinely have `destination_sample=:exclude_row` -- routing through
-`downgrade_v6_to_v5`'s lossy V5 view, which drops those fields, would silently and incorrectly
-reset a real :exclude_row provenance back to :all_legacy).
+Upgrades a `load_cm_checkpoint`-shaped result (CM-family only -- such a file is never an
+origin-family run, `run_cm_upper_checkpointed` never writes distribution_restriction) to
+`CMCheckpointV7`. UNLIKE `upgrade_schema5_to_v7`, this carries the REAL
+`destination_sample`/`row_idx`/`D_dest` straight across (a CM-family file may genuinely have
+`destination_sample=:exclude_row` -- routing through `downgrade_v6_to_v5`'s lossy V5 view, which
+drops those fields, would silently and incorrectly reset a real :exclude_row provenance back to
+:all_legacy).
+
+RENAMED from `upgrade_schema6_to_v7` (transformed-A restricted-family port, 2026-07-26): the
+argument's static type tracks whatever `load_cm_checkpoint` (cm_checkpoint.jl) currently returns
+-- `CMCheckpointV9` as of that port (was `CMCheckpointV6` when this function was first written;
+`CMCheckpointV9` is a strict field superset of `CMCheckpointV6` under identical field names, so
+every field this function reads is unaffected -- it simply never reads the two CM-family-only
+fields V9 adds, `marginal_restriction`/`A_coordinate_mode`, exactly as it never read schema-8's
+`marginal_restriction` either).
 """
-function upgrade_schema6_to_v7(v6::CMCheckpointV6)
-    power_layout = v6.cm_extension === :cm_only ? :none : :shared_by_power
-    return CMCheckpointV7(v6.schema, v6.run_id, v6.label, v6.branch, v6.find_smallest, v6.delta,
-        v6.W, v6.draw_seed, v6.draw_design, v6.draw_checksum_uniform, v6.draw_checksum_transformed,
-        v6.cm_L, v6.cm_probs, v6.cm_contrasts, v6.cm_grid_rule, v6.cm_basis, v6.cm_hessian_backend,
-        v6.cm_gradient_backend, v6.cm_extension, v6.meanzc_K_mean, v6.meanzc_K_pair, v6.meanzc_basis,
-        v6.moment_layout_version,
+function upgrade_load_cm_checkpoint_result_to_v7(src::CMCheckpointV9)
+    power_layout = src.cm_extension === :cm_only ? :none : :shared_by_power
+    return CMCheckpointV7(src.schema, src.run_id, src.label, src.branch, src.find_smallest, src.delta,
+        src.W, src.draw_seed, src.draw_design, src.draw_checksum_uniform, src.draw_checksum_transformed,
+        src.cm_L, src.cm_probs, src.cm_contrasts, src.cm_grid_rule, src.cm_basis, src.cm_hessian_backend,
+        src.cm_gradient_backend, src.cm_extension, src.meanzc_K_mean, src.meanzc_K_pair, src.meanzc_basis,
+        src.moment_layout_version,
         :unrestricted, 0, 0, power_layout, 0, 0,
-        v6.g, v6.zfree, v6.eta_nu, v6.logA_full, v6.dual_warm_start, v6.bandwidth_cache, v6.best_feasible,
-        v6.n_eval, v6.n_grad, v6.wall_elapsed, v6.wall_budget_remaining, v6.checkpoint_reason,
-        v6.knitro_version,
-        v6.destination_sample, v6.row_idx, v6.D_dest)
+        src.g, src.zfree, src.eta_nu, src.logA_full, src.dual_warm_start, src.bandwidth_cache, src.best_feasible,
+        src.n_eval, src.n_grad, src.wall_elapsed, src.wall_budget_remaining, src.checkpoint_reason,
+        src.knitro_version,
+        src.destination_sample, src.row_idx, src.D_dest)
 end
 
 """
@@ -293,11 +412,12 @@ end
 
 Tries schema-7 (`CMCheckpointV7`) first; falls back to schema-5 (`CMCheckpointV5`, upgraded via
 `upgrade_schema5_to_v7`, correctly implying destination_sample=:all_legacy since V5 predates that
-option entirely); falls back to `load_cm_checkpoint` (cm_checkpoint.jl's own V6/V4/V3/legacy
-fallback chain, always returns `CMCheckpointV6`) upgraded via `upgrade_schema6_to_v7` (which
-carries a REAL destination_sample straight across, unlike routing through the lossy V5 view).
-Always returns a `CMCheckpointV7`. This is the loader `run_originzc_upper_checkpointed` uses
-(superseding `load_cm_checkpoint_v5` for that call site).
+option entirely); falls back to `load_cm_checkpoint` (cm_checkpoint.jl's own V9/V8/V6/V4/V3/legacy
+fallback chain, always returns `CMCheckpointV9`) upgraded via
+`upgrade_load_cm_checkpoint_result_to_v7` (which carries a REAL destination_sample straight
+across, unlike routing through the lossy V5 view). Always returns a `CMCheckpointV7`. This is the
+loader `run_originzc_upper_checkpointed` uses (superseding `load_cm_checkpoint_v5` for that call
+site).
 """
 function load_cm_checkpoint_v7(path::AbstractString)
     try
@@ -308,7 +428,7 @@ function load_cm_checkpoint_v7(path::AbstractString)
             return upgrade_schema5_to_v7(deserialize(path)::CMCheckpointV5)
         catch e2
             (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
-            return upgrade_schema6_to_v7(load_cm_checkpoint(path))
+            return upgrade_load_cm_checkpoint_result_to_v7(load_cm_checkpoint(path))
         end
     end
 end
@@ -344,10 +464,16 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): same option/semantics/production-default as run_cm_upper_checkpointed's
         # own destination_sample kwarg.
-        blas_threads::Union{Nothing,Int} = nothing)   # allocation/Hessian port task §6.3/§7: set once
+        blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3/§7: set once
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count untouched, zero behavior change. Added for section 7's bounded
         # origin-ZC BLAS benchmark; origin-ZC retains Architecture A (dense) regardless of this.
+        A_coordinate_mode::Symbol = :legacy_z)   # transformed-A restricted-family port (2026-07-26
+        # production-audit task addendum): same option/semantics/production-default as
+        # run_cm_upper_checkpointed's own A_coordinate_mode kwarg -- :legacy_z (PRODUCTION DEFAULT,
+        # byte-identical to every pre-existing origin-ZC production run) | :powered_aspace
+        # (cm_aspace_coordinate.jl, fixed-theta only). The origin-family eta/nu restriction block
+        # is entirely orthogonal to this choice (same as CM's own eta_nu), untouched either way.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, section 4.1): resolve ckpt_dir to an absolute path
     # BEFORE any real-data/model setup runs. A relative ckpt_dir silently
@@ -369,6 +495,10 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         error("run_originzc_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
     destination_sample in (:exclude_row, :all_legacy) ||
         error("run_originzc_upper_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
+    A_coordinate_mode in (:legacy_z, :powered_aspace) ||
+        error("run_originzc_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
+    lp("[", label, "] A_coordinate_mode=", A_coordinate_mode,
+       A_coordinate_mode == :legacy_z ? " (legacy production default)" : " (transformed-A, opt-in pending gate promotion)")
     lp("[", label, "] distribution_restriction=", distribution_restriction, " power_target_layout=", power_target_layout,
        " K_mean=", K_mean, " K_pair=", K_pair, " cm_gradient_backend=", cm_gradient_backend,
        " destination_sample=", destination_sample, destination_sample == :exclude_row ? " (production default)" : " (legacy/reproduction-only)")
@@ -377,7 +507,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
                           power_target_layout = power_target_layout, meanzc_basis = meanzc_basis, nu_bounds = nu_bounds)
     K_mean_r, K_pair_r = originzc_resolve_K(cfg)   # raises on any config inconsistency
 
-    resumed = resume_from === nothing ? nothing : load_cm_checkpoint_v7(resume_from)
+    resumed = resume_from === nothing ? nothing : load_cm_checkpoint_v10(resume_from)
     find_smallest = true
     backend_switched = false
 
@@ -412,6 +542,26 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
     pe = build_pivot_elimination(ctx)
     D = ctx.D
+    # Transformed-A restricted-family port: same lazy-computation/isdefined-guard discipline as
+    # run_cm_upper_checkpointed (cm_checkpoint.jl) -- see that function's identical block for the
+    # full rationale (existing callers that never pass A_coordinate_mode must not be forced to
+    # include cm_aspace_coordinate.jl).
+    if A_coordinate_mode == :powered_aspace
+        isdefined(Main, :cm_fixed_theta) ||
+            error("run_originzc_upper_checkpointed($label): A_coordinate_mode=:powered_aspace requires " *
+                  "cm_aspace_coordinate.jl to be included (defines cm_fixed_theta/precompute_cm_aspace_xy/" *
+                  "cm_z_from_a/cm_a_from_z) -- add it to this script's include list, after gravity_elimination.jl.")
+        theta_cm = cm_fixed_theta(ctx)
+        xy_cm = precompute_cm_aspace_xy(ctx)
+    else
+        theta_cm = NaN
+        xy_cm = nothing
+    end
+    xf_from_w_econ(w_econ) = A_coordinate_mode == :powered_aspace ?
+        x_free_from_w(vcat(w_econ[1], cm_z_from_a(w_econ[2:end], theta_cm, xy_cm, pe)), pe) :
+        x_free_from_w(w_econ, pe)
+    zfree_from_w_econ(w_econ) = A_coordinate_mode == :powered_aspace ?
+        cm_z_from_a(w_econ[2:end], theta_cm, xy_cm, pe) : w_econ[2:end]
     layout = originzc_make_layout(cfg, D)
     originzc_validate_bounds(cfg, layout)
 
@@ -423,7 +573,16 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
          ctx.draw_meta.checksum_transformed == resumed.draw_checksum_transformed) ||
             error("run_originzc_upper_checkpointed($label): draw checksum MISMATCH on resume -- regenerated draws " *
                   "(design=:$(draw_design), seed=$(draw_seed)) do not match the checkpoint's own recorded checksums.")
-        w0 = vcat(resumed.g, resumed.zfree, resumed.eta_nu)
+        # resumed.zfree is ALWAYS canonical z-space regardless of which A_coordinate_mode the
+        # checkpoint's own run searched in -- safe to resume under a DIFFERENT A_coordinate_mode
+        # (same reasoning as run_cm_upper_checkpointed's identical resume block).
+        resumed_coord_mode = hasproperty(resumed, :A_coordinate_mode) ? resumed.A_coordinate_mode : :legacy_z
+        resumed_coord_mode == A_coordinate_mode ||
+            lp("[", label, "] A_coordinate_mode on resume differs from checkpoint (checkpoint=:",
+               resumed_coord_mode, ", requested=:", A_coordinate_mode, ") -- safe (checkpoint zfree is ",
+               "always canonical z-space), reconstructing w0 in the requested coordinate.")
+        A_native0 = A_coordinate_mode == :powered_aspace ? cm_a_from_z(resumed.zfree, theta_cm, xy_cm, pe) : resumed.zfree
+        w0 = vcat(resumed.g, A_native0, resumed.eta_nu)
     elseif w0 === nothing
         error("run_originzc_upper_checkpointed($label): w0 required for a fresh (non-resumed) run -- must be " *
               "vcat(gp, zfree, eta) with length(eta)==$(n_eta(layout))")
@@ -448,7 +607,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     cplus_ws = cm_gradient_backend == :cplus ? build_lfix_factorized_workspace(ctx.D, ctx.D_dest, size(ctx.obj.U, 1)) : nothing
 
     if backend_switched && resumed.best_feasible !== nothing
-        xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
+        xf_switch = xf_from_w_econ(resumed.best_feasible.w[1:D2_econ])
         νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
         (_, _, vs) = cm_originzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters)
         is_verified_success(vs) ||
@@ -492,11 +651,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     end
 
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64})
-        zfree_now = w_current[2:D2_econ]
+        zfree_now = zfree_from_w_econ(w_current[1:D2_econ])   # ALWAYS canonical z-space
         eta_now = w_current[D2_econ+1:end]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = pcx.ctx_cm.obj.x
-        ckpt = CMCheckpointV7(CM_CHECKPOINT_SCHEMA_V7, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV10(CM_CHECKPOINT_SCHEMA_V10, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             0, Float64[], :anchored, :equal, :cumulative, :dense_reference, cm_gradient_backend,
             :cm_only, 0, 0, :direct, 0,
@@ -504,7 +663,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
             w_current[1], copy(zfree_now), copy(eta_now), logA_full, copy(dual_warm_src), copy(bandwidth_cache),
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
             maxtime_real - (time() - t_start), reason, knitro_version,
-            destination_sample, ctx.row_idx, ctx.D_dest)
+            destination_sample, ctx.row_idx, ctx.D_dest, A_coordinate_mode)
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
         save_cm_checkpoint(path, ckpt)
         last_ckpt_t[] = time()
@@ -513,7 +672,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
-        xf = x_free_from_w(w[1:D2_econ], pe)
+        xf = xf_from_w_econ(w[1:D2_econ])
         νvec = exp.(w[D2_econ+1:end])
         local base, verify
         try
@@ -544,7 +703,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     end
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
-        xf = x_free_from_w(w[1:D2_econ], pe)
+        xf = xf_from_w_econ(w[1:D2_econ])
         νvec = exp.(w[D2_econ+1:end])
         shared = last_F_state[]
         matched = shared !== nothing && shared.w == w
@@ -559,6 +718,13 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         end
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
+        # Transformed-A restricted-family port: gfull is ALWAYS the z-space gradient (unchanged
+        # cm_originzc_production_gradient_cplus/cm_originzc_production_gradient); rescale the
+        # A-block (indices 2:D2_econ) by the constant scalar -theta_cm when the outer search is
+        # actually in a-space, same as run_cm_upper_checkpointed's identical block.
+        if A_coordinate_mode == :powered_aspace
+            gfull[2:D2_econ] .*= -theta_cm
+        end
         evalResult.jac .= gfull
         return 0
     end
@@ -576,7 +742,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     κ = b === nothing ? NaN : 1 - b.gp^(σ / (σ - 1))
 
     xsol_v = collect(xsol)
-    xf_final = x_free_from_w(xsol_v[1:D2_econ], pe)
+    xf_final = xf_from_w_econ(xsol_v[1:D2_econ])
     local verify_final
     try
         νvec_final = exp.(xsol_v[D2_econ+1:end])

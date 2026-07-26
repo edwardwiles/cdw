@@ -31,7 +31,17 @@ isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_p
 isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
 
-const CM_CHECKPOINT_SCHEMA = 8
+const CM_CHECKPOINT_SCHEMA = 9
+# Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
+# whole-tree CMCheckpointV* grep confirms V9 unclaimed -- cm_originzc_checkpoint.jl currently ends
+# at V7, so this bump does not collide there; that file's own analogous bump uses V10, keeping the
+# two files' shared-namespace numbering interleaved and non-colliding, same discipline as every
+# prior bump on either file): adds `A_coordinate_mode::Symbol` (:legacy_z | :powered_aspace) to the
+# persisted schema. `zfree` remains ALWAYS canonical z-space regardless of this field's value (the
+# outer search coordinate the checkpoint's OWN run actually used) -- this field exists purely so a
+# resume knows which coordinate w0 was reconstructed in at write time, matching
+# outer_coordinate_layout.jl's D20CheckpointUnified's identical "zfree always genuine z-space, plus
+# a separate mode-tag field" discipline for the unrestricted family.
 # Bumped 6 -> 8 (fixed-Frechet-as-CM-plus-anchor production port, 2026-07-25/26; skips 7, already
 # taken by cm_originzc_checkpoint.jl's own CMCheckpointV7 -- see CM_CHECKPOINT_SCHEMA's own comment
 # block below and the whole-tree CMCheckpointV* grep this bump was checked against): adds
@@ -336,6 +346,59 @@ struct CMCheckpointV8
     marginal_restriction::Symbol   # :common_flexible | :common_frechet
 end
 
+"""
+    CMCheckpointV9
+
+Identical to `CMCheckpointV8` except one new field, appended at the end: `A_coordinate_mode`
+(transformed-A restricted-family port, 2026-07-26). `CMCheckpointV8` is retained permanently,
+read-only, for every schema-8 file already written (all of which are, by construction,
+`:legacy_z` -- `:powered_aspace` did not exist as a runtime option at schema 8).
+"""
+struct CMCheckpointV9
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    destination_sample::Symbol
+    row_idx::Union{Nothing,Int}
+    D_dest::Int
+    marginal_restriction::Symbol
+    # ---- NEW (schema 9): transformed-A restricted-family port ----
+    A_coordinate_mode::Symbol   # :legacy_z | :powered_aspace
+end
+
 "Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
 function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV6)
     tmp = path * ".tmp"
@@ -346,6 +409,14 @@ end
 
 "Same discipline as the V6 method above -- new method (multiple dispatch), the V6 method is unchanged/untouched."
 function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV8)
+    tmp = path * ".tmp"
+    serialize(tmp, ckpt)
+    mv(tmp, path; force = true)
+    return path
+end
+
+"Same discipline as the V6/V8 methods above -- new method (multiple dispatch), those methods unchanged/untouched."
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV9)
     tmp = path * ".tmp"
     serialize(tmp, ckpt)
     mv(tmp, path; force = true)
@@ -401,45 +472,64 @@ function upgrade_schema6_to_v8(old::CMCheckpointV6)
         :common_flexible)
 end
 
-"""
-    load_cm_checkpoint(path) -> CMCheckpointV8
+"Upgrades a schema-8 `CMCheckpointV8` (:powered_aspace did not exist as a runtime option at that schema) to `CMCheckpointV9`, filling A_coordinate_mode=:legacy_z -- CORRECT (not a guess): every schema-8 file was written before :powered_aspace existed anywhere in the restricted-family drivers, so :legacy_z is the only value consistent with those files' own provenance."
+function upgrade_schema8_to_v9(old::CMCheckpointV8)
+    return CMCheckpointV9(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
+        old.moment_layout_version,
+        old.g, old.zfree, old.eta_nu, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version, old.destination_sample, old.row_idx, old.D_dest,
+        old.marginal_restriction, :legacy_z)
+end
 
-Tries the CURRENT (schema>=8, `CMCheckpointV8`) shape first; falls back to schema-6
-(`CMCheckpointV6`, upgraded via `upgrade_schema6_to_v8`), then schema-4 (`CMCheckpointV4`,
-upgraded via `upgrade_schema4_to_v6` then `upgrade_schema6_to_v8`), then schema-3
+"""
+    load_cm_checkpoint(path) -> CMCheckpointV9
+
+Tries the CURRENT (schema 9, `CMCheckpointV9`) shape first; falls back to schema-8
+(`CMCheckpointV8`, upgraded via `upgrade_schema8_to_v9`), then schema-6 (`CMCheckpointV6`,
+upgraded via `upgrade_schema6_to_v8` then `upgrade_schema8_to_v9`), then schema-4
+(`CMCheckpointV4`, upgraded via `upgrade_schema4_to_v6` then the same chain), then schema-3
 (`CMCheckpointV3`, upgraded via `upgrade_schema3` then the same chain), then legacy schema-1/2
 (`CMCheckpoint`, upgraded via `upgrade_schema2` then the same chain). Schema-1 files are still
 hard-refused below (semantically untrustworthy Delta) -- this fallback chain only concerns byte
-LAYOUT, not schema-1's own known defect. Always returns a `CMCheckpointV8` (uniform shape for
+LAYOUT, not schema-1's own known defect. Always returns a `CMCheckpointV9` (uniform shape for
 every caller downstream of this function, regardless of which schema the file on disk actually is).
 """
 function load_cm_checkpoint(path::AbstractString)
     ckpt = try
-        deserialize(path)::CMCheckpointV8
-    catch e0
-        (e0 isa TypeError || e0 isa EOFError || e0 isa MethodError) || rethrow()
+        deserialize(path)::CMCheckpointV9
+    catch e00
+        (e00 isa TypeError || e00 isa EOFError || e00 isa MethodError) || rethrow()
         try
-            upgrade_schema6_to_v8(deserialize(path)::CMCheckpointV6)
-        catch e1b
-            (e1b isa TypeError || e1b isa EOFError || e1b isa MethodError) || rethrow()
+            upgrade_schema8_to_v9(deserialize(path)::CMCheckpointV8)
+        catch e0
+            (e0 isa TypeError || e0 isa EOFError || e0 isa MethodError) || rethrow()
             try
-                upgrade_schema6_to_v8(upgrade_schema4_to_v6(deserialize(path)::CMCheckpointV4))
-            catch e1
-                (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
+                upgrade_schema8_to_v9(upgrade_schema6_to_v8(deserialize(path)::CMCheckpointV6))
+            catch e1b
+                (e1b isa TypeError || e1b isa EOFError || e1b isa MethodError) || rethrow()
                 try
-                    upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(deserialize(path)::CMCheckpointV3)))
-                catch e2
-                    (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
-                    local old
+                    upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(deserialize(path)::CMCheckpointV4)))
+                catch e1
+                    (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
                     try
-                        old = deserialize(path)::CMCheckpoint
-                    catch
-                        error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV8, " *
-                              "CMCheckpointV6, CMCheckpointV4, CMCheckpointV3, AND the legacy CMCheckpoint " *
-                              "(schema 1/2) layout -- this file is not a recognized CM checkpoint (corrupt, " *
-                              "truncated, or an even older/unrelated format).")
+                        upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(deserialize(path)::CMCheckpointV3))))
+                    catch e2
+                        (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
+                        local old
+                        try
+                            old = deserialize(path)::CMCheckpoint
+                        catch
+                            error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV9, " *
+                                  "CMCheckpointV8, CMCheckpointV6, CMCheckpointV4, CMCheckpointV3, AND the legacy " *
+                                  "CMCheckpoint (schema 1/2) layout -- this file is not a recognized CM checkpoint " *
+                                  "(corrupt, truncated, or an even older/unrelated format).")
+                        end
+                        upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(upgrade_schema2(old)))))
                     end
-                    upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(upgrade_schema2(old))))
                 end
             end
         end
@@ -453,8 +543,8 @@ function load_cm_checkpoint(path::AbstractString)
               "START POINT only, then cold-re-evaluate it with cm_production_value_verified before " *
               "trusting any Delta/feasibility for it.")
     end
-    ckpt.schema in (2, 3, 4, 6, CM_CHECKPOINT_SCHEMA) ||
-        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, 4, 6, or $(CM_CHECKPOINT_SCHEMA) -- " *
+    ckpt.schema in (2, 3, 4, 6, 8, CM_CHECKPOINT_SCHEMA) ||
+        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, 4, 6, 8, or $(CM_CHECKPOINT_SCHEMA) -- " *
               "this checkpoint predates the CM checkpoint-schema unification (task §11), e.g. a bare " *
               "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
               "run instead of resuming from an incompatible checkpoint.")
@@ -564,13 +654,24 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # ROW dropped as a destination only; validated real D=20/W=80000 both cm_gradient_backend
         # values, see lfix_cplus_exclude_row_validation.jl) | :all_legacy (square D x D, explicit
         # reproduction-only opt-out, byte-identical to every pre-existing CM production run).
-        marginal_restriction::Symbol = :common_flexible)   # fixed-Frechet-as-CM-plus-anchor
+        marginal_restriction::Symbol = :common_flexible,   # fixed-Frechet-as-CM-plus-anchor
         # production port (2026-07-25/26): :common_flexible (PRODUCTION DEFAULT -- plain flexible
         # CM, (D-1)*L restrictions, byte-identical to every pre-existing CM production run) |
         # :common_frechet (fixed Frechet as CM plus a common-level anchor, D*L restrictions --
         # cm_frechet_level.jl/cm_frechet_hessian.jl/cm_frechet_cplus.jl; opt-in, currently requires
         # cm_extension=:cm_only, i.e. not yet combined with the meanzc extension -- see the guard
         # just below).
+        A_coordinate_mode::Symbol = :legacy_z)   # transformed-A restricted-family port
+        # (2026-07-26 production-audit task addendum): :legacy_z (PRODUCTION DEFAULT until this
+        # port's own D=20 gates promote :powered_aspace -- z_nonpivot=log(Aod_theta), byte-
+        # identical to every pre-existing CM-family production run) | :powered_aspace (the
+        # theta-decoupled a-space coordinate, cm_aspace_coordinate.jl -- fixed-theta ONLY; a
+        # pointwise-affine, constant-slope-(-theta) reparametrization of z_nonpivot, reusing the
+        # EXISTING pe::PivotGravityElim/pivot_expand/pivot_reduce and the EXISTING z-space
+        # restriction gradient kernels (cm_production_gradient_cplus/cm_meanzc_production_gradient_
+        # cplus/cm_frechet_production_gradient_cplus, ALL unchanged) -- only the outer decode/
+        # encode/gradient-rescale boundary changes. w0/resume must be constructed in the SAME
+        # coordinate this kwarg selects (see cm_w0_from_calibration).
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -586,6 +687,10 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         error("run_cm_upper_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
     marginal_restriction in (:common_flexible, :common_frechet) ||
         error("run_cm_upper_checkpointed($label): marginal_restriction must be :common_flexible|:common_frechet, got :$marginal_restriction")
+    A_coordinate_mode in (:legacy_z, :powered_aspace) ||
+        error("run_cm_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
+    lp("[", label, "] A_coordinate_mode=", A_coordinate_mode,
+       A_coordinate_mode == :legacy_z ? " (legacy production default)" : " (transformed-A, opt-in pending gate promotion)")
     lp("[", label, "] cm_gradient_backend=", cm_gradient_backend,
        cm_gradient_backend == :cplus ? " (production default)" : " (fallback/validation backend)",
        " destination_sample=", destination_sample, destination_sample == :exclude_row ? " (production default)" : " (legacy/reproduction-only)")
@@ -693,6 +798,38 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
 
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
     pe = build_pivot_elimination(ctx)
+    # Transformed-A restricted-family port: theta_cm/xy_cm are only actually used when
+    # A_coordinate_mode==:powered_aspace (cheap to compute unconditionally regardless -- O(D*Ddest),
+    # negligible next to ctx build -- so both branches below can share one code path).
+    # LAZY on purpose: cm_fixed_theta/precompute_cm_aspace_xy live in the additive
+    # cm_aspace_coordinate.jl file, NOT included by the ~55 existing callers of
+    # run_cm_upper_checkpointed that never pass A_coordinate_mode (implicit :legacy_z default) --
+    # calling them unconditionally would break every one of those callers with a hard include-list
+    # requirement they don't need. Only evaluated when A_coordinate_mode=:powered_aspace is
+    # actually requested, at which point the caller MUST have included cm_aspace_coordinate.jl
+    # (clear isdefined guard below, not a bare UndefVarError).
+    if A_coordinate_mode == :powered_aspace
+        isdefined(Main, :cm_fixed_theta) ||
+            error("run_cm_upper_checkpointed($label): A_coordinate_mode=:powered_aspace requires " *
+                  "cm_aspace_coordinate.jl to be included (defines cm_fixed_theta/precompute_cm_aspace_xy/" *
+                  "cm_z_from_a/cm_a_from_z) -- add it to this script's include list, after gravity_elimination.jl.")
+        theta_cm = cm_fixed_theta(ctx)
+        xy_cm = precompute_cm_aspace_xy(ctx)
+    else
+        theta_cm = NaN
+        xy_cm = nothing
+    end
+    # Transformed-A restricted-family port: coordinate-aware decode (w_econ=[gp;A_nonpivot_native]
+    # -> xf) and zfree extraction (w_econ -> ALWAYS canonical z-space, for checkpointing), shared by
+    # cb_F!/cb_G!/do_checkpoint/xf_switch/xf_final below. :legacy_z is a pure passthrough to the
+    # EXISTING x_free_from_w/pivot_reduce (byte-identical, zero behavior change from before this
+    # port); :powered_aspace converts a_nonpivot->z_nonpivot first (cm_aspace_coordinate.jl), then
+    # reuses the SAME x_free_from_w/pivot_expand unchanged.
+    xf_from_w_econ(w_econ) = A_coordinate_mode == :powered_aspace ?
+        x_free_from_w(vcat(w_econ[1], cm_z_from_a(w_econ[2:end], theta_cm, xy_cm, pe)), pe) :
+        x_free_from_w(w_econ, pe)
+    zfree_from_w_econ(w_econ) = A_coordinate_mode == :powered_aspace ?
+        cm_z_from_a(w_econ[2:end], theta_cm, xy_cm, pe) : w_econ[2:end]
 
     if resumed !== nothing
         if ctx.draw_meta.checksum_uniform != resumed.draw_checksum_uniform ||
@@ -701,10 +838,22 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                   "draws (design=:$(draw_design), seed=$(draw_seed)) do not match the checkpoint's own " *
                   "recorded checksums. Refusing to resume from a different problem instance.")
         end
-        w0 = vcat(resumed.g, resumed.zfree, resumed.eta_nu)
+        # resumed.zfree is ALWAYS canonical z-space (by construction -- see do_checkpoint below),
+        # regardless of which A_coordinate_mode the checkpoint's own run searched in -- so resuming
+        # under a DIFFERENT A_coordinate_mode than the checkpoint was written under is safe by
+        # construction (not an approximation/assumption the way a gradient-backend switch is) and
+        # needs no explicit opt-in, just a transparent log line.
+        resumed_coord_mode = hasproperty(resumed, :A_coordinate_mode) ? resumed.A_coordinate_mode : :legacy_z
+        resumed_coord_mode == A_coordinate_mode ||
+            lp("[", label, "] A_coordinate_mode on resume differs from checkpoint (checkpoint=:",
+               resumed_coord_mode, ", requested=:", A_coordinate_mode, ") -- safe (checkpoint zfree is ",
+               "always canonical z-space), reconstructing w0 in the requested coordinate.")
+        A_native0 = A_coordinate_mode == :powered_aspace ? cm_a_from_z(resumed.zfree, theta_cm, xy_cm, pe) : resumed.zfree
+        w0 = vcat(resumed.g, A_native0, resumed.eta_nu)
     elseif w0 === nothing
         error("run_cm_upper_checkpointed($label): w0 required for a fresh (non-resumed) run " *
-              (is_meanzc ? "-- must be vcat(gp, zfree, eta_nu) with length(eta_nu)==$(meanzc_K_mean)" : ""))
+              (is_meanzc ? "-- must be vcat(gp, A_nonpivot_native, eta_nu) with length(eta_nu)==$(meanzc_K_mean), " *
+                           "A_nonpivot_native in whichever coordinate A_coordinate_mode selects (see cm_w0_from_calibration)" : ""))
     end
 
     probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
@@ -758,7 +907,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # checkpoint's own recorded Delta to numerical precision; a failure here would mean the
     # resumed incumbent is not safe to carry across the switch.
     if backend_switched && resumed.best_feasible !== nothing
-        xf_switch = x_free_from_w(resumed.best_feasible.w[1:D2_econ], pe)
+        xf_switch = xf_from_w_econ(resumed.best_feasible.w[1:D2_econ])
         verify_switch = if is_meanzc
             νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
             (_, _, vs) = cm_meanzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters); vs
@@ -827,11 +976,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     end
 
     function do_checkpoint(reason::Symbol, w_current::Vector{Float64})
-        zfree_now = w_current[2:D2_econ]
+        # zfree_now is ALWAYS canonical z-space regardless of A_coordinate_mode (converted from
+        # a-space here if needed) -- matches D20CheckpointUnified's own "zfree always genuine
+        # z-space" discipline (outer_coordinate_layout.jl), so a checkpoint is resumable under
+        # EITHER A_coordinate_mode without re-deriving anything.
+        zfree_now = zfree_from_w_econ(w_current[1:D2_econ])
         eta_nu_now = is_meanzc ? w_current[D2_econ+1:end] : Float64[]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = (is_meanzc || is_frechet) ? pcx.ctx_cm.obj.x : ctx.obj.x
-        ckpt = CMCheckpointV8(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV9(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
             cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, MEANZC_MOMENT_LAYOUT_VERSION,
@@ -839,7 +992,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
             maxtime_real - (time() - t_start), reason, knitro_version,
             destination_sample, ctx.row_idx, ctx.D_dest,
-            marginal_restriction)
+            marginal_restriction, A_coordinate_mode)
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
         save_cm_checkpoint(path, ckpt)
         last_ckpt_t[] = time()
@@ -848,7 +1001,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
-        xf = x_free_from_w(w[1:D2_econ], pe)
+        xf = xf_from_w_econ(w[1:D2_econ])
         νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
         local base, verify
         try
@@ -904,7 +1057,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     end
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
-        xf = x_free_from_w(w[1:D2_econ], pe)
+        xf = xf_from_w_econ(w[1:D2_econ])
         νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
         shared = last_F_state[]
         matched = shared !== nothing && shared.w == w
@@ -937,6 +1090,17 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         end
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
+        # Transformed-A restricted-family port: gfull is ALWAYS the z-space gradient (the shared
+        # numerical kernel -- cm_production_gradient_cplus/cm_meanzc_production_gradient_cplus/
+        # cm_frechet_production_gradient_cplus, ALL unchanged) regardless of A_coordinate_mode;
+        # rescale the A-block (indices 2:D2_econ; index 1 is d/dgp, D2_econ+1:end is the meanzc
+        # eta_nu block, neither touched by the A-coordinate) by the constant scalar -theta_cm to
+        # convert into the coordinate KNITRO is actually searching, exactly mirroring
+        # outer_coordinate_layout.jl::gradient_transform_unified's own `g[2:end] .*= (-theta)` line
+        # (cross-validated bit-for-bit against that function, test_cm_aspace_coordinate_gates.jl).
+        if A_coordinate_mode == :powered_aspace
+            gfull[2:D2_econ] .*= -theta_cm
+        end
         evalResult.jac .= gfull
         last_activity_t[] = time(); last_activity_kind[] = :cb_G!
         return 0
@@ -966,7 +1130,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # residual/gap checks. best_feasible[] (already gated by is_verified_success in cb_F! above)
     # remains the correct resume/incumbent state regardless of this outcome.
     xsol_v = collect(xsol)
-    xf_final = x_free_from_w(xsol_v[1:D2_econ], pe)
+    xf_final = xf_from_w_econ(xsol_v[1:D2_econ])
     local verify_final
     try
         if is_meanzc
