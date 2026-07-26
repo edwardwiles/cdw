@@ -31,7 +31,16 @@ isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_p
 isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
 
-const CM_CHECKPOINT_SCHEMA = 6
+const CM_CHECKPOINT_SCHEMA = 8
+# Bumped 6 -> 8 (fixed-Frechet-as-CM-plus-anchor production port, 2026-07-25/26; skips 7, already
+# taken by cm_originzc_checkpoint.jl's own CMCheckpointV7 -- see CM_CHECKPOINT_SCHEMA's own comment
+# block below and the whole-tree CMCheckpointV* grep this bump was checked against): adds
+# `marginal_restriction::Symbol` (:common_flexible | :common_frechet) to the persisted schema, so a
+# checkpoint records which restriction family (plain flexible CM vs CM-plus-common-level-anchor
+# fixed Frechet) it was written under -- CM_frechet's own thresholds/targets/basis are NOT
+# separately persisted, since they are already fully determined, deterministically, by the
+# EXISTING persisted fields (cm_L, cm_probs, cm_contrasts, ctx.D) exactly the same way flexible
+# CM's own thresholds already are -- no new non-deterministic state to capture.
 # Bumped 4 -> 6 (destination_sample production wiring, exclude-ROW-destination release,
 # 2026-07-24): adds destination_sample, row_idx, D_dest to the persisted schema, so a checkpoint
 # records WHICH destination-sample regime (:all_legacy square D x D vs :exclude_row true-shrink
@@ -271,8 +280,72 @@ end
 
 const MEANZC_MOMENT_LAYOUT_VERSION = 1   # wrap_moments_with_cm_meanzc's column order, cm_meanzc_moments.jl
 
+"""
+    CMCheckpointV8
+
+CM-production checkpoint layout, schema>=8 (fixed-Frechet-as-CM-plus-anchor production port,
+2026-07-25/26). Identical to `CMCheckpointV6` except one new field, appended at the end:
+`marginal_restriction`. New type name for the Julia-Serialization reason documented at
+`CM_CHECKPOINT_SCHEMA` above (also explains why this skips V7, already taken by
+cm_originzc_checkpoint.jl's unrelated struct) -- `CMCheckpointV6` is retained permanently,
+read-only, for every schema-6 file the destination_sample-era campaigns already wrote (all of
+which are, by construction, :common_flexible -- :common_frechet did not exist as a runtime option
+at schema 6).
+"""
+struct CMCheckpointV8
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    destination_sample::Symbol
+    row_idx::Union{Nothing,Int}
+    D_dest::Int
+    # ---- NEW (schema 8): fixed-Frechet-as-CM-plus-anchor marginal restriction mode ----
+    marginal_restriction::Symbol   # :common_flexible | :common_frechet
+end
+
 "Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
 function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV6)
+    tmp = path * ".tmp"
+    serialize(tmp, ckpt)
+    mv(tmp, path; force = true)
+    return path
+end
+
+"Same discipline as the V6 method above -- new method (multiple dispatch), the V6 method is unchanged/untouched."
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV8)
     tmp = path * ".tmp"
     serialize(tmp, ckpt)
     mv(tmp, path; force = true)
@@ -315,41 +388,59 @@ function upgrade_schema4_to_v6(old::CMCheckpointV4)
         :all_legacy, nothing, 20)
 end
 
-"""
-    load_cm_checkpoint(path) -> CMCheckpointV6
+"Upgrades a schema-6 `CMCheckpointV6` (:common_frechet did not exist as a runtime option at that schema) to `CMCheckpointV8`, filling marginal_restriction=:common_flexible -- CORRECT (not a guess): every schema-6 file was written before :common_frechet existed anywhere in this codebase, so :common_flexible is the only value consistent with those files' own provenance."
+function upgrade_schema6_to_v8(old::CMCheckpointV6)
+    return CMCheckpointV8(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
+        old.moment_layout_version,
+        old.g, old.zfree, old.eta_nu, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version, old.destination_sample, old.row_idx, old.D_dest,
+        :common_flexible)
+end
 
-Tries the CURRENT (schema>=6, `CMCheckpointV6`) shape first; falls back to schema-4
-(`CMCheckpointV4`, upgraded via `upgrade_schema4_to_v6`), then schema-3 (`CMCheckpointV3`,
-upgraded via `upgrade_schema3` then `upgrade_schema4_to_v6`), then legacy schema-1/2
-(`CMCheckpoint`, upgraded via `upgrade_schema2` then `upgrade_schema3` then
-`upgrade_schema4_to_v6`). Schema-1 files are still hard-refused below (semantically untrustworthy
-Delta) -- this fallback chain only concerns byte LAYOUT, not schema-1's own known defect. Always
-returns a `CMCheckpointV6` (uniform shape for every caller downstream of this function, regardless
-of which schema the file on disk actually is).
+"""
+    load_cm_checkpoint(path) -> CMCheckpointV8
+
+Tries the CURRENT (schema>=8, `CMCheckpointV8`) shape first; falls back to schema-6
+(`CMCheckpointV6`, upgraded via `upgrade_schema6_to_v8`), then schema-4 (`CMCheckpointV4`,
+upgraded via `upgrade_schema4_to_v6` then `upgrade_schema6_to_v8`), then schema-3
+(`CMCheckpointV3`, upgraded via `upgrade_schema3` then the same chain), then legacy schema-1/2
+(`CMCheckpoint`, upgraded via `upgrade_schema2` then the same chain). Schema-1 files are still
+hard-refused below (semantically untrustworthy Delta) -- this fallback chain only concerns byte
+LAYOUT, not schema-1's own known defect. Always returns a `CMCheckpointV8` (uniform shape for
+every caller downstream of this function, regardless of which schema the file on disk actually is).
 """
 function load_cm_checkpoint(path::AbstractString)
     ckpt = try
-        deserialize(path)::CMCheckpointV6
+        deserialize(path)::CMCheckpointV8
     catch e0
         (e0 isa TypeError || e0 isa EOFError || e0 isa MethodError) || rethrow()
         try
-            upgrade_schema4_to_v6(deserialize(path)::CMCheckpointV4)
-        catch e1
-            (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
+            upgrade_schema6_to_v8(deserialize(path)::CMCheckpointV6)
+        catch e1b
+            (e1b isa TypeError || e1b isa EOFError || e1b isa MethodError) || rethrow()
             try
-                upgrade_schema4_to_v6(upgrade_schema3(deserialize(path)::CMCheckpointV3))
-            catch e2
-                (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
-                local old
+                upgrade_schema6_to_v8(upgrade_schema4_to_v6(deserialize(path)::CMCheckpointV4))
+            catch e1
+                (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
                 try
-                    old = deserialize(path)::CMCheckpoint
-                catch
-                    error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV6, " *
-                          "CMCheckpointV4, CMCheckpointV3, AND the legacy CMCheckpoint (schema 1/2) " *
-                          "layout -- this file is not a recognized CM checkpoint (corrupt, truncated, " *
-                          "or an even older/unrelated format).")
+                    upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(deserialize(path)::CMCheckpointV3)))
+                catch e2
+                    (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
+                    local old
+                    try
+                        old = deserialize(path)::CMCheckpoint
+                    catch
+                        error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV8, " *
+                              "CMCheckpointV6, CMCheckpointV4, CMCheckpointV3, AND the legacy CMCheckpoint " *
+                              "(schema 1/2) layout -- this file is not a recognized CM checkpoint (corrupt, " *
+                              "truncated, or an even older/unrelated format).")
+                    end
+                    upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(upgrade_schema2(old))))
                 end
-                upgrade_schema4_to_v6(upgrade_schema3(upgrade_schema2(old)))
             end
         end
     end
@@ -362,8 +453,8 @@ function load_cm_checkpoint(path::AbstractString)
               "START POINT only, then cold-re-evaluate it with cm_production_value_verified before " *
               "trusting any Delta/feasibility for it.")
     end
-    ckpt.schema in (2, 3, 4, CM_CHECKPOINT_SCHEMA) ||
-        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, 4, or $(CM_CHECKPOINT_SCHEMA) -- " *
+    ckpt.schema in (2, 3, 4, 6, CM_CHECKPOINT_SCHEMA) ||
+        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, 4, 6, or $(CM_CHECKPOINT_SCHEMA) -- " *
               "this checkpoint predates the CM checkpoint-schema unification (task §11), e.g. a bare " *
               "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
               "run instead of resuming from an incompatible checkpoint.")
@@ -468,11 +559,18 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,   # only consulted when cm_extension=:cm_plus_moments
         meanzc_basis::Symbol = :direct,
         meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
-        destination_sample::Symbol = :exclude_row)   # exclude-ROW-destination production release
+        destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): :exclude_row (PRODUCTION DEFAULT -- true D_origin/D_dest dimension shrink,
         # ROW dropped as a destination only; validated real D=20/W=80000 both cm_gradient_backend
         # values, see lfix_cplus_exclude_row_validation.jl) | :all_legacy (square D x D, explicit
         # reproduction-only opt-out, byte-identical to every pre-existing CM production run).
+        marginal_restriction::Symbol = :common_flexible)   # fixed-Frechet-as-CM-plus-anchor
+        # production port (2026-07-25/26): :common_flexible (PRODUCTION DEFAULT -- plain flexible
+        # CM, (D-1)*L restrictions, byte-identical to every pre-existing CM production run) |
+        # :common_frechet (fixed Frechet as CM plus a common-level anchor, D*L restrictions --
+        # cm_frechet_level.jl/cm_frechet_hessian.jl/cm_frechet_cplus.jl; opt-in, currently requires
+        # cm_extension=:cm_only, i.e. not yet combined with the meanzc extension -- see the guard
+        # just below).
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -486,6 +584,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         error("run_cm_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
     destination_sample in (:exclude_row, :all_legacy) ||
         error("run_cm_upper_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
+    marginal_restriction in (:common_flexible, :common_frechet) ||
+        error("run_cm_upper_checkpointed($label): marginal_restriction must be :common_flexible|:common_frechet, got :$marginal_restriction")
     lp("[", label, "] cm_gradient_backend=", cm_gradient_backend,
        cm_gradient_backend == :cplus ? " (production default)" : " (fallback/validation backend)",
        " destination_sample=", destination_sample, destination_sample == :exclude_row ? " (production default)" : " (legacy/reproduction-only)")
@@ -502,6 +602,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     is_meanzc = cm_extension !== :cm_only
     is_meanzc && lp("[", label, "] cm_extension=", cm_extension, " K_mean=", meanzc_K_mean,
                      " K_pair=", meanzc_K_pair, " meanzc_basis=", meanzc_basis)
+    (marginal_restriction === :common_frechet && is_meanzc) &&
+        error("run_cm_upper_checkpointed($label): marginal_restriction=:common_frechet is not yet " *
+              "combined with cm_extension=:$cm_extension (the meanzc extension) -- these are " *
+              "orthogonal but the combination has not been implemented/validated. Use cm_extension=" *
+              ":cm_only with marginal_restriction=:common_frechet, or marginal_restriction=" *
+              ":common_flexible with the meanzc extension.")
+    marginal_restriction === :common_frechet &&
+        lp("[", label, "] marginal_restriction=common_frechet (fixed Frechet as CM plus a common-level anchor)")
 
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
     find_smallest = true   # :cm_upper is the only wired direction today, matches run_cm_upper's own docstring
@@ -531,6 +639,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                   "checkpoint was written with destination_sample=:$(resumed.destination_sample), this " *
                   "call requests :$destination_sample -- refusing to resume under a different " *
                   "destination-sample regime (D^2 vs D*D_dest free-parameter dimension differs).")
+        # fixed-Frechet-as-CM-plus-anchor production port: marginal_restriction changes the
+        # restriction column count (hence outer moment/dual-vector dimension and meaning) exactly
+        # like cm_extension/destination_sample do -- no safe override, hard-refuse on mismatch
+        # (same discipline as those two checks).
+        resumed.marginal_restriction == marginal_restriction ||
+            error("run_cm_upper_checkpointed($label): marginal_restriction MISMATCH on resume -- " *
+                  "checkpoint was written with marginal_restriction=:$(resumed.marginal_restriction), " *
+                  "this call requests :$marginal_restriction -- refusing to resume under a different " *
+                  "restriction family (CM-only vs CM-plus-level-anchor restriction-column count differs).")
         W = resumed.W; delta = resumed.delta; draw_design = resumed.draw_design; draw_seed = resumed.draw_seed
         L = resumed.cm_L; probs = resumed.cm_probs; contrasts = resumed.cm_contrasts
         cm_hessian_backend = resumed.cm_hessian_backend; cm_grid_rule = resumed.cm_grid_rule
@@ -591,21 +708,32 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     end
 
     probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
+    is_frechet = marginal_restriction === :common_frechet   # guarded mutually exclusive with is_meanzc above
+    mode_label = is_meanzc ? "cm_plus_meanzc" : (is_frechet ? "cm_common_frechet" : "cm_flexible")
     pcx = is_meanzc ?
         build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
             contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs) :
+        is_frechet ?
+        build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs,
+            cm_hessian_backend = cm_hessian_backend) :
         build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
-    print_active_layout_banner(ctx, is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
-    print_screen_startup_banner(is_meanzc ? "cm_plus_meanzc" : "cm_flexible")
+    print_active_layout_banner(ctx, mode_label)
+    print_screen_startup_banner(mode_label)
     th = pcx.ctx_cm.obj.threshold_state
-    println("[threshold-config] mode=", is_meanzc ? "cm_plus_meanzc" : "cm_flexible",
+    println("[threshold-config] mode=", mode_label,
             " requested_delta=", delta, " resolved_active_threshold=", th.threshold,
             " stored_in_objective_bundle=", pcx.ctx_cm.obj.threshold_state.threshold)
     flush(stdout)
-    print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = blas_threads,
-        cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair))   # allocation/Hessian port task §2
+    if is_frechet
+        print_frechet_startup_manifest((marginal_restriction = marginal_restriction, contrasts = contrasts,
+            cm_hessian_backend = cm_hessian_backend), ctx.D, L)
+        lp("[", label, "] core_hessian_backend=", pcx.cctx === nothing ? "dense_reference" : "exact_winner_pair_parallel (Architecture C)")
+    else
+        print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = blas_threads,
+            cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair))   # allocation/Hessian port task §2
+    end
 
     # D2_econ = length of the (gp, zfree) economic block only -- length(w0) itself is
     # D2_econ + meanzc_K_mean when is_meanzc, matching cm_meanzc_production.jl's own convention
@@ -634,6 +762,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         verify_switch = if is_meanzc
             νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
             (_, _, vs) = cm_meanzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters); vs
+        elseif is_frechet
+            (_, _, vs) = cm_frechet_production_value_verified_screened(xf_switch, pcx; counters = pcx.screen_counters); vs
         else
             (_, _, vs) = cm_production_value_verified_screened(xf_switch, pcx; counters = pcx.screen_counters); vs
         end
@@ -700,15 +830,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         zfree_now = w_current[2:D2_econ]
         eta_nu_now = is_meanzc ? w_current[D2_econ+1:end] : Float64[]
         logA_full = pivot_expand(zfree_now, pe)
-        dual_warm_src = is_meanzc ? pcx.ctx_cm.obj.x : ctx.obj.x
-        ckpt = CMCheckpointV6(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        dual_warm_src = (is_meanzc || is_frechet) ? pcx.ctx_cm.obj.x : ctx.obj.x
+        ckpt = CMCheckpointV8(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
             cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, MEANZC_MOMENT_LAYOUT_VERSION,
             w_current[1], copy(zfree_now), copy(eta_nu_now), logA_full, copy(dual_warm_src), copy(bandwidth_cache),
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
             maxtime_real - (time() - t_start), reason, knitro_version,
-            destination_sample, ctx.row_idx, ctx.D_dest)
+            destination_sample, ctx.row_idx, ctx.D_dest,
+            marginal_restriction)
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
         save_cm_checkpoint(path, ckpt)
         last_ckpt_t[] = time()
@@ -723,6 +854,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         try
             if is_meanzc
                 _, base, verify = cm_meanzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters)
+            elseif is_frechet
+                _, base, verify = cm_frechet_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
             else
                 _, base, verify = cm_production_value_verified_screened(xf, pcx; counters = pcx.screen_counters)
             end
@@ -785,6 +918,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                 cm_meanzc_production_gradient(xf, νvec, pcx, ctx, pe;
                     base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
             end
+        elseif is_frechet
+            if cm_gradient_backend == :cplus
+                cm_frechet_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, threaded = true,
+                    h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            else
+                cm_frechet_production_gradient(xf, pcx, ctx, pe; base = base, threaded = true,
+                    h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            end
         else
             if cm_gradient_backend == :cplus
                 cm_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, threaded = true,
@@ -831,6 +972,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         if is_meanzc
             νvec_final = exp.(xsol_v[D2_econ+1:end])
             _, _, verify_final = cm_meanzc_production_value_verified_screened(xf_final, νvec_final, pcx; counters = pcx.screen_counters)
+        elseif is_frechet
+            _, _, verify_final = cm_frechet_production_value_verified_screened(xf_final, pcx; counters = pcx.screen_counters)
         else
             _, _, verify_final = cm_production_value_verified_screened(xf_final, pcx; counters = pcx.screen_counters)
         end

@@ -154,7 +154,8 @@ function build_cm_production_context_v2(ctx, CS, cfg::CMConfig; L::Int = cfg.cm_
         # (basis x backend) dispatch below.
         pcx = build_cm_frechet_production_context(ctx, CS; L = L, contrasts = cfg.contrasts, probs = probs,
                                                     cm_hessian_backend = cfg.cm_hessian_backend)
-        return (ctx_cm = pcx.ctx_cm, aug = pcx.aug, hess_cb_builder = pcx.hess_cb_builder, cfg = cfg, L = L)
+        return (ctx_cm = pcx.ctx_cm, aug = pcx.aug, bins = pcx.bins, cctx = pcx.cctx,
+                hess_cb_builder = pcx.hess_cb_builder, cfg = cfg, L = L)
     end
 
     if cfg.cm_basis === :cumulative

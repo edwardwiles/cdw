@@ -175,3 +175,110 @@ function composite_gradient_at_fast_frechet(x_free0::AbstractVector, ctx_cm, pe,
     end
     return composite_gradient_at_fast(x_free0, ctx_cm, pe; base = base, cache = cache, kwargs...)
 end
+
+# ================================================================================================
+# Public-driver production bundle (Part V) -- level-aware siblings of cm_production_bundle.jl's
+# archC_verified_state(_screened)/cm_production_value_verified_screened/cm_production_gradient(_cplus),
+# with the SAME (x_free0, pcx, ...) call signature `run_cm_upper_checkpointed` (cm_checkpoint.jl)
+# already uses for plain flexible CM, so that file's cb_F!/cb_G!/checkpoint-save call sites need
+# only a marginal_restriction-keyed dispatch, not a rewrite. `cm_screen_precheck!` (cm_screen_bridge.jl)
+# is reused UNCHANGED -- it operates on ctx_cm.pairwise/.m, entirely unrelated to which restriction
+# family is active.
+# ================================================================================================
+
+"""
+    archC_frechet_verified_state(x_free0, ctx_cm, cctx, level_targets) -> (base, verify)
+
+Level-aware analog of `cm_production_bundle.jl::archC_verified_state`, using
+`archC_frechet_hess_cb_builder(cctx, level_targets)` instead of `archC_hess_cb_builder(cctx)`.
+Every other line (KKT residual, Delta_dual/Delta_primal, weight-norm checks) is IDENTICAL and
+copied verbatim -- none of it is restriction-family-specific.
+"""
+function archC_frechet_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64})
+    obj = ctx_cm.obj
+    θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
+    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
+        hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
+    nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_frechet_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
+
+    ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
+    W = size(obj.U, 1)
+    G = CS.select_G_from_H(obj, obj.H)
+
+    ncon = obj.d - obj.outer_constr_index + 2
+    cbuf = zeros(ncon)
+    obj(inner_x, constr = @view(cbuf[1:ncon]))
+    Delta_dual = cbuf[1] / 1e10
+    m_weights = copy(obj.arg1)
+    p_weights = m_weights ./ sum(m_weights)
+    Delta_primal = primal_divergence(m_weights)
+
+    mean_m_resid = abs(sum(m_weights) / W - 1.0)
+    nkkt = min(length(λstar), size(G, 2))
+    max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
+
+    base = BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, m_weights, nStatus)
+    verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
+              primal_dual_gap = abs(Delta_dual - Delta_primal),
+              weight_norm_resid = abs(sum(p_weights) - 1.0),
+              mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
+              m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+    return base, verify
+end
+
+"""
+    archC_frechet_verified_state_screened(x_free0, ctx_cm, cctx, level_targets; counters=nothing, use_witness=false) -> (base, verify)
+
+Level-aware analog of `cm_screen_bridge.jl::archC_verified_state_screened`. `cm_screen_precheck!`
+reused UNCHANGED.
+"""
+function archC_frechet_verified_state_screened(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64};
+                                                counters::Union{Nothing,CMScreenCounters} = nothing, use_witness::Bool = false)
+    cm_screen_precheck!(x_free0, ctx_cm; counters = counters, use_witness = use_witness)
+    return archC_frechet_verified_state(x_free0, ctx_cm, cctx, level_targets)
+end
+
+"""
+    cm_frechet_production_value_verified_screened(x_free0, pcx; counters=nothing, use_witness=false) -> (K, base, verify)
+
+Level-aware analog of `cm_screen_bridge.jl::cm_production_value_verified_screened`, for a
+`pcx = build_cm_frechet_production_context(...)` (`marginal_restriction=:common_frechet`, requires
+`cm_hessian_backend=:structured` so `pcx.cctx !== nothing`).
+"""
+function cm_frechet_production_value_verified_screened(x_free0::AbstractVector, pcx;
+                                                         counters::Union{Nothing,CMScreenCounters} = nothing, use_witness::Bool = false)
+    pcx.cctx === nothing && error("cm_frechet_production_value_verified_screened: pcx.cctx is nothing -- " *
+        "requires cm_hessian_backend=:structured (the public driver's screened/verified path is Architecture-C-only).")
+    base, verify = archC_frechet_verified_state_screened(x_free0, pcx.ctx_cm, pcx.cctx, pcx.aug.level_targets;
+        counters = counters, use_witness = use_witness)
+    K = pcx.ctx_cm.obj.H_save
+    return K, base, verify
+end
+
+"""
+    cm_frechet_production_gradient(x_free0, pcx, ctx, pe; base=nothing, kwargs...) -> (g, meta)
+
+Level-aware analog of `cm_production_bundle.jl::cm_production_gradient` (Reference/non-C+ backend),
+for a `pcx = build_cm_frechet_production_context(...)`.
+"""
+function cm_frechet_production_gradient(x_free0::AbstractVector, pcx, ctx, pe;
+        base::Union{Nothing,BaseDualState} = nothing, kwargs...)
+    base = base === nothing ? archC_frechet_base_state(x_free0, pcx.ctx_cm, pcx.cctx, pcx.aug.level_targets) : base
+    cache = build_lfix_base_cache_cm_frechet(x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins)
+    return composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+end
+
+"""
+    cm_frechet_production_gradient_cplus(x_free0, pcx, ctx, pe, pool, ws; base=nothing, kwargs...) -> (g, meta)
+
+`:cplus`-backend level-aware analog of `cm_production_bundle.jl::cm_production_gradient_cplus`, the
+production `cb_G!` entry point when `cm_gradient_backend=:cplus` (unchanged default) AND
+`marginal_restriction=:common_frechet`. `pcx` is the SAME `build_cm_frechet_production_context(...)`
+return value both gradient backends share.
+"""
+function cm_frechet_production_gradient_cplus(x_free0::AbstractVector, pcx, ctx, pe, pool::GradWorkspacePool,
+        ws::LFixFactorizedWorkspace; base::Union{Nothing,BaseDualState} = nothing, kwargs...)
+    base = base === nothing ? archC_frechet_base_state(x_free0, pcx.ctx_cm, pcx.cctx, pcx.aug.level_targets) : base
+    cache = build_lfix_base_cache_cm_frechet_C!(ws, x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins)
+    return composite_gradient_at_Cplus_from_cache(x_free0, pcx.ctx_cm, pe, pool, cache; base = base, kwargs...)
+end

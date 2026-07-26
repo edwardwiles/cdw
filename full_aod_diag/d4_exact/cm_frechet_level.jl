@@ -293,7 +293,9 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
 
     ctx_cm = merge(ctx, (obj = obj_cm,))
     aug = merge(aug, (core_cf_ref = core_cf_ref, Bidx = Bidx))
+    bins = cm_bin_indices_for(ctx, aug)   # top-level field, matches build_cm_production_context's own pcx shape
 
+    cctx = nothing
     if cm_hessian_backend === :structured
         cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false)   # UNCHANGED (cm_hessian_architectures.jl); serial-only frechet Hessian for now
         hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, aug.level_targets)
@@ -301,7 +303,7 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
     else
         hess_cb_builder = archA_hess_cb_builder
     end
-    return (ctx_cm = ctx_cm, aug = aug, hess_cb_builder = hess_cb_builder)
+    return (ctx_cm = ctx_cm, aug = aug, bins = bins, cctx = cctx, hess_cb_builder = hess_cb_builder)
 end
 
 """
