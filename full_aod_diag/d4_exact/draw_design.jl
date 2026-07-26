@@ -152,17 +152,16 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         timing = (uniform_and_transform = NaN, ctx_build = t_ctx,
                   pairwise = ctx0.screen_setup_wall.pairwise, witness = ctx0.screen_setup_wall.witness)
     else
-        # Part A (2026-07-23): d20_real_setup_qmc is a separate implementation that predates and
-        # does not know about destination_sample/row_idx -- error rather than silently building a
-        # square-D20_REAL context under a caller that believes it requested :exclude_row.
-        destination_sample === :exclude_row &&
-            error("d20_real_setup_design: destination_sample=:exclude_row is not supported with draw_design=:$draw_design (only :pseudorandom routes through the rectangularized d20_real_setup) -- pass destination_sample=:all_legacy explicitly if you intend square D x D behavior here.")
+        # Part A (2026-07-23) / QMC destination_sample port (2026-07-26): d20_real_setup_qmc now
+        # mirrors d20_real_setup's destination_sample/row_idx/D_dest wiring exactly (see
+        # qmc_context_real_d20.jl), so this branch simply passes destination_sample through --
+        # no more hard-error opt-out needed for :exclude_row here.
         D = D20_REAL
         gen = draw_design == :sobol_randomized ? sobol_U : halton_U
         t_gen = @elapsed Uexp = gen(W, D; seed = draw_seed)
         t_ctx = @elapsed ctx_qmc = d20_real_setup_qmc(W = W, U_injected = Uexp, δ = δ, find_smallest = find_smallest,
             outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
-            needs_outer_moment_jacobian = needs_outer_moment_jacobian)
+            needs_outer_moment_jacobian = needs_outer_moment_jacobian, destination_sample = destination_sample)
 
         # ---- screen parity: d20_real_setup_qmc does not build these (it mirrors
         # d20_real_setup exactly except at the U-injection point, and predates the
@@ -172,7 +171,7 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         screen_pairwise = nothing; screen_witness = nothing
         t_pairwise = NaN; t_witness = NaN
         if build_screen
-            ctx_min = (U = ctx_qmc.U, D = ctx_qmc.D)
+            ctx_min = (U = ctx_qmc.U, D = ctx_qmc.D, D_dest = ctx_qmc.D_dest)
             t_pairwise = @elapsed screen_pairwise = precompute_pairwise_M(ctx_min)
             t_witness = @elapsed screen_witness = build_extreme_draw_witness(ctx_min)
         end

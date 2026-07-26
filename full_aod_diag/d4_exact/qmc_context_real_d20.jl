@@ -91,6 +91,23 @@ function master_prepare_cc_qmc(data, counters, prestep_output, globalParams, U_i
 	ConfidenceLevel,
 	PMMGammaOnly = globalParams
 
+	# row_idx: destination excluded from the moment/estimation sample (Part A, 2026-07-23
+	# omit-ROW-destination release). nothing (default) reproduces today's D^2-moment layout
+	# exactly. Only the base autarky+gravity path (counterType==1) is supported with row_idx
+	# set -- every CM/marginals/independence extension below hard-errors rather than silently
+	# building a wrong-sized moment vector (those layers are out of scope for this release).
+	# Ported from prepare_cc/master_prepare_cc.jl verbatim -- this function had predated that
+	# port and was missing it (found+fixed as part of threading destination_sample through the
+	# QMC context path, 2026-07-26).
+	row_idx = get(globalParams, :row_idx, nothing)
+	Ddest = row_idx === nothing ? D : D - 1
+	if row_idx !== nothing
+		(sameMarginalsMoment == 1 || independenceMoment == 1 || GravityMomentFirstApproach == 1 ||
+			localGravityMoment == 1 || PMMGammaOnly == 1 || useConfidenceIntervals == 1) &&
+			error("row_idx (omit-ROW-destination) is not supported together with sameMarginalsMoment/independenceMoment/GravityMomentFirstApproach/localGravityMoment/PMMGammaOnly/useConfidenceIntervals -- out of scope for this release.")
+		counterType == 1 || error("row_idx (omit-ROW-destination) is only implemented for counterType==1 (autarky); counterType=$(counterType) is out of scope for this release.")
+	end
+
 	# QMC FORK (diagnostic only, full_aod_diag/d4_exact/qmc_context_real_d20.jl): the ONE
 	# and only change from prepare_cc/master_prepare_cc.jl -- U is injected by the caller
 	# (pseudorandom / scrambled-Halton / scrambled-Sobol, all already Exp(1)-transformed via
@@ -133,8 +150,9 @@ function master_prepare_cc_qmc(data, counters, prestep_output, globalParams, U_i
 		# autarky: drop the D baseline price-index moments (each is the exact sum of that
 		# destination's D trade-share moments, since shares sum to 1) and the D-1 unused
 		# counterfactual placeholders (only baseIndex has a counterfactual under autarky).
-		# Keep D^2 trade shares + 1 counterfactual price-index moment.
-		numMoments = D^2 + 1
+		# Keep D*Ddest trade shares + 1 counterfactual price-index moment (Ddest==D, i.e. D^2,
+		# unless row_idx excludes a destination -- Part A, 2026-07-23).
+		numMoments = D * Ddest + 1
 	end
 
 	# we add the condition that E[Ubar] =1
@@ -336,8 +354,8 @@ function master_prepare_cc_qmc(data, counters, prestep_output, globalParams, U_i
 end
 
 "Mirrors context_real_d20.jl::build_ad_context_real_d20 but injects U_injected (W x D, already Exp(1)) via master_prepare_cc_qmc instead of drawing it internally."
-function build_ad_context_real_d20_qmc(; W::Int, U_injected::AbstractMatrix{Float64})
-    params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W))
+function build_ad_context_real_d20_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, row_idx::Union{Nothing,Int} = nothing)
+    params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx))
     so = master_setup(params)
     @assert so.D == D20_REAL "master_setup returned D=$(so.D), expected $(D20_REAL)"
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
@@ -352,18 +370,33 @@ end
 
 Mirrors context_real_d20.jl::d20_real_setup exactly (same free-parameter
 layout, bounds, PsiObjectiveBundleImplicit wiring, needs_outer_moment_jacobian
-default) but takes an externally-supplied W x D Exp(1) draw matrix
-(`U_injected`) instead of drawing U via the production seedU/drawU path. Every
-existing D=4/D=20 diagnostic function (evaluate_fullA, compute_winners,
-build_pivot_elimination, composite_gradient_at_fast, ...) works unchanged on
-the returned ctx, exactly as for d20_real_setup.
+default, destination_sample/row_idx/D_dest rectangularization) but takes an
+externally-supplied W x D Exp(1) draw matrix (`U_injected`) instead of drawing
+U via the production seedU/drawU path. Every existing D=4/D=20 diagnostic
+function (evaluate_fullA, compute_winners, build_pivot_elimination,
+composite_gradient_at_fast, ...) works unchanged on the returned ctx, exactly
+as for d20_real_setup.
 """
 function d20_real_setup_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
-        needs_outer_moment_jacobian::Bool = false)
-    so, pp, params_used = build_ad_context_real_d20_qmc(W = W, U_injected = U_injected)
+        needs_outer_moment_jacobian::Bool = false,
+        # mirrors d20_real_setup's own destination_sample kwarg exactly (context_real_d20.jl) --
+        # :exclude_row is the production default (true dimension shrink, ROW dropped as a
+        # destination); :all_legacy is the pre-Part-A square D x D opt-out.
+        destination_sample::Symbol = :exclude_row)
+    destination_sample in (:exclude_row, :all_legacy) ||
+        error("d20_real_setup_qmc: destination_sample must be :exclude_row or :all_legacy, got :$destination_sample")
+    row_idx = destination_sample == :exclude_row ? D20_REAL : nothing
+    so, pp, params_used = build_ad_context_real_d20_qmc(W = W, U_injected = U_injected, row_idx = row_idx)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
+    # mirrors d20_real_setup's own bi/row_idx collision guard exactly (context_real_d20.jl) -- a
+    # focal country that is not itself a valid destination in the resolved sample makes GT undefined.
+    row_idx === nothing || bi != row_idx ||
+        error("d20_real_setup_qmc: focal country (baseIndex=$bi) coincides with the omitted ROW " *
+              "destination (row_idx=$row_idx) under destination_sample=:exclude_row -- GT is undefined " *
+              "for a focal country that is not itself a valid destination in the resolved sample.")
+    Ddest = row_idx === nothing ? Dact : Dact - 1
     @unpack θ_initial, θ_initial_up, U, γ, outer_constr_index, nTotalMoments, complement_index, inequality_index = pp
     Aod_offset = 3 + Dact
 
@@ -380,13 +413,13 @@ function d20_real_setup_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, δ::F
     θ_lo[3+Dact] = bounds.γp_lo; θ_hi[3+Dact] = bounds.γp_hi
 
     l_full = length(θ0_up)
-    free_idx = vcat(3 + Dact, collect(Aod_offset+1:Aod_offset+Dact^2))
+    free_idx = vcat(3 + Dact, collect(Aod_offset+1:Aod_offset+Dact*Ddest))
     fixed_idx = vcat(1, 2, collect(3:2+Dact))
     fixed_vals = θ0_up[fixed_idx]
     m = CS.FreeParamMap(l_full, free_idx, fixed_idx, fixed_vals)
-    @assert CS.n_free(m) == 1 + Dact^2
+    @assert CS.n_free(m) == 1 + Dact * Ddest
 
-    Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Dact]
+    Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Ddest]
     τ = γ.τ
     q_tilde, N_obs = precompute_q_tilde(τ)
 
@@ -399,7 +432,15 @@ function d20_real_setup_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, δ::F
         needs_outer_moment_jacobian = needs_outer_moment_jacobian)
     @assert obj.outer_constr_index == obj.d
 
-    return (so = so, pp = pp, D = Dact, W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
+    return (so = so, pp = pp, D = Dact, D_dest = Ddest, row_idx = row_idx,
+            destination_sample = destination_sample,
+            # matches d20_real_setup's active_origins/active_destinations convention exactly
+            # (context_real_d20.jl) -- origins never restricted, destinations truncated to
+            # 1:Ddest under :exclude_row (omitted destination, row_idx, is always Dact, the last
+            # index -- see Aod_free_pos's own `d in 1:Ddest` above).
+            active_origins = Base.OneTo(Dact), active_destinations = Base.OneTo(Ddest),
+            gravity_sample_version = GRAVITY_SAMPLE_VERSION, theta_calibration_version = THETA_CALIBRATION_VERSION,
+            W = W, bi = bi, σ = σ, μHat = μHat, γ = γ, U = U,
             θ0_up = θ0_up, θ_lo = θ_lo, θ_hi = θ_hi, l_full = l_full,
             free_idx = free_idx, fixed_idx = fixed_idx, fixed_vals = fixed_vals, m = m,
             Aod_offset = Aod_offset, Aod_free_pos = Aod_free_pos,
