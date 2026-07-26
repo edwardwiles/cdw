@@ -158,6 +158,8 @@ lp(">>> MEASURED RUN DONE wall=", round(t_meas, digits = 3), "s alloc_bytes=", a
    " status=", res_meas.knitro_status, " peak_rss_kb=", peak_rss_kb)
 lp(">>> best=", res_meas.best === nothing ? "nothing" :
     "Delta=$(res_meas.best.Delta) gp=$(res_meas.best.gp) n_eval=$(res_meas.best.n_eval) t=$(res_meas.best.t)")
+print_core_hessian_counters()   # final-gate continuation 2026-07-25 (task §2/§4): prove the shared H_EE backend actually ran during the MEASURED window
+counters_nt = resolve_core_hessian_counters_manifest()
 
 # ---------------------------------------------------------------------------
 # Cold-verify the best incumbent, mirroring cm_cold_verify.jl's own production verification
@@ -224,6 +226,11 @@ open(joinpath(OUTDIR, "summary_cm.txt"), "w") do io
     println(io, "cold_verify_ok=", verify_ok)
     println(io, "avg_alloc_bytes_per_eval=", res_meas.n_eval > 0 ? alloc_meas / res_meas.n_eval : NaN)
     println(io, "avg_alloc_bytes_per_grad=", res_meas.n_grad > 0 ? alloc_meas / res_meas.n_grad : NaN)
+    println(io, "winner_pair_hessian_calls=", counters_nt.winner_pair_hessian_calls)
+    println(io, "winner_pair_serial_calls=", counters_nt.winner_pair_serial_calls)
+    println(io, "winner_pair_parallel_calls=", counters_nt.winner_pair_parallel_calls)
+    println(io, "dense_core_fallback_calls=", counters_nt.dense_core_fallback_calls)
+    println(io, "compressed_core_rebuilds=", counters_nt.compressed_core_rebuilds)
 end
 
 serialize(joinpath(OUTDIR, "res_meas_cm.jls"), (best_feasible = res_meas.best, trace = res_meas.trace,
