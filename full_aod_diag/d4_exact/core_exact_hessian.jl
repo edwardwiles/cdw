@@ -150,7 +150,7 @@ and are only flipped here after this phase's own D=4 + real D=20 gates pass to m
 see `CM_MEANZC_WINNER_AWARE_HER_RELEASE_2026-07-27.md` / `ORIGIN_ZC_WINNER_AWARE_HEZ_RELEASE_2026-07-27.md`.
 """
 const CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
-const ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
 
 """
 Remediation task Phase B1 (production-audit continuation, 2026-07-26); flipped to `:cm_lookup`

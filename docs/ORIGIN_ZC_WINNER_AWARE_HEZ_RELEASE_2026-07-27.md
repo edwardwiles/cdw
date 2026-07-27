@@ -51,17 +51,47 @@ dual point agrees to `<1e-8`.
 **Real D=20/W=80,000** (`test_originzc_winner_bin_her_wiring_d20.jl`,
 `destination_sample=:exclude_row`, `K_mean=1/K_pair=1`, matching
 `d20_meanzc_release_gates.jl`'s own Point A config): calibration + a near-delta=1 perturbed point.
-<!-- RESULTS_PLACEHOLDER -->
+**ALL PASS**, `max|ΔH|` in `[5.3e-13, 2.0e-12]` against a Hessian scale of `~3970-4618`. Complete
+inner solve status matches (`nStatus=0` both backends) and dual point agrees to `8.3e-17`
+(essentially exact -- both backends drove KNITRO to the identical solution). Warm
+`archA_partitioned_hess_cb_builder` (`:winner_bin`) allocates a stable ~11.4 MB/call, with zero
+persistent-workspace resizes across repeated calls (`zc_cross_scratch` identity confirmed stable).
+`:winner_bin` was also modestly FASTER than dense here (`calib`: 1.43s vs 2.67s including JIT;
+`near_delta1_perturbed`: 1.40s vs 0.91s -- mixed, not a clean win either way at this restriction
+width, same caveat as Section 4's own timing note).
+
+(First attempt at this gate hit a trivial, unrelated scripting bug -- a top-level variable named
+`n_eta` collided with `cm_originzc_target_layout.jl`'s own `n_eta(layout)` function name at
+Main-module top-level scope; renamed to `n_eta_total` and rerun. The dense-vs-winner_bin inner
+solve had already agreed to `8.3e-17` in the failed run before hitting this purely cosmetic
+post-solve naming error -- not a masked correctness issue.)
 
 ## Runtime counters
 
 Reuses `dense_cross_hessian_calls`/`winner_cross_hessian_calls`/`operator_cross_hessian_calls`
 (`no_dense_g_counters.jl`), no new counter names. D=4 wiring gate run:
 `dense_cross_hessian_calls=15`, `winner_cross_hessian_calls=19` (`=operator_cross_hessian_calls`).
+D=20 wiring gate run: `dense_cross_hessian_calls=7`, `winner_cross_hessian_calls=9`.
 
 ## Default backend
 
-<!-- DEFAULT_PLACEHOLDER -->
+`ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT` (`core_exact_hessian.jl`) is flipped from
+`:dense_reference` to `:winner_bin` in this same session, after both gates above passed to machine
+precision.
+
+## Pre-existing, unrelated issue noticed during regression-checking (not introduced by this section, not fixed)
+
+While spot-checking that this session's default flips did not regress an existing gate,
+`test_cm_meanzc_d4_gates.jl` (untouched by this session) was found to already fail at the
+UNMODIFIED base commit (`9e42d92`, confirmed via a throwaway worktree at that exact SHA) --
+`build_cm_meanzc_bin_ctx` unconditionally evaluates `SharedByPowerLayout(...)` whenever
+`inner_fg_backend === :operator` (the pre-existing default,
+`CM_MEANZC_INNER_FG_BACKEND_DEFAULT[] = :operator`, set well before this session), but that test
+file's own include list never loads `cm_originzc_target_layout.jl` (where `SharedByPowerLayout` is
+defined), so `build_cm_meanzc_bin_ctx(ctx, aug)` calls with default kwargs throw
+`UndefVarError: SharedByPowerLayout not defined` -- confirmed identical at base commit and on this
+branch, i.e. genuinely pre-existing and unrelated to Sections 4/5's own changes. Not fixed this
+session (out of scope), flagged here so it isn't mistaken for a regression this work introduced.
 
 ## Not done / left for a future session
 
