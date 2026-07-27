@@ -384,12 +384,17 @@ cm_hessian_architectures.jl, an explicitly off-limits Hessian-backend file for t
 agents are concurrently changing which Hessian backends are active on different branches); a global
 Ref threads through with zero struct-plumbing risk, same pattern `UNRESTRICTED_CORE_HESSIAN_BACKEND`
 (compressed_live.jl) already uses for a cross-cutting backend choice outside `CMBinHessCtx`.
-Defaults are `:dense_reference` for every family until Section 6.1's D=4+D=20 comparison gates
-pass for that family (see docs/FIVE_FAMILY_OPERATOR_VERIFICATION_DEFAULT_RELEASE_2026-07-27.md for
-per-family pass/fail and which defaults were actually flipped).
+Defaults flipped `:dense_reference` -> `:operator` for ALL FIVE families (2026-07-27) after
+Section 6.1's D=4 AND real D=20/W=80,000 comparison gates ALL PASSED cleanly for every family --
+draw-level dual index, objective, complete dual gradient (full vector), KKT residual,
+feasibility/moment residual, status classification, cache admission decision, incumbent admission
+decision all agreed between backends at every tested config, both scales. See
+docs/FIVE_FAMILY_OPERATOR_VERIFICATION_DEFAULT_RELEASE_2026-07-27.md for the full per-family
+pass/fail table with real numbers. `:dense_reference` remains available as an explicit,
+named, non-default backend (pass `verification_backend = :dense_reference` at any call site).
 """
-const CM_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
-const CM_MEANZC_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
-const ORIGINZC_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
-const CM_FRECHET_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
-const UNRESTRICTED_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const CM_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:operator)
+const CM_MEANZC_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:operator)
+const ORIGINZC_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:operator)
+const CM_FRECHET_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:operator)
+const UNRESTRICTED_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:operator)
