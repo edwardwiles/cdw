@@ -26,6 +26,7 @@ using LinearAlgebra: BLAS, dot, norm
 # port/shared-inner-fg-operator-and-verification-2026-07-26: opt-in operator FG (`_originzc_fg_dispatch`,
 # fg_backend=:operator on OriginZCCoreHessCtx) -- self-guarded include, this codebase's own convention.
 isdefined(Main, :_originzc_fg_dispatch) || include(joinpath(@__DIR__, "cm_originzc_lookup_production.jl"))
+isdefined(Main, :verify_inner_solution_operator_originzc!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archOZ_verified_state's :operator backend below
 # shared outer-A-gradient task (2026-07-27): shared_a_gradient.jl provides economic_A_gradient!/
 # EconomicAGradientWorkspace, this arm's DEFAULT (g,A_od)-block gradient backend (see
 # cm_originzc_production_gradient below).
@@ -89,7 +90,8 @@ AUD-04-style verified analog of `archOZ_base_state`, mirroring
 `archC_meanzc_verified_state`.
 """
 function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{Float64}, ctx_cm;
-        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
+        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0,
+        verification_backend::Symbol = ORIGINZC_VERIFICATION_BACKEND_DEFAULT[])
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νfull)
@@ -108,29 +110,49 @@ function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{F
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
     W = size(obj.U, 1)
-    G = CS.select_G_from_H(obj, obj.H)
 
-    ncon = obj.d - obj.outer_constr_index + 2
-    cbuf = zeros(ncon)
-    obj(inner_x, constr = @view(cbuf[1:ncon]))
-    Delta_dual = cbuf[1] / 1e10
-    m_weights = copy(obj.arg1)
-    # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
-    # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
-    # the bit-identity verification.
-    s_m_weights = sum(m_weights)
-    Delta_primal = primal_divergence(m_weights)
+    local m_weights, verify
+    if verification_backend === :operator
+        # Verification-defaults task (2026-07-27): operator-based post-solve verification, G=[E|Z]
+        # via the shared economic/ZC operators -- no dense obj.H read. Requires ctx_cm.octx to have
+        # been built with fg_backend=:operator (ORIGINZC_FG_BACKEND_DEFAULT[] already defaults to
+        # :operator in production, so octx.fg_zc_op/fg_layout are populated by default); a hard
+        # error (no silent fallback) if that prerequisite isn't met.
+        octx = ctx_cm.octx
+        cf = octx.core_cf_ref[]
+        cf isa CompressedFactual || error("archOZ_verified_state: verification_backend=:operator requires ctx_cm.octx.core_cf_ref[] to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
+        octx.fg_zc_op !== nothing || error("archOZ_verified_state: verification_backend=:operator requires ctx_cm.octx.fg_zc_op to be built (octx was built with fg_backend=:dense_reference) -- prerequisite not met, refusing silent dense fallback")
+        ov = verify_inner_solution_operator_originzc!(ζstar, λstar, cf, octx.fg_zc_op, octx.fg_layout, νfull, obj, W)
+        m_weights, verify = verify_namedtuple_from_operator(ov, obj, W, nStatus)
+    elseif verification_backend === :dense_reference
+        G = CS.select_G_from_H(obj, obj.H)
 
-    mean_m_resid = abs(sum(m_weights) / W - 1.0)
-    nkkt = min(length(λstar), size(G, 2))
-    max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
+        ncon = obj.d - obj.outer_constr_index + 2
+        cbuf = zeros(ncon)
+        obj(inner_x, constr = @view(cbuf[1:ncon]))
+        Delta_dual = cbuf[1] / 1e10
+        m_weights = copy(obj.arg1)
+        # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
+        # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
+        # the bit-identity verification.
+        s_m_weights = sum(m_weights)
+        Delta_primal = primal_divergence(m_weights)
+
+        mean_m_resid = abs(sum(m_weights) / W - 1.0)
+        nkkt = min(length(λstar), size(G, 2))
+        max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
+
+        verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
+                  primal_dual_gap = abs(Delta_dual - Delta_primal),
+                  weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
+                  mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
+                  m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+        record_dense_reference_verification!()
+    else
+        error("archOZ_verified_state: unknown verification_backend=:$verification_backend (expected :operator or :dense_reference)")
+    end
 
     base = BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, m_weights, nStatus)
-    verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
-              primal_dual_gap = abs(Delta_dual - Delta_primal),
-              weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
-              mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
-              m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
     dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, vcat(collect(x_free0), νfull), inner_x)
     return base, verify
 end

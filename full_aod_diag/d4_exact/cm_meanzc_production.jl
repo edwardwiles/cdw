@@ -19,6 +19,8 @@
 # expected-failure signal, not redefined.
 # ============================================================================
 
+isdefined(Main, :verify_inner_solution_operator_cmmeanzc!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archC_meanzc_verified_state's :operator backend below
+
 using LinearAlgebra: BLAS, dot, norm
 
 # port/shared-inner-fg-operator-and-verification-2026-07-26: opt-in operator FG (`_meanzc_fg_dispatch`,
@@ -154,7 +156,8 @@ independent residual/gap diagnostics `classify_inner_result`/
 pattern (never trusts KNITRO's last FG callback alone).
 """
 function archC_meanzc_verified_state(x_free0::AbstractVector, νvec::AbstractVector{Float64}, ctx_cm, cctx::CMBinHessCtx;
-        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
+        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0,
+        verification_backend::Symbol = CM_MEANZC_VERIFICATION_BACKEND_DEFAULT[])
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νvec)
@@ -173,29 +176,47 @@ function archC_meanzc_verified_state(x_free0::AbstractVector, νvec::AbstractVec
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
     W = size(obj.U, 1)
-    G = CS.select_G_from_H(obj, obj.H)
 
-    ncon = obj.d - obj.outer_constr_index + 2
-    cbuf = zeros(ncon)
-    obj(inner_x, constr = @view(cbuf[1:ncon]))
-    Delta_dual = cbuf[1] / 1e10
-    m_weights = copy(obj.arg1)
-    # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
-    # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
-    # the bit-identity verification.
-    s_m_weights = sum(m_weights)
-    Delta_primal = primal_divergence(m_weights)
+    local m_weights, verify
+    if verification_backend === :operator
+        # Verification-defaults task (2026-07-27): operator-based post-solve verification, G=[E|Z|C]
+        # via the shared economic/ZC/CM-grid operators -- no dense obj.H read.
+        cf = cctx.core_cf_ref[]
+        cf isa CompressedFactual || error("archC_meanzc_verified_state: verification_backend=:operator requires cctx.core_cf_ref[] to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
+        cctx.meanzc_zc_op !== nothing || error("archC_meanzc_verified_state: verification_backend=:operator requires cctx.meanzc_zc_op to be built (this CMBinHessCtx was not built via build_cm_meanzc_bin_ctx)")
+        bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        ov = verify_inner_solution_operator_cmmeanzc!(ζstar, λstar, cf, cctx.meanzc_zc_op, cctx.meanzc_zc_layout,
+            νvec, cctx.L, cctx.nO, cctx.origins, cctx.refIndex1, bins_u, cctx.R, obj, W)
+        m_weights, verify = verify_namedtuple_from_operator(ov, obj, W, nStatus)
+    elseif verification_backend === :dense_reference
+        G = CS.select_G_from_H(obj, obj.H)
 
-    mean_m_resid = abs(sum(m_weights) / W - 1.0)
-    nkkt = min(length(λstar), size(G, 2))
-    max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
+        ncon = obj.d - obj.outer_constr_index + 2
+        cbuf = zeros(ncon)
+        obj(inner_x, constr = @view(cbuf[1:ncon]))
+        Delta_dual = cbuf[1] / 1e10
+        m_weights = copy(obj.arg1)
+        # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
+        # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
+        # the bit-identity verification.
+        s_m_weights = sum(m_weights)
+        Delta_primal = primal_divergence(m_weights)
+
+        mean_m_resid = abs(sum(m_weights) / W - 1.0)
+        nkkt = min(length(λstar), size(G, 2))
+        max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
+
+        verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
+                  primal_dual_gap = abs(Delta_dual - Delta_primal),
+                  weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
+                  mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
+                  m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+        record_dense_reference_verification!()
+    else
+        error("archC_meanzc_verified_state: unknown verification_backend=:$verification_backend (expected :operator or :dense_reference)")
+    end
 
     base = BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, m_weights, nStatus)
-    verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
-              primal_dual_gap = abs(Delta_dual - Delta_primal),
-              weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
-              mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
-              m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
     dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, vcat(collect(x_free0), νvec), inner_x)
     return base, verify
 end

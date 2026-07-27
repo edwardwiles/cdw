@@ -5,6 +5,7 @@ isdefined(Main, :DualBank) || include(joinpath(@__DIR__, "dual_bank.jl"))
 isdefined(Main, :RestrictedDualBank) || include(joinpath(@__DIR__, "cm_dual_bank_production.jl"))   # Phase D remediation (2026-07-26)
 isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # Phase E remediation (2026-07-26)
 isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))   # shared-FG-verification-and-A-gradient release (2026-07-27): flexible-CM's DEFAULT (g,A_od)-block gradient backend, see cm_production_gradient below
+isdefined(Main, :verify_inner_solution_operator_cm!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archC_verified_state's :operator backend below
 
 # ============================================================================
 # Continuation 13, Sections 3A + 5: production combined bundle.
@@ -242,7 +243,8 @@ Callers that need the AUD-04 gate (e.g. `cm_checkpoint.jl`'s `cb_F!`/final `:sta
 decision, via `cm_production_value_verified` below) should call this, not `archC_base_state`.
 """
 function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
-        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
+        dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0,
+        verification_backend::Symbol = CM_VERIFICATION_BACKEND_DEFAULT[])
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     warm_label = :unset
@@ -252,12 +254,14 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    # Phase 5.5 follow-on (2026-07-26): UNLIKE archC_base_state, this function's own post-solve
-    # recompute below (`obj(inner_x, constr=...)`, `CS.select_G_from_H(obj, obj.H)`) DOES read
-    # obj.H's CM columns -- explicitly force skip_cm_fill_ref false (defensively, not just relying
-    # on archC_base_state's own finally-reset) so this call always gets a correctly-filled G
-    # regardless of what any prior call on this SAME cctx left the shared ref set to.
-    cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
+    # Phase 5.5 follow-on (2026-07-26): UNLIKE archC_base_state, this function's own :dense_reference
+    # post-solve recompute below (`obj(inner_x, constr=...)`, `CS.select_G_from_H(obj, obj.H)`) DOES
+    # read obj.H's CM columns -- explicitly force skip_cm_fill_ref false (defensively, not just
+    # relying on archC_base_state's own finally-reset) so that path always gets a correctly-filled
+    # G regardless of what any prior call on this SAME cctx left the shared ref set to. Verification-
+    # defaults task (2026-07-27): the :operator backend below never reads obj.H at all, so this fill
+    # is skipped entirely when verification_backend===:operator (no wasted dense materialization).
+    verification_backend === :dense_reference && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
     K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
         inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
         inner_loop_internal_archgeneric(obj, θ_full0;
@@ -269,36 +273,56 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
 
     ζstar = inner_x[1]; λstar = collect(inner_x[2:end])
     W = size(obj.U, 1)
-    G = CS.select_G_from_H(obj, obj.H)   # already built once by inner_loop_internal_archgeneric above
 
-    # Explicit recompute at the converged point (solve_base_state/oracle.jl's own pattern, not
-    # archC_base_state's KN_solve-last-call trust) -- populates obj.arg1 = m(s) fresh and yields
-    # the constraint buffer needed for Delta_dual.
-    ncon = obj.d - obj.outer_constr_index + 2
-    cbuf = zeros(ncon)
-    obj(inner_x, constr = @view(cbuf[1:ncon]))
-    Delta_dual = cbuf[1] / 1e10
-    m_weights = copy(obj.arg1)
-    # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): p_weights used to be
-    # materialized as a fresh O(W) array purely to compute weight_norm_resid=abs(sum(p_weights)-1.0)
-    # -- a floating-point-rounding-noise diagnostic (sum(p_weights)==1 identically up to rounding
-    # by construction). `sum(x -> x / s_m_weights, m_weights)` is verified BIT-IDENTICAL to
-    # `sum(m_weights ./ s_m_weights)` (same pairwise-summation algorithm, same per-element values,
-    # same order -- checked directly at n=100/381/400/8000/80000, see
-    # docs/VERIFIED_STATE_ALLOCATION_FIXES_2026-07-27.md) -- zero behavior change, zero array.
-    s_m_weights = sum(m_weights)
-    Delta_primal = primal_divergence(m_weights)   # oracle.jl, reused not re-derived
+    local m_weights, verify
+    if verification_backend === :operator
+        # Verification-defaults task (2026-07-27): operator-based post-solve verification -- NO
+        # dense obj.H read. `cctx.core_cf_ref[]` is refreshed by moments! on every FG call of the
+        # inner solve just completed above (see CMBinHessCtx's own docstring), so it holds the
+        # CompressedFactual for THIS theta point already; a hard error (no silent fallback) if that
+        # invariant doesn't hold.
+        cf = cctx.core_cf_ref[]
+        cf isa CompressedFactual || error("archC_verified_state: verification_backend=:operator requires cctx.core_cf_ref[] to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
+        bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        ov = verify_inner_solution_operator_cm!(ζstar, λstar, cf, cctx.L, cctx.nO, cctx.origins,
+            cctx.refIndex1, bins_u, cctx.R, obj, W)
+        m_weights, verify = verify_namedtuple_from_operator(ov, obj, W, nStatus)
+    elseif verification_backend === :dense_reference
+        G = CS.select_G_from_H(obj, obj.H)   # already built once by inner_loop_internal_archgeneric above
 
-    mean_m_resid = abs(sum(m_weights) / W - 1.0)
-    nkkt = min(length(λstar), size(G, 2))
-    max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)   # oracle_fast.jl, reused not re-derived
+        # Explicit recompute at the converged point (solve_base_state/oracle.jl's own pattern, not
+        # archC_base_state's KN_solve-last-call trust) -- populates obj.arg1 = m(s) fresh and yields
+        # the constraint buffer needed for Delta_dual.
+        ncon = obj.d - obj.outer_constr_index + 2
+        cbuf = zeros(ncon)
+        obj(inner_x, constr = @view(cbuf[1:ncon]))
+        Delta_dual = cbuf[1] / 1e10
+        m_weights = copy(obj.arg1)
+        # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): p_weights used to be
+        # materialized as a fresh O(W) array purely to compute weight_norm_resid=abs(sum(p_weights)-1.0)
+        # -- a floating-point-rounding-noise diagnostic (sum(p_weights)==1 identically up to rounding
+        # by construction). `sum(x -> x / s_m_weights, m_weights)` is verified BIT-IDENTICAL to
+        # `sum(m_weights ./ s_m_weights)` (same pairwise-summation algorithm, same per-element values,
+        # same order -- checked directly at n=100/381/400/8000/80000, see
+        # docs/VERIFIED_STATE_ALLOCATION_FIXES_2026-07-27.md) -- zero behavior change, zero array.
+        s_m_weights = sum(m_weights)
+        Delta_primal = primal_divergence(m_weights)   # oracle.jl, reused not re-derived
+
+        mean_m_resid = abs(sum(m_weights) / W - 1.0)
+        nkkt = min(length(λstar), size(G, 2))
+        max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)   # oracle_fast.jl, reused not re-derived
+
+        verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
+                  primal_dual_gap = abs(Delta_dual - Delta_primal),
+                  weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
+                  mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
+                  m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+        record_dense_reference_verification!()
+    else
+        error("archC_verified_state: unknown verification_backend=:$verification_backend (expected :operator or :dense_reference)")
+    end
 
     base = BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, m_weights, nStatus)
-    verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
-              primal_dual_gap = abs(Delta_dual - Delta_primal),
-              weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
-              mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
-              m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
     dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, collect(x_free0), inner_x)
     return base, verify
 end
