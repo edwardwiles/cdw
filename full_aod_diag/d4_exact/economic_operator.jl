@@ -33,6 +33,7 @@
 # ================================================================================================
 
 isdefined(Main, :EconomicFGWorkspace) || include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
 
 """
     economic_operator_workspace(cf::CompressedFactual) -> EconomicFGWorkspace
@@ -58,6 +59,7 @@ its own restriction operator (task §3): `G = E` (unrestricted), `G = [E|C]` (fl
 function economic_forward!(out::AbstractVector{Float64}, lambda_E::AbstractVector{Float64},
                             cf::CompressedFactual, ws::EconomicFGWorkspace)
     compressed_dual_contraction!(out, lambda_E, cf, ws.κ, ws.C)
+    record_operator_forward!()
     return out
 end
 
@@ -76,5 +78,6 @@ offsets.
 function economic_transpose!(grad_E::AbstractVector{Float64}, draw_weights::AbstractVector{Float64},
                               cf::CompressedFactual, ws::EconomicFGWorkspace)
     compressed_transpose_contraction!(grad_E, draw_weights, cf, ws.B)
+    record_operator_transpose!()
     return grad_E
 end

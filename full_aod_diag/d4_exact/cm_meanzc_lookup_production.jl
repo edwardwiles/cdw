@@ -8,6 +8,7 @@
 # ================================================================================================
 
 isdefined(Main, :CMMeanZCOperatorState) || include(joinpath(@__DIR__, "cm_meanzc_lookup_kernels.jl"))
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
 
 "Same call-site Hessian adapter cm_lookup_production.jl/cm_originzc_lookup_production.jl use -- unwraps `userParams::CMMeanZCOperatorState` to `st.obj`."
 _adapt_hess_cb_for_meanzc_operator(hess_cb) =
@@ -115,6 +116,7 @@ function _meanzc_fg_dispatch(cctx::CMBinHessCtx, obj, θ_ext::AbstractVector)
     if cctx.inner_fg_backend === :operator
         return inner_loop_internal_meanzc_operator(obj, θ_ext, cctx)
     elseif cctx.inner_fg_backend === :dense_reference
+        record_generic_dense_fg!()
         return inner_loop_internal_archgeneric(obj, θ_ext; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
     else
         error("_meanzc_fg_dispatch: cctx.inner_fg_backend must be :dense_reference or :operator, got :$(cctx.inner_fg_backend)")

@@ -22,6 +22,7 @@
 
 isdefined(Main, :economic_forward!) || include(joinpath(@__DIR__, "economic_operator.jl"))
 isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
 
 """
     OriginZCOperatorState
@@ -100,6 +101,7 @@ function (st::OriginZCOperatorState)(x::AbstractVector{Float64}, g::AbstractVect
         # Fallback (tied winner / compressed state unavailable this outer point): dense economic
         # contraction against obj.H, same BLAS.gemv! CMLookupState uses for its own core block.
         st.n_dense_econ_fallback += 1
+        record_dense_economic_G!()
         xsub_ext = vcat(ζ, collect(λ_E))
         @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], xsub_ext, 0.0, st.arg0)
     end

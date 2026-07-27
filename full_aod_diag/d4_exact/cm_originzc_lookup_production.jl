@@ -12,6 +12,7 @@
 # ================================================================================================
 
 isdefined(Main, :OriginZCOperatorState) || include(joinpath(@__DIR__, "cm_originzc_lookup_kernels.jl"))
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
 
 "_adapt_hess_cb_for_originzc_operator(hess_cb): same call-site adapter cm_lookup_production.jl uses -- unwraps `userParams::OriginZCOperatorState` to `st.obj` before forwarding to the UNMODIFIED existing Hessian closure (`archA_partitioned_hess_cb_builder(octx)`, which itself expects `userParams` to be the dense `obj`)."
 _adapt_hess_cb_for_originzc_operator(hess_cb) =
@@ -136,6 +137,7 @@ function _originzc_fg_dispatch(ctx_cm, obj, θ_ext::AbstractVector)
     if octx.fg_backend === :operator
         return inner_loop_internal_originzc_operator(obj, θ_ext, octx)
     elseif octx.fg_backend === :dense_reference
+        record_generic_dense_fg!()
         return inner_loop_internal_archgeneric(obj, θ_ext; hess_cb_builder = _ -> _originzc_hess_cb_builder(ctx_cm))
     else
         error("_originzc_fg_dispatch: fg_backend must be :dense_reference or :operator, got :$(octx.fg_backend)")
