@@ -101,7 +101,7 @@ allocating `dest_contrib_incremental_top3`/`dest_contrib_incremental` (rare path
 """
 function dest_contrib_incremental_o1!(contrib_buf::AbstractVector, price_buf::AbstractVector, pTσ_buf::AbstractVector,
         cache::LFixBaseCache, ctx, θ_full::AbstractVector, d::Int, o::Int)
-    D = cache.D; W = cache.W
+    W = cache.W
     price_and_pTsigma_cell!(price_buf, pTσ_buf, θ_full, ctx, o, d)
     @inbounds for ω in 1:W
         wo, price_wo, ro, price_ro, _exact = update_winner_o1(
@@ -109,7 +109,27 @@ function dest_contrib_incremental_o1!(contrib_buf::AbstractVector, price_buf::Ab
             cache.runnerup_price0[ω, d], cache.runnerup0[ω, d],
             o, price_buf[ω])
         pTσ_wo = wo == o ? pTσ_buf[ω] : cache.pTσ0[ω, wo, d]
-        d1w = d + (wo - 1) * D
+        # BUGFIX (shared outer-A-gradient task, 2026-07-27): this previously read
+        # `d1w = d + (wo - 1) * D` using `D = cache.D` (ORIGIN count) as the linear-index stride.
+        # Every other site in this codebase that builds this SAME d1/d1w linear index into
+        # `λstar`/`γ.P` (build_lfix_base_cache's CONST_d/contrib0, the non-mutating
+        # dest_contrib_incremental_o1 in lfix_incremental.jl, hFunction.jl itself) uses
+        # `cache.Ddest`/`Ddest` (DESTINATION count) as the stride -- see build_lfix_base_cache's
+        # own docstring: "these arrays' own column-major convention has stride Ddest (destination
+        # count), NOT D (origin count)". `D == Ddest` for every SQUARE context (D=4 always,
+        # D=20/destination_sample=:all_legacy), which silently masked this divergence -- it is
+        # WRONG for the current D=20 PRODUCTION DEFAULT (destination_sample=:exclude_row, D=20,
+        # Ddest=19), confirmed live: at a real D=20/W=80,000 calibration point, this bug produced
+        # contributions differing from the correct (non-mutating) `dest_contrib_incremental_o1` by
+        # up to ~98 (vs correct values of order 0.01-0.05) at the very first probed coordinate,
+        # propagating into a ~75x-magnitude corruption of composite_gradient_at_fast_pooled's
+        # A-block gradient at real D=20 scale (see docs/A_GRADIENT_D20_ALLOCATION_RECONCILIATION_2026-07-27.md
+        # for the full repro). This means `composite_gradient_at_fast_pooled` was silently WRONG at
+        # the current real-D20 production default the whole time it has existed -- not merely an
+        # allocation inefficiency (it was never wired as a hard default anywhere, per the audit,
+        # only opt-in, which likely limited exposure, but this is a genuine correctness bug, found
+        # and fixed as part of this task, not merely a performance issue).
+        d1w = d + (wo - 1) * cache.Ddest
         contrib_buf[ω] = (cache.SW[ω] / cache.gammafac) * (cache.CONST_d[d] + cache.λstar[d1w] * pTσ_wo)
     end
     return contrib_buf
