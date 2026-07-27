@@ -104,6 +104,7 @@ include(joinpath(@__DIR__, "gradient_workspace.jl"))   # allocation/cache-cleanu
 include(joinpath(@__DIR__, "lfix_base_workspace_pooled.jl"))   # finalization task Phase 3: Backend A+ (composite_gradient_at_Aplus) -- opt-in via price_cache_backend=:aplus
 include(joinpath(@__DIR__, "lfix_factorized_workspace.jl"))   # finalization task Phase 3: Backend C+ (composite_gradient_at_Cplus) -- opt-in via price_cache_backend=:cplus
 include(joinpath(@__DIR__, "lfix_kbplus_workspace.jl"))   # finalization task Phase 4: Backend :kbplus (composite_gradient_at_KBplus, ratio-based no-W-scale-exp reconstruction) -- opt-in via price_cache_backend=:kbplus
+isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))   # shared-FG-verification-and-A-gradient release (2026-07-27), Phase A continuation: Backend :shared (economic_A_gradient!, the persistent-LFixBaseWorkspace-backed shared entry point 3 of 5 restricted families already default to) -- opt-in via price_cache_backend=:shared; unrestricted's own default (:cplus) is UNCHANGED, this is additive only
 include(joinpath(@__DIR__, "bandwidth_cache_policy.jl"))
 include(joinpath(@__DIR__, "fast_range_screen.jl"))   # pre-winner envelope + fused winning-range + general safety-net screens -- THE production screening path via evaluate_fullA_screened_ranged, wired into screened_eval below (used by every cb_F!/cb_G!/cb_newpt! callback); see docs/fullA_fast_range_screen_production_integration.md
 include(joinpath(@__DIR__, "dual_bank.jl"))   # successful-dual/KKT-scored small warm-start bank, ported from diag/fullA-d20-warmstart-replay; opt-in via use_dual_bank= on run_profile_checkpointed/run_polish_checkpointed, wired into screened_eval below
@@ -469,7 +470,7 @@ end
 # Direct extension of c9_phase8_d20_pilot.jl::profile_minimize with
 # screening (Section 5) + checkpointing (Section 6) wired in.
 # ============================================================================
-const VALID_PRICE_CACHE_BACKENDS = (:buffered, :pooled, :aplus, :cplus, :kbplus)
+const VALID_PRICE_CACHE_BACKENDS = (:buffered, :pooled, :aplus, :cplus, :kbplus, :shared)
 
 """
     resolve_price_cache_backend(label, use_pooled_gradient, price_cache_backend) -> Symbol
@@ -657,6 +658,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, ctx.D_dest, W) : nothing
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, ctx.D_dest, W) : nothing
     lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
+    econ_ws = resolved_backend == :shared ? get_or_build_econ_a_grad_ws(W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " price_cache_backend=", resolved_backend,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
@@ -885,6 +887,17 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
             record_hits!(policy, meta.cache_hits[2:end])
         elseif resolved_backend == :kbplus
             gfull, meta = composite_gradient_at_KBplus(xf, ctx, pe, grad_pool, lfix_kb_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
+        elseif resolved_backend == :shared
+            # shared-FG-verification-and-A-gradient release (2026-07-27), Phase A continuation:
+            # unrestricted's own opt-in wiring onto economic_A_gradient! (shared_a_gradient.jl) --
+            # same shared entry point 3 of 5 restricted families already default to, here with
+            # cache=nothing so it routes through the persistent LFixBaseWorkspace (this session's
+            # own §5 wiring, see PERSISTENT_LFIX_BASE_CACHE_RELEASE_2026-07-27.md) instead of
+            # composite_gradient_at_fast_buffered/_pooled's own separate allocation paths.
+            gfull = zeros(D2)
+            meta = economic_A_gradient!(gfull, base, ctx, pe, econ_ws; threaded = true,
                                                        h_mode = :cached, bandwidth_cache = policy.cache)
             record_hits!(policy, meta.cache_hits[2:end])
         else
@@ -1132,6 +1145,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, ctx.D_dest, W) : nothing
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, ctx.D_dest, W) : nothing
     lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
+    econ_ws = resolved_backend == :shared ? get_or_build_econ_a_grad_ws(W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
        " price_cache_backend=", resolved_backend,
        " draw_checksum=(", ctx.draw_meta.checksum_uniform, ",", ctx.draw_meta.checksum_transformed, ")",
@@ -1386,6 +1400,17 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
             record_hits!(policy, meta.cache_hits[2:end])
         elseif resolved_backend == :kbplus
             gfull, meta = composite_gradient_at_KBplus(xf, ctx, pe, grad_pool, lfix_kb_ws; base = base, threaded = true,
+                                                       h_mode = :cached, bandwidth_cache = policy.cache)
+            record_hits!(policy, meta.cache_hits[2:end])
+        elseif resolved_backend == :shared
+            # shared-FG-verification-and-A-gradient release (2026-07-27), Phase A continuation:
+            # unrestricted's own opt-in wiring onto economic_A_gradient! (shared_a_gradient.jl) --
+            # same shared entry point 3 of 5 restricted families already default to, here with
+            # cache=nothing so it routes through the persistent LFixBaseWorkspace (this session's
+            # own §5 wiring, see PERSISTENT_LFIX_BASE_CACHE_RELEASE_2026-07-27.md) instead of
+            # composite_gradient_at_fast_buffered/_pooled's own separate allocation paths.
+            gfull = zeros(D2)
+            meta = economic_A_gradient!(gfull, base, ctx, pe, econ_ws; threaded = true,
                                                        h_mode = :cached, bandwidth_cache = policy.cache)
             record_hits!(policy, meta.cache_hits[2:end])
         else
