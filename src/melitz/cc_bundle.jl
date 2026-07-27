@@ -481,17 +481,26 @@ function _direct_coordinate_grad(cc::MelitzCompactColumns, theta_p::AbstractVect
                                   h::Real, Gp::AbstractMatrix{Float64}, Gm::AbstractMatrix{Float64},
                                   linkp::AbstractVector{Float64}, linkm::AbstractVector{Float64},
                                   profit::AbstractVector{Float64}, u_plus::AbstractVector{Float64},
-                                  u_minus::AbstractVector{Float64}, psi_buf::AbstractVector{Float64})
+                                  u_minus::AbstractVector{Float64}, psi_buf::AbstractVector{Float64},
+                                  state_p::MelitzExpandedState, state_m::MelitzExpandedState,
+                                  ws::MelitzThetaExpansionWorkspace)
     W = length(arg0_base)
     layout = ctx.moment_layout
     ncols = length(cc.direct_cols)
     op = obj.op
 
-    ncols > 0 && _fill_compact_direct_columns!(Gp, theta_p, ctx, obj, cc.direct_cells, ncols)
-    ncols > 0 && _fill_compact_direct_columns!(Gm, theta_m, ctx, obj, cc.direct_cells, ncols)
+    # 2026-07-27 continuation (governing prompt Phase 1.3, this session): see
+    # direct_gradient.jl's identical fix -- state_p/state_m expanded once per coordinate probe,
+    # shared by the direct-column fill and the focal-link fill, for the MelitzCCBundle-specific
+    # method of this (non-sorted) direct backend.
+    melitz_expand_theta!(state_p, theta_p, ctx, ws)
+    melitz_expand_theta!(state_m, theta_m, ctx, ws)
+
+    ncols > 0 && _fill_compact_direct_columns_from_state!(Gp, ctx, obj, state_p, cc.direct_cells, ncols)
+    ncols > 0 && _fill_compact_direct_columns_from_state!(Gm, ctx, obj, state_m, cc.direct_cells, ncols)
     if cc.touches_link
-        _fill_compact_link!(linkp, profit, theta_p, ctx, obj)
-        _fill_compact_link!(linkm, profit, theta_m, ctx, obj)
+        _fill_compact_link_from_state!(linkp, profit, ctx, obj, state_p)
+        _fill_compact_link_from_state!(linkm, profit, ctx, obj, state_m)
     end
 
     copyto!(u_plus, arg0_base)
@@ -547,9 +556,17 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
     copyto!(u_plus, arg0_base)
     copyto!(u_minus, arg0_base)
 
+    # 2026-07-27 continuation (governing prompt Phase 1.1, this session): see
+    # sorted_crossing_gradient.jl's identical fix/comment -- state_p/state_m are expanded
+    # ONCE per coordinate probe here (MelitzCCBundle's own copy of this function), shared by
+    # the direct-column fill and the focal-link fill, eliminating the prior session's
+    # remaining allocating melitz_expand_theta call inside _fill_compact_link!.
+    melitz_expand_theta!(state_p, theta_p, ctx, ws)
+    melitz_expand_theta!(state_m, theta_m, ctx, ws)
+
     if ncols > 0
-        _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, theta_p, theta_m,
-            ctx, sorted_ctx, cc.direct_cells, ncols, state_p, state_m, ws)
+        _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, ctx, sorted_ctx,
+            cc.direct_cells, ncols, state_p, state_m)
         @inbounds for idx in 1:ncols
             gcol = cc.direct_cols[idx]
             lam_k = lambda[gcol]
@@ -566,8 +583,8 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
     end
 
     if cc.touches_link
-        _fill_compact_link!(linkp, profit, theta_p, ctx, obj)
-        _fill_compact_link!(linkm, profit, theta_m, ctx, obj)
+        _fill_compact_link_from_state!(linkp, profit, ctx, obj, state_p)
+        _fill_compact_link_from_state!(linkm, profit, ctx, obj, state_m)
         lam_link = lambda[layout.focal_link_index]
         ell = op.ell
         @inbounds for w in 1:W

@@ -1,0 +1,6 @@
+scale,item,seconds,bytes,n_theta,dense_fallbacks
+D4_W20000,complete_outer_gradient_serial,0.120276214,0,30,0
+realD20_W80000,complete_outer_gradient_serial,9.13773462,0,798,0
+realD20_W80000,finite_FC_call,5.223167018,731712,798,0
+realD20_W80000,above_evaluation_cap_FC_call,6.965743081,731648,798,0
+D4_W20000,nuisance_profile_short_sequence,5.751374559,0,30,0

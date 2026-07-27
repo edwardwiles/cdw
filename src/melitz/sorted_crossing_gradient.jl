@@ -52,8 +52,8 @@
 using LinearAlgebra: BLAS
 
 """
-    _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, theta_p, theta_m,
-                                                    ctx, sorted_ctx, direct_cells, ncols)
+    _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, ctx, sorted_ctx,
+                                                    direct_cells, ncols, state_p, state_m)
 
 Fills `Gp`/`Gm` (ORIGINAL-row indexed, `(W,>=ncols)` buffers) ONLY at the sorted crossing
 slice `union_start[idx]:W` for each cell `direct_cells[idx]` (scattered back to original row
@@ -62,25 +62,24 @@ file's own header for the exact proof that they are provably unneeded: inactive 
 `theta_m`, AND the base point simultaneously). `union_start[idx] = min(k_p,k_m)`, the sorted
 position where either displaced cutoff's active tail begins, is written into the
 caller-owned `union_start` vector for the caller's own crossing-slice apply step.
+
+2026-07-27 continuation (governing prompt Phase 1.1, this session): `state_p`/`state_m` must
+already reflect `theta_p`/`theta_m` (the CALLER's job, `melitz_expand_theta!`, shared with the
+focal-link fill) -- this function no longer expands theta itself.
 """
 function _fill_compact_direct_columns_crossing_sorted!(Gp::AbstractMatrix{Float64}, Gm::AbstractMatrix{Float64},
                                                          union_start::AbstractVector{Int},
-                                                         theta_p::AbstractVector{Float64}, theta_m::AbstractVector{Float64},
                                                          ctx, sorted_ctx::MelitzSortedTailContext,
                                                          direct_cells::Vector{Tuple{Int,Int}}, ncols::Int,
-                                                         state_p::MelitzExpandedState, state_m::MelitzExpandedState,
-                                                         ws::MelitzThetaExpansionWorkspace)
+                                                         state_p::MelitzExpandedState, state_m::MelitzExpandedState)
     sigma = ctx.sigma
     W = sorted_ctx.W
-    # 2026-07-27 continuation (governing prompt Phase 2): mutating fast path -- replaces two
-    # allocating `melitz_expand_theta` calls (~19,672 bytes each at real D=20) with
-    # `melitz_expand_theta!` into caller-owned, persistent `state_p`/`state_m` (see
-    # `delta_star.jl`'s header comment on this section). This is THE production default
-    # gradient backend's own hot loop (`melitz_resolve_gradient_backend` resolves to
-    # `:B_direct_argument_sorted_serial`/`_parallel` for every matrix-free bundle), called
-    # 2x per free coordinate.
-    melitz_expand_theta!(state_p, theta_p, ctx, ws)
-    melitz_expand_theta!(state_m, theta_m, ctx, ws)
+    # 2026-07-27 continuation (governing prompt Phase 1.1, this session): `state_p`/`state_m`
+    # are now populated ONCE by the caller (`_direct_coordinate_grad_sorted`, below), shared
+    # with the focal-link fill -- this function no longer expands theta itself (previously
+    # called `melitz_expand_theta!` here, redundantly re-expanding the SAME `theta_p`/`theta_m`
+    # a second time whenever the coordinate also touched the focal link, since the prior
+    # session's `_fill_compact_link!` call was still the allocating `melitz_expand_theta`).
     Ap, fp = state_p.A, state_p.f
     Am, fm = state_m.A, state_m.f
     @inbounds for idx in 1:ncols
@@ -137,9 +136,21 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
     copyto!(u_plus, arg0_base)
     copyto!(u_minus, arg0_base)
 
+    # 2026-07-27 continuation (governing prompt Phase 1.1, this session): expand theta+/-h
+    # into `state_p`/`state_m` ONCE per coordinate probe, unconditionally -- shared by BOTH
+    # the direct-column fill and the focal-link fill below, replacing the prior session's
+    # remaining gap (the focal-link fill's own SECOND, allocating `melitz_expand_theta` call,
+    # ~19,672 bytes/call at real D=20, `_fill_compact_link!`'s own docstring). Hoisting this
+    # out of the `ncols>0` guard (`melitz_compact_columns_map`'s own construction already
+    # guarantees `touches_link => ncols>0`, since a link-touching coordinate's own
+    # `direct_cells` always includes the D origin-j destination cells) also removes the
+    # fragile "was state already populated by the direct-column branch" dependency.
+    melitz_expand_theta!(state_p, theta_p, ctx, ws)
+    melitz_expand_theta!(state_m, theta_m, ctx, ws)
+
     if ncols > 0
-        _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, theta_p, theta_m,
-            ctx, sorted_ctx, cc.direct_cells, ncols, state_p, state_m, ws)
+        _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, ctx, sorted_ctx,
+            cc.direct_cells, ncols, state_p, state_m)
         @inbounds for idx in 1:ncols
             gcol = cc.direct_cols[idx]
             lam_k = lambda[gcol]
@@ -157,8 +168,8 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
     end
 
     if cc.touches_link
-        _fill_compact_link!(linkp, profit, theta_p, ctx, obj)
-        _fill_compact_link!(linkm, profit, theta_m, ctx, obj)
+        _fill_compact_link_from_state!(linkp, profit, ctx, obj, state_p)
+        _fill_compact_link_from_state!(linkm, profit, ctx, obj, state_m)
         lam_link = lambda[layout.focal_link_index]
         link_col_offset = 2 + layout.focal_link_index
         @inbounds for w in 1:W

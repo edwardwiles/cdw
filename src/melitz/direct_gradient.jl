@@ -99,16 +99,31 @@ function _direct_coordinate_grad(cc::MelitzCompactColumns, theta_p::AbstractVect
                                   h::Real, Gp::AbstractMatrix{Float64}, Gm::AbstractMatrix{Float64},
                                   linkp::AbstractVector{Float64}, linkm::AbstractVector{Float64},
                                   profit::AbstractVector{Float64}, u_plus::AbstractVector{Float64},
-                                  u_minus::AbstractVector{Float64}, psi_buf::AbstractVector{Float64})
+                                  u_minus::AbstractVector{Float64}, psi_buf::AbstractVector{Float64},
+                                  state_p::MelitzExpandedState, state_m::MelitzExpandedState,
+                                  ws::MelitzThetaExpansionWorkspace)
     W = length(arg0_base)
     layout = ctx.moment_layout
     ncols = length(cc.direct_cols)
 
-    ncols > 0 && _fill_compact_direct_columns!(Gp, theta_p, ctx, obj, cc.direct_cells, ncols)
-    ncols > 0 && _fill_compact_direct_columns!(Gm, theta_m, ctx, obj, cc.direct_cells, ncols)
+    # 2026-07-27 continuation (governing prompt Phase 1.3, this session): `:B_direct_argument_serial`/
+    # `_parallel` is production-supported (NOT diagnostic-only) -- `melitz_resolve_gradient_backend`
+    # (backend_config.jl) resolves `:auto` to exactly this backend whenever `inner_backend==
+    # :dense_reference` and the moment backend does not resolve to a sorted variant (a real,
+    # reachable, non-error production configuration, distinct from `:B_argument_localized_*`,
+    # which IS in `legacy_dense_only_gradient_backends` and is documented diagnostic-only,
+    # argument_localized_gradient.jl). Wired to the SAME mutating expansion workspace the sorted
+    # backend uses (delta_star.jl/log_cutoff_param.jl), expanded ONCE per coordinate probe and
+    # shared between the direct-column fill and the focal-link fill exactly as the sorted
+    # backend now does.
+    melitz_expand_theta!(state_p, theta_p, ctx, ws)
+    melitz_expand_theta!(state_m, theta_m, ctx, ws)
+
+    ncols > 0 && _fill_compact_direct_columns_from_state!(Gp, ctx, obj, state_p, cc.direct_cells, ncols)
+    ncols > 0 && _fill_compact_direct_columns_from_state!(Gm, ctx, obj, state_m, cc.direct_cells, ncols)
     if cc.touches_link
-        _fill_compact_link!(linkp, profit, theta_p, ctx, obj)
-        _fill_compact_link!(linkm, profit, theta_m, ctx, obj)
+        _fill_compact_link_from_state!(linkp, profit, ctx, obj, state_p)
+        _fill_compact_link_from_state!(linkm, profit, ctx, obj, state_m)
     end
 
     copyto!(u_plus, arg0_base)
@@ -165,6 +180,12 @@ function make_melitz_gradient_delta_direct_serial(h::Real)
     psi_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
     thetap_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
     thetam_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    # 2026-07-27 continuation (governing prompt Phase 1.3): the mutating theta-expansion
+    # workspace/state pair, rebuilt only when `ctx` changes (mirrors
+    # sorted_crossing_gradient.jl's identical pattern).
+    ws_buf = Ref{Union{Nothing,MelitzThetaExpansionWorkspace}}(nothing)
+    statep_buf = Ref{Union{Nothing,MelitzExpandedState}}(nothing)
+    statem_buf = Ref{Union{Nothing,MelitzExpandedState}}(nothing)
 
     function melitz_gradient_delta_direct_serial!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
                                                     ctx, obj, x::AbstractVector{Float64})
@@ -174,6 +195,9 @@ function make_melitz_gradient_delta_direct_serial(h::Real)
         if compact_cache[] === nothing || ctx_cache[] !== ctx
             compact_cache[] = melitz_compact_columns_map(ctx)
             ctx_cache[] = ctx
+            ws_buf[] = MelitzThetaExpansionWorkspace(ctx.D)
+            statep_buf[] = MelitzExpandedState(ctx.D)
+            statem_buf[] = MelitzExpandedState(ctx.D)
         end
         compact = compact_cache[]
         maxcols = maximum(length(c.direct_cols) for c in compact)
@@ -204,7 +228,7 @@ function make_melitz_gradient_delta_direct_serial(h::Real)
             copyto!(theta_m, theta); theta_m[r] -= h
             g[r] = _direct_coordinate_grad(cc, theta_p, theta_m, ctx, obj, lambda, arg0_base, h,
                 Gp_buf[], Gm_buf[], linkp_buf[], linkm_buf[], profit_buf[],
-                uplus_buf[], uminus_buf[], psi_buf[])
+                uplus_buf[], uminus_buf[], psi_buf[], statep_buf[], statem_buf[], ws_buf[])
         end
         return nothing
     end
@@ -238,6 +262,13 @@ function make_melitz_gradient_delta_direct_parallel(h::Real)
     thetap_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     thetam_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     nthreads_alloc = Ref(0)
+    # 2026-07-27 continuation (governing prompt Phase 1.3): per-thread mutating theta-expansion
+    # workspace/state, one triple per `Threads.maxthreadid()` slot -- mirrors
+    # sorted_crossing_gradient.jl's identical parallel-factory pattern, including sizing off
+    # `length(ws_bufs[]) != nt` directly (not a shared flag another block already updates first).
+    ws_bufs = Ref{Union{Nothing,Vector{MelitzThetaExpansionWorkspace}}}(nothing)
+    statep_bufs = Ref{Union{Nothing,Vector{MelitzExpandedState}}}(nothing)
+    statem_bufs = Ref{Union{Nothing,Vector{MelitzExpandedState}}}(nothing)
 
     function melitz_gradient_delta_direct_parallel!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
                                                        ctx, obj, x::AbstractVector{Float64})
@@ -273,6 +304,11 @@ function make_melitz_gradient_delta_direct_parallel(h::Real)
             thetap_bufs[] = [zeros(Float64, n) for _ in 1:nt]
             thetam_bufs[] = [zeros(Float64, n) for _ in 1:nt]
         end
+        if ws_bufs[] === nothing || length(ws_bufs[]) != nt || ws_bufs[][1].D != ctx.D
+            ws_bufs[] = [MelitzThetaExpansionWorkspace(ctx.D) for _ in 1:nt]
+            statep_bufs[] = [MelitzExpandedState(ctx.D) for _ in 1:nt]
+            statem_bufs[] = [MelitzExpandedState(ctx.D) for _ in 1:nt]
+        end
         arg0_base = arg0_buf[]
         _base_arg0!(arg0_base, obj, x)
         lambda = @view x[2:end]
@@ -294,7 +330,8 @@ function make_melitz_gradient_delta_direct_parallel(h::Real)
                 theta_m = thetam_bufs[][tid]; copyto!(theta_m, theta); theta_m[r] -= h
                 g[r] = _direct_coordinate_grad(cc, theta_p, theta_m, ctx, obj, lambda, arg0_base, h,
                     Gp_bufs[][tid], Gm_bufs[][tid], linkp_bufs[][tid], linkm_bufs[][tid],
-                    profit_bufs[][tid], uplus_bufs[][tid], uminus_bufs[][tid], psi_bufs[][tid])
+                    profit_bufs[][tid], uplus_bufs[][tid], uminus_bufs[][tid], psi_bufs[][tid],
+                    statep_bufs[][tid], statem_bufs[][tid], ws_bufs[][tid])
             end
         finally
             guards_on && Main.CounterfactualSensitivity.guard_exit_coord_pool!()

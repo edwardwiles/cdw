@@ -1,0 +1,17 @@
+scale,callback,bytes1,bytes2
+D4_W20000,operator_update_at_theta,1984,1984
+D4_W20000,objective_callback,176,176
+D4_W20000,inner_dual_gradient_callback,144,144
+D4_W20000,hessian_callback_structured_serial,144,144
+D4_W20000,matrix_free_range_screen,0,0
+D4_W20000,complete_outer_gradient_serial (n=30 coords => 0 bytes implies 0/coord),0,0
+D4_W20000,lfd_recovery_and_kkt_verification,160264,160264
+D4_W20000,cb_F_candidate_registration_cache_hit_theta,166840,1440
+realD20_W80000,operator_update_at_theta,32400,32400
+realD20_W80000,objective_callback,176,176
+realD20_W80000,inner_dual_gradient_callback,144,144
+realD20_W80000,hessian_callback_structured_serial,144,144
+realD20_W80000,matrix_free_range_screen,0,0
+realD20_W80000,complete_outer_gradient_serial (n=798 coords => 0 bytes implies 0/coord),0,0
+realD20_W80000,lfd_recovery_and_kkt_verification,643408,643408
+realD20_W80000,cb_F_candidate_registration_cache_hit_theta,728848,26112

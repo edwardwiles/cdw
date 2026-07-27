@@ -160,7 +160,91 @@ function _fill_compact_link!(link_col::AbstractVector{Float64}, profit_buf::Abst
 end
 
 """
+    _fill_compact_direct_columns_from_state!(Gcols, ctx, obj, state, direct_cells, ncols) -> Gcols
+
+2026-07-27 continuation (governing prompt Phase 1.3): zero-allocation twin of
+`_fill_compact_direct_columns!` for callers that have ALREADY expanded `theta_free` into a
+`MelitzExpandedState` (via `melitz_expand_theta!`, once per probe, shared with the focal-link
+fill below) -- reads `state.A`/`state.f` directly instead of re-expanding via the allocating
+`melitz_expand_theta`. Bit-identical formula/loop order to `_fill_compact_direct_columns!`.
+"""
+function _fill_compact_direct_columns_from_state!(Gcols::AbstractMatrix{Float64}, ctx, obj,
+                                                   state::MelitzExpandedState,
+                                                   direct_cells::Vector{Tuple{Int,Int}}, ncols::Int)
+    sigma = ctx.sigma
+    W = size(obj.U, 1)
+    A, f = state.A, state.f
+    price_power_d = 1.0
+    @inbounds for idx in 1:ncols
+        (o, d) = direct_cells[idx]
+        lambda_od = ctx.X_data[o, d] / ctx.expenditure[d]
+        for w in 1:W
+            z = obj.U[w, o]
+            firm = melitz_firm(ctx.w[o], ctx.tau[o, d], A[o, d], f[o, d], sigma,
+                                ctx.expenditure[d], price_power_d, z)
+            Gcols[w, idx] = firm.realized_revenue / ctx.expenditure[d] - lambda_od
+        end
+    end
+    return Gcols
+end
+
+"""
+    _fill_compact_link_from_state!(link_col, profit_buf, ctx, obj, state) -> link_col
+
+2026-07-27 continuation (governing prompt Phase 1.1): zero-allocation twin of
+`_fill_compact_link!` for callers that have ALREADY expanded `theta_free` into a
+`MelitzExpandedState` -- reads `state.A`/`state.f`/`state.gamma_prime_j`/`state.f_jj` directly
+instead of calling the allocating `melitz_expand_theta` a SECOND time (the sorted
+crossing-slice backends, `sorted_crossing_gradient.jl`/`cc_bundle.jl`, already expand `theta_p`/
+`theta_m` into `state_p`/`state_m` once per coordinate probe for the direct-column fill --
+`melitz_compact_columns_map` guarantees `cc.touches_link => length(cc.direct_cols) > 0`, since a
+link-touching coordinate's own `direct_cells` always includes the `D` origin-`j` destination
+cells, so `state_p`/`state_m` are always already current by the time this is called). Bit-
+identical formula/loop order to `_fill_compact_link!` (same `profit_j` accumulation order).
+"""
+function _fill_compact_link_from_state!(link_col::AbstractVector{Float64}, profit_buf::AbstractVector{Float64},
+                                         ctx, obj, state::MelitzExpandedState)
+    D, j = ctx.D, ctx.target_country
+    W = size(obj.U, 1)
+    sigma = ctx.sigma
+    A, f, gamma_prime_j, f_jj = state.A, state.f, state.gamma_prime_j, state.f_jj
+    price_power_d = 1.0
+    fill!(profit_buf, 0.0)
+    @inbounds for d in 1:D
+        lambda_od = ctx.X_data[j, d] / ctx.expenditure[d]
+        for w in 1:W
+            z = obj.U[w, j]
+            firm = melitz_firm(ctx.w[j], ctx.tau[j, d], A[j, d], f[j, d], sigma,
+                                ctx.expenditure[d], price_power_d, z)
+            profit_buf[w] += firm.realized_operating_profit
+        end
+    end
+    expenditure_prime = ctx.w_prime * ctx.L[j]
+    price_power_autarky = gamma_prime_j
+    @inbounds for w in 1:W
+        z_j = obj.U[w, j]
+        firm_auk = melitz_firm(ctx.w_prime, 1.0, A[j, j], f_jj, sigma, expenditure_prime, price_power_autarky, z_j)
+        link_col[w] = profit_buf[w] / ctx.w[j] - firm_auk.realized_operating_profit / ctx.w_prime
+    end
+    return link_col
+end
+
+"""
     make_melitz_moments_jacobian_b_argument_localized_serial(h) -> Function
+
+2026-07-27 continuation (governing prompt Phase 1.3): `:B_argument_localized_serial`/
+`_parallel` (this backend) is a LEGACY/DIAGNOSTIC-ONLY gradient backend -- it is a member of
+`finite_delta_outer.jl`'s own `legacy_dense_only_gradient_backends` tuple, so
+`build_melitz_implicit_bundle`'s `:auto_from_gradient_backend` resolution forces
+`backend=:dense_reference` whenever it is selected; it is never what `:auto` resolves to for a
+matrix-free (`MelitzCCBundle`) construction, and `MelitzBackendConfig`'s own `:auto` resolution
+(`melitz_resolve_gradient_backend`, backend_config.jl) never selects it either. Its per-column
+allocating `melitz_expand_theta` calls (via `_fill_compact_direct_columns!`/`_fill_compact_link!`
+below) are therefore explicitly LEFT UNCHANGED by this session's mutating-workspace fixes --
+the production-supported direct backends (`_direct_coordinate_grad`/`_direct_coordinate_grad_sorted`,
+`direct_gradient.jl`/`sorted_crossing_gradient.jl`/`cc_bundle.jl`) are the ones wired to the
+mutating fast path (Phase 1.1/1.3). This backend remains callable, fully correct, and
+cross-validated against them (unchanged) for diagnostic/cross-check use only.
 
 Backend `:B_argument_localized_serial`: same calling convention, dependency map, and
 central-difference construction as `:B_localized`, but never builds `Gbase` or any full

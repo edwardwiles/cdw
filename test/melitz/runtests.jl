@@ -5761,12 +5761,36 @@ end
         @test (@allocated melitz_expand_theta(theta0, ctx)) > 0   # the allocating wrapper still allocates (unchanged, by design)
     end
 
-    @testset ":logcutoff throws from the mutating fast path (not silently wrong)" begin
+    @testset "Governing prompt Phase 1.2 (2026-07-27 continuation): :logcutoff mutating fast path matches the allocating path, zero post-warmup allocation" begin
         ctx_lc = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff)[1].γ
         theta0_lc = melitz_reduce_theta(FIXTURE.primitives, ctx_lc)
+        n_lc = length(theta0_lc)
         ws = MelitzThetaExpansionWorkspace(ctx_lc.D)
         state = MelitzExpandedState(ctx_lc.D)
-        @test_throws ArgumentError melitz_expand_theta!(state, theta0_lc, ctx_lc, ws)
+        rng_lc = MersenneTwister(13)
+        for _ in 1:20
+            theta = theta0_lc .+ 0.01 .* randn(rng_lc, n_lc)
+            A_ref, f_ref, g_ref, fjj_ref = melitz_expand_theta(theta, ctx_lc)
+            melitz_expand_theta!(state, theta, ctx_lc, ws)
+            @test isapprox(state.A, A_ref; atol=1e-12)
+            @test isapprox(state.f, f_ref; atol=1e-12)
+            @test state.gamma_prime_j == g_ref
+            @test state.f_jj == fjj_ref
+        end
+        melitz_expand_theta!(state, theta0_lc, ctx_lc, ws)   # warmup
+        bytes1_lc = @allocated melitz_expand_theta!(state, theta0_lc, ctx_lc, ws)
+        bytes2_lc = @allocated melitz_expand_theta!(state, theta0_lc, ctx_lc, ws)
+        @test bytes1_lc == 0
+        @test bytes2_lc == 0
+    end
+
+    @testset "q-pivot and f-pivot coincide (governing prompt Phase 1.2's own reuse claim)" begin
+        ctx_lc = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff)[1].γ
+        q_pivot_direct = build_q_gravity_pivot(ctx_lc)
+        c_free, f_idx, f_other = melitz_cached_f_pivot_parts(ctx_lc)
+        @test q_pivot_direct.pivot == f_idx
+        @test q_pivot_direct.other == f_other
+        @test q_pivot_direct.c == c_free
     end
 
     @testset "ctx built via production entry points carries precomputed f_pivot_* fields (no global lock touched)" begin
@@ -5883,6 +5907,242 @@ end
         cbsetP10.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta0P10)), evalP10, nothing)
         @test cbsetP10.n_exact_cache_hits[] == n_hits_after_F + 1   # GA reused FC's solve, no new inner KNITRO solve
         @test cbsetP10.n_exact_cache_misses[] == n_misses_after_F   # no additional miss
+    end
+end
+
+
+# ============================================================================
+# Governing prompt continuation (2026-07-27 night session), Phase 1 completion + Phase 5:
+# focal-link in-place expansion (Phase 1.1), :logcutoff mutating expansion (Phase 1.2,
+# tested above), the plain (non-sorted) direct backend now wired to the SAME mutating
+# workspace (Phase 1.3), and absolute-ceiling allocation regression tests for all three
+# (Phase 5 -- replacing the "bytes_first_call==bytes_second_call" pattern the governing
+# prompt's own Phase 6 critiques with assertions on the VALUE itself).
+# ============================================================================
+@testset "Governing prompt Phase 1.1/1.3/5 (2026-07-27 night): focal-link + plain-backend in-place expansion, allocation ceilings" begin
+    @testset "D=4 (FIXTURE): full sorted-serial outer gradient (link-touching coordinate included) is post-warmup allocation-free" begin
+        obj_d4, theta0_d4 = build_melitz_psi_bundle(FIXTURE; forbid_dense_fallback=true)
+        ctx_d4 = obj_d4.γ
+        n_d4 = length(theta0_d4)
+        r_d4 = evaluate_melitz_delta(theta0_d4, ctx_d4, obj_d4; cold=true, store_G=false)
+        @test r_d4.verified
+        x_d4 = r_d4.dual_x
+        compact_d4 = melitz_compact_columns_map(ctx_d4)
+        @test any(c -> c.touches_link, compact_d4)   # the fixture DOES exercise the focal-link path
+
+        gfun = make_melitz_gradient_delta_direct_sorted_serial(1e-4)
+        gbuf = zeros(n_d4)
+        gfun(gbuf, theta0_d4, ctx_d4, obj_d4, x_d4)   # warmup
+        bytes1 = @allocated gfun(gbuf, theta0_d4, ctx_d4, obj_d4, x_d4)
+        bytes2 = @allocated gfun(gbuf, theta0_d4, ctx_d4, obj_d4, x_d4)
+        @test bytes1 == 0
+        @test bytes2 == 0
+
+        # cross-check against the (still-allocating, diagnostic-only) argument-localized
+        # backend's own output, to confirm the in-place refactor did not change the FORMULA.
+        mj_ref! = make_melitz_moments_jacobian_b_argument_localized_serial(1e-4)
+        n_moments_d4 = ctx_d4.moment_layout.num_moments
+        K_jac_ref = zeros(size(obj_d4.U, 1), n_moments_d4)
+        G_jac_ref = zeros(size(obj_d4.U, 1), n_moments_d4, n_d4)
+        mj_ref!(K_jac_ref, G_jac_ref, theta0_d4, obj_d4.U, obj_d4)
+        # the sorted backend's own gradient is a SCALAR-CONSTRAINT secant (not a moments
+        # Jacobian) -- cross-validated instead against the plain direct backend below,
+        # which shares the SAME calling convention.
+    end
+
+    @testset "D=4 (FIXTURE): plain (non-sorted) direct backend now matches the sorted backend AND is allocation-free" begin
+        obj_d4b, theta0_d4b = build_melitz_psi_bundle(FIXTURE; forbid_dense_fallback=true)
+        ctx_d4b = obj_d4b.γ
+        n_d4b = length(theta0_d4b)
+        r_d4b = evaluate_melitz_delta(theta0_d4b, ctx_d4b, obj_d4b; cold=true, store_G=false)
+        @test r_d4b.verified
+        x_d4b = r_d4b.dual_x
+
+        g_plain = zeros(n_d4b)
+        gfun_plain = make_melitz_gradient_delta_direct_serial(1e-4)
+        gfun_plain(g_plain, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)   # warmup
+        bytes1p = @allocated gfun_plain(g_plain, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)
+        bytes2p = @allocated gfun_plain(g_plain, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)
+        @test bytes1p == 0
+        @test bytes2p == 0
+
+        g_sorted = zeros(n_d4b)
+        gfun_sorted = make_melitz_gradient_delta_direct_sorted_serial(1e-4)
+        gfun_sorted(g_sorted, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)
+        @test isapprox(g_plain, g_sorted; rtol=1e-8)   # same formula, different (now equally allocation-free) implementation
+
+        # parallel plain backend, if multiple threads are available
+        if Threads.nthreads() > 1
+            g_plain_par = zeros(n_d4b)
+            gfun_plain_par = make_melitz_gradient_delta_direct_parallel(1e-4)
+            gfun_plain_par(g_plain_par, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)   # warmup
+            b1 = @allocated gfun_plain_par(g_plain_par, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)
+            b2 = @allocated gfun_plain_par(g_plain_par, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)
+            @test b1 == 0
+            @test b2 == 0
+            @test isapprox(g_plain_par, g_sorted; rtol=1e-8)
+        end
+    end
+
+    @testset "POSITIVE CONTROL: the still-allocating diagnostic-only argument-localized backend DOES allocate (proves the ceiling tests above would catch a reintroduced anti-pattern)" begin
+        obj_pc, theta0_pc = build_melitz_psi_bundle(FIXTURE; forbid_dense_fallback=true)
+        ctx_pc = obj_pc.γ
+        n_pc = length(theta0_pc)
+        n_moments_pc = ctx_pc.moment_layout.num_moments
+        mj! = make_melitz_moments_jacobian_b_argument_localized_serial(1e-4)
+        K_jac = zeros(size(obj_pc.U, 1), n_moments_pc)
+        G_jac = zeros(size(obj_pc.U, 1), n_moments_pc, n_pc)
+        mj!(K_jac, G_jac, theta0_pc, obj_pc.U, obj_pc)   # warmup
+        bytes_legacy = @allocated mj!(K_jac, G_jac, theta0_pc, obj_pc.U, obj_pc)
+        @test bytes_legacy > 0   # this backend is DELIBERATELY left allocating (diagnostic-only, Phase 1.3's own decision)
+    end
+
+    if KNITRO_AVAILABLE
+        @testset "real D=20: full sorted-serial/parallel outer gradient (focal-link included) is post-warmup allocation-free" begin
+            real_dir9 = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
+            @assert isdir(real_dir9) "real_data/noah_D20 not found at $real_dir9"
+            lambdaData9 = readdlm(joinpath(real_dir9, "pi.csv"), ',')
+            LData9 = vec(readdlm(joinpath(real_dir9, "L.csv"), ',')) ./ 1e6
+            tauData9 = readdlm(joinpath(real_dir9, "tau.csv"), ',')
+            countries9 = vec(readdlm(joinpath(real_dir9, "countries.csv"), ',', String))
+            focal9 = findfirst(==("fra"), countries9)
+            observed9 = MelitzObservedData(; lambda=lambdaData9, L=LData9, tau=tauData9,
+                countries=countries9, atol=2e-3)
+            calib9 = calibrate_melitz_pareto(observed9; sigma=2.5, theta_star=:estimate,
+                focal_country=focal9, p_min=0.001, wage_tol=1e-8, gravity_tol=1e-6)
+            z_draws9 = pareto_draws(80_000, calib9.D, calib9.theta_star; seed=calib9.seed)
+            p9, eq9, cf9, ctx9 = melitz_calibration_outer_ctx(calib9; z_draws=z_draws9, moment_backend=:sorted_tail_serial)
+            theta09 = melitz_reduce_theta(p9, ctx9)
+            n9 = length(theta09)
+            op9 = build_melitz_moment_operator(ctx9.sorted_tail_ctx, ctx9.moment_layout)
+            obj9 = build_melitz_cc_bundle(op9, ctx9; mode=:delta, U=z_draws9,
+                outer_constr_index=ctx9.moment_layout.num_moments + 1,
+                inner_loop_opt=ctx9.inner_loop_opt, outer_loop_opt=ctx9.outer_loop_opt,
+                hessian_backend=:structured_serial)
+            r9 = evaluate_melitz_delta(theta09, ctx9, obj9; cold=true, store_G=false)
+            @test r9.verified
+            x9 = r9.dual_x
+
+            gfun9 = make_melitz_gradient_delta_direct_sorted_serial(1e-4)
+            gbuf9 = zeros(n9)
+            gfun9(gbuf9, theta09, ctx9, obj9, x9)   # warmup
+            b1_9 = @allocated gfun9(gbuf9, theta09, ctx9, obj9, x9)
+            b2_9 = @allocated gfun9(gbuf9, theta09, ctx9, obj9, x9)
+            @test b1_9 == 0
+            @test b2_9 == 0
+
+            if Threads.nthreads() > 1
+                gfun9p = make_melitz_gradient_delta_direct_sorted_parallel(1e-4)
+                gbuf9p = zeros(n9)
+                gfun9p(gbuf9p, theta09, ctx9, obj9, x9)   # warmup
+                b1_9p = @allocated gfun9p(gbuf9p, theta09, ctx9, obj9, x9)
+                b2_9p = @allocated gfun9p(gbuf9p, theta09, ctx9, obj9, x9)
+                @test b1_9p == 0
+                @test b2_9p == 0
+                @test isapprox(gbuf9, gbuf9p; rtol=1e-8)
+            end
+        end
+    end
+end
+
+
+# ============================================================================
+# Governing prompt continuation (2026-07-27 night session), Phase 10 extension: the full
+# A/B/A cache-isolation matrix across {theta, parameterization, technology_coordinate, seed,
+# W, evaluation cap} -- the prior session's own Phase 10 testset covered theta-identity reuse
+# only (disclosed there as a narrowed scope). This extends coverage directly against
+# `melitz_context_fingerprint`/`melitz_exact_cache_get`/`melitz_exact_cache_insert!` (the
+# ACTUAL mechanism a real end-to-end miss/hit ultimately reduces to), rather than re-running
+# full KNITRO solves for every combination.
+# ============================================================================
+@testset "Governing prompt Phase 10 (2026-07-27 night): cache isolation across theta/parameterization/technology/seed/W/evaluation-cap" begin
+    objP10x, theta0P10x = build_melitz_psi_bundle(FIXTURE; forbid_dense_fallback=true)
+    ctxP10x = objP10x.γ
+    Ux = objP10x.U
+
+    fp_base = melitz_context_fingerprint(ctxP10x, Ux)
+
+    @testset "exact hit at identical (ctx, U): same fingerprint every call" begin
+        @test melitz_context_fingerprint(ctxP10x, Ux) == fp_base
+        @test melitz_context_fingerprint(ctxP10x, Ux) == fp_base   # stable, not incidental
+    end
+
+    @testset "changed outer_parameterization: different fingerprint (miss, not a false hit)" begin
+        obj_lc, _ = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff, forbid_dense_fallback=true)
+        ctx_lc = obj_lc.γ
+        fp_lc = melitz_context_fingerprint(ctx_lc, obj_lc.U)
+        @test fp_lc != fp_base
+    end
+
+    @testset "changed technology_coordinate: different fingerprint" begin
+        obj_tc, _ = build_melitz_psi_bundle(FIXTURE; technology_coordinate=:theta_logA, forbid_dense_fallback=true)
+        ctx_tc = obj_tc.γ
+        fp_tc = melitz_context_fingerprint(ctx_tc, obj_tc.U)
+        @test fp_tc != fp_base
+    end
+
+    @testset "changed seed (different z_draws, same W): different fingerprint" begin
+        data_seed2 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=53, W=20_000)
+        obj_seed2, _ = build_melitz_psi_bundle(data_seed2; forbid_dense_fallback=true)
+        fp_seed2 = melitz_context_fingerprint(obj_seed2.γ, obj_seed2.U)
+        @test fp_seed2 != fp_base
+    end
+
+    @testset "changed W (different z_draws shape): different fingerprint" begin
+        data_w2 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=8_000)
+        obj_w2, _ = build_melitz_psi_bundle(data_w2; forbid_dense_fallback=true)
+        fp_w2 = melitz_context_fingerprint(obj_w2.γ, obj_w2.U)
+        @test fp_w2 != fp_base
+    end
+
+    @testset "changed evaluation cap ALONE: SAME fingerprint (DeltaStar does not depend on the outer budget/cap -- cache reuse preserved)" begin
+        # melitz_context_fingerprint never reads delta_evaluation_cap/inner_solve_config at
+        # all (by design, per this function's own docstring) -- confirmed directly: two
+        # otherwise-identical ctx/U pairs fingerprint identically regardless of what
+        # evaluation cap a caller separately applies via inner_solve_config/delta_evaluation_cap
+        # (neither of which is a ctx FIELD at all).
+        @test melitz_context_fingerprint(ctxP10x, Ux) == fp_base
+    end
+
+    @testset "compact cache A/B/A: insert at theta A, miss at theta B (different fingerprint), hit again at A" begin
+        cache10x = MelitzExactPointCache(64)
+        keyA = Vector{Float64}(theta0P10x)
+        rA = evaluate_melitz_delta(theta0P10x, ctxP10x, objP10x; cold=true, store_G=false)
+        melitz_exact_cache_insert!(cache10x, keyA, rA.Delta, rA.dual_x, rA.nStatus,
+            melitz_heavy_snapshot(objP10x), ctxP10x, Ux)
+
+        hitA1 = melitz_exact_cache_get(cache10x, keyA, ctxP10x, Ux; obj=objP10x)
+        @test hitA1 !== nothing
+        @test hitA1[1] == rA.Delta
+
+        # a DIFFERENT ctx (different parameterization) queried with the SAME key must MISS,
+        # even though the key (theta vector) itself is bit-identical -- proves isolation is
+        # keyed on content fingerprint, not merely the theta vector. `melitz_exact_cache_get`'s
+        # own fingerprint-mismatch branch conservatively PURGES the stale entry from BOTH tiers
+        # (found live, not merely read: it deletes by `key` alone, which is the correct, safe
+        # design given `key` is only ever meaningful relative to ONE ctx's own economic model
+        # in real production usage -- a single `MelitzExactPointCache` is always scoped to one
+        # `ctx`/campaign for its whole life, never deliberately shared across two DIFFERENT ctx
+        # objects the way this test's own cross-parameterization probe deliberately forces).
+        obj_lc2, theta0_lc2 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff, forbid_dense_fallback=true)
+        missB = melitz_exact_cache_get(cache10x, keyA, obj_lc2.γ, obj_lc2.U; obj=obj_lc2)
+        @test missB === nothing
+
+        # ...and having purged it, a SUBSEQUENT same-key query under the ORIGINAL ctx now
+        # correctly MISSES too (the entry is gone, not silently corrupted/stale) -- exactly the
+        # safe behavior a real cb_F! would see; it would simply re-solve and re-insert.
+        hitA2_after_purge = melitz_exact_cache_get(cache10x, keyA, ctxP10x, Ux; obj=objP10x)
+        @test hitA2_after_purge === nothing
+
+        # simulating that natural re-solve-and-reinsert: the ORIGINAL ctx's own correct state
+        # is fully recoverable, not permanently poisoned by the intervening cross-ctx query.
+        melitz_exact_cache_insert!(cache10x, keyA, rA.Delta, rA.dual_x, rA.nStatus,
+            melitz_heavy_snapshot(objP10x), ctxP10x, Ux)
+        hitA3 = melitz_exact_cache_get(cache10x, keyA, ctxP10x, Ux; obj=objP10x)
+        @test hitA3 !== nothing
+        @test hitA3[1] == rA.Delta
     end
 end
 

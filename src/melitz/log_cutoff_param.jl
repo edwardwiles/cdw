@@ -159,14 +159,26 @@ function build_q_gravity_offset(A::AbstractMatrix, q_jj::Real, ctx)
     sigma = ctx.sigma
     markup = melitz_markup(sigma)
     c_full = ctx.c_full
+    # 2026-07-27 continuation (governing prompt Phase 1.2): rewritten to accumulate both dot
+    # products directly in ONE pass instead of materializing `const_vec = zeros(Float64, D^2)`
+    # (a fresh D^2-length allocation every call) and the broadcast temporary `vec(log.(A))`
+    # (a SECOND D^2-length allocation `dot` would otherwise force) -- algebraically identical,
+    # verified against the original dot-product formula in the test suite. `T` (unused in the
+    # PRIOR version, despite being computed) now actually types the accumulator, preserving
+    # exact `ForwardDiff.Dual` compatibility for `A::AbstractMatrix{<:ForwardDiff.Dual}`
+    # (the allocating `melitz_cutoff_constraint_jacobian` call path) -- the original's Dual
+    # support came for free from `dot`/broadcasting; this rewrite must carry it explicitly.
     T = promote_type(eltype(A), typeof(q_jj))
-    const_vec = zeros(Float64, D^2)
+    s_a = zero(T)
+    s_const = 0.0
     @inbounds for lin in 1:D^2
         o, d = lin2od(lin, D)
-        const_vec[lin] = (sigma - 1) * (-log(markup) - log(ctx.w[o]) - log(ctx.tau[o, d])) +
-                          log(ctx.expenditure[d]) - log(sigma) - log(ctx.w[o])
+        const_lin = (sigma - 1) * (-log(markup) - log(ctx.w[o]) - log(ctx.tau[o, d])) +
+                    log(ctx.expenditure[d]) - log(sigma) - log(ctx.w[o])
+        s_a += c_full[lin] * log(A[lin])
+        s_const += c_full[lin] * const_lin
     end
-    return c_full[ctx.jj_lin] * q_jj + dot(c_full, vec(log.(A))) + dot(c_full, const_vec) / (sigma - 1)
+    return c_full[ctx.jj_lin] * q_jj + s_a + s_const / (sigma - 1)
 end
 
 """
@@ -315,6 +327,75 @@ function melitz_expand_theta(theta_free::AbstractVector, ctx)
 end
 
 """
+    expand_free_theta_logcutoff!(state::MelitzExpandedState, theta_free_q_plain::AbstractVector{Float64},
+                                  ctx, ws::MelitzThetaExpansionWorkspace) -> state
+
+2026-07-27 continuation (governing prompt Phase 1.2): the mutating, workspace-based
+`:logcutoff` counterpart of `delta_star.jl`'s `expand_free_theta!`, completing this session's
+own governing prompt's requirement that NO production-supported parameterization silently
+fall back to the allocating wrapper. Mirrors `expand_free_theta_logcutoff` above exactly
+(same order: `A` first, then `q[j,j]`, then the q-pivot expansion, then `f`), with two
+allocation removals beyond simply making the array writes in-place:
+
+1. **q-pivot selection reuses the ALREADY-cached f-pivot parts** (`melitz_cached_f_pivot_parts`,
+   Phase 3) instead of calling `build_q_gravity_pivot(ctx)` (which would otherwise rebuild
+   `f_gravity_pivot_avoid_indices`/`build_gravity_pivot` from scratch every call). This is
+   exact, not an approximation: `build_q_gravity_pivot`'s own `(c, avoid)` inputs
+   (`ctx.c_full[ctx.f_free_lin]`, `f_gravity_pivot_avoid_indices(ctx.D, ctx.f_free_lin,
+   ctx.A_pivot.pivot)`) are IDENTICAL, term for term, to the f-pivot's own inputs
+   (`melitz_build_f_pivot_parts`) -- `build_gravity_pivot`'s pivot choice is a deterministic
+   function of `(c, avoid)` alone, never `g0` (`equilibrium.jl`'s own docstring), so the two
+   pivots are PROVABLY the same physical cell, only their per-call `g0` offset differs (and
+   that offset is rebuilt fresh here regardless, exactly as the allocating path already does).
+   Verified directly (test suite, "q-pivot and f-pivot coincide"), not merely argued.
+2. **`ws.logf_free_full`** (length `D^2-1`) is reused as `q_free_full` scratch -- safe because
+   this field is otherwise UNUSED for the lifetime of a `:logcutoff` ctx (only
+   `expand_free_theta!`'s own `:logf`-only body ever writes it, and that function is never
+   called for a `:logcutoff` ctx via the single dispatcher below).
+
+`theta_free_q_plain` must already be in plain (un-powered) `log(A_od)` units, exactly like
+`expand_free_theta!`'s own contract.
+"""
+function expand_free_theta_logcutoff!(state::MelitzExpandedState, theta_free_q_plain::AbstractVector{Float64},
+                                       ctx, ws::MelitzThetaExpansionWorkspace)
+    D, j = ctx.D, ctx.target_country
+    nA = D^2 - 1
+    log_gamma_prime_j = theta_free_q_plain[1]
+    gamma_prime_j = exp(log_gamma_prime_j)
+    A_free = @view theta_free_q_plain[2:1+nA]
+    q_free_free = @view theta_free_q_plain[2+nA:end]
+
+    pivot_expand!(ws.logA_full, A_free, ctx.A_pivot)
+    A = state.A
+    @inbounds for i in eachindex(A)
+        A[i] = exp(ws.logA_full[i])
+    end
+
+    q_jj = derive_qjj_from_autarky_cutoff(gamma_prime_j, ctx)
+
+    c_free, q_pivot_idx, q_other = melitz_cached_f_pivot_parts(ctx)
+    g0_q = build_q_gravity_offset(A, q_jj, ctx)
+    q_pivot = GravityPivot(length(c_free), q_pivot_idx, q_other, c_free, g0_q)
+    q_free_full = ws.logf_free_full
+    pivot_expand!(q_free_full, q_free_free, q_pivot)
+
+    f = state.f
+    sigma = ctx.sigma
+    @inbounds for (k, i) in enumerate(ctx.f_free_lin)
+        o, d = lin2od(i, D)
+        f[o, d] = exp(melitz_log_f_from_q(q_free_full[k], log(A[o, d]), ctx.w[o], ctx.tau[o, d],
+                                           ctx.expenditure[d], sigma))
+    end
+    f_jj = derive_fjj_from_autarky_cutoff(gamma_prime_j, ctx.w_prime, 1.0, A[j, j],
+                                           ctx.w_prime * ctx.L[j], sigma)
+    f[j, j] = f_jj
+
+    state.gamma_prime_j = gamma_prime_j
+    state.f_jj = f_jj
+    return state
+end
+
+"""
     melitz_expand_theta!(state::MelitzExpandedState, theta_free::AbstractVector{Float64},
                           ctx, ws::MelitzThetaExpansionWorkspace) -> state
 
@@ -322,31 +403,53 @@ end
 counterpart of `melitz_expand_theta` above -- un-scales `theta_free`'s A-block into plain
 `log(A_od)` units DIRECTLY INTO `ws.theta_plain` (no new `Vector`, mirroring
 `melitz_unpower_theta_free`'s own formula exactly), then delegates to `expand_free_theta!`
-(`delta_star.jl`). Restricted to `outer_parameterization=:logf` (the production default) --
-throws `ArgumentError` for `:logcutoff` rather than silently returning wrong/incomplete
-state (see `delta_star.jl`'s own header comment on this section for the scope rationale).
-Every existing consumer of `melitz_expand_theta` (screens, diagnostics,
-`gradient_lab.jl`) is UNCHANGED and continues to call the allocating dispatcher above; only
-the two identified O(n_theta)-per-gradient-call hot sites
-(`sorted_crossing_gradient.jl`'s `_fill_compact_direct_columns_crossing_sorted!`) call this
-mutating entry point instead.
+(`:logf`) or `expand_free_theta_logcutoff!` (`:logcutoff`) based on
+`ctx.outer_parameterization`, exactly mirroring the allocating `melitz_expand_theta`
+dispatcher's own logic.
+
+2026-07-27 continuation (governing prompt Phase 1.2): previously threw `ArgumentError` for
+`:logcutoff` (disclosed gap from the prior session). Both production-supported
+parameterizations now have a genuine in-place expansion path -- every existing consumer of
+`melitz_expand_theta` (screens, diagnostics, `gradient_lab.jl`) is UNCHANGED and continues to
+call the allocating dispatcher above; only the identified O(n_theta)-per-gradient-call hot
+sites (`sorted_crossing_gradient.jl`'s `_fill_compact_direct_columns_crossing_sorted!`,
+`direct_gradient.jl`'s `_direct_coordinate_grad`, and their focal-link-fill siblings) call
+this mutating entry point instead, and now work correctly regardless of which
+parameterization the bundle was built with.
 """
 function melitz_expand_theta!(state::MelitzExpandedState, theta_free::AbstractVector{Float64},
                                ctx, ws::MelitzThetaExpansionWorkspace)
-    get(ctx, :outer_parameterization, :logf) == :logcutoff && throw(ArgumentError(
-        "melitz_expand_theta!: the mutating fast path only supports outer_parameterization=" *
-        ":logf (the production default) -- use the allocating melitz_expand_theta for :logcutoff"))
     technology_coordinate = get(ctx, :technology_coordinate, :logA)
     p_A = melitz_technology_coordinate_scale(technology_coordinate, ctx)
+    logcutoff = get(ctx, :outer_parameterization, :logf) == :logcutoff
+    if p_A == 1.0
+        # 2026-07-27 continuation (governing prompt Phase 4, memory-traffic audit): `:logA`
+        # (p_A=1, the production default technology coordinate -- melitz_technology_coordinate_scale's
+        # own no-op case) means the un-scale below is the IDENTITY -- `copyto!(ws.theta_plain,
+        # theta_free)` was therefore copying all `2D^2-2` entries of `theta_free` UNCHANGED,
+        # every coordinate probe (2x/coordinate), purely so `expand_free_theta!`/
+        # `expand_free_theta_logcutoff!` had a `Float64`-typed argument to read -- `theta_free`
+        # itself already IS exactly that. Skips the copy entirely in this (default) case;
+        # the `p_A != 1.0` branch below is unchanged (a genuine rescale, still needs its own
+        # scratch destination).
+        if logcutoff
+            expand_free_theta_logcutoff!(state, theta_free, ctx, ws)
+        else
+            expand_free_theta!(state, theta_free, ctx, ws)
+        end
+        return state
+    end
     theta_plain = ws.theta_plain
     copyto!(theta_plain, theta_free)
-    if p_A != 1.0
-        nA = ctx.D^2 - 1
-        @inbounds for i in 2:1+nA
-            theta_plain[i] /= p_A
-        end
+    nA = ctx.D^2 - 1
+    @inbounds for i in 2:1+nA
+        theta_plain[i] /= p_A
     end
-    expand_free_theta!(state, theta_plain, ctx, ws)
+    if logcutoff
+        expand_free_theta_logcutoff!(state, theta_plain, ctx, ws)
+    else
+        expand_free_theta!(state, theta_plain, ctx, ws)
+    end
     return state
 end
 
