@@ -1,0 +1,12 @@
+
+=== CM+ZC (production default: operator) ===
+cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts
+cm_internal_feature_storage [CM+mean/ZC] = bin_indices
+inner_fg_backend [CM+mean/ZC] = operator (port/shared-inner-fg-operator-and-verification-2026-07-26)
+[cm_plus_zc default=operator]  operator_FG_calls=5  operator_forward=5  operator_transpose=5  dense_economic_G=0  dense_CM_G=0  dense_ZC_G=0  generic_dense_FG=0  full_G=0
+
+=== origin-ZC / ZC-only (production default: operator) ===
+cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)
+cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)
+origin_fg_backend [origin-ZC] = operator (port/shared-inner-fg-operator-and-verification-2026-07-26)
+[zc_only default=operator]  operator_FG_calls=5  operator_forward=5  operator_transpose=5  dense_economic_G=0  dense_CM_G=0  dense_ZC_G=0  generic_dense_FG=0  full_G=0
