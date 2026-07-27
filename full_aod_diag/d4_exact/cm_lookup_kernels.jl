@@ -36,6 +36,16 @@
 using Base.Threads: nthreads as _nthreads, @threads
 using LinearAlgebra: mul!
 
+# port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26 Phase A item 3: guarantee
+# `CompressedFactual`/`economic_forward!`/`economic_transpose!`/`record_dense_economic_G!` are
+# defined before CMLookupState's callable (below) can ever reference them at runtime -- this file
+# is included directly (without cm_hessian_architectures.jl/cm_production_bundle.jl first) by 50+
+# ad hoc scripts across the repo, so these guards must live HERE, not be assumed from caller order.
+# Same `isdefined(Main, :CompressedFactual) || include(...)` idiom cm_hessian_architectures.jl
+# already uses successfully across those same call sites.
+isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
+isdefined(Main, :economic_forward!) || include(joinpath(@__DIR__, "economic_operator.jl"))
+
 # ---- weighted histogram (Part B.2), threaded over draw chunks, thread-local buffers, no atomics ----
 
 """
@@ -323,10 +333,28 @@ mutable struct CMLookupState
     Hpre::Matrix{Float64}          # (D, L) prefix-sum scratch (:suffix/cumulative method only)
     g_block::Matrix{Float64}       # (nO, L) raw block-space backward gradient
     g_stored::Matrix{Float64}      # (nO, L) R-congruence-applied (stored-space) backward gradient
+    # port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26, Phase A item 3:
+    # retrofit the core-column block to the SHARED economic_forward!/economic_transpose!
+    # (economic_operator.jl) instead of the dense `obj.H` BLAS.gemv! above, mirroring
+    # OriginZCOperatorState's/CMMeanZCOperatorState's identical `core_cf_ref`-driven pattern
+    # exactly. `core_cf_ref` defaults to `Ref{Any}(nothing)` (never a `CompressedFactual`) for
+    # EVERY pre-existing call site of this constructor (50+ ad hoc scripts across the repo,
+    # `c12i_*`/`c13_*`/`c14_*`/etc.) so they take the dense fallback branch unconditionally --
+    # byte-identical to pre-port behavior. Only `cm_lookup_production.jl`'s production wiring
+    # passes the real `cctx.core_cf_ref`. `econ_ws`/`econ_ws_for` are typed `Any` (not
+    # `Union{Nothing,EconomicFGWorkspace}`) purely to avoid a forward type reference --
+    # `economic_operator.jl` is not necessarily included yet at every one of this struct's many
+    # call sites, same idiom `cctx.cmlookup_st::Any` already uses one file over for the same reason.
+    core_cf_ref::Ref{Any}
+    econ_ws::Any
+    econ_ws_for::Any
+    econ_buf::Vector{Float64}
+    n_dense_econ_fallback::Int
 end
 
 function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, refIndex1::Int,
-                        bins::Matrix{<:Unsigned}, R; method::Symbol = :interval, nthreads_use::Int = 1)
+                        bins::Matrix{<:Unsigned}, R; method::Symbol = :interval, nthreads_use::Int = 1,
+                        core_cf_ref::Ref{Any} = Ref{Any}(nothing))
     method in (:interval, :suffix) || error("CMLookupState: method must be :interval or :suffix, got $method")
     nO = length(origins)
     M = size(obj.U, 1)
@@ -339,7 +367,8 @@ function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, 
     CMLookupState(obj, ncore, ncm, L, nO, origins, refIndex1, bins, R, method, nbins, nthreads_use,
                   zeros(M), zeros(M), zeros(M), zeros(nO, L + 1), 0,
                   zeros(1 + ncore1), zeros(nO, L), hist_partials, zeros(D, nbins), zeros(D, L),
-                  zeros(nO, L), zeros(nO, L))
+                  zeros(nO, L), zeros(nO, L),
+                  core_cf_ref, nothing, nothing, zeros(M), 0)
 end
 
 """
@@ -358,12 +387,34 @@ function (st::CMLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float
     λ_cm = @view x[2+ncore1:1+ncore1+st.ncm]
 
     # ---- forward: arg0 = -(ζ .+ G_core*λ_core .+ cm_contribution) ----
-    # Phase 5.5: st.xsub is persistent scratch (was a fresh `vcat(ζ, λ_core)` allocation every FG
-    # call); the sign flip that used to live on `-xsub` moves onto BLAS's own alpha (-1.0) instead,
-    # since gemv!(alpha, A, x) == alpha*A*x regardless of which factor carries the sign.
-    st.xsub[1] = ζ
-    st.xsub[2:end] .= λ_core
-    @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
+    # port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26 Phase A item 3: use
+    # the SHARED economic_forward!/economic_transpose! (economic_operator.jl) against the SAME
+    # `core_cf_ref[]` CompressedFactual `wrap_moments_with_cm_archB`'s moments! closure already
+    # publishes on every outer point for the winner-pair Hessian, exactly the pattern
+    # OriginZCOperatorState/CMMeanZCOperatorState already established -- see those files' own
+    # `core_cf_ref`-branch docstrings for the full rationale. Falls back to the ORIGINAL dense
+    # `obj.H` BLAS.gemv! (Phase 5.5's own persistent-scratch version, byte-identical to pre-port)
+    # whenever `core_cf_ref[]` is not a usable `CompressedFactual` (tied winner / compressed state
+    # unavailable / caller never wired a real core_cf_ref -- the default for every pre-existing
+    # call site of this constructor), so this is a pure win-or-neutral change, never a regression.
+    cf = st.core_cf_ref[]
+    if cf isa CompressedFactual
+        if st.econ_ws === nothing || st.econ_ws_for !== cf
+            st.econ_ws = economic_operator_workspace(cf)
+            st.econ_ws_for = cf
+        end
+        economic_forward!(st.econ_buf, λ_core, cf, st.econ_ws)
+        st.arg0 .= (-ζ) .- st.econ_buf
+    else
+        st.n_dense_econ_fallback += 1
+        record_dense_economic_G!()
+        # Phase 5.5: st.xsub is persistent scratch (was a fresh `vcat(ζ, λ_core)` allocation every
+        # FG call); the sign flip that used to live on `-xsub` moves onto BLAS's own alpha (-1.0)
+        # instead, since gemv!(alpha, A, x) == alpha*A*x regardless of which factor carries the sign.
+        st.xsub[1] = ζ
+        st.xsub[2:end] .= λ_core
+        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
+    end
 
     λmat_stored = reshape(λ_cm, st.nO, st.L)  # threshold-major storage, col-major reshape: [oi,k] <-> j=(k-1)*nO+oi
     apply_contrast!(st.λmat_block, λmat_stored, st.R)   # block-space coefficients (R===nothing -> copy)
@@ -383,7 +434,13 @@ function (st::CMLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float
     if length(g) > 0
         obj.dPsi!(st.arg1, st.arg0)
         g[1] = 1.0 - sum(st.arg1) / M
-        @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
+        if cf isa CompressedFactual
+            g_E = @view g[2:1+ncore1]
+            economic_transpose!(g_E, st.arg1, cf, st.econ_ws)
+            g_E .*= -(1.0 / M)   # economic_transpose! returns the raw scatter, caller applies -(1/M) per its own docstring
+        else
+            @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
+        end
 
         build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, size(st.bins, 2), st.nbins)
         if st.method == :interval

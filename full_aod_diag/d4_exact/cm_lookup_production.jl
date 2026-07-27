@@ -125,8 +125,14 @@ function inner_loop_internal_cmlookup_production(obj, θ::AbstractVector, cctx::
     # this file's own first draft, caught by test_phaseB1_cmlookup_production_correctness.jl.
     if cctx.cmlookup_st === nothing
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        # port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26 Phase A item 3:
+        # thread THE SAME `cctx.core_cf_ref` box `wrap_moments_with_cm_archB`'s moments! closure
+        # publishes a fresh `CompressedFactual` into on every outer point (built for the shared
+        # winner-pair Hessian, cm_hessian_architectures.jl) so CMLookupState's own FG callback can
+        # consume it too instead of a dense `obj.H` BLAS.gemv! -- see CMLookupState's own
+        # `core_cf_ref`-branch docstring for the fallback contract.
         cctx.cmlookup_st = CMLookupState(obj, cctx.NCORE, cctx.ncm, cctx.L, cctx.origins, cctx.refIndex1, bins_u, cctx.R;
-                                          method = method, nthreads_use = nthreads_use)
+                                          method = method, nthreads_use = nthreads_use, core_cf_ref = cctx.core_cf_ref)
     end
     st = cctx.cmlookup_st::CMLookupState
     st.method == method || error("inner_loop_internal_cmlookup_production: cached CMLookupState was built with method=$(st.method), called with method=$method -- a live method change on a reused cctx is not supported (rebuild cctx instead)")
