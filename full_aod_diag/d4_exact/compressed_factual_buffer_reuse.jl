@@ -16,7 +16,24 @@
 # campaign-lifetime buffer -- the precedent this fix follows exactly).
 # ============================================================================
 
-"Persistent, campaign-lifetime scratch for `build_compressed_factual!` -- owns the SAME-shaped `winner`/`wval`/`cf_raw` buffers `build_compressed_factual` otherwise allocates fresh every call."
+# Defensive self-include (matches fast_range_screen.jl / winner_certificate.jl / cm_hessian_
+# architectures.jl's own identical pattern) -- needs CompressedFactual plus the shared economic
+# moment-state builder runtime counters (ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS etc., 2026-07-27
+# task), both defined in compressed_moments.jl. Most production drivers already include that file
+# first, but some callers of this file (e.g. cm_production_bundle.jl's own defensive include)
+# don't guarantee it.
+isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
+
+"""
+Persistent, campaign-lifetime scratch for `build_compressed_factual!` -- owns the SAME-shaped
+`winner`/`wval`/`cf_raw` buffers `build_compressed_factual` otherwise allocates fresh every call.
+
+`last_theta`/`has_last` (shared economic moment-state builder task, 2026-07-27): tracks the
+`θ_full` this workspace was last filled at, purely for the `DUPLICATE_ECONOMIC_STATE_BUILDS` vs
+`ECONOMIC_WORKSPACE_REFILLS` runtime-counter classification in `build_compressed_factual!` below
+-- NOT used for any correctness/caching decision (every call still fully recomputes winner/wval/
+cf_raw; this is instrumentation only, see addendum §6).
+"""
 mutable struct CompressedFactualWorkspace
     D::Int
     Ddest::Int
@@ -24,18 +41,23 @@ mutable struct CompressedFactualWorkspace
     winner::Matrix{Int}
     wval::Matrix{Float64}
     cf_raw::Vector{Float64}
+    last_theta::Vector{Float64}
+    has_last::Bool
 end
 
 "`build_compressed_factual_workspace(D, Ddest, W)` -- one-time allocation, matches `build_lfix_factorized_workspace`'s own construction pattern."
 function build_compressed_factual_workspace(D::Int, Ddest::Int, W::Int)
+    ECONOMIC_WORKSPACE_ALLOCATIONS[] += 1
     return CompressedFactualWorkspace(D, Ddest, W,
-        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest), Vector{Float64}(undef, W))
+        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest), Vector{Float64}(undef, W),
+        Float64[], false)
 end
 
 "Rebuilds only on a genuine (D,Ddest,W) change -- mirrors `ensure_lfix_factorized_workspace!`."
 function ensure_compressed_factual_workspace!(ws_ref::Base.RefValue{CompressedFactualWorkspace}, D::Int, Ddest::Int, W::Int)
     ws = ws_ref[]
     if ws.D != D || ws.Ddest != Ddest || ws.W != W
+        ECONOMIC_WORKSPACE_RESIZES[] += 1   # genuine shape change on an already-live workspace
         ws_ref[] = build_compressed_factual_workspace(D, Ddest, W)
     end
     return ws_ref[]
@@ -58,6 +80,17 @@ Bit-identical output to `build_compressed_factual` given the same `(θ_full, ctx
 verified in `test_compressed_factual_buffer_reuse.jl` (D=4 synthetic and real D=20/W=80000 points).
 """
 function build_compressed_factual!(ws::CompressedFactualWorkspace, θ_full::AbstractVector, ctx; check_ties::Bool = true)
+    INPLACE_BUILD_COMPRESSED_FACTUAL_CALLS[] += 1
+    if ws.has_last && length(ws.last_theta) == length(θ_full) && ws.last_theta == θ_full
+        DUPLICATE_ECONOMIC_STATE_BUILDS[] += 1   # same θ_full as the immediately preceding fill of THIS workspace
+    else
+        ECONOMIC_WORKSPACE_REFILLS[] += 1        # genuinely new outer point
+    end
+    if length(ws.last_theta) != length(θ_full)
+        resize!(ws.last_theta, length(θ_full))
+    end
+    ws.last_theta .= θ_full
+    ws.has_last = true
     γo = ctx.γ
     D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     U = ctx.U; W = size(U, 1)
@@ -160,9 +193,66 @@ reused/resumed, before any `screened_eval` call.
 """
 function attach_compressed_factual_workspace(ctx, D::Int, Ddest::Int, W::Int)
     existing = hasproperty(ctx, :cf_workspace) ? ctx.cf_workspace : nothing
-    ws = (existing isa CompressedFactualWorkspace && existing.D == D && existing.Ddest == Ddest && existing.W == W) ?
-        existing : build_compressed_factual_workspace(D, Ddest, W)
+    reuse = existing isa CompressedFactualWorkspace && existing.D == D && existing.Ddest == Ddest && existing.W == W
+    if !reuse && existing isa CompressedFactualWorkspace
+        ECONOMIC_WORKSPACE_RESIZES[] += 1   # already-attached workspace, genuine (D,Ddest,W) change
+    end
+    ws = reuse ? existing : build_compressed_factual_workspace(D, Ddest, W)
     return merge(ctx, (cf_workspace = ws,))
+end
+
+# ============================================================================
+# Shared economic moment-state builder (2026-07-27 task). This section makes explicit, under the
+# task's own naming, what `cf_build` (Phase E remediation, 2026-07-26) already implemented as a
+# dispatch helper: `build_economic_moment_state!` IS the one shared production implementation
+# constructing/refreshing the common economic moment-state block for all five families
+# (unrestricted / flexible CM / common Frechet / CM+ZC / ZC-only) -- `cf_build` becomes a thin
+# backward-compatible alias so the four already-wired restricted-family call sites
+# (cm_hessian_architectures.jl / cm_meanzc_moments.jl / cm_frechet_level.jl /
+# cm_originzc_moments.jl) need no rename. See SHARED_ECONOMIC_MOMENT_STATE_BUILDER_2026-07-27.md
+# for the full name-mapping table against the task addendum's illustrative (invented) names --
+# `reuse_immutable_cm_state`/`update_low_dimensional_zc_targets!` do not exist in this codebase;
+# the equivalent, already-production-validated functions are
+# `materialize_dense_factual_structured!` (shared, all 4 restricted families) plus each family's
+# own column-fill function (`fill_cm_columns_from_bins!` for CM, etc.) -- documented precisely
+# there rather than invented here to match the addendum's spelling.
+# ============================================================================
+
+"""
+    build_economic_moment_state!(θ_full, ctx; check_ties=true) -> CompressedFactual
+
+THE canonical, single production entry point for constructing/refreshing the shared economic
+moment-state block (winner identities `winner`, winner contributions `wval`, counterfactual
+contribution `cf_raw`, and all draw-independent bookkeeping -- `Pmat`/`denom`/`gdiv`/`nrm`/`PMM`/
+`SW`/`gammafac`) consumed by all five production families: unrestricted, flexible CM, common
+Frechet, CM+ZC, ZC-only.
+
+Dispatches to the in-place, non-allocating `build_compressed_factual!` whenever `ctx` carries an
+attached `cf_workspace::CompressedFactualWorkspace` (via `attach_compressed_factual_workspace`,
+called once per live production context) -- so a repeated call at a new outer point REFILLS the
+SAME `winner`/`wval`/`cf_raw` buffers in place rather than reallocating them. Falls back to the
+allocating `build_compressed_factual` only when no workspace is attached (diagnostic/test
+contexts) -- every real production driver (`c10_d20_production_driver.jl`/`_unified.jl`) always
+attaches one via `attach_compressed_factual_workspace`, so this fallback is not exercised in a
+real driver run; the runtime counter `ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS` must read 0
+across such a run (see `FIVE_FAMILY_INPLACE_COMPRESSED_FACTUAL_GATE_2026-07-27.md`).
+
+Bit-identical output to `build_compressed_factual` given the same `(θ_full, ctx, check_ties)`
+either way -- inherited from `build_compressed_factual!`'s own established guarantee (verified
+originally in `test_compressed_factual_buffer_reuse.jl`; re-verified for this task's own call-site
+changes in `test_shared_economic_moment_state_builder_2026-07-27.jl`).
+
+Family-specific moment builders should call this function and then append their own restriction
+state -- they must NOT run their own winner search, call the allocating `build_compressed_factual`
+directly, allocate a second compressed economic object, or use a separate economic indexing
+convention. `cf_build` (below) is a byte-identical alias kept for the four already-wired call
+sites; new call sites (including this task's fix to the unrestricted family's own hot path,
+`compressed_live.jl::inner_loop_internal_compressed`) should spell the canonical name.
+"""
+function build_economic_moment_state!(θ_full::AbstractVector, ctx; check_ties::Bool = true)
+    return hasproperty(ctx, :cf_workspace) && ctx.cf_workspace isa CompressedFactualWorkspace ?
+        build_compressed_factual!(ctx.cf_workspace, θ_full, ctx; check_ties = check_ties) :
+        build_compressed_factual(θ_full, ctx; check_ties = check_ties)
 end
 
 """
@@ -170,13 +260,9 @@ end
 
 Phase E remediation (production-audit continuation, 2026-07-26): dispatch helper used by the four
 restricted families' `moments!` closures (`cm_hessian_architectures.jl`, `cm_meanzc_moments.jl`,
-`cm_frechet_level.jl`, `cm_originzc_moments.jl`) -- reuses `ctx.cf_workspace` via
-`build_compressed_factual!` when the caller attached one (`attach_compressed_factual_workspace`),
-falls back to the original allocating `build_compressed_factual` otherwise (every pre-existing
-caller that never attaches a workspace is completely unaffected). Bit-identical output either way
-(same guarantee `build_compressed_factual!`'s own docstring already establishes).
+`cm_frechet_level.jl`, `cm_originzc_moments.jl`). As of the shared economic moment-state builder
+task (2026-07-27) this is a byte-identical alias for `build_economic_moment_state!` (see above,
+the canonical name going forward) -- kept so these four existing call sites need no rename.
 """
 cf_build(θ_full::AbstractVector, ctx; check_ties::Bool = true) =
-    hasproperty(ctx, :cf_workspace) ?
-        build_compressed_factual!(ctx.cf_workspace, θ_full, ctx; check_ties = check_ties) :
-        build_compressed_factual(θ_full, ctx; check_ties = check_ties)
+    build_economic_moment_state!(θ_full, ctx; check_ties = check_ties)

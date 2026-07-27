@@ -95,7 +95,12 @@ end
 
 "Same as compressed_live.jl's `inner_loop_internal_compressed`, dispatching to the `_v2` solver loop."
 function inner_loop_internal_compressed_v2(obj, θ_full, ctx)
-    cf = @prof "inner_moment_build_compressed_v2" build_compressed_factual(θ_full, ctx; check_ties = true)
+    # EXPLICIT_REFERENCE / benchmark-only (per this file's own module docstring: "Not wired into
+    # evaluate_fullA_fast's moment_representation dispatch") -- not a PRODUCTION_HOT_PATH, but
+    # updated to the canonical `build_economic_moment_state!` anyway (2026-07-27 task) for
+    # consistency with compressed_live.jl's now-fixed call site; zero behavior change for any
+    # caller whose ctx has no cf_workspace attached (unchanged allocating fallback).
+    cf = @prof "inner_moment_build_compressed_v2" build_economic_moment_state!(θ_full, ctx; check_ties = true)
 
     W = size(obj.U, 1)
     SW = ctx.γ.SamplingWeights[1:W]

@@ -64,6 +64,50 @@ include(joinpath(@__DIR__, "instrumentation.jl"))
 # for build_compressed_factual to use.
 isdefined(Main, :WinnerRefCache) || include(joinpath(@__DIR__, "winner_certificate.jl"))
 
+# ============================================================================
+# Shared economic moment-state builder runtime counters (2026-07-27 task).
+# Defined HERE (not compressed_factual_buffer_reuse.jl) so they exist for every one of the
+# ~50 existing bench/test scripts that `include(compressed_moments.jl)` WITHOUT also including
+# compressed_factual_buffer_reuse.jl -- those scripts still call the allocating
+# `build_compressed_factual` below, and it must be able to increment
+# ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS unconditionally without an UndefVarError.
+# compressed_factual_buffer_reuse.jl's in-place machinery (included after this file in every
+# production driver) increments the remaining five counters.
+# ============================================================================
+"defined-hot-path allocating call count; must be 0 across an ordinary production driver run"
+const ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS = Ref(0)
+"in-place, non-allocating build_compressed_factual! call count"
+const INPLACE_BUILD_COMPRESSED_FACTUAL_CALLS = Ref(0)
+"CompressedFactualWorkspace object creations (build_compressed_factual_workspace calls); should be 1 per live production context after warm-up"
+const ECONOMIC_WORKSPACE_ALLOCATIONS = Ref(0)
+"in-place refills of an existing workspace at a genuinely new outer point (θ_full changed since the workspace's last fill)"
+const ECONOMIC_WORKSPACE_REFILLS = Ref(0)
+"workspace rebuilds triggered by a genuine (D,Ddest,W) shape change on an ALREADY-attached workspace; must be 0 after warm-up"
+const ECONOMIC_WORKSPACE_RESIZES = Ref(0)
+"in-place builds whose θ_full is bit-identical to the immediately preceding build on the SAME workspace -- i.e. the economic state was reconstructed twice for what is functionally the same outer point"
+const DUPLICATE_ECONOMIC_STATE_BUILDS = Ref(0)
+
+"Resets all six shared economic moment-state builder runtime counters to zero. Call once at the start of a measurement window (a gate script, a fresh driver run) -- these are process-global Refs, not reset automatically."
+function reset_economic_moment_state_counters!()
+    ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS[] = 0
+    INPLACE_BUILD_COMPRESSED_FACTUAL_CALLS[] = 0
+    ECONOMIC_WORKSPACE_ALLOCATIONS[] = 0
+    ECONOMIC_WORKSPACE_REFILLS[] = 0
+    ECONOMIC_WORKSPACE_RESIZES[] = 0
+    DUPLICATE_ECONOMIC_STATE_BUILDS[] = 0
+    return nothing
+end
+
+"Snapshot of all six counters as a NamedTuple, for logging in a public driver's final verdict block."
+economic_moment_state_counters() = (
+    allocating_build_compressed_factual_calls = ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS[],
+    inplace_build_compressed_factual_calls = INPLACE_BUILD_COMPRESSED_FACTUAL_CALLS[],
+    economic_workspace_allocations = ECONOMIC_WORKSPACE_ALLOCATIONS[],
+    economic_workspace_refills = ECONOMIC_WORKSPACE_REFILLS[],
+    economic_workspace_resizes = ECONOMIC_WORKSPACE_RESIZES[],
+    duplicate_economic_state_builds = DUPLICATE_ECONOMIC_STATE_BUILDS[],
+)
+
 """
     CompressedFactual
 
@@ -121,8 +165,19 @@ vs the dense path evaluating all D and zeroing losers.
 If `check_ties` and any (draw,destination) has 2+ origins bit-exactly tied at
 the row-min price, throws `TiedWinnerError` (reusing lfix_incremental.jl's type)
 -- the one-winner assumption does not hold there (see MEMORY tie-bug note).
+
+ALLOCATING REFERENCE IMPLEMENTATION (shared economic moment-state builder task,
+2026-07-27): this is the freshly-heap-allocating correctness reference / test helper /
+one-off diagnostic convenience wrapper. It must NOT be called on any repeated production
+hot path -- use `build_economic_moment_state!`/`cf_build` (compressed_factual_buffer_reuse.jl),
+which dispatch to the in-place, non-allocating `build_compressed_factual!` whenever `ctx`
+carries an attached `cf_workspace`. See `ALLOCATING_COMPRESSED_FACTUAL_CALLSITE_AUDIT_2026-07-27.md`
+for the full call-site classification. Every call here increments the runtime counter
+`ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS` (defined below) so a production driver run can be
+audited for accidental use of this allocating path.
 """
 function build_compressed_factual(θ_full::AbstractVector, ctx; check_ties::Bool = true)
+    ALLOCATING_BUILD_COMPRESSED_FACTUAL_CALLS[] += 1
     γo = ctx.γ
     D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     U = ctx.U; W = size(U, 1)

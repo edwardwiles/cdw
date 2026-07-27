@@ -42,6 +42,14 @@
 # rationale). Self-include-guarded, this codebase's own convention.
 isdefined(Main, :fill_core_hessian_upper!) || include(joinpath(@__DIR__, "core_exact_hessian.jl"))
 
+# Shared economic moment-state builder (2026-07-27 task): defensive self-include, this codebase's
+# own established convention (matches cm_production_bundle.jl's identical guard) -- needed for
+# `build_economic_moment_state!`/`CompressedFactualWorkspace`, used below by
+# `inner_loop_internal_compressed` (fixed this task: previously called the always-allocating
+# `build_compressed_factual` directly on EVERY inner solve, even when the production driver had
+# already attached a `ctx.cf_workspace` -- see ALLOCATING_COMPRESSED_FACTUAL_CALLSITE_AUDIT_2026-07-27.md).
+isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))
+
 "Resolved backend/workers/storage for the UNRESTRICTED family's core Hessian -- read by `_callbackEvalH_inner_compressed!` and by `resolve_unrestricted_manifest` so the two can never silently diverge. Production default is the validated destination-pair-owned parallel kernel; set to :dense_reference for anti-regression / emergency-revert comparisons (see task §5). Worker count defaults via `resolve_core_hessian_workers_default()` (2026-07-25 final gate): 20 when >=20 Julia threads are available (measured 13-20% faster than 10, not a tie), else 10, else the bounded available count."
 const UNRESTRICTED_CORE_HESSIAN_BACKEND = Ref{Symbol}(:exact_winner_pair_parallel)
 const UNRESTRICTED_CORE_HESSIAN_WORKERS = Ref{Int}(resolve_core_hessian_workers_default())
@@ -311,12 +319,26 @@ O(W*D^2) structure to compress here either; computed directly rather than
 introducing a dependency on the dense `moments!` path.
 """
 function inner_loop_internal_compressed(obj, θ_full, ctx)
-    # NOTE: build_compressed_factual is the compressed analog of dense's ONE `obj.moments!` call --
-    # timed under the SAME "inner_moment_build[_compressed]" label so the two are directly comparable
-    # in prof_summary() output (an earlier version of this function left this call OUTSIDE any @prof
-    # block, silently under-reporting the compressed build cost as ~0 -- fixed after the benchmark
-    # caught it, see docs/compressed_live_integration_report.md's speedup-measurement section).
-    cf = @prof "inner_moment_build_compressed" build_compressed_factual(θ_full, ctx; check_ties = true)   # may throw TiedWinnerError
+    # NOTE: build_economic_moment_state! is the compressed analog of dense's ONE `obj.moments!`
+    # call -- timed under the SAME "inner_moment_build[_compressed]" label so the two are directly
+    # comparable in prof_summary() output (an earlier version of this function left this call
+    # OUTSIDE any @prof block, silently under-reporting the compressed build cost as ~0 -- fixed
+    # after the benchmark caught it, see docs/compressed_live_integration_report.md's speedup-
+    # measurement section).
+    #
+    # FIX (shared economic moment-state builder task, 2026-07-27): this call previously read
+    # `build_compressed_factual(θ_full, ctx; check_ties=true)` directly -- the ALWAYS-allocating
+    # reference builder -- even though c10_d20_production_driver.jl's `attach_compressed_factual_
+    # workspace` call (§3.1, 2026-07-25) already attaches a campaign-lifetime `ctx.cf_workspace` in
+    # every real production run. This is THE per-inner-solve moment build for the unrestricted
+    # family under `moment_representation=:compressed` (the production driver's default mode) --
+    # i.e. a genuine PRODUCTION_HOT_PATH allocation the 2026-07-25 port task's own remediation
+    # (which fixed the 4 restricted families' `cf_build` call sites) missed for THIS, the 5th,
+    # family. `build_economic_moment_state!` dispatches to the in-place `build_compressed_factual!`
+    # whenever ctx.cf_workspace is attached (bit-identical output either way -- same guarantee
+    # build_compressed_factual!'s docstring establishes), and falls back to the allocating builder
+    # unchanged for any ctx that never attached one (no regression for non-production callers).
+    cf = @prof "inner_moment_build_compressed" build_economic_moment_state!(θ_full, ctx; check_ties = true)   # may throw TiedWinnerError
 
     W = size(obj.U, 1)
     SW = ctx.γ.SamplingWeights[1:W]

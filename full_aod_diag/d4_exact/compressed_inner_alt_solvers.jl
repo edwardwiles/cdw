@@ -201,7 +201,11 @@ for `:hvp`) -- each wrapper asserts this via `KN_get_int_param(kc,"hessopt")`
 rather than silently proceeding with the wrong mode.
 """
 function inner_loop_internal_compressed_variant(obj, θ_full, ctx; variant::Symbol)
-    cf = @prof "inner_moment_build_compressed" build_compressed_factual(θ_full, ctx; check_ties = true)
+    # EXPLICIT_REFERENCE / benchmark-only (Phase 3C alt-solver comparison harness, never wired into
+    # evaluate_fullA_fast's moment_representation dispatch) -- updated to the canonical
+    # `build_economic_moment_state!` anyway (2026-07-27 task) for consistency; unchanged allocating
+    # fallback for any ctx without an attached cf_workspace.
+    cf = @prof "inner_moment_build_compressed" build_economic_moment_state!(θ_full, ctx; check_ties = true)
 
     W = size(obj.U, 1)
     SW = ctx.γ.SamplingWeights[1:W]

@@ -401,10 +401,11 @@ function screened_eval(xf::AbstractVector{Float64}, ctx, rsc::RangedScreenContex
         # dual_bank.jl's select_warm_start/cheap_score, which only ever read `cf`, never store it),
         # so it is safe to serve from the campaign-lifetime workspace when one is attached to ctx.
         # Falls back to the original fresh-allocation path unchanged for any ctx without one.
-        cf_ws = hasproperty(ctx, :cf_workspace) ? ctx.cf_workspace : nothing
+        # (shared economic moment-state builder task, 2026-07-27: this hand-inlined ternary is now
+        # exactly what build_economic_moment_state! does internally -- routed through the canonical
+        # name for a single shared production implementation, zero behavior change.)
         cf_score = try
-            cf_ws === nothing ? build_compressed_factual(θ_full_score, ctx; check_ties = true) :
-                build_compressed_factual!(cf_ws, θ_full_score, ctx; check_ties = true)
+            build_economic_moment_state!(θ_full_score, ctx; check_ties = true)
         catch e
             e isa TiedWinnerError ? nothing : rethrow()
         end
