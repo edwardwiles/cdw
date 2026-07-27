@@ -1,0 +1,40 @@
+δ_star_initial = -0.002486773477940599
+val = 0.002486773477940599
+δ_star_initial_low = -0.002486773477940599
+val = 0.002486773477940599
+δ_star_initial_up = -0.002486773477940599
+δ_star_initial = -0.002486773477940599
+δ_grid = [1]
+δ_grid_filtered = [1]
+---- D20-real-W80000 L=50 contrasts=anchored ----
+PASS  D20-real-W80000 L=50 anchored: dense cctx tagged correctly
+PASS  D20-real-W80000 L=50 anchored: lookup cctx tagged correctly
+PASS  D20-real-W80000 L=50 anchored calib: inner_status agrees (dense=0, lookup=0)
+PASS  D20-real-W80000 L=50 anchored calib: zeta* agrees (diff=1.3877787807814457e-17)
+PASS  D20-real-W80000 L=50 anchored calib: lambda* agrees (max abs diff=2.9655796048022598e-12)
+PASS  D20-real-W80000 L=50 anchored calib: m_weights (obj.arg1) agrees (max abs diff=1.5127454844332533e-11)
+PASS  D20-real-W80000 L=50 anchored calib: Delta_dual agrees (diff=1.734723475976807e-17)
+    dense: Delta_dual=0.015817469186355126  | lookup: Delta_dual=0.015817469186355144
+PASS  D20-real-W80000 L=50 anchored perturbed: inner_status agrees (dense=0, lookup=0)
+PASS  D20-real-W80000 L=50 anchored perturbed: zeta* agrees (diff=2.9976021664879227e-14)
+PASS  D20-real-W80000 L=50 anchored perturbed: lambda* agrees (max abs diff=2.4190649483557536e-12)
+PASS  D20-real-W80000 L=50 anchored perturbed: m_weights (obj.arg1) agrees (max abs diff=3.671551951356378e-11)
+PASS  D20-real-W80000 L=50 anchored perturbed: Delta_dual agrees (diff=1.1102230246251565e-16)
+    dense: Delta_dual=0.25014269468885597  | lookup: Delta_dual=0.2501426946888561
+---- D20-real-W80000 L=50 contrasts=orthonormal ----
+PASS  D20-real-W80000 L=50 orthonormal: dense cctx tagged correctly
+PASS  D20-real-W80000 L=50 orthonormal: lookup cctx tagged correctly
+PASS  D20-real-W80000 L=50 orthonormal calib: inner_status agrees (dense=0, lookup=0)
+PASS  D20-real-W80000 L=50 orthonormal calib: zeta* agrees (diff=1.700029006457271e-16)
+PASS  D20-real-W80000 L=50 orthonormal calib: lambda* agrees (max abs diff=2.5718593921197908e-12)
+PASS  D20-real-W80000 L=50 orthonormal calib: m_weights (obj.arg1) agrees (max abs diff=1.482325373558524e-11)
+PASS  D20-real-W80000 L=50 orthonormal calib: Delta_dual agrees (diff=6.938893903907228e-18)
+    dense: Delta_dual=0.015817469186355147  | lookup: Delta_dual=0.015817469186355154
+PASS  D20-real-W80000 L=50 orthonormal perturbed: inner_status agrees (dense=0, lookup=0)
+PASS  D20-real-W80000 L=50 orthonormal perturbed: zeta* agrees (diff=1.7208456881689926e-15)
+PASS  D20-real-W80000 L=50 orthonormal perturbed: lambda* agrees (max abs diff=2.7166047189552955e-12)
+PASS  D20-real-W80000 L=50 orthonormal perturbed: m_weights (obj.arg1) agrees (max abs diff=3.3507419061606925e-11)
+PASS  D20-real-W80000 L=50 orthonormal perturbed: Delta_dual agrees (diff=3.885780586188048e-16)
+    dense: Delta_dual=0.2501426946888556  | lookup: Delta_dual=0.25014269468885597
+======================================== SUMMARY (d20) ========================================
+ALL PASS

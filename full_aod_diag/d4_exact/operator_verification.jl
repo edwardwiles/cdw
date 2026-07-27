@@ -70,3 +70,75 @@ function verify_inner_solution_operator_originzc!(zeta::Float64, lambda::Abstrac
     record_operator_verification!()
     return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
 end
+
+isdefined(Main, :CMLookupState) || include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
+
+"""
+    verify_inner_solution_operator_cmmeanzc!(zeta, lambda, cf, zc_op, zc_layout, nu_vec, L, nO,
+        origins, refIndex1, bins, R, obj, W) -> NamedTuple
+
+port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26 Phase A item 8: CM+ZC
+analogue of `verify_inner_solution_operator_originzc!`, extended to `G=[E|Z|C]` (economic + Z
+restriction + CM-grid). Reuses the SAME free-function kernels `CMMeanZCOperatorState`'s own FG
+callable calls (`apply_contrast!`/`suffix_sums!`/`cumulative_forward_contribution!`/
+`build_weighted_histogram!`/`cumulative_backward_gradient!`, cm_lookup_kernels.jl -- unchanged,
+already independently validated) against FRESH scratch buffers allocated here, never touching the
+live `CMMeanZCOperatorState`'s own `st.arg0`/`st.hist_h`/etc -- same independence contract as the
+origin-ZC verifier. `lambda = [lambda_E; lambda_mean; lambda_pair; lambda_cm]`, matching
+`CMMeanZCOperatorState`'s own `x` layout (minus `zeta`).
+"""
+function verify_inner_solution_operator_cmmeanzc!(zeta::Float64, lambda::AbstractVector{Float64},
+        cf::CompressedFactual, zc_op::ZCRestrictionOperator, zc_layout, nu_vec::AbstractVector{Float64},
+        L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int, bins::Matrix{<:Unsigned},
+        R::Union{Nothing,Matrix{Float64}}, obj, W::Int)
+    ncore1 = cf.oci - 1
+    ncm = nO * L
+    λ_E = @view lambda[1:ncore1]
+    λ_mean = @view lambda[ncore1+1:ncore1+n_mean(zc_op)]
+    λ_pair = @view lambda[ncore1+n_mean(zc_op)+1:ncore1+n_mean(zc_op)+n_pair(zc_op)]
+    λ_cm = @view lambda[ncore1+n_mean(zc_op)+n_pair(zc_op)+1:ncore1+n_mean(zc_op)+n_pair(zc_op)+ncm]
+
+    econ_ws = economic_operator_workspace(cf)
+    zc_ws = ZCRestrictionWorkspace(zc_op)
+    refresh_zc_targets!(zc_ws, zc_op, zc_layout, nu_vec)
+
+    r = fill(-zeta, W)
+    econ_buf = zeros(W)
+    economic_forward!(econ_buf, λ_E, cf, econ_ws)
+    r .-= econ_buf
+    restriction_forward!(r, λ_mean, λ_pair, zc_op, zc_ws)
+
+    D_bins = size(bins, 2)
+    nbins = L + 1
+    λmat_stored = reshape(λ_cm, nO, L)
+    λmat_block = zeros(nO, L)
+    apply_contrast!(λmat_block, λmat_stored, R)
+    λmat_ext = zeros(nO, L + 1)
+    suffix_sums!(λmat_ext, λmat_block)
+    cm_contrib = zeros(W)
+    cumulative_forward_contribution!(cm_contrib, bins, refIndex1, origins, λmat_ext)
+    r .-= cm_contrib
+
+    Psi_r = similar(r); obj.Psi!(Psi_r, r)
+    f = sum(Psi_r) / W + zeta
+
+    dPsi_r = similar(r); obj.dPsi!(dPsi_r, r)
+    g_E = zeros(ncore1)
+    economic_transpose!(g_E, dPsi_r, cf, econ_ws)
+    g_E .*= -(1.0 / W)
+    g_mean = zeros(n_mean(zc_op)); g_pair = zeros(n_pair(zc_op))
+    restriction_transpose!(g_mean, g_pair, dPsi_r, zc_op, zc_ws)
+
+    hist_partials = [zeros(D_bins, nbins)]
+    hist_h = zeros(D_bins, nbins)
+    build_weighted_histogram!(hist_h, hist_partials, bins, dPsi_r, D_bins, nbins)
+    Hpre = zeros(D_bins, L)
+    g_block = zeros(nO, L)
+    cumulative_backward_gradient!(g_block, Hpre, hist_h, refIndex1, origins, L, W)
+    g_stored = zeros(nO, L)
+    apply_contrast!(g_stored, g_block, R)
+
+    g_lambda = vcat(g_E, g_mean, g_pair, vec(g_stored))
+    record_operator_verification!()
+    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
+end
