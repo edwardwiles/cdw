@@ -1,0 +1,40 @@
+=== git branch/HEAD ===
+feature/shared-outer-a-gradient-2026-07-27
+2781583dcc2b8252678d7f6715a6995b5d501312
+
+=== git log (this task's commits) ===
+2781583 Wire ZC-only family onto the shared economic_A_gradient! backend (default)
+88aa0c4 Non-allocating weight_norm_resid diagnostic in verified-state (4 of 5 families)
+c5cfddc Add shared economic_A_gradient! entry point: fixed 2-slot scratch eliminates the pooled gradient's last confirmed W-scale allocation sites
+281e830 Fix pre-existing D-vs-Ddest stride bug in gradient_workspace.jl's dest_contrib_incremental_o1!
+a69b32d Phase A item 8: extend operator verification to CM+ZC + real D=20/W=80,000 confirmation log for common-Frechet fix
+
+=== git status ===
+?? docs/A_GRADIENT_BEFORE_AFTER_PERFORMANCE_2026-07-27.md
+?? docs/A_GRADIENT_D20_ALLOCATION_RECONCILIATION_2026-07-27.md
+?? docs/FIVE_FAMILY_SHARED_A_GRADIENT_WIRING_2026-07-27.md
+?? docs/HOT_OPERATOR_STATE_TYPE_STABILITY_FIXES_2026-07-27.md
+?? docs/PERSISTENT_LFIX_BASE_WORKSPACE_2026-07-27.md
+?? docs/SHARED_OUTER_A_GRADIENT_ARCHITECTURE_2026-07-27.md
+?? docs/VERIFIED_STATE_ALLOCATION_FIXES_2026-07-27.md
+?? docs/key_results_shared_a_gradient_2026-07-27/
+
+=== git diff --stat vs base a69b32d ===
+ .../bench_shared_a_gradient_reconciliation_d4.jl   | 113 +++++
+ full_aod_diag/d4_exact/cm_frechet_cplus.jl         |   7 +-
+ full_aod_diag/d4_exact/cm_meanzc_production.jl     |   7 +-
+ full_aod_diag/d4_exact/cm_originzc_production.jl   |  80 +++-
+ full_aod_diag/d4_exact/cm_production_bundle.jl     |  11 +-
+ full_aod_diag/d4_exact/fast_range_screen.jl        |   8 +-
+ full_aod_diag/d4_exact/gradient_workspace.jl       |  24 +-
+ full_aod_diag/d4_exact/shared_a_gradient.jl        | 507 +++++++++++++++++++++
+ .../test_originzc_shared_a_gradient_gate.jl        |  69 +++
+ full_aod_diag/d4_exact/test_shared_a_gradient.jl   |  92 ++++
+ .../d4_exact/test_shared_a_gradient_d20.jl         | 114 +++++
+ 11 files changed, 1012 insertions(+), 20 deletions(-)
+
+=== environment ===
+Julia: julia version 1.12.6
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 (per project standing rule)
+Host: demand.mit.edu
+Date: Mon Jul 27 04:09:29 EDT 2026

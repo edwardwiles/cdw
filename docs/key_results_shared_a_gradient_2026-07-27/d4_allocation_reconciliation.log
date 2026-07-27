@@ -1,0 +1,64 @@
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+D=4, D2=16, W=8000
+
+--- Component-level breakdown (warmed @allocated) ---
+build_lfix_base_cache (fresh, once per gradient call):           4.4818 MB
+coord -> #affected (o,d) cells: [2 => 2, 3 => 2, 4 => 2, 5 => 2, 6 => 2, 7 => 2, 8 => 2, 9 => 2, 10 => 2, 11 => 2, 12 => 2, 13 => 2, 14 => 2, 15 => 2, 16 => 2]
+select_bandwidth (single coordinate, cold, k=2):                 0.7739 MB
+select_bandwidth summed over ALL 15 coordinates (cold cache):    12.6449 MB
+a_block_fd_component (ORIGINAL, allocating), 1 coordinate:        1.0292 MB
+a_block_fd_component_ws! (pooled), 1 coordinate:                  0.0041 MB
+
+--- Full-gradient totals, h_mode=:cached, COLD bandwidth_cache every call (worst case: forces select_bandwidth on every coordinate every call) ---
+composite_gradient_at_fast_pooled, COLD bandwidth_cache (function pre-warmed, fresh Dict):    19.1250 MB
+
+--- Full-gradient totals, h_mode=:cached, WARM bandwidth_cache reused across calls (steady-state production pattern) ---
+composite_gradient_at_fast_pooled, WARM bandwidth_cache:          6.4742 MB
+
+--- Reconciliation: cold-call total should approx = build_lfix_base_cache + sum(select_bandwidth) + sum(a_block_fd_component_ws!) ---
+build_lfix_base_cache:            4.4818 MB
+sum(select_bandwidth), all k:    12.6449 MB
+sum(a_block_fd_component_ws!), all k:     1.9900 MB
+RECONCILED SUM:                  19.1167 MB
+MEASURED pooled COLD total:      19.1250 MB
+MEASURED pooled WARM total:       6.4742 MB
+
+done.
+
+--- Per-coordinate a_block_fd_component_ws! breakdown (diagnosing the 1.99MB/15-coord total) ---
+k= 2  cells=[(1, 1), (4, 4)]     bytes=    4096 (0.0041 MB)
+k= 3  cells=[(2, 1), (4, 4)]     bytes=    4096 (0.0041 MB)
+k= 4  cells=[(3, 1), (4, 4)]     bytes=    4096 (0.0041 MB)
+k= 5  cells=[(4, 1), (4, 4)]     bytes=    4096 (0.0041 MB)
+k= 6  cells=[(1, 2), (4, 4)]     bytes=    4096 (0.0041 MB)
+k= 7  cells=[(2, 2), (4, 4)]     bytes=    4096 (0.0041 MB)
+k= 8  cells=[(3, 2), (4, 4)]     bytes=    4096 (0.0041 MB)
+k= 9  cells=[(4, 2), (4, 4)]     bytes=    4096 (0.0041 MB)
+k=10  cells=[(1, 3), (4, 4)]     bytes=    4096 (0.0041 MB)
+k=11  cells=[(2, 3), (4, 4)]     bytes=    4096 (0.0041 MB)
+k=12  cells=[(3, 3), (4, 4)]     bytes=    4096 (0.0041 MB)
+k=13  cells=[(4, 3), (4, 4)]     bytes=    4096 (0.0041 MB)
+k=14  cells=[(1, 4), (4, 4)]     bytes=  646704 (0.6467 MB)
+k=15  cells=[(2, 4), (4, 4)]     bytes=  646704 (0.6467 MB)
+k=16  cells=[(3, 4), (4, 4)]     bytes=  646704 (0.6467 MB)
