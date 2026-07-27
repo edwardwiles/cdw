@@ -24,6 +24,11 @@ using LinearAlgebra: BLAS, dot, norm
 # port/shared-inner-fg-operator-and-verification-2026-07-26: opt-in operator FG (`_meanzc_fg_dispatch`,
 # inner_fg_backend=:operator on CMBinHessCtx) -- self-guarded include, this codebase's own convention.
 isdefined(Main, :_meanzc_fg_dispatch) || include(joinpath(@__DIR__, "cm_meanzc_lookup_production.jl"))
+# shared-FG-verification-and-A-gradient release (2026-07-27): shared_a_gradient.jl provides
+# economic_A_gradient!/EconomicAGradientWorkspace/get_or_build_econ_a_grad_ws, this family's
+# DEFAULT (g,A_od)-block gradient backend (see cm_meanzc_production_gradient below) -- mirrors
+# origin-ZC's own wiring in cm_originzc_production.jl exactly.
+isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))
 
 """
     build_cm_meanzc_bin_ctx(ctx, aug) -> CMBinHessCtx
@@ -286,25 +291,51 @@ function build_lfix_base_cache_cm_meanzc(x_free0::AbstractVector, ctx_cm, base::
 end
 
 """
-    cm_meanzc_production_gradient(x_free0, νvec, pcx, ctx, pe; base=nothing, verify=nothing, kwargs...) -> (g_ext, meta)
+    cm_meanzc_production_gradient(x_free0, νvec, pcx, ctx, pe; base=nothing, verify=nothing,
+                                   gradient_backend=:shared_inplace_pooled, econ_ws=nothing, kwargs...) -> (g_ext, meta)
 
 One-call entry point for the extended arms' full outer gradient: the (g,A_od)
-block via the UNCHANGED `composite_gradient_at_fast` (every ν_k held fixed,
-folded into q0 once, matching `composite_gradient_at_fast_cm`'s own
-contract), PLUS the analytic `∂Delta_dual/∂η_{ν,k}` vector appended as the
-LAST `K_mean` components. `g_ext` has length `D^2 + K_mean` (`D^2` = the
+block, PLUS the analytic `∂Delta_dual/∂η_{ν,k}` vector appended as the
+LAST `K_mean` components. `g_ext` has length `D*Ddest + K_mean` (`D*Ddest` = the
 w-space (g,A_od) block's own dimension, matching `composite_gradient_at_fast`'s
 own return convention -- NOT `length(x_free0)`). If `verify` (from
 `cm_meanzc_production_value_verified`) is not supplied, one extra verified
 inner solve is performed to get `m_mean`.
+
+`gradient_backend` (shared-FG-verification-and-A-gradient release, 2026-07-27): controls how the
+(g,A_od) block is computed, mirroring `cm_originzc_production_gradient`'s own kwarg exactly.
+  - `:shared_inplace_pooled` (DEFAULT): the shared `economic_A_gradient!` entry point
+    (shared_a_gradient.jl) -- writes directly into a preallocated buffer, no per-call W-scale
+    allocation for the winner-flip/2-origin-same-destination cases (`TwoOriginScratch`, not a
+    Dict). Every ν_k is held fixed throughout (unchanged contract), folded into `cache.q0` once by
+    `build_lfix_base_cache_cm_meanzc` exactly as the prior `composite_gradient_at_fast` path did --
+    `economic_A_gradient!` accepts that pre-built cache via its own `cache=` kwarg unchanged.
+  - `:legacy_unbuffered`: the ORIGINAL, fully-allocating `composite_gradient_at_fast` -- kept ONLY
+    as an explicit reference/debug backend.
+
+`econ_ws`: an `EconomicAGradientWorkspace` to reuse across calls; if not supplied, the shared
+process-wide cache keyed by `W` (`get_or_build_econ_a_grad_ws`, shared_a_gradient.jl) is used --
+the SAME cache origin-ZC's own wiring uses, so a driver running both families at the same `W`
+shares one workspace rather than allocating two.
 """
 function cm_meanzc_production_gradient(x_free0::AbstractVector, νvec::AbstractVector{Float64}, pcx, ctx, pe;
-        base::Union{Nothing,BaseDualState} = nothing, verify = nothing, kwargs...)
+        base::Union{Nothing,BaseDualState} = nothing, verify = nothing,
+        gradient_backend::Symbol = :shared_inplace_pooled,
+        econ_ws::Union{Nothing,EconomicAGradientWorkspace} = nothing, kwargs...)
     if base === nothing || verify === nothing
         base, verify = archC_meanzc_verified_state(x_free0, νvec, pcx.ctx_cm, pcx.cctx)
     end
     cache = build_lfix_base_cache_cm_meanzc(x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins, νvec)
-    g_econ, meta = composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    if gradient_backend === :shared_inplace_pooled
+        D = pcx.ctx_cm.D; Ddest = hasproperty(pcx.ctx_cm, :D_dest) ? pcx.ctx_cm.D_dest : pcx.ctx_cm.D
+        ws = econ_ws === nothing ? get_or_build_econ_a_grad_ws(cache.W) : econ_ws
+        g_econ = zeros(D * Ddest)
+        meta = economic_A_gradient!(g_econ, base, pcx.ctx_cm, pe, ws; cache = cache, kwargs...)
+    elseif gradient_backend === :legacy_unbuffered
+        g_econ, meta = composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    else
+        error("cm_meanzc_production_gradient: gradient_backend must be :shared_inplace_pooled|:legacy_unbuffered, got $gradient_backend")
+    end
     d_eta = d_delta_dual_d_eta_nu_vec(base.λstar, pcx.aug, νvec; mean_m = verify.m_mean)
     return vcat(g_econ, d_eta), meta
 end

@@ -381,6 +381,34 @@ function EconomicAGradientWorkspace(W::Int; nT::Int = Threads.maxthreadid())
 end
 
 """
+    get_or_build_econ_a_grad_ws(W::Int) -> EconomicAGradientWorkspace
+
+Process-wide cache of one `EconomicAGradientWorkspace` per problem scale `W`, built lazily on
+first use and reused thereafter (shared outer-A-gradient task §5: "Do not construct this
+workspace or its thread-local arrays on every outer gradient"). Family-agnostic -- moved here
+(shared-FG-verification-and-A-gradient release, 2026-07-27) from `cm_originzc_production.jl`,
+where it originated as ZC-only's own helper, so every family wiring onto `economic_A_gradient!`
+(origin-ZC, CM+ZC, flexible-CM, ...) can share ONE cache keyed by `W` instead of each family
+re-declaring its own -- exactly this task's own "one shared implementation, not family copies"
+principle applied to the workspace cache itself, not just the gradient math. NOT a per-context
+cache -- if two DIFFERENT live contexts at the SAME `W` both call a family gradient with the
+shared backend, they will share this one workspace. This is safe (no data race, no cross-
+contamination of results -- every buffer is fully overwritten before being read on each call) as
+long as no family's own outer solver issues two of ITS OWN gradient calls concurrently against the
+SAME workspace, true of every current production driver (no threaded multi-context driver exists
+for any of the restricted families). A caller that DOES need strict per-context isolation should
+build its own `EconomicAGradientWorkspace` and pass it via `econ_ws=`.
+"""
+const _ECON_A_GRAD_WS_CACHE = Dict{Int,EconomicAGradientWorkspace}()
+function get_or_build_econ_a_grad_ws(W::Int)
+    ws = get(_ECON_A_GRAD_WS_CACHE, W, nothing)
+    ws === nothing || return ws
+    ws = EconomicAGradientWorkspace(W)
+    _ECON_A_GRAD_WS_CACHE[W] = ws
+    return ws
+end
+
+"""
     economic_A_gradient!(grad_A, base, ctx, pe, ws::EconomicAGradientWorkspace;
                           cache=nothing, threaded=false, h_mode=:cached, h0=0.01,
                           multi_method=:top3) -> meta

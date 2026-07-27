@@ -31,28 +31,10 @@ isdefined(Main, :_originzc_fg_dispatch) || include(joinpath(@__DIR__, "cm_origin
 # cm_originzc_production_gradient below).
 isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))
 
-"""
-    get_or_build_econ_a_grad_ws(W::Int) -> EconomicAGradientWorkspace
-
-Process-wide cache of one `EconomicAGradientWorkspace` per problem scale `W`, built lazily on
-first use and reused thereafter (task §5: "Do not construct this workspace or its thread-local
-arrays on every outer gradient"). NOT a per-context cache -- if two DIFFERENT live contexts at the
-SAME `W` both call `cm_originzc_production_gradient` with the shared backend, they will share this
-one workspace. This is safe (no data race, no cross-contamination of results -- every buffer is
-fully overwritten before being read on each call) as long as this arm's own outer solver never
-issues two of ITS OWN gradient calls concurrently against the SAME workspace, which is true of
-every current production driver for this family (no threaded multi-context driver exists). A
-caller that DOES need strict per-context isolation should build its own `EconomicAGradientWorkspace`
-and pass it via `econ_ws=`.
-"""
-const _ECON_A_GRAD_WS_CACHE = Dict{Int,EconomicAGradientWorkspace}()
-function get_or_build_econ_a_grad_ws(W::Int)
-    ws = get(_ECON_A_GRAD_WS_CACHE, W, nothing)
-    ws === nothing || return ws
-    ws = EconomicAGradientWorkspace(W)
-    _ECON_A_GRAD_WS_CACHE[W] = ws
-    return ws
-end
+# get_or_build_econ_a_grad_ws (shared-FG-verification-and-A-gradient release, 2026-07-27): moved
+# to shared_a_gradient.jl -- it was ZC-only-only in name only (nothing in its own body is
+# ZC-specific), and every family wiring onto economic_A_gradient! needs the identical process-wide
+# per-W cache, not a per-family copy. See that file's own docstring for the full rationale.
 
 """
     build_originzc_production_context(ctx, CS, layout) -> (ctx_cm, aug)
