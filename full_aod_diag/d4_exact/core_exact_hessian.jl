@@ -147,12 +147,17 @@ common-Fréchet's CM-grid block (`H_EC`, identical math to flexible-CM's own), p
 `winner_pair_cross_hessian_colsum!`/`winner_pair_cross_hessian_esum!` primitives
 (`winner_pair_cross_hessian.jl`) for the level-anchor block's `H_E,level` (`H_CM,level`/
 `H_level,level` need no change -- they never read `E` to begin with, see
-`cm_frechet_hessian.jl`'s own header comment). Kept `:dense_reference` until this family's own D=4 +
-real D=20/W=80,000/L=50 wiring gates pass -- see
-docs/COMMON_FRECHET_WINNER_AWARE_HER_RELEASE_2026-07-27.md for the gate results and the flip
-decision actually made.
+`cm_frechet_hessian.jl`'s own header comment). Flipped `:dense_reference` -> `:winner_bin`
+(2026-07-27) after this family's own D=4 (114/114 checks, max|ΔH| in [3.6e-15, 1.2e-14]) and real
+D=20/W=80,000/L=50 (44/44 checks, both contrasts, calib + near-delta1-perturbed + a hard point
+x_free0.*1.01, both serial and threaded_v2 architectures, max|ΔH| in [7.2e-12, 1.1e-10] against
+Hessian scale in [1590, 5198]) wiring gates ALL PASSED, complete inner-solve status/dual-point
+agreeing throughout -- see docs/COMMON_FRECHET_WINNER_AWARE_HER_RELEASE_2026-07-27.md for the full
+gate results, including a harness bug found and fixed along the way (the first D20 hard-point run
+compared Hessians built from two different theta_full's, not a real backend disagreement -- see
+that doc and test_frechet_winner_bin_her_wiring_d20.jl's own commit message for the full trace).
 """
-const CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
 const ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
 const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_workers_default())
 const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
