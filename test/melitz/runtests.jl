@@ -27,6 +27,7 @@ using DelimitedFiles
 const MELITZ_DIR = joinpath(@__DIR__, "..", "..", "src", "melitz")
 include(joinpath(dirname(dirname(@__DIR__)), "misc", "doubleDiff.jl"))
 include(joinpath(MELITZ_DIR, "profiling.jl"))
+include(joinpath(MELITZ_DIR, "backend_config.jl"))
 include(joinpath(MELITZ_DIR, "types.jl"))
 include(joinpath(MELITZ_DIR, "bounded_cache.jl"))
 include(joinpath(MELITZ_DIR, "inner_solve_config.jl"))
@@ -36,6 +37,7 @@ include(joinpath(MELITZ_DIR, "equilibrium.jl"))
 include(joinpath(MELITZ_DIR, "moments.jl"))
 include(joinpath(MELITZ_DIR, "sorted_tail.jl"))
 include(joinpath(MELITZ_DIR, "sorted_dual_argument.jl"))
+include(joinpath(MELITZ_DIR, "moment_operator.jl"))
 include(joinpath(MELITZ_DIR, "delta_star.jl"))
 include(joinpath(MELITZ_DIR, "affine_cutoff.jl"))
 include(joinpath(MELITZ_DIR, "log_cutoff_param.jl"))
@@ -51,8 +53,13 @@ include(joinpath(MELITZ_DIR, "localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "argument_localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "direct_gradient.jl"))
 include(joinpath(MELITZ_DIR, "sorted_crossing_gradient.jl"))
+include(joinpath(MELITZ_DIR, "cc_bundle.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(MELITZ_DIR, "nuisance_profile.jl"))
+include(joinpath(MELITZ_DIR, "predictor_corrector.jl"))   # 2026-07-26 closure (Phase 3): was
+    # not previously included in this test file at all (zero test coverage) -- now included
+    # so the kappa_of_g -> kappa_ratio_of_g / kappa -> kappa_ratio rename in this file is
+    # actually compiled and exercisable, not merely assumed correct.
 
 # ============================================================================
 # 1. Pareto draws
@@ -910,6 +917,360 @@ end
     end
 end
 
+@testset "Matrix-free moment operator (2026-07-26)" begin
+    using LinearAlgebra: dot, Diagonal
+
+    function _check_operator_against_dense(p, eq, cf, layout, z; ntrials=15, atol=1e-8, rtol=1e-8, seed=99)
+        Wt = size(z, 1)
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        K = zeros(Wt); G = zeros(Wt, layout.num_moments)
+        melitz_moments!(K, G, p, eq, cf, z, layout)
+        op = build_melitz_moment_operator(sctx, layout)
+        melitz_update_moment_operator!(op, p, eq, cf)
+
+        rng = MersenneTwister(seed)
+        u = zeros(Wt)
+        g = zeros(layout.num_moments)
+        for trial in 1:ntrials
+            zeta = randn(rng) * 50
+            mu = randn(rng, layout.num_moments)
+            u_dense = melitz_dense_dual_argument(zeta, mu, K, G)
+            mul_G!(u, op, zeta, mu)
+            @test isapprox(u, u_dense; atol=atol, rtol=rtol)
+
+            v = randn(rng, Wt)
+            g_dense = melitz_dense_Gt_v(v, G)
+            mul_Gt!(g, op, v)
+            @test isapprox(g, g_dense; atol=atol, rtol=rtol)
+        end
+
+        # Per-column unit-mu extraction: mul_G! at mu=e_k, zeta=0 must reproduce -G[:,k] exactly.
+        mu_unit = zeros(layout.num_moments)
+        for k in (1, layout.num_moments, cld(layout.num_moments, 2))
+            fill!(mu_unit, 0.0); mu_unit[k] = 1.0
+            mul_G!(u, op, 0.0, mu_unit)
+            @test isapprox(u, -G[:, k]; atol=atol, rtol=rtol)
+        end
+
+        # Per-row unit-v extraction: mul_Gt! at v=e_s must reproduce G[s,:] exactly.
+        v_unit = zeros(Wt)
+        for s in (1, Wt, cld(Wt, 2))
+            fill!(v_unit, 0.0); v_unit[s] = 1.0
+            mul_Gt!(g, op, v_unit)
+            @test isapprox(g, G[s, :]; atol=atol, rtol=rtol)
+        end
+
+        return op, K, G
+    end
+
+    @testset "D=4 (calibrated fixture, truncated W)" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        z = FIXTURE.z_draws[1:3000, :]
+        _check_operator_against_dense(p, eq, cf, LAYOUT, z)
+    end
+
+    @testset "D=4 random A perturbations" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        D = p.D
+        z = FIXTURE.z_draws[1:3000, :]
+        rng = MersenneTwister(4242)
+        for trial in 1:3
+            A2 = p.A .* exp.(0.05 .* randn(rng, D, D))
+            p2 = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, A2, p.f, p.gamma_prime_target)
+            cutoff2 = melitz_baseline_cutoff(A2, p.f, p.w, p.tau, eq.expenditure, p.sigma)
+            eq2 = MelitzEquilibrium(eq.expenditure, eq.price_power, cutoff2, eq.trade_flow)
+            _check_operator_against_dense(p2, eq2, cf, LAYOUT, z; ntrials=5, seed=100 + trial)
+        end
+    end
+
+    @testset "D=10 (fresh fixture)" begin
+        f10 = generate_fake_melitz_data(; D=10, sigma=2.5, theta_star=6.8, target_country=3, seed=8, W=4000)
+        p, eq, cf = f10.primitives, f10.equilibrium, f10.counterfactual
+        layout10 = MelitzMomentLayout(p.D)
+        _check_operator_against_dense(p, eq, cf, layout10, f10.z_draws)
+    end
+
+    @testset "Operator update: coef/lambda/order/rank/bin agree with dense reconstruction" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        D = p.D
+        z = FIXTURE.z_draws[1:3000, :]
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        op = build_melitz_moment_operator(sctx, LAYOUT)
+        melitz_update_moment_operator!(op, p, eq, cf)
+
+        for o in 1:D, d in 1:D
+            C_od = melitz_C(p.w[o], p.tau[o, d], p.A[o, d], p.sigma, eq.expenditure[d])
+            @test isapprox(op.coef[o, d], C_od / eq.expenditure[d]; atol=1e-12)
+            @test isapprox(op.lambda[o, d], eq.trade_flow[o, d] / eq.expenditure[d]; atol=1e-12)
+        end
+
+        for o in 1:D
+            @test sort(op.order[:, o]) == collect(1:D)
+            for d in 1:D
+                @test op.order[op.rank[d, o], o] == d
+            end
+            @test issorted(eq.cutoff[o, :][op.order[:, o]])
+        end
+
+        # bin[s,o] must equal the exact count of destinations active for draw s at origin o.
+        Wt = size(z, 1)
+        for o in 1:D
+            n_check = 0
+            for s in 1:min(Wt, 200)
+                n_active = count(d -> eq.cutoff[o, d] < z[s, o], 1:D)
+                @test op.bin[s, o] == n_active
+                n_check += 1
+            end
+            @test n_check > 0
+        end
+    end
+
+    @testset "Guards: stale D/sigma rejected" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        z = FIXTURE.z_draws[1:1000, :]
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        op = build_melitz_moment_operator(sctx, LAYOUT)
+        melitz_update_moment_operator!(op, p, eq, cf)
+
+        sctx_bad_sigma = build_melitz_sorted_tail_context(z, p.sigma + 1.0)
+        op_bad = build_melitz_moment_operator(sctx_bad_sigma, LAYOUT)
+        @test_throws ArgumentError melitz_update_moment_operator!(op_bad, p, eq, cf)
+
+        @test_throws ArgumentError mul_G!(zeros(999), op, 0.0, zeros(LAYOUT.num_moments))
+        @test_throws ArgumentError mul_G!(zeros(size(z,1)), op, 0.0, zeros(3))
+        @test_throws ArgumentError mul_Gt!(zeros(3), op, zeros(size(z,1)))
+        @test_throws ArgumentError mul_Gt!(zeros(LAYOUT.num_moments), op, zeros(999))
+    end
+
+    @testset "Zero-allocation callbacks after warmup (D=4)" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        z = FIXTURE.z_draws[1:3000, :]
+        Wt = size(z, 1)
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        op = build_melitz_moment_operator(sctx, LAYOUT)
+        melitz_update_moment_operator!(op, p, eq, cf)
+
+        u = zeros(Wt); g = zeros(LAYOUT.num_moments)
+        mu = randn(MersenneTwister(1), LAYOUT.num_moments)
+        v = randn(MersenneTwister(2), Wt)
+
+        mul_G!(u, op, 1.0, mu)   # warmup
+        mul_Gt!(g, op, v)        # warmup
+
+        bytes_G = @allocated mul_G!(u, op, 1.0, mu)
+        bytes_Gt = @allocated mul_Gt!(g, op, v)
+        @test bytes_G == 0
+        @test bytes_Gt == 0
+    end
+
+    @testset "Phase 6/7 (scoped prototype): same-origin weighted-Gram block vs dense R'*S*R (D=4, D=10)" begin
+        function _check_same_origin_block(p, eq, cf, layout, z; seed=321)
+            D = p.D
+            Wt = size(z, 1)
+            K = zeros(Wt); G = zeros(Wt, layout.num_moments)
+            melitz_moments!(K, G, p, eq, cf, z, layout)
+            R = copy(G)
+            for o in 1:D, d in 1:D
+                col = layout.trade_index[o, d]
+                lambda_od = eq.trade_flow[o, d] / eq.expenditure[d]
+                R[:, col] .+= lambda_od
+            end
+            sctx = build_melitz_sorted_tail_context(z, p.sigma)
+            op = build_melitz_moment_operator(sctx, layout)
+            melitz_update_moment_operator!(op, p, eq, cf)
+
+            rng = MersenneTwister(seed)
+            S = rand(rng, Wt) .+ 0.1   # positive curvature weights, like ddPsi! output
+            Hblock = zeros(D, D)
+            for o in 1:D
+                melitz_same_origin_weighted_block!(Hblock, op, o, S)
+                R_o = @view R[:, layout.trade_index[o, :]]
+                dense_block = R_o' * Diagonal(S) * R_o
+                for d in 1:D, dp in d:D
+                    @test isapprox(Hblock[d, dp], dense_block[d, dp]; atol=1e-8, rtol=1e-6)
+                end
+            end
+
+            # allocation check (D=4/D=10 scale)
+            melitz_same_origin_weighted_block!(Hblock, op, 1, S)  # warmup
+            bytes = @allocated melitz_same_origin_weighted_block!(Hblock, op, 1, S)
+            @test bytes == 0
+        end
+
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        _check_same_origin_block(p, eq, cf, LAYOUT, FIXTURE.z_draws[1:3000, :])
+
+        f10 = generate_fake_melitz_data(; D=10, sigma=2.5, theta_star=6.8, target_country=3, seed=8, W=4000)
+        layout10 = MelitzMomentLayout(f10.primitives.D)
+        _check_same_origin_block(f10.primitives, f10.equilibrium, f10.counterfactual, layout10, f10.z_draws)
+    end
+
+    @testset "Phase 7/8/9 (2026-07-26): full matrix-free weighted Gram (complete Hessian) vs dense (D=4, D=10)" begin
+        function _check_full_weighted_gram(p, eq, cf, layout, z; seed=555)
+            D = p.D
+            Wt = size(z, 1)
+            K = zeros(Wt); G = zeros(Wt, layout.num_moments)
+            melitz_moments!(K, G, p, eq, cf, z, layout)
+            Hfull_dense = hcat(ones(Wt), G)
+
+            sctx = build_melitz_sorted_tail_context(z, p.sigma)
+            op = build_melitz_moment_operator(sctx, layout)
+            melitz_update_moment_operator!(op, p, eq, cf)
+
+            rng = MersenneTwister(seed)
+            S = rand(rng, Wt) .+ 0.1
+            n = 1 + layout.num_moments
+            H = zeros(n, n)
+            melitz_full_weighted_gram!(H, op, S)
+
+            dense_full = Hfull_dense' * Diagonal(S) * Hfull_dense
+            for i in 1:n, j in i:n
+                @test isapprox(H[i, j], dense_full[i, j]; atol=1e-8, rtol=1e-6)
+            end
+
+            # cross-origin block, standalone, o<p direct check against dense R'*S*R (not G'SG)
+            R = copy(G)
+            for o in 1:D, d in 1:D
+                col = layout.trade_index[o, d]
+                lambda_od = eq.trade_flow[o, d] / eq.expenditure[d]
+                R[:, col] .+= lambda_od
+            end
+            if D >= 2
+                Hblock = zeros(D, D)
+                melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)
+                R1 = @view R[:, layout.trade_index[1, :]]
+                R2 = @view R[:, layout.trade_index[2, :]]
+                dense_cross = R1' * Diagonal(S) * R2
+                @test isapprox(Hblock, dense_cross; atol=1e-8, rtol=1e-6)
+                @test_throws ArgumentError melitz_cross_origin_weighted_block!(Hblock, op, 2, 1, S)  # o<p required
+            end
+
+            # allocation gates
+            melitz_full_weighted_gram!(H, op, S)  # warmup
+            @test (@allocated melitz_full_weighted_gram!(H, op, S)) == 0
+            if D >= 2
+                Hblock2 = zeros(D, D)
+                melitz_cross_origin_weighted_block!(Hblock2, op, 1, 2, S)  # warmup
+                @test (@allocated melitz_cross_origin_weighted_block!(Hblock2, op, 1, 2, S)) == 0
+            end
+
+            @test_throws ArgumentError melitz_full_weighted_gram!(zeros(3, 3), op, S)
+            @test_throws ArgumentError melitz_full_weighted_gram!(H, op, zeros(3))
+
+            # Phase 7 parallelization: bit-identical to serial (disjoint per-origin-pair
+            # writes, no reduction), and allocation is a small FIXED Threads.@threads
+            # task-spawn cost (confirmed W/D-independent during development, ~13KB at
+            # nthreads()=16 regardless of D=4/D=10/real-D20 -- NOT a data-scaling hot-loop
+            # allocation; bounded rather than asserted ==0 since exact Task-spawn overhead
+            # is a Julia-runtime/thread-count detail, not a correctness property).
+            Hpar = zeros(n, n)
+            melitz_full_weighted_gram_parallel!(Hpar, op, S)
+            for i in 1:n, j in i:n
+                @test isapprox(Hpar[i, j], H[i, j]; atol=1e-12, rtol=1e-12)
+            end
+            melitz_full_weighted_gram_parallel!(Hpar, op, S)  # warmup
+            @test (@allocated melitz_full_weighted_gram_parallel!(Hpar, op, S)) < 100_000
+            @test_throws ArgumentError melitz_full_weighted_gram_parallel!(zeros(3, 3), op, S)
+            @test_throws ArgumentError melitz_full_weighted_gram_parallel!(H, op, zeros(3))
+        end
+
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        _check_full_weighted_gram(p, eq, cf, LAYOUT, FIXTURE.z_draws[1:3000, :])
+
+        f10 = generate_fake_melitz_data(; D=10, sigma=2.5, theta_star=6.8, target_country=3, seed=8, W=4000)
+        layout10 = MelitzMomentLayout(f10.primitives.D)
+        _check_full_weighted_gram(f10.primitives, f10.equilibrium, f10.counterfactual, layout10, f10.z_draws)
+    end
+
+    begin
+        @testset "real D=20: matrix-free operator vs dense at real calibration" begin
+            real_dir = joinpath(dirname(dirname(dirname(@__DIR__))), "real_data", "noah_D20")
+            if isdir(real_dir)
+                lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
+                LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
+                tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
+                countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
+                focal20 = findfirst(==("fra"), countries)
+                observed20 = MelitzObservedData(; lambda=lambdaData, L=LData, tau=tauData, countries=countries, atol=2e-3)
+                calib20 = calibrate_melitz_pareto(observed20; sigma=2.5, theta_star=:estimate,
+                    focal_country=focal20, p_min=0.001, wage_tol=1e-6, gravity_tol=1e-6)
+                p20 = MelitzPrimitives(calib20.D, calib20.sigma, calib20.theta_star, calib20.target_country,
+                    calib20.tau, calib20.w, calib20.A, calib20.f, calib20.gamma_prime_target)
+                eq20 = MelitzEquilibrium(calib20.E, ones(calib20.D), calib20.q, calib20.X)
+                cf20 = MelitzCounterfactual(calib20.target_country, calib20.w_prime,
+                    calib20.w_prime * calib20.L[calib20.target_country], 1.0, calib20.w_prime * calib20.L[calib20.target_country])
+                layout20 = MelitzMomentLayout(calib20.D)
+
+                Wt = 20_000
+                z20 = pareto_draws(Wt, calib20.D, calib20.theta_star; seed=1)
+                op, K1, G1 = _check_operator_against_dense(p20, eq20, cf20, layout20, z20; ntrials=10, atol=1e-6, rtol=1e-6)
+
+                u = zeros(Wt); g = zeros(layout20.num_moments)
+                mu = randn(MersenneTwister(3), layout20.num_moments)
+                v = randn(MersenneTwister(4), Wt)
+                mul_G!(u, op, 1.0, mu); mul_Gt!(g, op, v)   # warmup
+                bytes_G = @allocated mul_G!(u, op, 1.0, mu)
+                bytes_Gt = @allocated mul_Gt!(g, op, v)
+                @test bytes_G == 0
+                @test bytes_Gt == 0
+
+                # Phase 6/7 (scoped prototype): same-origin weighted-Gram block vs dense R'*S*R
+                D20 = layout20.D
+                R20 = copy(G1)
+                for o in 1:D20, d in 1:D20
+                    col = layout20.trade_index[o, d]
+                    lambda_od = eq20.trade_flow[o, d] / eq20.expenditure[d]
+                    R20[:, col] .+= lambda_od
+                end
+                S = rand(MersenneTwister(321), Wt) .+ 0.1
+                Hblock = zeros(D20, D20)
+                for o in 1:D20
+                    melitz_same_origin_weighted_block!(Hblock, op, o, S)
+                    R_o = @view R20[:, layout20.trade_index[o, :]]
+                    dense_block = R_o' * Diagonal(S) * R_o
+                    for d in 1:D20, dp in d:D20
+                        @test isapprox(Hblock[d, dp], dense_block[d, dp]; atol=1e-6, rtol=1e-5)
+                    end
+                end
+                melitz_same_origin_weighted_block!(Hblock, op, 1, S)  # warmup
+                bytes_H = @allocated melitz_same_origin_weighted_block!(Hblock, op, 1, S)
+                @test bytes_H == 0
+
+                # Phase 7/8/9 (2026-07-26): cross-origin block + full weighted Gram (complete Hessian)
+                melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)
+                R1 = @view R20[:, layout20.trade_index[1, :]]
+                R2 = @view R20[:, layout20.trade_index[2, :]]
+                dense_cross = R1' * Diagonal(S) * R2
+                @test isapprox(Hblock, dense_cross; atol=1e-6, rtol=1e-5)
+                melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)  # warmup
+                @test (@allocated melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)) == 0
+
+                n20 = 1 + layout20.num_moments
+                Hfull = zeros(n20, n20)
+                melitz_full_weighted_gram!(Hfull, op, S)
+                Hfull_dense = hcat(ones(Wt), G1)
+                dense_full = Hfull_dense' * Diagonal(S) * Hfull_dense
+                for i in 1:n20, j in i:n20
+                    @test isapprox(Hfull[i, j], dense_full[i, j]; atol=1e-6, rtol=1e-5)
+                end
+                melitz_full_weighted_gram!(Hfull, op, S)  # warmup
+                @test (@allocated melitz_full_weighted_gram!(Hfull, op, S)) == 0
+
+                # Phase 7 parallelization at real D=20/W=20,000 scale
+                Hfull_par = zeros(n20, n20)
+                melitz_full_weighted_gram_parallel!(Hfull_par, op, S)
+                for i in 1:n20, j in i:n20
+                    @test isapprox(Hfull_par[i, j], Hfull[i, j]; atol=1e-12, rtol=1e-12)
+                end
+                melitz_full_weighted_gram_parallel!(Hfull_par, op, S)  # warmup
+                @test (@allocated melitz_full_weighted_gram_parallel!(Hfull_par, op, S)) < 100_000
+            else
+                @warn "Skipping real D=20 matrix-free operator test -- real_data/noah_D20 not found"
+            end
+        end
+    end
+end
+
 # ============================================================================
 # 7. Population-Pareto construction identities (addendum Sections 2, 6, 8) -- REPLACES the
 # superseded exact-sample-correction benchmark. `fstar_solver.jl`/`solve_fstar` is ARCHIVED
@@ -990,6 +1351,7 @@ end
 const KNITRO_AVAILABLE = try
     include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "include_cc_algo.jl"))
     @eval using .CounterfactualSensitivity
+    include(joinpath(MELITZ_DIR, "matrix_free_dual_solve.jl"))
     true
 catch e
     @warn "Skipping CC inner-loop testsets: cc_algo/KNITRO not available in this environment" exception = e
@@ -1256,6 +1618,47 @@ end
                 moment_backend=:bogus_backend)
         end
 
+        @testset "Matrix-free inner CC dual solve (2026-07-26 continuation): validated through a REAL KNITRO inner solve, D=4" begin
+            # MelitzMatrixFreeDualBundle (matrix_free_dual_solve.jl) is a freestanding bundle
+            # that never touches cc_algo/PsiObjectiveBundle.jl -- this test drives a REAL
+            # KNITRO solve through it and compares against the dense PsiObjectiveBundleDelta
+            # solve on the IDENTICAL (p, eq, cf, z_draws) fixture, not merely a callback-level
+            # comparison at an isolated point.
+            p4, eq4, cf4 = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+            z4 = FIXTURE.z_draws
+            inner_opt = joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt")
+
+            obj_dense, theta0 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
+            lfd_dense = melitz_recover_lfd(obj_dense, theta0)
+            @test lfd_dense.nStatus == 0
+            @test lfd_dense.lfd_ok
+
+            sctx4 = build_melitz_sorted_tail_context(z4, p4.sigma)
+            op4 = build_melitz_moment_operator(sctx4, LAYOUT)
+            melitz_update_moment_operator!(op4, p4, eq4, cf4)
+            bundle4 = build_melitz_matrix_free_dual_bundle(op4)
+            nStatus_mf, objSol_mf, x_mf = melitz_matrix_free_inner_solve(bundle4, inner_opt)
+            @test nStatus_mf == 0
+
+            # `find_smallest` (default true on PsiObjectiveBundleDelta) is a reporting-only
+            # sign flip applied by `inner_loop`'s wrapper (cc_algo/inner_loop_functions.jl),
+            # not a property of the raw KNITRO objective `melitz_matrix_free_inner_solve`
+            # returns directly -- compare against the pre-wrapper raw value.
+            @test obj_dense.find_smallest == true
+            @test isapprox(-lfd_dense.Delta, objSol_mf; atol=1e-8, rtol=1e-8)
+            @test isapprox(lfd_dense.dual_x, x_mf; atol=1e-6, rtol=1e-6)
+
+            weights_mf, moment_residuals_mf, norm_resid_mf = melitz_matrix_free_moment_residuals(bundle4, x_mf)
+            @test isapprox(lfd_dense.weights, weights_mf; atol=1e-8, rtol=1e-8)
+            @test maximum(abs.(moment_residuals_mf)) < 1e-6
+            @test isapprox(lfd_dense.moment_residuals, moment_residuals_mf; atol=1e-6, rtol=1e-6)
+            @test abs(norm_resid_mf) < 1e-6
+
+            # Guards: wrong-length x rejected (via mul_G!'s own length check), not silently
+            # truncated/padded.
+            @test_throws ArgumentError bundle4(zeros(3))
+        end
+
         @testset "Phase 6/7 (2026-07-25): sorted crossing-slice gradient at real D=20/W=80,000" begin
             inner_opt_d20 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options_capped_2026-07-24.opt")
             obj_d20_inner, theta_d20 = build_melitz_psi_bundle_from_calibration(calib; W=80_000, seed=1,
@@ -1269,7 +1672,8 @@ end
             obj_d20 = build_melitz_implicit_bundle(ctx_d20, obj_d20_inner.U, theta_d20; delta=1.0,
                 find_smallest=true, gradient_backend=:B_direct_argument_serial, h=1e-4,
                 inner_loop_opt=inner_opt_d20,
-                outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"))
+                outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
+                backend=:dense_reference)  # this testset calls CS.inner_loop_internal directly
             obj_d20.use_cached_x = false; obj_d20.x .= NaN
             _, x_d20, nStatus_d20 = CounterfactualSensitivity.inner_loop_internal(obj_d20, theta_d20)
             @test nStatus_d20 == 0
@@ -1973,7 +2377,10 @@ if KNITRO_AVAILABLE
 
         obj_dg = build_melitz_implicit_bundle(ctx_dg, obj_dg_inner.U, theta_dg; delta=1.0,
             find_smallest=true, gradient_backend=:B_direct_argument_serial, h=1e-4,
-            inner_loop_opt=inner_opt_dg, outer_loop_opt=outer_opt_dg)
+            inner_loop_opt=inner_opt_dg, outer_loop_opt=outer_opt_dg,
+            backend=:dense_reference)  # this testset pokes obj_dg.H directly + calls
+            # CS.inner_loop_internal directly -- genuinely dense-bundle-specific mechanics
+
 
         @testset "needs_outer_moment_jacobian=false actually skips the jac_h allocation" begin
             @test size(obj_dg.jac_h) == (0, 0, 0)
@@ -2064,7 +2471,8 @@ if KNITRO_AVAILABLE
 
         obj_cg = build_melitz_implicit_bundle(ctx_cg, obj_cg_inner.U, theta_cg; delta=1.0,
             find_smallest=true, gradient_backend=:B_direct_argument_serial, h=1e-4,
-            inner_loop_opt=inner_opt_cg, outer_loop_opt=outer_opt_cg)
+            inner_loop_opt=inner_opt_cg, outer_loop_opt=outer_opt_cg,
+            backend=:dense_reference)  # pokes obj_cg.H directly + calls CS.inner_loop_internal directly
         obj_cg.use_cached_x = false; obj_cg.x .= NaN
         _, x_cg, nStatus_cg = CounterfactualSensitivity.inner_loop_internal(obj_cg, theta_cg)
         @test nStatus_cg in (0, -100, -101, -103)
@@ -2106,7 +2514,11 @@ if KNITRO_AVAILABLE
 
         @testset "requires ctx.sorted_tail_ctx -- rejects a ctx built without it" begin
             obj_plain_inner, theta_plain = build_melitz_psi_bundle(fixture_cg; inner_loop_opt=inner_opt_cg,
-                needs_outer_moment_jacobian=false)  # default moment_backend=:dense_reference
+                needs_outer_moment_jacobian=false, backend=:dense_reference, moment_backend=:dense_reference)
+                # 2026-07-26 production-port session: explicitly forced fully-plain/dense
+                # (no sorted_tail_ctx at all) -- the production DEFAULT now always builds one
+                # (the matrix-free bundle requires it structurally), so this test's own "a ctx
+                # built without it" case must ask for the dense-only path explicitly.
             ctx_plain = obj_plain_inner.γ
             @test get(ctx_plain, :sorted_tail_ctx, nothing) === nothing
             g_bad = zeros(n_cg)
@@ -2126,7 +2538,7 @@ if KNITRO_AVAILABLE
 
             g_bad_par = zeros(n_cg)
             obj_plain_inner2, theta_plain2 = build_melitz_psi_bundle(fixture_cg; inner_loop_opt=inner_opt_cg,
-                needs_outer_moment_jacobian=false)
+                needs_outer_moment_jacobian=false, backend=:dense_reference, moment_backend=:dense_reference)
             ctx_plain2 = obj_plain_inner2.γ
             @test_throws ArgumentError direct_sorted_parallel_cg(g_bad_par, theta_plain2, ctx_plain2, obj_cg, x_cg)
         end
@@ -2445,7 +2857,7 @@ if KNITRO_AVAILABLE
         @testset "Delta-above-cap point: threshold fires, classified AboveEvaluationCap(:live_dual_threshold), independent of delta" begin
             objT1 = build_melitz_implicit_bundle(ctx20, obj20.U, theta_pertT1; delta=delta_hugeT1,
                 find_smallest=true, gradient_backend=:B, h=1e-4,
-                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, lower_limit_guard=0.0,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20,
                 delta_evaluation_cap=cap_tightT1)
             @test objT1.lower_limit == -cap_tightT1   # tied to the CAP, not the (huge, irrelevant) delta
 
@@ -2476,7 +2888,7 @@ if KNITRO_AVAILABLE
             cap_looseT1 = rT1.Delta * 5
             objT1b = build_melitz_implicit_bundle(ctx20, obj20.U, theta_pertT1; delta=delta_hugeT1,
                 find_smallest=true, gradient_backend=:B, h=1e-4,
-                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, lower_limit_guard=0.0,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20,
                 delta_evaluation_cap=cap_looseT1)
             bankT1b = MelitzDualBank()
             resultT1b = melitz_classified_inner_solve(objT1b, theta_pertT1, ctx20;
@@ -2495,7 +2907,7 @@ if KNITRO_AVAILABLE
             cap_looseT1c = rT1.Delta * 5
             objT1c = build_melitz_implicit_bundle(ctx20, obj20.U, theta_pertT1; delta=delta_tightT1c,
                 find_smallest=true, gradient_backend=:B, h=1e-4,
-                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, lower_limit_guard=0.0,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20,
                 delta_evaluation_cap=cap_looseT1c)
             bankT1c = MelitzDualBank()
             resultT1c = melitz_classified_inner_solve(objT1c, theta_pertT1, ctx20;
@@ -2505,17 +2917,23 @@ if KNITRO_AVAILABLE
             @test isapprox(resultT1c.Delta, rT1.Delta; atol=1e-6, rtol=1e-6)   # AND the true, exact value
         end
 
-        @testset "build_melitz_implicit_bundle fails fast if lower_limit_guard is set without delta_evaluation_cap" begin
+        @testset "build_melitz_implicit_bundle fails fast if inner_solve_config AND delta_evaluation_cap are both given" begin
+            # 2026-07-26 closure session (post guard-removal): the only remaining mutual-
+            # exclusion invariant on this constructor's cap arguments -- there is no separate
+            # `lower_limit_guard` kwarg to misuse any more (removed entirely, see this
+            # function's own docstring).
+            cfg_excl = MelitzInnerSolveConfig(:evaluation_cap; delta_evaluation_cap=1.0)
             @test_throws ArgumentError build_melitz_implicit_bundle(ctx20, obj20.U, theta_pertT1; delta=1.0,
                 find_smallest=true, gradient_backend=:B, h=1e-4,
-                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, lower_limit_guard=0.0)
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20,
+                delta_evaluation_cap=1.0, inner_solve_config=cfg_excl)
         end
 
         @testset "Delta-below-cap point: threshold does NOT fire, classified FiniteSolved" begin
             cap_looseT2 = max(r0_20.Delta * 5, 1e-3)
             objT2 = build_melitz_implicit_bundle(ctx20, obj20.U, theta0_20; delta=cap_looseT2,
                 find_smallest=true, gradient_backend=:B, h=1e-4,
-                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20, lower_limit_guard=0.0,
+                inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20,
                 delta_evaluation_cap=cap_looseT2)
             @test objT2.lower_limit == -cap_looseT2
 
@@ -2528,7 +2946,7 @@ if KNITRO_AVAILABLE
             @test resultT2.Delta <= cap_looseT2
         end
 
-        @testset "integration: solve_melitz_finite_delta_bound with lower_limit_guard routes hits through n_above_cap_reject, never n_numerical_failure_reject as a threshold artifact" begin
+        @testset "integration: solve_melitz_finite_delta_bound routes cap hits through n_above_cap_reject, never n_numerical_failure_reject as a threshold artifact" begin
             # A tight delta_evaluation_cap on a short trajectory: every rejection this
             # specific mechanism produces must appear in the above-cap bucket, not the
             # numerical-failure bucket (governing prompt: "must not enter a failed-solve
@@ -2547,7 +2965,7 @@ if KNITRO_AVAILABLE
             end
             resT3 = solve_melitz_finite_delta_bound(ctx20, obj20, theta0_20; delta=1.0,
                 direction=:upper, theta_box=0.02, inner_loop_opt=inner_opt20, outer_loop_opt=outer_opt20,
-                lower_limit_guard=0.0, delta_evaluation_cap=1e-2, on_inner_result=collector)
+                delta_evaluation_cap=1e-2, on_inner_result=collector)
             @test resT3.n_above_cap_reject >= n_threshold_hits[]
             @test n_threshold_hits[] >= 0   # sanity: counter machinery ran without error
         end
@@ -3944,8 +4362,11 @@ end
             inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"))
         @test objA1_10.needs_outer_moment_jacobian == false
         @test size(objA1_10.jac_h) == (0, 0, 0)
-        val_10, x_10, nStatus_10 = inner_loop(objA1_10, thetaA1_10)
-        @test nStatus_10 in (0, -100, -101, -103)
+        # bundle-agnostic (was a bare `inner_loop(...)` call, cc_algo-generic-only): now that
+        # build_melitz_psi_bundle defaults to the matrix-free MelitzCCBundle, use
+        # melitz_recover_lfd, which dispatches correctly for either bundle type.
+        lfd_10 = melitz_recover_lfd(objA1_10, thetaA1_10)
+        @test lfd_10.nStatus in (0, -100, -101, -103)
     end
 
     @testset "D=20: construction alone (no solve -- this is a memory-shape test, not a convergence test) skips jac_h" begin
@@ -4080,7 +4501,7 @@ end
     fixtureD = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
         target_country=1, seed=29, W=2_000)
     inner_optD = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
-    objD, thetaD = build_melitz_psi_bundle(fixtureD; inner_loop_opt=inner_optD)
+    objD, thetaD = build_melitz_psi_bundle(fixtureD; inner_loop_opt=inner_optD, backend=:dense_reference)  # pokes objD.H directly
     ctxD = objD.γ
     UD = objD.U
     K_D = ctxD.moment_layout.num_moments
@@ -4180,10 +4601,10 @@ end
 @testset "Phase 1 (2026-07-25): evaluation-cap-impossible-to-omit infrastructure" begin
     @testset "melitz_configure_lower_limit: happy paths" begin
         @test melitz_configure_lower_limit(:full_value) == -KNITRO.KN_INFINITY
-        ll = melitz_configure_lower_limit(:evaluation_cap; delta_evaluation_cap=10.0, guard=1e-6)
-        @test ll == -(10.0 + 1e-6)
+        ll = melitz_configure_lower_limit(:evaluation_cap; delta_evaluation_cap=10.0)
+        @test ll == -10.0   # 2026-07-26 (user-directed): no guard/margin -- exactly -cap
         @test isfinite(ll)
-        ll_diag = melitz_configure_lower_limit(:diagnostic; delta_evaluation_cap=5.0, guard=0.0)
+        ll_diag = melitz_configure_lower_limit(:diagnostic; delta_evaluation_cap=5.0)
         @test ll_diag == -5.0
     end
 
@@ -4195,21 +4616,20 @@ end
         @test_throws ArgumentError melitz_configure_lower_limit(:evaluation_cap; delta_evaluation_cap=Inf)
         @test_throws ArgumentError melitz_configure_lower_limit(:evaluation_cap; delta_evaluation_cap=NaN)
         @test_throws ArgumentError melitz_configure_lower_limit(:evaluation_cap; delta_evaluation_cap=-1.0)
-        @test_throws ArgumentError melitz_configure_lower_limit(:evaluation_cap; delta_evaluation_cap=10.0, guard=-1.0)
     end
 
     @testset "MelitzInnerSolveConfig + melitz_assert_evaluation_cap_active" begin
         cfg_full = MelitzInnerSolveConfig(:full_value)
         @test melitz_assert_evaluation_cap_active(cfg_full)   # no-op, does not throw
 
-        cfg_cap = MelitzInnerSolveConfig(:evaluation_cap; delta_evaluation_cap=10.0, guard=1e-6)
+        cfg_cap = MelitzInnerSolveConfig(:evaluation_cap; delta_evaluation_cap=10.0)
         @test melitz_assert_evaluation_cap_active(cfg_cap)
         @test isfinite(cfg_cap.lower_limit)
-        @test cfg_cap.lower_limit < -cfg_cap.delta_evaluation_cap   # guard strictly tightens it
+        @test cfg_cap.lower_limit == -cfg_cap.delta_evaluation_cap   # exact, no guard/margin
 
         # A hand-corrupted config (mimicking a future refactor reintroducing the silent bug)
         # must fail the assertion, not pass silently.
-        cfg_corrupted = MelitzInnerSolveConfig(:evaluation_cap, -KNITRO.KN_INFINITY, 10.0, 1e-6)
+        cfg_corrupted = MelitzInnerSolveConfig(:evaluation_cap, -KNITRO.KN_INFINITY, 10.0)
         @test_throws Exception melitz_assert_evaluation_cap_active(cfg_corrupted)
 
         @test_logs (:warn,) match_mode = :any MelitzInnerSolveConfig(:evaluation_cap;
@@ -4218,7 +4638,7 @@ end
 
     if KNITRO_AVAILABLE
         inner_opt = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
-        cfg = MelitzInnerSolveConfig(:evaluation_cap; delta_evaluation_cap=10.0, guard=1e-6)
+        cfg = MelitzInnerSolveConfig(:evaluation_cap; delta_evaluation_cap=10.0)
 
         @testset "build_melitz_psi_bundle: inner_solve_config wires PsiObjectiveBundleDelta.lower_limit" begin
             obj_default, _ = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
@@ -4244,13 +4664,13 @@ end
             @test obj_capped.lower_limit == cfg.lower_limit
         end
 
-        @testset "build_melitz_implicit_bundle: inner_solve_config vs. legacy kwargs agree, mutual exclusion enforced" begin
+        @testset "build_melitz_implicit_bundle: inner_solve_config vs. legacy delta_evaluation_cap kwarg agree, mutual exclusion enforced" begin
             obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
             ctx = obj_f.γ
 
             obj_legacy = build_melitz_implicit_bundle(ctx, obj_f.U, theta0_f; delta=1.0, find_smallest=true,
                 inner_loop_opt=inner_opt, outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
-                lower_limit_guard=1e-6, delta_evaluation_cap=10.0)
+                delta_evaluation_cap=10.0)
             obj_new = build_melitz_implicit_bundle(ctx, obj_f.U, theta0_f; delta=1.0, find_smallest=true,
                 inner_loop_opt=inner_opt, outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
                 inner_solve_config=cfg)
@@ -4260,11 +4680,11 @@ end
             @test_throws ArgumentError build_melitz_implicit_bundle(ctx, obj_f.U, theta0_f; delta=1.0,
                 find_smallest=true, inner_loop_opt=inner_opt,
                 outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
-                lower_limit_guard=1e-6, delta_evaluation_cap=10.0, inner_solve_config=cfg)
+                delta_evaluation_cap=10.0, inner_solve_config=cfg)
         end
 
         @testset "solve_melitz_nuisance_min_delta: inner_solve_config is a required kwarg, applied and restored" begin
-            obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
+            obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt, backend=:dense_reference)  # pinned to dense_reference deliberately -- see the matched Phase 6 (2026-07-26 closure) tests below for the matrix-free comparison
             ctx = obj_f.γ
             mask = melitz_nuisance_free_mask(ctx; block=:A_only)
 
@@ -4288,7 +4708,7 @@ end
             # exact-point cache to this driver (docs/melitz_real_d20_outer_benchmark_2026-07-24.md
             # Section 5.1's own recommendation) -- this test confirms the port actually
             # elides the duplicate re-solve, not merely that it runs without erroring.
-            obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
+            obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt, backend=:dense_reference)  # pinned to dense_reference deliberately -- see the matched Phase 6 (2026-07-26 closure) tests below for the matrix-free comparison
             ctx = obj_f.γ
             mask = melitz_nuisance_free_mask(ctx; block=:A_only)
             cache = MelitzExactPointCache()
@@ -4300,6 +4720,678 @@ end
             # assumption): total calls exceed total UNIQUE inner solves whenever any hit occurs.
             @test res.n_exact_cache_hits >= 1
             @test res.n_exact_cache_hits + res.n_exact_cache_misses == res.n_fc_calls + res.n_ga_calls
+        end
+
+        # ====================================================================
+        # 2026-07-26 production-closure session (governing prompt Phase 1): the residual gap
+        # left after the 2026-07-25 session above -- `delta_evaluation_cap` supplied ALONE
+        # previously left `lower_limit` silently disabled on `build_melitz_implicit_bundle`,
+        # and therefore on `solve_melitz_finite_delta_bound` too (its own
+        # `delta_evaluation_cap::Real=10.0` default is unconditionally forwarded).
+        # Confirmed-live incident: docs/melitz_production_fast_backend_2026-07-26.md Section
+        # 5.5 (13.5x slower real-D20 campaign, 31 spurious NumericalFailure results, traced
+        # to exactly this omission). These tests recreate the omission pattern directly and
+        # require the corrected (active-by-default) behavior.
+        #
+        # Same-day follow-up (direct user feedback): the FIRST fix additionally introduced a
+        # small additive `guard`/`lower_limit_guard` margin on top of the cap -- removed
+        # entirely as unnecessary complexity (the cap value itself, e.g. `-10`, is already
+        # the correct exact threshold; no separate margin is needed). `lower_limit_guard` no
+        # longer exists as a kwarg anywhere in this API.
+        # ====================================================================
+        outer_opt_path = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+
+        @testset "build_melitz_implicit_bundle: delta_evaluation_cap ALONE always activates lower_limit, exactly" begin
+            obj_f3, theta0_f3 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
+            ctx3 = obj_f3.γ
+
+            # THE fix: a cap supplied at all must activate, at EXACTLY -delta_evaluation_cap
+            # (no guard/margin) -- previously fell through to the disabled (-KN_INFINITY) branch.
+            obj_capalone = build_melitz_implicit_bundle(ctx3, obj_f3.U, theta0_f3; delta=1.0,
+                find_smallest=true, inner_loop_opt=inner_opt, outer_loop_opt=outer_opt_path,
+                delta_evaluation_cap=10.0)
+            @test isfinite(obj_capalone.lower_limit)
+            @test obj_capalone.lower_limit == -10.0
+
+            # The ONE remaining way to get an uncapped bundle: omit the kwarg entirely --
+            # an explicit, all-defaults choice, not a trap.
+            obj_uncapped = build_melitz_implicit_bundle(ctx3, obj_f3.U, theta0_f3; delta=1.0,
+                find_smallest=true, inner_loop_opt=inner_opt, outer_loop_opt=outer_opt_path)
+            @test obj_uncapped.lower_limit == -KNITRO.KN_INFINITY
+        end
+
+        @testset "REGRESSION: solve_melitz_finite_delta_bound with NO cap-related kwargs still activates the cap" begin
+            # Recreates the exact confirmed-live incident's call pattern: a caller passing
+            # only the basics, relying entirely on this function's own delta_evaluation_cap
+            # default -- must NOT silently disable the KNITRO-native early-abort mechanism.
+            obj_f4, theta0_f4 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
+            ctx4 = obj_f4.γ
+            res_default = solve_melitz_finite_delta_bound(ctx4, obj_f4, theta0_f4; delta=1e-3,
+                direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.1, inner_loop_opt=inner_opt)
+            @test res_default.nStatus != -500   # the internal @assert isfinite(obj.lower_limit) did not fire
+
+            # Direct, black-box confirmation of the SAME construction this driver performs
+            # internally, using its own default cap value (10.0):
+            obj_check = build_melitz_implicit_bundle(ctx4, obj_f4.U, theta0_f4; delta=1e-3,
+                find_smallest=true, inner_loop_opt=inner_opt, outer_loop_opt=outer_opt_path,
+                delta_evaluation_cap=10.0)
+            @test isfinite(obj_check.lower_limit)
+        end
+
+        @testset "REGRESSION: cap-alone (no guard) yields fast AboveEvaluationCap, not a full FiniteSolved re-derivation" begin
+            # Before the fix, this exact construction left lower_limit=-KN_INFINITY, so the
+            # bad point below would have been classified FiniteSolved (the early-stop
+            # mechanism never engages when disabled) -- after the fix, the cap fires and the
+            # point is classified AboveEvaluationCap via the cheap live dual-threshold
+            # certificate, exactly the classification distinction this repo's whole
+            # evaluation-cap machinery exists to make.
+            obj_f5, theta0_f5 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt)
+            ctx5 = obj_f5.γ
+            # Search a short, fixed, deterministic candidate list for a perturbation that
+            # solves cleanly (nStatus==0) -- a small D=4 fixture is fragile to LARGE
+            # perturbations across all 2D^2-2 free coordinates at once (this repo's own
+            # Section 2 test above deliberately uses magnitude 3.0 to produce a GROSSLY
+            # infeasible point) -- this test only needs ONE genuine, well-defined "positive
+            # Delta" point, not a specific seed, so it searches small magnitudes (matching the
+            # 0.005 convention already proven reliable for the D=20 fixture elsewhere in this
+            # file, Phase I.1 above) rather than gambling on a single fixed draw.
+            local theta_bad5, r_bad5
+            found = false
+            for (seed, mag) in ((7, 0.005), (11, 0.005), (3, 0.003), (23, 0.003), (1, 0.002),
+                                 (2, 0.002), (4, 0.001), (5, 0.001))
+                theta_try = theta0_f5 .+ mag .* randn(MersenneTwister(seed), length(theta0_f5))
+                r_try = evaluate_melitz_delta(theta_try, ctx5, obj_f5; cold=true, store_G=false)
+                if r_try.nStatus == 0 && r_try.Delta > 0
+                    theta_bad5, r_bad5 = theta_try, r_try
+                    found = true
+                    break
+                end
+            end
+            @test found
+            if found
+                cap_tight5 = r_bad5.Delta / 2   # deliberately below the true Delta at theta_bad5
+
+                obj_capalone5 = build_melitz_implicit_bundle(ctx5, obj_f5.U, theta_bad5;
+                    delta=r_bad5.Delta * 1000, find_smallest=true, inner_loop_opt=inner_opt,
+                    outer_loop_opt=outer_opt_path, delta_evaluation_cap=cap_tight5)
+                @test obj_capalone5.lower_limit == -cap_tight5
+
+                bank5 = MelitzDualBank()
+                t0_5 = time()
+                result5 = melitz_classified_inner_solve(obj_capalone5, theta_bad5, ctx5;
+                    delta_evaluation_cap=cap_tight5, bank=bank5)
+                elapsed5 = time() - t0_5
+                @test result5 isa AboveEvaluationCap
+                @test result5.source == :live_dual_threshold
+                @test elapsed5 < 30.0   # certificate-based, not a slow full-timeout re-derivation
+            end
+        end
+    end
+end
+
+# ============================================================================
+# 2026-07-26 production-closure session (governing prompt Phase 2): "make production-fast
+# genuinely strict." MELITZ_PRODUCTION_FAST now has forbid_dense_fallback=true (was false --
+# an authoritative "production-fast" preset silently PERMITTING a dense fallback was
+# backwards); MELITZ_PRODUCTION_COMPAT is the new, explicitly permissive preset;
+# MELITZ_DENSE_REFERENCE is unchanged (forbid_dense_fallback=false, since that preset IS the
+# dense path). `forbid_dense_fallback::Bool=false` is now a real kwarg on
+# build_melitz_psi_bundle/build_melitz_psi_bundle_from_calibration/build_melitz_implicit_bundle/
+# solve_melitz_finite_delta_bound -- these tests confirm it actually throws, at construction
+# time, for every known way to end up on a dense path, and does NOT throw for the matrix-free
+# default.
+# ============================================================================
+@testset "Phase 2 (2026-07-26): strict production-fast forbids every dense fallback" begin
+    @testset "preset values" begin
+        @test MELITZ_PRODUCTION_FAST.forbid_dense_fallback == true
+        @test MELITZ_PRODUCTION_FAST.inner_backend == :matrix_free
+        @test MELITZ_PRODUCTION_COMPAT.forbid_dense_fallback == false
+        @test MELITZ_PRODUCTION_COMPAT.inner_backend == :matrix_free
+        @test MELITZ_DENSE_REFERENCE.forbid_dense_fallback == false
+        @test MELITZ_DENSE_REFERENCE.inner_backend == :dense_reference
+    end
+
+    if KNITRO_AVAILABLE
+        inner_opt2 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        outer_opt2 = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+
+        @testset "build_melitz_psi_bundle: forbid_dense_fallback=true throws on every dense-selecting route, at construction" begin
+            # matrix-free default: no throw.
+            obj_ok, _ = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt2, forbid_dense_fallback=true)
+            @test obj_ok isa MelitzCCBundle
+
+            # Explicit backend=:dense_reference.
+            @test_throws ArgumentError build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt2,
+                backend=:dense_reference, forbid_dense_fallback=true)
+            # Explicit moment_backend (no explicit backend override) silently selects
+            # backend=:dense_reference (delta_star.jl's own documented rule) -- must ALSO throw.
+            @test_throws ArgumentError build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt2,
+                moment_backend=:sorted_tail_serial, forbid_dense_fallback=true)
+            # needs_outer_moment_jacobian=true ALSO silently selects backend=:dense_reference.
+            @test_throws ArgumentError build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt2,
+                needs_outer_moment_jacobian=true, forbid_dense_fallback=true)
+            # forbid_dense_fallback=false (the default, and MELITZ_PRODUCTION_COMPAT's value)
+            # still permits the SAME dense choice, unchanged.
+            obj_dense, _ = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt2, backend=:dense_reference)
+            @test !(obj_dense isa MelitzCCBundle)
+        end
+
+        @testset "build_melitz_psi_bundle_from_calibration: forbid_dense_fallback=true throws on the dense route" begin
+            fixture4 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+                target_country=1, seed=29, W=20_000)
+            observed4, _ = split_melitz_synthetic_truth(fixture4)
+            calib4 = calibrate_melitz_pareto(observed4; sigma=2.5, theta_star=:estimate,
+                focal_country=1, gravity_tol=1e-6)
+            obj_ok, _ = build_melitz_psi_bundle_from_calibration(calib4; W=5_000,
+                inner_loop_opt=inner_opt2, forbid_dense_fallback=true)
+            @test obj_ok isa MelitzCCBundle
+            @test_throws ArgumentError build_melitz_psi_bundle_from_calibration(calib4; W=5_000,
+                inner_loop_opt=inner_opt2, backend=:dense_reference, forbid_dense_fallback=true)
+        end
+
+        @testset "build_melitz_implicit_bundle: forbid_dense_fallback=true throws on backend=:dense_reference AND on a legacy dense-only gradient_backend" begin
+            obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt2)
+            ctx = obj_f.γ
+
+            # matrix-free default: no throw.
+            obj_ok = build_melitz_implicit_bundle(ctx, obj_f.U, theta0_f; delta=1.0,
+                find_smallest=true, inner_loop_opt=inner_opt2, outer_loop_opt=outer_opt2,
+                forbid_dense_fallback=true)
+            @test obj_ok isa MelitzCCBundle
+
+            @test_throws ArgumentError build_melitz_implicit_bundle(ctx, obj_f.U, theta0_f; delta=1.0,
+                find_smallest=true, inner_loop_opt=inner_opt2, outer_loop_opt=outer_opt2,
+                backend=:dense_reference, forbid_dense_fallback=true)
+            # gradient_backend=:B (the legacy dense-only finite-difference backend) silently
+            # selects backend=:dense_reference underneath it (this function's own documented
+            # rule) -- must ALSO throw under strict mode.
+            @test_throws ArgumentError build_melitz_implicit_bundle(ctx, obj_f.U, theta0_f; delta=1.0,
+                find_smallest=true, gradient_backend=:B, inner_loop_opt=inner_opt2,
+                outer_loop_opt=outer_opt2, forbid_dense_fallback=true)
+            # unchanged (permitted) when forbid_dense_fallback=false, the default.
+            obj_dense = build_melitz_implicit_bundle(ctx, obj_f.U, theta0_f; delta=1.0,
+                find_smallest=true, gradient_backend=:B, inner_loop_opt=inner_opt2, outer_loop_opt=outer_opt2)
+            @test !(obj_dense isa MelitzCCBundle)
+        end
+
+        @testset "solve_melitz_finite_delta_bound: forbid_dense_fallback=true fails FAST at construction, not after a real solve" begin
+            obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt2)
+            t0 = time()
+            @test_throws ArgumentError solve_melitz_finite_delta_bound(obj_f.γ, obj_f, theta0_f;
+                delta=1e-3, direction=:upper, gradient_backend=:B, inner_loop_opt=inner_opt2,
+                forbid_dense_fallback=true)
+            elapsed = time() - t0
+            @test elapsed < 5.0   # construction-time failure, not a real KNITRO trajectory
+        end
+    end
+end
+
+# ============================================================================
+# 2026-07-26 production-closure session (governing prompt Phase 3): "centralize and type the
+# welfare metrics." See equilibrium.jl's MelitzWelfareMetrics/melitz_welfare_metrics_from_g/
+# melitz_welfare_metrics/kappa_ratio_of_g for the implementation and full incident writeup
+# (the OLD kappa_of_g/`.kappa` naming collided with the gains-from-trade kappa/GT).
+# ============================================================================
+@testset "Phase 3 (2026-07-26): MelitzWelfareMetrics eliminates the g/kappa_ratio/GT confusion" begin
+    @testset "gamma_prime == exp(g), kappa_ratio matches the closed-form, GT == 1-kappa_ratio" begin
+        for (g, wage_ratio, sigma) in ((0.3, 1.07, 2.5), (-0.5, 0.93, 4.0), (0.0, 1.0, 3.2))
+            m = melitz_welfare_metrics_from_g(g, wage_ratio, sigma)
+            @test m.g == g
+            @test m.gamma_prime == exp(g)
+            @test m.wage_ratio == wage_ratio
+            @test m.kappa_ratio == wage_ratio * exp(g)^(1 / (sigma - 1))
+            @test m.gains_from_trade == 1 - m.kappa_ratio
+            # the two must genuinely differ whenever kappa_ratio != 0.5 -- a structural
+            # sanity check that GT is not silently aliased to kappa_ratio (the exact
+            # confusion this phase exists to eliminate).
+            m.kappa_ratio != 0.5 && @test m.gains_from_trade != m.kappa_ratio
+        end
+    end
+
+    @testset "kappa_ratio_of_g agrees with MelitzWelfareMetrics.kappa_ratio (ctx-based calling convention)" begin
+        ctx_stub = (sigma=2.5, w_prime=1.0, w=[1.0, 1.1, 0.9], target_country=2)
+        g = 0.42
+        @test kappa_ratio_of_g(g, ctx_stub) == melitz_welfare_metrics_from_g(g, ctx_stub).kappa_ratio
+        wage_ratio = ctx_stub.w_prime / ctx_stub.w[ctx_stub.target_country]
+        @test kappa_ratio_of_g(g, ctx_stub) == wage_ratio * exp(g)^(1 / (ctx_stub.sigma - 1))
+    end
+
+    @testset "melitz_welfare_metrics agrees with melitz_gains_from_trade at the D=4 fixture's own calibration" begin
+        p, cf = FIXTURE.primitives, FIXTURE.counterfactual
+        m = melitz_welfare_metrics(p, cf)
+        @test m.gains_from_trade == melitz_gains_from_trade(p, cf)
+        @test m.g == log(p.gamma_prime_target)
+        @test m.gamma_prime == p.gamma_prime_target
+    end
+
+    @testset "Pareto reference GT agrees with ACR sufficient statistic (population closed forms)" begin
+        p, cf, eq = FIXTURE.primitives, FIXTURE.counterfactual, FIXTURE.equilibrium
+        m = melitz_welfare_metrics(p, cf)
+        _, GT_ACR = acr_gains_from_trade(p, eq)
+        @test isapprox(m.gains_from_trade, GT_ACR; atol=1e-6)
+    end
+
+    @testset "plausible real-data GT lies in the analytical attainable interval [0,1)" begin
+        p, cf = FIXTURE.primitives, FIXTURE.counterfactual
+        m = melitz_welfare_metrics(p, cf)
+        @test 0 <= m.gains_from_trade < 1
+        # a negative g is a perfectly ordinary outer-search coordinate (no welfare
+        # interpretation by itself) -- confirm it is NEVER mistaken for kappa_ratio/GT by
+        # construction: MelitzWelfareMetrics keeps g in its OWN field, never overwriting
+        # kappa_ratio/gains_from_trade.
+        m_neg = melitz_welfare_metrics_from_g(-0.9, m.wage_ratio, p.sigma)
+        @test m_neg.g < 0
+        @test m_neg.g != m_neg.kappa_ratio && m_neg.g != m_neg.gains_from_trade
+    end
+end
+
+# ============================================================================
+# 2026-07-26 production-closure session (governing prompt Phase 5): "audit the 1e10
+# outer-constraint scaling." Traced the full chain (finite_delta_outer.jl's own header +
+# melitz_build_finite_delta_callbacks/melitz_register_finite_delta_knitro_problem!): the
+# ACTUALLY-REGISTERED KNITRO constraint has been the DIMENSIONLESS
+# `c_delta(theta)=DeltaStar(theta)/delta<=1` since the 2026-07-23 correctness-repair session
+# -- the governing prompt's premise ("the current implicit bundle uses ... constr[1] = 1e10 *
+# DeltaStar") describes an OLDER, already-superseded state; `1e10` survives only as an
+# internal raw-functor convention (`obj(x,constr=c)` returns `1e10*DeltaStar` -- a detail
+# shared with cc_algo's own `PsiObjectiveBundleImplicit` functor, see the Section 18 test
+# above), never reaching the actual KNITRO registration. `divergence_constraint_scaling`
+# (new kwarg, default `:dimensionless` -- UNCHANGED existing behavior) additionally supports
+# `:legacy_1e10`, reproducing the OLD, pre-2026-07-23 raw-magnitude registration for direct
+# comparison -- NOT made default (per the governing prompt's own instruction), diagnostic-only.
+# ============================================================================
+@testset "Phase 5 (2026-07-26): divergence-constraint scaling audit -- dimensionless vs legacy_1e10" begin
+    if KNITRO_AVAILABLE
+        inner_opt5 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        outer_opt5 = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+        fixture5 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        obj5, theta0_5 = build_melitz_psi_bundle(fixture5; inner_loop_opt=inner_opt5)
+        ctx5b = obj5.γ
+        n5 = length(theta0_5)
+        m5 = 1 + ctx5b.D + ctx5b.D * (ctx5b.D - 1)
+        r0_5 = evaluate_melitz_delta(theta0_5, ctx5b, obj5; cold=true, store_G=false)
+        @test r0_5.nStatus == 0 && r0_5.Delta > 0
+        delta5 = max(r0_5.Delta * 3, 1e-3)   # a genuine, non-degenerate outer budget
+
+        @testset "melitz_build_finite_delta_callbacks rejects an unrecognized scaling mode" begin
+            obj_i5 = build_melitz_implicit_bundle(ctx5b, obj5.U, theta0_5; delta=delta5,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt5, outer_loop_opt=outer_opt5)
+            @test_throws ArgumentError melitz_build_finite_delta_callbacks(obj_i5, ctx5b, delta5, true;
+                divergence_constraint_scaling=:not_a_mode)
+        end
+
+        @testset ":dimensionless (default) matches the pre-existing registered bound/value exactly" begin
+            obj_dim = build_melitz_implicit_bundle(ctx5b, obj5.U, theta0_5; delta=delta5,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt5, outer_loop_opt=outer_opt5)
+            cbset_dim = melitz_build_finite_delta_callbacks(obj_dim, ctx5b, delta5, true)
+            @test cbset_dim.divergence_constraint_scaling == :dimensionless
+            @test cbset_dim.divergence_constraint_upbnd == 1.0
+
+            evR = MelitzMockEvalResult(zeros(1), zeros(m5), zeros(n5), zeros(n5 * m5))
+            cbset_dim.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_5)), evR, nothing)
+            cbset_dim.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_5)), evR, nothing)
+            @test isapprox(evR.c[1], r0_5.Delta / delta5; rtol=1e-6)
+            @test evR.c[1] <= cbset_dim.divergence_constraint_upbnd   # feasible: Delta(theta0)<=delta5 by construction
+        end
+
+        @testset ":legacy_1e10 registers the OLD raw-magnitude bound/value, exactly 1e10*delta5 larger" begin
+            obj_leg = build_melitz_implicit_bundle(ctx5b, obj5.U, theta0_5; delta=delta5,
+                find_smallest=true, gradient_backend=:B, h=1e-4,
+                inner_loop_opt=inner_opt5, outer_loop_opt=outer_opt5)
+            cbset_leg = melitz_build_finite_delta_callbacks(obj_leg, ctx5b, delta5, true;
+                divergence_constraint_scaling=:legacy_1e10)
+            @test cbset_leg.divergence_constraint_scaling == :legacy_1e10
+            @test cbset_leg.divergence_constraint_upbnd == 1e10 * delta5
+
+            evR_leg = MelitzMockEvalResult(zeros(1), zeros(m5), zeros(n5), zeros(n5 * m5))
+            cbset_leg.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_5)), evR_leg, nothing)
+            cbset_leg.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_5)), evR_leg, nothing)
+            @test isapprox(evR_leg.c[1], 1e10 * r0_5.Delta; rtol=1e-6)
+            @test evR_leg.c[1] <= cbset_leg.divergence_constraint_upbnd   # SAME feasibility conclusion
+        end
+
+        @testset "the two modes are the SAME feasible set and equivalent search direction, after accounting for scale" begin
+            # Re-derive both callback sets fresh (obj's own mutable state -- x/H -- must not
+            # be shared/stale across the two comparisons) and evaluate at an OVER-BUDGET
+            # point (genuinely infeasible under both conventions) as well as the feasible
+            # theta0_5 above -- the equivalence must hold in BOTH directions. Small
+            # deterministic candidate search (not a single fixed seed) for the perturbation
+            # magnitude/seed, matching this session's own Phase 1 fix: a small D=4 fixture is
+            # fragile to an arbitrary single random perturbation (some draws land on a
+            # non-converged nStatus!=0 point).
+            local theta_bad5b, r_bad5b
+            found5 = false
+            for (seed, mag) in ((4, 0.01), (7, 0.01), (2, 0.005), (9, 0.005), (1, 0.002))
+                theta_try5 = theta0_5 .+ mag .* randn(MersenneTwister(seed), n5)
+                r_try5 = evaluate_melitz_delta(theta_try5, ctx5b, obj5; cold=true, store_G=false)
+                if r_try5.nStatus == 0 && r_try5.Delta > 0
+                    theta_bad5b, r_bad5b = theta_try5, r_try5
+                    found5 = true
+                    break
+                end
+            end
+            @test found5
+            delta_tight5 = found5 ? r_bad5b.Delta / 2 : 1e-3   # deliberately infeasible at theta_bad5b
+
+            if found5
+                for theta_test in (theta0_5, theta_bad5b)
+                    obj_dim2 = build_melitz_implicit_bundle(ctx5b, obj5.U, theta0_5; delta=delta_tight5,
+                        find_smallest=true, gradient_backend=:B, h=1e-4,
+                        inner_loop_opt=inner_opt5, outer_loop_opt=outer_opt5)
+                    cbset_dim2 = melitz_build_finite_delta_callbacks(obj_dim2, ctx5b, delta_tight5, true)
+                    obj_leg2 = build_melitz_implicit_bundle(ctx5b, obj5.U, theta0_5; delta=delta_tight5,
+                        find_smallest=true, gradient_backend=:B, h=1e-4,
+                        inner_loop_opt=inner_opt5, outer_loop_opt=outer_opt5)
+                    cbset_leg2 = melitz_build_finite_delta_callbacks(obj_leg2, ctx5b, delta_tight5, true;
+                        divergence_constraint_scaling=:legacy_1e10)
+
+                    ev_dim = MelitzMockEvalResult(zeros(1), zeros(m5), zeros(n5), zeros(n5 * m5))
+                    cbset_dim2.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta_test)), ev_dim, nothing)
+                    cbset_dim2.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta_test)), ev_dim, nothing)
+                    ev_leg = MelitzMockEvalResult(zeros(1), zeros(m5), zeros(n5), zeros(n5 * m5))
+                    cbset_leg2.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta_test)), ev_leg, nothing)
+                    cbset_leg2.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta_test)), ev_leg, nothing)
+
+                    scale = 1e10 * delta_tight5
+                    # SAME feasibility conclusion (the whole point of "same feasible set"):
+                    @test (ev_dim.c[1] <= cbset_dim2.divergence_constraint_upbnd) ==
+                          (ev_leg.c[1] <= cbset_leg2.divergence_constraint_upbnd)
+                    # value and Jacobian related by the EXACT constant scale factor:
+                    @test isapprox(ev_leg.c[1], ev_dim.c[1] * scale; rtol=1e-8)
+                    @test isapprox(ev_leg.jac[1:n5], ev_dim.jac[1:n5] .* scale; rtol=1e-8)
+                    # equivalent search DIRECTION: the Jacobian sign pattern (which coordinates
+                    # increase/decrease the constraint) is identical, only magnitude differs.
+                    @test sign.(ev_leg.jac[1:n5]) == sign.(ev_dim.jac[1:n5])
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
+# 2026-07-26 production-closure session (governing prompt Phase 6): "port nuisance
+# profiling to production-fast infrastructure." `solve_melitz_nuisance_min_delta`/
+# `melitz_build_nuisance_profile_callbacks` (nuisance_profile.jl) now accept EITHER a
+# dense `PsiObjectiveBundleDelta` or a matrix-free `MelitzCCBundle` `obj_inner` -- the
+# optimization algorithm itself is UNCHANGED (no trust-region/predictor-corrector logic
+# introduced, per the governing prompt's own instruction); only the three bundle-specific
+# internals were swapped for already-established bundle-agnostic dispatch
+# (`melitz_bundle_inner_loop` (new, composed from existing primitives),
+# `melitz_heavy_snapshot`/`melitz_heavy_restore!` (pre-existing, already generic)).
+# ============================================================================
+@testset "Phase 6 (2026-07-26): nuisance-profile matrix-free port matches dense reference" begin
+    if KNITRO_AVAILABLE
+        inner_opt6 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        cfg6 = MelitzInnerSolveConfig(:evaluation_cap; delta_evaluation_cap=10.0)
+
+        @testset "D=4: matrix-free forbid_dense_fallback=true throws when obj_inner is dense" begin
+            obj_dense6, theta0_dense6 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt6,
+                backend=:dense_reference)
+            mask6a = melitz_nuisance_free_mask(obj_dense6.γ; block=:A_only)
+            @test_throws ArgumentError solve_melitz_nuisance_min_delta(obj_dense6.γ, obj_dense6, theta0_dense6;
+                free_mask=mask6a, radius=0.05, inner_loop_opt=inner_opt6, inner_solve_config=cfg6,
+                forbid_dense_fallback=true)
+        end
+
+        @testset "D=4: matrix-free (default backend) runs end to end, forbid_dense_fallback=true does NOT throw" begin
+            obj_mf6, theta0_mf6 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt6)
+            @test obj_mf6 isa MelitzCCBundle
+            mask6b = melitz_nuisance_free_mask(obj_mf6.γ; block=:A_only)
+            res_mf6 = solve_melitz_nuisance_min_delta(obj_mf6.γ, obj_mf6, theta0_mf6; free_mask=mask6b,
+                radius=0.05, inner_loop_opt=inner_opt6, inner_solve_config=cfg6, forbid_dense_fallback=true)
+            @test res_mf6.r_final.nStatus in (0, -100, -101, -103)
+        end
+
+        @testset "D=4: matched dense-vs-matrix-free -- identical starting point/mask/radius/cache init" begin
+            obj_d6, theta0_d6 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt6, backend=:dense_reference)
+            obj_m6, theta0_m6 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt6)
+            @test theta0_d6 == theta0_m6   # identical starting point (same FIXTURE, same reduce_theta)
+            mask6c = melitz_nuisance_free_mask(obj_d6.γ; block=:A_only)
+
+            res_d6 = solve_melitz_nuisance_min_delta(obj_d6.γ, obj_d6, theta0_d6; free_mask=mask6c,
+                radius=0.05, gradient_backend=:B_direct_argument_serial,
+                inner_loop_opt=inner_opt6, inner_solve_config=cfg6)
+            res_m6 = solve_melitz_nuisance_min_delta(obj_m6.γ, obj_m6, theta0_m6; free_mask=mask6c,
+                radius=0.05, gradient_backend=:B_direct_argument_serial,
+                inner_loop_opt=inner_opt6, inner_solve_config=cfg6, forbid_dense_fallback=true)
+
+            @test res_d6.r_final.nStatus in (0, -100, -101, -103)
+            @test res_m6.r_final.nStatus in (0, -100, -101, -103)
+            # SAME optimization problem, SAME KNITRO options/settings -- must reach the SAME
+            # minimized Delta and the SAME optimized nuisance coordinates (both backends drive
+            # the identical box-constrained NLP through the identical KNITRO options file).
+            @test isapprox(res_d6.Delta_min, res_m6.Delta_min; rtol=1e-5, atol=1e-8)
+            @test isapprox(res_d6.theta_final, res_m6.theta_final; rtol=1e-5, atol=1e-8)
+            @test isapprox(res_d6.r_final.Delta, res_m6.r_final.Delta; rtol=1e-5, atol=1e-8)
+            # cutoff/gravity residuals agree too (both re-verified via the SAME
+            # evaluate_melitz_delta cold reverification, generic across bundle types):
+            @test isapprox(res_d6.r_final.equilibrium_check.gravity_residual_A,
+                           res_m6.r_final.equilibrium_check.gravity_residual_A; atol=1e-8)
+            @test isapprox(res_d6.r_final.equilibrium_check.gravity_residual_f,
+                           res_m6.r_final.equilibrium_check.gravity_residual_f; atol=1e-8)
+        end
+
+        @testset "real D=20 (W=80,000): ONE fixed-g point, dense vs matrix-free cb_F!/cb_G! agree" begin
+            # Governing prompt's own wording: "one real-D20 FIXED g point" -- a SINGLE-POINT
+            # callback comparison, not a full nested outer KNITRO search. A full
+            # solve_melitz_nuisance_min_delta search at real D=20 scale was tried first and
+            # HUNG (confirmed live: 28+ minutes with zero further output after a KNITRO
+            # "Could not evaluate objective... trying perturbed initial points" cascade) --
+            # consistent with this repo's own documented history of real-D20 nested-KNITRO-
+            # solve fragility (memory: "KNITRO driver runs can hang past timeout",
+            # "Nested-KNITRO-solve hang"). A single bounded cb_F!/cb_G! call pair, exactly
+            # mirroring this session's own Phase 5 mock-callback pattern, tests the SAME
+            # bundle-agnostic port (melitz_bundle_inner_loop/melitz_heavy_snapshot/_restore!)
+            # without that risk -- one real inner CC dual solve per side, not an open-ended
+            # multi-iteration search.
+            #
+            # W=80,000, NOT W=20,000: confirmed live this session -- at W=20,000 this exact
+            # UNCAPPED single-point inner solve is genuinely ill-conditioned (objective
+            # ~1.3e9 vs ~2.2e9 between the two independently-implemented KNITRO drivers, one
+            # gradient entry ~1e23-1e24 -- clear numerical garbage from a divergent
+            # trajectory, not a port bug), consistent with this repo's OWN documented finding
+            # (memory: "Melitz D=20 rank deficiency RESOLVES at W=80k") that real-D20 needs
+            # W>=80,000 for a well-posed comparison; W=20,000 remains fine for the OTHER
+            # (feasibility-only, no inner-solve-value comparison) real-D20 tests in this file.
+            #
+            # NOTE: dirname(dirname(@__DIR__)) (TWO levels up from test/melitz), not three --
+            # this repo's real_data/ lives directly under the repo root
+            # (trade_robustness_modular/real_data/noah_D20). A pre-existing THREE-dirname
+            # version of this exact guard also appears elsewhere in this file (e.g. "Section
+            # 17: real D=20 data-only calibration diagnostics") and resolves one level too
+            # high, silently skipping via this same isdir guard -- a real, separate,
+            # pre-existing issue flagged for a future session, not fixed here (out of this
+            # phase's own scope, and those tests are not otherwise part of this port).
+            real_dir6 = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
+            if isdir(real_dir6)
+                lambdaData6 = readdlm(joinpath(real_dir6, "pi.csv"), ',')
+                LData6 = vec(readdlm(joinpath(real_dir6, "L.csv"), ',')) ./ 1e6
+                tauData6 = readdlm(joinpath(real_dir6, "tau.csv"), ',')
+                countries6 = vec(readdlm(joinpath(real_dir6, "countries.csv"), ',', String))
+                focal6 = findfirst(==("fra"), countries6)
+                observed6 = MelitzObservedData(; lambda=lambdaData6, L=LData6, tau=tauData6,
+                    countries=countries6, atol=2e-3)
+                calib6 = calibrate_melitz_pareto(observed6; sigma=2.5, theta_star=:estimate,
+                    focal_country=focal6, p_min=0.001, wage_tol=1e-8, gravity_tol=1e-6)
+
+                obj_d20n, theta0_d20n = build_melitz_psi_bundle_from_calibration(calib6; W=80_000,
+                    seed=calib6.seed, inner_loop_opt=inner_opt6, backend=:dense_reference)
+                obj_m20n, theta0_m20n = build_melitz_psi_bundle_from_calibration(calib6; W=80_000,
+                    seed=calib6.seed, inner_loop_opt=inner_opt6)
+                @test theta0_d20n == theta0_m20n
+                n20n = length(theta0_d20n)
+
+                # 2026-07-26 (fixed live this session): the counter reset must happen AFTER
+                # the dense callback calls, not before -- resetting before them and then
+                # calling BOTH cbset_d20n's (legitimately dense) and cbset_m20n's callbacks
+                # before snapshotting means the shared GLOBAL counters pick up the dense
+                # bundle's own expected dense-path increments too, producing a false failure
+                # that looked like a matrix-free dense-fallback leak but was actually a test
+                # ordering bug.
+                cbset_d20n = melitz_build_nuisance_profile_callbacks(obj_d20n, obj_d20n.γ;
+                    gradient_backend=:B_direct_argument_serial)
+                evD = MelitzMockEvalResult(zeros(1), Float64[], zeros(n20n), Float64[])
+                cbset_d20n.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_d20n)), evD, nothing)
+                cbset_d20n.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_d20n)), evD, nothing)
+
+                melitz_backend_counters_reset!()
+                cbset_m20n = melitz_build_nuisance_profile_callbacks(obj_m20n, obj_m20n.γ;
+                    gradient_backend=:B_direct_argument_serial, forbid_dense_fallback=true)
+                evM = MelitzMockEvalResult(zeros(1), Float64[], zeros(n20n), Float64[])
+                cbset_m20n.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_m20n)), evM, nothing)
+                cbset_m20n.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta0_m20n)), evM, nothing)
+                counters20n = melitz_backend_counters_snapshot()
+
+                @test isapprox(evD.obj[1], evM.obj[1]; rtol=1e-6)   # Delta(theta0) agrees
+                @test isapprox(evD.objGrad, evM.objGrad; rtol=1e-4, atol=1e-8)   # gradient agrees
+                # dense-fallback counters must be EXACTLY zero for the matrix-free run (strict
+                # mode was active -- forbid_dense_fallback=true -- so this is also a structural
+                # guarantee, not merely an observation):
+                @test counters20n.dense_inner_objective_calls == 0
+                @test counters20n.dense_inner_gradient_calls == 0
+                @test counters20n.dense_G_materializations == 0
+            else
+                @warn "Skipping real D=20 nuisance-profile matched test -- real_data/noah_D20 not found"
+            end
+        end
+    end
+end
+
+# ============================================================================
+# 2026-07-26 production-closure session (governing prompt Phase 7): "implement and
+# benchmark a matrix-free range screen." `melitz_range_screen(op::MelitzMomentOperator)`
+# (inner_screening.jl) computes the SAME per-column range test as the dense
+# `melitz_range_screen(G)` WITHOUT materializing `G` -- O(D^2) given `op`'s own
+# already-updated state (fused into `melitz_update_moment_operator!`'s existing merge
+# sweep, no extra O(W*D) pass). Validated (this session, standalone script, not
+# repeated in full here for wall-clock reasons) at D=4/D=10/real-D20 with ZERO
+# mismatches across 37 checked points; measured ~300x faster than the dense screen in
+# isolation at real D=20/W=20,000 (~110us vs ~33ms) -- `matrix_free_range_screen`
+# defaults to `true` in `melitz_classified_inner_solve` (was opt-in during
+# development) since the governing prompt's own bar ("enable by default only if the
+# measured net return is positive") is clearly met.
+# ============================================================================
+@testset "Phase 7 (2026-07-26): matrix-free range screen matches dense reference" begin
+    function melitz_test_ctx_and_op(fixture)
+        p, eq, cf = fixture.primitives, fixture.equilibrium, fixture.counterfactual
+        D = p.D
+        z_draws = fixture.z_draws
+        moment_layout = MelitzMomentLayout(D)
+        c_full, A_pivot = build_gravity_pivots(p.tau, p.target_country)
+        outer_layout = melitz_outer_layout(D, p.target_country)
+        sorted_ctx = build_melitz_sorted_tail_context(z_draws, p.sigma; theta_star=p.theta_star)
+        ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=p.target_country, tau=p.tau,
+               w=p.w, w_prime=cf.w_prime, L=fixture.L, expenditure=eq.expenditure, benchmark_cutoff=eq.cutoff,
+               moment_layout=moment_layout, X_data=eq.trade_flow, c_full=c_full, A_pivot=A_pivot,
+               jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+               outer_parameterization=:logf, inner_loop_opt="unused", outer_loop_opt="unused",
+               moment_backend=:sorted_tail_serial, sorted_tail_ctx=sorted_ctx)
+        op = build_melitz_moment_operator(sorted_ctx, moment_layout)
+        return ctx, op, z_draws
+    end
+
+    function melitz_check_range_screen_equivalence(fixture; n_perturb=8, perturb=0.02, seed=1)
+        ctx, op, z_draws = melitz_test_ctx_and_op(fixture)
+        p = fixture.primitives
+        obj_stub = (γ=ctx,)
+        theta0 = melitz_reduce_theta(p, ctx)
+        rng = MersenneTwister(seed)
+        n_checked = 0
+        for trial in 0:n_perturb
+            theta = trial == 0 ? theta0 : theta0 .+ perturb .* randn(rng, length(theta0))
+            st = melitz_outer_state(theta, ctx)
+            st.feasible || continue
+            K = zeros(size(z_draws, 1)); G = zeros(size(z_draws, 1), ctx.moment_layout.num_moments)
+            melitz_moments_adapter!(K, G, theta, z_draws, obj_stub)
+            melitz_update_moment_operator!(op, st.primitives, st.equilibrium, fixture.counterfactual; X_data=ctx.X_data)
+            cert_dense = melitz_range_screen(G)
+            cert_mf = melitz_range_screen(op)
+            @test (cert_dense === nothing) == (cert_mf === nothing)
+            if cert_dense !== nothing && cert_mf !== nothing
+                @test cert_dense.column == cert_mf.column
+                @test isapprox(cert_dense.lo, cert_mf.lo; atol=1e-9, rtol=1e-9)
+                @test isapprox(cert_dense.hi, cert_mf.hi; atol=1e-9, rtol=1e-9)
+            end
+            n_checked += 1
+        end
+        return n_checked
+    end
+
+    @testset "D=4 (FIXTURE): matrix-free range screen matches dense at theta0 and perturbed points" begin
+        n_checked = melitz_check_range_screen_equivalence(FIXTURE; seed=1)
+        @test n_checked >= 1
+    end
+
+    @testset "D=10 (synthetic): matrix-free range screen matches dense" begin
+        fixture10 = nothing
+        for seed10 in (100, 200, 7, 3, 11)
+            try
+                fixture10 = generate_fake_melitz_data(; D=10, sigma=2.5, theta_star=6.8,
+                    target_country=1, seed=seed10, W=5_000)
+                break
+            catch
+                continue
+            end
+        end
+        if fixture10 !== nothing
+            n_checked = melitz_check_range_screen_equivalence(fixture10; seed=2)
+            @test n_checked >= 1
+        else
+            @warn "Skipping D=10 range-screen equivalence test -- no seed produced a feasible fixture"
+        end
+    end
+
+    if KNITRO_AVAILABLE
+        @testset "real D=20: matrix-free range screen matches dense (direct op/G construction, no KNITRO)" begin
+            real_dir7 = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
+            if isdir(real_dir7)
+                lambdaData7 = readdlm(joinpath(real_dir7, "pi.csv"), ',')
+                LData7 = vec(readdlm(joinpath(real_dir7, "L.csv"), ',')) ./ 1e6
+                tauData7 = readdlm(joinpath(real_dir7, "tau.csv"), ',')
+                countries7 = vec(readdlm(joinpath(real_dir7, "countries.csv"), ',', String))
+                focal7 = findfirst(==("fra"), countries7)
+                observed7 = MelitzObservedData(; lambda=lambdaData7, L=LData7, tau=tauData7,
+                    countries=countries7, atol=2e-3)
+                calib7 = calibrate_melitz_pareto(observed7; sigma=2.5, theta_star=:estimate,
+                    focal_country=focal7, p_min=0.001, wage_tol=1e-8, gravity_tol=1e-6)
+                D7 = calib7.D
+                z_draws7 = pareto_draws(20_000, D7, calib7.theta_star; seed=calib7.seed, mode=:halton)
+                p7 = MelitzPrimitives(D7, calib7.sigma, calib7.theta_star, calib7.target_country, calib7.tau,
+                    calib7.w, calib7.A, calib7.f, calib7.gamma_prime_target)
+                eq7 = MelitzEquilibrium(calib7.E, ones(D7), calib7.q, calib7.X)
+                cf7 = MelitzCounterfactual(calib7.target_country, calib7.w_prime,
+                    calib7.w_prime * calib7.L[calib7.target_country], 1.0,
+                    calib7.w_prime * calib7.L[calib7.target_country])
+                fixture7 = (primitives=p7, equilibrium=eq7, counterfactual=cf7, L=calib7.L, z_draws=z_draws7)
+                n_checked = melitz_check_range_screen_equivalence(fixture7; n_perturb=10, perturb=0.01, seed=3)
+                @test n_checked >= 1
+            else
+                @warn "Skipping real D=20 range-screen equivalence test -- real_data/noah_D20 not found"
+            end
+        end
+
+        @testset "melitz_classified_inner_solve: matrix_free_range_screen defaults to true and actually engages for MelitzCCBundle" begin
+            inner_opt7 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+            obj_mf7, theta0_mf7 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt7)
+            @test obj_mf7 isa MelitzCCBundle
+            bank7 = MelitzDualBank()
+            melitz_backend_counters_reset!()
+            result7 = melitz_classified_inner_solve(obj_mf7, theta0_mf7, obj_mf7.γ;
+                delta_evaluation_cap=10.0, bank=bank7)
+            counters7 = melitz_backend_counters_snapshot()
+            @test counters7.matrix_free_range_screen_calls >= 1   # engaged by DEFAULT, no kwarg passed
+            @test counters7.production_dense_screen_calls == 0    # never the dense path for this bundle
+
+            # explicit opt-out still works (governing prompt: keep it toggleable, not forced):
+            melitz_backend_counters_reset!()
+            bank7b = MelitzDualBank()
+            melitz_classified_inner_solve(obj_mf7, theta0_mf7, obj_mf7.γ;
+                delta_evaluation_cap=10.0, bank=bank7b, matrix_free_range_screen=false)
+            counters7b = melitz_backend_counters_snapshot()
+            @test counters7b.matrix_free_range_screen_calls == 0
         end
     end
 end

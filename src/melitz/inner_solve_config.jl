@@ -17,41 +17,21 @@ using KNITRO
 #      Every caller that reuses the resulting `obj_inner` for REPEATED nested inner solves
 #      (`nuisance_profile.jl`'s own `solve_melitz_nuisance_min_delta`, or any future
 #      continuation/predictor-corrector driver built on the same object) inherits an
-#      unguarded object by construction. Confirmed live, same session
-#      (`docs/melitz_real_d20_outer_correction_2026-07-24.md` Section 10.4):
-#      `obj_inner.lower_limit` printed as `-1.797693e+308` (i.e. `-KNITRO.KN_INFINITY`)
-#      before a one-off diagnostic script patched it in by hand -- the fix was applied to
-#      ONE script, not to the construction/use path itself, so the same omission remains
-#      possible for the next caller.
+#      unguarded object by construction.
 #
-# This file is the SINGLE place that computes a Melitz inner-solve `lower_limit` from an
-# explicit, named mode. It does not replace `build_melitz_implicit_bundle`'s existing
-# `lower_limit_guard`/`delta_evaluation_cap` kwargs (changing that signature would force
-# every one of the ~90 existing D=4 unit-test call sites in `test/melitz/runtests.jl` --
-# most of which test gradient backends/cache mechanics at a small, bounded, single-shot
-# solve where an unguarded inner solve was never the failure mode -- to specify a mode they
-# do not need, pure churn with no safety benefit). Instead:
-#
-#   - `build_melitz_implicit_bundle`'s internal guard/cap arithmetic now ROUTES THROUGH
-#     `melitz_configure_lower_limit` (one implementation, not two) and additionally accepts
-#     an `inner_solve_config::MelitzInnerSolveConfig` kwarg as the PREFERRED way to specify
-#     the cap going forward (see finite_delta_outer.jl).
-#   - `build_melitz_psi_bundle`/`build_melitz_psi_bundle_from_calibration` gain the SAME
-#     optional `inner_solve_config` kwarg (default `nothing`, preserving every existing
-#     call site's exact current behavior -- an explicitly uncapped `PsiObjectiveBundleDelta`,
-#     appropriate for a single bounded D=4/D=20 one-shot solve).
-#   - `solve_melitz_nuisance_min_delta` (nuisance_profile.jl) -- the ACTUAL site of the
-#     confirmed-live incident, and the one function in this codebase whose entire purpose is
-#     REPEATED nested inner solves inside an outer KNITRO trajectory over a caller-supplied
-#     `obj_inner` -- now REQUIRES `inner_solve_config::MelitzInnerSolveConfig` with NO
-#     default at all, and applies it to `obj_inner.lower_limit` unconditionally at entry
-#     (save/restore around the call, `melitz_without_lower_limit_bailout`'s own convention),
-#     independent of how `obj_inner` happened to be constructed. This has zero existing
-#     committed call sites (`solve_melitz_nuisance_min_delta` appears in zero place in
-#     `test/melitz/runtests.jl` as of this session's start), so tightening its signature
-#     breaks nothing already committed -- and it is exactly the function this session's own
-#     Phases 7/8 (predictor-corrector, nuisance-profile experiments) build directly on top
-#     of, so guarding it now protects every subsequent use in this session too.
+# 2026-07-26 production-closure session, second pass (user-directed simplification): the
+# ORIGINAL fix (above) additionally introduced a small additive `guard` epsilon on top of
+# `delta_evaluation_cap` (`lower_limit = -(delta_evaluation_cap + guard)`), inherited from an
+# EARLIER, DIFFERENT, and WRONG design where `lower_limit` was tied to the OUTER BUDGET
+# `delta` rather than the evaluation cap (the "current-delta-budget" conflation this file's
+# own header used to warn about) -- that older design needed a margin because aborting
+# exactly AT `delta` was itself the bug being fixed. Once the abort threshold is correctly
+# gated on `delta_evaluation_cap` alone (a value chosen deliberately far from any routine
+# `Delta`, e.g. `10.0` vs. routine values order `1e-3`-`1`), no margin is needed: the cap
+# IS the threshold, not an approximation of one. The `guard` kwarg/field therefore added
+# complexity (a second number to reason about, a second thing that could silently drift)
+# with no remaining justification -- REMOVED. `lower_limit == -delta_evaluation_cap`,
+# exactly, under `:evaluation_cap`/`:diagnostic` mode.
 
 """
     MELITZ_INNER_SOLVE_MODES
@@ -68,7 +48,7 @@ governing prompt's Phase 1.1:
                          explicit, named choice, not silence.
   - `:evaluation_cap` -- the production routine-inner-solve cap (governing prompt Section
                          1/2): requires a finite `delta_evaluation_cap`, sets
-                         `lower_limit = -(delta_evaluation_cap + guard)`.
+                         `lower_limit = -delta_evaluation_cap` exactly.
   - `:diagnostic`     -- mathematically identical to `:evaluation_cap` (same formula, same
                          finite-cap requirement) but tagged separately so a one-off
                          diagnostic/canary script's intent ("I am exploring, not running the
@@ -85,15 +65,14 @@ const MELITZ_INNER_SOLVE_MODES = (:full_value, :evaluation_cap, :diagnostic)
 Immutable record of a fully-resolved inner-solve cap decision -- `mode` names WHY
 `lower_limit` has the value it does, so a downstream consumer (a report, a test, a runtime
 assertion) never has to re-derive intent from a bare `Float64`. Construct via
-`MelitzInnerSolveConfig(mode; delta_evaluation_cap=..., guard=..., outer_delta=...)`, never
-via the raw positional constructor (which performs no validation) -- `Base.show` prints a
-one-line summary for logging.
+`MelitzInnerSolveConfig(mode; delta_evaluation_cap=..., outer_delta=...)`, never via the raw
+positional constructor (which performs no validation) -- `Base.show` prints a one-line
+summary for logging.
 """
 struct MelitzInnerSolveConfig
     mode::Symbol
     lower_limit::Float64
     delta_evaluation_cap::Union{Nothing,Float64}
-    guard::Float64
 end
 
 function Base.show(io::IO, cfg::MelitzInnerSolveConfig)
@@ -101,13 +80,12 @@ function Base.show(io::IO, cfg::MelitzInnerSolveConfig)
         print(io, "MelitzInnerSolveConfig(:full_value, lower_limit=-Inf [uncapped])")
     else
         print(io, "MelitzInnerSolveConfig($(cfg.mode), delta_evaluation_cap=$(cfg.delta_evaluation_cap), ",
-                  "guard=$(cfg.guard), lower_limit=$(cfg.lower_limit))")
+                  "lower_limit=$(cfg.lower_limit))")
     end
 end
 
 """
-    melitz_configure_lower_limit(mode; delta_evaluation_cap=nothing, guard=1e-6,
-        outer_delta=nothing) -> Float64
+    melitz_configure_lower_limit(mode; delta_evaluation_cap=nothing, outer_delta=nothing) -> Float64
 
 The one authoritative computation of a Melitz `PsiObjectiveBundleDelta`/
 `PsiObjectiveBundleImplicit`'s KNITRO-native `lower_limit` early-bailout threshold (the
@@ -118,8 +96,8 @@ reimplementation of `cc_algo` itself).
 Fails fast (an `ArgumentError`, before ever touching KNITRO) rather than silently returning
 an uncapped/disabled threshold for any input the governing prompt's Phase 1.1 flags as
 invalid: an unrecognized `mode`, a missing `delta_evaluation_cap` under `:evaluation_cap`/
-`:diagnostic`, a non-finite or non-positive `delta_evaluation_cap`, a negative `guard`, or a
-stray `delta_evaluation_cap` supplied under `:full_value` (a caller passing both is almost
+`:diagnostic`, a non-finite or non-positive `delta_evaluation_cap`, or a stray
+`delta_evaluation_cap` supplied under `:full_value` (a caller passing both is almost
 certainly confused about which mode they want).
 
 `outer_delta`, if given, is compared against `delta_evaluation_cap` (Phase 1.3's "the cap
@@ -128,12 +106,19 @@ not an error, since `delta_evaluation_cap == outer_delta` is a legitimate (if un
 explicit choice (e.g. the 2026-07-24 evaluation-cap-correction session's own live
 reproduction of the OLD pre-correction bug, Section 3 of that report, deliberately sets
 `delta_evaluation_cap = delta` to demonstrate the original coupling for comparison).
+
+No `guard`/margin: `lower_limit = -delta_evaluation_cap` exactly. A prior version of this
+function added a small additive `guard` epsilon on top of the cap -- removed (2026-07-26,
+user-directed): that epsilon was inherited from an earlier, unrelated design where the
+abort threshold was tied to the OUTER BUDGET `delta` (which genuinely needed a margin, since
+aborting exactly AT `delta` was the bug being fixed there); once the threshold is the
+evaluation cap itself -- a value chosen deliberately far from any routine `Delta` -- the cap
+IS the threshold, and a second number to reason about adds nothing.
 """
 function melitz_configure_lower_limit(mode::Symbol; delta_evaluation_cap::Union{Nothing,Real}=nothing,
-                                       guard::Real=1e-6, outer_delta::Union{Nothing,Real}=nothing)
+                                       outer_delta::Union{Nothing,Real}=nothing)
     mode in MELITZ_INNER_SOLVE_MODES || throw(ArgumentError(
         "melitz_configure_lower_limit: mode must be one of $(MELITZ_INNER_SOLVE_MODES), got $mode"))
-    guard >= 0 || throw(ArgumentError("melitz_configure_lower_limit: guard must be >= 0, got $guard"))
 
     if mode == :full_value
         delta_evaluation_cap === nothing || throw(ArgumentError(
@@ -160,22 +145,22 @@ function melitz_configure_lower_limit(mode::Symbol; delta_evaluation_cap::Union{
               "outer budget (docs/melitz_real_d20_evaluation_cap_correction_2026-07-24.md). " *
               "Only intentional if you are deliberately reproducing that OLD behavior for comparison."
     end
-    return -(dec + Float64(guard))
+    return -dec
 end
 
 """
-    MelitzInnerSolveConfig(mode; delta_evaluation_cap=nothing, guard=1e-6, outer_delta=nothing)
+    MelitzInnerSolveConfig(mode; delta_evaluation_cap=nothing, outer_delta=nothing)
 
 Validating outer constructor -- see `melitz_configure_lower_limit` for the full argument
 semantics/error conditions. This is the ONLY supported way to build a
 `MelitzInnerSolveConfig`.
 """
 function MelitzInnerSolveConfig(mode::Symbol; delta_evaluation_cap::Union{Nothing,Real}=nothing,
-                                 guard::Real=1e-6, outer_delta::Union{Nothing,Real}=nothing)
-    ll = melitz_configure_lower_limit(mode; delta_evaluation_cap=delta_evaluation_cap, guard=guard,
+                                 outer_delta::Union{Nothing,Real}=nothing)
+    ll = melitz_configure_lower_limit(mode; delta_evaluation_cap=delta_evaluation_cap,
                                        outer_delta=outer_delta)
     dec = delta_evaluation_cap === nothing ? nothing : Float64(delta_evaluation_cap)
-    return MelitzInnerSolveConfig(mode, ll, dec, Float64(guard))
+    return MelitzInnerSolveConfig(mode, ll, dec)
 end
 
 """
@@ -189,9 +174,7 @@ silently returns `false`) if `cfg.mode in (:evaluation_cap, :diagnostic)` but an
 
   - `cfg.delta_evaluation_cap` is not finite;
   - `cfg.lower_limit` is not finite (i.e. still `-KNITRO.KN_INFINITY`, the disabled value);
-  - `cfg.lower_limit` is not strictly below `0` with the correct sign
-    (`cfg.lower_limit == -(delta_evaluation_cap + guard)`, i.e. more negative than
-    `-delta_evaluation_cap` alone -- the guard must be doing SOMETHING).
+  - `cfg.lower_limit != -cfg.delta_evaluation_cap` (wrong sign or stale config).
 
 No-op (returns `true`) for `mode==:full_value` -- that mode's entire point is an
 intentionally inactive cap, not a bug to flag.
@@ -204,9 +187,8 @@ function melitz_assert_evaluation_cap_active(cfg::MelitzInnerSolveConfig)
         "melitz_assert_evaluation_cap_active: mode=$(cfg.mode) but lower_limit=$(cfg.lower_limit) " *
         "is not finite -- the evaluation cap is NOT active (this is exactly the silent-omission " *
         "bug this file exists to prevent)")
-    expected = -(cfg.delta_evaluation_cap + cfg.guard)
-    @assert cfg.lower_limit == expected (
+    @assert cfg.lower_limit == -cfg.delta_evaluation_cap (
         "melitz_assert_evaluation_cap_active: lower_limit=$(cfg.lower_limit) does not match " *
-        "-(delta_evaluation_cap+guard)=$expected -- wrong sign or stale config")
+        "-delta_evaluation_cap=$(-cfg.delta_evaluation_cap) -- wrong sign or stale config")
     return true
 end

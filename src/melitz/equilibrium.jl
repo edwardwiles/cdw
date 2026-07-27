@@ -427,6 +427,98 @@ function acr_gains_from_trade(p::MelitzPrimitives, eq::MelitzEquilibrium)
     return lambda_jj, GT_ACR
 end
 
+# ============================================================================
+# 2026-07-26 production-closure session (governing prompt Phase 3): authoritative,
+# explicitly-named welfare metrics. A prior session's own reporting scripts printed the raw
+# outer-loop coordinate `g = theta_free[1] = log(gamma_prime_j)` under a field/label implying
+# it was the gains-from-trade `kappa`/`GT_j` (docs/melitz_production_fast_backend_2026-07-26.md
+# Section 5.5, caught live by direct user questioning: "kappa is meant to live between 0 and
+# 0.113" -- correctly flagged as impossible for the raw `g` value, which is unbounded and can
+# be negative with no welfare interpretation on its own). This was a REPORTING error, not an
+# economics error (the underlying `melitz_gains_from_trade`/`acr_gains_from_trade` formulas
+# above were always correct) -- but the ambiguity is unacceptable in production results, so
+# every quantity in the g -> kappa_ratio -> GT chain now has its own explicit name, bundled
+# into one struct so a caller/report never has to reconstruct or guess which one it has.
+# ============================================================================
+
+"""
+    MelitzWelfareMetrics
+
+Authoritative, explicitly-named bundle of the g -> kappa_ratio -> GT welfare chain. NEVER
+store or print the raw coordinate `g` under a variable/field/CSV-column name containing
+`kappa` or `GT` -- construct this struct (via `melitz_welfare_metrics_from_g`/
+`melitz_welfare_metrics`) and read the correctly-named field instead.
+
+Fields:
+  - `g::Float64`                -- the raw outer-loop free coordinate,
+    `theta_free[1] = log(gamma_prime_target)`. Unbounded, sign has no welfare
+    interpretation by itself.
+  - `gamma_prime::Float64`      -- `exp(g)`, the autarky price-power level.
+  - `wage_ratio::Float64`       -- `w_prime / w[target_country]`.
+  - `kappa_ratio::Float64`      -- `wage_ratio * gamma_prime^(1/(sigma-1))`, the "pre-`1-`"
+    term (main prompt Section A1's derivation, `melitz_gains_from_trade`'s docstring above).
+    This is NOT the gains-from-trade by itself -- this is exactly the quantity the OLD
+    `kappa_of_g` computed under a name that collided with `kappa`/`GT`.
+  - `gains_from_trade::Float64` -- `GT_j = 1 - kappa_ratio`, the actual gains-from-trade
+    (`melitz_gains_from_trade`'s return value, reconstructed here field-by-field).
+"""
+struct MelitzWelfareMetrics
+    g::Float64
+    gamma_prime::Float64
+    wage_ratio::Float64
+    kappa_ratio::Float64
+    gains_from_trade::Float64
+end
+
+"""
+    melitz_welfare_metrics_from_g(g, wage_ratio, sigma) -> MelitzWelfareMetrics
+    melitz_welfare_metrics_from_g(g, calib_or_ctx) -> MelitzWelfareMetrics
+
+Constructs `MelitzWelfareMetrics` from the raw outer-loop coordinate `g` (as returned by
+`solve_melitz_finite_delta_bound`'s `theta_free[1]`/`MelitzOuterCandidate.objective`'s own
+underlying coordinate). The second method accepts any object exposing `.sigma`, `.w_prime`,
+`.w`, `.target_country` (a `MelitzPrimitives`+`MelitzCounterfactual`-merged `ctx`, or any
+calibration context with the same field names -- matches the OLD `kappa_of_g`'s calling
+convention exactly, so existing call sites only need the name/return-type updated, not their
+arguments).
+"""
+function melitz_welfare_metrics_from_g(g::Real, wage_ratio::Real, sigma::Real)
+    gamma_prime = exp(g)
+    kappa_ratio = Float64(wage_ratio) * gamma_prime^(1 / (sigma - 1))
+    return MelitzWelfareMetrics(Float64(g), gamma_prime, Float64(wage_ratio), kappa_ratio, 1 - kappa_ratio)
+end
+function melitz_welfare_metrics_from_g(g::Real, calib_or_ctx)
+    wage_ratio = calib_or_ctx.w_prime / calib_or_ctx.w[calib_or_ctx.target_country]
+    return melitz_welfare_metrics_from_g(g, wage_ratio, calib_or_ctx.sigma)
+end
+
+"""
+    melitz_welfare_metrics(p::MelitzPrimitives, cf::MelitzCounterfactual) -> MelitzWelfareMetrics
+
+Population-level construction directly from primitives + counterfactual -- the closed-form
+reference point (wraps the SAME arithmetic as `melitz_gains_from_trade`, never a live
+outer-search trial). `gains_from_trade` here agrees with `melitz_gains_from_trade(p, cf)`
+exactly (tested).
+"""
+function melitz_welfare_metrics(p::MelitzPrimitives, cf::MelitzCounterfactual)
+    g = log(p.gamma_prime_target)
+    wage_ratio = cf.w_prime / p.w[p.target_country]
+    return melitz_welfare_metrics_from_g(g, wage_ratio, p.sigma)
+end
+
+"""
+    kappa_ratio_of_g(g, calib_or_ctx) -> Float64
+
+Renamed from the prior session's `kappa_of_g` (2026-07-26 closure session, governing prompt
+Phase 3) -- the OLD name was the direct cause of the live mislabeling incident this section's
+header describes: it has NEVER computed the gains-from-trade `kappa`/`GT_j`, only the
+pre-`1-` ratio term (`MelitzWelfareMetrics.kappa_ratio`). No external call sites existed for
+the old name (grep-confirmed: `predictor_corrector.jl`-internal only), so it is renamed
+outright rather than kept as a deprecated alias. Equivalent to
+`melitz_welfare_metrics_from_g(g, calib_or_ctx).kappa_ratio`.
+"""
+kappa_ratio_of_g(g::Real, calib_or_ctx) = melitz_welfare_metrics_from_g(g, calib_or_ctx).kappa_ratio
+
 """
     population_focal_link_residual(p, X, q, f_jj, cf) -> Float64
 

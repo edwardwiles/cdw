@@ -401,6 +401,24 @@ clearly, not misbehave silently, if that branch is then invoked on an object bui
 new default -- see `calculate_jac_θ!`'s and `ift!`'s `needs_outer_moment_jacobian` guards).
 The real Melitz outer theta-gradient search uses a SEPARATE `PsiObjectiveBundleImplicit`
 (`build_melitz_implicit_bundle`), unaffected by this kwarg.
+
+2026-07-26 production-port session: `backend` (NEW, default `:matrix_free`) selects between
+the permanent Melitz-owned `MelitzCCBundle` (matrix-free objective/gradient/Hessian, no
+dense `G`/`H` anywhere) and the legacy `:dense_reference` path (`PsiObjectiveBundleDelta`,
+`cc_algo`-owned functor, kept fully intact for diagnostics/cross-checks -- see
+docs/melitz_production_fast_backend_2026-07-26.md). This is now the PRODUCTION DEFAULT --
+every caller not passing `backend` explicitly gets the matrix-free bundle. `moment_backend`
+now defaults to `:auto` (resolved via `melitz_resolve_moment_backend`) rather than
+`:dense_reference` -- ONLY meaningful when `backend=:dense_reference` (a sorted-tail
+`ctx.sorted_tail_ctx` is always built either way, since `:matrix_free`'s own
+`MelitzMomentOperator` requires it structurally).
+
+`forbid_dense_fallback` (2026-07-26 closure session, governing prompt Phase 2, default
+`false`): when `true`, throws an `ArgumentError` immediately (before any moment/KNITRO work)
+if the resolved `backend` is `:dense_reference` -- the strict enforcement
+`MELITZ_PRODUCTION_FAST.forbid_dense_fallback` is meant to guarantee. `false` (this
+function's own default, and `MELITZ_PRODUCTION_COMPAT`'s value) permits an explicit dense
+choice, exactly as every existing call site already assumes.
 """
 function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   X_data::Matrix{Float64}=data.equilibrium.trade_flow,
@@ -409,11 +427,17 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
                                   needs_outer_moment_jacobian::Bool=false,
                                   inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
-                                  moment_backend::Symbol=:dense_reference)
+                                  backend::Symbol=:auto_from_moment_backend,
+                                  moment_backend::Symbol=:auto,
+                                  hessian_backend::Symbol=:auto,
+                                  forbid_dense_fallback::Bool=false)
     outer_parameterization in (:logf, :logcutoff) || throw(ArgumentError(
         "outer_parameterization must be :logf or :logcutoff, got $outer_parameterization"))
-    moment_backend in (:dense_reference, :sorted_tail_serial, :sorted_tail_parallel) || throw(ArgumentError(
-        "build_melitz_psi_bundle: moment_backend must be :dense_reference, " *
+    backend in (:matrix_free, :dense_reference, :auto_from_moment_backend) || throw(ArgumentError(
+        "build_melitz_psi_bundle: backend must be :matrix_free, :dense_reference, or " *
+        "(default) :auto_from_moment_backend, got $backend"))
+    moment_backend in (:auto, :dense_reference, :sorted_tail_serial, :sorted_tail_parallel) || throw(ArgumentError(
+        "build_melitz_psi_bundle: moment_backend must be :auto, :dense_reference, " *
         ":sorted_tail_serial, or :sorted_tail_parallel, got $moment_backend"))
     p, eq, cf = data.primitives, data.equilibrium, data.counterfactual
     D = p.D
@@ -424,12 +448,50 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
     c_full, A_pivot = build_gravity_pivots(p.tau, j)
     outer_layout = melitz_outer_layout(D, j)
 
-    # 2026-07-25 sorted-tail session: built ONCE here (never inside a callback) from the
-    # SAME z_draws the bundle itself will carry as obj.U -- see melitz_moments_adapter!'s
-    # docstring for the dispatch and its residual-risk caveat. Both sorted backends share
-    # the SAME context (:sorted_tail_serial/:sorted_tail_parallel differ only in whether
-    # melitz_moments_adapter! threads the trade-share loop, not in what is precomputed).
-    sorted_tail_ctx = moment_backend in (:sorted_tail_serial, :sorted_tail_parallel) ?
+    # 2026-07-26 production-port session: `backend=:auto_from_moment_backend` (NEW default)
+    # mirrors `build_melitz_implicit_bundle`'s own `gradient_backend`-driven auto-detection --
+    # a caller who explicitly names a concrete `moment_backend` (`:dense_reference`,
+    # `:sorted_tail_serial`, `:sorted_tail_parallel`) is asking for THAT backend's own
+    # semantics on `ctx.moment_backend`/`obj.γ`, which only the dense-reference bundle
+    # exposes (the matrix-free bundle's `MelitzMomentOperator` does not read this kwarg at
+    # all) -- so an explicit `moment_backend` choice, without an explicit `backend`
+    # override, silently selects `backend=:dense_reference` rather than being ignored (the
+    # bug this session's own test suite caught: `ctx.moment_backend` disagreeing with what
+    # the caller explicitly asked for). Same rule for `needs_outer_moment_jacobian=true`
+    # explicitly passed -- that kwarg only has meaning for the dense bundle (MelitzCCBundle's
+    # own `jac_h`/`needs_outer_moment_jacobian` fields are always `false`/empty, structurally,
+    # since it has no dense theta-branch at all -- see cc_bundle.jl).
+    if backend == :auto_from_moment_backend
+        backend = (moment_backend == :auto && !needs_outer_moment_jacobian) ? :matrix_free : :dense_reference
+    end
+    cfg = MelitzBackendConfig(inner_backend=backend, moment_backend=moment_backend, hessian_backend=hessian_backend)
+    resolved_moment_backend = backend == :matrix_free ? :sorted_tail_parallel : melitz_resolve_moment_backend(cfg, D)
+    resolved_moment_backend in (:dense_reference, :sorted_tail_serial, :sorted_tail_parallel) || throw(ArgumentError(
+        "build_melitz_psi_bundle: moment_backend must resolve to :dense_reference, " *
+        ":sorted_tail_serial, or :sorted_tail_parallel, got $resolved_moment_backend"))
+
+    # 2026-07-26 closure session (governing prompt Phase 2): strict production-fast callers
+    # (MELITZ_PRODUCTION_FAST's own forbid_dense_fallback=true) must fail HERE, at
+    # construction, if the resolved choice is dense -- never after an expensive callback
+    # begins, and never merely counted-and-allowed. `backend==:dense_reference` is the
+    # complete condition for THIS constructor (moment_backend only matters once backend is
+    # already dense -- see `resolved_moment_backend`'s own definition above).
+    if forbid_dense_fallback && backend == :dense_reference
+        throw(ArgumentError(
+            "build_melitz_psi_bundle: forbid_dense_fallback=true (strict production-fast mode) " *
+            "but the resolved backend is :dense_reference (from backend=$backend, " *
+            "moment_backend=$moment_backend, needs_outer_moment_jacobian=$needs_outer_moment_jacobian) " *
+            "-- pass backend=:matrix_free (or leave moment_backend=:auto and " *
+            "needs_outer_moment_jacobian=false) for a strict caller, or forbid_dense_fallback=false " *
+            "(MELITZ_PRODUCTION_COMPAT) if this dense choice is genuinely intended."))
+    end
+
+    # 2026-07-25 sorted-tail session (kept unconditional as of the 2026-07-26 production-port
+    # session): built ONCE here (never inside a callback) from the SAME z_draws the bundle
+    # itself will carry as obj.U. The matrix-free `MelitzMomentOperator` ALSO requires this
+    # same context structurally (its own bin/rank construction), so it is now built whenever
+    # EITHER backend needs it (i.e. except the pure `:dense_reference` diagnostic choice).
+    sorted_tail_ctx = (backend == :matrix_free || resolved_moment_backend in (:sorted_tail_serial, :sorted_tail_parallel)) ?
         build_melitz_sorted_tail_context(z_draws, p.sigma; theta_star=p.theta_star) : nothing
 
     ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=j, tau=p.tau, w=p.w,
@@ -441,9 +503,20 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
            outer_parameterization=outer_parameterization,
            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
-           moment_backend=moment_backend, sorted_tail_ctx=sorted_tail_ctx)
+           moment_backend=resolved_moment_backend, sorted_tail_ctx=sorted_tail_ctx)
 
     theta_free = melitz_reduce_theta(p, ctx)
+
+    if backend == :matrix_free
+        op = build_melitz_moment_operator(sorted_tail_ctx, moment_layout)
+        resolved_hessian_backend = melitz_resolve_hessian_backend(cfg, D)
+        obj = build_melitz_cc_bundle(op, ctx; mode=:delta, U=z_draws,
+            outer_constr_index=moment_layout.num_moments + 1,
+            lower_limit=(inner_solve_config === nothing ? -KNITRO.KN_INFINITY : inner_solve_config.lower_limit),
+            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+            hessian_backend=resolved_hessian_backend)
+        return obj, theta_free
+    end
 
     obj = PsiObjectiveBundleDelta(
         γ=ctx,
@@ -766,11 +839,14 @@ function evaluate_melitz_delta(theta_free::AbstractVector, ctx, obj;
 
     G_out = nothing
     if store_G
-        W = size(obj.U, 1)
-        K = zeros(W)
-        G = zeros(W, obj.d)
-        obj.moments!(K, G, theta_free, obj.U, obj)
-        G_out = G
+        # 2026-07-26 production-port session: melitz_bundle_dense_G_at_theta (cc_bundle.jl)
+        # dispatches -- dense bundles rebuild via obj.moments! (unchanged); MelitzCCBundle
+        # materializes G from the ALREADY-at-theta_free operator (melitz_recover_lfd just
+        # updated it above) via melitz_dense_G_from_operator -- a deliberately diagnostic-only
+        # O(num_moments) dense reconstruction, acceptable here since this is a one-shot
+        # evaluator (cold initial-incumbent, tests), never the per-iteration FC/GA hot path
+        # (which never passes store_G=true).
+        G_out = melitz_bundle_dense_G_at_theta(obj, theta_free)
     end
 
     verified = state.feasible && lfd.lfd_ok && lfd.nStatus == 0

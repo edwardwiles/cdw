@@ -279,7 +279,7 @@ end
 """
     build_melitz_implicit_bundle(ctx, theta_free_init; delta, find_smallest,
         gradient_backend=:B, h=1e-4, inner_loop_opt=..., outer_loop_opt=...,
-        lower_limit_guard=nothing) -> PsiObjectiveBundleImplicit
+        delta_evaluation_cap=nothing) -> PsiObjectiveBundleImplicit
 
 Constructs the SAME `PsiObjectiveBundleImplicit` struct the Ricardian model uses
 (`cc_algo/PsiObjectiveBundle.jl`, unmodified), wired to Melitz's own moments/gradient:
@@ -289,66 +289,130 @@ Constructs the SAME `PsiObjectiveBundleImplicit` struct the Ricardian model uses
 see this file's header), `l = length(theta_free_init)`, `U = z_draws` (the SAME reference
 draws the inner Delta(theta) solve uses).
 
-`lower_limit_guard`/`delta_evaluation_cap` (2026-07-24 evaluation-cap-correction session,
-governing prompt Sections 2-3, superseding this docstring's own prior `delta`-coupled
-description): `cc_algo`'s shared functor (`PsiObjectiveBundle.jl`'s
-`(Q::PsiObjectiveBundleImplicit)(...)`) already contains an objective-threshold early-stop
-mechanism -- `if f <= lower_limit; return -KNITRO.KN_INFINITY; else; return f; end`, where
-`f` is the raw dual objective KNITRO minimizes (`f = -Delta` at the optimum, and `-f(x) <=
-Delta` for EVERY dual point `x` by weak duality, since the CC dual here is unconstrained --
-see inner_screening.jl's header). The PRIOR session tied this to the OUTER BUDGET `delta`
-(`lower_limit = -(delta + lower_limit_guard)`) -- diagnosed as the central conceptual error
-this session corrects: a certified lower bound above the CURRENT outer budget is not
-evidence the point is unsolvable, only that it exceeds that one budget, so aborting there
-threw away an ordinary finite, fully-solvable point (Case A: `FiniteSolved`,
+`delta_evaluation_cap` (2026-07-24 evaluation-cap-correction session, governing prompt
+Sections 2-3, superseding this docstring's own prior `delta`-coupled description): `cc_algo`'s
+shared functor (`PsiObjectiveBundle.jl`'s `(Q::PsiObjectiveBundleImplicit)(...)`) already
+contains an objective-threshold early-stop mechanism -- `if f <= lower_limit; return
+-KNITRO.KN_INFINITY; else; return f; end`, where `f` is the raw dual objective KNITRO
+minimizes (`f = -Delta` at the optimum, and `-f(x) <= Delta` for EVERY dual point `x` by weak
+duality, since the CC dual here is unconstrained -- see inner_screening.jl's header). An
+EARLIER session tied this to the OUTER BUDGET `delta` (`lower_limit = -(delta + margin)`) --
+diagnosed as a central conceptual error: a certified lower bound above the CURRENT outer
+budget is not evidence the point is unsolvable, only that it exceeds that one budget, so
+aborting there threw away an ordinary finite, fully-solvable point (Case A: `FiniteSolved`,
 `inner_screening.jl`). This early-stop must instead be gated on the SEPARATE
-`delta_evaluation_cap` (governing prompt Section 2's evaluation cap, e.g. `10.0` --
-routine solves are never aborted merely for exceeding `delta`, only for certifiably
-exceeding this cap): `lower_limit = -(delta_evaluation_cap + lower_limit_guard)`.
-`lower_limit_guard === nothing` (default) leaves the mechanism permanently disabled
-(`-KNITRO.KN_INFINITY`), matching the pre-existing opt-in behavior; passing a real
-`lower_limit_guard` NOW REQUIRES an explicit `delta_evaluation_cap` too (an
-`ArgumentError` otherwise) -- deliberately fail-fast rather than silently falling back to
-the old, incorrect `delta`-coupling if a caller forgets to pass it. The KNITRO-native
-mid-solve stop this produces is classified `AboveEvaluationCap(...,:live_dual_threshold,...)`
-by `melitz_classified_inner_solve` (inner_screening.jl), never `NumericalFailure` and never
-`BudgetInfeasible` (that name/type no longer exists as of this session).
+`delta_evaluation_cap` (governing prompt Section 2's evaluation cap, e.g. `10.0` -- routine
+solves are never aborted merely for exceeding `delta`, only for certifiably exceeding this
+cap): `lower_limit = -delta_evaluation_cap`, exactly.
+
+2026-07-26 production-closure session (governing prompt Phase 1, "make the evaluation cap
+impossible to omit"): CORRECTED activation rule, superseding this docstring's own prior
+description. The previous rule left `lower_limit` disabled whenever a separate
+`lower_limit_guard` kwarg was omitted, EVEN IF `delta_evaluation_cap` was supplied -- a
+caller passing `delta_evaluation_cap=10.0` alone got a silently-disabled cap (confirmed
+live, `docs/melitz_production_fast_backend_2026-07-26.md` Section 5.5: a `13.5x` slower
+campaign, 31 spurious `NumericalFailure`s). The corrected rule -- and, per direct user
+feedback the same session, simplified further by removing the separate `lower_limit_guard`/
+`guard` margin entirely (it was inherited from the OLD `delta`-coupled design, which
+genuinely needed a margin because aborting exactly AT `delta` was itself the bug; once the
+threshold is the evaluation cap itself -- a value chosen deliberately far from any routine
+`Delta` -- the cap IS the threshold, and a second number to reason about added nothing):
+
+  - `inner_solve_config::MelitzInnerSolveConfig` given -- use it as-is (preferred going
+    forward); an error to also pass `delta_evaluation_cap`.
+  - `delta_evaluation_cap !== nothing` -- the cap is ALWAYS active:
+    `lower_limit = -delta_evaluation_cap`, exactly.
+  - NEITHER kwarg given -- `lower_limit = -KNITRO.KN_INFINITY` (disabled), the one remaining
+    way to get an uncapped bundle, and now an all-defaults, self-evident choice rather than
+    a trap a caller falls into while believing a cap is active.
+
+The KNITRO-native mid-solve stop this produces is classified
+`AboveEvaluationCap(...,:live_dual_threshold,...)` by `melitz_classified_inner_solve`
+(inner_screening.jl), never `NumericalFailure` and never `BudgetInfeasible` (that name/type
+no longer exists as of this session).
 """
 function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_init::AbstractVector;
                                        delta::Real, find_smallest::Bool,
-                                       gradient_backend::Symbol=:B, h::Real=1e-4,
+                                       gradient_backend::Symbol=:auto, h::Real=1e-4,
                                        inner_loop_opt::AbstractString,
                                        outer_loop_opt::AbstractString,
-                                       lower_limit_guard::Union{Nothing,Real}=nothing,
                                        delta_evaluation_cap::Union{Nothing,Real}=nothing,
-                                       inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing)
+                                       inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
+                                       backend::Symbol=:auto_from_gradient_backend,
+                                       hessian_backend::Symbol=:auto,
+                                       forbid_dense_fallback::Bool=false)
+    backend in (:matrix_free, :dense_reference, :auto_from_gradient_backend) || throw(ArgumentError(
+        "build_melitz_implicit_bundle: backend must be :matrix_free, :dense_reference, or " *
+        "(default) :auto_from_gradient_backend, got $backend"))
     d = ctx.moment_layout.num_moments
     l = length(theta_free_init)
-    # 2026-07-25 local-geometry/continuation session: this arithmetic now routes through the
-    # ONE authoritative `melitz_configure_lower_limit` (inner_solve_config.jl) instead of
-    # duplicating the guard/cap logic here -- `inner_solve_config`, if supplied, takes
-    # priority and is the PREFERRED way to specify the cap going forward (see that file's own
-    # header for why the legacy `lower_limit_guard`/`delta_evaluation_cap` kwargs are kept,
-    # not removed: ~90 existing D=4 unit-test call sites rely on their exact current
-    # behavior). Passing BOTH `inner_solve_config` and the legacy kwargs is an error, not a
-    # silent precedence choice.
+    D = ctx.D
+    # 2026-07-26 production-port session: `gradient_backend=:auto` (NEW default, replacing
+    # the old unconditional `:B`) resolves to the sorted crossing-slice direct backend
+    # whenever a sorted-tail context is available (built below for `backend=:matrix_free`,
+    # or already present on `ctx` if the paired FC-side bundle used a sorted moment_backend),
+    # else the plain direct backend -- never silently falling back to the old dense `:B`
+    # finite-difference-of-full-moments backend, which this session's own inventory audit
+    # found was still the un-flipped default. `D`/thread-count threshold matches
+    # `MelitzBackendConfig`'s own `:auto` rule (backend_config.jl).
+    #
+    # `backend` DEFAULT (`:auto_from_gradient_backend`) is itself resolved from the CALLER'S
+    # OWN `gradient_backend` choice, BEFORE `:auto` is expanded: if the caller explicitly
+    # asked for one of the legacy dense-only gradient mechanisms (`:B`, `:B_localized`,
+    # `:B_localized_parallel`, `:B_argument_localized_serial`, `:B_argument_localized_parallel`,
+    # `:D` -- every one of which reads `obj.H` and has NO matrix-free equivalent), that
+    # request is honored by silently building the dense-reference bundle underneath it,
+    # rather than throwing -- this is what a caller explicitly requesting `:B` clearly
+    # wants, and it is what this repo's own ~40 existing test call sites (comparison/
+    # cross-check baselines against `:B`) already assume. `backend=:matrix_free` passed
+    # EXPLICITLY still hard-errors on an incompatible gradient_backend below (a genuine,
+    # surfaced conflict), and `backend=:dense_reference` passed explicitly is always honored.
+    legacy_dense_only_gradient_backends = (:B, :B_localized, :B_localized_parallel,
+        :B_argument_localized_serial, :B_argument_localized_parallel, :D)
+    if backend == :auto_from_gradient_backend
+        backend = gradient_backend in legacy_dense_only_gradient_backends ? :dense_reference : :matrix_free
+    end
+    cfg = MelitzBackendConfig(inner_backend=backend, outer_gradient_backend=gradient_backend, hessian_backend=hessian_backend)
+    have_ctx_sorted_ctx = get(ctx, :sorted_tail_ctx, nothing) !== nothing
+    resolved_gradient_backend = gradient_backend != :auto ? gradient_backend :
+        (backend == :matrix_free || have_ctx_sorted_ctx) ?
+            melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:matrix_free), D) :
+            melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:dense_reference), D)
+    gradient_backend = resolved_gradient_backend
+    # 2026-07-26 closure session (governing prompt Phase 2): strict production-fast callers
+    # (MELITZ_PRODUCTION_FAST's own forbid_dense_fallback=true) must fail HERE, at
+    # construction, if the resolved backend is dense -- never after an expensive callback
+    # begins. `backend==:dense_reference` is the complete condition (a caller who explicitly
+    # requested a legacy dense-only gradient_backend already forced backend=:dense_reference
+    # above, so this single check also covers that case -- no separate gradient_backend
+    # check is needed).
+    if forbid_dense_fallback && backend == :dense_reference
+        throw(ArgumentError(
+            "build_melitz_implicit_bundle: forbid_dense_fallback=true (strict production-fast " *
+            "mode) but the resolved backend is :dense_reference (from backend=$backend, " *
+            "gradient_backend=$gradient_backend) -- pass backend=:matrix_free and a matrix-free " *
+            "gradient_backend (or leave gradient_backend=:auto) for a strict caller, or " *
+            "forbid_dense_fallback=false (MELITZ_PRODUCTION_COMPAT) if this dense choice is " *
+            "genuinely intended."))
+    end
+    # 2026-07-26 production-closure session (governing prompt Phase 1, then simplified same
+    # day per direct user feedback removing the separate guard/margin -- see this function's
+    # own docstring and inner_solve_config.jl's file header for the full history). The ONLY
+    # way to end up with a disabled (`-KN_INFINITY`) `lower_limit` is to supply NEITHER
+    # `inner_solve_config` NOR `delta_evaluation_cap` at all -- an explicit, all-defaults
+    # choice (still the right default for a single bounded D=4/D=20 one-shot solve that never
+    # mentions a cap). The MOMENT a caller supplies `delta_evaluation_cap`, the cap is active,
+    # exactly at that value: `lower_limit = -delta_evaluation_cap`.
     local lower_limit
     if inner_solve_config !== nothing
-        (lower_limit_guard !== nothing || delta_evaluation_cap !== nothing) && throw(ArgumentError(
-            "build_melitz_implicit_bundle: pass EITHER inner_solve_config OR the legacy " *
-            "lower_limit_guard/delta_evaluation_cap kwargs, not both"))
+        delta_evaluation_cap !== nothing && throw(ArgumentError(
+            "build_melitz_implicit_bundle: pass EITHER inner_solve_config OR delta_evaluation_cap, not both"))
         lower_limit = inner_solve_config.lower_limit
-    elseif lower_limit_guard === nothing
-        lower_limit = -KNITRO.KN_INFINITY
-    else
-        delta_evaluation_cap === nothing && throw(ArgumentError(
-            "build_melitz_implicit_bundle: lower_limit_guard requires an explicit " *
-            "delta_evaluation_cap -- the 2026-07-24 evaluation-cap-correction session " *
-            "removed the prior default of silently using the OUTER BUDGET `delta` as the " *
-            "KNITRO-native early-abort threshold (see this function's own docstring: that " *
-            "coupling is exactly the conceptual error this session corrects)."))
+    elseif delta_evaluation_cap !== nothing
         lower_limit = melitz_configure_lower_limit(:evaluation_cap;
-            delta_evaluation_cap=delta_evaluation_cap, guard=lower_limit_guard, outer_delta=delta)
+            delta_evaluation_cap=delta_evaluation_cap, outer_delta=delta)
+    else
+        lower_limit = -KNITRO.KN_INFINITY
     end
 
     # ADDITIVE (continuation4, Section 4): the two new "direct" backends never touch
@@ -377,6 +441,23 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
                 ":B_direct_argument_serial, :B_direct_argument_parallel, " *
                 ":B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel, or :D for " *
                 "the KNITRO-native Implicit path (Backend R does not fit the moments_jacobian! hook -- see file header)")
+
+    if backend == :matrix_free
+        is_direct || throw(ArgumentError(
+            "build_melitz_implicit_bundle: backend=:matrix_free requires gradient_backend in " *
+            "the :B_direct_argument_* family (resolved gradient_backend=$gradient_backend) -- " *
+            "MelitzCCBundle's functor does not implement the jac_h theta-branch (confirmed " *
+            "structurally unreachable/vacuous for Melitz, cc_bundle.jl header)."))
+        sorted_tail_ctx = have_ctx_sorted_ctx ? ctx.sorted_tail_ctx :
+            build_melitz_sorted_tail_context(z_draws, ctx.sigma; theta_star=ctx.theta_star)
+        op = build_melitz_moment_operator(sorted_tail_ctx, ctx.moment_layout)
+        resolved_hessian_backend = melitz_resolve_hessian_backend(cfg, D)
+        obj = build_melitz_cc_bundle(op, ctx; mode=:implicit, U=z_draws,
+            outer_constr_index=d + 1, find_smallest=find_smallest, lower_limit=lower_limit,
+            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+            hessian_backend=resolved_hessian_backend)
+        return obj
+    end
 
     obj = PsiObjectiveBundleImplicit(
         δ=Float64(delta),
@@ -624,7 +705,12 @@ mutable struct MelitzExactPointCache
     order::MelitzLRUOrder
     max_size::Int
     evictions::Int
-    heavy_store::Dict{Vector{Float64},Matrix{Float64}}
+    # 2026-07-26 production-port session: widened from Dict{...,Matrix{Float64}} to
+    # Dict{...,Any} so a heavy entry can hold EITHER a dense H copy (legacy bundles) or a
+    # MelitzOperatorSnapshot (MelitzCCBundle, cc_bundle.jl) -- see melitz_heavy_snapshot/
+    # melitz_heavy_restore!/melitz_heavy_bytes/melitz_heavy_recompute (cc_bundle.jl) for the
+    # per-bundle-type dispatch this enables.
+    heavy_store::Dict{Vector{Float64},Any}
     heavy_order::MelitzLRUOrder
     heavy_max_size::Int
     heavy_max_bytes::Int
@@ -636,7 +722,7 @@ function MelitzExactPointCache(max_size::Int=256; heavy_max_size::Int=4,
                                 heavy_max_bytes::Int=4_000_000_000)
     MelitzExactPointCache(
         Dict{Vector{Float64},Tuple{Float64,Vector{Float64},Int,UInt}}(), MelitzLRUOrder(), max_size, 0,
-        Dict{Vector{Float64},Matrix{Float64}}(), MelitzLRUOrder(), heavy_max_size, heavy_max_bytes, 0, 0, 0)
+        Dict{Vector{Float64},Any}(), MelitzLRUOrder(), heavy_max_size, heavy_max_bytes, 0, 0, 0)
 end
 
 """
@@ -653,7 +739,7 @@ function melitz_heavy_evict_until!(cache::MelitzExactPointCache)
           (length(cache.heavy_order.keys) > cache.heavy_max_size || cache.heavy_bytes > cache.heavy_max_bytes)
         oldest = popfirst!(cache.heavy_order.keys)
         H_old = pop!(cache.heavy_store, oldest, nothing)
-        H_old === nothing || (cache.heavy_bytes -= sizeof(H_old))
+        H_old === nothing || (cache.heavy_bytes -= melitz_heavy_bytes(H_old))
         n_evicted += 1
     end
     return n_evicted
@@ -687,12 +773,13 @@ function melitz_exact_cache_get(cache::MelitzExactPointCache, key::Vector{Float6
     H_hit = get(cache.heavy_store, key, nothing)
     if H_hit === nothing
         obj === nothing && return nothing   # compact hit, heavy miss, no way to recompute: full miss
-        H_hit = zeros(size(obj.H))
-        obj.moments!(@view(H_hit[:, 1]), CounterfactualSensitivity.select_G_from_H(obj, H_hit), key, obj.U, obj)
-        H_hit[:, 2] .= 1.0
+        # 2026-07-26 production-port session: melitz_heavy_recompute (cc_bundle.jl) dispatches
+        # per bundle type -- dense rebuild via obj.moments! (legacy), or a cheap
+        # (no-KNITRO) operator re-equilibration + snapshot for MelitzCCBundle.
+        H_hit = melitz_heavy_recompute(obj, key, ctx)
         cache.heavy_recomputes += 1
         cache.heavy_store[key] = H_hit
-        cache.heavy_bytes += sizeof(H_hit)
+        cache.heavy_bytes += melitz_heavy_bytes(H_hit)
         melitz_lru_touch!(cache.heavy_order, key)
         cache.heavy_evictions += melitz_heavy_evict_until!(cache)
     else
@@ -710,14 +797,14 @@ each tier's own capacity independently (`cache.max_size` for the compact tier,
 """
 function melitz_exact_cache_insert!(cache::MelitzExactPointCache, key::Vector{Float64},
                                      Delta::Float64, x::Vector{Float64}, nStatus::Int,
-                                     H::Matrix{Float64}, ctx, U::Union{Nothing,AbstractMatrix}=nothing)
+                                     H, ctx, U::Union{Nothing,AbstractMatrix}=nothing)
     cache.store[key] = (Delta, x, nStatus, melitz_context_fingerprint(ctx, U))
     melitz_lru_touch!(cache.order, key)
     cache.evictions += melitz_lru_evict_until!(cache.order, cache.store, cache.max_size)
 
-    haskey(cache.heavy_store, key) && (cache.heavy_bytes -= sizeof(cache.heavy_store[key]))
+    haskey(cache.heavy_store, key) && (cache.heavy_bytes -= melitz_heavy_bytes(cache.heavy_store[key]))
     cache.heavy_store[key] = H
-    cache.heavy_bytes += sizeof(H)
+    cache.heavy_bytes += melitz_heavy_bytes(H)
     melitz_lru_touch!(cache.heavy_order, key)
     cache.heavy_evictions += melitz_heavy_evict_until!(cache)
     return nothing
@@ -798,19 +885,53 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                                               warm_start_source::Symbol=:previous,
                                               exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
                                               dual_bank_max_size::Int=8,
-                                              gradient_backend::Symbol=:B,
-                                              h::Real=1e-4)
+                                              gradient_backend::Symbol=:auto,
+                                              h::Real=1e-4,
+                                              divergence_constraint_scaling::Symbol=:dimensionless)
     cutoff_constraint_backend in (:linear, :nonlinear_reference) || throw(ArgumentError(
         "cutoff_constraint_backend must be :linear or :nonlinear_reference, got $cutoff_constraint_backend"))
+    divergence_constraint_scaling in (:dimensionless, :legacy_1e10) || throw(ArgumentError(
+        "melitz_build_finite_delta_callbacks: divergence_constraint_scaling must be :dimensionless " *
+        "or :legacy_1e10, got $divergence_constraint_scaling"))
+    # 2026-07-26 closure session (governing prompt Phase 5): `:dimensionless`
+    # (c_delta(theta)=DeltaStar(theta)/delta<=1) is this codebase's OWN production default
+    # since the 2026-07-23 correctness-repair session (this file's own header, "OPAQUE 1e10
+    # CONSTRAINT SCALING") -- NOT a new mode introduced this session. `:legacy_1e10`
+    # reproduces the OLD, pre-2026-07-23 registration (`1e10*Delta(theta) <= 1e10*delta`) for
+    # direct side-by-side comparison/conditioning study only; it is never the default and this
+    # session does not change what any existing caller gets by omitting this kwarg.
+    #
+    # The shared functor's raw `constr[1]`/theta-gradient are ALWAYS `1e10*DeltaStar(theta)`/
+    # `d(1e10*DeltaStar)/dtheta` (an internal cc_algo-shared convention, unaffected by this
+    # kwarg). Both modes divide that SAME raw pair by one `divisor`, so the registered
+    # constraint/bound/sentinel are always `raw/divisor <= (1e10*delta)/divisor` -- an
+    # IDENTICAL feasible set and search direction for any `divisor`, only the numeric scale
+    # differs (`divisor=1e10*delta` -> `:dimensionless`'s `<=1`; `divisor=1` -> `:legacy_1e10`'s
+    # `<=1e10*delta`).
+    divergence_divisor = divergence_constraint_scaling == :dimensionless ? (1e10 * delta) : 1.0
+    divergence_bound = (1e10 * delta) / divergence_divisor
+    divergence_sentinel = (1e10 * delta_evaluation_cap) / divergence_divisor
+    # 2026-07-26 production-port session: resolve `gradient_backend=:auto` HERE using the
+    # SAME rule `build_melitz_implicit_bundle` used to build `obj` (matrix-free bundle, or a
+    # sorted-tail context present on `ctx`, -> the sorted direct family; else the plain direct
+    # family) -- `obj` was just constructed from this exact `ctx` by the caller
+    # (solve_melitz_finite_delta_bound/melitz_fixed_point_probe), so the two resolutions
+    # necessarily agree. Without this, `:auto` would silently fall through to `nothing` below
+    # and reintroduce the legacy jac_h theta-branch even though `obj` itself is matrix-free/
+    # sorted-ready.
+    resolved_gradient_backend = gradient_backend != :auto ? gradient_backend :
+        (obj isa MelitzCCBundle || get(ctx, :sorted_tail_ctx, nothing) !== nothing) ?
+            melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:matrix_free), ctx.D) :
+            melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:dense_reference), ctx.D)
     # ADDITIVE (continuation4, Section 4): when gradient_backend is one of the two "direct"
     # backends, cb_G! (below) calls this closure directly instead of the shared
     # PsiObjectiveBundleImplicit functor's own theta-branch (obj(x, dummy_g, theta; jac=...)),
     # which would otherwise touch jac_h. `nothing` (the ordinary case) leaves cb_G! exactly as
     # before -- purely additive, zero behavior change for every existing gradient_backend value.
-    direct_gradient_fn = gradient_backend == :B_direct_argument_serial ? make_melitz_gradient_delta_direct_serial(h) :
-                         gradient_backend == :B_direct_argument_parallel ? make_melitz_gradient_delta_direct_parallel(h) :
-                         gradient_backend == :B_direct_argument_sorted_serial ? make_melitz_gradient_delta_direct_sorted_serial(h) :
-                         gradient_backend == :B_direct_argument_sorted_parallel ? make_melitz_gradient_delta_direct_sorted_parallel(h) :
+    direct_gradient_fn = resolved_gradient_backend == :B_direct_argument_serial ? make_melitz_gradient_delta_direct_serial(h) :
+                         resolved_gradient_backend == :B_direct_argument_parallel ? make_melitz_gradient_delta_direct_parallel(h) :
+                         resolved_gradient_backend == :B_direct_argument_sorted_serial ? make_melitz_gradient_delta_direct_sorted_serial(h) :
+                         resolved_gradient_backend == :B_direct_argument_sorted_parallel ? make_melitz_gradient_delta_direct_sorted_parallel(h) :
                          nothing
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
     live_candidates = MelitzOuterCandidate[]
@@ -885,7 +1006,11 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         # `evaluate_melitz_delta_from_solution` -> `melitz_recover_lfd_from_solution` --
         # this WAS the dominant cost of `fc_candidate_registration` (~65-75ms/call,
         # `docs/melitz_optimization_report_2026-07-23.md` Section A.3).
-        G_now = CounterfactualSensitivity.select_G_from_H(obj, obj.H)
+        # melitz_bundle_current_G (cc_bundle.jl) returns the dense G view for the legacy
+        # bundles (unchanged), or `nothing` for MelitzCCBundle -- a fully supported value for
+        # `G_precomputed` (the matrix-free `melitz_recover_lfd_from_solution` method ignores
+        # it entirely, always using mul_G!/mul_Gt! on the operator already at this theta).
+        G_now = melitz_bundle_current_G(obj)
         r = evaluate_melitz_delta_from_solution(theta, ctx, obj, Delta_val, x, nStatus;
             G_precomputed=G_now)
         cls = melitz_classify_outer_feasibility(r, delta)
@@ -939,7 +1064,12 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             n_exact_cache_hits[] += 1
             melitz_record_seconds_outcome!(:inner_solve, :cache_hit, 0.0)
             Delta_hit, x_hit, nStatus_hit, H_hit = hit
-            obj.H .= H_hit
+            # melitz_heavy_restore! (cc_bundle.jl) dispatches: obj.H .= H_hit for the legacy
+            # bundles (unchanged), or a zero-rebuild operator-field restore (+ MELITZ_FC_TO_GA_
+            # CACHE_HITS increment) for MelitzCCBundle -- this IS the FC-to-GA state-reuse path
+            # (Phase 3.1/9): a cb_G! call at a theta cb_F! JUST solved hits this branch.
+            melitz_heavy_restore!(obj, H_hit)
+            MELITZ_EXACT_POINT_CACHE_HITS[] += 1
             return (Delta_hit, x_hit, nStatus_hit, :solved)
         end
         n_exact_cache_misses[] += 1
@@ -967,7 +1097,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             # DIFFERENT outer `delta`/`delta_evaluation_cap` -- can reuse this entry
             # (`DeltaStar(theta)` does not depend on the outer budget OR the evaluation cap).
             melitz_exact_cache_insert!(exact_cache, key, result.Delta, result.x, result.nStatus,
-                copy(obj.H), ctx, obj.U)
+                melitz_heavy_snapshot(obj), ctx, obj.U)
             return (result.Delta, result.x, result.nStatus, :solved)
         elseif result isa InfiniteDeltaCertified
             n_infinite_delta_reject[] += 1
@@ -1028,7 +1158,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             # `inner_solve_verified_or_fail`'s own comment for the full reasoning). Reported
             # as an ORDINARY successful evaluation (return 0), not an eval-error.
             if kind == :certified_bad
-                evalResult.c[1] = delta_evaluation_cap / delta
+                evalResult.c[1] = divergence_sentinel
                 if cutoff_constraint_backend == :nonlinear_reference
                     g_d, g_e = @melitz_profile :fc_cutoff_nonlinear melitz_cutoff_constraints_at(theta, obj.γ)
                     nd = length(g_d)
@@ -1054,7 +1184,10 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             # delta_evaluation_cap (governing prompt Case A: these are FiniteSolved, not
             # intercepted early) -- giving KNITRO's own line search real, non-path-dependent
             # magnitude/direction information at every evaluated point, on-budget or not.
-            evalResult.c[1] = Delta_theta / delta
+            # (governing prompt Phase 5: generalized to `local_c[1]/divergence_divisor` --
+            # `:dimensionless` reduces to the ORIGINAL `Delta_theta/delta` exactly, since
+            # `local_c[1]==1e10*Delta_theta` and `divergence_divisor==1e10*delta` in that mode.)
+            evalResult.c[1] = local_c[1] / divergence_divisor
 
             # Section 3.3/4 (backend comparison): under :linear, the D+D*(D-1) cutoff rows are
             # NOT evaluated here at all -- they are registered as true KNITRO linear
@@ -1133,7 +1266,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                 # base state at this `theta` (inner_solve_verified_or_fail just ensured it).
                 @melitz_profile :ga_divergence_gradient direct_gradient_fn(local_jac, theta, ctx, obj, x)
             end
-            evalResult.jac[1:n_] .= local_jac ./ (1e10 * delta)   # Section 4.2: same scaling as the value
+            evalResult.jac[1:n_] .= local_jac ./ divergence_divisor   # Section 4.2/Phase 5: same divisor as the value
 
             if cutoff_constraint_backend == :nonlinear_reference
                 J_d, J_e = @melitz_profile :ga_cutoff_jacobian_nonlinear melitz_cutoff_constraint_jacobian(theta, obj.γ)
@@ -1159,6 +1292,8 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             n_inner_eval_failures = n_inner_eval_failures, signed_objective = signed_objective,
             cutoff_constraint_backend = cutoff_constraint_backend,
             delta_evaluation_cap = delta_evaluation_cap,
+            divergence_constraint_scaling = divergence_constraint_scaling,
+            divergence_constraint_upbnd = divergence_bound,
             n_fc_calls = n_fc_calls, n_ga_calls = n_ga_calls,
             n_exact_cache_hits = n_exact_cache_hits, n_exact_cache_misses = n_exact_cache_misses,
             exact_cache = exact_cache,
@@ -1206,8 +1341,13 @@ function melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, 
     n_cutoff = D + D2
     m = 1 + n_cutoff
     cIndices = KNITRO.KN_add_cons(kc, m)
-    # Section 4.1: c_delta <= 1 -- dimensionless, replaces the old 1e10*delta magnitude.
-    KNITRO.KN_set_con_upbnd(kc, cIndices[1], 1.0)
+    # Section 4.1: c_delta <= 1 under the (default) :dimensionless scaling, replacing the old
+    # 1e10*delta magnitude. Governing prompt Phase 5: the bound now comes from `cbset` itself
+    # (`melitz_build_finite_delta_callbacks`'s own `divergence_constraint_upbnd`), so the
+    # registered bound always matches whatever scaling that function's callbacks actually use
+    # -- `:legacy_1e10` registers `1e10*delta` here instead, an IDENTICAL feasible set, just
+    # unscaled (see that function's own header comment for the full equivalence argument).
+    KNITRO.KN_set_con_upbnd(kc, cIndices[1], cbset.divergence_constraint_upbnd)
 
     cutoff_sys = nothing
     if cutoff_constraint_backend == :nonlinear_reference
@@ -1265,7 +1405,21 @@ Three corrections vs. the prior (2026-07-23, pre-repair) version of this functio
 2026-07-24 evaluation-cap-correction session (fourth correction, layered on top of the three
 above): `delta_evaluation_cap` (default `10.0`) is a NEW kwarg threaded straight into
 `build_melitz_implicit_bundle`/`melitz_build_finite_delta_callbacks` -- see those functions'
-own docstrings for the full Case A/B/C/D semantics this introduces. In one sentence: `delta`
+own docstrings for the full Case A/B/C/D semantics this introduces.
+
+2026-07-26 production-closure session (governing prompt Phase 1): `delta_evaluation_cap` is
+ALWAYS active on this driver now, exactly (`lower_limit = -delta_evaluation_cap`, see
+`build_melitz_implicit_bundle`'s docstring) -- there is no separate guard/margin kwarg to
+omit (removed the same session, per direct user feedback: an earlier version of this fix
+added a small additive margin on top of the cap, inherited from an unrelated older design
+that genuinely needed one; once the threshold IS the evaluation cap, no margin is needed).
+Prior to this session, calling this function with no cap-related kwargs at all left the cap
+looking active (`delta_evaluation_cap=10.0`, the default) while `lower_limit` stayed
+disabled -- confirmed live to cost a `13.5x` wall-clock regression and 31 spurious
+`NumericalFailure` results in a real D=20 campaign
+(`docs/melitz_production_fast_backend_2026-07-26.md` Section 5.5).
+
+In one sentence: `delta`
 no longer plays any role in whether an inner evaluation is aborted early (only
 `delta_evaluation_cap` does), so a trial point with genuine `DeltaStar` between `delta` and
 `delta_evaluation_cap` is now solved to a real optimum and returned to KNITRO as an
@@ -1343,14 +1497,13 @@ matching KNITRO's own documented behavior).
 function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVector;
                                           delta::Real, direction::Symbol,
                                           delta_evaluation_cap::Real=10.0,
-                                          gradient_backend::Symbol=:B, h::Real=1e-4,
+                                          gradient_backend::Symbol=:auto, h::Real=1e-4,
                                           theta_box::Union{Real,AbstractVector}=2.0,
                                           n_live_candidates_tracked::Int=5,
                                           cutoff_constraint_backend::Symbol=:nonlinear_reference,
                                           inner_loop_opt::AbstractString,
                                           outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"),
                                           on_inner_result=nothing,
-                                          lower_limit_guard::Union{Nothing,Real}=nothing,
                                           dual_polish_screen::Bool=false,
                                           dual_polish_steps::Int=3,
                                           origin_block_screen::Bool=false,
@@ -1361,7 +1514,10 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           dual_bank_max_size::Int=8,
                                           external_incumbent::Union{Nothing,AbstractVector}=nothing,
                                           var_scale::Union{Nothing,AbstractVector}=nothing,
-                                          var_center::Union{Nothing,AbstractVector}=nothing)
+                                          var_center::Union{Nothing,AbstractVector}=nothing,
+                                          backend::Symbol=:auto_from_gradient_backend,
+                                          forbid_dense_fallback::Bool=false,
+                                          divergence_constraint_scaling::Symbol=:dimensionless)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     t0 = time()
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
@@ -1370,14 +1526,33 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     delta = Float64(delta)
     delta_evaluation_cap = Float64(delta_evaluation_cap)
 
-    # 2026-07-24 evaluation-cap-correction session: `lower_limit_guard`, when enabled, is now
-    # ALWAYS paired with THIS call's own `delta_evaluation_cap` (never the outer budget
-    # `delta`) -- see `build_melitz_implicit_bundle`'s docstring for why the two must not be
-    # conflated.
+    # 2026-07-24 evaluation-cap-correction session: `delta_evaluation_cap` is threaded to
+    # `build_melitz_implicit_bundle` (never the outer budget `delta`) -- see that function's
+    # docstring for why the two must not be conflated.
+    #
+    # 2026-07-26 production-closure session (governing prompt Phase 1, simplified same day
+    # per direct user feedback removing the separate guard/margin entirely): `delta_evaluation_cap`
+    # here is `::Real` (never `Union{Nothing,Real}`) -- this driver's cap is ALWAYS meant to be
+    # active, by construction, never an opt-in a caller can forget. Combined with this
+    # session's fix to `build_melitz_implicit_bundle` (a supplied `delta_evaluation_cap`
+    # always activates `lower_limit = -delta_evaluation_cap`, exactly), simply calling this
+    # function with NO cap-related kwargs at all -- the exact confirmed-live incident (Section
+    # 5.5 of docs/melitz_production_fast_backend_2026-07-26.md: `delta_evaluation_cap=10.0`'s
+    # own default, previously left disabled, 13.5x slower campaign, 31 spurious
+    # `NumericalFailure`s) -- now yields an ACTIVE cap automatically. The assertion below is a
+    # live, unconditional runtime guarantee of that fact (not merely a documentation claim): if
+    # a future refactor ever reintroduces a silent disabled-cap path here, this fails loudly
+    # the very first call, not just in a test file that might not be re-run.
     obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta_init; delta=delta,
         find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
-        lower_limit_guard=lower_limit_guard, delta_evaluation_cap=delta_evaluation_cap)
+        delta_evaluation_cap=delta_evaluation_cap, backend=backend,
+        forbid_dense_fallback=forbid_dense_fallback)
+    @assert isfinite(obj.lower_limit) (
+        "solve_melitz_finite_delta_bound: obj.lower_limit=$(obj.lower_limit) is not finite -- " *
+        "the evaluation cap (delta_evaluation_cap=$delta_evaluation_cap) failed to activate. " *
+        "This should be impossible after the 2026-07-26 production-closure fix; see " *
+        "build_melitz_implicit_bundle's docstring.")
 
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
 
@@ -1424,7 +1599,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         dual_polish_screen=dual_polish_screen, dual_polish_steps=dual_polish_steps,
         origin_block_screen=origin_block_screen, screen_order=screen_order,
         warm_start_source=warm_start_source, exact_cache=exact_cache,
-        dual_bank_max_size=dual_bank_max_size, gradient_backend=gradient_backend, h=h)
+        dual_bank_max_size=dual_bank_max_size, gradient_backend=gradient_backend, h=h,
+        divergence_constraint_scaling=divergence_constraint_scaling)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -1552,10 +1728,12 @@ production combined callback (`melitz_build_finite_delta_callbacks`) exactly onc
 """
 function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
                                    delta::Real, direction::Symbol,
-                                   gradient_backend::Symbol=:B, h::Real=1e-4,
+                                   gradient_backend::Symbol=:auto, h::Real=1e-4,
                                    cutoff_constraint_backend::Symbol=:nonlinear_reference,
                                    inner_loop_opt::AbstractString,
-                                   outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"))
+                                   outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"),
+                                   backend::Symbol=:auto_from_gradient_backend,
+                                   divergence_constraint_scaling::Symbol=:dimensionless)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     find_smallest = direction == :upper
     D = ctx.D
@@ -1565,10 +1743,11 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
 
     obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta_probe_v; delta=delta,
         find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
-        inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
+        inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt, backend=backend)
 
     cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
-        cutoff_constraint_backend=cutoff_constraint_backend, gradient_backend=gradient_backend, h=h)
+        cutoff_constraint_backend=cutoff_constraint_backend, gradient_backend=gradient_backend, h=h,
+        divergence_constraint_scaling=divergence_constraint_scaling)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)

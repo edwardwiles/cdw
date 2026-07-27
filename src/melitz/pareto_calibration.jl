@@ -1114,6 +1114,17 @@ Shared builder (factored out so `build_melitz_psi_bundle_from_calibration` and t
 for the `MelitzPrimitives`/outer `ctx` pair from a calibration, with NO Monte Carlo draws
 and NO `PsiObjectiveBundleDelta` construction -- everything `melitz_reduce_theta`/
 `melitz_expand_theta` need and nothing more.
+
+2026-07-26 closure session (governing prompt Phase 10 audit): `moment_backend` here defaults
+to `:dense_reference` -- audited, and confirmed NOT a production hidden-default risk: this
+function has exactly two callers in this codebase (grep-confirmed), `build_melitz_psi_bundle_from_calibration`
+(the production entry point, which always passes `moment_backend=resolved_moment_backend`
+explicitly -- never relies on this default) and `melitz_calibration_roundtrip_check` (a pure
+algebraic reduce/expand consistency check -- no Monte Carlo, no KNITRO, no moment matrix ever
+touched regardless of this field's value -- clearly diagnostic by name and docstring, the
+governing prompt's own stated exception: "explicit diagnostic functions may default to
+MELITZ_DENSE_REFERENCE only if their names/documentation clearly identify them as reference
+tools"). Left unchanged.
 """
 function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
         outer_parameterization::Symbol=:logf,
@@ -1225,16 +1236,56 @@ function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration
         outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
         needs_outer_moment_jacobian::Bool=false,
         inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
-        moment_backend::Symbol=:dense_reference)
+        backend::Symbol=:auto_from_moment_backend,
+        moment_backend::Symbol=:auto,
+        hessian_backend::Symbol=:auto,
+        forbid_dense_fallback::Bool=false)
+    backend in (:matrix_free, :dense_reference, :auto_from_moment_backend) || throw(ArgumentError(
+        "build_melitz_psi_bundle_from_calibration: backend must be :matrix_free, :dense_reference, " *
+        "or (default) :auto_from_moment_backend, got $backend"))
+    moment_backend in (:auto, :dense_reference, :sorted_tail_serial, :sorted_tail_parallel) || throw(ArgumentError(
+        "build_melitz_psi_bundle_from_calibration: moment_backend must be :auto, :dense_reference, " *
+        ":sorted_tail_serial, or :sorted_tail_parallel, got $moment_backend"))
     D = calib.D
     j = calib.target_country
     z_draws = pareto_draws(W, D, calib.theta_star; seed=seed, mode=draw_mode)
 
+    # See build_melitz_psi_bundle's identical (delta_star.jl) comment for why an explicit
+    # concrete moment_backend, without an explicit backend override, silently selects
+    # backend=:dense_reference.
+    if backend == :auto_from_moment_backend
+        backend = moment_backend == :auto ? :matrix_free : :dense_reference
+    end
+    # 2026-07-26 closure session (governing prompt Phase 2): see build_melitz_psi_bundle's
+    # identical check (delta_star.jl) -- strict callers fail HERE, at construction, not after
+    # an expensive callback begins.
+    if forbid_dense_fallback && backend == :dense_reference
+        throw(ArgumentError(
+            "build_melitz_psi_bundle_from_calibration: forbid_dense_fallback=true (strict " *
+            "production-fast mode) but the resolved backend is :dense_reference (from " *
+            "backend=$backend, moment_backend=$moment_backend) -- pass backend=:matrix_free " *
+            "(or leave moment_backend=:auto) for a strict caller, or forbid_dense_fallback=false " *
+            "(MELITZ_PRODUCTION_COMPAT) if this dense choice is genuinely intended."))
+    end
+    cfg = MelitzBackendConfig(inner_backend=backend, moment_backend=moment_backend, hessian_backend=hessian_backend)
+    resolved_moment_backend = backend == :matrix_free ? :sorted_tail_parallel : melitz_resolve_moment_backend(cfg, D)
+
     p, eq, cf, ctx = melitz_calibration_outer_ctx(calib; outer_parameterization=:logf,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
-        moment_backend=moment_backend, z_draws=z_draws)
+        moment_backend=resolved_moment_backend, z_draws=z_draws)
 
     theta_free = melitz_reduce_theta(p, ctx)
+
+    if backend == :matrix_free
+        op = build_melitz_moment_operator(ctx.sorted_tail_ctx, ctx.moment_layout)
+        resolved_hessian_backend = melitz_resolve_hessian_backend(cfg, D)
+        obj = build_melitz_cc_bundle(op, ctx; mode=:delta, U=z_draws,
+            outer_constr_index=ctx.moment_layout.num_moments + 1,
+            lower_limit=(inner_solve_config === nothing ? -KNITRO.KN_INFINITY : inner_solve_config.lower_limit),
+            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+            hessian_backend=resolved_hessian_backend)
+        return obj, theta_free
+    end
 
     obj = PsiObjectiveBundleDelta(
         γ=ctx, (moments!)=melitz_moments_adapter!, d=ctx.moment_layout.num_moments,

@@ -212,6 +212,82 @@ function melitz_range_screen(G::AbstractMatrix{<:Real}; guard::Real=0.0)
     return nothing
 end
 
+"""
+    melitz_range_screen(op::MelitzMomentOperator; guard=0.0) -> Union{Nothing,InfiniteDeltaCertified}
+
+2026-07-26 closure session (governing prompt Phase 7): a matrix-free equivalent of the dense
+range screen above, computed WITHOUT ever materializing `G` -- `O(D^2)` given `op`'s own
+already-updated state (`melitz_update_moment_operator!`'s `O(W*D)` cost, amortized across
+every screen/objective/gradient/Hessian call at this outer point, NOT repeated here).
+
+Algebra: for trade cell `(o,d)`, `G[w,idx] = coef[o,d]*z_power[w,o] - lambda[o,d]` when draw
+`w` is ACTIVE for `d` (`bin[w,o] >= rank[d,o]`), else `G[w,idx] = -lambda[o,d]` (a CONSTANT
+across every inactive draw). So the column's value set is
+`{-lambda[o,d]} UNION {coef[o,d]*z_power[w,o] - lambda[o,d] : w active}` (the first set is
+only present if at least one draw is inactive). Because
+`sorted_ctx.sorted_z_power[:,o]` is sorted ASCENDING and `bin` is a non-decreasing function
+of `z`, "active for threshold `t`" is exactly the SORTED SUFFIX from `op.first_active_pos[t+1,o]`
+to `W` -- so the active set's `z_power` extrema are just its two endpoints:
+`sorted_z_power[first_active_pos[t+1,o], o]` (min) and `sorted_z_power[W,o]` (max, the SAME
+for every destination at this origin, since the top of the suffix never changes). No sign
+assumption on `coef` is made (both `coef*zmin` and `coef*zmax` are computed and min/max'd
+directly, robust either way). "At least one inactive draw exists" iff
+`rank[d,o] > bin[perm_o[1],o]` (the smallest-z draw's own bin value) -- the complementary
+condition to `first_active_pos[1,o]==1` always holding for every destination trivially at
+`t=0` only.
+
+The focal link column (`ell`) is already fully dense (no active/inactive gate) -- its range
+is a direct `extrema(op.ell)`, exactly as the dense reference computes its own dense columns.
+
+Returns the FIRST violated column's certificate (SAME `InfiniteDeltaCertified` type, same
+`(column_index, lo, hi, :range)` fields as the dense method), scanning trade cells in the SAME
+`(o,d)` order the dense method's own column index enumeration uses (`trade_index[o,d]`) so a
+caller comparing "which column failed first" against the dense reference sees a directly
+comparable index.
+"""
+function melitz_range_screen(op::MelitzMomentOperator; guard::Real=0.0)
+    D = op.D
+    W = op.W
+    sorted_ctx = op.sorted_ctx
+    trade_index = op.layout.trade_index
+    coef = op.coef
+    lambda = op.lambda
+    rank = op.rank
+    first_active_pos = op.first_active_pos
+    sorted_zpow = sorted_ctx.sorted_z_power
+    perm = sorted_ctx.permutation
+
+    @inbounds for o in 1:D
+        zpow_max_o = sorted_zpow[W, o]
+        min_bin_o = Int(op.bin[perm[1, o], o])
+        for d in 1:D
+            t = rank[d, o]
+            lo = Inf
+            hi = -Inf
+            if t > min_bin_o   # at least one inactive draw exists at this threshold
+                v = -lambda[o, d]
+                lo = min(lo, v); hi = max(hi, v)
+            end
+            fpos = first_active_pos[t+1, o]
+            if fpos <= W   # at least one active draw exists at this threshold
+                zpow_min_active = sorted_zpow[fpos, o]
+                v1 = coef[o, d] * zpow_min_active - lambda[o, d]
+                v2 = coef[o, d] * zpow_max_o - lambda[o, d]
+                lo = min(lo, v1, v2); hi = max(hi, v1, v2)
+            end
+            if !(lo <= guard <= hi)
+                return InfiniteDeltaCertified(trade_index[o, d], lo, hi, :range)
+            end
+        end
+    end
+
+    lo_ell, hi_ell = extrema(op.ell)
+    if !(lo_ell <= guard <= hi_ell)
+        return InfiniteDeltaCertified(op.layout.focal_link_index, lo_ell, hi_ell, :range)
+    end
+    return nothing
+end
+
 # ============================================================================
 # Section 4.3/8.1 (addendum): stored-dual lower-bound screen.
 # ============================================================================
@@ -358,7 +434,7 @@ have already run `obj.moments!` for the query `theta`) via the bare functor call
 TIGHTEST (maximum) `-f(x)` over the bank, a valid lower bound on `Delta` at this `theta`
 (see file header); `-Inf` if the bank is empty. Wrapped in
 `melitz_without_lower_limit_bailout` (see that function's docstring) so a tight
-`lower_limit_guard` never corrupts this TRUE lower bound with the live-solve
+evaluation cap never corrupts this TRUE lower bound with the live-solve
 `-KNITRO.KN_INFINITY` sentinel.
 """
 function melitz_stored_dual_lower_bound(obj, bank::MelitzDualBank)
@@ -379,7 +455,7 @@ end
 # ============================================================================
 
 """
-    melitz_dual_polish_screen(obj, x0; delta_evaluation_cap, guard=1e-6, max_steps=3,
+    melitz_dual_polish_screen(obj, x0; delta_evaluation_cap, max_steps=3,
         damping=1e-6, max_backtrack=4) -> Union{Nothing,AboveEvaluationCap}
 
 A small, fixed number of damped Newton steps on the CANONICAL exact dual functor in
@@ -391,7 +467,7 @@ from `x0` (typically the stored-dual bank's own best-lower-bound entry).
 No convergence claim is made or needed: by the SAME unconditional weak-duality argument as
 `melitz_stored_dual_lower_bound` (file header above), EVERY finite dual iterate visited --
 including `x0` itself, before any step is taken -- gives a valid `Delta(theta)` lower bound
-`-f(x)`. The moment ANY visited iterate's bound exceeds `delta_evaluation_cap+guard`, this
+`-f(x)`. The moment ANY visited iterate's bound exceeds `delta_evaluation_cap`, this
 function returns immediately with a certified `AboveEvaluationCap(lb, :dual_polish, ...)`; if `max_steps` damped
 Newton steps complete without a certified rejection, returns `nothing` (not a claim of
 feasibility -- merely "this screen did not reject").
@@ -400,8 +476,13 @@ The line search is safeguarded per main prompt Section 12: a candidate step is a
 only if it is FINITE and does not increase the raw objective (`f_try <= f`, i.e. does not
 WORSEN the lower bound) -- halved up to `max_backtrack` times, else the polish stops (not
 an error; the caller proceeds to a real KNITRO attempt).
+
+2026-07-26 (user-directed simplification): the threshold used to be `delta_evaluation_cap +
+guard` (a small additive margin) -- removed. The cap value itself is already the correct
+exact threshold; no separate margin is needed (same rationale as
+`inner_solve_config.jl`'s own guard removal).
 """
-function melitz_dual_polish_screen(obj, x0::AbstractVector; delta_evaluation_cap::Real, guard::Real=1e-6,
+function melitz_dual_polish_screen(obj, x0::AbstractVector; delta_evaluation_cap::Real,
                                     max_steps::Int=3, damping::Real=1e-6, max_backtrack::Int=4)
     melitz_without_lower_limit_bailout(obj) do   # see melitz_without_lower_limit_bailout's docstring
         t0 = time_ns()
@@ -413,7 +494,7 @@ function melitz_dual_polish_screen(obj, x0::AbstractVector; delta_evaluation_cap
         f = obj(x, g; h=H)
         isfinite(f) || return nothing
         lb = -f
-        lb > delta_evaluation_cap + guard &&
+        lb > delta_evaluation_cap &&
             return AboveEvaluationCap(lb, :dual_polish, copy(x), (time_ns() - t0) / 1e9, 0)
 
         for step in 1:max_steps
@@ -442,7 +523,7 @@ function melitz_dual_polish_screen(obj, x0::AbstractVector; delta_evaluation_cap
             accepted || break
 
             lb = -f
-            lb > delta_evaluation_cap + guard &&
+            lb > delta_evaluation_cap &&
                 return AboveEvaluationCap(lb, :dual_polish, copy(x), (time_ns() - t0) / 1e9, step)
         end
         return nothing
@@ -461,7 +542,7 @@ Section 8.1, `melitz_stored_dual_lower_bound`'s own computation) AND the entry t
 attains it -- the natural starting point for the dual-polish screen (Phase I.5: "starting
 from the stored dual with the best current lower bound"). `(-Inf, nothing)` if the bank is
 empty. Wrapped in `melitz_without_lower_limit_bailout` (see that function's docstring) so a
-tight `lower_limit_guard` never corrupts this TRUE lower bound with the live-solve
+tight evaluation cap never corrupts this TRUE lower bound with the live-solve
 `-KNITRO.KN_INFINITY` sentinel.
 """
 function melitz_bank_best(obj, bank::MelitzDualBank)
@@ -538,7 +619,7 @@ function melitz_resolve_warm_start!(obj, bank::MelitzDualBank, theta::AbstractVe
 end
 
 """
-    melitz_classified_inner_solve(obj, theta, ctx; delta_evaluation_cap, bank, guard=1e-6,
+    melitz_classified_inner_solve(obj, theta, ctx; delta_evaluation_cap, bank,
         range_screen=true, stored_dual_screen=true, dual_polish_screen=false,
         dual_polish_steps=3, origin_block_screen=false, screen_order=:A,
         warm_start_source=:previous, on_result=nothing) -> MelitzInnerResult
@@ -589,8 +670,8 @@ during a real trajectory) without adding any collection state to this function i
 """
 function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
                                         delta_evaluation_cap::Real, bank::MelitzDualBank,
-                                        guard::Real=1e-6,
                                         range_screen::Bool=true,
+                                        matrix_free_range_screen::Bool=true,
                                         stored_dual_screen::Bool=true,
                                         dual_polish_screen::Bool=false,
                                         dual_polish_steps::Int=3,
@@ -599,10 +680,13 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
                                         warm_start_source::Symbol=:previous,
                                         on_result=nothing)::MelitzInnerResult
     screen_order in (:A, :B, :C) || throw(ArgumentError("screen_order must be :A, :B, or :C, got $screen_order"))
-    CS = CounterfactualSensitivity
-    G_now = CS.select_G_from_H(obj, obj.H)
-    obj.moments!(@view(obj.H[:, 1]), G_now, theta, obj.U, obj)
-    obj.H[:, 2] .= 1.0
+    # 2026-07-26 production-port session: routed through the Melitz-owned
+    # melitz_bundle_prepare_at_theta! dispatcher (cc_bundle.jl) instead of hardcoding
+    # `CS.select_G_from_H`/`obj.moments!` -- the legacy bundles get the EXACT same two lines
+    # via that dispatcher's generic (untyped) method; `obj::MelitzCCBundle` updates the
+    # matrix-free operator in place and returns `nothing` (no dense G exists), which the
+    # range screen below is guarded against.
+    G_now = melitz_bundle_prepare_at_theta!(obj, theta)
 
     # Continuation session (2026-07-23), Section 12: per-screen call-count/timer
     # instrumentation, using the SAME exception-safe `melitz_record_seconds_outcome!`
@@ -615,9 +699,37 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     # `total_s` columns), rather than only inferring it indirectly from wall-time deltas
     # across separate before/after campaign runs (the prior session's own Section 8/12
     # methodology).
-    if range_screen
+    # 2026-07-26 production-port session (Phase 8): `melitz_range_screen` needs a genuine
+    # dense `G` (an O(W*K) column-range scan), which does not exist for `MelitzCCBundle`
+    # (`G_now === nothing`, from `melitz_bundle_prepare_at_theta!` above).
+    #
+    # 2026-07-26 closure session (Phase 7): a genuine matrix-free equivalent now exists
+    # (`melitz_range_screen(op::MelitzMomentOperator)`, inner_screening.jl above) -- `O(D^2)`
+    # given `op`'s already-updated state, no dense `G` materialized, fused into the SAME
+    # merge sweep `melitz_update_moment_operator!` already runs (no extra O(W*D) pass).
+    # Validated correct against the dense reference (D=4/D=10 synthetic, real D=20 --
+    # docs/melitz_production_fast_backend_closure_2026-07-26.md Phase 7: zero mismatches
+    # across 37 checked perturbed/feasible points spanning all three) and measured
+    # DECISIVELY faster in isolation (real D=20/W=20,000: ~110us matrix-free vs ~33ms dense,
+    # ~300x) -- the governing prompt's own bar ("enable it by default only if the measured
+    # net return is positive") is clearly met, so `matrix_free_range_screen::Bool=true` by
+    # default for `MelitzCCBundle`. `stored_dual_screen`/`dual_polish_screen` below remain
+    # fully active for BOTH bundle types regardless (they operate purely through the generic
+    # functor `obj(x,g;h=H)`, already bundle-agnostic via duck typing, no dense G needed).
+    if range_screen && G_now !== nothing
         t0_range = time_ns()
         cert = melitz_range_screen(G_now)
+        MELITZ_PRODUCTION_DENSE_SCREEN_CALLS[] += 1
+        melitz_record_seconds_outcome!(:screen_range, cert === nothing ? :passed : :rejected,
+            (time_ns() - t0_range) / 1e9)
+        if cert !== nothing
+            on_result !== nothing && on_result(theta, cert)
+            return cert
+        end
+    elseif matrix_free_range_screen && obj isa MelitzCCBundle
+        t0_range = time_ns()
+        cert = melitz_range_screen(obj.op)
+        MELITZ_MATRIX_FREE_RANGE_SCREEN_CALLS[] += 1
         melitz_record_seconds_outcome!(:screen_range, cert === nothing ? :passed : :rejected,
             (time_ns() - t0_range) / 1e9)
         if cert !== nothing
@@ -633,7 +745,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
         # Governing prompt Section 3: threshold is `delta_evaluation_cap`, never the outer
         # budget `delta` -- "do not reject merely because a stored dual proves
         # DeltaStar>delta" (that is now an ordinary Case A point, solved fully below).
-        result = lb > delta_evaluation_cap + guard ?
+        result = lb > delta_evaluation_cap ?
             AboveEvaluationCap(lb, :stored_dual, copy(x_best), 0.0, 0) : nothing
         melitz_record_seconds_outcome!(:screen_stored_dual, result === nothing ? :passed : :rejected,
             (time_ns() - t0_sd) / 1e9)
@@ -644,7 +756,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
         t0_dp = time_ns()
         _, best_x = melitz_bank_best(obj, bank)
         result = best_x === nothing ? nothing : melitz_dual_polish_screen(obj, best_x;
-            delta_evaluation_cap=delta_evaluation_cap, guard=guard, max_steps=dual_polish_steps)
+            delta_evaluation_cap=delta_evaluation_cap, max_steps=dual_polish_steps)
         melitz_record_seconds_outcome!(:screen_dual_polish, result === nothing ? :passed : :rejected,
             (time_ns() - t0_dp) / 1e9)
         result
@@ -680,7 +792,12 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     # is otherwise unchanged.
     melitz_resolve_warm_start!(obj, bank, theta, warm_start_source)
     t_solve_start_ns = time_ns()   # evaluation-cap-correction session: base for crossing_time_s below
-    objSol, x, nStatus = CS.inner_loop_internal(obj, theta)
+    # 2026-07-26 production-port session: melitz_bundle_inner_solve! (cc_bundle.jl) dispatches
+    # to CS.inner_loop_internal for the legacy bundles (generic method) or the Melitz-owned
+    # melitz_cc_inner_loop_internal! for MelitzCCBundle -- theta was already applied to the
+    # bundle/operator by melitz_bundle_prepare_at_theta! above, so this call does not repeat
+    # that work for the matrix-free path (see that dispatcher's own docstring).
+    objSol, x, nStatus = melitz_bundle_inner_solve!(obj, theta)
     accepted = nStatus in (0, -100, -101, -103)
     if !accepted
         if obj.threshold_crossed[]

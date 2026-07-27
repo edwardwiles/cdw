@@ -73,7 +73,9 @@ struct MelitzPredictorCorrectorStep
     deta_norm::Float64
     Delta::Float64
     nStatus::Int
-    kappa::Float64
+    kappa_ratio::Float64   # 2026-07-26 closure (Phase 3): renamed from `kappa` -- see
+                            # equilibrium.jl's MelitzWelfareMetrics/kappa_ratio_of_g for why
+                            # this is NOT the gains-from-trade by itself.
     min_slack::Float64
     predicted_dDelta::Float64
     realized_dDelta::Union{Nothing,Float64}
@@ -87,21 +89,20 @@ end
 
 Full record of a `melitz_predictor_corrector_continuation` run: `path` is every VERIFIED
 accepted point (theta_free), `steps` is every attempted step (accepted or not, predictor or
-corrector) in order, `final_theta`/`final_Delta`/`final_kappa` describe the last accepted
-point.
+corrector) in order, `final_theta`/`final_Delta`/`final_kappa_ratio` describe the last
+accepted point. `final_kappa_ratio` is the pre-`1-` ratio term, NOT the gains-from-trade --
+construct `melitz_welfare_metrics_from_g(final_theta[1], ctx)` (equilibrium.jl) for the
+actual `GT_j = 1 - kappa_ratio` if welfare is what's wanted.
 """
 struct MelitzPredictorCorrectorResult
     path::Vector{Vector{Float64}}
     steps::Vector{MelitzPredictorCorrectorStep}
     final_theta::Vector{Float64}
     final_Delta::Float64
-    final_kappa::Float64
+    final_kappa_ratio::Float64
     n_accepted::Int
     n_rejected::Int
 end
-
-kappa_of_g(g::Real, calib_or_ctx) = exp(g)^(1 / (calib_or_ctx.sigma - 1)) *
-    (calib_or_ctx.w_prime / calib_or_ctx.w[calib_or_ctx.target_country])
 
 """
     melitz_predictor_corrector_continuation(ctx, obj_inner, theta0; delta, cap,
@@ -139,7 +140,7 @@ function melitz_predictor_corrector_continuation(ctx, obj_inner, theta0::Abstrac
     r0 = evaluate_melitz_delta(theta_cur, ctx, obj_inner; cold=true, store_G=false)
     @assert r0.nStatus == 0 "melitz_predictor_corrector_continuation: theta0 must already be a genuine converged finite point"
     Delta_cur = r0.Delta
-    kappa_cur = kappa_of_g(theta_cur[1], ctx)
+    kappa_ratio_cur = kappa_ratio_of_g(theta_cur[1], ctx)
     x_cur = r0.dual_x
 
     path = [copy(theta_cur)]
@@ -151,9 +152,18 @@ function melitz_predictor_corrector_continuation(ctx, obj_inner, theta0::Abstrac
         make_melitz_gradient_delta_direct_parallel(h) : make_melitz_gradient_delta_direct_serial(h)
 
     function fresh_gradient(theta, x)
+        # 2026-07-26 production-port session: this function is NOT part of the main
+        # production outer loop (solve_melitz_finite_delta_bound) -- it is Stage 2's own
+        # alternative predictor-corrector continuation strategy (Phase 8 audit) -- and reads
+        # `obj.H`/`obj.moments!` directly below, which only the dense/legacy bundle exposes.
+        # Pinned to `backend=:dense_reference` explicitly rather than silently inheriting the
+        # new matrix-free default (which would break this function with a field-not-found
+        # error); porting this Stage 2 path to the matrix-free bundle is out of scope this
+        # session (docs/melitz_production_fast_backend_2026-07-26.md).
         obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta; delta=Float64(delta),
             find_smallest=true, gradient_backend=gradient_backend, h=h,
-            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt)
+            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+            backend=:dense_reference)
         CS = CounterfactualSensitivity
         G_now = CS.select_G_from_H(obj, obj.H)
         obj.moments!(@view(obj.H[:, 1]), G_now, theta, obj.U, obj)
@@ -189,7 +199,7 @@ function melitz_predictor_corrector_continuation(ctx, obj_inner, theta0::Abstrac
 
         accept = finite_try && cutoff_ok && pred_err <= prediction_error_tol
         push!(steps, MelitzPredictorCorrectorStep(:predictor, accept, dg, norm(d_eta),
-            finite_try ? r_try.Delta : NaN, r_try.nStatus, finite_try ? kappa_of_g(theta_try[1], ctx) : NaN,
+            finite_try ? r_try.Delta : NaN, r_try.nStatus, finite_try ? kappa_ratio_of_g(theta_try[1], ctx) : NaN,
             state_try.min_slack, pred_dDelta, actual_dDelta, radii.r_g, radii.r_eta, wall))
 
         if accept && r_try.Delta > delta
@@ -207,7 +217,7 @@ function melitz_predictor_corrector_continuation(ctx, obj_inner, theta0::Abstrac
             state_corr = melitz_outer_state(theta_corr, ctx)
             corr_ok = r_corr.nStatus == 0 && state_corr.min_slack >= min_slack_floor
             push!(steps, MelitzPredictorCorrectorStep(:corrector, corr_ok, 0.0, norm(d_eta_corr),
-                corr_ok ? r_corr.Delta : NaN, r_corr.nStatus, corr_ok ? kappa_of_g(theta_corr[1], ctx) : NaN,
+                corr_ok ? r_corr.Delta : NaN, r_corr.nStatus, corr_ok ? kappa_ratio_of_g(theta_corr[1], ctx) : NaN,
                 state_corr.min_slack, NaN, corr_ok ? r_corr.Delta - r_try.Delta : nothing,
                 radii.r_g, radii.r_eta, wallc))
             if corr_ok
@@ -220,7 +230,7 @@ function melitz_predictor_corrector_continuation(ctx, obj_inner, theta0::Abstrac
         if accept
             theta_cur = theta_try
             Delta_cur = r_try.Delta
-            kappa_cur = kappa_of_g(theta_cur[1], ctx)
+            kappa_ratio_cur = kappa_ratio_of_g(theta_cur[1], ctx)
             x_cur = r_try.dual_x
             push!(path, copy(theta_cur))
             n_accepted += 1
@@ -240,6 +250,6 @@ function melitz_predictor_corrector_continuation(ctx, obj_inner, theta0::Abstrac
         end
     end
 
-    return MelitzPredictorCorrectorResult(path, steps, theta_cur, Delta_cur, kappa_cur,
+    return MelitzPredictorCorrectorResult(path, steps, theta_cur, Delta_cur, kappa_ratio_cur,
         n_accepted, n_rejected)
 end

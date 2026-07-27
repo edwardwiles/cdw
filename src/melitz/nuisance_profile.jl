@@ -27,6 +27,21 @@
 #
 # No divergence-budget constraint is registered at all here (there is nothing to bound --
 # `Delta(theta)` IS the objective being minimized).
+#
+# 2026-07-26 closure session (governing prompt Phase 6): ported to support the
+# production-fast matrix-free `MelitzCCBundle` (`obj_inner` may now be EITHER
+# `PsiObjectiveBundleDelta` (legacy dense) or `MelitzCCBundle` (matrix-free, `mode=:delta`)
+# -- `build_melitz_psi_bundle`'s own default). Nothing about the optimization algorithm
+# changed (still the identical box-constrained direct-gradient KNITRO NLP; no trust-region or
+# predictor-corrector logic was introduced, per the governing prompt's own explicit
+# instruction not to): only the THREE bundle-specific internals were swapped for the
+# bundle-agnostic dispatch pair already established during the 2026-07-26 production-port
+# session (`cc_bundle.jl`) -- `inner_loop(obj_inner,theta)` -> `melitz_bundle_inner_loop`
+# (new, this session, composed from the existing `melitz_bundle_prepare_at_theta!`/
+# `melitz_bundle_inner_solve!` pair), and `obj_inner.H`'s direct read/write in the exact-point
+# cache -> `melitz_heavy_snapshot`/`melitz_heavy_restore!` (already existed, already
+# bundle-agnostic). `direct_gradient_fn` needed NO changes at all -- it was already
+# bundle-agnostic via multiple dispatch on the generic `obj` parameter it already had.
 
 using KNITRO
 using LinearAlgebra: norm
@@ -106,11 +121,33 @@ rather than an inferred/guessed contribution.
 """
 function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backend::Symbol=:B_direct_argument_parallel,
                                                   h::Real=1e-4, on_eval=nothing, on_start=nothing,
-                                                  exact_cache::Union{Nothing,MelitzExactPointCache}=nothing)
+                                                  exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
+                                                  forbid_dense_fallback::Bool=false)
+    # 2026-07-26 closure session (governing prompt Phase 6): ported to the production-fast
+    # matrix-free backend. `direct_gradient_fn` was ALREADY bundle-agnostic before this port
+    # (`_base_arg0!`/`_direct_coordinate_grad`/`_direct_coordinate_grad_sorted`, cc_bundle.jl,
+    # gained `obj::MelitzCCBundle`-specific methods during the 2026-07-26 production-port
+    # session -- `make_melitz_gradient_delta_direct_serial/_parallel`'s closures call them
+    # through the generic, untyped `obj` parameter, so multiple dispatch already selects the
+    # right method for either bundle type with no changes here). Added the two SORTED
+    # backends (governing prompt: "sorted outer/nuisance gradients where applicable") --
+    # requires `ctx.sorted_tail_ctx`, exactly the same requirement `finite_delta_outer.jl`'s
+    # own `:B_direct_argument_sorted_*` already impose.
     direct_gradient_fn = gradient_backend == :B_direct_argument_serial ? make_melitz_gradient_delta_direct_serial(h) :
                          gradient_backend == :B_direct_argument_parallel ? make_melitz_gradient_delta_direct_parallel(h) :
+                         gradient_backend == :B_direct_argument_sorted_serial ? make_melitz_gradient_delta_direct_sorted_serial(h) :
+                         gradient_backend == :B_direct_argument_sorted_parallel ? make_melitz_gradient_delta_direct_sorted_parallel(h) :
                          error("melitz_build_nuisance_profile_callbacks: gradient_backend must be " *
-                               ":B_direct_argument_serial or :B_direct_argument_parallel, got $gradient_backend")
+                               ":B_direct_argument_serial, :B_direct_argument_parallel, " *
+                               ":B_direct_argument_sorted_serial, or :B_direct_argument_sorted_parallel, " *
+                               "got $gradient_backend")
+    if forbid_dense_fallback && !(obj_inner isa MelitzCCBundle)
+        throw(ArgumentError(
+            "melitz_build_nuisance_profile_callbacks: forbid_dense_fallback=true (strict " *
+            "production-fast mode) but obj_inner is not a MelitzCCBundle (got " *
+            "$(typeof(obj_inner))) -- construct obj_inner via build_melitz_psi_bundle(...; " *
+            "backend=:matrix_free) (the default) for a strict caller."))
+    end
     n_fc_calls = Ref(0)
     n_ga_calls = Ref(0)
     exact_cache = exact_cache === nothing ? MelitzExactPointCache() : exact_cache
@@ -121,18 +158,24 @@ function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backen
     # in finite_delta_outer.jl (Section 4.2/5.1 there) -- kept local to this file rather than
     # shared, since this callback's accept-set/failure convention (DomainError on ANY
     # rejected nStatus, no AboveEvaluationCap-style fixed sentinel) differs from that file's.
+    # 2026-07-26 closure session (Phase 6): `melitz_exact_cache_get`/`_insert!` were ALREADY
+    # bundle-agnostic (the "heavy" tier stores whatever `melitz_heavy_snapshot` returns --
+    # a dense `Matrix` copy or a `MelitzOperatorSnapshot`, cc_bundle.jl) -- only the two
+    # direct `obj_inner.H` reads/writes below were dense-specific; both replaced with the
+    # SAME `melitz_heavy_restore!`/`melitz_heavy_snapshot` dispatch `finite_delta_outer.jl`'s
+    # own exact-point cache already uses.
     function inner_solve_cached(theta::AbstractVector)
         key = Vector{Float64}(theta)
         hit = melitz_exact_cache_get(exact_cache, key, ctx, obj_inner.U; obj=obj_inner)
         if hit !== nothing
             n_exact_cache_hits[] += 1
             Delta_hit, x_hit, nStatus_hit, H_hit = hit
-            obj_inner.H .= H_hit
+            melitz_heavy_restore!(obj_inner, H_hit)
             return (Delta_hit, x_hit, nStatus_hit, 0.0, true)
         end
         n_exact_cache_misses[] += 1
         t0 = time_ns()
-        val, x, nStatus_raw = inner_loop(obj_inner, theta)
+        val, x, nStatus_raw = melitz_bundle_inner_loop(obj_inner, theta)
         elapsed_s = (time_ns() - t0) / 1e9
         # nStatus comes back as Int32 from the raw KNITRO solve (matching
         # inner_screening.jl's own `Int(nStatus)` conversion at its analogous call site) --
@@ -147,7 +190,7 @@ function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backen
         x_concrete = collect(Float64.(x))
         if nStatus in (0, -100, -101, -103)
             melitz_exact_cache_insert!(exact_cache, key, Float64(val), x_concrete, nStatus,
-                copy(obj_inner.H), ctx, obj_inner.U)
+                melitz_heavy_snapshot(obj_inner), ctx, obj_inner.U)
         end
         return (val, x_concrete, nStatus, elapsed_s, false)
     end
@@ -309,7 +352,8 @@ function solve_melitz_nuisance_min_delta(ctx, obj_inner, theta_start::AbstractVe
                                           on_start=nothing,
                                           warm_start_x::Union{Nothing,AbstractVector}=nothing,
                                           inner_solve_config::MelitzInnerSolveConfig,
-                                          exact_cache::Union{Nothing,MelitzExactPointCache}=nothing)
+                                          exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
+                                          forbid_dense_fallback::Bool=false)
     n = length(theta_start)
     length(free_mask) == n || throw(ArgumentError(
         "solve_melitz_nuisance_min_delta: free_mask length ($(length(free_mask))) must equal " *
@@ -323,7 +367,7 @@ function solve_melitz_nuisance_min_delta(ctx, obj_inner, theta_start::AbstractVe
 
     cbset = melitz_build_nuisance_profile_callbacks(obj_inner, ctx;
         gradient_backend=gradient_backend, h=h, on_eval=on_eval, on_start=on_start,
-        exact_cache=exact_cache)
+        exact_cache=exact_cache, forbid_dense_fallback=forbid_dense_fallback)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, outer_loop_opt)
