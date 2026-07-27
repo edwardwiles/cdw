@@ -47,19 +47,36 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
     invsqrtD = 1.0 / sqrt(D)
 
     E = @view H[:, 2:1+NCORE]
-    if threaded_bins
-        tls === nothing && error("hessian_cm_frechet_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
-        build_bin_tables_threaded!(cctx, tls, E, w)
-        prefix_sum_tables_threaded!(cctx)
-    else
-        build_bin_tables!(cctx, E, w)
-        prefix_sum_tables!(cctx)
-    end
 
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
+    cf = cctx.core_cf_ref[]
+
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # UNCHANGED -- shared winner-pair backend
+    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # UNCHANGED -- shared winner-pair backend; may rebuild cctx.core_ws/core_ws_for for this cf
+
+    # Winner-aware H_ER phase (2026-07-27), Section 3 Part A: SAME decision function as the serial
+    # hessian_cm_frechet_structured! (cm_frechet_hessian.jl) and as flexible-CM's own
+    # hessian_cm_structured_v2! (cm_hessian_threaded.jl) -- reused, not re-derived.
+    use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
+    if threaded_bins
+        tls === nothing && error("hessian_cm_frechet_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
+        build_bin_tables_threaded!(cctx, tls, E, w; fill_S = !use_winner_bin)
+        prefix_sum_tables_threaded!(cctx; fill_S = !use_winner_bin)
+    else
+        build_bin_tables!(cctx, E, w; fill_S = !use_winner_bin)
+        prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
+    end
+
+    local wctx, cross_ws
+    if use_winner_bin
+        record_winner_cross_hessian_call!()
+        wctx = serial_ctx(cctx.core_ws)
+        cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
+        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+    else
+        record_dense_cross_hessian_call!()
+    end
 
     CS_ = cctx.CScum
     CT = cctx.CT
@@ -67,9 +84,13 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
     # ---- H_EC, H_CC: verbatim from hessian_cm_structured_v2! ----
     Hraw_EC = cctx.Hraw_EC
     @inbounds for l in 1:L
-        for (oi, o) in enumerate(origins)
-            for j in 1:NCORE
-                Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+        if use_winner_bin
+            winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, cross_ws, l, origins, refIndex1, M)
+        else
+            for (oi, o) in enumerate(origins)
+                for j in 1:NCORE
+                    Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+                end
             end
         end
         cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
@@ -119,20 +140,39 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
         end
     end
     Wtot = sum(w)
-    Esum = Vector{Float64}(undef, NCORE)
-    mul!(Esum, E', w)
 
+    # ---- H_E,level: winner-aware (Section 3 Part B) -- see hessian_cm_frechet_structured!'s own
+    # comment (cm_frechet_hessian.jl) for the full rationale; verbatim dispatch logic, just threaded
+    # bin-table construction above it. ----
     level_off = NCORE + ncm_cm
-    @inbounds for l in 1:L
-        tl = level_targets[l]
-        for j in 1:NCORE
-            acc = 0.0
-            for o in 1:D
-                acc += CS_[o, j, l]
+    if use_winner_bin
+        Esum_wb = Vector{Float64}(undef, NCORE)
+        winner_pair_cross_hessian_esum!(Esum_wb, wctx, cross_ws, w, Wtot)
+        colsum = Vector{Float64}(undef, NCORE)
+        @inbounds for l in 1:L
+            tl = level_targets[l]
+            winner_pair_cross_hessian_colsum!(colsum, wctx, cross_ws, l)
+            for j in 1:NCORE
+                v = invsqrtD * colsum[j] / M - tl * Esum_wb[j] / M
+                Hfull[j, level_off + l] = v
+                Hfull[level_off + l, j] = v
             end
-            v = invsqrtD * acc / M - tl * Esum[j] / M
-            Hfull[j, level_off + l] = v
-            Hfull[level_off + l, j] = v
+        end
+    else
+        record_dense_frechet_g!()
+        Esum = Vector{Float64}(undef, NCORE)
+        mul!(Esum, E', w)
+        @inbounds for l in 1:L
+            tl = level_targets[l]
+            for j in 1:NCORE
+                acc = 0.0
+                for o in 1:D
+                    acc += CS_[o, j, l]
+                end
+                v = invsqrtD * acc / M - tl * Esum[j] / M
+                Hfull[j, level_off + l] = v
+                Hfull[level_off + l, j] = v
+            end
         end
     end
 
