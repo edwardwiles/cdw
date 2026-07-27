@@ -1,0 +1,87 @@
+=== flexible CM (production default: FG=cm_lookup, cross-Hessian=winner_bin) ===
+[flexible_cm_d20] FULL COUNTER SNAPSHOT:
+    full_G_materializations = 0
+    dense_economic_G_materializations = 0
+    dense_CM_G_materializations = 0
+    dense_ZC_G_materializations = 0
+    dense_Frechet_G_materializations = 0
+    generic_dense_FG_calls = 0
+    operator_FG_calls = 7
+    operator_forward_calls = 7
+    operator_transpose_calls = 7
+    operator_economic_FG_calls = 0
+    operator_restriction_FG_calls = 0
+    operator_verification_calls = 0
+    dense_reference_verification_calls = 0
+    dense_cross_hessian_calls = 0
+    operator_cross_hessian_calls = 6
+    winner_cross_hessian_calls = 6
+  >>> INVARIANT (5 required-zero counters) HOLDS for flexible_cm_d20
+
+=== common Frechet (production default: FG=dense_reference) ===
+[common_frechet_d20] FULL COUNTER SNAPSHOT:
+    full_G_materializations = 0
+    dense_economic_G_materializations = 0
+    dense_CM_G_materializations = 0
+    dense_ZC_G_materializations = 0
+    dense_Frechet_G_materializations = 0
+    generic_dense_FG_calls = 0
+    operator_FG_calls = 0
+    operator_forward_calls = 0
+    operator_transpose_calls = 0
+    operator_economic_FG_calls = 0
+    operator_restriction_FG_calls = 0
+    operator_verification_calls = 0
+    dense_reference_verification_calls = 0
+    dense_cross_hessian_calls = 0
+    operator_cross_hessian_calls = 0
+    winner_cross_hessian_calls = 0
+  >>> INVARIANT (5 required-zero counters) HOLDS for common_frechet_d20
+
+=== CM+ZC (production default: FG=operator) ===
+cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts
+cm_internal_feature_storage [CM+mean/ZC] = bin_indices
+inner_fg_backend [CM+mean/ZC] = operator (port/shared-inner-fg-operator-and-verification-2026-07-26)
+[cm_plus_zc_d20] FULL COUNTER SNAPSHOT:
+    full_G_materializations = 0
+    dense_economic_G_materializations = 0
+    dense_CM_G_materializations = 0
+    dense_ZC_G_materializations = 0
+    dense_Frechet_G_materializations = 0
+    generic_dense_FG_calls = 0
+    operator_FG_calls = 6
+    operator_forward_calls = 6
+    operator_transpose_calls = 6
+    operator_economic_FG_calls = 0
+    operator_restriction_FG_calls = 0
+    operator_verification_calls = 0
+    dense_reference_verification_calls = 0
+    dense_cross_hessian_calls = 5
+    operator_cross_hessian_calls = 0
+    winner_cross_hessian_calls = 0
+  >>> INVARIANT VIOLATED for cm_plus_zc_d20 -- nonzero: dense_cross_hessian_calls=5
+
+=== origin-ZC / ZC-only (production default: FG=operator) ===
+cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)
+cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)
+origin_fg_backend [origin-ZC] = operator (port/shared-inner-fg-operator-and-verification-2026-07-26)
+[zc_only_d20] FULL COUNTER SNAPSHOT:
+    full_G_materializations = 0
+    dense_economic_G_materializations = 0
+    dense_CM_G_materializations = 0
+    dense_ZC_G_materializations = 0
+    dense_Frechet_G_materializations = 0
+    generic_dense_FG_calls = 0
+    operator_FG_calls = 7
+    operator_forward_calls = 7
+    operator_transpose_calls = 7
+    operator_economic_FG_calls = 0
+    operator_restriction_FG_calls = 0
+    operator_verification_calls = 0
+    dense_reference_verification_calls = 0
+    dense_cross_hessian_calls = 0
+    operator_cross_hessian_calls = 0
+    winner_cross_hessian_calls = 0
+  >>> INVARIANT (5 required-zero counters) HOLDS for zc_only_d20
+
+=== DONE ===
