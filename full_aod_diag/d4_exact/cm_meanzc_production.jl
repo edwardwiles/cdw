@@ -45,7 +45,12 @@ independent of K_mean/K_pair.
 function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[],
-        inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[])
+        inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
+        cm_cross_hessian_backend::Symbol = :dense_reference)   # winner-aware H_ER phase (2026-07-27): CM+ZC's H_EC cross block
+        # is section 4 of that task, not yet implemented -- :winner_bin would be a no-op here anyway
+        # (aug.ncore_econ < NCORE_ext whenever K_mean>0 or K_pair>0, so hessian_cm_structured!'s own
+        # ncore_core==NCORE guard falls back to dense automatically), but this kwarg exists so a
+        # future CM+ZC-specific cross backend has somewhere to plug in without another signature change.
     inner_fg_backend in (:dense_reference, :operator) ||
         error("build_cm_meanzc_bin_ctx: inner_fg_backend must be :dense_reference or :operator, got :$inner_fg_backend (CM+ZC does not support :cm_lookup -- CMLookupState is CM-grid-only, no mean/pair block)")
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
@@ -84,7 +89,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         # (wrap_moments_with_cm_meanzc, cm_meanzc_moments.jl) is a SEPARATE closure from
         # wrap_moments_with_cm_archB and doesn't accept/check this kwarg at all; kept as an
         # inert Ref purely so every CMBinHessCtx has a uniformly non-nothing field.
-        meanzc_zc_op, meanzc_zc_layout)
+        meanzc_zc_op, meanzc_zc_layout,
+        cm_cross_hessian_backend, nothing)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true

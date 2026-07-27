@@ -47,10 +47,17 @@ function build_thread_local_scratch(cctx)
     return ThreadLocalBinScratch(Ttab, Stab)
 end
 
-"Threaded drop-in replacement for build_bin_tables! (cm_hessian_architectures.jl). Writes the SAME
+"""
+Threaded drop-in replacement for build_bin_tables! (cm_hessian_architectures.jl). Writes the SAME
 cctx.Ttab/cctx.Stab as the serial version, via a deterministic static-chunk-then-fixed-order
-reduction (no atomics; ported unchanged from diag/fullA-inner-blas-threading)."
-function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, E::AbstractMatrix{Float64}, w::AbstractVector{Float64})
+reduction (no atomics; ported unchanged from diag/fullA-inner-blas-threading).
+
+`fill_S=false` (winner-aware H_ER phase, 2026-07-27) skips the `Sloc[x,j,bx] += ws*E[s,j]` inner
+loop -- the only per-thread read of `E` -- mirroring the serial `build_bin_tables!`'s own `fill_S`
+kwarg exactly, so the production default (`use_threaded_bins=true`) gets the SAME
+no-dense-economic-column-read property when the `:winner_bin` cross-Hessian backend is active.
+"""
+function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, E::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
     D = cctx.D; NCORE = cctx.NCORE; Bidx = cctx.Bidx
     W = size(E, 1)
     nt = Threads.nthreads()
@@ -60,23 +67,41 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, E::Abstrac
         fill!(tls.Stab[t], 0.0)
     end
 
-    Threads.@threads :static for tid in 1:nt
-        lo = 1 + div((tid - 1) * W, nt)
-        hi = div(tid * W, nt)
-        Tloc = tls.Ttab[tid]; Sloc = tls.Stab[tid]
-        @inbounds for s in lo:hi
-            ws = w[s]
-            for x in 1:D
-                bx = Bidx[s, x]
-                for j in 1:NCORE
-                    Sloc[x, j, bx] += ws * E[s, j]
+    if fill_S
+        Threads.@threads :static for tid in 1:nt
+            lo = 1 + div((tid - 1) * W, nt)
+            hi = div(tid * W, nt)
+            Tloc = tls.Ttab[tid]; Sloc = tls.Stab[tid]
+            @inbounds for s in lo:hi
+                ws = w[s]
+                for x in 1:D
+                    bx = Bidx[s, x]
+                    for j in 1:NCORE
+                        Sloc[x, j, bx] += ws * E[s, j]
+                    end
+                end
+                for x in 1:D
+                    bx = Bidx[s, x]
+                    for y in 1:D
+                        by = Bidx[s, y]
+                        Tloc[x, y, bx, by] += ws
+                    end
                 end
             end
-            for x in 1:D
-                bx = Bidx[s, x]
-                for y in 1:D
-                    by = Bidx[s, y]
-                    Tloc[x, y, bx, by] += ws
+        end
+    else
+        Threads.@threads :static for tid in 1:nt
+            lo = 1 + div((tid - 1) * W, nt)
+            hi = div(tid * W, nt)
+            Tloc = tls.Ttab[tid]
+            @inbounds for s in lo:hi
+                ws = w[s]
+                for x in 1:D
+                    bx = Bidx[s, x]
+                    for y in 1:D
+                        by = Bidx[s, y]
+                        Tloc[x, y, bx, by] += ws
+                    end
                 end
             end
         end
@@ -86,14 +111,15 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, E::Abstrac
     fill!(T, 0.0); fill!(S, 0.0)
     for tid in 1:nt   # fixed order 1:nt (not completion order) -> deterministic
         T .+= tls.Ttab[tid]
-        S .+= tls.Stab[tid]
+        fill_S && (S .+= tls.Stab[tid])
     end
     return nothing
 end
 
 "Threaded drop-in replacement for prefix_sum_tables!. Embarrassingly parallel over the D*D (x,y)
-pairs -- no reduction needed. Ported unchanged from diag/fullA-inner-blas-threading."
-function prefix_sum_tables_threaded!(cctx)
+pairs -- no reduction needed. Ported unchanged from diag/fullA-inner-blas-threading. `fill_S=false`
+(winner-aware H_ER phase) skips the CScum prefix-sum, mirroring the serial version's own kwarg."
+function prefix_sum_tables_threaded!(cctx; fill_S::Bool = true)
     D = cctx.D; L = cctx.L; NCORE = cctx.NCORE
     T = cctx.Ttab; CT = cctx.CT
     pairs = [(x, y) for x in 1:D for y in 1:D]
@@ -109,12 +135,14 @@ function prefix_sum_tables_threaded!(cctx)
             end
         end
     end
-    S = cctx.Stab; CS_ = cctx.CScum
-    @inbounds for x in 1:D, j in 1:NCORE
-        acc = 0.0
-        for l in 1:L
-            acc += S[x, j, l]
-            CS_[x, j, l] = acc
+    if fill_S
+        S = cctx.Stab; CS_ = cctx.CScum
+        @inbounds for x in 1:D, j in 1:NCORE
+            acc = 0.0
+            for l in 1:L
+                acc += S[x, j, l]
+                CS_[x, j, l] = acc
+            end
         end
     end
     return nothing
@@ -140,17 +168,10 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     refIndex1 = cctx.refIndex1; origins = cctx.origins
 
     E = @view H[:, 2:1+NCORE]
-    if threaded_bins
-        tls === nothing && error("hessian_cm_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
-        build_bin_tables_threaded!(cctx, tls, E, w)
-        prefix_sum_tables_threaded!(cctx)
-    else
-        build_bin_tables!(cctx, E, w)
-        prefix_sum_tables!(cctx)
-    end
 
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
+    cf = cctx.core_cf_ref[]
 
     # ---- H_EE: shared exact winner-pair backend (port/shared-winner-pair-core-hessian-
     # production-2026-07-25), same `_fill_cm_HEE!` helper the serial Architecture C callback uses
@@ -166,7 +187,30 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     # uses `gemm!`) -- kept as a no-op parameter rather than a breaking signature change for
     # existing callers.
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)
+    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
+
+    # winner-aware H_ER phase (2026-07-27): SAME decision function as the serial
+    # hessian_cm_structured! (cm_hessian_architectures.jl), reused not re-derived -- see that
+    # function's own docstring for the exact gating rationale.
+    use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
+    if threaded_bins
+        tls === nothing && error("hessian_cm_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
+        build_bin_tables_threaded!(cctx, tls, E, w; fill_S = !use_winner_bin)
+        prefix_sum_tables_threaded!(cctx; fill_S = !use_winner_bin)
+    else
+        build_bin_tables!(cctx, E, w; fill_S = !use_winner_bin)
+        prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
+    end
+
+    local wctx, cross_ws
+    if use_winner_bin
+        record_winner_cross_hessian_call!()
+        wctx = serial_ctx(cctx.core_ws)
+        cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
+        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+    else
+        record_dense_cross_hessian_call!()
+    end
 
     # ---- H_EC raw, then optional R congruence (right-multiply by R per threshold block) ----
     # (verbatim from cm_hessian_architectures.jl::hessian_cm_structured! -- see that file's own
@@ -180,9 +224,13 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     CS_ = cctx.CScum
     Hraw_EC = cctx.Hraw_EC
     @inbounds for l in 1:L
-        for (oi, o) in enumerate(origins)
-            for j in 1:NCORE
-                Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+        if use_winner_bin
+            winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, cross_ws, l, origins, refIndex1, M)
+        else
+            for (oi, o) in enumerate(origins)
+                for j in 1:NCORE
+                    Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+                end
             end
         end
         cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO

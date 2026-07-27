@@ -107,6 +107,30 @@ for all four families.
 const CM_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
 const CM_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_workers_default())
 const CM_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
+
+"""
+    CM_CROSS_HESSIAN_BACKEND_DEFAULT
+
+Winner-aware H_ER phase (2026-07-27): which backend `hessian_cm_structured!`/`_v2!`
+(cm_hessian_architectures.jl / cm_hessian_threaded.jl) use for the economic x CM-restriction
+cross block (`H_EC`). `:winner_bin` (winner_pair_cross_hessian.jl, `H_ER = Q'SR - pi*(nu'SR)`,
+PRODUCTION DEFAULT as of this phase) reuses the already-validated `WinnerPairHessCtx`/
+`CoreExactHessianWorkspace` H_EE precompute the shared exact-winner-pair backend already builds
+for this same context -- no dense read of `E = H[:, 2:1+NCORE]` at all in the fast path. Flipped
+from `:dense_reference` after D=4 (8 configs x L in {10,20,50} x 2 extra perturbed points, both
+serial `hessian_cm_structured!` and threaded-production `hessian_cm_structured_v2!`) and real
+D=20/W=80,000/L=50 (both contrasts, calib + near-delta=1 perturbed) gates ALL PASSED to machine
+precision (max|Delta H|~1e-13 to 1e-16 against the dense reference), with the complete inner solve
+status/dual point matching too, and a genuine speedup (real D=20: ~7x serial cold, ~2x
+threaded-warm) -- see FLEXIBLE_CM_WINNER_BIN_HER_RELEASE_2026-07-27.md. Only available when
+`cctx.core_hessian_backend !== :dense_reference` AND `cctx.ncore_core == cctx.NCORE` (no
+CM+mean/pair-ZC widening -- that layout is out of this backend's validated scope, see Section 4 of
+the winner-aware-H_ER task); `hessian_cm_structured!` checks both and falls back to
+`:dense_reference` (not silently, `record_dense_cross_hessian_call!`) whenever either fails --
+e.g. CM+meanZC always falls back here automatically since its `ncore_core < NCORE`.
+`:dense_reference` remains available as an explicit, named, non-default backend.
+"""
+const CM_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
 const ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
 const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_workers_default())
 const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)

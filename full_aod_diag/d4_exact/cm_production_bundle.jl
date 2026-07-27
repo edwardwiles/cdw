@@ -72,10 +72,13 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
                                       # matches build_cm_bin_ctx's own default) selects the threaded
                                       # Architecture-C Hessian; false is an explicit opt-out/benchmark-
                                       # only comparison against the original serial implementation.
-                                      inner_fg_backend::Symbol = CM_INNER_FG_BACKEND_DEFAULT[])   # Phase B1
+                                      inner_fg_backend::Symbol = CM_INNER_FG_BACKEND_DEFAULT[],   # Phase B1
                                       # remediation (2026-07-26): pass-through to build_cm_bin_ctx --
                                       # :dense_reference (default, unchanged) | :cm_lookup (plain
                                       # flexible CM only, see cm_lookup_production.jl).
+                                      cm_cross_hessian_backend::Symbol = CM_CROSS_HESSIAN_BACKEND_DEFAULT[])   # winner-aware
+                                      # H_ER phase (2026-07-27): pass-through to build_cm_bin_ctx -- :dense_reference
+                                      # (default, unchanged) | :winner_bin (winner_pair_cross_hessian.jl).
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
@@ -130,7 +133,8 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     # build_cm_frechet_production_context/build_cm_meanzc_production_context, neither of which
     # accepts this kwarg), so the "plain flexible CM only" scope restriction from
     # cm_lookup_production.jl's header is structural here, not enforced by an extra runtime check.
-    cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins, inner_fg_backend = inner_fg_backend)
+    cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins, inner_fg_backend = inner_fg_backend,
+        cm_cross_hessian_backend = cm_cross_hessian_backend)
     return (ctx_cm = ctx_cm, aug = aug, bins = bins, cctx = cctx)
 end
 

@@ -24,6 +24,10 @@
 # ============================================================================
 
 isdefined(Main, :WinnerPairHessCtx) || include(joinpath(@__DIR__, "core_exact_hessian.jl"))
+# Winner-aware H_ER phase (2026-07-27), §7: cross-Hessian backend-use counters live in the shared
+# no_dense_g_counters.jl (NO_DENSE_G_COUNTERS), not a separate Ref here -- see that file's own
+# record_winner_cross_hessian_call!/record_dense_cross_hessian_call! (added there this phase).
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
 
 """
     WinnerBinCrossScratch

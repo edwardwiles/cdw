@@ -57,6 +57,10 @@ isdefined(Main, :compressed_gravity_raw) || include(joinpath(@__DIR__, "compress
 # actually CALLED, which this guard (placed before CMBinHessCtx's own struct, which now carries a
 # tls::ThreadLocalBinScratch field) guarantees.
 isdefined(Main, :ThreadLocalBinScratch) || include(joinpath(@__DIR__, "cm_hessian_threaded.jl"))
+# Winner-aware H_ER phase (2026-07-27): winner_pair_cross_hessian.jl's WinnerBinCrossScratch is
+# referenced by CMBinHessCtx's own struct definition below, so this include must run before that
+# struct is parsed -- same self-guard convention every other dependency in this file already uses.
+isdefined(Main, :WinnerBinCrossScratch) || include(joinpath(@__DIR__, "winner_pair_cross_hessian.jl"))
 
 # ----------------------------------------------------------------------------
 # Shared: per-draw bin indices w.r.t. the SAME thresholds `z` that
@@ -435,6 +439,18 @@ mutable struct CMBinHessCtx
     # `build_cm_bin_ctx`/`build_cm_bin_ctx`-via-Frechet callers never set these).
     meanzc_zc_op::Any
     meanzc_zc_layout::Any
+    # Winner-aware H_ER phase (2026-07-27, task Section 2): which backend fills the economic x
+    # CM-restriction cross block (H_EC). :dense_reference (default until this phase's own gates
+    # pass) | :winner_bin (winner_pair_cross_hessian.jl, reuses the SAME WinnerPairHessCtx H_EE
+    # already builds via core_ws -- no separate winner-pair precompute). Only ever taken when
+    # ncore_core == NCORE (plain flexible CM / common-Frechet's CM-grid block widening does NOT
+    # apply here -- CM+mean/pair-ZC's ncore_core < NCORE widened layout is explicitly out of this
+    # backend's validated scope, see task Section 4).
+    cm_cross_hessian_backend::Symbol
+    # Persistent scratch for the :winner_bin backend, rebuilt only on a (ncolI,D,L) size change
+    # (campaign-lifetime constant in practice) -- NOT per Hessian callback, matching this file's
+    # existing "built once, reused every call" discipline for core_ws/tls.
+    cross_scratch::Union{Nothing,WinnerBinCrossScratch}
 end
 
 """
@@ -448,7 +464,8 @@ whatever CM matrix Architecture A is using.
 function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[],
-        inner_fg_backend::Symbol = CM_INNER_FG_BACKEND_DEFAULT[])
+        inner_fg_backend::Symbol = CM_INNER_FG_BACKEND_DEFAULT[],
+        cm_cross_hessian_backend::Symbol = CM_CROSS_HESSIAN_BACKEND_DEFAULT[])
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE = aug.ncore; ncm = aug.ncm
@@ -473,7 +490,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
         nothing, false,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
-        NCORE, inner_fg_backend, nothing, skip_cm_fill_ref, nothing, nothing)
+        NCORE, inner_fg_backend, nothing, skip_cm_fill_ref, nothing, nothing,
+        cm_cross_hessian_backend, nothing)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -481,33 +499,58 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     return cctx
 end
 
-"Build the D x D and D x NCORE x (L+1) weighted bin tables from CURRENT weights `w` (obj.arg2) and economic block `E`. O(W*(D*NCORE + D^2))."
-function build_bin_tables!(cctx::CMBinHessCtx, E::AbstractMatrix{Float64}, w::AbstractVector{Float64})
+"""
+Build the D x D and D x NCORE x (L+1) weighted bin tables from CURRENT weights `w` (obj.arg2) and
+economic block `E`. O(W*(D*NCORE + D^2)).
+
+`fill_S=false` (winner-aware H_ER phase, 2026-07-27) skips the `S[x,j,bx] += ws*E[s,j]` inner loop
+entirely -- the ONLY reader of `E` in this function -- so when the caller is about to fill `H_EC`
+via the `:winner_bin` cross-Hessian backend instead (which never reads `E`/`obj.H`'s dense economic
+columns, see winner_pair_cross_hessian.jl), this function performs NO dense economic-column read at
+all, only the still-needed T-table accumulation for `H_CC` (untouched by this phase, per task
+Section 2's own "do not alter the existing H_RR CM contingency-table block"). `Stab` is still
+zeroed (defensive: stale values must never leak into a later `fill_S=true` call at a different
+context) but never populated.
+"""
+function build_bin_tables!(cctx::CMBinHessCtx, E::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
     D = cctx.D; NCORE = cctx.NCORE; Bidx = cctx.Bidx
     T = cctx.Ttab; S = cctx.Stab
     fill!(T, 0.0); fill!(S, 0.0)
     W = size(E, 1)
-    @inbounds for s in 1:W
-        ws = w[s]
-        for x in 1:D
-            bx = Bidx[s, x]
-            for j in 1:NCORE
-                S[x, j, bx] += ws * E[s, j]
+    if fill_S
+        @inbounds for s in 1:W
+            ws = w[s]
+            for x in 1:D
+                bx = Bidx[s, x]
+                for j in 1:NCORE
+                    S[x, j, bx] += ws * E[s, j]
+                end
+            end
+            for x in 1:D
+                bx = Bidx[s, x]
+                for y in 1:D
+                    by = Bidx[s, y]
+                    T[x, y, bx, by] += ws
+                end
             end
         end
-        for x in 1:D
-            bx = Bidx[s, x]
-            for y in 1:D
-                by = Bidx[s, y]
-                T[x, y, bx, by] += ws
+    else
+        @inbounds for s in 1:W
+            ws = w[s]
+            for x in 1:D
+                bx = Bidx[s, x]
+                for y in 1:D
+                    by = Bidx[s, y]
+                    T[x, y, bx, by] += ws
+                end
             end
         end
     end
     return nothing
 end
 
-"2D-prefix-sum `Ttab` into `CT` (restricted to l,l' in 1:L) and 1D-prefix-sum `Stab` into `CScum`. O(D^2*L^2 + D*NCORE*L)."
-function prefix_sum_tables!(cctx::CMBinHessCtx)
+"2D-prefix-sum `Ttab` into `CT` (restricted to l,l' in 1:L) and 1D-prefix-sum `Stab` into `CScum`. O(D^2*L^2 + D*NCORE*L). `fill_S=false` (winner-aware H_ER phase) skips the CScum prefix-sum -- `Stab` was never populated by `build_bin_tables!(...; fill_S=false)`, so prefix-summing it would only waste O(D*NCORE*L) work on zeros."
+function prefix_sum_tables!(cctx::CMBinHessCtx; fill_S::Bool = true)
     D = cctx.D; L = cctx.L; NCORE = cctx.NCORE
     T = cctx.Ttab; CT = cctx.CT
     @inbounds for x in 1:D, y in 1:D
@@ -521,12 +564,14 @@ function prefix_sum_tables!(cctx::CMBinHessCtx)
             end
         end
     end
-    S = cctx.Stab; CS_ = cctx.CScum
-    @inbounds for x in 1:D, j in 1:NCORE
-        acc = 0.0
-        for l in 1:L
-            acc += S[x, j, l]
-            CS_[x, j, l] = acc
+    if fill_S
+        S = cctx.Stab; CS_ = cctx.CScum
+        @inbounds for x in 1:D, j in 1:NCORE
+            acc = 0.0
+            for l in 1:L
+                acc += S[x, j, l]
+                CS_[x, j, l] = acc
+            end
         end
     end
     return nothing
@@ -588,6 +633,34 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
 end
 
 """
+Winner-aware H_ER phase (2026-07-27), Section 2: decide whether THIS Hessian callback may use the
+`:winner_bin` cross-Hessian backend for `H_EC`. Requires (a) the backend is actually requested,
+(b) `cctx.ncore_core == cctx.NCORE` (no CM+mean/pair-ZC widening -- out of scope, see task Section
+4), and (c) `cctx.core_ws`/`core_ws_for` were ACTUALLY refreshed for the CURRENT `cf` by
+`_fill_cm_HEE!` just now (i.e. H_EE itself used the winner-pair backend this call, not a dense
+fallback) -- reusing `_fill_cm_HEE!`'s own decision instead of re-deriving a second one prevents
+this backend from ever running against a stale/mismatched `core_ws`. Not silent: callers that want
+`:winner_bin` but land here `false` fall back to the dense CScum path and record
+`record_dense_cross_hessian_call!` (never a bare unrecorded fallback).
+"""
+function _cm_cross_hessian_wants_winner_bin(cctx::CMBinHessCtx, cf)
+    return cctx.cm_cross_hessian_backend === :winner_bin &&
+           cctx.ncore_core == cctx.NCORE &&
+           cf isa CompressedFactual &&
+           cctx.core_ws !== nothing &&
+           cctx.core_ws_for === cf
+end
+
+"Ensure `cctx.cross_scratch` is sized for the current (ncolI,D,L); rebuild only on a genuine size change (campaign-lifetime constant in practice), never per-Hessian-callback."
+function _ensure_cm_cross_scratch!(cctx::CMBinHessCtx, ncolI::Int, D::Int, L::Int)
+    cs = cctx.cross_scratch
+    if cs === nothing || cs.ncolI != ncolI || cs.D != D || cs.L != L
+        cctx.cross_scratch = WinnerBinCrossScratch(ncolI, D, L)
+    end
+    return cctx.cross_scratch
+end
+
+"""
     hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
 
 Architecture C Hessian callback. Requires `obj.arg0` to already reflect the
@@ -604,13 +677,26 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     refIndex1 = cctx.refIndex1; origins = cctx.origins
 
     E = @view H[:, 2:1+NCORE]
-    build_bin_tables!(cctx, E, w)
-    prefix_sum_tables!(cctx)
 
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)
+    cf = cctx.core_cf_ref[]
+    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
+
+    use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
+    build_bin_tables!(cctx, E, w; fill_S = !use_winner_bin)
+    prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
+
+    local wctx, cross_ws
+    if use_winner_bin
+        record_winner_cross_hessian_call!()
+        wctx = serial_ctx(cctx.core_ws)
+        cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
+        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+    else
+        record_dense_cross_hessian_call!()
+    end
 
     # ---- H_EC raw, then optional R congruence (right-multiply by R per threshold block) ----
     # Allocation/Hessian port task §4.2: Hraw_EC/block_ec now live in cctx (persistent,
@@ -620,9 +706,13 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     CS_ = cctx.CScum
     Hraw_EC = cctx.Hraw_EC   # reused per threshold block
     @inbounds for l in 1:L
-        for (oi, o) in enumerate(origins)
-            for j in 1:NCORE
-                Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+        if use_winner_bin
+            winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, cross_ws, l, origins, refIndex1, M)
+        else
+            for (oi, o) in enumerate(origins)
+                for j in 1:NCORE
+                    Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+                end
             end
         end
         cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
