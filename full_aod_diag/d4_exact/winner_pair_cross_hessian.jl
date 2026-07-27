@@ -54,12 +54,20 @@ mutable struct WinnerBinCrossScratch
     NuCScum::Matrix{Float64}   # D x L
     SOnlyCScum::Matrix{Float64}  # D x L
     QCfCScum::Matrix{Float64}  # D x L
+    # Common-Fréchet winner-aware H_ER phase (2026-07-27), Part B: UN-binned (no threshold/bin
+    # dimension) per-economic-column accumulator `EsumEcon[j] = sum_w Snu[w]*y[w,slot(j)]*
+    # 1{winner(w,slot(j))=o(j)}` (length ncolI, `wctx`'s own 1:ncolI numbering, NOT NCORE-offset).
+    # Needed ONLY by common-Fréchet's H_E,level block (`winner_pair_cross_hessian_esum!` below) --
+    # flexible-CM's own H_EC/H_CC blocks have no un-binned economic-column-sum term, so this field
+    # is unused (but harmlessly filled) for a plain flexible-CM caller of this same scratch struct.
+    EsumEcon::Vector{Float64}  # ncolI
 end
 
 function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
     return WinnerBinCrossScratch(ncolI, D, L,
         zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
-        zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L))
+        zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L),
+        zeros(ncolI))
 end
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(ncolI, D, L)` -- mirrors this codebase's own `resize_*_if_needed!` idiom."
@@ -93,8 +101,8 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
     nu = wctx.nu; y = wctx.y; winner = wctx.winner
     D = ws.D; L = ws.L; nbins = L + 1
 
-    QTab = ws.QTab; NuTab = ws.NuTab; SOnlyTab = ws.SOnlyTab; QCfTab = ws.QCfTab
-    fill!(QTab, 0.0); fill!(NuTab, 0.0); fill!(SOnlyTab, 0.0); fill!(QCfTab, 0.0)
+    QTab = ws.QTab; NuTab = ws.NuTab; SOnlyTab = ws.SOnlyTab; QCfTab = ws.QCfTab; EsumEcon = ws.EsumEcon
+    fill!(QTab, 0.0); fill!(NuTab, 0.0); fill!(SOnlyTab, 0.0); fill!(QCfTab, 0.0); fill!(EsumEcon, 0.0)
 
     has_cf = wctx.has_cf
     crs = wctx.cf_raw_scaled
@@ -118,6 +126,10 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
             o = winner[w, slot]
             j = slot + (o - 1) * Ddest
             snuy = (S[w] * nu[w]) * y[w, slot]
+            # Common-Fréchet Part B: UN-binned accumulation (no x/Bidx loop) alongside the existing
+            # per-bin QTab fill -- O(W*Ddest) additional work, negligible next to QTab's own
+            # O(W*Ddest*D). See EsumEcon's own field docstring above.
+            EsumEcon[j] += snuy
             for x in 1:D
                 QTab[j, x, Bidx[w, x]] += snuy
             end
@@ -184,4 +196,101 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
         end
     end
     return Hraw_EC
+end
+
+# ============================================================================
+# Common-Fréchet winner-aware H_ER phase (2026-07-27), Part B: the level-anchor block's H_E,level
+# needs `sum_{o=1}^D CS_[o,j,l]` (a SUM over all D origins, unlike H_EC's own (o,ref)-DIFFERENCE)
+# and the UN-binned column sum `Esum[j] = sum_s w[s]*E[s,j]` -- neither is provided by
+# `winner_pair_cross_hessian_cm_block!` above, which only ever produces per-threshold DIFFERENCES.
+# Both are cheap, O(D) and O(1) respectively per (j,l)/j, reusing the SAME cumulative tables
+# `winner_pair_cross_hessian_fill!` already builds (plus the new `EsumEcon` field above for the
+# UN-binned half) -- no second O(W) pass. See docs/COMMON_FRECHET_WINNER_AWARE_HER_RELEASE_2026-07-27.md
+# for the full derivation and the cross-check against the dense `CS_`/`Esum` formulas this replaces.
+# ============================================================================
+
+"""
+    winner_pair_cross_hessian_colsum!(colsum, wctx, ws, l) -> colsum
+
+`colsum[j] = sum_{o=1}^D CS_[o,j,l]` for `j = 1:NCORE` (`NCORE = wctx.ncolI + 1`, SAME row
+convention as `winner_pair_cross_hessian_cm_block!`: row 1 = the ones/zeta column, S-only; rows
+2:NCORE = the `ncolI` economic-lambda columns, row `j+1` <-> `wctx`'s own column `j`) -- the
+SUM-over-all-origins counterpart to that function's own (o,ref)-DIFFERENCE, needed by common-
+Fréchet's level restriction (a sum over all D origins with weight `1/sqrt(D)`, not a CM-style
+difference against `refIndex1`). `O(D)` per row, `O(D*NCORE)` total per `l` -- same complexity class
+as the dense `for o in 1:D; acc += CS_[o,j,l]; end` loop this replaces. Caller must call
+`winner_pair_cross_hessian_fill!` once per Hessian callback first (same precondition as
+`winner_pair_cross_hessian_cm_block!`).
+"""
+function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
+        ws::WinnerBinCrossScratch, l::Int)
+    QCScum = ws.QCScum; NuCScum = ws.NuCScum; SOnlyCScum = ws.SOnlyCScum; QCfCScum = ws.QCfCScum
+    pi_vec = wctx.pi_vec
+    has_cf = wctx.has_cf
+    jcf = wctx.ncolI   # the cf column's index WITHIN wctx's own 1:ncolI numbering (cf.cf_col)
+    D = ws.D
+
+    sumNu = 0.0
+    @inbounds for o in 1:D
+        sumNu += NuCScum[o, l]
+    end
+
+    sumS = 0.0
+    @inbounds for o in 1:D
+        sumS += SOnlyCScum[o, l]
+    end
+    colsum[1] = sumS
+
+    @inbounds for j in 1:wctx.ncolI
+        sumQ = 0.0
+        for o in 1:D
+            sumQ += QCScum[j, o, l]
+        end
+        colsum[j + 1] = sumQ - pi_vec[j] * sumNu
+    end
+
+    # Same cf-column override as winner_pair_cross_hessian_cm_block! -- QCScum[jcf,:,:] was left at
+    # zero by the main slot-loop (the cf column is not a (slot,origin) pair), so overwrite that one
+    # entry with its own dedicated accumulation.
+    if has_cf
+        sumQCf = 0.0
+        @inbounds for o in 1:D
+            sumQCf += QCfCScum[o, l]
+        end
+        colsum[jcf + 1] = sumQCf - pi_vec[jcf] * sumNu
+    end
+    return colsum
+end
+
+"""
+    winner_pair_cross_hessian_esum!(Esum, wctx, ws, w, Wtot) -> Esum
+
+`Esum[j] = sum_s w[s]*E[s,j]` for `j = 1:NCORE` -- the UN-binned (no threshold dependence) column
+sum common-Fréchet's `H_E,level` block needs for its nonzero-target correction term (the level
+feature, unlike CM's own zero-target raw features, subtracts `target[l]` -- see
+`cm_frechet_hessian.jl`'s own header derivation). `j=1` (the ones/zeta column, `E[:,1]≡1`) is
+`Wtot = sum(w)` exactly, passed in rather than recomputed (callers already have it for the
+UNCHANGED `H_level,level` block). `j=2:NCORE` uses `ws.EsumEcon[j-1] - wctx.pi_vec[j-1]*t0`,
+`t0 = sum_w S[w]*nu[w]` (`S` is `w` here -- `winner_pair_cross_hessian_fill!`'s own precondition is
+that `obj.arg2` already reflects the current weights, same `w` this function receives). Derivation:
+`w[s]*E[s,j] = S[w]*nu[w]*(y[w,slot]*1{winner=j} - pi[j]) = Snu[w]*y*1{winner=j} - Snu[w]*pi[j]`
+(the SAME decomposition `winner_pair_cross_hessian_fill!`'s own header comment already establishes
+for the binned case) -- summing over `s`/`w` and using `EsumEcon`'s own un-binned accumulation gives
+this formula directly. Caller must call `winner_pair_cross_hessian_fill!` once per Hessian callback
+first (builds `EsumEcon`).
+"""
+function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
+        ws::WinnerBinCrossScratch, w::AbstractVector{Float64}, Wtot::Float64)
+    Esum[1] = Wtot
+    nu = wctx.nu
+    t0 = 0.0
+    @inbounds for s in eachindex(w)
+        t0 += w[s] * nu[s]
+    end
+    pi_vec = wctx.pi_vec
+    EsumEcon = ws.EsumEcon
+    @inbounds for j in 1:wctx.ncolI
+        Esum[j + 1] = EsumEcon[j] - pi_vec[j] * t0
+    end
+    return Esum
 end

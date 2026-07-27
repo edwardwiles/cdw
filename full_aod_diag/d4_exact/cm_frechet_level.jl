@@ -277,12 +277,18 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
                                               probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                               use_compressed_core::Bool = true,
                                               cm_hessian_backend::Symbol = :dense_reference,
-                                              inner_fg_backend::Symbol = CM_FRECHET_INNER_FG_BACKEND_DEFAULT[])   # Phase
+                                              inner_fg_backend::Symbol = CM_FRECHET_INNER_FG_BACKEND_DEFAULT[],   # Phase
                                               # 5.2 remediation (2026-07-26): :dense_reference (default
                                               # until gated) | :cm_frechet_lookup (cm_frechet_lookup_
                                               # kernels.jl/cm_frechet_lookup_production.jl). Only
                                               # reachable when cm_hessian_backend=:structured (needs a
                                               # real cctx -- see the check below).
+                                              cm_cross_hessian_backend::Symbol = CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT[])   # winner-aware
+                                              # H_ER phase (2026-07-27), Section 3: pass-through to build_cm_bin_ctx --
+                                              # :dense_reference (default, unchanged until this family's own gates
+                                              # pass) | :winner_bin (winner_pair_cross_hessian.jl). Deliberately reads
+                                              # a SEPARATE Ref from flexible-CM's own CM_CROSS_HESSIAN_BACKEND_DEFAULT
+                                              # -- see that Ref's own docstring (core_exact_hessian.jl).
     cm_hessian_backend in (:dense_reference, :structured) ||
         error("build_cm_frechet_production_context: cm_hessian_backend must be :dense_reference or :structured, got $cm_hessian_backend")
     inner_fg_backend in (:dense_reference, :cm_frechet_lookup) ||
@@ -326,7 +332,8 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
         # archC_frechet_verified_state (cm_frechet_cplus.jl) never read cctx.inner_fg_backend at all;
         # those two functions now dispatch on it, mirroring plain-CM's archC_base_state/
         # archC_verified_state exactly.
-        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false, inner_fg_backend = inner_fg_backend)
+        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false, inner_fg_backend = inner_fg_backend,
+            cm_cross_hessian_backend = cm_cross_hessian_backend)
         hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, aug.level_targets)
         aug = merge(aug, (cctx = cctx,))
     else

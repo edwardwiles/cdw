@@ -131,6 +131,28 @@ e.g. CM+meanZC always falls back here automatically since its `ncore_core < NCOR
 `:dense_reference` remains available as an explicit, named, non-default backend.
 """
 const CM_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
+
+"""
+    CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT
+
+Winner-aware H_ER phase (2026-07-27), Section 3: common-Fréchet's OWN analogue of
+`CM_CROSS_HESSIAN_BACKEND_DEFAULT`, deliberately a SEPARATE `Ref` (not shared with plain flexible
+CM's) so flipping the flexible-CM default in Section 2 does NOT silently also flip common-Fréchet's
+behavior before this family's own gates have run -- `build_cm_frechet_production_context`
+(cm_frechet_level.jl) reads this Ref for its own `cm_cross_hessian_backend` kwarg default, exactly
+mirroring how `build_cm_meanzc_bin_ctx` hardcodes its own independent `:dense_reference` for the
+same reason (see `CM_CROSS_HESSIAN_BACKEND_DEFAULT`'s own docstring above). `:winner_bin` reuses the
+SAME `winner_pair_cross_hessian_fill!`/`winner_pair_cross_hessian_cm_block!` primitive for
+common-Fréchet's CM-grid block (`H_EC`, identical math to flexible-CM's own), plus the NEW
+`winner_pair_cross_hessian_colsum!`/`winner_pair_cross_hessian_esum!` primitives
+(`winner_pair_cross_hessian.jl`) for the level-anchor block's `H_E,level` (`H_CM,level`/
+`H_level,level` need no change -- they never read `E` to begin with, see
+`cm_frechet_hessian.jl`'s own header comment). Kept `:dense_reference` until this family's own D=4 +
+real D=20/W=80,000/L=50 wiring gates pass -- see
+docs/COMMON_FRECHET_WINNER_AWARE_HER_RELEASE_2026-07-27.md for the gate results and the flip
+decision actually made.
+"""
+const CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
 const ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:exact_winner_pair_parallel)
 const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_workers_default())
 const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
