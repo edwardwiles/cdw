@@ -1,0 +1,54 @@
+Provenance -- Phase C CM basis/contrast/immutability diagnosis session, 2026-07-27
+================================================================================
+
+Branch: diag/cm-basis-interval-orthonormal-2026-07-27
+Base/HEAD commit: a69b32d05590120d9d04ada8063178dd7060e1ff
+
+git log -1:
+commit a69b32d05590120d9d04ada8063178dd7060e1ff
+Author: Edward Wiles <emmabenzvi@gmail.com>
+Date:   Mon Jul 27 03:21:21 2026 -0400
+
+    Phase A item 8: extend operator verification to CM+ZC + real D=20/W=80,000 confirmation log for common-Frechet fix
+    
+    verify_inner_solution_operator_cmmeanzc! (operator_verification.jl): CM+ZC analogue of
+    verify_inner_solution_operator_originzc!, extended to G=[E|Z|C] -- reuses CMMeanZCOperatorState's
+    own free-function kernels (apply_contrast!/suffix_sums!/cumulative_forward_contribution!/
+    build_weighted_histogram!/cumulative_backward_gradient!) against fresh, independent scratch, never
+    touching the live callback's own buffers. test_operator_verification_cmmeanzc.jl: D=4, 3 K_mean/
+    K_pair/L configs, ALL PASS -- operator KKT residual agrees with the dense verifier's own
+    max_abs_moment_kkt_resid to ~1e-15, both ~0 (stationarity confirmed independently).
+    
+    Also archives test_phase52_frechet_lookup_correctness.jl's real D=20/W=80,000 run (ALL PASS, all
+    diffs <=3.7e-11), confirming the obj::O type-parameterization fix from the prior commit holds at
+    production scale, not just D=4.
+
+git status --short (before this session's commit):
+?? docs/IMMUTABLE_CM_FEATURE_OPERATOR_FINAL_2026-07-27.md
+?? docs/INTERVAL_HESSIAN_OPTIMALITY_FINAL_DIAGNOSIS_2026-07-27.md
+?? docs/INTERVAL_VS_CUMULATIVE_FINAL_DIAGNOSIS_2026-07-27.md
+?? docs/ORTHONORMAL_CONTRAST_FINAL_DIAGNOSIS_2026-07-27.md
+?? docs/key_results/SHA256_MANIFEST_2026-07-27.txt
+?? docs/key_results/c12i_validate_interval_equiv_rerun_2026-07-27.log
+?? docs/key_results/c13_validate_interval_native_archC_rerun_2026-07-27.log
+?? docs/key_results/c15_d20_four_arm_basis_contrast_comparison_2026-07-27.log
+?? docs/key_results/c15_d4_four_arm_basis_contrast_comparison_2026-07-27.log
+?? docs/key_results/four_arm_basis_contrast_summary_2026-07-27.csv
+?? docs/key_results/provenance_2026-07-27.txt
+?? full_aod_diag/d4_exact/c15_d20_four_arm_basis_contrast_comparison.jl
+?? full_aod_diag/d4_exact/c15_d4_four_arm_basis_contrast_comparison.jl
+
+git diff --stat (working tree vs HEAD, before commit):
+
+Julia: julia version 1.12.6 (juliaup, $HOME/.juliaup/bin -- NOT /opt/shared_sw)
+Project: worktree root Project.toml/Manifest.toml (NOT full_aod_diag/d4_exact -- that dir has no Project.toml of its own)
+Env: OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1, PATH includes $HOME/.juliaup/bin
+
+Key scripts run this session (all under full_aod_diag/d4_exact/):
+  - c12i_validate_interval_equiv.jl (pre-existing, re-run fresh on this HEAD)
+  - c13_validate_interval_native_archC.jl (pre-existing, re-run fresh on this HEAD)
+  - c15_d4_four_arm_basis_contrast_comparison.jl (NEW this session)
+  - c15_d20_four_arm_basis_contrast_comparison.jl (NEW this session)
+
+D20 context: d20_real_setup_design(W=80000, delta=1.0, find_smallest=true) ->
+  draw_design=:pseudorandom, draw_seed=20260719, destination_sample=:exclude_row (all defaults, matching task spec exactly)

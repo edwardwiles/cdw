@@ -1,0 +1,174 @@
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+----------------------------------------------------------------------------------------------------
+calibration  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0033034508  cold=8.354s(nfg=5,nhess=4)  warm=0.173s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0033034508  cold=0.780s(nfg=5,nhess=4)  warm=0.607s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.908e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=3.6396e+04  cond(H) interval-native=1.2314e+04  (interval/cumulative ratio=0.3383, <1 means BETTER conditioned)
+  rank(CM) cumulative=30  rank(CM) interval=30  (ncm=30, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+unrestricted_upper_candidate  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=2.4952751102  cold=0.050s(nfg=11,nhess=10)  warm=0.018s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=2.4952751102  cold=0.053s(nfg=11,nhess=10)  warm=0.012s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.332e-15   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=2.8772e+04  cond(H) interval-native=1.4628e+04  (interval/cumulative ratio=0.5084, <1 means BETTER conditioned)
+  rank(CM) cumulative=30  rank(CM) interval=30  (ncm=30, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+perturbed_5pct  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0778940067  cold=0.021s(nfg=6,nhess=5)  warm=0.011s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0778940067  cold=0.021s(nfg=6,nhess=5)  warm=0.010s(nfg=1,nhess=0)
+  |Delta_dual diff| = 7.494e-16   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=4.6294e+04  cond(H) interval-native=1.5473e+04  (interval/cumulative ratio=0.3342, <1 means BETTER conditioned)
+  rank(CM) cumulative=30  rank(CM) interval=30  (ncm=30, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+difficult_15pct  L=10  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=-300  Delta_dual=78.9279726376  cold=0.017s(nfg=4,nhess=3)  warm=0.018s(nfg=4,nhess=3)
+  interval-native: status=-300  Delta_dual=78.9279726381  cold=0.017s(nfg=4,nhess=3)  warm=0.019s(nfg=4,nhess=3)
+  |Delta_dual diff| = 5.421e-10   (should be ~0 -- same restriction, exact reparameterization)
+----------------------------------------------------------------------------------------------------
+calibration  L=10  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0033034508  cold=0.023s(nfg=5,nhess=4)  warm=0.016s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0033034508  cold=0.026s(nfg=5,nhess=4)  warm=0.017s(nfg=1,nhess=0)
+  |Delta_dual diff| = 6.939e-18   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.6297e+04  cond(H) interval-native=1.1276e+04  (interval/cumulative ratio=0.6919, <1 means BETTER conditioned)
+  rank(CM) cumulative=30  rank(CM) interval=30  (ncm=30, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+unrestricted_upper_candidate  L=10  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=2.4952751102  cold=0.046s(nfg=11,nhess=10)  warm=0.011s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=2.4952751102  cold=0.030s(nfg=11,nhess=10)  warm=0.010s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.776e-15   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.7467e+04  cond(H) interval-native=1.4430e+04  (interval/cumulative ratio=0.8262, <1 means BETTER conditioned)
+  rank(CM) cumulative=30  rank(CM) interval=30  (ncm=30, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+perturbed_5pct  L=10  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0778940067  cold=0.022s(nfg=6,nhess=5)  warm=0.011s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0778940067  cold=0.022s(nfg=6,nhess=5)  warm=0.011s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.804e-16   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=2.0513e+04  cond(H) interval-native=1.3900e+04  (interval/cumulative ratio=0.6776, <1 means BETTER conditioned)
+  rank(CM) cumulative=30  rank(CM) interval=30  (ncm=30, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+difficult_15pct  L=10  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=-300  Delta_dual=78.9279726361  cold=0.018s(nfg=4,nhess=3)  warm=0.018s(nfg=4,nhess=3)
+  interval-native: status=-300  Delta_dual=78.9279726342  cold=0.018s(nfg=4,nhess=3)  warm=0.018s(nfg=4,nhess=3)
+  |Delta_dual diff| = 1.906e-09   (should be ~0 -- same restriction, exact reparameterization)
+----------------------------------------------------------------------------------------------------
+calibration  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0115051927  cold=0.043s(nfg=5,nhess=4)  warm=0.021s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0115051927  cold=0.042s(nfg=5,nhess=4)  warm=0.018s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.561e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.4369e+05  cond(H) interval-native=1.1231e+04  (interval/cumulative ratio=0.0782, <1 means BETTER conditioned)
+  rank(CM) cumulative=150  rank(CM) interval=150  (ncm=150, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+unrestricted_upper_candidate  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=3.0177595568  cold=0.082s(nfg=12,nhess=11)  warm=0.017s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=3.0177595568  cold=0.091s(nfg=12,nhess=11)  warm=0.015s(nfg=1,nhess=0)
+  |Delta_dual diff| = 4.441e-16   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.1586e+05  cond(H) interval-native=1.6160e+04  (interval/cumulative ratio=0.1395, <1 means BETTER conditioned)
+  rank(CM) cumulative=150  rank(CM) interval=150  (ncm=150, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+perturbed_5pct  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0999118995  cold=0.041s(nfg=7,nhess=6)  warm=0.016s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0999118995  cold=0.039s(nfg=7,nhess=6)  warm=0.015s(nfg=1,nhess=0)
+  |Delta_dual diff| = 5.551e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=1.8486e+05  cond(H) interval-native=1.4106e+04  (interval/cumulative ratio=0.0763, <1 means BETTER conditioned)
+  rank(CM) cumulative=150  rank(CM) interval=150  (ncm=150, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+difficult_15pct  L=50  contrasts=anchored
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=-300  Delta_dual=79.3416910079  cold=0.041s(nfg=4,nhess=3)  warm=0.035s(nfg=4,nhess=3)
+  interval-native: status=-300  Delta_dual=79.3416910072  cold=0.046s(nfg=4,nhess=3)  warm=0.027s(nfg=4,nhess=3)
+  |Delta_dual diff| = 6.701e-10   (should be ~0 -- same restriction, exact reparameterization)
+----------------------------------------------------------------------------------------------------
+calibration  L=50  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0115051927  cold=0.038s(nfg=5,nhess=4)  warm=0.017s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0115051927  cold=0.035s(nfg=5,nhess=4)  warm=0.017s(nfg=1,nhess=0)
+  |Delta_dual diff| = 5.378e-17   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=4.2026e+04  cond(H) interval-native=1.1157e+04  (interval/cumulative ratio=0.2655, <1 means BETTER conditioned)
+  rank(CM) cumulative=150  rank(CM) interval=150  (ncm=150, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+unrestricted_upper_candidate  L=50  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=3.0177595568  cold=0.077s(nfg=12,nhess=11)  warm=0.017s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=3.0177595568  cold=0.065s(nfg=12,nhess=11)  warm=0.016s(nfg=1,nhess=0)
+  |Delta_dual diff| = 1.332e-15   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=4.8130e+04  cond(H) interval-native=1.7418e+04  (interval/cumulative ratio=0.3619, <1 means BETTER conditioned)
+  rank(CM) cumulative=150  rank(CM) interval=150  (ncm=150, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+perturbed_5pct  L=50  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=0     Delta_dual=0.0999118995  cold=0.067s(nfg=7,nhess=6)  warm=0.016s(nfg=1,nhess=0)
+  interval-native: status=0     Delta_dual=0.0999118995  cold=0.067s(nfg=7,nhess=6)  warm=0.015s(nfg=1,nhess=0)
+  |Delta_dual diff| = 3.331e-16   (should be ~0 -- same restriction, exact reparameterization)
+  cond(H) cumulative=5.4277e+04  cond(H) interval-native=1.3783e+04  (interval/cumulative ratio=0.2539, <1 means BETTER conditioned)
+  rank(CM) cumulative=150  rank(CM) interval=150  (ncm=150, both should be full column rank)
+----------------------------------------------------------------------------------------------------
+difficult_15pct  L=50  contrasts=orthonormal
+----------------------------------------------------------------------------------------------------
+  cumulative:      status=-300  Delta_dual=79.3416910078  cold=0.031s(nfg=4,nhess=3)  warm=0.031s(nfg=4,nhess=3)
+  interval-native: status=-300  Delta_dual=79.3416910070  cold=0.351s(nfg=4,nhess=3)  warm=0.029s(nfg=4,nhess=3)
+  |Delta_dual diff| = 7.895e-10   (should be ~0 -- same restriction, exact reparameterization)
+
+==============================================================================================================
+SUMMARY: 4 arms (cm_basis x origin_contrasts) at D=4
+==============================================================================================================
+point                          L   contrasts    Ddual_dif cum_cold int_cold cum_warm int_warm     cond_cum     cond_int   rk_C   rk_I
+calibration                    10  anchored      1.91e-17    8.354    0.780    0.173    0.607   3.6396e+04   1.2314e+04     30     30
+unrestricted_upper_candidate   10  anchored      1.33e-15    0.050    0.053    0.018    0.012   2.8772e+04   1.4628e+04     30     30
+perturbed_5pct                 10  anchored      7.49e-16    0.021    0.021    0.011    0.010   4.6294e+04   1.5473e+04     30     30
+difficult_15pct                10  anchored      5.42e-10    0.017    0.017    0.018    0.019          NaN          NaN     -1     -1
+calibration                    10  orthonormal   6.94e-18    0.023    0.026    0.016    0.017   1.6297e+04   1.1276e+04     30     30
+unrestricted_upper_candidate   10  orthonormal   1.78e-15    0.046    0.030    0.011    0.010   1.7467e+04   1.4430e+04     30     30
+perturbed_5pct                 10  orthonormal   1.80e-16    0.022    0.022    0.011    0.011   2.0513e+04   1.3900e+04     30     30
+difficult_15pct                10  orthonormal   1.91e-09    0.018    0.018    0.018    0.018          NaN          NaN     -1     -1
+calibration                    50  anchored      1.56e-17    0.043    0.042    0.021    0.018   1.4369e+05   1.1231e+04    150    150
+unrestricted_upper_candidate   50  anchored      4.44e-16    0.082    0.091    0.017    0.015   1.1586e+05   1.6160e+04    150    150
+perturbed_5pct                 50  anchored      5.55e-17    0.041    0.039    0.016    0.015   1.8486e+05   1.4106e+04    150    150
+difficult_15pct                50  anchored      6.70e-10    0.041    0.046    0.035    0.027          NaN          NaN     -1     -1
+calibration                    50  orthonormal   5.38e-17    0.038    0.035    0.017    0.017   4.2026e+04   1.1157e+04    150    150
+unrestricted_upper_candidate   50  orthonormal   1.33e-15    0.077    0.065    0.017    0.016   4.8130e+04   1.7418e+04    150    150
+perturbed_5pct                 50  orthonormal   3.33e-16    0.067    0.067    0.016    0.015   5.4277e+04   1.3783e+04    150    150
+difficult_15pct                50  orthonormal   7.89e-10    0.031    0.351    0.031    0.029          NaN          NaN     -1     -1
+
+12/16 points: both bases converged AND Delta_dual agrees to <1e-6.  4 points: at least one architecture failed.  12/16 points: both CM matrices full column rank.
+
+==============================================================================================================
+Anchored vs orthonormal conditioning ratio (orthonormal/anchored), by basis and L -- D=4
+==============================================================================================================
+  L=10  basis=cumulative  cond(anchored)=3.6396e+04  cond(orthonormal)=1.6297e+04  ratio(ortho/anchored)=0.4478  (orthonormal BETTER)
+  L=10  basis=interval    cond(anchored)=1.2314e+04  cond(orthonormal)=1.1276e+04  ratio(ortho/anchored)=0.9158  (orthonormal BETTER)
+  L=50  basis=cumulative  cond(anchored)=1.4369e+05  cond(orthonormal)=4.2026e+04  ratio(ortho/anchored)=0.2925  (orthonormal BETTER)
+  L=50  basis=interval    cond(anchored)=1.1231e+04  cond(orthonormal)=1.1157e+04  ratio(ortho/anchored)=0.9934  (orthonormal BETTER)
+DONE
