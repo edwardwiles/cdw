@@ -14,6 +14,11 @@
 # What these counters DO prove, honestly: every inner-FG call this branch's own operator code paths
 # serve is accounted for as `operator_*`, and the pre-existing dense-reference paths (still the
 # default for 3/5 families) are accounted for as `generic_dense_FG_calls`/`dense_economic_G_materializations`.
+#
+# Winner-aware H_ER phase (2026-07-27): extended with the cross-Hessian (H_ER) backend-use
+# counters, `operator_economic_FG_calls`/`operator_restriction_FG_calls`, and
+# `dense_Frechet_G_materializations` -- consolidated HERE (not a separate Ref elsewhere) so every
+# "no dense G" counter this project tracks lives in one place, per that task's own Section 7 list.
 # ================================================================================================
 
 Base.@kwdef mutable struct NoDenseGCounters
@@ -21,12 +26,22 @@ Base.@kwdef mutable struct NoDenseGCounters
     dense_economic_G_materializations::Int = 0
     dense_CM_G_materializations::Int = 0
     dense_ZC_G_materializations::Int = 0
+    dense_Frechet_G_materializations::Int = 0
     generic_dense_FG_calls::Int = 0
     operator_FG_calls::Int = 0
     operator_forward_calls::Int = 0
     operator_transpose_calls::Int = 0
+    operator_economic_FG_calls::Int = 0
+    operator_restriction_FG_calls::Int = 0
     operator_verification_calls::Int = 0
     dense_reference_verification_calls::Int = 0
+    # winner-aware H_ER cross-Hessian counters. `winner_cross_hessian_calls` is kept numerically
+    # identical to `operator_cross_hessian_calls` (both incremented together by
+    # record_winner_cross_hessian_call!) -- the task brief's own §7 counter list names both
+    # separately; there is no semantic difference, only two names for the same event.
+    dense_cross_hessian_calls::Int = 0
+    operator_cross_hessian_calls::Int = 0
+    winner_cross_hessian_calls::Int = 0
 end
 
 const NO_DENSE_G_COUNTERS = Ref(NoDenseGCounters())
@@ -80,11 +95,32 @@ record_dense_cm_g!() = (NO_DENSE_G_COUNTERS[].dense_CM_G_materializations += 1; 
 "Call whenever an FG callback's ZC (mean/pair) block reads dense obj.H columns directly (the :dense_reference origin-ZC/CM+ZC path)."
 record_dense_zc_g!() = (NO_DENSE_G_COUNTERS[].dense_ZC_G_materializations += 1; nothing)
 
+"Call whenever common-Fréchet's level-anchor block reads dense obj.H columns directly (the :dense_reference path)."
+record_dense_frechet_g!() = (NO_DENSE_G_COUNTERS[].dense_Frechet_G_materializations += 1; nothing)
+
 "Call from operator-based verification (verify_inner_solution_operator!)."
 record_operator_verification!() = (NO_DENSE_G_COUNTERS[].operator_verification_calls += 1; nothing)
 
 "Call from dense-reference verification (the explicit :dense_reference debug backend)."
 record_dense_reference_verification!() = (NO_DENSE_G_COUNTERS[].dense_reference_verification_calls += 1; nothing)
+
+"""
+    record_winner_cross_hessian_call!() / record_dense_cross_hessian_call!()
+
+Winner-aware H_ER phase (2026-07-27): call from a family's cross-Hessian (H_ER) backend dispatch
+point every Hessian callback -- mirrors `record_operator_forward!`/`record_generic_dense_fg!`'s own
+discipline, one call site per decision, no silent path.
+"""
+function record_winner_cross_hessian_call!()
+    c = NO_DENSE_G_COUNTERS[]
+    c.winner_cross_hessian_calls += 1
+    c.operator_cross_hessian_calls += 1
+    return nothing
+end
+function record_dense_cross_hessian_call!()
+    NO_DENSE_G_COUNTERS[].dense_cross_hessian_calls += 1
+    return nothing
+end
 
 """
     no_dense_g_report() -> NamedTuple
@@ -97,10 +133,16 @@ function no_dense_g_report()
             dense_economic_G_materializations = c.dense_economic_G_materializations,
             dense_CM_G_materializations = c.dense_CM_G_materializations,
             dense_ZC_G_materializations = c.dense_ZC_G_materializations,
+            dense_Frechet_G_materializations = c.dense_Frechet_G_materializations,
             generic_dense_FG_calls = c.generic_dense_FG_calls,
             operator_FG_calls = c.operator_FG_calls,
             operator_forward_calls = c.operator_forward_calls,
             operator_transpose_calls = c.operator_transpose_calls,
+            operator_economic_FG_calls = c.operator_economic_FG_calls,
+            operator_restriction_FG_calls = c.operator_restriction_FG_calls,
             operator_verification_calls = c.operator_verification_calls,
-            dense_reference_verification_calls = c.dense_reference_verification_calls)
+            dense_reference_verification_calls = c.dense_reference_verification_calls,
+            dense_cross_hessian_calls = c.dense_cross_hessian_calls,
+            operator_cross_hessian_calls = c.operator_cross_hessian_calls,
+            winner_cross_hessian_calls = c.winner_cross_hessian_calls)
 end
