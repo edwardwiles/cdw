@@ -615,6 +615,13 @@ struct MelitzFiniteDeltaOuterResult
     n_infinite_delta_reject::Int
     n_above_cap_reject::Int
     n_numerical_failure_reject::Int
+    # 2026-07-27 continuation: Melitz-owned, backend-agnostic replacement for a prior
+    # unconditional `CounterfactualSensitivity.INNER_SOLVE_COUNT[]` read (see
+    # run_diagnostics.jl's own header for the full incident writeup). `inner_solve_count`/
+    # `inner_infeas_count` above are now DERIVED from this same object (not from CS), so this
+    # field is the authoritative source; the two scalar fields are kept for backward
+    # compatibility with existing callers/tests that read them by name.
+    diagnostics::MelitzRunDiagnostics
 end
 
 """
@@ -1619,13 +1626,18 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     cIndices, cutoff_sys = melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, n, D, obj;
         cutoff_constraint_backend=cutoff_constraint_backend)
 
-    CS = CounterfactualSensitivity
-    CS.INNER_SOLVE_COUNT[] = 0; CS.INNER_INFEAS_COUNT[] = 0; CS.INNER_ITERS_TOTAL[] = 0
+    # 2026-07-27 continuation: Melitz-owned counter snapshot bracketing the solve, replacing a
+    # prior unconditional `CounterfactualSensitivity.INNER_SOLVE_COUNT[]` reset/read that (a)
+    # threw `UndefVarError` when `cc_algo` was not loaded and (b) was silently always-zero for
+    # the matrix-free backend even when `cc_algo` WAS loaded (see run_diagnostics.jl header).
+    counters_before = melitz_backend_counters_snapshot()
     KNITRO.KN_solve(kc)
     nStatus, _, theta_final_raw, _ = KNITRO.KN_get_solution(kc)
-    solve_inner_count = CS.INNER_SOLVE_COUNT[]
-    solve_infeas_count = CS.INNER_INFEAS_COUNT[]
     KNITRO.KN_free(kc)
+    counters_after = melitz_backend_counters_snapshot()
+    diagnostics = melitz_run_diagnostics(cbset, counters_before, counters_after)
+    solve_inner_count = diagnostics.inner_solve_attempts
+    solve_infeas_count = diagnostics.inner_numerical_failure_reject
 
     theta_final = collect(theta_final_raw)
     terminal_eval = evaluate_melitz_delta(theta_final, ctx, obj_inner; cold=true, cache=eval_cache)
@@ -1671,7 +1683,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         cutoff_constraint_backend, cbset.n_fc_calls[], cbset.n_ga_calls[],
         delta_evaluation_cap,
         cbset.n_inner_solved[], cbset.n_infinite_delta_reject[],
-        cbset.n_above_cap_reject[], cbset.n_numerical_failure_reject[])
+        cbset.n_above_cap_reject[], cbset.n_numerical_failure_reject[], diagnostics)
 end
 
 # ============================================================================

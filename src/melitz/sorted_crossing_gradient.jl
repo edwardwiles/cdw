@@ -270,6 +270,8 @@ function make_melitz_gradient_delta_direct_sorted_parallel(h::Real)
     uplus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     uminus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     psi_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    thetap_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    thetam_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     nthreads_alloc = Ref(0)
 
     function melitz_gradient_delta_direct_sorted_parallel!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
@@ -303,6 +305,13 @@ function make_melitz_gradient_delta_direct_sorted_parallel(h::Real)
             psi_bufs[] = [zeros(Float64, W) for _ in 1:nt]
             nthreads_alloc[] = nt
         end
+        # NOTE: checks `length(thetap_bufs[]) != nt` directly -- see direct_gradient.jl's
+        # identical fix for why a shared `nthreads_alloc[] != nt` check here would be silently
+        # defeated by the arg0_buf/Gp_bufs block above (which updates `nthreads_alloc[]` first).
+        if thetap_bufs[] === nothing || length(thetap_bufs[]) != nt || length(thetap_bufs[][1]) != n
+            thetap_bufs[] = [zeros(Float64, n) for _ in 1:nt]
+            thetam_bufs[] = [zeros(Float64, n) for _ in 1:nt]
+        end
         arg0_base = arg0_buf[]
         _base_arg0!(arg0_base, obj, x)
         lambda = @view x[2:end]
@@ -315,8 +324,11 @@ function make_melitz_gradient_delta_direct_sorted_parallel(h::Real)
             Threads.@threads :static for r in 1:n
                 tid = Threads.threadid()
                 cc = compact[r]
-                theta_p = copy(theta); theta_p[r] += h
-                theta_m = copy(theta); theta_m[r] -= h
+                # 2026-07-27 continuation (Phase 3.2): per-thread persistent theta_p/theta_m
+                # buffers replace a `copy(theta)` allocation on EVERY coordinate -- see
+                # direct_gradient.jl's identical fix for the full rationale.
+                theta_p = thetap_bufs[][tid]; copyto!(theta_p, theta); theta_p[r] += h
+                theta_m = thetam_bufs[][tid]; copyto!(theta_m, theta); theta_m[r] -= h
                 g[r] = _direct_coordinate_grad_sorted(cc, theta_p, theta_m, ctx, obj, sorted_ctx, lambda, arg0_base, h,
                     Gp_bufs[][tid], Gm_bufs[][tid], union_start_bufs[][tid], linkp_bufs[][tid], linkm_bufs[][tid],
                     profit_bufs[][tid], uplus_bufs[][tid], uminus_bufs[][tid], psi_bufs[][tid])

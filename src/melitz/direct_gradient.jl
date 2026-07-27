@@ -235,6 +235,8 @@ function make_melitz_gradient_delta_direct_parallel(h::Real)
     uplus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     uminus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     psi_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    thetap_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    thetam_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     nthreads_alloc = Ref(0)
 
     function melitz_gradient_delta_direct_parallel!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
@@ -262,6 +264,15 @@ function make_melitz_gradient_delta_direct_parallel(h::Real)
             psi_bufs[] = [zeros(Float64, W) for _ in 1:nt]
             nthreads_alloc[] = nt
         end
+        # NOTE: checks `length(thetap_bufs[]) != nt` directly (NOT `nthreads_alloc[] != nt`) --
+        # the arg0_buf/Gp_bufs block above already updates `nthreads_alloc[]` to `nt` when IT
+        # reallocates, so a shared-flag check here would be silently defeated whenever `nt`
+        # grows without `W`/`maxcols` also changing (found while writing this fix: `nt` can grow
+        # across calls within a session as Julia's thread pool only ever grows, never shrinks).
+        if thetap_bufs[] === nothing || length(thetap_bufs[]) != nt || length(thetap_bufs[][1]) != n
+            thetap_bufs[] = [zeros(Float64, n) for _ in 1:nt]
+            thetam_bufs[] = [zeros(Float64, n) for _ in 1:nt]
+        end
         arg0_base = arg0_buf[]
         _base_arg0!(arg0_base, obj, x)
         lambda = @view x[2:end]
@@ -274,8 +285,13 @@ function make_melitz_gradient_delta_direct_parallel(h::Real)
             Threads.@threads :static for r in 1:n
                 tid = Threads.threadid()
                 cc = compact[r]
-                theta_p = copy(theta); theta_p[r] += h
-                theta_m = copy(theta); theta_m[r] -= h
+                # 2026-07-27 continuation (Phase 3.2): per-thread persistent theta_p/theta_m
+                # buffers replace a `copy(theta)` allocation on EVERY coordinate -- mirrors the
+                # serial sibling's own `copyto!`-based buffer reuse above. Mutate only the one
+                # affected entry per perturbation; no restore needed since the buffer is fully
+                # overwritten by `copyto!` on the next coordinate/next call.
+                theta_p = thetap_bufs[][tid]; copyto!(theta_p, theta); theta_p[r] += h
+                theta_m = thetam_bufs[][tid]; copyto!(theta_m, theta); theta_m[r] -= h
                 g[r] = _direct_coordinate_grad(cc, theta_p, theta_m, ctx, obj, lambda, arg0_base, h,
                     Gp_bufs[][tid], Gm_bufs[][tid], linkp_bufs[][tid], linkm_bufs[][tid],
                     profit_bufs[][tid], uplus_bufs[][tid], uminus_bufs[][tid], psi_bufs[][tid])

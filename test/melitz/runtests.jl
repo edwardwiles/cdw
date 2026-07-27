@@ -29,6 +29,7 @@ include(joinpath(dirname(dirname(@__DIR__)), "misc", "doubleDiff.jl"))
 include(joinpath(MELITZ_DIR, "profiling.jl"))
 include(joinpath(MELITZ_DIR, "knitro_compat.jl"))
 include(joinpath(MELITZ_DIR, "backend_config.jl"))
+include(joinpath(MELITZ_DIR, "run_diagnostics.jl"))
 include(joinpath(MELITZ_DIR, "types.jl"))
 include(joinpath(MELITZ_DIR, "bounded_cache.jl"))
 include(joinpath(MELITZ_DIR, "inner_solve_config.jl"))
@@ -1538,23 +1539,67 @@ end
             @test abs(calib20.equilibrium_check.gravity_residual_A) < 1e-8
             @test abs(calib20.equilibrium_check.gravity_residual_f) < 1e-8
             @test isapprox(calib20.cutoff_calibration.gravity_rhs_A, calib20.cutoff_calibration.gravity_rhs_f; atol=1e-6)
-            # Governing prompt Phase 3 (2026-07-27 addendum): this ENTIRE testset had never
-            # actually run in this repo before the path-bug fix above -- this specific
+            # Governing prompt Phase 3 (2026-07-27 addendum, first pass): this ENTIRE testset
+            # had never actually run in this repo before the path-bug fix above -- this specific
             # assertion is the one genuine failure it revealed (`1e-10` was a never-validated
-            # guess). `residual_shares`'s own docstring claims "~0 to machine precision", which
-            # a matched check on the D=4 synthetic FIXTURE confirms EXACTLY (5.6e-16) -- so the
-            # inversion algebra itself is correct, not the bug. The real D=20 dataset's own
-            # calibrated (A,f,X) span ~5 orders of magnitude (vs. <1 for the D=4 fixture,
-            # confirmed live: `log10(maximum(calib20.X)/minimum(calib20.X)) ~ 5.13`), and
-            # `model_lambda = X ./ sum(X, dims=1)` mixes tiny and large terms in that same sum
-            # -- a genuine floating-point cancellation/conditioning floor, not an algorithmic
-            # error: verified insensitive to `wage_tol` (1e-6 to 1e-12) and to the u_jj bisection
-            # `xatol` (1e-10 to 1e-14), both left completely unchanged at ~5.86e-8 across every
-            # value tried. `1e-6` (this repo's own existing convention for other D=20-scale
-            # conditioning floors two lines above, e.g. `gravity_rhs_A`/`gravity_rhs_f`) gives
-            # ~14x margin over the observed floor while remaining tight enough to catch a real
-            # regression.
+            # guess). The first-pass diagnosis attributed the ~5.86e-8 floor to generic
+            # "floating-point cancellation from the real dataset's wide dynamic range," verified
+            # only by checking insensitivity to `wage_tol`/the u_jj bisection `xatol`.
+            #
+            # 2026-07-27 CONTINUATION SESSION -- exact root cause identified and independently
+            # verified (governing prompt Phase 2, "do not accept the existing explanation
+            # without an independent numerical check"; full script archived to Dropbox,
+            # key_results/melitz_d20_share_residual_diagnosis_2026-07-27.csv):
+            #
+            # 1. RULED OUT arithmetic/cancellation: recomputing `population_X`/`model_lambda`
+            #    in BigFloat (256-bit) from the SAME Float64-calibrated `A`/`f`/`w` reproduces
+            #    the IDENTICAL residual (5.857674170773914e-8 vs. the Float64 path's
+            #    5.8576741679416955e-8, agreeing to 9 significant figures; per-cell
+            #    Float64-vs-BigFloat model_lambda differences are ~1e-16, i.e. ordinary
+            #    roundoff, NOT ~1e-8). An algebraically-simplified single-log-exp
+            #    reformulation of `population_X` (avoiding the separate K1/cutoff/tail-mean
+            #    intermediate roundings) gives the same ~5.86e-8 residual too. Both rule out
+            #    the verification arithmetic itself as the source.
+            # 2. IDENTIFIED THE EXACT MECHANISM: `melitz_ad_from_cutoffs` (the cell-by-cell A/f
+            #    inversion, Section 7/8) is constructed so that `X[o,d] = E[d]*lambda[o,d]`
+            #    EXACTLY -- `mu`/`w`/`tau`/`A` cancel algebraically regardless of the calibrated
+            #    cutoff/theta_star (confirmed by direct derivation AND numerically: a
+            #    prediction built from ONLY the raw data's own column sums,
+            #    `lambda[o,d]*(1/colsum(lambda[:,d]) - 1)`, matches the actual
+            #    `residual_shares` to 4.4e-16 -- i.e. the ENTIRE residual, cell by cell). So
+            #    `model_lambda[o,d] = lambda[o,d]/colsum(lambda[:,d])` is an EXACT closed form,
+            #    and the residual is purely `real_data/noah_D20/pi.csv`'s own raw column shares
+            #    not summing to exactly 1.0 (`max|colsum-1| = 7.058e-8` here) -- a DATA
+            #    property, not a solver-precision one. This is exactly why sweeping `wage_tol`
+            #    (1e-6 to 1e-12) and the u_jj bisection `xatol` (1e-10 to 1e-14) never moved the
+            #    residual: neither tolerance touches the raw data's own column-sum property.
+            # 3. RESOLUTION CONFIRMED: `MelitzObservedData`'s existing, already-documented
+            #    `share_policy=:renormalize` option (which rescales each column to sum to
+            #    exactly 1 at construction) reduces `residual_shares` to `4.44e-16` (machine
+            #    precision) on this exact dataset -- confirming the diagnosis directly, not just
+            #    consistently. NOT applied to `observed20` above: this testset deliberately uses
+            #    the default `share_policy=:as_supplied` (byte-for-byte passthrough, asserted
+            #    earlier in this testset) to validate the calibration pipeline against the data
+            #    AS DELIVERED, not a silently-adjusted copy of it; loosening this offline
+            #    verification tolerance is the correct response for `:as_supplied`, not a
+            #    production-code change (Phase 2.3: "do not slow production callbacks merely to
+            #    improve an offline diagnostic"). `1e-6` gives ~14x margin over the verified
+            #    ~7.06e-8 floor while remaining tight enough to catch a real regression.
             @test maximum(abs.(calib20.equilibrium_check.residual_shares)) < 1e-6
+
+            # Pins the verified mechanism itself (not just its consequence): the raw data's own
+            # column-sum deviation from 1, and that `share_policy=:renormalize` genuinely
+            # resolves it to machine precision on this exact dataset. Would fail loudly if the
+            # bundled `pi.csv` fixture is ever replaced with data whose columns sum exactly to
+            # 1 already (raw_colsum_dev would then be ~0, not a regression, but worth noticing)
+            # or if `share_policy=:renormalize`'s own rescaling is ever broken.
+            raw_colsum_dev = maximum(abs.(vec(sum(observed20.lambda, dims=1)) .- 1.0))
+            @test 1e-9 < raw_colsum_dev < 1e-6
+            observed20_renorm = MelitzObservedData(; lambda=lambdaData, L=LData, tau=tauData,
+                countries=countries, atol=2e-3, share_policy=:renormalize)
+            calib20_renorm = calibrate_melitz_pareto(observed20_renorm; sigma=2.5, theta_star=:estimate,
+                focal_country=focal20, p_min=0.001, wage_tol=1e-6, gravity_tol=1e-6)
+            @test maximum(abs.(calib20_renorm.equilibrium_check.residual_shares)) < 1e-10
             @test calib20.equilibrium_check.min_support > -1e-6
             @test calib20.equilibrium_check.min_export_minus_domestic > -1e-6
             @test all(>(0), calib20.equilibrium_check.f_E)
@@ -1727,6 +1772,45 @@ end
             g_sorted_par_d20 = zeros(n_d20)
             direct_sorted_parallel_d20(g_sorted_par_d20, theta_d20, ctx_d20, obj_d20, x_d20)
             @test g_sorted_par_d20 == g_sorted_d20   # disjoint per-coordinate writes -> bit-identical
+
+            @testset "Phase 3.2/3.3 (2026-07-27 continuation): parallel sorted gradient allocation regression, real D=20/W=80,000" begin
+                # Governing prompt Phase 3: `copy(theta)` inside the parallel gradient
+                # variants (direct_gradient.jl/sorted_crossing_gradient.jl) allocated a fresh
+                # n-length vector on EVERY coordinate (n=$(n_d20) here), and expand_free_theta's
+                # own f-gravity-pivot reconstruction redundantly recomputed
+                # f_gravity_pivot_avoid_indices/build_gravity_pivot's pivot-selection work
+                # (two setdiff calls + an abs. temporary + an argmax) on every FD evaluation
+                # despite depending only on ctx (invariant across an entire outer solve). Both
+                # fixed this session (per-thread persistent theta_p/theta_m buffers;
+                # melitz_cached_f_pivot_parts memoized by ctx identity). This regression test
+                # pins a POST-WARM-UP absolute bound that would catch either regression
+                # reappearing. NOTE: despite this testset's own name, `calib` here (line ~1417)
+                # is built from the D=4 `fixture`, not real D=20 data, so `n_d20` is small (this
+                # is the pre-existing testset structure, not something this session changed) --
+                # measured live post-warm-up: ~87KB (dominated by expand_free_theta's own
+                # legitimate, UNAVOIDABLE per-call output construction -- fresh A/f matrices and
+                # logA_full/logf_free_full vectors, allocated twice per coordinate for
+                # theta_p/theta_m -- not a residual of either fixed pattern). A relative n^2
+                # bound is the wrong shape of test at this small an `n` (same reasoning as the
+                # adjacent serial-backend test's own comment: the fixed baseline dominates at
+                # small scale) -- use a generous absolute cap instead, comfortably above the
+                # observed ~87KB, comfortably below any regression that reintroduces an
+                # allocating pattern inside the per-coordinate parallel loop.
+                g_scratch_par = zeros(n_d20)
+                direct_sorted_parallel_d20(g_scratch_par, theta_d20, ctx_d20, obj_d20, x_d20)  # warm-up
+                bytes_par = @allocated direct_sorted_parallel_d20(g_scratch_par, theta_d20, ctx_d20, obj_d20, x_d20)
+                @test g_scratch_par == g_sorted_d20
+                @test bytes_par < 500_000
+
+                # melitz_expand_theta/reduce_to_free_theta's own cached-pivot-parts allocation
+                # stays bounded and ctx-identity-stable across repeated calls (would regress if
+                # melitz_cached_f_pivot_parts's ctx-identity check were ever broken, causing a
+                # rebuild -- with its own setdiff/abs./argmax allocations -- on every call).
+                melitz_expand_theta(theta_d20, ctx_d20)  # warm-up
+                bytes_expand1 = @allocated melitz_expand_theta(theta_d20, ctx_d20)
+                bytes_expand2 = @allocated melitz_expand_theta(theta_d20, ctx_d20)
+                @test bytes_expand1 == bytes_expand2   # stable, not growing/shrinking across repeated calls with the SAME ctx
+            end
 
             # Phase 8 (2026-07-26): sorted dual-argument construction, exact vs dense at real
             # D=20/W=80,000, using the SAME converged dual x_d20 and a genuinely random mu.
@@ -2447,6 +2531,21 @@ if KNITRO_AVAILABLE
             # O(W*K*n) tensor would require even at this tiny fixture.
             @test bytes < 2_000_000
             @test bytes < W_dg * K_dg * n_dg * 8 / 2   # still well under half the full-tensor size
+        end
+
+        @testset "Phase 3.2 (2026-07-27 continuation): parallel direct backend no longer copy(theta)-per-coordinate" begin
+            # direct_gradient.jl's PARALLEL variant used to `copy(theta)` (a fresh n-length
+            # allocation) TWICE per coordinate, every call -- fixed via per-thread persistent
+            # theta_p/theta_m buffers (mirroring the serial sibling's own copyto!-based reuse).
+            # n_dg is small at this D=4 fixture so the absolute byte savings are modest, but a
+            # reintroduced copy(theta) would still show up as bytes scaling with repeated calls
+            # at a FIXED n rather than staying flat post-warm-up.
+            g_scratch_p = zeros(n_dg)
+            direct_parallel_dg(g_scratch_p, theta_dg, ctx_dg, obj_dg, x_dg)  # warm-up
+            bytes_p1 = @allocated direct_parallel_dg(g_scratch_p, theta_dg, ctx_dg, obj_dg, x_dg)
+            bytes_p2 = @allocated direct_parallel_dg(g_scratch_p, theta_dg, ctx_dg, obj_dg, x_dg)
+            @test g_scratch_p == g_serial
+            @test bytes_p1 == bytes_p2   # stable post-warm-up, not growing across repeated calls
         end
 
         @testset "agrees with an independent frozen-x finite difference at a random coordinate" begin

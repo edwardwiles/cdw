@@ -52,4 +52,47 @@ println(">>> nStatus=", lfd.nStatus, "  Delta=", lfd.Delta, "  lfd_ok=", lfd.lfd
 @assert lfd.lfd_ok "standalone_no_cc_algo.jl: expected lfd_ok == true"
 @assert isfinite(lfd.Delta) && lfd.Delta > 0 "standalone_no_cc_algo.jl: expected a finite, positive DeltaStar, got $(lfd.Delta)"
 
+println(">>> standalone_no_cc_algo.jl: inner-solve check PASSED.")
+
+# ----------------------------------------------------------------------------------------
+# 2026-07-27 continuation: a genuinely stronger check than the inner-solve-only test above.
+# `solve_melitz_finite_delta_bound` (the TOP-LEVEL outer driver, one level above
+# `build_melitz_psi_bundle`/`melitz_recover_lfd`) unconditionally read
+# `CounterfactualSensitivity.INNER_SOLVE_COUNT[]` for post-solve diagnostics -- found live
+# while running the 2026-07-26 addendum session's own Stage 10B campaign standalone
+# (`docs/melitz_outer_parameterization_comparison_2026-07-26.md` Section C): a top-level
+# Melitz outer solve threw `UndefVarError: CounterfactualSensitivity not defined` even though
+# the inner-solve-only test above (which never calls this function) passed cleanly. Fixed by
+# `run_diagnostics.jl`'s `MelitzRunDiagnostics` (Melitz-owned, backend-agnostic). This section
+# must FAIL if that dependency is ever reintroduced, unconditionally guarded or not.
+# ----------------------------------------------------------------------------------------
+
+println(">>> standalone_no_cc_algo.jl: running a real top-level solve_melitz_finite_delta_bound (strict production-fast, matrix-free, sorted outer gradient)...")
+
+r0 = evaluate_melitz_delta(theta_free, obj.γ, obj; cold=true, store_G=false)
+@assert r0.nStatus == 0 "standalone_no_cc_algo.jl: cold theta_free evaluation must converge, got nStatus=$(r0.nStatus)"
+delta_loose = max(r0.Delta * 5, 1e-3)
+
+outer_result = solve_melitz_finite_delta_bound(obj.γ, obj, theta_free;
+    delta=delta_loose, direction=:upper, delta_evaluation_cap=10.0,
+    gradient_backend=:B_direct_argument_sorted_serial, h=1e-4, theta_box=0.5,
+    inner_loop_opt=inner_opt, outer_loop_opt=outer_opt)
+
+println(">>> nStatus=", outer_result.nStatus, "  n_fc_calls=", outer_result.diagnostics.n_fc_calls,
+    "  n_ga_calls=", outer_result.diagnostics.n_ga_calls,
+    "  matrix_free_objective_calls=", outer_result.diagnostics.matrix_free_objective_calls,
+    "  matrix_free_gradient_calls=", outer_result.diagnostics.matrix_free_gradient_calls,
+    "  dense_fallback_calls=", outer_result.diagnostics.dense_fallback_calls)
+
+@assert outer_result isa MelitzFiniteDeltaOuterResult "standalone_no_cc_algo.jl: expected a MelitzFiniteDeltaOuterResult, got $(typeof(outer_result))"
+@assert outer_result.diagnostics isa MelitzRunDiagnostics "standalone_no_cc_algo.jl: expected a MelitzRunDiagnostics, got $(typeof(outer_result.diagnostics))"
+@assert outer_result.diagnostics.n_fc_calls > 0 "standalone_no_cc_algo.jl: expected at least one cb_F! (FC) call, got 0"
+@assert outer_result.diagnostics.n_ga_calls > 0 "standalone_no_cc_algo.jl: expected at least one cb_G! (GA) call, got 0"
+@assert outer_result.diagnostics.matrix_free_objective_calls > 0 "standalone_no_cc_algo.jl: expected at least one genuine matrix-free objective call, got 0"
+@assert outer_result.diagnostics.matrix_free_gradient_calls > 0 "standalone_no_cc_algo.jl: expected at least one genuine matrix-free gradient call, got 0"
+@assert outer_result.diagnostics.dense_fallback_calls == 0 "standalone_no_cc_algo.jl: expected zero dense-fallback calls under forbid_dense_fallback=true, got $(outer_result.diagnostics.dense_fallback_calls)"
+@assert outer_result.cold_verified_incumbent !== nothing "standalone_no_cc_algo.jl: expected a real cold-verified (or initial) incumbent"
+
+println(">>> standalone_no_cc_algo.jl: top-level outer-solve check PASSED (no cc_algo ever loaded).")
+
 println(">>> standalone_no_cc_algo.jl: PASSED (no cc_algo ever loaded; MelitzCCBundle's own KNITRO driver is self-sufficient).")

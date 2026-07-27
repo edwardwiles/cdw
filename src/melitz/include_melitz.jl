@@ -16,6 +16,7 @@
 include("profiling.jl")
 include("knitro_compat.jl")
 include("backend_config.jl")
+include("run_diagnostics.jl")
 include("types.jl")
 include("bounded_cache.jl")
 include("inner_solve_config.jl")

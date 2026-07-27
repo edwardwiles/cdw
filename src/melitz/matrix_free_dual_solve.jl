@@ -1,3 +1,28 @@
+# ============================================================================================
+# STATUS (2026-07-27 continuation, governing-prompt Phase 4 audit): DIAGNOSTIC / REFERENCE
+# ONLY -- NOT a production backend, NOT reachable from any production entry point.
+#
+# `MelitzMatrixFreeDualBundle`/`build_melitz_matrix_free_dual_bundle`/
+# `melitz_matrix_free_inner_solve`/`melitz_matrix_free_moment_residuals` are confirmed (grep,
+# every `src/melitz/*.jl` file) to have exactly ONE real consumer: the "Matrix-free inner CC
+# dual solve" testset in `test/melitz/runtests.jl`, which uses this file's own freestanding
+# bundle as an INDEPENDENT cross-check -- a second, separately-coded KNITRO driver
+# (deliberately never sharing code with `cc_bundle.jl`'s `MelitzCCBundle`, see "DELIBERATE
+# DESIGN CHOICE" below) that a real matrix-free production solve is compared against. None of
+# `build_melitz_psi_bundle`/`build_melitz_psi_bundle_from_calibration`/
+# `build_melitz_implicit_bundle`/`solve_melitz_finite_delta_bound` (the four production entry
+# points) can construct or select `MelitzMatrixFreeDualBundle` -- it is never an option of any
+# `backend`/`inner_backend` kwarg anywhere in `backend_config.jl`. The actual, current
+# production matrix-free path is `MelitzCCBundle` (`cc_bundle.jl`), which this file's own
+# functor was the direct prototype for (`cc_bundle.jl`'s own comment: "ports
+# melitz_matrix_free_inner_solve") -- KEPT here, not deleted, specifically BECAUSE it remains
+# useful as an independently-coded validation oracle for `MelitzCCBundle`, not because it is
+# still a candidate production implementation. Do not add a `backend=:matrix_free_dual_solve`
+# (or similar) option anywhere that would let a production caller select this file's bundle --
+# that would defeat the entire point of keeping two independently-coded implementations to
+# cross-check against each other.
+# ============================================================================================
+#
 # Matrix-free Melitz inner CC dual solve (2026-07-26 continuation, PART 3). Validates
 # `mul_G!`/`mul_Gt!`/`melitz_full_weighted_gram!` (moment_operator.jl) through a REAL KNITRO
 # inner solve -- not merely against a dense reference at an isolated point, but by actually

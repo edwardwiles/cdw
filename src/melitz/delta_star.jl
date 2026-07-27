@@ -138,6 +138,62 @@ function gravity_pivot_cells(tau::Matrix{Float64}, target_country::Int)
 end
 
 """
+    melitz_cached_f_pivot_parts(ctx) -> (c_free::Vector{Float64}, pivot::Int, other::Vector{Int})
+
+2026-07-27 continuation (Phase 3.3): `avoid_f = f_gravity_pivot_avoid_indices(...)` followed
+by `build_gravity_pivot(ctx.c_full[ctx.f_free_lin], g0_f; avoid=avoid_f)` was being recomputed
+from scratch on EVERY call to `expand_free_theta`/`reduce_to_free_theta` -- i.e. on every
+single FD coordinate probe, up to `O(n)` times per outer gradient -- even though the pivot
+CHOICE depends only on `ctx.c_full[ctx.f_free_lin]` and `ctx.A_pivot.pivot` (both fixed for
+the lifetime of a given `ctx`), never on `g0` (`build_gravity_pivot`'s own docstring: "WHICH
+cell is chosen depends only on `c` and the avoid-set, never on `g0`"). Each recomputation did
+real allocating work (`f_gravity_pivot_avoid_indices`'s own comprehension, TWO `setdiff`
+calls, an `abs.(...)` temporary, `ctx.c_full[ctx.f_free_lin]` re-indexed fresh) purely to
+re-derive the SAME answer every time.
+
+Memoized here by `ctx` OBJECT IDENTITY (`===`), mirroring the SAME established pattern this
+codebase already uses elsewhere for context-invariant precomputation (e.g.
+`direct_gradient.jl`'s `compact_cache`/`ctx_cache`) -- computed once per distinct `ctx`, reused
+on every subsequent call regardless of `theta_free`'s value. Callers reconstruct a fresh,
+cheap `GravityPivot(length(c_free), pivot, other, c_free, g0)` from the cached parts (no new
+allocation of `c_free`/`other` -- `pivot_expand`/`pivot_reduce` never mutate a `GravityPivot`'s
+fields, confirmed by reading both, so sharing these vectors across calls is safe).
+
+THREAD SAFETY: unlike `direct_gradient.jl`'s `compact_cache`/`ctx_cache` (each a closure-local
+pair, freshly created per gradient-backend INSTANCE, so scoped to one outer solve's own
+parallel sweep and only ever populated single-threaded before `Threads.@threads` starts), this
+cache is process-global (`expand_free_theta`/`reduce_to_free_theta` are called from many sites
+beyond any one gradient backend, including directly from `melitz_outer_state`) AND is reached
+from INSIDE a live `Threads.@threads` region: `sorted_crossing_gradient.jl`'s
+`_fill_compact_direct_columns_crossing_sorted!` (called from the PARALLEL sorted gradient
+backend's per-coordinate thread body) calls `melitz_expand_theta` -> `expand_free_theta`
+directly. A bare check-then-set `Ref` here would race both within one solve (harmless
+redundant recompute) AND, more seriously, across two DIFFERENT outer solves' ctx objects
+running concurrently in the same process (one solve's parallel sweep could silently read the
+OTHER solve's cached pivot parts mid-overwrite -- a genuine silent-wrong-gradient risk, not
+merely a lost optimization). Guarded by a `ReentrantLock` for correctness in every case;
+contention is negligible in the overwhelming common case (one active outer solve, cache
+already warm for its own `ctx`) since the lock is held only for a `===` check plus, at most
+once per solve, the pivot rebuild itself.
+"""
+const MELITZ_F_PIVOT_PARTS_LOCK = ReentrantLock()
+const MELITZ_F_PIVOT_PARTS_CTX = Ref{Any}(nothing)
+const MELITZ_F_PIVOT_PARTS_CACHE = Ref{Union{Nothing,Tuple{Vector{Float64},Int,Vector{Int}}}}(nothing)
+
+function melitz_cached_f_pivot_parts(ctx)
+    return lock(MELITZ_F_PIVOT_PARTS_LOCK) do
+        if MELITZ_F_PIVOT_PARTS_CTX[] !== ctx
+            D = ctx.D
+            avoid_f = f_gravity_pivot_avoid_indices(D, ctx.f_free_lin, ctx.A_pivot.pivot)
+            f_pivot0 = build_gravity_pivot(ctx.c_full[ctx.f_free_lin], 0.0; avoid=avoid_f)
+            MELITZ_F_PIVOT_PARTS_CACHE[] = (f_pivot0.c, f_pivot0.pivot, f_pivot0.other)
+            MELITZ_F_PIVOT_PARTS_CTX[] = ctx
+        end
+        MELITZ_F_PIVOT_PARTS_CACHE[]
+    end
+end
+
+"""
     reduce_to_free_theta(p::MelitzPrimitives, ctx) -> theta_free
 
 Full `(A, f, gamma_prime_target)` -> the `2D^2-2` FREE gravity-pivoted vector (inverse of
@@ -152,8 +208,8 @@ function reduce_to_free_theta(p::MelitzPrimitives, ctx)
 
     f_jj = p.f[j, j]
     g0_f = ctx.c_full[ctx.jj_lin] * log(f_jj)
-    avoid_f = f_gravity_pivot_avoid_indices(D, ctx.f_free_lin, ctx.A_pivot.pivot)
-    f_pivot = build_gravity_pivot(ctx.c_full[ctx.f_free_lin], g0_f; avoid=avoid_f)
+    c_free, f_pivot_idx, f_other = melitz_cached_f_pivot_parts(ctx)
+    f_pivot = GravityPivot(length(c_free), f_pivot_idx, f_other, c_free, g0_f)
     logf_free_full = [log(p.f[lin2od(i, D)...]) for i in ctx.f_free_lin]
     f_free = pivot_reduce(logf_free_full, f_pivot)
 
@@ -184,8 +240,8 @@ function expand_free_theta(theta_free::AbstractVector{T}, ctx) where {T}
     f_jj = derive_fjj_from_autarky_cutoff(gamma_prime_j, ctx.w_prime, 1.0, A_jj, expenditure_prime_j, ctx.sigma)
 
     g0_f = ctx.c_full[ctx.jj_lin] * log(f_jj)
-    avoid_f = f_gravity_pivot_avoid_indices(D, ctx.f_free_lin, ctx.A_pivot.pivot)
-    f_pivot = build_gravity_pivot(ctx.c_full[ctx.f_free_lin], g0_f; avoid=avoid_f)
+    c_free, f_pivot_idx, f_other = melitz_cached_f_pivot_parts(ctx)
+    f_pivot = GravityPivot(length(c_free), f_pivot_idx, f_other, c_free, g0_f)
     logf_free_full = pivot_expand(f_free_free, f_pivot)
 
     f = zeros(T, D, D)
