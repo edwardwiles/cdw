@@ -42,6 +42,12 @@ using LinearAlgebra: BLAS, mul!
 # real caller of this file).
 isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
 isdefined(Main, :materialize_dense_factual_structured!) || include(joinpath(@__DIR__, "structured_moment_build.jl"))
+# port/shared-inner-fg-operator-and-verification-2026-07-26: compressed_live.jl (as of Addendum
+# Part A, fbb7d79) references EconomicFGWorkspace/compressed_cc_value_grad! from
+# compressed_cc_inner.jl but never includes it itself (every pre-existing caller happened to
+# include compressed_cc_inner.jl separately before compressed_live.jl) -- this include stack didn't,
+# so add the same self-guard here rather than relying on caller discipline.
+isdefined(Main, :EconomicFGWorkspace) || include(joinpath(@__DIR__, "compressed_cc_inner.jl"))
 isdefined(Main, :compressed_gravity_raw) || include(joinpath(@__DIR__, "compressed_live.jl"))
 # Allocation/Hessian port task §6.1/6.2: threaded Architecture-C Hessian (ThreadLocalBinScratch/
 # build_thread_local_scratch/hessian_cm_structured_v2!). Safe to include here despite
