@@ -155,6 +155,37 @@ this family's own gate results once run).
 const CM_FRECHET_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
 
 """
+    ORIGINZC_FG_BACKEND_DEFAULT
+
+port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26, Phase A item 6 gate.
+`:dense_reference` | `:operator` (shared `economic_forward!`/`economic_transpose!` + `G=[E|Z]`
+`ZCRestrictionOperator`, `cm_originzc_lookup_kernels.jl`). Flipped to `:operator` after real
+D=4 + D=20/W=80,000 complete-inner-solve A/B (`bench_originzc_meanzc_operator_vs_dense.jl`):
+correctness ALL PASS (Delta_dual agreement 8.3e-16 at D=20), speedup 1.001x (within-5% criterion
+met), median allocation 13,239.9MB (dense) vs 13,242.4MB (operator) -- ratio 1.0002x, i.e. AT
+PARITY, not materially reduced, for the SAME reason `CM_INNER_FG_BACKEND_DEFAULT`'s own flip
+docstring above already establishes as this codebase's precedent: `archOZ_verified_state`'s shared
+post-solve `CS.select_G_from_H`/KKT-residual step and KNITRO's own C-side per-iterate solve
+overhead dominate total per-call bytes at W=80,000 scale, common to both backends -- the operator's
+own FG-callback-level saving (previously measured in isolation at 20,081x for the shared economic
+block) is real but a rounding error against that shared total. No stability regression (identical
+nStatus, machine-precision Delta_dual agreement). Flipping removes the last dense `obj.H`
+BLAS.gemv! from this family's ordinary FG hot path, matching this task's Phase A architecture
+requirement (`G=[E|Z]` composed of shared operators, no per-family dense-column re-derivation).
+"""
+const ORIGINZC_FG_BACKEND_DEFAULT = Ref{Symbol}(:operator)
+
+"""
+    CM_MEANZC_INNER_FG_BACKEND_DEFAULT
+
+Analogous to `ORIGINZC_FG_BACKEND_DEFAULT` for CM+ZC's `G=[E|C|Z]` operator FG
+(`cm_meanzc_lookup_kernels.jl`). Flipped to `:operator` on the same real D=4+D=20/W=80,000 gate
+evidence: correctness ALL PASS (Delta_dual agreement 3.7e-15), speedup 1.084x, allocation at parity
+(ratio 1.0002x, same shared-overhead explanation as `ORIGINZC_FG_BACKEND_DEFAULT`).
+"""
+const CM_MEANZC_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:operator)
+
+"""
     record_core_hessian_call!(backend; fallback_reason=nothing)
 
 Record ONE Hessian-callback EXECUTION at the given backend -- called from

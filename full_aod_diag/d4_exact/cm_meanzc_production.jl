@@ -40,7 +40,7 @@ independent of K_mean/K_pair.
 function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[],
-        inner_fg_backend::Symbol = :dense_reference)
+        inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[])
     inner_fg_backend in (:dense_reference, :operator) ||
         error("build_cm_meanzc_bin_ctx: inner_fg_backend must be :dense_reference or :operator, got :$inner_fg_backend (CM+ZC does not support :cm_lookup -- CMLookupState is CM-grid-only, no mean/pair block)")
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
@@ -100,7 +100,7 @@ performance contract).
 function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair::Int = 0,
                                              contrasts::Symbol = :orthonormal, meanzc_basis::Symbol = :direct,
                                              probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                             inner_fg_backend::Symbol = :dense_reference)
+                                             inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[])
     println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")
     println(stdout, "cm_internal_feature_storage [CM+mean/ZC] = bin_indices")
     println(stdout, "inner_fg_backend [CM+mean/ZC] = ", inner_fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
