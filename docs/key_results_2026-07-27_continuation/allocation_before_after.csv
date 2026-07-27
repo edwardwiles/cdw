@@ -1,0 +1,3 @@
+metric,before_mb,after_mb,reduction_pct
+economic_A_gradient_warm_d20_w80000,614.83,27.30,95.6
+economic_A_gradient_cold_d20_w80000,9296.13,63.67,99.3

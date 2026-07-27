@@ -1,0 +1,11 @@
+scale,contrasts,L,point,max_abs_delta,matrix_scale,pass
+d4,anchored,10,calib,5.55e-16,1.0,true
+d4,anchored,10,perturbed,4.44e-16,1.0,true
+d4,anchored,20,calib,6.74e-16,1.0,true
+d4,anchored,20,perturbed,4.82e-16,1.0,true
+d4,orthonormal,10,calib,5.55e-16,1.0,true
+d4,orthonormal,10,perturbed,5.00e-16,1.0,true
+d4,orthonormal,20,calib,4.68e-16,1.0,true
+d4,orthonormal,20,perturbed,3.61e-16,1.0,true
+d20_w80000,anchored,50,calib,1.81e-13,18.82,true
+d20_w80000,orthonormal,50,calib,1.07e-13,18.03,true

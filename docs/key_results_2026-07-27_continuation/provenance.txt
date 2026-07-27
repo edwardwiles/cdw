@@ -1,0 +1,37 @@
+Session: shared-FG-verification-and-A-gradient release, continuation, 2026-07-27
+Branch: release/shared-FG-verification-and-A-gradient-2026-07-27
+Inherited HEAD at session start: 4fb983904f93892b3a83411b37e899cbba117999
+Base (production/fullA-exact): f1fa8e770759c62b3f96c1024dd310f235ea463e
+HEAD at session end: ed5d1973316c2c5b6ee487b126f085b18236bb2c
+Commits ahead of base: 76
+Commits this session: 6
+
+git log this session:
+ed5d1973316c2c5b6ee487b126f085b18236bb2c Phase B: real D=20/L=50 validation of winner-bin H_EC + final port status doc
+ab279a99c9ccbae5c741a2f6dd3cef55e0307b15 Phase B: winner-aware H_EC cross-Hessian for flexible-CM (H_ER = Q'SR - pi*(nu'SR))
+a4e8eceb733ae3b63d9a0a2d6089107c3c2f1468 Build operator verification for the 3 remaining families: flexible-CM, unrestricted, common-Frechet
+d7d2d2f7ff379ac01c15b65356f5f07b43d2d81d Wire unrestricted family onto economic_A_gradient! (opt-in price_cache_backend=:shared)
+823bf999d4bec3141d93e29b35003217a67b85e5 Wire common-Frechet onto the shared economic_A_gradient! backend (default)
+4367abe81ffb6bcaea700c3436fe36912819202e Wire persistent LFixBaseWorkspace into economic_A_gradient!, killing the 615MB warm alloc
+
+git diff --stat vs inherited HEAD:
+ docs/WINNER_AWARE_H_ER_FINAL_PORT_2026-07-27.md    | 110 +++++++++++++
+ .../d4_exact/c10_d20_production_driver.jl          |  27 ++-
+ .../d4_exact/c20b_shared_backend_driver_smoke.jl   |  56 +++++++
+ full_aod_diag/d4_exact/cm_frechet_cplus.jl         |  33 +++-
+ full_aod_diag/d4_exact/operator_verification.jl    | 181 ++++++++++++++++++++
+ full_aod_diag/d4_exact/shared_a_gradient.jl        |  21 ++-
+ .../test_cm_frechet_shared_a_gradient_gate.jl      |  77 +++++++++
+ .../d4_exact/test_operator_verification_cm.jl      |  49 ++++++
+ .../test_operator_verification_cm_frechet.jl       |  51 ++++++
+ .../test_operator_verification_cm_frechet_d20.jl   |  51 ++++++
+ .../test_operator_verification_unrestricted.jl     |  65 ++++++++
+ .../test_winner_pair_cross_hessian_cm_d20.jl       |  80 +++++++++
+ .../test_winner_pair_cross_hessian_cm_d4.jl        |  82 +++++++++
+ .../d4_exact/winner_pair_cross_hessian.jl          | 183 +++++++++++++++++++++
+ 14 files changed, 1059 insertions(+), 7 deletions(-)
+
+Julia: see juliaup, 1.12.6
+Environment: OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 for all gates unless noted (worker sweep varied -t N)
+
+PRODUCTION_MERGE STATUS: NOT merged, NOT pushed to origin. Working tree clean.
