@@ -1,0 +1,7 @@
+case,step,time_ms,bytes
+D4 square,build_compressed_factual_reference,4.4213,1475344
+D4 square,build_compressed_factual_inplace_first_fill,,899272
+D4 square,build_compressed_factual_inplace_repeated_refill,4.1690,899064
+D4 square,build_economic_moment_state_shared,5.0520,899272
+D4 square unrestricted inner solve,complete_family_moment_state_build_no_workspace,16.1509,671984640
+D4 square unrestricted inner solve,complete_family_moment_state_build_with_workspace,15.7068,113324880
