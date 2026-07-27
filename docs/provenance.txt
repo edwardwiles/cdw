@@ -1,0 +1,95 @@
+=== git branch/HEAD ===
+port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26
+5310612 Deliverable docs: shared economic FG final port status, operator verification all-families status (honest 2/5 gap reporting)
+
+=== git log since f1fa8e7 (base) ===
+5310612 Deliverable docs: shared economic FG final port status, operator verification all-families status (honest 2/5 gap reporting)
+4e31146 5x7 status matrix (markdown + CSV) for this session's operator-completion work
+2abdf37 Master completion report: five-family operator stack, this session's Phase A/B scope
+5539cd9 Phase B item 9: no-dense-G runtime proof, scoped honestly to this session's Phase A work
+ccc2bbb Phase B item 9 (scoped): five-family no-dense-G runtime smoke test
+16da707 Phase A item 4: common-Frechet complete-inner-solve perf A/B harness + D=4 results
+a69b32d Phase A item 8: extend operator verification to CM+ZC + real D=20/W=80,000 confirmation log for common-Frechet fix
+ae0bcd5 Phase A item 4: fix common-Frechet 14MB/callback allocation regression (obj::O type param) + shared economic operator retrofit
+843d988 Phase A items 5/6: flip origin-ZC/CM+ZC operator FG to production default
+b420d71 Phase A item 3: real D=20/W=80,000 confirmation log for flexible-CM economic-operator retrofit (ALL PASS, all diffs <=2.2e-11)
+5cdd4bb Phase A item 3: retrofit CMLookupState's economic block to shared economic_forward!/economic_transpose!
+9746024 Phase A item 1: D=4 complete-inner-solve perf A/B harness + results for origin-ZC/CM+ZC operator vs dense
+8bb0d3d Phase 0: provenance sync (production unchanged at f1fa8e7), branch discipline, per-commit classification for the 6 new commits under this task's taxonomy
+e48a71d Final deliverable docs: per-family gates, no-dense-G proof, verification scope, perf A/B, final verdict
+3969acf Job 2: operator-based verification proof-of-concept for origin-ZC (verify_inner_solution_operator_originzc!)
+ae2a790 Real D=20/W=80,000 correctness gates: origin-ZC and CM+ZC operator FG both ALL PASS
+47daf6f Job 1: CM+ZC [E|C|Z] operator FG (new, opt-in) + D=20 perturbation-point fix for origin-ZC gate
+74c1450 Job 1: shared economic operator + origin-ZC [E|Z] operator FG (new, opt-in)
+b399de4 Fix include-order gap: cm_hessian_architectures.jl -> compressed_live.jl needs compressed_cc_inner.jl
+fea8e9a Branch setup: adopt finish-five-family-optimization-stack chain, save addendum verbatim
+29b1c79 Add handoff note for next session: addendum Part B onward (shared economic-core FG operator)
+fbb7d79 Addendum Part A: make unrestricted's compressed inner FG allocation-free (20,081x reduction)
+b31e88c Phase 5.2: matrix-free CM+level operator for common Frechet (validated, not flipped to default)
+c5f29eb Update RESTRICTED_OPERATOR_FG_PRODUCTION_PORT doc: flexible-CM allocation fix results + two G-materialization findings
+217e91b Phase 5.5: fix flexible-CM cm_lookup allocation regression, cache CMLookupState, flip default, skip wasted CM-column fill
+c3c0073 Add verbatim original task prompt + handoff prompt for the Phase 5-7 continuation session
+08550a8 Finalize five-family optimization stack completion master report with final verdict
+b20902a Update 5x7 status matrix and gate matrix with final origin-ZC verification data
+dad6b9c Complete origin-ZC dual-bank real-trajectory data; finalize KEEP_OPT_IN decision, all 4 families
+223fd02 Fix a masked KNITRO callback-error false-positive in the Phase 8 smoke test; all 4 families now genuinely PASS
+2fa61b7 Add real D=20 gate scripts: dual-bank real-trajectory benchmark, transformed-A default smoke test
+06d4bd6 Promote A_coordinate_mode=:powered_aspace to the production default for all 4 restricted families
+0a85db4 Add honest scope/gap deliverables for Phases 4-7, 9, 11 and the transformed-A release writeup
+ca5f176 Add Phase 3 CM-feature-immutability counters; empirically confirm the mandatory invariant
+abbecb8 Add D=20/W=80,000 all-family gates for exact cache, workspace, and unrestricted unified driver
+1900635 REWORK: revert restricted dual-bank default to opt-in (false), not on-by-default
+3d5ba5a Add Phase F (items 1-4) consolidated write-up
+88c7658 Phase F: fail-fast validation for the dead price_cache_backend kwarg (MATCHED_AB_PASSED)
+47fe5e5 Phase F: fix stale origin-ZC docstring claiming H_EE 'always uses Architecture A'
+fce210e Phase F: add common-Frechet manifest resolver + fix CM+ZC congruence-label bug (MATCHED_AB_PASSED)
+1ef4578 Phase E (part 2): dense-columns vs bin-fill benchmark + gap-closing end-to-end tests (MATCHED_AB_PASSED)
+a34198b Fix: CMBinHessCtx constructor missing inner_fg_backend field in build_cm_meanzc_bin_ctx (CM+ZC broken since Phase B1)
+053bb27 Phase E (part 1): wire CompressedFactualWorkspace into all four restricted families' hot moment-build path (MATCHED_AB_PASSED)
+ac2ede8 Phase D: wire dual-bank warm starts into all four restricted family drivers (MATCHED_AB_PASSED)
+01ebea0 Phase C: wire exact-point cache into all four restricted family drivers (MATCHED_AB_PASSED)
+dd85847 Phase B1: wire validated lookup FG kernel into flexible-CM production (MATCHED_AB_PASSED, default unchanged)
+01559e3 Phase A: repoint unrestricted stage runner to unified direct-bound driver (MATCHED_AB_PASSED)
+cb4b6b2 Freeze static-audit baseline report on remediation branch (no production code changed)
+8a8b0a8 Freeze Phase 0 inherited-commit review before adopting any remediation work
+
+=== git diff --stat vs base ===
+ full_aod_diag/d4_exact/operator_verification.jl    | 144 ++++
+ .../d4_exact/phase2_dual_bank_benchmark.jl         | 132 ++++
+ .../d4_exact/phase2_originzc_dual_bank_only.jl     |  76 ++
+ .../d4_exact/phase8_transformed_a_default_smoke.jl | 109 +++
+ .../d4_exact/production_backend_manifest.jl        |  60 +-
+ .../d4_exact/smoke_no_dense_g_five_families.jl     |  64 ++
+ .../d4_exact/test_meanzc_operator_correctness.jl   | 100 +++
+ .../test_operator_verification_cmmeanzc.jl         |  51 ++
+ .../test_operator_verification_originzc.jl         |  55 ++
+ .../d4_exact/test_originzc_operator_correctness.jl | 107 +++
+ ...1_d20_exact_cache_and_workspace_all_families.jl | 187 +++++
+ .../test_phase52_frechet_lookup_correctness.jl     |  82 ++
+ .../test_phase52_frechet_performance_gate.jl       |  56 ++
+ ...test_phaseB1_cmlookup_production_correctness.jl |  95 +++
+ .../d4_exact/test_phaseB1_performance_gate.jl      |  65 ++
+ .../test_phaseC_exact_cache_correctness.jl         |  92 +++
+ .../d4_exact/test_phaseD_dual_bank_correctness.jl  |  69 ++
+ .../test_phaseE_denseVsBinfill_benchmark.jl        |  81 ++
+ .../d4_exact/test_phaseE_frechet_end_to_end.jl     |  88 +++
+ .../d4_exact/test_phaseE_meanzc_end_to_end.jl      |  97 +++
+ .../d4_exact/test_phaseE_workspace_correctness.jl  |  67 ++
+ .../d4_exact/test_phaseF_frechet_manifest.jl       |  62 ++
+ .../d4_exact/test_phaseF_manifest_label_fix.jl     |  64 ++
+ .../test_phaseF_price_cache_backend_validation.jl  |  56 ++
+ ...t_unrestricted_legacy_vs_unified_equivalence.jl |  90 +++
+ .../d4_exact/unrestricted_stage_runner.jl          | 205 ++++-
+ full_aod_diag/d4_exact/zc_restriction_operator.jl  | 149 ++++
+ results/final_5x7_status_matrix_2026-07-26.csv     |   6 +
+ .../phase1_1_unrestricted_unified_driver_gate.sh   |  67 ++
+ 112 files changed, 10758 insertions(+), 155 deletions(-)
+
+=== git status ===
+?? docs/provenance.txt
+?? full_aod_diag/d4_exact/bench_originzc_meanzc_operator_vs_dense_d20_results.csv
+
+=== related background-agent worktrees/branches ===
+shared-a-gradient-2026-07-27 -> feature/shared-outer-a-gradient-2026-07-27 (base a69b32d)
+cm-basis-diagnosis-2026-07-27 -> diag/cm-basis-interval-orthonormal-2026-07-27 (base a69b32d)
+audit-hot-path-array-allocation-2026-07-27 -> diag/hot-path-array-allocation-audit-2026-07-27 (base 9746024), COMPLETE, commit e5e5c8f7a14cef3e4ef54c82453a9ea31f9ba997
