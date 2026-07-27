@@ -208,6 +208,11 @@ FULL_G_MATERIALIZATION = present_flexible_cm_common_frechet_cm_plus_zc (chunked-
 CROSS_HESSIAN_WINNER_STRUCTURE = not_audited_this_session (gated behind Phase 5, which was not attempted)
 CM_BASIS_DEFAULT = cumulative (interval basis not built this session)
 ORIGIN_CONTRAST_DEFAULT = orthonormal (pre-existing 2026-07-22 decision, reconfirmed not re-decided)
+    [CORRECTION 2026-07-27, CM_BASIS_AND_CONTRAST_DEFAULT_RECONCILIATION_2026-07-27.md: this line
+    is WRONG -- the actual wired driver default is :anchored (cm_checkpoint.jl:591), not orthonormal;
+    there was no real 2026-07-22 D20 evidence behind the "orthonormal" claim being reconfirmed here.
+    Real D=20 evidence gathered 2026-07-27 shows the two are conditioning-equivalent; :anchored is
+    left unchanged as the production default.]
 TRANSFORMED_A_DEFAULT =
     unrestricted:verified (prior session's own Phase A)
     flexible_cm:promoted_and_verified_this_session

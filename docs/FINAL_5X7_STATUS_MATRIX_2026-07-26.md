@@ -1,5 +1,12 @@
 # Final 5×7 Status Matrix — 2026-07-26
 
+> **CORRECTION (2026-07-27, `CM_BASIS_AND_CONTRAST_DEFAULT_RECONCILIATION_2026-07-27.md`): every
+> `cm_basis` cell below reading "cumulative + orthonormal" is WRONG about the contrast half.** The
+> actual wired driver default is `:anchored`, not `:orthonormal` — confirmed by reading
+> `cm_checkpoint.jl:591` directly. Real D=20 evidence (2026-07-27) also shows the two contrasts are
+> conditioning-equivalent, so there is no case for changing the code to match this table instead.
+> Read `cm_basis` below as "cumulative + anchored" for all three CM-grid families.
+
 **This is a STATUS matrix (what backend is active, what is verified), not a performance matrix.**
 Task §11's real-runtime-attributed 5×7 performance matrix was not produced this session — see
 `FIVE_FAMILY_FINAL_PROFILE_STATUS_2026-07-26.md`. Every cell below reflects this session's own

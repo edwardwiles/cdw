@@ -1,5 +1,17 @@
 # Orthonormal Origin-Contrast Benchmark — 2026-07-26
 
+> **CORRECTION (2026-07-27, `CM_BASIS_AND_CONTRAST_DEFAULT_RECONCILIATION_2026-07-27.md`): the
+> claim below that `contrasts=:orthonormal` is "already the production default" is WRONG.** The
+> actual wired production driver (`run_cm_upper_checkpointed`, `cm_checkpoint.jl:591`) defaults to
+> `contrasts=:anchored`, confirmed by reading the code directly, not by any doc citation. Real
+> D=20/W=80,000 evidence (gathered 2026-07-27, this codebase's first real-D20 check of this
+> question) also shows anchored and orthonormal are conditioning-equivalent at D=20 (<1.7% either
+> direction) — the D4-only "2.6-3.4x orthonormal advantage" this document cites below does not
+> survive to D=20 and should not be used to justify a default either way. **Production default
+> remains `:anchored` (the actual wired value), unchanged.** See the reconciliation doc for the
+> full evidence. The rest of this document is preserved for its D4 benchmark data, which is not
+> disputed — only its "already decided, already default" framing is wrong.
+
 ## This decision was already made and is already the production default
 
 Contrary to the task's framing (as if `anchored` vs `orthonormal` were still an open question),
