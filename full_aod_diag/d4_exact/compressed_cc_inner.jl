@@ -63,6 +63,103 @@ function compressed_transpose_contraction(weights::AbstractVector, cf::Compresse
 end
 
 """
+    compressed_transpose_contraction!(v, weights, cf, B) -> v
+
+Addendum Part A remediation (2026-07-26): in-place analogue of `compressed_transpose_contraction`,
+writing into caller-supplied `v` (length oci-1 -- may be a `@view` into KNITRO's own gradient
+buffer, no extra copy needed) using persistent `B` (D x Ddest) scratch. Identical math/order of
+operations -- see the allocating original's own docstring. The allocating original is UNCHANGED
+and kept (still used by benchmark/test scripts, not the hot per-FG-callback path).
+"""
+function compressed_transpose_contraction!(v::AbstractVector{Float64}, weights::AbstractVector, cf::CompressedFactual,
+                                            B::AbstractMatrix{Float64})
+    D = cf.D; Ddest = cf.D_dest; W = cf.W
+    length(weights) == W || error("weights length $(length(weights)) != W=$W")
+    fill!(B, 0.0)
+    T = 0.0
+    Bcf = 0.0
+    @inbounds for s in 1:W
+        ws = cf.SW[s] * weights[s]
+        T += ws
+        for slot in 1:Ddest
+            B[cf.winner[s, slot], slot] += ws * cf.wval[s, slot]
+        end
+        if cf.cf_col > 0
+            Bcf += ws * cf.cf_raw[s]
+        end
+    end
+    @inbounds for slot in 1:Ddest, o in 1:D
+        j = slot + (o - 1) * Ddest
+        v[j] = cf.nrm[j] * cf.gdiv[j] * (B[o, slot] - cf.Pmat[o, slot] * cf.denom[slot] * T) -
+               cf.nrm[j] * cf.usePMM * cf.PMM[j] * T
+    end
+    if cf.cf_col > 0
+        j = cf.cf_col
+        v[j] = cf.nrm[j] * cf.gdiv[j] * Bcf - cf.nrm[j] * cf.usePMM * cf.PMM[j] * T
+    end
+    return v
+end
+
+"""
+    EconomicFGWorkspace
+
+Addendum Part A remediation (2026-07-26): persistent scratch for the unrestricted family's
+compressed inner-FG evaluation, eliminating the 7-8 per-call heap allocations
+`compressed_cc_value_grad` incurred (`compressed_dual_contraction`'s own `κ`/`C`/returned-`t`,
+`compressed_cc_value_grad`'s `q`/`Psq`/`dPsq`, `compressed_transpose_contraction`'s `B`/returned-
+`v` -- see docs/RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md's original audit and
+docs/UNRESTRICTED_ALLOCATION_FREE_FG_PORT_2026-07-26.md for the full accounting). Sized from a
+`CompressedFactual`'s own `(D, D_dest, W)` -- rebuilt once per `CompressedCBState` (i.e. once per
+inner solve, the SAME lifecycle as `cf` itself, which genuinely changes every outer point) rather
+than once per FG callback (many per inner solve) -- already eliminates the dominant allocation
+cost even without caching the workspace ACROSS inner solves (a smaller further refinement, not
+done here: `cf`'s own dimensions are stable for a whole campaign, so this workspace could in
+principle be cached on `ctx` the same way `cf_workspace`/`CompressedFactualWorkspace` already is).
+"""
+mutable struct EconomicFGWorkspace
+    κ::Matrix{Float64}      # (D, Ddest)
+    C::Vector{Float64}      # (Ddest,)
+    contr::Vector{Float64}  # (W,)
+    q::Vector{Float64}      # (W,)
+    Psq::Vector{Float64}    # (W,)
+    dPsq::Vector{Float64}   # (W,)
+    B::Matrix{Float64}      # (D, Ddest)
+end
+
+function EconomicFGWorkspace(cf::CompressedFactual)
+    D = cf.D; Ddest = cf.D_dest; W = cf.W
+    EconomicFGWorkspace(Matrix{Float64}(undef, D, Ddest), zeros(Ddest), Vector{Float64}(undef, W),
+                         Vector{Float64}(undef, W), Vector{Float64}(undef, W), Vector{Float64}(undef, W),
+                         zeros(D, Ddest))
+end
+
+"""
+    compressed_cc_value_grad!(ws, g_λ_out, ζ, λ, cf; Psi!, dPsi!) -> (f, g_ζ)
+
+Addendum Part A remediation (2026-07-26): in-place analogue of `compressed_cc_value_grad`. Writes
+the gradient directly into caller-supplied `g_λ_out` (a `@view` into KNITRO's own
+`evalResult.objGrad` buffer at the real call site -- no extra copy), and every intermediate
+(`contr`/`q`/`Psq`/`dPsq`) into `ws`'s persistent buffers. Calls the SAME `Psi!`/`dPsi!` the
+allocating original calls, unchanged -- no approximation to or restructuring of the divergence
+formula (per the addendum's own explicit instruction not to alter the economic model). `ws.q` is
+left populated with the converged `arg0` for the caller to copy into `obj.arg0` afterward (same
+role the allocating original's returned `q` served).
+"""
+function compressed_cc_value_grad!(ws::EconomicFGWorkspace, g_λ_out::AbstractVector{Float64},
+                                    ζ::Real, λ::AbstractVector, cf::CompressedFactual; Psi!, dPsi!)
+    W = cf.W; M = W
+    compressed_dual_contraction!(ws.contr, λ, cf, ws.κ, ws.C)
+    @inbounds @. ws.q = -ζ - ws.contr
+    Psi!(ws.Psq, ws.q)
+    dPsi!(ws.dPsq, ws.q)
+    f = sum(ws.Psq) / M + ζ
+    g_ζ = 1.0 - sum(ws.dPsq) / M
+    compressed_transpose_contraction!(g_λ_out, ws.dPsq, cf, ws.B)
+    @. g_λ_out = -(1.0 / M) * g_λ_out
+    return f, g_ζ
+end
+
+"""
     compressed_cc_value_grad(ζ, λ, cf; Psi!, dPsi!) -> (f, g_ζ, g_λ)
 
 CC-inner dual objective + gradient w.r.t. (ζ, λ) from the compressed moments.

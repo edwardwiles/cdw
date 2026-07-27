@@ -268,6 +268,53 @@ function compressed_dual_contraction(β::AbstractVector, cf::CompressedFactual)
 end
 
 """
+    compressed_dual_contraction!(t, β, cf, κ, C) -> t
+
+Addendum Part A remediation (2026-07-26): in-place analogue of `compressed_dual_contraction`,
+writing into caller-supplied `t` (length W) using persistent `κ` (D x Ddest) / `C` (Ddest) scratch
+instead of allocating fresh each call. Identical math/order of operations -- see the allocating
+original's own docstring for the full derivation. The allocating original is UNCHANGED and kept
+(still used by `dual_bank.jl`'s cheap scorer, `theta_cplus.jl`, and various benchmark/test
+scripts, none of them the hot per-FG-callback path this exists to fix).
+"""
+function compressed_dual_contraction!(t::AbstractVector{Float64}, β::AbstractVector, cf::CompressedFactual,
+                                       κ::AbstractMatrix{Float64}, C::AbstractVector{Float64})
+    D = cf.D; Ddest = cf.D_dest; W = cf.W
+    length(β) == cf.oci - 1 || error("β length $(length(β)) != oci-1 = $(cf.oci-1)")
+
+    @inbounds for slot in 1:Ddest
+        acc = 0.0
+        for o in 1:D
+            j = slot + (o - 1) * Ddest
+            k = β[j] * cf.nrm[j] * cf.gdiv[j]
+            κ[o, slot] = k
+            acc += k * cf.Pmat[o, slot]
+        end
+        C[slot] = -cf.denom[slot] * acc
+    end
+    Csum = sum(C)
+
+    κ_cf = cf.cf_col > 0 ? β[cf.cf_col] * cf.nrm[cf.cf_col] * cf.gdiv[cf.cf_col] : 0.0
+
+    pmmterm = 0.0
+    if cf.usePMM == 1
+        @inbounds for j in 1:(cf.oci - 1)
+            pmmterm += β[j] * cf.nrm[j] * cf.PMM[j]
+        end
+    end
+
+    @inbounds for w in 1:W
+        acc = Csum
+        for slot in 1:Ddest
+            acc += κ[cf.winner[w, slot], slot] * cf.wval[w, slot]
+        end
+        acc += κ_cf * cf.cf_raw[w]
+        t[w] = cf.SW[w] * (acc - pmmterm)
+    end
+    return t
+end
+
+"""
     materialize_dense_factual(cf::CompressedFactual) -> Matrix{Float64}
 
 DIAGNOSTIC: reconstruct the dense W x (oci-1) factual moment matrix from the

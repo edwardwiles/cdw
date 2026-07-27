@@ -147,11 +147,15 @@ mutable struct CompressedCBState
     grav_raw::Float64
     dense_materialized::Bool    # true once obj.H's G columns have been filled from cf (lazy, once per inner solve; only needed by the :dense_reference core-Hessian backend now)
     core_ws::Union{Nothing,CoreExactHessianWorkspace}   # built lazily from `cf` on first Hessian call this inner solve (port/shared-winner-pair-core-hessian-production-2026-07-25)
+    fg_ws::EconomicFGWorkspace   # Addendum Part A remediation (2026-07-26): persistent scratch for
+    # _callbackEvalFG_inner_compressed! (compressed_cc_value_grad!) -- eliminates the per-FG-callback
+    # allocations compressed_cc_value_grad used to incur. Built once per inner solve (same lifecycle
+    # as `cf`, sized from it), not per callback.
 end
 
 "Backward-compatible outer constructor for the 4 existing call sites that predate the shared core-Hessian workspace field (compressed_live.jl/compressed_live_v2.jl/fast_range_screen.jl/infeasibility_screen.jl/compressed_inner_alt_solvers.jl) -- none of them need to change."
 CompressedCBState(obj, cf::CompressedFactual, grav_raw::Float64, dense_materialized::Bool) =
-    CompressedCBState(obj, cf, grav_raw, dense_materialized, nothing)
+    CompressedCBState(obj, cf, grav_raw, dense_materialized, nothing, EconomicFGWorkspace(cf))
 
 """
     _callbackEvalFG_inner_compressed!
@@ -170,11 +174,16 @@ function _callbackEvalFG_inner_compressed!(kc, cb, evalRequest, evalResult, user
     ζ = x[1]
     λ = @view x[2:end]
     @prof "inner_dual_fg_callback_compressed" begin
-        f, g_ζ, g_λ, q, _ = compressed_cc_value_grad(ζ, λ, st.cf; Psi! = obj.Psi!, dPsi! = obj.dPsi!)
+        # Addendum Part A remediation (2026-07-26): compressed_cc_value_grad! writes g_λ directly
+        # into evalResult.objGrad's own view (no extra copy) and uses st.fg_ws's persistent scratch
+        # for every intermediate -- was compressed_cc_value_grad, which allocated 7-8 fresh arrays
+        # (several W-scale) on every one of these calls (many per inner solve). Same math, same
+        # Psi!/dPsi! calls, unchanged.
+        f, g_ζ = compressed_cc_value_grad!(st.fg_ws, @view(evalResult.objGrad[2:end]), ζ, λ, st.cf;
+                                            Psi! = obj.Psi!, dPsi! = obj.dPsi!)
         evalResult.obj[1] = f <= obj.lower_limit ? -KNITRO.KN_INFINITY : f
         evalResult.objGrad[1] = g_ζ
-        @views evalResult.objGrad[2:end] .= g_λ
-        obj.arg0 .= q
+        obj.arg0 .= st.fg_ws.q
     end
     _INNER_CALL_COUNTERS[].n_fg_calls += 1
     return 0

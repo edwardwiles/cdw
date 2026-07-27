@@ -1,9 +1,12 @@
 # Restricted Operator FG Production Port — 2026-07-26 (updated, this session)
 
-## Status: flexible-CM allocation fix + default flip DONE and validated. Common Fréchet, CM+ZC,
-## origin-ZC operators NOT attempted this session (still scoped below, unchanged in substance from
-## the prior draft of this doc). Two additional G-materialization findings surfaced and are
-## documented in detail (§4) — one fixed, one deliberately NOT fixed this session.
+## Status: flexible-CM allocation fix + default flip DONE and validated. Common Fréchet's
+## matrix-free CM+level operator (`CMFrechetLookupState`) is DONE, validated D4+D20, but NOT
+## flipped to default (allocation regressed ~21%, see §3). CM+ZC, origin-ZC operators NOT attempted
+## this session (still scoped below). Two additional G-materialization findings surfaced and are
+## documented in detail (§4) — one fixed (flexible CM), one deliberately NOT fixed this session
+## (now fixed separately for the UNRESTRICTED family, see
+## `docs/UNRESTRICTED_ALLOCATION_FREE_FG_PORT_2026-07-26.md`, addendum Part A).
 
 This revises the prior session's draft of this doc (which reported the whole of task §5 as "NOT
 ATTEMPTED"). This session picked up exactly the lowest-risk item that draft itself identified as
@@ -185,7 +188,112 @@ operator replaces a dense consumer, the *producer* side (the thing that used to 
 consumer) needs its own audit, not an assumption that it was already conditioned on which
 consumer is active.
 
-## 3. Documented-but-NOT-fixed finding: `compressed_cc_value_grad` allocates heavily inside a real KNITRO hot loop
+## 3. Common Fréchet: matrix-free CM+level operator (DONE, validated, NOT flipped to default)
+
+### 3.1 Math
+
+Common Fréchet is flexible CM's `(D-1)*L` CM restriction moments plus `L` common-level-anchor
+moments (`docs/FRECHET_AS_CM_PLUS_LEVEL_MATHEMATICS_2026-07-25.md`, a prior session's own proof).
+The level column at threshold `l` is `u'f_l(ω) - (u'1)F*(H_l)`, `u = 1_D/√D` — i.e. `(1/√D)·Σ_o
+1{z_o(ω)<H_l} - √D·p_l`, summed over **all** `D` origins (not reference-differenced, unlike the CM
+block's `(D-1)` columns). Forward/backward were derived fresh and cross-checked against two
+independent existing pieces of code before writing any new kernel:
+
+- **Forward**: `Σ_l λ_level[l]·G_level[s,l] = invsqrtD·Σ_o P_level[bin(s,o)] - Σ_l λ_level[l]·targets[l]`,
+  where `P_level[k] = Σ_{l≥k} λ_level[l]` (suffix sum). The `Σ_o P_level[bin(s,o)]` term is
+  *exactly* what `frechet_level_forward_sum!` (`cm_frechet_cplus.jl`, pre-existing, used unchanged
+  by the Lfix outer-gradient path at the converged `λ*`) already computes — reused directly rather
+  than re-derived, for the live in-solve `λ_level` instead of the converged one.
+- **Backward**: `g_level[l] = -(invsqrtD/M)·Σ_{o=1}^D Hpre[o,l] + (targets[l]/M)·Σ_s dPsi[s]`, where
+  `Hpre` is the **same** `(D,L)` prefix-sum-of-weighted-histogram buffer the CM block's own
+  cumulative backward gradient already computes — shared between the two, one `prefix_sums!` call
+  per callback instead of two. This is genuinely new (no prior backward-gradient code existed for
+  this block at all, since Fréchet's inner FG was 100% dense before this session).
+
+Both were verified via a standalone unit-style comparison (`debug_frechet_lookup_unit.jl`) — the
+new `CMFrechetLookupState(x,g)` callable directly against the dense `obj(x,g)` callable at a fixed
+point, no KNITRO involved — **before** trusting any KNITRO-solve-level result, per this project's
+own "verify math independently before blaming/trusting a downstream numerical discrepancy"
+discipline: `f`/`g` agreed to ~1e-16 to ~4.8e-16 at two test points, confirming the kernel math
+itself was correct from the start.
+
+### 3.2 A real bug found and fixed (KNITRO callback protocol, not kernel math)
+
+The FIRST full KNITRO-solve correctness run failed **every single case** (48/48 checks), with
+`Delta_dual` exactly `-0.0` in every case despite `nStatus=0` ("success") — a strong tell that the
+inner solve wasn't actually iterating rather than a small numerical slip. The standalone unit test
+above (run *because* of this suspicious pattern, before assuming the kernel math was at fault)
+showed the kernel math was exact — isolating the bug to the KNITRO wiring. Root cause: the FG
+callback (`_callbackEvalFG_inner_cmfrechetlookup!`) branched on `evalRequest.evalRequestCode ==
+KNITRO.KN_RC_EVALFC`/`KN_RC_EVALGA` and returned an error code on anything else — but this
+codebase's actual `KN_add_eval_callback(kc, true, ...)` registration pattern (confirmed by reading
+the real, working `_callbackEvalFG_inner_cmlookup!` in `cm_lookup_live_knitro.jl`, not assumed)
+calls ONE combined callback for both `f` and `g` every time, with no such branching at all — every
+callback call was hitting the error branch. Fixed by mirroring the real, proven callback exactly
+(including its `lower_limit` infeasibility guard, which the first draft also omitted).
+
+### 3.3 Validation
+
+**Correctness** (`test_phase52_frechet_lookup_correctness.jl`, mirrors
+`test_phaseB1_cmlookup_production_correctness.jl`'s structure, through the real
+`archC_frechet_verified_state` entry point):
+
+```
+D=4:  ALL PASS (0 failures) -- L in {10,20,50}, contrasts in {anchored,orthonormal}
+D=20: ALL PASS (0 failures) -- L=50, contrasts in {anchored,orthonormal}, real W=80,000/KNITRO
+```
+
+ζ*/λ*/m_weights/Delta_dual agreement: ~1e-13 to ~1e-17.
+
+**Performance** (`test_phase52_frechet_performance_gate.jl`, real D=20/W=80,000/L=50, 5 reps,
+`workers ∈ {1,4,8,10,20}`):
+
+| workers | dense median (s) | lookup median (s) | speedup | alloc ratio (dense/lookup) |
+|---|---|---|---|---|
+| 1  | 1.2117 | 1.0684 | 1.134x | 0.825x |
+| 4  | 1.2706 | 1.0802 | 1.176x | 0.825x |
+| 8  | 1.1954 | 1.0749 | 1.112x | 0.825x |
+| 10 | 1.3060 | 1.0975 | 1.190x | 0.825x |
+| 20 | 1.2021 | 1.0842 | 1.109x | 0.825x |
+
+Faster at every thread count (1.11x-1.19x), `Delta_dual` agreement ~1e-17 to ~2.4e-17 — but
+allocation is **worse**, not better (~21% more: 80.5MB vs 66.4MB median), unlike flexible CM which
+achieved exact parity. The CM block's own logic is identical code (`apply_contrast!`/
+`suffix_sums!`/etc. reused unchanged from `cm_lookup_kernels.jl`), so the extra allocation is
+either genuine extra work in the new level-block code, or (more likely, not yet confirmed) a
+difference in the number of KNITRO iterations taken by the two solve paths (different but
+equally-valid floating-point orderings can converge in different iteration counts) rather than a
+per-callback allocation bug — not root-caused in this pass; flagged as a specific, bounded
+follow-on rather than chased down, to stay within this session's actual priority (the addendum's
+Part A was judged higher-value and more clearly scoped).
+
+### 3.4 Flip decision
+
+Per task §5.6 ("allocations fall materially" is one of five required criteria), this does **not**
+meet the bar as-is — allocation regressed, not fell. **`CM_FRECHET_INNER_FG_BACKEND_DEFAULT`
+stays `:dense_reference`.** `:cm_frechet_lookup` ships available, explicitly opt-in
+(`build_cm_frechet_production_context(...; inner_fg_backend=:cm_frechet_lookup)`), same
+`AVAILABLE_BUT_NOT_DEFAULT` treatment flexible CM's own kernel got before its allocation fix.
+
+### 3.5 Implementation notes
+
+New files: `cm_frechet_lookup_kernels.jl` (`CMFrechetLookupState`), `cm_frechet_lookup_production.jl`
+(KNITRO wiring, mirrors `cm_lookup_production.jl`). Modified: `cm_frechet_level.jl`
+(`inner_fg_backend`/`skip_cm_fill_ref` kwargs on `wrap_moments_with_cm_frechet_archB`/
+`build_cm_frechet_production_context`), `cm_frechet_cplus.jl` (`archC_frechet_base_state`/
+`archC_frechet_verified_state` now dispatch on `cctx.inner_fg_backend`, with the same
+`skip_cm_fill_ref` toggle-and-defensive-reset discipline §2 established for plain CM — verified
+harmless/inert for the `:dense_reference` default via the D4/D20 gates above, which exercise the
+default path unchanged). `cctx.cmlookup_st` (the `Any`-typed cache field added for plain CM) is
+reused as-is for `CMFrechetLookupState` too — a `cctx` only ever belongs to one family, so there is
+no collision risk between the two struct types sharing one field.
+
+## 4. Documented-but-NOT-fixed-this-session finding: `compressed_cc_value_grad` allocates heavily inside a real KNITRO hot loop
+
+**Update**: this finding is now FIXED, for the unrestricted family, as addendum Part A — see
+`docs/UNRESTRICTED_ALLOCATION_FREE_FG_PORT_2026-07-26.md` for the full writeup (20,081x allocation
+reduction, bit-identical output, existing comprehensive dense-vs-compressed integration suite
+ALL PASS). The finding as originally documented follows, unchanged, for the record.
 
 **This was found, verified against the real call graph, and is explicitly NOT fixed this
 session** — flagged for a dedicated follow-on, not attempted under time pressure, per this
@@ -264,26 +372,22 @@ under time pressure. **Recommended as the highest-value next allocation-focused 
 codebase, ahead of any further restricted-family work**, given it is default/hot/unaudited rather
 than experimental/off-by-default.
 
-## 4. Scoped follow-on for common Fréchet / CM+ZC / origin-ZC (unchanged in substance, still NOT attempted)
+## 5. Scoped follow-on for CM+ZC / origin-ZC (unchanged in substance, still NOT attempted)
 
-1. **Common Fréchet** (reuses (1)'s CM operator plus the level-anchor direction, task §5.2): needs
-   a genuinely new backward-gradient derivation, not just a reuse of `CMLookupState` — the
-   level-anchor block's forward pass sums over all `D` origins (not reference-differenced, per
-   `cm_frechet_cplus.jl::frechet_level_forward_sum!`) and carries a nonzero-target constant
-   correction term with no CM analog. `CMLookupState`'s layout has no room for this extra block
-   (`x = [ζ; λ_core; λ_cm]`, no `λ_level` slot) — this is new kernel development, not wiring.
-2. **CM+ZC** (task §5.3's `[E | C | Z]` partition): genuinely unbuilt — CM+ZC has **no**
+1. **CM+ZC** (task §5.3's `[E | C | Z]` partition): genuinely unbuilt — CM+ZC has **no**
    lookup/compressed FG alternative at all right now; its `cctx.inner_fg_backend` is hardcoded to
    `:dense_reference`, and its entire inner FG callback is one dense `BLAS.gemv!` against the full
    widened `obj.H` (core+mean/pair columns lumped into one dense block, per its own docs).
-3. **Origin-ZC** (task §5.4's `[E | Z]` partition): genuinely new, no existing partial kernel; does
+2. **Origin-ZC** (task §5.4's `[E | Z]` partition): genuinely new, no existing partial kernel; does
    not touch `CMBinHessCtx`/`build_cm_bin_ctx` at all currently.
+
+(Common Fréchet was in this list in the prior draft of this doc — it is now DONE, see §3.)
 
 Each requires the task's own §5.6 flip rule (D=4+D=20 correctness, non-inferior speed, material
 allocation reduction, no stability regression, `full_G_materializations=0`) before any default
 change — none of that gating work has started for these three.
 
-## 5. Separately-scoped follow-on: winner-sparse economic-core FG for CM (not the CM block — the core block)
+## 6. Separately-scoped follow-on: winner-sparse economic-core FG for CM (not the CM block — the core block)
 
 Even with §1's fix, flexible CM's economic-core columns (the non-CM part of the inner FG
 forward/backward) still go through a real dense `BLAS.gemv!` against a densely-materialized
