@@ -1,3 +1,5 @@
+isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))   # shared-FG-verification-and-A-gradient release (2026-07-27): common-Frechet's DEFAULT (g,A_od)-block gradient backend, see cm_frechet_production_gradient below
+
 # ================================================================================================
 # Fixed Fréchet as flexible CM plus a common-level anchor -- Part IV (outer gradient / C+ path).
 #
@@ -304,16 +306,41 @@ function cm_frechet_production_value_verified_screened(x_free0::AbstractVector, 
 end
 
 """
-    cm_frechet_production_gradient(x_free0, pcx, ctx, pe; base=nothing, kwargs...) -> (g, meta)
+    cm_frechet_production_gradient(x_free0, pcx, ctx, pe; gradient_backend=:shared_inplace_pooled,
+                                    econ_ws=nothing, base=nothing, kwargs...) -> (g, meta)
 
 Level-aware analog of `cm_production_bundle.jl::cm_production_gradient` (Reference/non-C+ backend),
 for a `pcx = build_cm_frechet_production_context(...)`.
+
+`gradient_backend` (shared-FG-verification-and-A-gradient release, 2026-07-27): mirrors
+`cm_production_gradient`/`cm_originzc_production_gradient`/`cm_meanzc_production_gradient`'s own
+kwarg exactly -- common-Frechet was the last of the CM-family restricted wrappers still hardcoded
+to the allocating reference gradient.
+  - `:shared_inplace_pooled` (DEFAULT): the shared `economic_A_gradient!` entry point
+    (shared_a_gradient.jl). `build_lfix_base_cache_cm_frechet`'s own CM/level-folded `q0` is an
+    `LFixBaseCache` (NOT `LFixBaseCacheC` -- that's the separate `:cplus`-only factorized type used
+    by `cm_frechet_production_gradient_cplus` below), so it is passed through unchanged via
+    `economic_A_gradient!`'s `cache=` kwarg -- same contract as the plain-CM wiring.
+  - `:legacy_unbuffered`: the ORIGINAL, fully-allocating `composite_gradient_at_fast` -- kept ONLY
+    as an explicit reference/debug backend.
 """
 function cm_frechet_production_gradient(x_free0::AbstractVector, pcx, ctx, pe;
-        base::Union{Nothing,BaseDualState} = nothing, kwargs...)
+        base::Union{Nothing,BaseDualState} = nothing,
+        gradient_backend::Symbol = :shared_inplace_pooled,
+        econ_ws::Union{Nothing,EconomicAGradientWorkspace} = nothing, kwargs...)
     base = base === nothing ? archC_frechet_base_state(x_free0, pcx.ctx_cm, pcx.cctx, pcx.aug.level_targets) : base
     cache = build_lfix_base_cache_cm_frechet(x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins)
-    return composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    if gradient_backend === :shared_inplace_pooled
+        D = pcx.ctx_cm.D; Ddest = hasproperty(pcx.ctx_cm, :D_dest) ? pcx.ctx_cm.D_dest : pcx.ctx_cm.D
+        ws = econ_ws === nothing ? get_or_build_econ_a_grad_ws(cache.W) : econ_ws
+        g_econ = zeros(D * Ddest)
+        meta = economic_A_gradient!(g_econ, base, pcx.ctx_cm, pe, ws; cache = cache, kwargs...)
+        return g_econ, meta
+    elseif gradient_backend === :legacy_unbuffered
+        return composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    else
+        error("cm_frechet_production_gradient: gradient_backend must be :shared_inplace_pooled|:legacy_unbuffered, got $gradient_backend")
+    end
 end
 
 """
