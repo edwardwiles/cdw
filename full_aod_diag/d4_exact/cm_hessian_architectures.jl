@@ -809,23 +809,51 @@ mutable struct OriginZCCoreHessCtx
     core_hessian_backend::Symbol
     core_hessian_workers::Int
     core_hessian_storage::Symbol
+    # port/shared-inner-fg-operator-and-verification-2026-07-26: origin-ZC's operator FG state.
+    # `Any`-typed (mirrors CMBinHessCtx's own `cmlookup_st` field, cm_lookup_kernels.jl) so this
+    # file has no load-order dependency on zc_restriction_operator.jl/cm_originzc_lookup_kernels.jl
+    # -- those files self-include-guard their own dependencies instead.
+    fg_backend::Symbol                 # :dense_reference (default) | :operator
+    fg_zc_op::Any                      # ZCRestrictionOperator, built once per campaign, or `nothing`
+    fg_layout::Any                     # MeanZCTargetLayout, or `nothing`
+    fg_lookup_st::Any                  # OriginZCOperatorState, cached once per octx, or `nothing`
 end
 
 """
-    build_originzc_core_hess_ctx(aug; core_hessian_backend=:exact_winner_pair_parallel, core_hessian_workers=10, core_hessian_storage=:full_stride) -> OriginZCCoreHessCtx
+    build_originzc_core_hess_ctx(aug; core_hessian_backend=:exact_winner_pair_parallel, core_hessian_workers=10, core_hessian_storage=:full_stride, fg_backend=:dense_reference) -> OriginZCCoreHessCtx
 
 `aug` is `build_originzc_augmented_obj(...)`'s return value -- needs
 `aug.ncore_econ` and `aug.core_cf_ref` (the shared box
 `wrap_moments_with_originzc`'s moments! closure publishes a fresh
 `CompressedFactual` into every outer point, mirroring flexible CM's
-`core_cf_ref`).
+`core_cf_ref`). `fg_backend=:operator` opts into the new shared-economic-operator +
+ZC-restriction-operator FG (port/shared-inner-fg-operator-and-verification-2026-07-26); default
+`:dense_reference` preserves the pre-existing `inner_loop_internal_archgeneric` dense path exactly.
 """
 function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT[],
-        core_hessian_workers::Int = ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT[])
+        core_hessian_workers::Int = ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT[],
+        fg_backend::Symbol = :dense_reference)
     n_eta_total = aug.obj_cm.outer_constr_index - aug.ncore_econ
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
+    # port/shared-inner-fg-operator-and-verification-2026-07-26: build the ZC restriction operator
+    # EAGERLY here (aug.Zraw_all/Zpairraw_all/layout are already available at this call site) rather
+    # than lazily at solve time, so inner_loop_internal_originzc_operator doesn't need `aug` threaded
+    # through to solve time at all -- octx alone is a complete, self-sufficient campaign context.
+    # Self-guarded include (this file's own established convention, see lines 43-45 above) so this
+    # file has no unconditional load-order dependency on zc_restriction_operator.jl for callers that
+    # never request fg_backend=:operator.
+    local fg_zc_op, fg_layout
+    if fg_backend === :operator
+        isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
+        fg_zc_op = ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2))
+        fg_layout = aug.layout
+    else
+        fg_zc_op = nothing
+        fg_layout = nothing
+    end
     return OriginZCCoreHessCtx(aug.ncore_econ, n_eta_total, core_cf_ref, nothing, nothing,
-        core_hessian_backend, core_hessian_workers, core_hessian_storage)
+        core_hessian_backend, core_hessian_workers, core_hessian_storage,
+        fg_backend, fg_zc_op, fg_layout, nothing)
 end
 
 """

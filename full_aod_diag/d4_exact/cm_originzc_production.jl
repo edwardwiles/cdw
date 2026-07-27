@@ -23,6 +23,10 @@
 
 using LinearAlgebra: BLAS, dot, norm
 
+# port/shared-inner-fg-operator-and-verification-2026-07-26: opt-in operator FG (`_originzc_fg_dispatch`,
+# fg_backend=:operator on OriginZCCoreHessCtx) -- self-guarded include, this codebase's own convention.
+isdefined(Main, :_originzc_fg_dispatch) || include(joinpath(@__DIR__, "cm_originzc_lookup_production.jl"))
+
 """
     build_originzc_production_context(ctx, CS, layout) -> (ctx_cm, aug)
 
@@ -30,9 +34,10 @@ Analog of `build_cm_meanzc_production_context`, minus the CM-specific
 `cctx`/`bins` (there is no CM block for this arm, hence nothing to
 precompute for it). `ctx_cm.obj` is `aug.obj_cm`.
 """
-function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout)
+function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; fg_backend::Symbol = :dense_reference)
     println(stdout, "cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)")
     println(stdout, "cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)")
+    println(stdout, "origin_fg_backend [origin-ZC] = ", fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
     flush(stdout)
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_originzc_augmented_obj(ctx, CS, layout)
@@ -42,7 +47,7 @@ function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout)
     # functions across the codebase (cm_screen_bridge.jl, cm_originzc_profile.jl,
     # cm_originzc_cplus.jl, and a dozen+ diagnostic/test scripts) needs zero signature-call
     # changes and automatically picks up the shared H_EE backend.
-    octx = build_originzc_core_hess_ctx(aug)
+    octx = build_originzc_core_hess_ctx(aug; fg_backend = fg_backend)
     ctx_cm = merge(ctx, (obj = aug.obj_cm, octx = octx))
     return (ctx_cm = ctx_cm, aug = aug, octx = octx)
 end
@@ -62,7 +67,7 @@ function archOZ_base_state(x_free0::AbstractVector, νfull::AbstractVector{Float
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νfull)
-    K, x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0; hess_cb_builder = _ -> _originzc_hess_cb_builder(ctx_cm))
+    K, x, nStatus, n_fg, n_hess = _originzc_fg_dispatch(ctx_cm, obj, θ_ext0)
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archOZ_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, copy(obj.arg1), nStatus)
@@ -86,7 +91,7 @@ function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{F
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0; hess_cb_builder = _ -> _originzc_hess_cb_builder(ctx_cm))
+    K, inner_x, nStatus, n_fg, n_hess = _originzc_fg_dispatch(ctx_cm, obj, θ_ext0)
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
         throw(CMExpectedSolveFailure("archOZ_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
