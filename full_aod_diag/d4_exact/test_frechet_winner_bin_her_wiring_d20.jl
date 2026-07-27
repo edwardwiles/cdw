@@ -80,11 +80,18 @@ for contrasts in (:anchored, :orthonormal)
     tls_wbin = build_thread_local_scratch(pcx_wbin.cctx)
 
     # "hard point": x_free0 .* 1.01, the exact perturbation that exposed the skip_cm_fill_ref bug
-    # in this family's own history (docs/COMMON_FRECHET_FG_D20_FINAL_GATE_2026-07-27.md). We solve
-    # it at the DENSE backend first (known-good reference), then feed the SAME converged dual point
-    # into both backends' Hessian callbacks for the actual comparison (matching how the calib/
-    # near-delta1 points below are handled too -- solve once with dense, compare Hessians at that
-    # shared point).
+    # in this family's own history (docs/COMMON_FRECHET_FG_D20_FINAL_GATE_2026-07-27.md). UNLIKE
+    # calib/near_delta1_perturbed below (which only perturb the DUAL point -- obj.H stays fixed at
+    # the calibration theta_full the whole time, matching this codebase's own established "same
+    # theta, different Hessian-weight vector" gate convention), this point requires a genuinely
+    # NEW theta_full. That means obj.H itself must be refreshed on BOTH backends before comparing --
+    # a first attempt at this gate solved ONLY pcx_dense and reused pcx_wbin's stale, calibration-
+    # theta obj.H, producing a spurious ~5990 "failure" that was actually just comparing two
+    # different underlying moment matrices, not a real backend disagreement (max|Delta H_EE| alone
+    # was 1590 -- H_EE doesn't even touch the winner-bin cross-Hessian code at all, confirming the
+    # discrepancy was a harness bug, not a Part A/B bug). Fixed by solving the hard point through
+    # BOTH backends (mirroring how calib's own base_dense/base_wbin pair is built above) before
+    # comparing.
     x_free_hard = x_free_calib .* 1.01
 
     for (label, x_free_for_solve, x) in (
@@ -93,10 +100,18 @@ for contrasts in (:anchored, :orthonormal)
             ("hard_point_x1.01", x_free_hard, nothing))
         if label == "hard_point_x1.01"
             println("  solving hard point (x_free0 .* 1.01) at dense backend..."); flush(stdout)
-            base_hard = archC_frechet_base_state(x_free_hard, pcx_dense.ctx_cm, pcx_dense.cctx, pcx_dense.aug.level_targets)
-            check("contrasts=$contrasts hard_point: dense inner solve feasible (status=$(base_hard.inner_status))",
-                base_hard.inner_status in (0, -100, -101, -103))
-            x = vcat(base_hard.ζstar, base_hard.λstar)
+            base_hard_dense = archC_frechet_base_state(x_free_hard, pcx_dense.ctx_cm, pcx_dense.cctx, pcx_dense.aug.level_targets)
+            check("contrasts=$contrasts hard_point: dense inner solve feasible (status=$(base_hard_dense.inner_status))",
+                base_hard_dense.inner_status in (0, -100, -101, -103))
+            println("  solving hard point (x_free0 .* 1.01) at winner_bin backend..."); flush(stdout)
+            base_hard_wbin = archC_frechet_base_state(x_free_hard, pcx_wbin.ctx_cm, pcx_wbin.cctx, pcx_wbin.aug.level_targets)
+            check("contrasts=$contrasts hard_point: winner_bin inner solve feasible (status=$(base_hard_wbin.inner_status))",
+                base_hard_wbin.inner_status in (0, -100, -101, -103))
+            check("contrasts=$contrasts hard_point: complete inner solve status matches (nStatus $(base_hard_dense.inner_status) vs $(base_hard_wbin.inner_status))",
+                base_hard_dense.inner_status == base_hard_wbin.inner_status)
+            hard_dual_diff = maximum(abs.(vcat(base_hard_dense.ζstar, base_hard_dense.λstar) .- vcat(base_hard_wbin.ζstar, base_hard_wbin.λstar)))
+            check("contrasts=$contrasts hard_point: complete inner solve dual point matches (max|Δ|=$hard_dual_diff)", hard_dual_diff < 1e-6)
+            x = vcat(base_hard_dense.ζstar, base_hard_dense.λstar)
         end
         for (arch_label, hess_fn) in (
                 ("serial", (h, obj, cctx) -> hessian_cm_frechet_structured!(h, obj, cctx, cctx === pcx_dense.cctx ? level_targets_d : level_targets_w)),
