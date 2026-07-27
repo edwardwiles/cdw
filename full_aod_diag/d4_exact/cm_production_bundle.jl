@@ -4,6 +4,7 @@ isdefined(Main, :inner_loop_internal_cmlookup_production) || include(joinpath(@_
 isdefined(Main, :DualBank) || include(joinpath(@__DIR__, "dual_bank.jl"))
 isdefined(Main, :RestrictedDualBank) || include(joinpath(@__DIR__, "cm_dual_bank_production.jl"))   # Phase D remediation (2026-07-26)
 isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # Phase E remediation (2026-07-26)
+isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))   # shared-FG-verification-and-A-gradient release (2026-07-27): flexible-CM's DEFAULT (g,A_od)-block gradient backend, see cm_production_gradient below
 
 # ============================================================================
 # Continuation 13, Sections 3A + 5: production combined bundle.
@@ -299,18 +300,38 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
 end
 
 """
-    cm_production_gradient(x_free0, pcx, ctx, pe; kwargs...) -> (g, meta)
+    cm_production_gradient(x_free0, pcx, ctx, pe; gradient_backend=:shared_inplace_pooled,
+                            econ_ws=nothing, kwargs...) -> (g, meta)
 
 `pcx = build_cm_production_context(...)`'s return value. One-call entry
-point: Architecture-C inner solve (`archC_base_state`) + the CM-aware Lfix
-gradient (`composite_gradient_at_fast_cm`), fully wired for a KNITRO OUTER
-callback's `cb_G!`.
+point: Architecture-C inner solve (`archC_base_state`) + the (g,A_od)-block
+gradient, fully wired for a KNITRO OUTER callback's `cb_G!`.
+
+`gradient_backend` (shared-FG-verification-and-A-gradient release, 2026-07-27): mirrors
+`cm_originzc_production_gradient`/`cm_meanzc_production_gradient`'s own kwarg exactly.
+  - `:shared_inplace_pooled` (DEFAULT): the shared `economic_A_gradient!` entry point
+    (shared_a_gradient.jl). `build_lfix_base_cache_cm`'s own CM-folded `q0` is passed through
+    unchanged via `economic_A_gradient!`'s `cache=` kwarg -- same contract as before.
+  - `:legacy_unbuffered`: the ORIGINAL, fully-allocating `composite_gradient_at_fast` -- kept ONLY
+    as an explicit reference/debug backend.
 """
 function cm_production_gradient(x_free0::AbstractVector, pcx, ctx, pe;
-        base::Union{Nothing,BaseDualState} = nothing, kwargs...)
+        base::Union{Nothing,BaseDualState} = nothing,
+        gradient_backend::Symbol = :shared_inplace_pooled,
+        econ_ws::Union{Nothing,EconomicAGradientWorkspace} = nothing, kwargs...)
     base = base === nothing ? archC_base_state(x_free0, pcx.ctx_cm, pcx.cctx) : base
     cache = build_lfix_base_cache_cm(x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins)
-    return composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    if gradient_backend === :shared_inplace_pooled
+        D = pcx.ctx_cm.D; Ddest = hasproperty(pcx.ctx_cm, :D_dest) ? pcx.ctx_cm.D_dest : pcx.ctx_cm.D
+        ws = econ_ws === nothing ? get_or_build_econ_a_grad_ws(cache.W) : econ_ws
+        g_econ = zeros(D * Ddest)
+        meta = economic_A_gradient!(g_econ, base, pcx.ctx_cm, pe, ws; cache = cache, kwargs...)
+        return g_econ, meta
+    elseif gradient_backend === :legacy_unbuffered
+        return composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    else
+        error("cm_production_gradient: gradient_backend must be :shared_inplace_pooled|:legacy_unbuffered, got $gradient_backend")
+    end
 end
 
 """
