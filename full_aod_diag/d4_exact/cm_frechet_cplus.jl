@@ -108,22 +108,32 @@ end
 function archC_frechet_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64})
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
-    # Phase 5.2 remediation (2026-07-26): mirrors cm_production_bundle.jl::archC_base_state exactly
-    # -- archC_frechet_base_state never reads obj.H's CM/level columns (only ζ*/λ*/obj.arg1), so
-    # skip their now-wasted dense fill when :cm_frechet_lookup is registered (which never reads
-    # them either). finally-reset so `true` can't leak into archC_frechet_verified_state below.
+    # BUGFIX (shared-FG-verification-and-A-gradient release, 2026-07-27): this function used to set
+    # cctx.skip_cm_fill_ref[]=true whenever inner_fg_backend=:cm_frechet_lookup, on the Phase 5.2
+    # remediation (2026-07-26) comment's claim that "archC_frechet_base_state never reads obj.H's
+    # CM/level columns... skip their now-wasted dense fill when :cm_frechet_lookup is registered
+    # (which never reads them either)". That claim is FALSE for the Hessian side: BOTH branches
+    # below share the SAME archC_frechet_hess_cb_builder(cctx, level_targets) Hessian callback
+    # (the lookup branch reaches it via the thin `_adapt_hess_cb_for_lookup` wrapper, not a
+    # different implementation), and that Hessian callback DOES read obj.H's CM/level dense
+    # columns. Skipping their fill left the lookup path's Hessian reading stale/unfilled data,
+    # sending KNITRO's Newton steps in a wrong direction and producing a reproducible real
+    # infeasible termination (nStatus=-400) at points beyond the narrow calibration point the
+    # original allocation-fix gates happened to cover -- see
+    # docs/COMMON_FRECHET_FG_D20_FINAL_GATE_2026-07-27.md for the full root-cause trace (a direct
+    # A/B: identical solve, skip forced off -> nStatus=0, zeta* agrees with dense to 9 significant
+    # figures; skip left on -> nStatus=-400, reproduced 4/4 times across two sessions). The
+    # skip_cm_fill_ref optimization is REMOVED here for common-Frechet; the CM/level dense columns
+    # are always filled regardless of inner_fg_backend, exactly as the pre-Phase-5.2 code did. The
+    # plain-CM family's OWN skip_cm_fill_ref usage (cm_production_bundle.jl::archC_base_state) is
+    # a SEPARATE, independently-validated call site for a DIFFERENT Hessian builder
+    # (archC_hess_cb_builder, not archC_frechet_hess_cb_builder) and is unaffected by this fix.
     use_lookup = cctx.inner_fg_backend == :cm_frechet_lookup
-    use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = true)
-    local K, x, nStatus, n_fg, n_hess
-    try
-        K, x, nStatus, n_fg, n_hess = use_lookup ?
-            inner_loop_internal_cmfrechetlookup_production(obj, θ_full0, cctx, level_targets;
-                hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets)) :
-            inner_loop_internal_archgeneric(obj, θ_full0;
-                hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
-    finally
-        use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
-    end
+    K, x, nStatus, n_fg, n_hess = use_lookup ?
+        inner_loop_internal_cmfrechetlookup_production(obj, θ_full0, cctx, level_targets;
+            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets)) :
+        inner_loop_internal_archgeneric(obj, θ_full0;
+            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_frechet_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, copy(obj.arg1), nStatus)
