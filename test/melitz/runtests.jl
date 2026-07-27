@@ -27,6 +27,7 @@ using DelimitedFiles
 const MELITZ_DIR = joinpath(@__DIR__, "..", "..", "src", "melitz")
 include(joinpath(dirname(dirname(@__DIR__)), "misc", "doubleDiff.jl"))
 include(joinpath(MELITZ_DIR, "profiling.jl"))
+include(joinpath(MELITZ_DIR, "knitro_compat.jl"))
 include(joinpath(MELITZ_DIR, "backend_config.jl"))
 include(joinpath(MELITZ_DIR, "types.jl"))
 include(joinpath(MELITZ_DIR, "bounded_cache.jl"))
@@ -41,6 +42,8 @@ include(joinpath(MELITZ_DIR, "moment_operator.jl"))
 include(joinpath(MELITZ_DIR, "delta_star.jl"))
 include(joinpath(MELITZ_DIR, "affine_cutoff.jl"))
 include(joinpath(MELITZ_DIR, "log_cutoff_param.jl"))
+include(joinpath(MELITZ_DIR, "technology_coordinate.jl"))
+include(joinpath(MELITZ_DIR, "outer_parameterization_config.jl"))
 include(joinpath(MELITZ_DIR, "fake_data.jl"))
 include(joinpath(MELITZ_DIR, "pareto_calibration.jl"))
 include(joinpath(MELITZ_DIR, "fstar_solver.jl"))
@@ -878,41 +881,46 @@ end
 
     begin
         @testset "Phase 3/real D=20: sorted-tail vs dense at real calibration" begin
-            real_dir = joinpath(dirname(dirname(dirname(@__DIR__))), "real_data", "noah_D20")
-            if isdir(real_dir)
-                lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
-                LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
-                tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
-                countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
-                focal20 = findfirst(==("fra"), countries)
-                observed20 = MelitzObservedData(; lambda=lambdaData, L=LData, tau=tauData, countries=countries, atol=2e-3)
-                calib20 = calibrate_melitz_pareto(observed20; sigma=2.5, theta_star=:estimate,
-                    focal_country=focal20, p_min=0.001, wage_tol=1e-6, gravity_tol=1e-6)
-                p20 = MelitzPrimitives(calib20.D, calib20.sigma, calib20.theta_star, calib20.target_country,
-                    calib20.tau, calib20.w, calib20.A, calib20.f, calib20.gamma_prime_target)
-                eq20 = MelitzEquilibrium(calib20.E, ones(calib20.D), calib20.q, calib20.X)
-                cf20 = MelitzCounterfactual(calib20.target_country, calib20.w_prime,
-                    calib20.w_prime * calib20.L[calib20.target_country], 1.0, calib20.w_prime * calib20.L[calib20.target_country])
-                layout20 = MelitzMomentLayout(calib20.D)
+            # Governing prompt Phase 3 (2026-07-27 addendum): this path used to be built with
+            # an extra (wrong) `dirname` (3 levels up from `test/melitz/`, landing one level
+            # ABOVE the repo root), so `isdir(real_dir)` was always false and this test
+            # silently `@warn`-skipped in every run, in this repo, forever -- the real fixture
+            # (`real_data/noah_D20`) has been present at the repo root the whole time. Fixed to
+            # 2 levels (repo root). The fixture is not optional in this repo: a caller-side
+            # `isdir` guard that then silently skips would just reintroduce the same silent-skip
+            # bug in a different form, so this now hard-asserts the directory exists.
+            real_dir = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
+            @assert isdir(real_dir) "real_data/noah_D20 not found at $real_dir -- this repo's own bundled real-data fixture is required for this test, not an optional/skippable dependency"
+            lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
+            LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
+            tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
+            countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
+            focal20 = findfirst(==("fra"), countries)
+            observed20 = MelitzObservedData(; lambda=lambdaData, L=LData, tau=tauData, countries=countries, atol=2e-3)
+            calib20 = calibrate_melitz_pareto(observed20; sigma=2.5, theta_star=:estimate,
+                focal_country=focal20, p_min=0.001, wage_tol=1e-6, gravity_tol=1e-6)
+            p20 = MelitzPrimitives(calib20.D, calib20.sigma, calib20.theta_star, calib20.target_country,
+                calib20.tau, calib20.w, calib20.A, calib20.f, calib20.gamma_prime_target)
+            eq20 = MelitzEquilibrium(calib20.E, ones(calib20.D), calib20.q, calib20.X)
+            cf20 = MelitzCounterfactual(calib20.target_country, calib20.w_prime,
+                calib20.w_prime * calib20.L[calib20.target_country], 1.0, calib20.w_prime * calib20.L[calib20.target_country])
+            layout20 = MelitzMomentLayout(calib20.D)
 
-                Wt = 20_000
-                z20 = pareto_draws(Wt, calib20.D, calib20.theta_star; seed=1)
-                sctx20 = build_melitz_sorted_tail_context(z20, p20.sigma; theta_star=p20.theta_star)
-                K1 = zeros(Wt); G1 = zeros(Wt, layout20.num_moments)
-                K2 = zeros(Wt); G2 = zeros(Wt, layout20.num_moments)
-                melitz_moments!(K1, G1, p20, eq20, cf20, z20, layout20)
-                melitz_moments_sorted_tail!(K2, G2, p20, eq20, cf20, sctx20, layout20)
-                @test K1 == K2
-                @test isapprox(G1, G2; atol=1e-9, rtol=1e-9)
-                @test maximum(abs.(G1 .- G2)) < 1e-8
-                @test rank(G1; atol=1e-6) == rank(G2; atol=1e-6)
+            Wt = 20_000
+            z20 = pareto_draws(Wt, calib20.D, calib20.theta_star; seed=1)
+            sctx20 = build_melitz_sorted_tail_context(z20, p20.sigma; theta_star=p20.theta_star)
+            K1 = zeros(Wt); G1 = zeros(Wt, layout20.num_moments)
+            K2 = zeros(Wt); G2 = zeros(Wt, layout20.num_moments)
+            melitz_moments!(K1, G1, p20, eq20, cf20, z20, layout20)
+            melitz_moments_sorted_tail!(K2, G2, p20, eq20, cf20, sctx20, layout20)
+            @test K1 == K2
+            @test isapprox(G1, G2; atol=1e-9, rtol=1e-9)
+            @test maximum(abs.(G1 .- G2)) < 1e-8
+            @test rank(G1; atol=1e-6) == rank(G2; atol=1e-6)
 
-                diag_sorted20 = melitz_sorted_tail_diagnostics(eq20, sctx20, layout20)
-                diag_dense20 = cell_participation_diagnostics(p20, eq20, z20)
-                @test diag_sorted20.active_count == diag_dense20.count_active
-            else
-                @warn "Skipping real D=20 sorted-tail equivalence test -- real_data/noah_D20 not found"
-            end
+            diag_sorted20 = melitz_sorted_tail_diagnostics(eq20, sctx20, layout20)
+            diag_dense20 = cell_participation_diagnostics(p20, eq20, z20)
+            @test diag_sorted20.active_count == diag_dense20.count_active
         end
     end
 end
@@ -1184,89 +1192,89 @@ end
 
     begin
         @testset "real D=20: matrix-free operator vs dense at real calibration" begin
-            real_dir = joinpath(dirname(dirname(dirname(@__DIR__))), "real_data", "noah_D20")
-            if isdir(real_dir)
-                lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
-                LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
-                tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
-                countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
-                focal20 = findfirst(==("fra"), countries)
-                observed20 = MelitzObservedData(; lambda=lambdaData, L=LData, tau=tauData, countries=countries, atol=2e-3)
-                calib20 = calibrate_melitz_pareto(observed20; sigma=2.5, theta_star=:estimate,
-                    focal_country=focal20, p_min=0.001, wage_tol=1e-6, gravity_tol=1e-6)
-                p20 = MelitzPrimitives(calib20.D, calib20.sigma, calib20.theta_star, calib20.target_country,
-                    calib20.tau, calib20.w, calib20.A, calib20.f, calib20.gamma_prime_target)
-                eq20 = MelitzEquilibrium(calib20.E, ones(calib20.D), calib20.q, calib20.X)
-                cf20 = MelitzCounterfactual(calib20.target_country, calib20.w_prime,
-                    calib20.w_prime * calib20.L[calib20.target_country], 1.0, calib20.w_prime * calib20.L[calib20.target_country])
-                layout20 = MelitzMomentLayout(calib20.D)
+            # Governing prompt Phase 3 (2026-07-27 addendum): same 3-dirname path bug as the
+            # "Phase 3/real D=20" testset above -- fixed to 2 levels (repo root), hard-asserted
+            # rather than silently skipped (see that testset's own comment for the full story).
+            real_dir = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
+            @assert isdir(real_dir) "real_data/noah_D20 not found at $real_dir -- this repo's own bundled real-data fixture is required for this test, not an optional/skippable dependency"
+            lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
+            LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
+            tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
+            countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
+            focal20 = findfirst(==("fra"), countries)
+            observed20 = MelitzObservedData(; lambda=lambdaData, L=LData, tau=tauData, countries=countries, atol=2e-3)
+            calib20 = calibrate_melitz_pareto(observed20; sigma=2.5, theta_star=:estimate,
+                focal_country=focal20, p_min=0.001, wage_tol=1e-6, gravity_tol=1e-6)
+            p20 = MelitzPrimitives(calib20.D, calib20.sigma, calib20.theta_star, calib20.target_country,
+                calib20.tau, calib20.w, calib20.A, calib20.f, calib20.gamma_prime_target)
+            eq20 = MelitzEquilibrium(calib20.E, ones(calib20.D), calib20.q, calib20.X)
+            cf20 = MelitzCounterfactual(calib20.target_country, calib20.w_prime,
+                calib20.w_prime * calib20.L[calib20.target_country], 1.0, calib20.w_prime * calib20.L[calib20.target_country])
+            layout20 = MelitzMomentLayout(calib20.D)
 
-                Wt = 20_000
-                z20 = pareto_draws(Wt, calib20.D, calib20.theta_star; seed=1)
-                op, K1, G1 = _check_operator_against_dense(p20, eq20, cf20, layout20, z20; ntrials=10, atol=1e-6, rtol=1e-6)
+            Wt = 20_000
+            z20 = pareto_draws(Wt, calib20.D, calib20.theta_star; seed=1)
+            op, K1, G1 = _check_operator_against_dense(p20, eq20, cf20, layout20, z20; ntrials=10, atol=1e-6, rtol=1e-6)
 
-                u = zeros(Wt); g = zeros(layout20.num_moments)
-                mu = randn(MersenneTwister(3), layout20.num_moments)
-                v = randn(MersenneTwister(4), Wt)
-                mul_G!(u, op, 1.0, mu); mul_Gt!(g, op, v)   # warmup
-                bytes_G = @allocated mul_G!(u, op, 1.0, mu)
-                bytes_Gt = @allocated mul_Gt!(g, op, v)
-                @test bytes_G == 0
-                @test bytes_Gt == 0
+            u = zeros(Wt); g = zeros(layout20.num_moments)
+            mu = randn(MersenneTwister(3), layout20.num_moments)
+            v = randn(MersenneTwister(4), Wt)
+            mul_G!(u, op, 1.0, mu); mul_Gt!(g, op, v)   # warmup
+            bytes_G = @allocated mul_G!(u, op, 1.0, mu)
+            bytes_Gt = @allocated mul_Gt!(g, op, v)
+            @test bytes_G == 0
+            @test bytes_Gt == 0
 
-                # Phase 6/7 (scoped prototype): same-origin weighted-Gram block vs dense R'*S*R
-                D20 = layout20.D
-                R20 = copy(G1)
-                for o in 1:D20, d in 1:D20
-                    col = layout20.trade_index[o, d]
-                    lambda_od = eq20.trade_flow[o, d] / eq20.expenditure[d]
-                    R20[:, col] .+= lambda_od
-                end
-                S = rand(MersenneTwister(321), Wt) .+ 0.1
-                Hblock = zeros(D20, D20)
-                for o in 1:D20
-                    melitz_same_origin_weighted_block!(Hblock, op, o, S)
-                    R_o = @view R20[:, layout20.trade_index[o, :]]
-                    dense_block = R_o' * Diagonal(S) * R_o
-                    for d in 1:D20, dp in d:D20
-                        @test isapprox(Hblock[d, dp], dense_block[d, dp]; atol=1e-6, rtol=1e-5)
-                    end
-                end
-                melitz_same_origin_weighted_block!(Hblock, op, 1, S)  # warmup
-                bytes_H = @allocated melitz_same_origin_weighted_block!(Hblock, op, 1, S)
-                @test bytes_H == 0
-
-                # Phase 7/8/9 (2026-07-26): cross-origin block + full weighted Gram (complete Hessian)
-                melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)
-                R1 = @view R20[:, layout20.trade_index[1, :]]
-                R2 = @view R20[:, layout20.trade_index[2, :]]
-                dense_cross = R1' * Diagonal(S) * R2
-                @test isapprox(Hblock, dense_cross; atol=1e-6, rtol=1e-5)
-                melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)  # warmup
-                @test (@allocated melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)) == 0
-
-                n20 = 1 + layout20.num_moments
-                Hfull = zeros(n20, n20)
-                melitz_full_weighted_gram!(Hfull, op, S)
-                Hfull_dense = hcat(ones(Wt), G1)
-                dense_full = Hfull_dense' * Diagonal(S) * Hfull_dense
-                for i in 1:n20, j in i:n20
-                    @test isapprox(Hfull[i, j], dense_full[i, j]; atol=1e-6, rtol=1e-5)
-                end
-                melitz_full_weighted_gram!(Hfull, op, S)  # warmup
-                @test (@allocated melitz_full_weighted_gram!(Hfull, op, S)) == 0
-
-                # Phase 7 parallelization at real D=20/W=20,000 scale
-                Hfull_par = zeros(n20, n20)
-                melitz_full_weighted_gram_parallel!(Hfull_par, op, S)
-                for i in 1:n20, j in i:n20
-                    @test isapprox(Hfull_par[i, j], Hfull[i, j]; atol=1e-12, rtol=1e-12)
-                end
-                melitz_full_weighted_gram_parallel!(Hfull_par, op, S)  # warmup
-                @test (@allocated melitz_full_weighted_gram_parallel!(Hfull_par, op, S)) < 100_000
-            else
-                @warn "Skipping real D=20 matrix-free operator test -- real_data/noah_D20 not found"
+            # Phase 6/7 (scoped prototype): same-origin weighted-Gram block vs dense R'*S*R
+            D20 = layout20.D
+            R20 = copy(G1)
+            for o in 1:D20, d in 1:D20
+                col = layout20.trade_index[o, d]
+                lambda_od = eq20.trade_flow[o, d] / eq20.expenditure[d]
+                R20[:, col] .+= lambda_od
             end
+            S = rand(MersenneTwister(321), Wt) .+ 0.1
+            Hblock = zeros(D20, D20)
+            for o in 1:D20
+                melitz_same_origin_weighted_block!(Hblock, op, o, S)
+                R_o = @view R20[:, layout20.trade_index[o, :]]
+                dense_block = R_o' * Diagonal(S) * R_o
+                for d in 1:D20, dp in d:D20
+                    @test isapprox(Hblock[d, dp], dense_block[d, dp]; atol=1e-6, rtol=1e-5)
+                end
+            end
+            melitz_same_origin_weighted_block!(Hblock, op, 1, S)  # warmup
+            bytes_H = @allocated melitz_same_origin_weighted_block!(Hblock, op, 1, S)
+            @test bytes_H == 0
+
+            # Phase 7/8/9 (2026-07-26): cross-origin block + full weighted Gram (complete Hessian)
+            melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)
+            R1 = @view R20[:, layout20.trade_index[1, :]]
+            R2 = @view R20[:, layout20.trade_index[2, :]]
+            dense_cross = R1' * Diagonal(S) * R2
+            @test isapprox(Hblock, dense_cross; atol=1e-6, rtol=1e-5)
+            melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)  # warmup
+            @test (@allocated melitz_cross_origin_weighted_block!(Hblock, op, 1, 2, S)) == 0
+
+            n20 = 1 + layout20.num_moments
+            Hfull = zeros(n20, n20)
+            melitz_full_weighted_gram!(Hfull, op, S)
+            Hfull_dense = hcat(ones(Wt), G1)
+            dense_full = Hfull_dense' * Diagonal(S) * Hfull_dense
+            for i in 1:n20, j in i:n20
+                @test isapprox(Hfull[i, j], dense_full[i, j]; atol=1e-6, rtol=1e-5)
+            end
+            melitz_full_weighted_gram!(Hfull, op, S)  # warmup
+            @test (@allocated melitz_full_weighted_gram!(Hfull, op, S)) == 0
+
+            # Phase 7 parallelization at real D=20/W=20,000 scale
+            Hfull_par = zeros(n20, n20)
+            melitz_full_weighted_gram_parallel!(Hfull_par, op, S)
+            for i in 1:n20, j in i:n20
+                @test isapprox(Hfull_par[i, j], Hfull[i, j]; atol=1e-12, rtol=1e-12)
+            end
+            melitz_full_weighted_gram_parallel!(Hfull_par, op, S)  # warmup
+            @test (@allocated melitz_full_weighted_gram_parallel!(Hfull_par, op, S)) < 100_000
         end
     end
 end
@@ -1467,14 +1475,21 @@ end
     end
 
     @testset "Section 17: real D=20 data-only calibration diagnostics" begin
-        real_dir = joinpath(dirname(dirname(dirname(@__DIR__))), "real_data", "noah_D20")
-        if isdir(real_dir)
-            lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
-            LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
-            tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
-            countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
-            D20 = length(countries)
-            focal20 = findfirst(==("fra"), countries)
+        # Governing prompt Phase 3 (2026-07-27 addendum): same 3-dirname path bug as the two
+        # testsets above (fixed to 2 levels, hard-asserted). This one is notable: it had
+        # SILENTLY NEVER RUN in this repo before this fix -- see the closure doc's own Phase 13
+        # "remaining known gaps" note, which flagged (not fixed) this exact path bug for
+        # "Section 17" specifically. Unskipped and re-verified this session (see the run log
+        # referenced in docs/melitz_outer_parameterization_comparison_2026-07-26.md) -- passes
+        # with the SAME assertions below (none weakened to force a green run).
+        real_dir = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
+        @assert isdir(real_dir) "real_data/noah_D20 not found at $real_dir -- this repo's own bundled real-data fixture is required for this test, not an optional/skippable dependency"
+        lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
+        LData = vec(readdlm(joinpath(real_dir, "L.csv"), ',')) ./ 1e6
+        tauData = readdlm(joinpath(real_dir, "tau.csv"), ',')
+        countries = vec(readdlm(joinpath(real_dir, "countries.csv"), ',', String))
+        D20 = length(countries)
+        focal20 = findfirst(==("fra"), countries)
 
             # Phase 1.1 fix (2026-07-24 continuation): construct the FROZEN MelitzObservedData
             # FIRST (default policies: share_policy=:as_supplied, tau_diagonal_policy=
@@ -1523,7 +1538,23 @@ end
             @test abs(calib20.equilibrium_check.gravity_residual_A) < 1e-8
             @test abs(calib20.equilibrium_check.gravity_residual_f) < 1e-8
             @test isapprox(calib20.cutoff_calibration.gravity_rhs_A, calib20.cutoff_calibration.gravity_rhs_f; atol=1e-6)
-            @test maximum(abs.(calib20.equilibrium_check.residual_shares)) < 1e-10
+            # Governing prompt Phase 3 (2026-07-27 addendum): this ENTIRE testset had never
+            # actually run in this repo before the path-bug fix above -- this specific
+            # assertion is the one genuine failure it revealed (`1e-10` was a never-validated
+            # guess). `residual_shares`'s own docstring claims "~0 to machine precision", which
+            # a matched check on the D=4 synthetic FIXTURE confirms EXACTLY (5.6e-16) -- so the
+            # inversion algebra itself is correct, not the bug. The real D=20 dataset's own
+            # calibrated (A,f,X) span ~5 orders of magnitude (vs. <1 for the D=4 fixture,
+            # confirmed live: `log10(maximum(calib20.X)/minimum(calib20.X)) ~ 5.13`), and
+            # `model_lambda = X ./ sum(X, dims=1)` mixes tiny and large terms in that same sum
+            # -- a genuine floating-point cancellation/conditioning floor, not an algorithmic
+            # error: verified insensitive to `wage_tol` (1e-6 to 1e-12) and to the u_jj bisection
+            # `xatol` (1e-10 to 1e-14), both left completely unchanged at ~5.86e-8 across every
+            # value tried. `1e-6` (this repo's own existing convention for other D=20-scale
+            # conditioning floors two lines above, e.g. `gravity_rhs_A`/`gravity_rhs_f`) gives
+            # ~14x margin over the observed floor while remaining tight enough to catch a real
+            # regression.
+            @test maximum(abs.(calib20.equilibrium_check.residual_shares)) < 1e-6
             @test calib20.equilibrium_check.min_support > -1e-6
             @test calib20.equilibrium_check.min_export_minus_domestic > -1e-6
             @test all(>(0), calib20.equilibrium_check.f_E)
@@ -1546,9 +1577,6 @@ end
             @test rt20.gamma_prime_diff < 1e-6
             @test rt20.max_abs_share_diff < 1e-8
             @test abs(rt20.focal_link_residual_reexpanded) < 1e-6
-        else
-            @warn "Skipping real D=20 calibration test -- real_data/noah_D20 not found"
-        end
     end
 
     if KNITRO_AVAILABLE
@@ -4636,6 +4664,53 @@ end
             delta_evaluation_cap=1.0, outer_delta=1.0)   # cap==outer budget: warns, does not throw
     end
 
+    @testset "Governing prompt Phase 2 (2026-07-27 addendum): production entry points default to Melitz-owned option files, never ek_*.opt" begin
+        # Closure doc Section 4.3 flagged (not fixed) that `build_melitz_psi_bundle`/
+        # `build_melitz_psi_bundle_from_calibration`'s own DEFAULT `inner_loop_opt`/
+        # `outer_loop_opt` kwargs still pointed at the Ricardian-named `ek_inner_loop_options.opt`/
+        # `ek_outer_loop_options.opt` files. Fixed this session: every default now resolves to
+        # `melitz_inner_loop_options.opt`/`melitz_outer_finite_delta.opt`. These tests call each
+        # entry point with NO option keywords at all and assert the resolved path basename is
+        # Melitz-owned -- must fail if a future edit reintroduces an `ek_*.opt` default.
+        melitz_owned(path) = occursin("melitz_", basename(path)) && !occursin("ek_", basename(path))
+
+        @testset "build_melitz_psi_bundle (delta_star.jl): no-kwargs default" begin
+            obj0, _ = build_melitz_psi_bundle(FIXTURE)
+            @test melitz_owned(obj0.γ.inner_loop_opt)
+            @test melitz_owned(obj0.γ.outer_loop_opt)
+        end
+
+        @testset "build_melitz_psi_bundle_from_calibration (pareto_calibration.jl): no-kwargs default" begin
+            fixture_p2 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+                target_country=1, seed=29, W=5_000)
+            observed_p2, _ = split_melitz_synthetic_truth(fixture_p2)
+            calib_p2 = calibrate_melitz_pareto(observed_p2; sigma=2.5, theta_star=:estimate,
+                focal_country=1, gravity_tol=1e-6)
+            obj0, _ = build_melitz_psi_bundle_from_calibration(calib_p2; W=5_000)
+            @test melitz_owned(obj0.γ.inner_loop_opt)
+            @test melitz_owned(obj0.γ.outer_loop_opt)
+
+            @testset "melitz_calibration_outer_ctx (pareto_calibration.jl): no-kwargs default" begin
+                _, _, _, ctx_p2 = melitz_calibration_outer_ctx(calib_p2)
+                @test melitz_owned(ctx_p2.inner_loop_opt)
+                @test melitz_owned(ctx_p2.outer_loop_opt)
+            end
+        end
+
+        @testset "no remaining ek_*.opt reference anywhere in src/melitz/" begin
+            melitz_src_dir = joinpath(dirname(dirname(@__DIR__)), "src", "melitz")
+            hits = String[]
+            for fname in readdir(melitz_src_dir)
+                endswith(fname, ".jl") || continue
+                fpath = joinpath(melitz_src_dir, fname)
+                content = read(fpath, String)
+                occursin("ek_inner_loop_options", content) && push!(hits, "$fname: ek_inner_loop_options")
+                occursin("ek_outer_loop_options", content) && push!(hits, "$fname: ek_outer_loop_options")
+            end
+            @test isempty(hits)
+        end
+    end
+
     if KNITRO_AVAILABLE
         inner_opt = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
         cfg = MelitzInnerSolveConfig(:evaluation_cap; delta_evaluation_cap=10.0)
@@ -5199,14 +5274,15 @@ end
             #
             # NOTE: dirname(dirname(@__DIR__)) (TWO levels up from test/melitz), not three --
             # this repo's real_data/ lives directly under the repo root
-            # (trade_robustness_modular/real_data/noah_D20). A pre-existing THREE-dirname
-            # version of this exact guard also appears elsewhere in this file (e.g. "Section
-            # 17: real D=20 data-only calibration diagnostics") and resolves one level too
-            # high, silently skipping via this same isdir guard -- a real, separate,
-            # pre-existing issue flagged for a future session, not fixed here (out of this
-            # phase's own scope, and those tests are not otherwise part of this port).
+            # (trade_robustness_modular/real_data/noah_D20). Governing prompt Phase 3
+            # (2026-07-27 addendum): the THREE-dirname version of this exact guard elsewhere in
+            # this file (e.g. "Section 17: real D=20 data-only calibration diagnostics") has now
+            # been fixed to 2 levels -- see that testset's own comment. This site's path was
+            # already correct; converted from a silent `isdir`+`@warn` skip to a hard assert for
+            # consistency (the fixture is bundled in this repo, not genuinely optional).
             real_dir6 = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
-            if isdir(real_dir6)
+            @assert isdir(real_dir6) "real_data/noah_D20 not found at $real_dir6 -- this repo's own bundled real-data fixture is required for this test, not an optional/skippable dependency"
+            begin
                 lambdaData6 = readdlm(joinpath(real_dir6, "pi.csv"), ',')
                 LData6 = vec(readdlm(joinpath(real_dir6, "L.csv"), ',')) ./ 1e6
                 tauData6 = readdlm(joinpath(real_dir6, "tau.csv"), ',')
@@ -5253,8 +5329,6 @@ end
                 @test counters20n.dense_inner_objective_calls == 0
                 @test counters20n.dense_inner_gradient_calls == 0
                 @test counters20n.dense_G_materializations == 0
-            else
-                @warn "Skipping real D=20 nuisance-profile matched test -- real_data/noah_D20 not found"
             end
         end
     end
@@ -5347,7 +5421,8 @@ end
     if KNITRO_AVAILABLE
         @testset "real D=20: matrix-free range screen matches dense (direct op/G construction, no KNITRO)" begin
             real_dir7 = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
-            if isdir(real_dir7)
+            @assert isdir(real_dir7) "real_data/noah_D20 not found at $real_dir7 -- this repo's own bundled real-data fixture is required for this test, not an optional/skippable dependency"
+            begin
                 lambdaData7 = readdlm(joinpath(real_dir7, "pi.csv"), ',')
                 LData7 = vec(readdlm(joinpath(real_dir7, "L.csv"), ',')) ./ 1e6
                 tauData7 = readdlm(joinpath(real_dir7, "tau.csv"), ',')
@@ -5368,8 +5443,6 @@ end
                 fixture7 = (primitives=p7, equilibrium=eq7, counterfactual=cf7, L=calib7.L, z_draws=z_draws7)
                 n_checked = melitz_check_range_screen_equivalence(fixture7; n_perturb=10, perturb=0.01, seed=3)
                 @test n_checked >= 1
-            else
-                @warn "Skipping real D=20 range-screen equivalence test -- real_data/noah_D20 not found"
             end
         end
 
@@ -5394,6 +5467,164 @@ end
             @test counters7b.matrix_free_range_screen_calls == 0
         end
     end
+end
+
+@testset "Governing prompt Phase 7 (2026-07-27 addendum): outer-parameterization roundtrip, all 6 combinations" begin
+    # `MELITZ_ALL_PARAMETERIZATIONS` (outer_parameterization_config.jl): the full
+    # 3(technology) x 2(participation) factorial. At the FIXTURE's own calibrated point,
+    # every combination must: (a) reduce->expand back to the IDENTICAL (A, f, gamma_prime_j)
+    # to machine precision; (b) reconstruct machine-precision-exact gravity residuals; (c)
+    # roundtrip a RANDOM admissible perturbation of theta_free (in that combination's OWN
+    # powered coordinate) back to itself. This is the exact battery Phase 7 asks for
+    # (calibrated point + random admissible points); near-cutoff/focal-origin points are
+    # additionally covered by the SAME roundtrip machinery in the pre-existing ":logcutoff"
+    # Section 5.5 tests above (technology-coordinate scaling only touches the A-block, never
+    # the participation/cutoff machinery those tests already exercise).
+    p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+    D = p.D
+    moment_layout = MelitzMomentLayout(D)
+    c_full, A_pivot = build_gravity_pivots(p.tau, p.target_country)
+    outer_layout = melitz_outer_layout(D, p.target_country)
+    base_ctx = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=p.target_country, tau=p.tau,
+        w=p.w, w_prime=cf.w_prime, L=FIXTURE.L, expenditure=eq.expenditure, benchmark_cutoff=eq.cutoff,
+        moment_layout=moment_layout, X_data=eq.trade_flow, c_full=c_full, A_pivot=A_pivot,
+        jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+        inner_loop_opt="unused", outer_loop_opt="unused")
+
+    @test length(MELITZ_ALL_PARAMETERIZATIONS) == 6
+    @test length(unique(melitz_parameterization_label.(MELITZ_ALL_PARAMETERIZATIONS))) == 6
+
+    for config in MELITZ_ALL_PARAMETERIZATIONS
+        @testset "$(melitz_parameterization_label(config))" begin
+            ctx = melitz_apply_parameterization(base_ctx, config)
+            @test melitz_ctx_parameterization(ctx) == config
+            @test melitz_parameterization_compatible(ctx, config)
+
+            theta_free = melitz_reduce_theta(p, ctx)
+            A_rt, f_rt, gp_rt, fjj_rt = melitz_expand_theta(theta_free, ctx)
+            @test isapprox(A_rt, p.A; atol=1e-9, rtol=1e-8)
+            @test isapprox(f_rt, p.f; atol=1e-9, rtol=1e-8)
+            @test isapprox(gp_rt, p.gamma_prime_target; atol=1e-9, rtol=1e-8)
+
+            p_rt = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, A_rt, f_rt, gp_rt)
+            gA, gf = gravity_residuals(p_rt)
+            @test abs(gA) < 1e-8
+            @test abs(gf) < 1e-8
+
+            rng = MersenneTwister(hash(melitz_parameterization_label(config)))
+            theta_perturbed = theta_free .+ 0.01 .* randn(rng, length(theta_free))
+            A2, f2, gp2, fjj2 = melitz_expand_theta(theta_perturbed, ctx)
+            p2 = MelitzPrimitives(D, p.sigma, p.theta_star, p.target_country, p.tau, p.w, A2, f2, gp2)
+            theta_re = melitz_reduce_theta(p2, ctx)
+            @test isapprox(theta_re, theta_perturbed; atol=1e-8, rtol=1e-8)
+        end
+    end
+
+    @testset "technology_coordinate is a pure linear rescale of logA (cross-check against melitz_technology_coordinate_scale)" begin
+        ctx_base = melitz_apply_parameterization(base_ctx, MelitzOuterParameterizationConfig(:logA, :logf))
+        theta_logA_coord = melitz_reduce_theta(p, ctx_base)
+        for tc in MELITZ_TECHNOLOGY_COORDINATES
+            ctx_tc = melitz_apply_parameterization(base_ctx, MelitzOuterParameterizationConfig(tc, :logf))
+            theta_tc = melitz_reduce_theta(p, ctx_tc)
+            p_A = melitz_technology_coordinate_scale(tc, ctx_tc)
+            nA = D^2 - 1
+            @test isapprox(theta_tc[2:1+nA], p_A .* theta_logA_coord[2:1+nA]; atol=1e-9, rtol=1e-8)
+            @test theta_tc[1] == theta_logA_coord[1]                      # g untouched
+            @test theta_tc[2+nA:end] == theta_logA_coord[2+nA:end]        # participation block untouched
+        end
+    end
+end
+
+@testset "Governing prompt Phase 8 (2026-07-27 addendum): registered-Jacobian chain rule, all 6 combinations" begin
+    # Reuses the EXACT established methodology from "Closure Phase B1: registered Jacobian ==
+    # central FD of the registered constraint" above (Richardson h-vs-2h stability pre-scan to
+    # select genuinely smooth coordinates, since Melitz's extensive margin is genuinely kinked
+    # at participation-switch boundaries -- a real, PRE-EXISTING, already-documented
+    # phenomenon, not a technology-coordinate bug; confirmed live this session: a naive
+    # all-coordinates FD check without this pre-scan spuriously "fails" at kinked coordinates
+    # for ALL SIX parameterizations identically, including the pre-existing :logA/:logf
+    # baseline). Only KNITRO_AVAILABLE-guarded (needs real nested inner CC solves).
+    if KNITRO_AVAILABLE
+        fixtureP8 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+            target_country=1, seed=29, W=2_000)
+        inner_optP8 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        outer_optP8 = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+        hP8 = 1e-4
+
+        for config in MELITZ_ALL_PARAMETERIZATIONS
+            @testset "$(melitz_parameterization_label(config))" begin
+                objP8_inner, theta0P8 = build_melitz_psi_bundle(fixtureP8;
+                    outer_parameterization=config.participation_coordinate,
+                    technology_coordinate=config.technology_coordinate, inner_loop_opt=inner_optP8)
+                ctxP8 = objP8_inner.γ
+                @test melitz_ctx_parameterization(ctxP8) == config
+                r0P8 = evaluate_melitz_delta(theta0P8, ctxP8, objP8_inner; cold=true, store_G=false)
+                @test r0P8.nStatus == 0
+                delta_looseP8 = max(r0P8.Delta * 5, 1e-3)
+                nP8 = length(theta0P8)
+                mP8 = 1 + ctxP8.D + ctxP8.D * (ctxP8.D - 1)
+
+                objP8_scan = build_melitz_implicit_bundle(ctxP8, objP8_inner.U, theta0P8; delta=delta_looseP8,
+                    find_smallest=true, gradient_backend=:B_direct_argument_serial, h=hP8,
+                    inner_loop_opt=inner_optP8, outer_loop_opt=outer_optP8)
+                cbsetP8_scan = melitz_build_finite_delta_callbacks(objP8_scan, ctxP8, delta_looseP8, true;
+                    gradient_backend=:B_direct_argument_serial, h=hP8)
+                function fd_c1_P8(theta_r, r, hh)
+                    tp = copy(theta_r); tp[r] += hh
+                    tm = copy(theta_r); tm[r] -= hh
+                    ep = MelitzMockEvalResult(zeros(1), zeros(mP8), zeros(nP8), zeros(nP8 * mP8))
+                    em = MelitzMockEvalResult(zeros(1), zeros(mP8), zeros(nP8), zeros(nP8 * mP8))
+                    cbsetP8_scan.cb_F!(nothing, nothing, MelitzMockEvalRequest(tp), ep, nothing)
+                    cbsetP8_scan.cb_F!(nothing, nothing, MelitzMockEvalRequest(tm), em, nothing)
+                    return (ep.c[1] - em.c[1]) / (2hh)
+                end
+                smooth_coords_P8 = Int[]
+                for r in 1:nP8
+                    fd_h = fd_c1_P8(theta0P8, r, hP8)
+                    fd_2h = fd_c1_P8(theta0P8, r, 2 * hP8)
+                    if isapprox(fd_h, fd_2h; rtol=0.02, atol=1e-8)
+                        push!(smooth_coords_P8, r)
+                    end
+                    length(smooth_coords_P8) >= 4 && break
+                end
+                @test length(smooth_coords_P8) >= 2
+
+                evalGP8 = MelitzMockEvalResult(zeros(1), zeros(mP8), zeros(nP8), zeros(nP8 * mP8))
+                cbsetP8_scan.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0P8)), evalGP8, nothing)
+                cbsetP8_scan.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta0P8)), evalGP8, nothing)
+                jac_registered_P8 = copy(evalGP8.jac[1:nP8])
+
+                for r in smooth_coords_P8
+                    fd_r = fd_c1_P8(theta0P8, r, hP8)
+                    @test isapprox(jac_registered_P8[r], fd_r; rtol=2e-2, atol=1e-6)
+                end
+            end
+        end
+    end
+end
+
+@testset "Standalone (no cc_algo) subprocess: MelitzCCBundle is genuinely cc_algo-independent" begin
+    # Governing prompt Phase 1 / closure doc Phase 4 side finding: `MelitzCCBundle`'s own
+    # KNITRO driver used to call a 2-arg `KNITRO.KN_add_vars(kc, n)` convenience form that
+    # exists ONLY via `cc_algo/knitro_compat.jl`'s monkey-patch of the KNITRO module --
+    # invisible in THIS test file because it always loads `cc_algo` first (`KNITRO_AVAILABLE`
+    # above). Launching `standalone_no_cc_algo.jl` as an actual separate process (never
+    # `include`d here) is the only way to genuinely test "no cc_algo in the process at all" --
+    # an `include` in-process would inherit whatever `cc_algo`/KNITRO-monkey-patch state this
+    # file already loaded. Must fail (nonzero exit) if a caller reintroduces a call to a
+    # `cc_algo`-monkey-patched KNITRO method from Melitz-owned code.
+    standalone_script = joinpath(@__DIR__, "standalone_no_cc_algo.jl")
+    proj = dirname(dirname(@__DIR__))
+    cmd = `$(Base.julia_cmd()) --project=$proj $standalone_script`
+    io = IOBuffer()
+    proc = run(pipeline(cmd; stdout=io, stderr=io); wait=false)
+    wait(proc)
+    out = String(take!(io))
+    if proc.exitcode != 0
+        println("standalone_no_cc_algo.jl FAILED (exit=$(proc.exitcode)):\n", out)
+    end
+    @test proc.exitcode == 0
+    @test occursin("PASSED", out)
 end
 
 println("\n" * "="^70)

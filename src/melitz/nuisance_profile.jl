@@ -259,7 +259,7 @@ contributes zero constraint rows, only the objective gradient).
 function melitz_register_nuisance_profile_knitro_problem!(kc, ctx, cbset, xIndices, n::Int)
     cutoff_sys = build_melitz_affine_cutoff_system(ctx)
     m = size(cutoff_sys.C, 1)
-    cIndices = KNITRO.KN_add_cons(kc, m)
+    cIndices = melitz_kn_add_cons!(kc, m)
     KNITRO.KN_set_con_lobnds(kc, m, cIndices, -cutoff_sys.b)
     nnz = m * n
     indexCons_lin = repeat(cIndices, inner=n)
@@ -371,7 +371,7 @@ function solve_melitz_nuisance_min_delta(ctx, obj_inner, theta_start::AbstractVe
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, outer_loop_opt)
-    xIndices = KNITRO.KN_add_vars(kc, n)
+    xIndices = melitz_kn_add_vars!(kc, n)
 
     r = radius isa Real ? fill(Float64(radius), n) : collect(Float64.(radius))
     lo = copy(theta0)

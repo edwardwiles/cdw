@@ -99,12 +99,25 @@ function melitz_context_fingerprint(ctx, U::Union{Nothing,AbstractMatrix}=nothin
                 hasproperty(ctx, :sigma) && hasproperty(ctx, :outer_parameterization) &&
                 hasproperty(ctx, :inner_loop_opt) && hasproperty(ctx, :outer_loop_opt)
     has_shape || return UInt(objectid(ctx))
-    h = hash(:melitz_ctx_fingerprint_v1)
+    # 2026-07-27 addendum (governing prompt Phase 6): schema bumped to v2 -- also hashes
+    # `ctx.technology_coordinate` (`technology_coordinate.jl`), the orthogonal TECHNOLOGY axis
+    # crossed with the pre-existing `outer_parameterization` (participation) axis. Read via
+    # `get(ctx, :technology_coordinate, :logA)`, NOT gated into `has_shape` above -- an older
+    # `ctx` (or this repo's own synthetic cache-mechanics test doubles) that predates this
+    # field still gets a genuine, stable content fingerprint (defaulting to `:logA`, this
+    # codebase's pre-existing sole technology coordinate) rather than falling back to
+    # `objectid(ctx)`; only a ctx that ALSO differs on one of the ORIGINAL required fields
+    # loses precision. Two contexts differing ONLY in `technology_coordinate` (or
+    # `outer_parameterization`) now correctly produce DIFFERENT fingerprints -- required so a
+    # cache entry from one parameterization is never mistaken for another's (Phase 6's own
+    # "no old warm start or cache entry crosses parameterizations" requirement).
+    h = hash(:melitz_ctx_fingerprint_v2)
     h = hash(ctx.D, h)
     h = hash(ctx.sigma, h)
     h = hash(ctx.theta_star, h)
     h = hash(ctx.target_country, h)
     h = hash(ctx.outer_parameterization, h)
+    h = hash(get(ctx, :technology_coordinate, :logA), h)
     h = hash(ctx.inner_loop_opt, h)
     h = hash(ctx.outer_loop_opt, h)
     h = hash(ctx.tau, h)

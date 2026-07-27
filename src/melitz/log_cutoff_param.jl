@@ -282,13 +282,35 @@ discarding its extra native `q` output -- callers that want `q` directly should 
 `expand_free_theta_logcutoff` themselves) based on `get(ctx, :outer_parameterization,
 :logf)` -- absent defaults to `:logf` so any `ctx` built before this dispatcher existed
 (e.g. the Section 5 round-trip tests' own hand-built `ctx` NamedTuples) still works.
+
+2026-07-27 addendum (governing prompt Phase 6): ALSO dispatches on the orthogonal
+TECHNOLOGY-coordinate axis, `get(ctx, :technology_coordinate, :logA)` (`technology_coordinate.jl`)
+-- `theta_free`'s A-block entries (`theta_free[2:1+nA]`, `nA=D^2-1`) are un-scaled from
+`p_A*log(A_od)` back to plain `log(A_od)` BEFORE calling `expand_free_theta`/
+`expand_free_theta_logcutoff` (both of which only ever know plain `log(A_od)` units).
+`:logA` (`p_A=1`) is an exact no-op, so every existing caller/test that never sets
+`ctx.technology_coordinate` is byte-for-byte unaffected. Doing this INSIDE the single
+dispatcher (rather than as a separate post-hoc wrapper layer, `technology_coordinate.jl`'s
+OWN now-superseded `melitz_reduce_theta_powered`/`melitz_expand_theta_powered`) means every
+existing consumer of `melitz_expand_theta`/`melitz_reduce_theta` -- the outer KNITRO
+objective/constraint callbacks, EVERY finite-difference gradient backend (`direct_gradient.jl`,
+`sorted_crossing_gradient.jl`, `argument_localized_gradient.jl`, all of which perturb
+`theta_free` directly and re-expand at each perturbed point), the moment operator, the
+screens -- becomes technology-coordinate-correct automatically, with NO separate chain-rule
+rescale needed anywhere else: a central finite difference computed by perturbing the POWERED
+coordinate and re-expanding through THIS dispatcher at each perturbed point already IS the
+correct derivative w.r.t. the powered coordinate, in the FD limit, by construction. (Verified
+directly, not merely argued: `docs/melitz_outer_parameterization_comparison_2026-07-26.md`
+Section F reports FD-vs-independent-FD chain-rule validation results for all three technology
+candidates.)
 """
 function melitz_expand_theta(theta_free::AbstractVector, ctx)
+    theta_free_plain = melitz_unpower_theta_free(theta_free, ctx)
     if get(ctx, :outer_parameterization, :logf) == :logcutoff
-        A, f, gamma_prime_j, f_jj, _q = expand_free_theta_logcutoff(theta_free, ctx)
+        A, f, gamma_prime_j, f_jj, _q = expand_free_theta_logcutoff(theta_free_plain, ctx)
         return A, f, gamma_prime_j, f_jj
     else
-        return expand_free_theta(theta_free, ctx)
+        return expand_free_theta(theta_free_plain, ctx)
     end
 end
 
@@ -296,12 +318,16 @@ end
     melitz_reduce_theta(p::MelitzPrimitives, ctx) -> theta_free
 
 Inverse dispatcher: routes to `reduce_to_free_theta` (:logf) or
-`reduce_to_free_theta_logcutoff` (:logcutoff) based on `ctx.outer_parameterization`.
+`reduce_to_free_theta_logcutoff` (:logcutoff) based on `ctx.outer_parameterization`, THEN
+re-scales the A-block into `ctx.technology_coordinate`'s own units (`melitz_power_theta_free`,
+exact inverse of `melitz_unpower_theta_free` above) -- see `melitz_expand_theta`'s own
+docstring for the full addendum rationale.
 """
 function melitz_reduce_theta(p::MelitzPrimitives, ctx)
-    if get(ctx, :outer_parameterization, :logf) == :logcutoff
-        return reduce_to_free_theta_logcutoff(p.A, p.f, p.gamma_prime_target, ctx)
+    theta_free_plain = if get(ctx, :outer_parameterization, :logf) == :logcutoff
+        reduce_to_free_theta_logcutoff(p.A, p.f, p.gamma_prime_target, ctx)
     else
-        return reduce_to_free_theta(p, ctx)
+        reduce_to_free_theta(p, ctx)
     end
+    return melitz_power_theta_free(theta_free_plain, ctx)
 end

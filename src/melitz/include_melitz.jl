@@ -14,6 +14,7 @@
 # `using .CounterfactualSensitivity` to have been loaded first.
 
 include("profiling.jl")
+include("knitro_compat.jl")
 include("backend_config.jl")
 include("types.jl")
 include("bounded_cache.jl")
@@ -28,6 +29,8 @@ include("moment_operator.jl")
 include("delta_star.jl")
 include("affine_cutoff.jl")
 include("log_cutoff_param.jl")
+include("technology_coordinate.jl")
+include("outer_parameterization_config.jl")
 include("fake_data.jl")
 include("pareto_calibration.jl")
 include("fstar_solver.jl")

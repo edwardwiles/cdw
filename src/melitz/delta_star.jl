@@ -423,8 +423,9 @@ choice, exactly as every existing call site already assumes.
 function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   X_data::Matrix{Float64}=data.equilibrium.trade_flow,
                                   outer_parameterization::Symbol=:logf,
-                                  inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
-                                  outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
+                                  technology_coordinate::Symbol=:logA,
+                                  inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
+                                  outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
                                   needs_outer_moment_jacobian::Bool=false,
                                   inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
                                   backend::Symbol=:auto_from_moment_backend,
@@ -433,6 +434,9 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   forbid_dense_fallback::Bool=false)
     outer_parameterization in (:logf, :logcutoff) || throw(ArgumentError(
         "outer_parameterization must be :logf or :logcutoff, got $outer_parameterization"))
+    technology_coordinate in MELITZ_TECHNOLOGY_COORDINATES || throw(ArgumentError(
+        "build_melitz_psi_bundle: technology_coordinate must be one of " *
+        "$MELITZ_TECHNOLOGY_COORDINATES, got $technology_coordinate"))
     backend in (:matrix_free, :dense_reference, :auto_from_moment_backend) || throw(ArgumentError(
         "build_melitz_psi_bundle: backend must be :matrix_free, :dense_reference, or " *
         "(default) :auto_from_moment_backend, got $backend"))
@@ -501,7 +505,7 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                         # melitz_moments_adapter! always recompute fresh
            moment_layout=moment_layout, X_data=X_data, c_full=c_full, A_pivot=A_pivot,
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
-           outer_parameterization=outer_parameterization,
+           outer_parameterization=outer_parameterization, technology_coordinate=technology_coordinate,
            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
            moment_backend=resolved_moment_backend, sorted_tail_ctx=sorted_tail_ctx)
 

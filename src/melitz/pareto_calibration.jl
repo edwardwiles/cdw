@@ -1128,8 +1128,9 @@ tools"). Left unchanged.
 """
 function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
         outer_parameterization::Symbol=:logf,
-        inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
-        outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
+        technology_coordinate::Symbol=:logA,
+        inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
+        outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
         moment_backend::Symbol=:dense_reference, z_draws::Union{Nothing,AbstractMatrix}=nothing)
     moment_backend in (:dense_reference, :sorted_tail_serial, :sorted_tail_parallel) || throw(ArgumentError(
         "melitz_calibration_outer_ctx: moment_backend must be :dense_reference, " *
@@ -1157,7 +1158,8 @@ function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
            w_prime=cf.w_prime, L=calib.L, expenditure=eq.expenditure, benchmark_cutoff=eq.cutoff,
            moment_layout=moment_layout, X_data=eq.trade_flow, c_full=c_full, A_pivot=A_pivot,
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
-           outer_parameterization=outer_parameterization, inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
+           outer_parameterization=outer_parameterization, technology_coordinate=technology_coordinate,
+           inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
            moment_backend=moment_backend, sorted_tail_ctx=sorted_tail_ctx)
     return p, eq, cf, ctx
 end
@@ -1232,8 +1234,9 @@ since `MelitzParetoCalibration` does not itself carry a Monte-Carlo sample.
 """
 function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration;
         W::Int=20_000, seed::Int=calib.seed, draw_mode::Symbol=:halton,
-        inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_inner_loop_options.opt"),
-        outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "ek_outer_loop_options.opt"),
+        technology_coordinate::Symbol=:logA,
+        inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
+        outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
         needs_outer_moment_jacobian::Bool=false,
         inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
         backend::Symbol=:auto_from_moment_backend,
@@ -1271,6 +1274,7 @@ function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration
     resolved_moment_backend = backend == :matrix_free ? :sorted_tail_parallel : melitz_resolve_moment_backend(cfg, D)
 
     p, eq, cf, ctx = melitz_calibration_outer_ctx(calib; outer_parameterization=:logf,
+        technology_coordinate=technology_coordinate,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
         moment_backend=resolved_moment_backend, z_draws=z_draws)
 

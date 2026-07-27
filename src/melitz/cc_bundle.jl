@@ -363,7 +363,7 @@ function melitz_cc_inner_loop_knitro!(bundle::MelitzCCBundle)
         n = bundle.outer_constr_index
         kc = KNITRO.KN_new()
 
-        KNITRO.KN_add_vars(kc, n)
+        melitz_kn_add_vars!(kc, n)
         KNITRO.KN_set_var_lobnds_all(kc, fill(-KNITRO.KN_INFINITY, n))
         x0 = (bundle.use_cached_x && all(isfinite, bundle.x)) ? bundle.x : zeros(n)
         KNITRO.KN_set_var_primal_init_values_all(kc, x0)
@@ -379,7 +379,7 @@ function melitz_cc_inner_loop_knitro!(bundle::MelitzCCBundle)
 
         cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], cbEvalFG!)
         KNITRO.KN_load_param_file(kc, bundle.inner_loop_opt)
-        if KNITRO.KN_get_int_param(kc, "hessopt") == 1
+        if melitz_kn_get_int_param(kc, "hessopt") == 1
             KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, cbEvalH!)
         end
 
@@ -610,9 +610,23 @@ function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus:
 
     zeta = x[1]
     mu = @view x[2:end]
-    arg0 = zeros(W)
+    # 2026-07-27 addendum (governing prompt Phase 4): `arg0`/`LFD` used to be fresh W-length
+    # `zeros(W)` allocations on EVERY call -- the exact class of anti-pattern the addendum
+    # flagged (a hot per-callback function allocating several W-length arrays every call),
+    # confirmed live via `@allocated`: 640,672 bytes at D=4/W=20,000, scaling to 2,560,672
+    # bytes at W=80,000 (clean 4x, i.e. genuinely O(W)), from THIS function alone, called
+    # every `cb_F!` via `register_live_candidate!`. Reuses `obj.arg0`/`obj.arg1` instead --
+    # SAFE because both are pure functor-internal scratch (grep-confirmed: read/written only
+    # inside `(Q::MelitzCCBundle)`'s own callback body, `cc_bundle.jl` above; nothing reads
+    # them AFTER a solve completes) and `melitz_recover_lfd_from_solution` always runs strictly
+    # AFTER `melitz_cc_inner_loop`'s `KN_solve` has fully finished -- never concurrently with
+    # the functor's own use of these same buffers. `weights`/`moment_residuals` themselves
+    # remain FRESH allocations (unavoidable: both are stored directly on the returned, often
+    # long-lived-cached `MelitzLFDResult`/`MelitzDeltaEvalResult`, so they must be
+    # independently owned, not aliased to `obj`'s own mutable scratch).
+    arg0 = obj.arg0
     mul_G!(arg0, obj.op, zeta, mu)
-    LFD = zeros(W)
+    LFD = obj.arg1
     melitz_cc_dPsi!(LFD, arg0)
     s = sum(LFD)
 
@@ -626,7 +640,7 @@ function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus:
     weights = LFD ./ s
     moment_residuals = zeros(d)
     mul_Gt!(moment_residuals, obj.op, weights)
-    max_moment_residual = maximum(abs.(moment_residuals))
+    max_moment_residual = maximum(abs, moment_residuals)   # fused, no d-length temporary
 
     primal_divergence = melitz_primal_divergence(weights, W)
     dual_divergence = val
@@ -637,8 +651,11 @@ function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus:
              max_moment_residual < moment_tol &&
              primal_dual_gap <= gap_tol
 
+    # fused (no `W .* weights .- 1` / `abs.(...)` W-length temporaries)
+    max_abs_W_weights_minus_1 = maximum(w -> abs(W * w - 1), weights)
+
     return MelitzLFDResult(val, x, nStatus, weights, lfd_ok, moment_residuals, normalization_residual,
-                            minimum(weights), maximum(weights), maximum(abs.(W .* weights .- 1)),
+                            minimum(weights), maximum(weights), max_abs_W_weights_minus_1,
                             primal_divergence, dual_divergence, primal_dual_gap,
                             max_moment_residual, normalization_residual,
                             kkt_opt_error, kkt_feas_error)

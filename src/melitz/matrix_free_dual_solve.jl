@@ -168,7 +168,7 @@ function melitz_matrix_free_inner_solve(bundle::MelitzMatrixFreeDualBundle, inne
     n = bundle.outer_constr_index
     kc = KNITRO.KN_new()
 
-    KNITRO.KN_add_vars(kc, n)
+    melitz_kn_add_vars!(kc, n)
     KNITRO.KN_set_var_lobnds_all(kc, fill(-KNITRO.KN_INFINITY, n))
     x0 = (bundle.use_cached_x && all(isfinite, bundle.x)) ? bundle.x : zeros(n)
     KNITRO.KN_set_var_primal_init_values_all(kc, x0)
@@ -184,7 +184,7 @@ function melitz_matrix_free_inner_solve(bundle::MelitzMatrixFreeDualBundle, inne
 
     cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], cbEvalFG!)
     KNITRO.KN_load_param_file(kc, inner_loop_opt)
-    if KNITRO.KN_get_int_param(kc, "hessopt") == 1
+    if melitz_kn_get_int_param(kc, "hessopt") == 1
         KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, cbEvalH!)
     end
 

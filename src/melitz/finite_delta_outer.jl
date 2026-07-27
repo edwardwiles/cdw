@@ -1340,7 +1340,7 @@ function melitz_register_finite_delta_knitro_problem!(kc, ctx, cbset, xIndices, 
     D2 = D * (D - 1)
     n_cutoff = D + D2
     m = 1 + n_cutoff
-    cIndices = KNITRO.KN_add_cons(kc, m)
+    cIndices = melitz_kn_add_cons!(kc, m)
     # Section 4.1: c_delta <= 1 under the (default) :dimensionless scaling, replacing the old
     # 1e10*delta magnitude. Governing prompt Phase 5: the bound now comes from `cbset` itself
     # (`melitz_build_finite_delta_callbacks`'s own `divergence_constraint_upbnd`), so the
@@ -1605,7 +1605,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
 
-    xIndices = KNITRO.KN_add_vars(kc, n)
+    xIndices = melitz_kn_add_vars!(kc, n)
     KNITRO.KN_set_var_lobnds_all(kc, collect(theta_init) .- theta_box)
     KNITRO.KN_set_var_upbnds_all(kc, collect(theta_init) .+ theta_box)
     KNITRO.KN_set_var_primal_init_values_all(kc, collect(theta_init))
@@ -1752,7 +1752,7 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
 
-    xIndices = KNITRO.KN_add_vars(kc, n)
+    xIndices = melitz_kn_add_vars!(kc, n)
     KNITRO.KN_set_var_lobnds_all(kc, theta_probe_v)
     KNITRO.KN_set_var_upbnds_all(kc, theta_probe_v)
     KNITRO.KN_set_var_primal_init_values_all(kc, theta_probe_v)
