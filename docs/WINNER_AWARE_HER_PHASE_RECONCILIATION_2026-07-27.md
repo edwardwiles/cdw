@@ -94,4 +94,18 @@ This phase will move through:
 7. `TAGGED`
 8. `POST_MERGE_SMOKE_PASSED`
 
-Current state as of this commit: **`INHERITED_PRIMITIVE_RECONCILED`**.
+## Final state (updated post-phase)
+
+1. `INHERITED_PRIMITIVE_RECONCILED` -- DONE
+2. `FLEXIBLE_CM_HER_WIRED` -- DONE (Section 2)
+3. `ALL_RESTRICTED_HER_IMPLEMENTED` -- DONE (Sections 3, 4, 5)
+4. `OPERATOR_VERIFICATION_DEFAULTS_ACTIVE` -- DONE (Section 6, 5/5 families)
+5. `NO_DENSE_G_INNER_SOLVE_PROVED` -- DONE for every path except common-Fréchet's FG default
+   (deliberately not flipped, see master report); measured, not assumed (Section 7)
+6. `FAST_FORWARDED_TO_CANONICAL_PRODUCTION` -- NOT DONE, pending user authorization
+7. `TAGGED` -- NOT DONE, pending merge
+8. `POST_MERGE_SMOKE_PASSED` -- N/A until merge
+
+Current state: **`NO_DENSE_G_INNER_SOLVE_PROVED`** (all pre-merge phase work complete). See
+`docs/WINNER_AWARE_HER_PHASE_MASTER_REPORT_2026-07-27.md` for the full session report and final
+verdict block.
