@@ -141,6 +141,20 @@ docs/RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md for full results.
 const CM_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:cm_lookup)
 
 """
+    CM_FRECHET_INNER_FG_BACKEND_DEFAULT
+
+Phase 5.2 remediation (2026-07-26): common-Frechet analogue of `CM_INNER_FG_BACKEND_DEFAULT`.
+`:dense_reference` (default, unchanged) | `:cm_frechet_lookup` (new matrix-free CM+level operator,
+`cm_frechet_lookup_kernels.jl`/`cm_frechet_lookup_production.jl` -- only reachable when
+`cm_hessian_backend=:structured`, see `build_cm_frechet_production_context`'s own check). Kept
+`:dense_reference` until D=4/D=20 correctness and performance gates pass (mirrors
+`CM_INNER_FG_BACKEND_DEFAULT`'s own history: available-but-not-default until validated, THEN
+flipped -- see docs/RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md for the flip criteria and
+this family's own gate results once run).
+"""
+const CM_FRECHET_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+
+"""
     record_core_hessian_call!(backend; fallback_reason=nothing)
 
 Record ONE Hessian-callback EXECUTION at the given backend -- called from

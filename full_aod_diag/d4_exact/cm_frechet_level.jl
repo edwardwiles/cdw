@@ -206,7 +206,14 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
                                              Bidx::Matrix{Int}, origins::Vector{Int}, refIndex1::Int, L::Int,
                                              R::Union{Nothing,Matrix{Float64}}, D::Int, level_targets::Vector{Float64},
                                              ctx; chunk_size::Int = 2000, use_compressed_core::Bool = true,
-                                             core_cf_ref::Ref{Any} = Ref{Any}(nothing))
+                                             core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                                             skip_cm_fill_ref::Union{Nothing,Ref{Bool}} = nothing)   # Phase
+                                             # 5.2 remediation (2026-07-26): same contract as
+                                             # wrap_moments_with_cm_archB's own kwarg -- when true,
+                                             # skips BOTH the CM-column and level-column dense fills
+                                             # (neither is read by the :cm_frechet_lookup FG callback
+                                             # or by Architecture C's Hessian; only archC_frechet_
+                                             # verified_state's post-solve recompute needs them).
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
@@ -237,12 +244,14 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
         end
         @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         @views G[:, end] .= Gtmp[:, end]
-        cm_cols = pregrav + 1 : pregrav + L * nO
-        fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
-                                    chunk_size = chunk_size, prod_scratch = prod_scratch)
-        level_cols = pregrav + L * nO + 1 : pregrav + L * nO + L
-        fill_frechet_level_columns_from_bins!(@view(G[:, level_cols]), Bidx, D, L, level_targets;
-                                               chunk_size = chunk_size)
+        if skip_cm_fill_ref === nothing || !skip_cm_fill_ref[]
+            cm_cols = pregrav + 1 : pregrav + L * nO
+            fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
+                                        chunk_size = chunk_size, prod_scratch = prod_scratch)
+            level_cols = pregrav + L * nO + 1 : pregrav + L * nO + L
+            fill_frechet_level_columns_from_bins!(@view(G[:, level_cols]), Bidx, D, L, level_targets;
+                                                   chunk_size = chunk_size)
+        end
         return nothing
     end
 end
@@ -267,9 +276,19 @@ the extra columns beyond the core mean) -- only the Hessian-FILL step needed a l
 function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol = :anchored,
                                               probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                               use_compressed_core::Bool = true,
-                                              cm_hessian_backend::Symbol = :dense_reference)
+                                              cm_hessian_backend::Symbol = :dense_reference,
+                                              inner_fg_backend::Symbol = CM_FRECHET_INNER_FG_BACKEND_DEFAULT[])   # Phase
+                                              # 5.2 remediation (2026-07-26): :dense_reference (default
+                                              # until gated) | :cm_frechet_lookup (cm_frechet_lookup_
+                                              # kernels.jl/cm_frechet_lookup_production.jl). Only
+                                              # reachable when cm_hessian_backend=:structured (needs a
+                                              # real cctx -- see the check below).
     cm_hessian_backend in (:dense_reference, :structured) ||
         error("build_cm_frechet_production_context: cm_hessian_backend must be :dense_reference or :structured, got $cm_hessian_backend")
+    inner_fg_backend in (:dense_reference, :cm_frechet_lookup) ||
+        error("build_cm_frechet_production_context: inner_fg_backend must be :dense_reference or :cm_frechet_lookup, got $inner_fg_backend")
+    inner_fg_backend == :cm_frechet_lookup && cm_hessian_backend != :structured &&
+        error("build_cm_frechet_production_context: inner_fg_backend=:cm_frechet_lookup requires cm_hessian_backend=:structured (needs a real CMBinHessCtx)")
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
 
     aug = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
@@ -279,8 +298,12 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
     Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
 
     core_cf_ref = Ref{Any}(nothing)
+    skip_cm_fill_ref = Ref(false)   # Phase 5.2/5.5: shared box archC_frechet_base_state/
+    # archC_frechet_verified_state toggle around each inner solve (see wrap_moments_with_cm_frechet_
+    # archB's own kwarg docstring and cm_production_bundle.jl's plain-CM precedent).
     moments_archB! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
-        refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref)
+        refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+        skip_cm_fill_ref = skip_cm_fill_ref)
 
     obj0 = aug.obj_cm
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
@@ -293,20 +316,17 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
         needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
 
     ctx_cm = merge(ctx, (obj = obj_cm,))
-    aug = merge(aug, (core_cf_ref = core_cf_ref, Bidx = Bidx))
+    aug = merge(aug, (core_cf_ref = core_cf_ref, skip_cm_fill_ref = skip_cm_fill_ref, Bidx = Bidx))
     bins = cm_bin_indices_for(ctx, aug)   # top-level field, matches build_cm_production_context's own pcx shape
 
     cctx = nothing
     if cm_hessian_backend === :structured
-        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false, inner_fg_backend = :dense_reference)   # UNCHANGED (cm_hessian_architectures.jl);
-        # serial-only frechet Hessian for now. inner_fg_backend PINNED explicitly to :dense_reference
-        # (2026-07-26 Phase 5.5 flip): common-Frechet's own inner solve (archC_frechet_base_state/
-        # archC_frechet_verified_state, cm_frechet_cplus.jl) always calls inner_loop_internal_archgeneric
-        # unconditionally -- it never reads cctx.inner_fg_backend at all, so the field is dispatch-inert
-        # here -- but leaving it on the CM_INNER_FG_BACKEND_DEFAULT[] global default (now :cm_lookup,
-        # plain-flexible-CM-only) would mislabel this context's manifest/diagnostics as using a kernel
-        # this family cannot actually use (CMLookupState has no level-anchor block, see
-        # cm_lookup_production.jl's own header).
+        # inner_fg_backend now genuinely selects the FG callback (Phase 5.2, 2026-07-26) -- previously
+        # PINNED to :dense_reference unconditionally here because archC_frechet_base_state/
+        # archC_frechet_verified_state (cm_frechet_cplus.jl) never read cctx.inner_fg_backend at all;
+        # those two functions now dispatch on it, mirroring plain-CM's archC_base_state/
+        # archC_verified_state exactly.
+        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false, inner_fg_backend = inner_fg_backend)
         hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, aug.level_targets)
         aug = merge(aug, (cctx = cctx,))
     else

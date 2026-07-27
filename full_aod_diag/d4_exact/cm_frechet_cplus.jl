@@ -108,8 +108,22 @@ end
 function archC_frechet_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64})
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
-    K, x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
-        hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
+    # Phase 5.2 remediation (2026-07-26): mirrors cm_production_bundle.jl::archC_base_state exactly
+    # -- archC_frechet_base_state never reads obj.H's CM/level columns (only ζ*/λ*/obj.arg1), so
+    # skip their now-wasted dense fill when :cm_frechet_lookup is registered (which never reads
+    # them either). finally-reset so `true` can't leak into archC_frechet_verified_state below.
+    use_lookup = cctx.inner_fg_backend == :cm_frechet_lookup
+    use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = true)
+    local K, x, nStatus, n_fg, n_hess
+    try
+        K, x, nStatus, n_fg, n_hess = use_lookup ?
+            inner_loop_internal_cmfrechetlookup_production(obj, θ_full0, cctx, level_targets;
+                hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets)) :
+            inner_loop_internal_archgeneric(obj, θ_full0;
+                hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
+    finally
+        use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
+    end
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_frechet_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_full0, ζstar, λstar, copy(obj.arg1), nStatus)
@@ -205,8 +219,15 @@ function archC_frechet_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMB
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_full0;
-        hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
+    # Phase 5.2 remediation (2026-07-26): UNLIKE archC_frechet_base_state, this function's own
+    # post-solve recompute below DOES read obj.H's CM/level columns -- defensively force the shared
+    # ref false before dispatch, regardless of what any prior call on this cctx left it set to.
+    cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
+    K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_frechet_lookup ?
+        inner_loop_internal_cmfrechetlookup_production(obj, θ_full0, cctx, level_targets;
+            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets)) :
+        inner_loop_internal_archgeneric(obj, θ_full0;
+            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
         throw(CMExpectedSolveFailure("archC_frechet_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
