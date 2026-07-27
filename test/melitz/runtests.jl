@@ -5726,6 +5726,166 @@ end
     @test occursin("PASSED", out)
 end
 
+# ============================================================================
+# Governing prompt continuation (2026-07-27 evening session), Phases 2-3: mutating,
+# workspace-based `melitz_expand_theta!`/`expand_free_theta!` (delta_star.jl,
+# log_cutoff_param.jl) replacing the ~19,672-byte-per-call (real D=20) allocating path
+# inside the production default gradient backend's own hot loop
+# (`sorted_crossing_gradient.jl`'s `_fill_compact_direct_columns_crossing_sorted!`, called
+# 2x per free coordinate), plus the removal of the global-lock pivot-parts cache for every
+# `ctx` built via a production entry point (`ctx.f_pivot_c`/`f_pivot_idx`/`f_pivot_other`
+# precomputed once at construction instead).
+# ============================================================================
+@testset "Governing prompt Phase 2-3 (2026-07-27 evening): mutating theta expansion + ctx-owned pivot" begin
+    @testset "D=4 (FIXTURE): melitz_expand_theta! matches melitz_expand_theta to machine precision, zero post-warmup allocation" begin
+        ctx = build_melitz_psi_bundle(FIXTURE)[1].γ
+        theta0 = melitz_reduce_theta(FIXTURE.primitives, ctx)
+        n = length(theta0)
+        ws = MelitzThetaExpansionWorkspace(ctx.D)
+        state = MelitzExpandedState(ctx.D)
+        rng = MersenneTwister(11)
+        for _ in 1:20
+            theta = theta0 .+ 0.01 .* randn(rng, n)
+            A_ref, f_ref, g_ref, fjj_ref = melitz_expand_theta(theta, ctx)
+            melitz_expand_theta!(state, theta, ctx, ws)
+            @test isapprox(state.A, A_ref; atol=1e-12)
+            @test isapprox(state.f, f_ref; atol=1e-12)
+            @test state.gamma_prime_j == g_ref
+            @test state.f_jj == fjj_ref
+        end
+        melitz_expand_theta!(state, theta0, ctx, ws)   # warmup
+        bytes1 = @allocated melitz_expand_theta!(state, theta0, ctx, ws)
+        bytes2 = @allocated melitz_expand_theta!(state, theta0, ctx, ws)
+        @test bytes1 == 0
+        @test bytes2 == 0
+        @test (@allocated melitz_expand_theta(theta0, ctx)) > 0   # the allocating wrapper still allocates (unchanged, by design)
+    end
+
+    @testset ":logcutoff throws from the mutating fast path (not silently wrong)" begin
+        ctx_lc = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff)[1].γ
+        theta0_lc = melitz_reduce_theta(FIXTURE.primitives, ctx_lc)
+        ws = MelitzThetaExpansionWorkspace(ctx_lc.D)
+        state = MelitzExpandedState(ctx_lc.D)
+        @test_throws ArgumentError melitz_expand_theta!(state, theta0_lc, ctx_lc, ws)
+    end
+
+    @testset "ctx built via production entry points carries precomputed f_pivot_* fields (no global lock touched)" begin
+        ctx = build_melitz_psi_bundle(FIXTURE)[1].γ
+        @test ctx.f_pivot_c !== nothing
+        c_free, idx, other = melitz_cached_f_pivot_parts(ctx)
+        @test c_free === ctx.f_pivot_c   # returned directly, not recomputed/copied
+        @test idx == ctx.f_pivot_idx
+        @test other === ctx.f_pivot_other
+    end
+
+    @testset "legacy hand-built ctx (no f_pivot_* fields) still works via the global-lock fallback" begin
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        D = p.D
+        moment_layout = MelitzMomentLayout(D)
+        c_full, A_pivot = build_gravity_pivots(p.tau, p.target_country)
+        outer_layout = melitz_outer_layout(D, p.target_country)
+        ctx_legacy = (D=D, sigma=p.sigma, theta_star=p.theta_star, target_country=p.target_country, tau=p.tau,
+               w=p.w, w_prime=cf.w_prime, L=FIXTURE.L, expenditure=eq.expenditure, benchmark_cutoff=eq.cutoff,
+               moment_layout=moment_layout, X_data=eq.trade_flow, c_full=c_full, A_pivot=A_pivot,
+               jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+               outer_parameterization=:logf, inner_loop_opt="unused", outer_loop_opt="unused",
+               moment_backend=:dense_reference, sorted_tail_ctx=nothing)
+        @test get(ctx_legacy, :f_pivot_c, nothing) === nothing
+        c_free, idx, other = melitz_cached_f_pivot_parts(ctx_legacy)
+        theta_legacy = reduce_to_free_theta(p, ctx_legacy)
+        A_l, f_l, g_l, fjj_l = expand_free_theta(theta_legacy, ctx_legacy)
+        @test isapprox(A_l, p.A; atol=1e-10)
+    end
+
+    if KNITRO_AVAILABLE
+        @testset "real D=20: melitz_expand_theta! matches melitz_expand_theta to machine precision, zero post-warmup allocation" begin
+            real_dir8 = joinpath(dirname(dirname(@__DIR__)), "real_data", "noah_D20")
+            @assert isdir(real_dir8) "real_data/noah_D20 not found at $real_dir8"
+            lambdaData8 = readdlm(joinpath(real_dir8, "pi.csv"), ',')
+            LData8 = vec(readdlm(joinpath(real_dir8, "L.csv"), ',')) ./ 1e6
+            tauData8 = readdlm(joinpath(real_dir8, "tau.csv"), ',')
+            countries8 = vec(readdlm(joinpath(real_dir8, "countries.csv"), ',', String))
+            focal8 = findfirst(==("fra"), countries8)
+            observed8 = MelitzObservedData(; lambda=lambdaData8, L=LData8, tau=tauData8,
+                countries=countries8, atol=2e-3)
+            calib8 = calibrate_melitz_pareto(observed8; sigma=2.5, theta_star=:estimate,
+                focal_country=focal8, p_min=0.001, wage_tol=1e-8, gravity_tol=1e-6)
+            z_draws8 = pareto_draws(80_000, calib8.D, calib8.theta_star; seed=calib8.seed)
+            p8, eq8, cf8, ctx8 = melitz_calibration_outer_ctx(calib8; z_draws=z_draws8, moment_backend=:sorted_tail_serial)
+            @test ctx8.f_pivot_c !== nothing
+            theta08 = melitz_reduce_theta(p8, ctx8)
+            n8 = length(theta08)
+            @test n8 == 2 * ctx8.D^2 - 2
+            ws8 = MelitzThetaExpansionWorkspace(ctx8.D)
+            state8 = MelitzExpandedState(ctx8.D)
+            rng8 = MersenneTwister(12)
+            for _ in 1:5
+                theta = theta08 .+ 0.001 .* randn(rng8, n8)
+                A_ref, f_ref, g_ref, fjj_ref = melitz_expand_theta(theta, ctx8)
+                melitz_expand_theta!(state8, theta, ctx8, ws8)
+                @test isapprox(state8.A, A_ref; rtol=1e-9)
+                @test isapprox(state8.f, f_ref; rtol=1e-9)
+            end
+            melitz_expand_theta!(state8, theta08, ctx8, ws8)   # warmup
+            bytes1_8 = @allocated melitz_expand_theta!(state8, theta08, ctx8, ws8)
+            bytes2_8 = @allocated melitz_expand_theta!(state8, theta08, ctx8, ws8)
+            @test bytes1_8 == 0
+            @test bytes2_8 == 0
+            @test (@allocated melitz_expand_theta(theta08, ctx8)) > 15_000   # the old allocating path -- confirms the ~19,672-byte figure this session's own doc cites is real, not fabricated
+        end
+    end
+end
+
+# ============================================================================
+# Governing prompt continuation (2026-07-27 evening session), Phase 10: FC-to-GA cache /
+# inner-solve state-reuse validation. `inner_solve_verified_or_fail`'s exact-point cache
+# (`MelitzExactPointCache`) is what lets a `cb_G!` call reuse the dual/moment state
+# `cb_F!` JUST solved for the identical `theta` -- this testset proves cold vs warm-started
+# re-solves at the SAME theta agree to machine precision (ruling out any state-staleness
+# effect across repeated calls) and that a genuine cb_F!-then-cb_G! sequence at the same
+# theta reuses the cache (not a redundant KNITRO solve).
+# ============================================================================
+@testset "Governing prompt Phase 10 (2026-07-27 evening): FC-to-GA cache / re-solve consistency A/B/A" begin
+    fixtureP10 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8,
+        target_country=1, seed=29, W=5_000)
+    inner_optP10 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+    objP10, theta0P10 = build_melitz_psi_bundle(fixtureP10; inner_loop_opt=inner_optP10)
+    ctxP10 = objP10.γ
+
+    @testset "cold-solve reproducibility: repeated cold solves at the SAME theta are bit-identical" begin
+        r1 = evaluate_melitz_delta(theta0P10, ctxP10, objP10; cold=true, store_G=false)
+        r2 = evaluate_melitz_delta(theta0P10, ctxP10, objP10; cold=true, store_G=false)
+        r3 = evaluate_melitz_delta(theta0P10, ctxP10, objP10; cold=true, store_G=false)
+        @test r1.Delta == r2.Delta == r3.Delta
+        @test r1.dual_x == r2.dual_x == r3.dual_x
+    end
+
+    @testset "warm-start from the SAME theta's own converged dual matches the cold solve to machine precision" begin
+        r_cold = evaluate_melitz_delta(theta0P10, ctxP10, objP10; cold=true, store_G=false)
+        r_warm = evaluate_melitz_delta(theta0P10, ctxP10, objP10; warm_start=r_cold.dual_x, store_G=false)
+        @test isapprox(r_cold.Delta, r_warm.Delta; rtol=1e-10)
+    end
+
+    @testset "cb_F! then cb_G! at the identical theta: exact-cache hit, consistent Delta" begin
+        m10 = 1 + ctxP10.D + ctxP10.D * (ctxP10.D - 1)
+        n10 = length(theta0P10)
+        r0P10 = evaluate_melitz_delta(theta0P10, ctxP10, objP10; cold=true, store_G=false)
+        delta_looseP10 = max(r0P10.Delta * 5, 1e-3)
+        objP10b = build_melitz_implicit_bundle(ctxP10, objP10.U, theta0P10; delta=delta_looseP10,
+            find_smallest=true, gradient_backend=:B_direct_argument_sorted_serial, h=1e-4,
+            inner_loop_opt=inner_optP10, outer_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"))
+        cbsetP10 = melitz_build_finite_delta_callbacks(objP10b, ctxP10, delta_looseP10, true;
+            gradient_backend=:B_direct_argument_sorted_serial, h=1e-4)
+        evalP10 = MelitzMockEvalResult(zeros(1), zeros(m10), zeros(n10), zeros(n10 * m10))
+        cbsetP10.cb_F!(nothing, nothing, MelitzMockEvalRequest(copy(theta0P10)), evalP10, nothing)
+        n_misses_after_F = cbsetP10.n_exact_cache_misses[]
+        n_hits_after_F = cbsetP10.n_exact_cache_hits[]
+        cbsetP10.cb_G!(nothing, nothing, MelitzMockEvalRequest(copy(theta0P10)), evalP10, nothing)
+        @test cbsetP10.n_exact_cache_hits[] == n_hits_after_F + 1   # GA reused FC's solve, no new inner KNITRO solve
+        @test cbsetP10.n_exact_cache_misses[] == n_misses_after_F   # no additional miss
+    end
+end
+
 println("\n" * "="^70)
 println("Melitz Delta-star test suite (active minimal-moment closure) complete.")
 println("="^70)

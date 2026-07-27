@@ -67,11 +67,22 @@ function _fill_compact_direct_columns_crossing_sorted!(Gp::AbstractMatrix{Float6
                                                          union_start::AbstractVector{Int},
                                                          theta_p::AbstractVector{Float64}, theta_m::AbstractVector{Float64},
                                                          ctx, sorted_ctx::MelitzSortedTailContext,
-                                                         direct_cells::Vector{Tuple{Int,Int}}, ncols::Int)
+                                                         direct_cells::Vector{Tuple{Int,Int}}, ncols::Int,
+                                                         state_p::MelitzExpandedState, state_m::MelitzExpandedState,
+                                                         ws::MelitzThetaExpansionWorkspace)
     sigma = ctx.sigma
     W = sorted_ctx.W
-    Ap, fp, _, _ = melitz_expand_theta(theta_p, ctx)
-    Am, fm, _, _ = melitz_expand_theta(theta_m, ctx)
+    # 2026-07-27 continuation (governing prompt Phase 2): mutating fast path -- replaces two
+    # allocating `melitz_expand_theta` calls (~19,672 bytes each at real D=20) with
+    # `melitz_expand_theta!` into caller-owned, persistent `state_p`/`state_m` (see
+    # `delta_star.jl`'s header comment on this section). This is THE production default
+    # gradient backend's own hot loop (`melitz_resolve_gradient_backend` resolves to
+    # `:B_direct_argument_sorted_serial`/`_parallel` for every matrix-free bundle), called
+    # 2x per free coordinate.
+    melitz_expand_theta!(state_p, theta_p, ctx, ws)
+    melitz_expand_theta!(state_m, theta_m, ctx, ws)
+    Ap, fp = state_p.A, state_p.f
+    Am, fm = state_m.A, state_m.f
     @inbounds for idx in 1:ncols
         (o, d) = direct_cells[idx]
         lambda_od = ctx.X_data[o, d] / ctx.expenditure[d]
@@ -117,7 +128,8 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
                                          union_start::AbstractVector{Int}, linkp::AbstractVector{Float64},
                                          linkm::AbstractVector{Float64}, profit::AbstractVector{Float64},
                                          u_plus::AbstractVector{Float64}, u_minus::AbstractVector{Float64},
-                                         psi_buf::AbstractVector{Float64})
+                                         psi_buf::AbstractVector{Float64}, state_p::MelitzExpandedState,
+                                         state_m::MelitzExpandedState, ws::MelitzThetaExpansionWorkspace)
     W = length(arg0_base)
     layout = ctx.moment_layout
     ncols = length(cc.direct_cols)
@@ -127,7 +139,7 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
 
     if ncols > 0
         _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, theta_p, theta_m,
-            ctx, sorted_ctx, cc.direct_cells, ncols)
+            ctx, sorted_ctx, cc.direct_cells, ncols, state_p, state_m, ws)
         @inbounds for idx in 1:ncols
             gcol = cc.direct_cols[idx]
             lam_k = lambda[gcol]
@@ -191,6 +203,12 @@ function make_melitz_gradient_delta_direct_sorted_serial(h::Real)
     psi_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
     thetap_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
     thetam_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    # 2026-07-27 continuation (governing prompt Phase 2): the mutating theta-expansion
+    # workspace/state pair, rebuilt only when `ctx` changes (same `ctx_cache[] !== ctx` check
+    # `compact_cache` already uses -- `ctx.D` is fixed for a given `ctx`'s lifetime).
+    ws_buf = Ref{Union{Nothing,MelitzThetaExpansionWorkspace}}(nothing)
+    statep_buf = Ref{Union{Nothing,MelitzExpandedState}}(nothing)
+    statem_buf = Ref{Union{Nothing,MelitzExpandedState}}(nothing)
 
     function melitz_gradient_delta_direct_sorted_serial!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
                                                            ctx, obj, x::AbstractVector{Float64})
@@ -205,6 +223,9 @@ function make_melitz_gradient_delta_direct_sorted_serial(h::Real)
         if compact_cache[] === nothing || ctx_cache[] !== ctx
             compact_cache[] = melitz_compact_columns_map(ctx)
             ctx_cache[] = ctx
+            ws_buf[] = MelitzThetaExpansionWorkspace(ctx.D)
+            statep_buf[] = MelitzExpandedState(ctx.D)
+            statem_buf[] = MelitzExpandedState(ctx.D)
         end
         compact = compact_cache[]
         maxcols = maximum(length(c.direct_cols) for c in compact)
@@ -236,7 +257,7 @@ function make_melitz_gradient_delta_direct_sorted_serial(h::Real)
             copyto!(theta_m, theta); theta_m[r] -= h
             g[r] = _direct_coordinate_grad_sorted(cc, theta_p, theta_m, ctx, obj, sorted_ctx, lambda, arg0_base, h,
                 Gp_buf[], Gm_buf[], union_start_buf[], linkp_buf[], linkm_buf[], profit_buf[],
-                uplus_buf[], uminus_buf[], psi_buf[])
+                uplus_buf[], uminus_buf[], psi_buf[], statep_buf[], statem_buf[], ws_buf[])
         end
         return nothing
     end
@@ -273,6 +294,15 @@ function make_melitz_gradient_delta_direct_sorted_parallel(h::Real)
     thetap_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     thetam_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
     nthreads_alloc = Ref(0)
+    # 2026-07-27 continuation (governing prompt Phase 2): per-thread mutating theta-expansion
+    # workspace/state, one triple per `Threads.maxthreadid()` slot (mirrors thetap_bufs/
+    # thetam_bufs immediately below). Sized directly off `length(ws_bufs[]) != nt` (NOT a
+    # shared flag another block already updates first) -- see the identical latent-bug fix
+    # this file/direct_gradient.jl already applied to thetap_bufs/thetam_bufs for why a shared
+    # flag would be silently defeated when `nt` grows without `ctx`/`W`/`maxcols` changing.
+    ws_bufs = Ref{Union{Nothing,Vector{MelitzThetaExpansionWorkspace}}}(nothing)
+    statep_bufs = Ref{Union{Nothing,Vector{MelitzExpandedState}}}(nothing)
+    statem_bufs = Ref{Union{Nothing,Vector{MelitzExpandedState}}}(nothing)
 
     function melitz_gradient_delta_direct_sorted_parallel!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
                                                              ctx, obj, x::AbstractVector{Float64})
@@ -312,6 +342,11 @@ function make_melitz_gradient_delta_direct_sorted_parallel(h::Real)
             thetap_bufs[] = [zeros(Float64, n) for _ in 1:nt]
             thetam_bufs[] = [zeros(Float64, n) for _ in 1:nt]
         end
+        if ws_bufs[] === nothing || length(ws_bufs[]) != nt || ws_bufs[][1].D != ctx.D
+            ws_bufs[] = [MelitzThetaExpansionWorkspace(ctx.D) for _ in 1:nt]
+            statep_bufs[] = [MelitzExpandedState(ctx.D) for _ in 1:nt]
+            statem_bufs[] = [MelitzExpandedState(ctx.D) for _ in 1:nt]
+        end
         arg0_base = arg0_buf[]
         _base_arg0!(arg0_base, obj, x)
         lambda = @view x[2:end]
@@ -331,7 +366,8 @@ function make_melitz_gradient_delta_direct_sorted_parallel(h::Real)
                 theta_m = thetam_bufs[][tid]; copyto!(theta_m, theta); theta_m[r] -= h
                 g[r] = _direct_coordinate_grad_sorted(cc, theta_p, theta_m, ctx, obj, sorted_ctx, lambda, arg0_base, h,
                     Gp_bufs[][tid], Gm_bufs[][tid], union_start_bufs[][tid], linkp_bufs[][tid], linkm_bufs[][tid],
-                    profit_bufs[][tid], uplus_bufs[][tid], uminus_bufs[][tid], psi_bufs[][tid])
+                    profit_bufs[][tid], uplus_bufs[][tid], uminus_bufs[][tid], psi_bufs[][tid],
+                    statep_bufs[][tid], statem_bufs[][tid], ws_bufs[][tid])
             end
         finally
             guards_on && Main.CounterfactualSensitivity.guard_exit_coord_pool!()

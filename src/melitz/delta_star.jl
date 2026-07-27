@@ -138,55 +138,54 @@ function gravity_pivot_cells(tau::Matrix{Float64}, target_country::Int)
 end
 
 """
+    melitz_build_f_pivot_parts(D, f_free_lin, A_pivot, c_full) -> (c_free, pivot, other)
+
+2026-07-27 continuation (governing prompt Phase 3): the actual pivot-selection work
+`melitz_cached_f_pivot_parts` used to memoize behind a process-global lock -- factored out
+so every PRODUCTION ctx-construction site (`build_melitz_psi_bundle`,
+`melitz_calibration_outer_ctx`) can call this ONCE, at construction time, and store the
+result directly as immutable `ctx` fields (`f_pivot_c`/`f_pivot_idx`/`f_pivot_other`) --
+exactly like `c_full`/`A_pivot` themselves already are. Since the pivot choice depends only
+on `ctx.c_full[ctx.f_free_lin]`/`ctx.A_pivot.pivot` (both fixed for the lifetime of a given
+`ctx`), precomputing it at construction removes the runtime cache/lock entirely for every
+`ctx` built this way -- "no global lock during normal coordinate expansion" becomes true by
+construction, not by a faster cache.
+"""
+function melitz_build_f_pivot_parts(D::Int, f_free_lin::Vector{Int}, A_pivot::GravityPivot, c_full::Vector{Float64})
+    avoid_f = f_gravity_pivot_avoid_indices(D, f_free_lin, A_pivot.pivot)
+    f_pivot0 = build_gravity_pivot(c_full[f_free_lin], 0.0; avoid=avoid_f)
+    return (f_pivot0.c, f_pivot0.pivot, f_pivot0.other)
+end
+
+"""
     melitz_cached_f_pivot_parts(ctx) -> (c_free::Vector{Float64}, pivot::Int, other::Vector{Int})
 
-2026-07-27 continuation (Phase 3.3): `avoid_f = f_gravity_pivot_avoid_indices(...)` followed
-by `build_gravity_pivot(ctx.c_full[ctx.f_free_lin], g0_f; avoid=avoid_f)` was being recomputed
-from scratch on EVERY call to `expand_free_theta`/`reduce_to_free_theta` -- i.e. on every
-single FD coordinate probe, up to `O(n)` times per outer gradient -- even though the pivot
-CHOICE depends only on `ctx.c_full[ctx.f_free_lin]` and `ctx.A_pivot.pivot` (both fixed for
-the lifetime of a given `ctx`), never on `g0` (`build_gravity_pivot`'s own docstring: "WHICH
-cell is chosen depends only on `c` and the avoid-set, never on `g0`"). Each recomputation did
-real allocating work (`f_gravity_pivot_avoid_indices`'s own comprehension, TWO `setdiff`
-calls, an `abs.(...)` temporary, `ctx.c_full[ctx.f_free_lin]` re-indexed fresh) purely to
-re-derive the SAME answer every time.
+2026-07-27 continuation (Phase 3.3, ORIGINAL fix): memoized `ctx`-invariant pivot-selection
+parts behind a process-global `ReentrantLock` + single-slot `Ref` cache (see git history for
+the full incident writeup this docstring originally carried).
 
-Memoized here by `ctx` OBJECT IDENTITY (`===`), mirroring the SAME established pattern this
-codebase already uses elsewhere for context-invariant precomputation (e.g.
-`direct_gradient.jl`'s `compact_cache`/`ctx_cache`) -- computed once per distinct `ctx`, reused
-on every subsequent call regardless of `theta_free`'s value. Callers reconstruct a fresh,
-cheap `GravityPivot(length(c_free), pivot, other, c_free, g0)` from the cached parts (no new
-allocation of `c_free`/`other` -- `pivot_expand`/`pivot_reduce` never mutate a `GravityPivot`'s
-fields, confirmed by reading both, so sharing these vectors across calls is safe).
-
-THREAD SAFETY: unlike `direct_gradient.jl`'s `compact_cache`/`ctx_cache` (each a closure-local
-pair, freshly created per gradient-backend INSTANCE, so scoped to one outer solve's own
-parallel sweep and only ever populated single-threaded before `Threads.@threads` starts), this
-cache is process-global (`expand_free_theta`/`reduce_to_free_theta` are called from many sites
-beyond any one gradient backend, including directly from `melitz_outer_state`) AND is reached
-from INSIDE a live `Threads.@threads` region: `sorted_crossing_gradient.jl`'s
-`_fill_compact_direct_columns_crossing_sorted!` (called from the PARALLEL sorted gradient
-backend's per-coordinate thread body) calls `melitz_expand_theta` -> `expand_free_theta`
-directly. A bare check-then-set `Ref` here would race both within one solve (harmless
-redundant recompute) AND, more seriously, across two DIFFERENT outer solves' ctx objects
-running concurrently in the same process (one solve's parallel sweep could silently read the
-OTHER solve's cached pivot parts mid-overwrite -- a genuine silent-wrong-gradient risk, not
-merely a lost optimization). Guarded by a `ReentrantLock` for correctness in every case;
-contention is negligible in the overwhelming common case (one active outer solve, cache
-already warm for its own `ctx`) since the lock is held only for a `===` check plus, at most
-once per solve, the pivot rebuild itself.
+2026-07-27 continuation (governing prompt Phase 3, THIS fix): superseded by
+`melitz_build_f_pivot_parts` precomputed directly into `ctx` (`ctx.f_pivot_c`/
+`ctx.f_pivot_idx`/`ctx.f_pivot_other`) at every PRODUCTION construction site. This function
+now checks for those fields FIRST (zero lock, zero recompute, zero allocation beyond what
+the caller already owns) -- the global-lock path below is retained ONLY as a fallback for
+`ctx` objects that predate/bypass this field (hand-built test `NamedTuple`s,
+`fstar_solver.jl`'s own diagnostic-only local `ctx`), so no existing caller breaks. No
+production hot-path caller (any `ctx` from `build_melitz_psi_bundle`/
+`melitz_calibration_outer_ctx`) ever reaches the lock.
 """
 const MELITZ_F_PIVOT_PARTS_LOCK = ReentrantLock()
 const MELITZ_F_PIVOT_PARTS_CTX = Ref{Any}(nothing)
 const MELITZ_F_PIVOT_PARTS_CACHE = Ref{Union{Nothing,Tuple{Vector{Float64},Int,Vector{Int}}}}(nothing)
 
 function melitz_cached_f_pivot_parts(ctx)
+    precomputed = get(ctx, :f_pivot_c, nothing)
+    if precomputed !== nothing
+        return precomputed, ctx.f_pivot_idx, ctx.f_pivot_other
+    end
     return lock(MELITZ_F_PIVOT_PARTS_LOCK) do
         if MELITZ_F_PIVOT_PARTS_CTX[] !== ctx
-            D = ctx.D
-            avoid_f = f_gravity_pivot_avoid_indices(D, ctx.f_free_lin, ctx.A_pivot.pivot)
-            f_pivot0 = build_gravity_pivot(ctx.c_full[ctx.f_free_lin], 0.0; avoid=avoid_f)
-            MELITZ_F_PIVOT_PARTS_CACHE[] = (f_pivot0.c, f_pivot0.pivot, f_pivot0.other)
+            MELITZ_F_PIVOT_PARTS_CACHE[] = melitz_build_f_pivot_parts(ctx.D, ctx.f_free_lin, ctx.A_pivot, ctx.c_full)
             MELITZ_F_PIVOT_PARTS_CTX[] = ctx
         end
         MELITZ_F_PIVOT_PARTS_CACHE[]
@@ -252,6 +251,131 @@ function expand_free_theta(theta_free::AbstractVector{T}, ctx) where {T}
     end
 
     return A, f, gamma_prime_j, f_jj
+end
+
+# ============================================================================
+# 2026-07-27 continuation (governing prompt Phase 2): mutating, workspace-based, Float64-only
+# fast path for the production hot loop -- an outer coordinate probe (central-difference
+# gradient) calls `expand_free_theta`/`melitz_expand_theta` TWICE per free coordinate (once
+# at theta+h, once at theta-h), ~798 coordinates x2 at real D=20, and each allocating call
+# was measured at ~19,672 bytes (`logA_full`, `A`, `f`, `logf_free_full`, plus the transient
+# `GravityPivot`/pivot-selection temporaries `melitz_cached_f_pivot_parts` used to rebuild
+# every time -- Phase 3, above, already removed those). This section removes the remaining
+# `logA_full`/`A`/`f`/`logf_free_full` allocations via preallocated scratch, for the
+# `outer_parameterization=:logf` (production default) case only -- `:logcutoff` still rebuilds
+# its own q-gravity pivot from scratch every call (a separate, pre-existing allocation this
+# session did not touch, since `:logcutoff` is not the production default and the governing
+# prompt's own Phase 12 forbids further parameterization work this session); a caller needing
+# `:logcutoff` must use the allocating `melitz_expand_theta`, which remains fully general
+# (any parameterization, any `eltype` including `ForwardDiff.Dual` for
+# `melitz_cutoff_constraint_jacobian`'s own AD branch).
+#
+# `melitz_expand_theta` itself is UNCHANGED by this section (still the generic, allocating,
+# dual-number-compatible implementation) -- kept as the "diagnostic convenience wrapper" the
+# governing prompt's own Phase 2 describes, and cross-validated against the new mutating path
+# by dedicated equivalence tests (`test/melitz/runtests.jl`) rather than routed through it,
+# to avoid adding indirection/allocation risk to the ~14 existing non-hot call sites
+# (diagnostics, screens, `gradient_lab.jl`, `cc_bundle.jl`'s snapshot restore,
+# `pareto_calibration.jl`'s roundtrip check) that do not need this speedup.
+# ============================================================================
+
+"""
+    MelitzThetaExpansionWorkspace(D)
+
+Preallocated `Float64`-only scratch for `expand_free_theta!`/`melitz_expand_theta!`:
+`logA_full` (length `D^2`), `logf_free_full` (length `D^2-1`), `theta_plain` (length
+`2D^2-2`, used by `melitz_expand_theta!`'s technology-coordinate un-scale). Constructed
+once per context/bundle (sized by that context's own `D`) and reused across every
+coordinate probe for the solve's lifetime -- never resized inside a callback.
+"""
+struct MelitzThetaExpansionWorkspace
+    D::Int
+    logA_full::Vector{Float64}
+    logf_free_full::Vector{Float64}
+    theta_plain::Vector{Float64}
+end
+MelitzThetaExpansionWorkspace(D::Int) = MelitzThetaExpansionWorkspace(D, zeros(D^2), zeros(D^2 - 1), zeros(2D^2 - 2))
+
+"""
+    MelitzExpandedState(D)
+
+Preallocated mutable output of `melitz_expand_theta!`/`expand_free_theta!`: `A`, `f` (both
+`D x D`), plus the two scalar outputs `gamma_prime_j`, `f_jj`. One instance is reused across
+every coordinate probe that needs it -- a caller that must retain a value beyond the next
+`melitz_expand_theta!` call on the SAME state must copy it out explicitly (e.g.
+`copy(state.A)`).
+"""
+mutable struct MelitzExpandedState
+    A::Matrix{Float64}
+    f::Matrix{Float64}
+    gamma_prime_j::Float64
+    f_jj::Float64
+end
+MelitzExpandedState(D::Int) = MelitzExpandedState(zeros(D, D), zeros(D, D), 0.0, 0.0)
+
+"""
+    pivot_expand!(z, z_free, gp::GravityPivot) -> z
+
+In-place `pivot_expand`: `z` (preallocated, length `gp.n`) is written directly, no new
+`Vector` allocated. Otherwise identical formula/semantics to `pivot_expand`.
+"""
+function pivot_expand!(z::AbstractVector{Float64}, z_free::AbstractVector{Float64}, gp::GravityPivot)
+    @inbounds for (k, i) in enumerate(gp.other)
+        z[i] = z_free[k]
+    end
+    rhs = -gp.g0
+    @inbounds for k in eachindex(z_free)
+        rhs -= gp.c[gp.other[k]] * z_free[k]
+    end
+    @inbounds z[gp.pivot] = rhs / gp.c[gp.pivot]
+    return z
+end
+
+"""
+    expand_free_theta!(state::MelitzExpandedState, theta_free_plain::AbstractVector{Float64},
+                        ctx, ws::MelitzThetaExpansionWorkspace) -> state
+
+Mutating, `:logf`-only fast path for `expand_free_theta`: writes `state.A`, `state.f`,
+`state.gamma_prime_j`, `state.f_jj` in place using `ws`'s preallocated scratch. No allocation
+beyond what `GravityPivot` construction itself needs (a small immutable wrapper around
+ALREADY-owned vectors -- `melitz_cached_f_pivot_parts` returns shared, not copied, vectors).
+`theta_free_plain` must already be in PLAIN `log(A_od)` units -- the technology-coordinate
+un-scale, if any, is `melitz_expand_theta!`'s job, not this function's.
+"""
+function expand_free_theta!(state::MelitzExpandedState, theta_free_plain::AbstractVector{Float64},
+                             ctx, ws::MelitzThetaExpansionWorkspace)
+    D, j = ctx.D, ctx.target_country
+    nA = D^2 - 1
+    log_gamma_prime_j = theta_free_plain[1]
+    gamma_prime_j = exp(log_gamma_prime_j)
+    A_free = @view theta_free_plain[2:1+nA]
+    f_free_free = @view theta_free_plain[2+nA:end]
+
+    pivot_expand!(ws.logA_full, A_free, ctx.A_pivot)
+    A = state.A
+    @inbounds for i in eachindex(A)
+        A[i] = exp(ws.logA_full[i])
+    end
+    A_jj = A[j, j]
+
+    expenditure_prime_j = ctx.w_prime * ctx.L[j]
+    f_jj = derive_fjj_from_autarky_cutoff(gamma_prime_j, ctx.w_prime, 1.0, A_jj, expenditure_prime_j, ctx.sigma)
+
+    g0_f = ctx.c_full[ctx.jj_lin] * log(f_jj)
+    c_free, f_pivot_idx, f_other = melitz_cached_f_pivot_parts(ctx)
+    f_pivot = GravityPivot(length(c_free), f_pivot_idx, f_other, c_free, g0_f)
+    pivot_expand!(ws.logf_free_full, f_free_free, f_pivot)
+
+    f = state.f
+    f[j, j] = f_jj
+    @inbounds for (k, i) in enumerate(ctx.f_free_lin)
+        o, d = lin2od(i, D)
+        f[o, d] = exp(ws.logf_free_full[k])
+    end
+
+    state.gamma_prime_j = gamma_prime_j
+    state.f_jj = f_jj
+    return state
 end
 
 """
@@ -507,6 +631,7 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
     moment_layout = MelitzMomentLayout(D)
     c_full, A_pivot = build_gravity_pivots(p.tau, j)
     outer_layout = melitz_outer_layout(D, j)
+    f_pivot_c, f_pivot_idx, f_pivot_other = melitz_build_f_pivot_parts(D, outer_layout.f_free_lin, A_pivot, c_full)
 
     # 2026-07-26 production-port session: `backend=:auto_from_moment_backend` (NEW default)
     # mirrors `build_melitz_implicit_bundle`'s own `gradient_backend`-driven auto-detection --
@@ -561,6 +686,7 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                         # melitz_moments_adapter! always recompute fresh
            moment_layout=moment_layout, X_data=X_data, c_full=c_full, A_pivot=A_pivot,
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           f_pivot_c=f_pivot_c, f_pivot_idx=f_pivot_idx, f_pivot_other=f_pivot_other,
            outer_parameterization=outer_parameterization, technology_coordinate=technology_coordinate,
            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
            moment_backend=resolved_moment_backend, sorted_tail_ctx=sorted_tail_ctx)

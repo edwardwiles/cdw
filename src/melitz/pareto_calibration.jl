@@ -1144,6 +1144,7 @@ function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
     moment_layout = MelitzMomentLayout(D)
     c_full, A_pivot = build_gravity_pivots(p.tau, j)
     outer_layout = melitz_outer_layout(D, j)
+    f_pivot_c, f_pivot_idx, f_pivot_other = melitz_build_f_pivot_parts(D, outer_layout.f_free_lin, A_pivot, c_full)
 
     if moment_backend in (:sorted_tail_serial, :sorted_tail_parallel)
         z_draws === nothing && throw(ArgumentError(
@@ -1158,6 +1159,7 @@ function melitz_calibration_outer_ctx(calib::MelitzParetoCalibration;
            w_prime=cf.w_prime, L=calib.L, expenditure=eq.expenditure, benchmark_cutoff=eq.cutoff,
            moment_layout=moment_layout, X_data=eq.trade_flow, c_full=c_full, A_pivot=A_pivot,
            jj_lin=outer_layout.jj_lin, f_free_lin=outer_layout.f_free_lin,
+           f_pivot_c=f_pivot_c, f_pivot_idx=f_pivot_idx, f_pivot_other=f_pivot_other,
            outer_parameterization=outer_parameterization, technology_coordinate=technology_coordinate,
            inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
            moment_backend=moment_backend, sorted_tail_ctx=sorted_tail_ctx)

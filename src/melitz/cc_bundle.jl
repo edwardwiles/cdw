@@ -537,7 +537,8 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
                                          union_start::AbstractVector{Int}, linkp::AbstractVector{Float64},
                                          linkm::AbstractVector{Float64}, profit::AbstractVector{Float64},
                                          u_plus::AbstractVector{Float64}, u_minus::AbstractVector{Float64},
-                                         psi_buf::AbstractVector{Float64})
+                                         psi_buf::AbstractVector{Float64}, state_p::MelitzExpandedState,
+                                         state_m::MelitzExpandedState, ws::MelitzThetaExpansionWorkspace)
     W = length(arg0_base)
     layout = ctx.moment_layout
     ncols = length(cc.direct_cols)
@@ -548,7 +549,7 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
 
     if ncols > 0
         _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, theta_p, theta_m,
-            ctx, sorted_ctx, cc.direct_cells, ncols)
+            ctx, sorted_ctx, cc.direct_cells, ncols, state_p, state_m, ws)
         @inbounds for idx in 1:ncols
             gcol = cc.direct_cols[idx]
             lam_k = lambda[gcol]

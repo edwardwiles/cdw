@@ -315,6 +315,42 @@ function melitz_expand_theta(theta_free::AbstractVector, ctx)
 end
 
 """
+    melitz_expand_theta!(state::MelitzExpandedState, theta_free::AbstractVector{Float64},
+                          ctx, ws::MelitzThetaExpansionWorkspace) -> state
+
+2026-07-27 continuation (governing prompt Phase 2): the mutating, production-hot-path
+counterpart of `melitz_expand_theta` above -- un-scales `theta_free`'s A-block into plain
+`log(A_od)` units DIRECTLY INTO `ws.theta_plain` (no new `Vector`, mirroring
+`melitz_unpower_theta_free`'s own formula exactly), then delegates to `expand_free_theta!`
+(`delta_star.jl`). Restricted to `outer_parameterization=:logf` (the production default) --
+throws `ArgumentError` for `:logcutoff` rather than silently returning wrong/incomplete
+state (see `delta_star.jl`'s own header comment on this section for the scope rationale).
+Every existing consumer of `melitz_expand_theta` (screens, diagnostics,
+`gradient_lab.jl`) is UNCHANGED and continues to call the allocating dispatcher above; only
+the two identified O(n_theta)-per-gradient-call hot sites
+(`sorted_crossing_gradient.jl`'s `_fill_compact_direct_columns_crossing_sorted!`) call this
+mutating entry point instead.
+"""
+function melitz_expand_theta!(state::MelitzExpandedState, theta_free::AbstractVector{Float64},
+                               ctx, ws::MelitzThetaExpansionWorkspace)
+    get(ctx, :outer_parameterization, :logf) == :logcutoff && throw(ArgumentError(
+        "melitz_expand_theta!: the mutating fast path only supports outer_parameterization=" *
+        ":logf (the production default) -- use the allocating melitz_expand_theta for :logcutoff"))
+    technology_coordinate = get(ctx, :technology_coordinate, :logA)
+    p_A = melitz_technology_coordinate_scale(technology_coordinate, ctx)
+    theta_plain = ws.theta_plain
+    copyto!(theta_plain, theta_free)
+    if p_A != 1.0
+        nA = ctx.D^2 - 1
+        @inbounds for i in 2:1+nA
+            theta_plain[i] /= p_A
+        end
+    end
+    expand_free_theta!(state, theta_plain, ctx, ws)
+    return state
+end
+
+"""
     melitz_reduce_theta(p::MelitzPrimitives, ctx) -> theta_free
 
 Inverse dispatcher: routes to `reduce_to_free_theta` (:logf) or
