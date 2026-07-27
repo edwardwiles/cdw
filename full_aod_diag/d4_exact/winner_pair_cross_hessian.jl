@@ -278,19 +278,44 @@ that `obj.arg2` already reflects the current weights, same `w` this function rec
 for the binned case) -- summing over `s`/`w` and using `EsumEcon`'s own un-binned accumulation gives
 this formula directly. Caller must call `winner_pair_cross_hessian_fill!` once per Hessian callback
 first (builds `EsumEcon`).
+
+BUGFIX (found via this family's own D=4 wiring gate, 2026-07-27): the "cf"/common-factor column
+(`wctx.has_cf`, index `wctx.ncolI` within `wctx`'s own numbering) is NOT a (slot,origin) pair, so
+(exactly like `QTab[jcf,:,:]` in the binned case, see `winner_pair_cross_hessian_cm_block!`'s own
+cf override) `EsumEcon[jcf]` is left at zero by `winner_pair_cross_hessian_fill!`'s slot loop --
+using it unconditionally for `Esum[jcf+1]` silently dropped the entire cf-column contribution,
+undercounting `Esum[jcf+1]` by exactly `ecf` below. Overwritten here with the correct dedicated
+accumulation (`ecf = sum_w S[w]*nu[w]*cf_raw_scaled[w]`, mirroring `winner_pair_cross_hessian_fill!`'s
+own `snucf = snu*crs[w]` weighting for `QCfTab`), computed in the SAME O(W) pass as `t0` (no second
+traversal).
 """
 function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
         ws::WinnerBinCrossScratch, w::AbstractVector{Float64}, Wtot::Float64)
     Esum[1] = Wtot
     nu = wctx.nu
+    has_cf = wctx.has_cf
+    crs = wctx.cf_raw_scaled
     t0 = 0.0
-    @inbounds for s in eachindex(w)
-        t0 += w[s] * nu[s]
+    ecf = 0.0
+    if has_cf
+        @inbounds for s in eachindex(w)
+            snu = w[s] * nu[s]
+            t0 += snu
+            ecf += snu * crs[s]
+        end
+    else
+        @inbounds for s in eachindex(w)
+            t0 += w[s] * nu[s]
+        end
     end
     pi_vec = wctx.pi_vec
     EsumEcon = ws.EsumEcon
     @inbounds for j in 1:wctx.ncolI
         Esum[j + 1] = EsumEcon[j] - pi_vec[j] * t0
+    end
+    if has_cf
+        jcf = wctx.ncolI
+        Esum[jcf + 1] = ecf - pi_vec[jcf] * t0
     end
     return Esum
 end
