@@ -80,8 +80,8 @@ check("complete inner solve status matches (nStatus $(base_dense.inner_status) v
 dual_diff = maximum(abs.(vcat(base_dense.ζstar, base_dense.λstar) .- vcat(base_wbin.ζstar, base_wbin.λstar)))
 check("complete inner solve dual point matches (max|Δ|=$dual_diff)", dual_diff < 1e-6)
 
-NCORE = octx_dense.NCORE; n_eta = octx_dense.n_eta
-n = NCORE + n_eta
+NCORE = octx_dense.NCORE; n_eta_total = octx_dense.n_eta
+n = NCORE + n_eta_total
 
 for (label, x) in (("calib", vcat(base_dense.ζstar, base_dense.λstar)),
                     ("near_delta1_perturbed", vcat(base_dense.ζstar, base_dense.λstar) .+ vcat(0.005, 0.01 .* randn(length(base_dense.λstar)))))
