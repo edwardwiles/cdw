@@ -175,16 +175,37 @@ same `select_G_from_H`-view-then-BLAS pattern as row 6/7 of the companion doc (o
 not per FG callback) — structurally identical in kind to the other four families' verification
 dense-read, just not routed through this particular counter struct.
 
-### C.7 — real D=20/W=80,000
+### C.7 — real D=20/W=80,000 (`no_dense_g_full_family_audit_d20_2026-07-27.jl`, `d20_real_setup(W=80_000, δ=1.0, find_smallest=true, destination_sample=:exclude_row)`, `L=50`; raw counter output in `docs/key_results_2026-07-27/partC_d20_counters_only.log`)
 
-<!-- D20_RESULTS_PLACEHOLDER -->
+Ran to completion (context build + all four family inner solves), no crash, no hang. Same four
+families as D.4, at real production scale:
+
+| Family | FG default | `full_G_mat` | `dense_econ_G` | `generic_dense_FG` | `operator_FG` (fwd/T) | `operator_econ_FG` | `operator_restr_FG` | `operator_verif` | `dense_ref_verif` | `dense_cross_hess` | `operator_cross_hess` | `winner_cross_hess` | **5-counter invariant** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Flexible CM | `:cm_lookup` | 0 | 0 | 0 | 7 (7/7) | 0 | 0 | 0 | 0 | 0 | 6 | 6 | **HOLDS** |
+| Common-Fréchet | `:dense_reference` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Reports HOLDS — same instrumentation gap as D=4 (C.3), not compliance |
+| CM+ZC (CM+meanZC) | `:operator` | 0 | 0 | 0 | 6 (6/6) | 0 | 0 | 0 | 0 | **5** | 0 | 0 | **VIOLATED** — `dense_cross_hessian_calls=5` |
+| Origin-ZC / ZC-only | `:operator` | 0 | 0 | 0 | 7 (7/7) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | Reports HOLDS — does not cover H_ER/H_RR, same caveat as D=4 (C.4) |
+
+**Every qualitative conclusion from the D=4 run (C.1-C.6) reproduces exactly at real D=20/W=80,000
+scale** — same families pass/fail the same way, for the same structural reasons (winner-bin H_EC
+genuinely clean for flexible-CM; `:dense_reference` FG genuinely dense-but-uninstrumented for
+common-Fréchet; H_EC structurally excluded to dense for CM+meanZC whenever `ncore_core<NCORE`;
+origin-ZC's FG+H_EE genuinely clean but H_ER/H_RR uncovered by these counters). The only
+differences are the FG-callback counts themselves (7/7, 0, 6/6, 7/7 vs. D=4's 5/5, 0, 5/5, 5/5 —
+expected, since KNITRO's own Newton-iteration count at the converged point is a function of scale
+and is not held fixed between D=4 and D=20 runs) and `dense_cross_hessian_calls`/`winner_cross_hessian_calls`
+(5/0 vs D=4's 4/0 for CM+ZC; 0/6 vs D=4's 0/4 for flexible-CM) — both simply reflect this run's own
+Hessian-callback count at D=20, not a different backend decision.
 
 ## Summary: does the invariant hold?
 
-| Family | Holds? |
-|---|---|
-| Unrestricted | Not applicable — single compressed path, no dense/operator fork exists to violate |
-| Flexible CM | **YES**, genuinely, measured (FG + H_EC cross-Hessian both operator, 0 dense) |
-| Common-Fréchet | **NO** — production default is `:dense_reference`; the report's own all-zero counters reflect an instrumentation gap (`inner_loop_internal_archgeneric`/`PsiObjectiveBundle` callable uninstrumented), not compliance |
-| CM+ZC (CM+meanZC) | **NO** — FG callback is operator (genuinely clean), but H_EC cross-Hessian is always dense by structural exclusion (`ncore_core<NCORE`), measured live (`dense_cross_hessian_calls=4`) |
-| Origin-ZC / ZC-only | **PARTIALLY** — FG callback + H_EE core Hessian genuinely operator-based; H_ER/H_RR cross/restriction Hessian block is deliberately dense by design, not covered by any of the 5 required-zero counters |
+Measured at both D=4 and real D=20/W=80,000 — same conclusion at both scales in every case.
+
+| Family | Holds? | D=4 evidence | D=20 evidence |
+|---|---|---|---|
+| Unrestricted | Not applicable — single compressed path, no dense/operator fork exists to violate | — | — |
+| Flexible CM | **YES**, genuinely, measured (FG + H_EC cross-Hessian both operator, 0 dense) | `dense_cross_hessian_calls=0`, `winner_cross_hessian_calls=4` | `dense_cross_hessian_calls=0`, `winner_cross_hessian_calls=6` |
+| Common-Fréchet | **NO** — production default is `:dense_reference`; the report's own all-zero counters reflect an instrumentation gap (`inner_loop_internal_archgeneric`/`PsiObjectiveBundle` callable uninstrumented), not compliance | all-zero (gap, not compliance) | all-zero (gap, not compliance) |
+| CM+ZC (CM+meanZC) | **NO** — FG callback is operator (genuinely clean), but H_EC cross-Hessian is always dense by structural exclusion (`ncore_core<NCORE`), measured live | `dense_cross_hessian_calls=4` | `dense_cross_hessian_calls=5` |
+| Origin-ZC / ZC-only | **PARTIALLY** — FG callback + H_EE core Hessian genuinely operator-based; H_ER/H_RR cross/restriction Hessian block is deliberately dense by design, not covered by any of the 5 required-zero counters | `operator_FG_calls=5`, no counter covers H_ER/H_RR | `operator_FG_calls=7`, no counter covers H_ER/H_RR |
