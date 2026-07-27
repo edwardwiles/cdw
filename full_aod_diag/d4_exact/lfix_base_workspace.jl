@@ -5,15 +5,15 @@
 #
 # MOTIVATION (measured in docs/fullA_price_tensor_audit.md +
 # results/fullA_d4/c15_price_tensor/price_tensor_benchmark.csv): at real
-# D=20/W=80000, `build_lfix_base_cache` allocates two fresh W*D*D=3.2e7-element
-# Float64 tensors (price0, pTσ0, ~256MB each = ~512MB) PLUS several smaller
-# W*D and W-length arrays (winner0/runnerup0/third0 and their price/pTσ levels,
-# contrib0, q0, cf pieces, SW) EVERY SINGLE call, even though every one of
-# those arrays is fully OVERWRITTEN (not read-then-extended) on every call and
-# nothing outside the returned `LFixBaseCache` retains a reference to the old
-# one once a new gradient starts (verified: `grep`-audited, no call site in
-# this codebase stores an `LFixBaseCache` across gradient calls -- see the
-# audit doc's confirmation this file's docstrings below rely on).
+# D=20/W=80000, `build_lfix_base_cache` allocates two fresh W*D*Ddest tensors
+# (price0, pTσ0) PLUS several smaller W*Ddest and W-length arrays (winner0/
+# runnerup0/third0 and their price/pTσ levels, contrib0, q0, cf pieces, SW)
+# EVERY SINGLE call, even though every one of those arrays is fully
+# OVERWRITTEN (not read-then-extended) on every call and nothing outside the
+# returned `LFixBaseCache` retains a reference to the old one once a new
+# gradient starts (verified: `grep`-audited, no call site in this codebase
+# stores an `LFixBaseCache` across gradient calls -- see the audit doc's
+# confirmation this file's docstrings below rely on).
 #
 # DESIGN: `LFixBaseCache` itself is UNCHANGED (still an immutable struct,
 # still constructed the same way, still consumed identically by every existing
@@ -26,6 +26,21 @@
 # `undef`-allocated fresh memory. Every existing consumer function is
 # unaffected because it never knew or cared where `cache.price0` etc. came
 # from in the first place.
+#
+# RECTANGULAR GENERALIZATION (shared-FG-verification-and-A-gradient release,
+# 2026-07-27): this file was originally hard square-only (`D x D` tensors
+# throughout, guarded by an explicit `Ddest_here == D || error(...)` check --
+# see git history for the pre-generalization version). Generalized here to
+# `D x Ddest`, mirroring `lfix_incremental.jl::build_lfix_base_cache`'s own
+# already-Ddest-aware formulas EXACTLY (same order of operations, same linear-
+# index convention `d1 = d + (o-1)*Ddest`, same tie-check/self-validation
+# discipline) -- the only change from that allocating reference is that every
+# large array is written into `ws`'s persistent buffers instead of freshly
+# `undef`-allocated. This is what unblocks `composite_gradient_at_Aplus`
+# (lfix_base_workspace_pooled.jl) and any future persistent-cache wiring of
+# `economic_A_gradient!` (shared_a_gradient.jl, task's own §5 ask) under the
+# real D=20 production default (`destination_sample=:exclude_row`, D != Ddest)
+# -- previously this backend hard-errored there by explicit design.
 #
 # CORRECTNESS INVARIANT THIS RELIES ON (mechanically re-verified by this
 # file's own grep-based comment, not just asserted): no code anywhere in this
@@ -46,6 +61,15 @@
 # per-thread-slot discipline in gradient_workspace.jl -- reused here, not
 # reinvented). Callers running multiple gradients concurrently (e.g. a
 # multi-start batch) must give each concurrent gradient its own workspace.
+#
+# SCALAR-INVARIANCE CAVEAT (inherited, unresolved -- see
+# docs/PERSISTENT_LFIX_BASE_CACHE_RELEASE_2026-07-27.md for the full writeup):
+# this workspace does NOT cache μ/σ/gammafac -- they are recomputed fresh from
+# `base.θ_full0`/`ctx.σ` on every `build_lfix_base_cache!` call (cheap, O(1)),
+# so unlike the array fields there is no staleness risk even if a caller's
+# flexible-theta overlay changes μ/σ between calls. Only the ARRAY fields are
+# reused in place; every scalar in the returned `LFixBaseCache` is freshly
+# computed every call.
 # ============================================================================
 include(joinpath(@__DIR__, "lfix_incremental.jl"))
 
@@ -53,9 +77,11 @@ include(joinpath(@__DIR__, "lfix_incremental.jl"))
     LFixBaseWorkspace
 
 Caller-owned, mutable, persistent backing store for `LFixBaseCache`'s large arrays. Built ONCE
-per `(D, W)` via `build_lfix_base_workspace`, refilled in place on every subsequent gradient
-call via `build_lfix_base_cache!` -- never reallocated as long as `(D, W)` stay fixed (the
-steady-state case across an entire KNITRO run / staged δ-continuation at one problem size).
+per `(D, Ddest, W)` via `build_lfix_base_workspace`, refilled in place on every subsequent
+gradient call via `build_lfix_base_cache!` -- never reallocated as long as `(D, Ddest, W)` stay
+fixed (the steady-state case across an entire KNITRO run / staged δ-continuation at one problem
+size). `Ddest` may differ from `D` (`destination_sample=:exclude_row`, the real D=20 production
+default) -- see this file's header for the rectangular generalization this struct underwent.
 
 `valid` is `false` from construction and after any failed/partial `build_lfix_base_cache!` call
 (tie error, dimension mismatch, or any exception mid-build) -- callers should not read the
@@ -69,55 +95,62 @@ implicit staleness-based caching is introduced here).
 """
 mutable struct LFixBaseWorkspace
     D::Int
+    Ddest::Int
     W::Int
     valid::Bool
     fingerprint::UInt64
-    price0::Array{Float64,3}
-    pTσ0::Array{Float64,3}
-    winner0::Matrix{Int}
-    winner_price0::Matrix{Float64}
-    runnerup0::Matrix{Int}
-    runnerup_price0::Matrix{Float64}
-    third0::Matrix{Int}
-    third_price0::Matrix{Float64}
-    third_pTσ0::Matrix{Float64}
-    contrib0::Matrix{Float64}
-    SW::Vector{Float64}
-    denom::Vector{Float64}
-    CONST_d::Vector{Float64}
-    q0::Vector{Float64}
-    Uσ_bi::Vector{Float64}
-    cf_contrib0::Vector{Float64}
+    price0::Array{Float64,3}        # W x D x Ddest
+    pTσ0::Array{Float64,3}          # W x D x Ddest
+    winner0::Matrix{Int}            # W x Ddest
+    winner_price0::Matrix{Float64}  # W x Ddest
+    runnerup0::Matrix{Int}          # W x Ddest
+    runnerup_price0::Matrix{Float64}  # W x Ddest
+    third0::Matrix{Int}             # W x Ddest
+    third_price0::Matrix{Float64}   # W x Ddest
+    third_pTσ0::Matrix{Float64}     # W x Ddest
+    contrib0::Matrix{Float64}       # W x Ddest
+    SW::Vector{Float64}             # W
+    denom::Vector{Float64}          # Ddest
+    CONST_d::Vector{Float64}        # Ddest
+    q0::Vector{Float64}             # W
+    Uσ_bi::Vector{Float64}          # W
+    cf_contrib0::Vector{Float64}    # W
 end
 
-"`build_lfix_base_workspace(D, W)` -- one-time allocation of every persistent array `build_lfix_base_cache!` needs, sized for problem `(D, W)`. `valid=false` until the first successful `build_lfix_base_cache!` call."
-function build_lfix_base_workspace(D::Int, W::Int)
-    return LFixBaseWorkspace(D, W, false, UInt64(0),
-        Array{Float64}(undef, W, D, D), Array{Float64}(undef, W, D, D),
-        Matrix{Int}(undef, W, D), Matrix{Float64}(undef, W, D),
-        Matrix{Int}(undef, W, D), Matrix{Float64}(undef, W, D),
-        Matrix{Int}(undef, W, D), Matrix{Float64}(undef, W, D), Matrix{Float64}(undef, W, D),
-        Matrix{Float64}(undef, W, D),
-        Vector{Float64}(undef, W), Vector{Float64}(undef, D), Vector{Float64}(undef, D),
+"`build_lfix_base_workspace(D, Ddest, W)` -- one-time allocation of every persistent array `build_lfix_base_cache!` needs, sized for problem `(D, Ddest, W)`. `valid=false` until the first successful `build_lfix_base_cache!` call."
+function build_lfix_base_workspace(D::Int, Ddest::Int, W::Int)
+    return LFixBaseWorkspace(D, Ddest, W, false, UInt64(0),
+        Array{Float64}(undef, W, D, Ddest), Array{Float64}(undef, W, D, Ddest),
+        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest),
+        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest),
+        Matrix{Int}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest), Matrix{Float64}(undef, W, Ddest),
+        Matrix{Float64}(undef, W, Ddest),
+        Vector{Float64}(undef, W), Vector{Float64}(undef, Ddest), Vector{Float64}(undef, Ddest),
         Vector{Float64}(undef, W), Vector{Float64}(undef, W), Vector{Float64}(undef, W))
 end
 
+"Backward-compatible 2-arg form: square context (`Ddest == D`)."
+build_lfix_base_workspace(D::Int, W::Int) = build_lfix_base_workspace(D, D, W)
+
 """
-    ensure_lfix_workspace!(ws_ref, D, W) -> LFixBaseWorkspace
+    ensure_lfix_workspace!(ws_ref, D, Ddest, W) -> LFixBaseWorkspace
 
 `ws_ref` is a `Base.RefValue{LFixBaseWorkspace}` (or any 1-element mutable holder) so this
-function can REPLACE the workspace object when `(D, W)` change (a genuinely new problem size),
-matching `gradient_workspace.jl::resize_pool_if_needed!`'s own reassignment pattern. Returns the
-(possibly rebuilt) workspace. A no-op reallocation-wise when `(D, W)` already match -- the
-steady-state case.
+function can REPLACE the workspace object when `(D, Ddest, W)` change (a genuinely new problem
+size), matching `gradient_workspace.jl::resize_pool_if_needed!`'s own reassignment pattern.
+Returns the (possibly rebuilt) workspace. A no-op reallocation-wise when `(D, Ddest, W)` already
+match -- the steady-state case.
 """
-function ensure_lfix_workspace!(ws_ref::Base.RefValue{LFixBaseWorkspace}, D::Int, W::Int)
+function ensure_lfix_workspace!(ws_ref::Base.RefValue{LFixBaseWorkspace}, D::Int, Ddest::Int, W::Int)
     ws = ws_ref[]
-    if ws.D != D || ws.W != W
-        ws_ref[] = build_lfix_base_workspace(D, W)
+    if ws.D != D || ws.Ddest != Ddest || ws.W != W
+        ws_ref[] = build_lfix_base_workspace(D, Ddest, W)
     end
     return ws_ref[]
 end
+
+"Backward-compatible 3-arg form: square context (`Ddest == D`)."
+ensure_lfix_workspace!(ws_ref::Base.RefValue{LFixBaseWorkspace}, D::Int, W::Int) = ensure_lfix_workspace!(ws_ref, D, D, W)
 
 "Fast, non-cryptographic fingerprint of the (x_free0, context) pair a workspace build is for -- diagnostic only, see `LFixBaseWorkspace`'s own docstring."
 _lfix_ws_fingerprint(x_free0::AbstractVector, ctx) = hash(x_free0, hash(objectid(ctx)))
@@ -126,18 +159,19 @@ _lfix_ws_fingerprint(x_free0::AbstractVector, ctx) = hash(x_free0, hash(objectid
     build_lfix_base_cache!(ws::LFixBaseWorkspace, x_free0, ctx, base::BaseDualState; validate_dense=false) -> LFixBaseCache
 
 In-place-backed twin of `build_lfix_base_cache`: SAME formulas, SAME order of operations, SAME
-tie-detection/self-validation discipline -- the only difference is every large array is written
-into `ws`'s persistent buffers (`.=`/`copyto!`/direct index assignment) instead of freshly
-`undef`-allocated. The returned `LFixBaseCache`'s array fields ALIAS `ws`'s buffers (zero-copy).
+tie-detection/self-validation discipline, SAME `D x Ddest` rectangular support -- the only
+difference is every large array is written into `ws`'s persistent buffers (`.=`/`copyto!`/direct
+index assignment) instead of freshly `undef`-allocated. The returned `LFixBaseCache`'s array
+fields ALIAS `ws`'s buffers (zero-copy).
 
 `ws.valid` is set `false` at entry and only set `true` after every step below (including the tie
 check and, if requested, the dense self-validation) has succeeded -- an exception at any point
-(dimension mismatch via the `@assert`, `TiedWinnerError`, a failed self-validation `error()`)
-leaves `ws.valid == false`, signaling to any caller who inspects `ws` directly (rather than just
-using the returned `LFixBaseCache`, which callers should always prefer) that its contents are
-not to be trusted. Throws `DimensionMismatch` immediately (before touching any array) if `ws`'s
-`(D, W)` don't match `ctx`'s -- callers must `ensure_lfix_workspace!` first; this function never
-silently reallocates (that would defeat the entire persistent-preallocation point).
+(dimension mismatch, `TiedWinnerError`, a failed self-validation `error()`) leaves
+`ws.valid == false`, signaling to any caller who inspects `ws` directly (rather than just using
+the returned `LFixBaseCache`, which callers should always prefer) that its contents are not to be
+trusted. Throws `DimensionMismatch` immediately (before touching any array) if `ws`'s
+`(D, Ddest, W)` don't match `ctx`'s -- callers must `ensure_lfix_workspace!` first; this function
+never silently reallocates (that would defeat the entire persistent-preallocation point).
 
 Requires `x_free0`'s Aod block to be strictly positive with no exact price ties, exactly like
 the allocating reference -- `TiedWinnerError` propagates identically.
@@ -146,26 +180,21 @@ function build_lfix_base_cache!(ws::LFixBaseWorkspace, x_free0::AbstractVector, 
     ws.valid = false
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
-    # This persistent-workspace backend is still square-only (D x D tensors throughout) --
-    # NOT generalized to D x Ddest this pass (out of scope, see lfix_incremental.jl's
-    # allocating build_lfix_base_cache for the true-shrink-aware version). Hard-error rather
-    # than silently misbehave if ever handed a rectangular (:exclude_row) context.
-    Ddest_here = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
-    Ddest_here == D || error("build_lfix_base_cache!: this workspace-pooled backend is still square-only (D=$D, Ddest=$Ddest_here) -- not implemented for destination_sample=:exclude_row.")
-    (ws.D == D && ws.W == W) || throw(DimensionMismatch(
-        "build_lfix_base_cache!: workspace is (D=$(ws.D),W=$(ws.W)), context needs (D=$D,W=$W) -- call ensure_lfix_workspace! first"))
+    Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    (ws.D == D && ws.Ddest == Ddest && ws.W == W) || throw(DimensionMismatch(
+        "build_lfix_base_cache!: workspace is (D=$(ws.D),Ddest=$(ws.Ddest),W=$(ws.W)), context needs (D=$D,Ddest=$Ddest,W=$W) -- call ensure_lfix_workspace! first"))
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
     γo = ctx.γ
     gammafac = spgamma(μ * (1 - σ) + 1)
     λstar = base.λstar
 
     ws.SW .= @view γo.SamplingWeights[1:W]
-    for d in 1:D
+    for d in 1:Ddest
         ws.denom[d] = γo.wHat[d] * γo.L[d]
     end
 
     price0 = ws.price0; pTσ0 = ws.pTσ0
-    for d in 1:D, o in 1:D
+    for d in 1:Ddest, o in 1:D
         price_and_pTsigma_cell!(@view(price0[:, o, d]), @view(pTσ0[:, o, d]), base.θ_full0, ctx, o, d)
     end
 
@@ -175,31 +204,31 @@ function build_lfix_base_cache!(ws::LFixBaseWorkspace, x_free0::AbstractVector, 
     winner0 = ws.winner0; winner_price0 = ws.winner_price0
     runnerup0 = ws.runnerup0; runnerup_price0 = ws.runnerup_price0
     third0 = ws.third0; third_price0 = ws.third_price0; third_pTσ0 = ws.third_pTσ0
-    @inbounds for d in 1:D, ω in 1:W
+    @inbounds for d in 1:Ddest, ω in 1:W
         m1, idx1, m2, idx2, m3, idx3 = min_secondthirdmin_with_idx(@view(price0[ω, :, d]))
         winner0[ω, d] = idx1; winner_price0[ω, d] = m1
         runnerup0[ω, d] = idx2; runnerup_price0[ω, d] = m2
         third0[ω, d] = idx3; third_price0[ω, d] = m3
     end
-    @inbounds for d in 1:D, ω in 1:W
+    @inbounds for d in 1:Ddest, ω in 1:W
         t = third0[ω, d]
         third_pTσ0[ω, d] = t == 0 ? Inf : pTσ0[ω, t, d]
     end
 
     CONST_d = ws.CONST_d
-    for d in 1:D
+    for d in 1:Ddest
         s = 0.0
         for o in 1:D
-            d1 = d + (o - 1) * D
+            d1 = d + (o - 1) * Ddest
             s += λstar[d1] * (-γo.P[d1] * ws.denom[d])
         end
         CONST_d[d] = s
     end
 
     contrib0 = ws.contrib0
-    @inbounds for d in 1:D, ω in 1:W
+    @inbounds for d in 1:Ddest, ω in 1:W
         wo = winner0[ω, d]
-        d1w = d + (wo - 1) * D
+        d1w = d + (wo - 1) * Ddest
         contrib0[ω, d] = (ws.SW[ω] / gammafac) * (CONST_d[d] + λstar[d1w] * pTσ0[ω, wo, d])
     end
 
@@ -208,7 +237,7 @@ function build_lfix_base_cache!(ws::LFixBaseWorkspace, x_free0::AbstractVector, 
     τPrime_bi = γo.τPrime[bi, bi]
     LPrime_bi = γo.LPrime[bi]
     ws.Uσ_bi .= @view(γo.Uσ[:, bi]) .^ (-μ)
-    d1_cf = D^2 + 1
+    d1_cf = D * Ddest + 1
     λ_cf = oci - 1 >= d1_cf ? λstar[d1_cf] : 0.0
 
     AodPow_bibi0 = aod_pow_cell(base.θ_full0, ctx, bi, bi)
@@ -236,7 +265,7 @@ function build_lfix_base_cache!(ws::LFixBaseWorkspace, x_free0::AbstractVector, 
     ws.fingerprint = _lfix_ws_fingerprint(x_free0, ctx)
     ws.valid = true
 
-    return LFixBaseCache(D, D, oci, W, μ, σ, bi, gammafac, ws.SW, ws.denom, ws.CONST_d, price0, pTσ0,
+    return LFixBaseCache(D, Ddest, oci, W, μ, σ, bi, gammafac, ws.SW, ws.denom, ws.CONST_d, price0, pTσ0,
         winner0, winner_price0, runnerup0, runnerup_price0,
         third0, third_price0, third_pTσ0, contrib0,
         λstar, base.ζstar, q0, wPrime_bi, τPrime_bi, LPrime_bi, ws.Uσ_bi, λ_cf, ws.cf_contrib0)

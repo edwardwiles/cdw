@@ -653,7 +653,7 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     # one pool/workspace per ctx (built ONCE here), not per gradient call -- see docs/
     # fullA_factorized_price_production_gate.md for A+/C+'s own persistence/aliasing design.
     grad_pool = resolved_backend in (:pooled, :aplus, :cplus, :kbplus) ? build_grad_workspace_pool(W) : nothing
-    lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, W) : nothing
+    lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, ctx.D_dest, W) : nothing
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, ctx.D_dest, W) : nothing
     lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,
@@ -1128,7 +1128,7 @@ function run_polish_checkpointed(label::String, find_smallest_in::Bool, g_start_
     # one pool/workspace per ctx (built ONCE here), not per gradient call -- see docs/
     # fullA_factorized_price_production_gate.md for A+/C+'s own persistence/aliasing design.
     grad_pool = resolved_backend in (:pooled, :aplus, :cplus, :kbplus) ? build_grad_workspace_pool(W) : nothing
-    lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, W) : nothing
+    lfix_ws = resolved_backend == :aplus ? build_lfix_base_workspace(D, ctx.D_dest, W) : nothing
     lfix_c_ws = resolved_backend == :cplus ? build_lfix_factorized_workspace(D, ctx.D_dest, W) : nothing
     lfix_kb_ws = resolved_backend == :kbplus ? build_lfix_kbplus_workspace(D, W) : nothing
     lp("[", label, "] ctx built, D=", D, " W=", W, " draw_seed=", draw_seed, " draw_design=", draw_design,

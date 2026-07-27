@@ -29,8 +29,13 @@ function composite_gradient_at_Aplus(x_free0::AbstractVector, ctx, pe, pool::Gra
 
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache!(ws, x_free0, ctx, base; validate_dense = false)
-    D = ctx.D; D2 = D^2; W = cache.W
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    # BUGFIX (shared-FG-verification-and-A-gradient release, 2026-07-27): same square-hardcoded
+    # D2=D^2/reshape(D,D) fix as composite_gradient_at_fast_buffered/_pooled -- now reachable
+    # since build_lfix_base_cache! (lfix_base_workspace.jl) was generalized to D x Ddest this
+    # release (previously hard-erred on any rectangular context, so this line was unreachable
+    # code for :exclude_row anyway; now it is real).
+    D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D; D2 = D * Ddest; W = cache.W
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
 
     g = zeros(D2)
