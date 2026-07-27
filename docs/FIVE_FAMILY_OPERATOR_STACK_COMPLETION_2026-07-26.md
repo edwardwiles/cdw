@@ -52,33 +52,53 @@ cross-Hessian rework was NOT attempted this session. The full ~500-file reposito
 literally asks for was also NOT attempted (scope reasons, consistent with the prior session's own
 triage).
 
-### Dispatched, in-progress background work (see their own deliverable docs when complete)
+### Dispatched background work — all three now COMPLETE, each self-pushed to Dropbox
 
-Two large follow-on investigations this session judged too large to fold into the main thread were
-dispatched as separate background agents, each in its own isolated git worktree/branch:
+Three large follow-on investigations this session judged too large to fold into the main thread
+were dispatched as separate background agents, each in its own isolated git worktree/branch. All
+three finished before this report's final revision and are folded in below; their own deliverable
+docs are the authoritative source, not this summary.
 
-- **Shared outer A-gradient allocation rework** (worktree `shared-a-gradient-2026-07-27`, branch
-  `feature/shared-outer-a-gradient-2026-07-27`) — directly following on from the hot-path
-  allocation audit's finding that the real ~13GB/complete-solve figure comes from
-  `composite_gradient_at_fast`'s outer-coordinate finite-difference loop, not this task's own
-  FG/Hessian/verification scope. Builds one shared `economic_A_gradient!` entry point for all five
-  families atop the existing (but only-unrestricted-wired) pooled/buffered gradient kernels.
-- **CM basis diagnosis** (worktree `cm-basis-diagnosis-2026-07-27`, branch
-  `diag/cm-basis-interval-orthonormal-2026-07-27`) — Phase C's interval-vs-cumulative CM basis and
-  anchored-vs-orthonormal origin-contrast investigation, explicitly kept in scope per the user's
-  own instruction not to drop it.
+**1. Hot-path array allocation audit** (worktree `audit-hot-path-array-allocation-2026-07-27`,
+commit `e5e5c8f7a14cef3e4ef54c82453a9ea31f9ba997`, pushed to
+`dropbox:.../hot_path_array_allocation_audit_2026-07-27`): resolved the `select_G_from_H` question
+above (zero-byte view, not a dense materialization); identified the outer A-gradient
+(`composite_gradient_at_fast`) as the true source of the large per-call allocation figures other
+sessions had misattributed to the FG/verification path — directly motivating investigation #2.
 
-Both were still running at the time this document was written; their own final-verdict documents
-(see task list) supersede any Phase C/outer-gradient claims made in earlier planning within this
-session's own conversation history.
+**2. Shared outer A-gradient allocation rework** (worktree `shared-a-gradient-2026-07-27`, branch
+`feature/shared-outer-a-gradient-2026-07-27`, HEAD `9af2af3`, pushed to
+`dropbox:.../shared_outer_a_gradient_session_2026-07-27`): **partial_merge**. Built
+`shared_a_gradient.jl`'s `economic_A_gradient!` shared entry point (bit-identical to reference at
+D=4 and real D=20) and wired it as default for ZC-only ONLY (1 of 5 families) — 93.0%/86.3%
+allocation reduction at real D=20/W=80,000 (9296MB cold / 4474MB warm unbuffered →
+651MB cold / 615MB warm). Flexible-CM/common-Fréchet/CM+ZC remain on the legacy unbuffered path,
+honestly reported as not yet wired (not a false "merged_all_families" claim). **Two real bugs
+found**: (a) a genuine, previously-undetected correctness bug in `dest_contrib_incremental_o1!`
+(`gradient_workspace.jl`) — used origin-count `D` instead of destination-count `Ddest` as an index
+stride, silently correct only when `D==Ddest` (i.e. every square-case gate this codebase has ever
+run), producing ~75x-magnitude-wrong gradients under the CURRENT real-D20 production default
+(`destination_sample=:exclude_row`, D=20/Ddest=19) — **found and fixed** this session; (b) both
+`composite_gradient_at_fast_buffered` and `_pooled` (the functions the prior allocation audit's own
+"756.5MB pooled" figure was based on) **hard-crash** under today's D=20 production default due to a
+hardcoded square reshape — found and disclosed, NOT fixed (out of this agent's time budget). This
+means the prior audit's own headline pooled-allocation number cannot currently be reproduced at
+all under the actual production default, a materially important correction.
 
-## Also completed this session (parallel background agent, already finished)
-
-**Hot-path array allocation audit** (worktree `audit-hot-path-array-allocation-2026-07-27`, commit
-`e5e5c8f7a14cef3e4ef54c82453a9ea31f9ba997`, already pushed to Dropbox): resolved the
-`select_G_from_H` question above, and identified that the real large-allocation site in this
-codebase is the outer A-gradient, not the inner FG/verification path this task's main scope
-covers — directly motivating the dispatched follow-on above.
+**3. CM basis diagnosis** (worktree `cm-basis-diagnosis-2026-07-27`, branch
+`diag/cm-basis-interval-orthonormal-2026-07-27`, commit `92b9d7b`, pushed to
+`dropbox:.../cm_basis_diagnosis_session_2026-07-27`): found that two DIFFERENT 2026-07-26 sessions'
+own docs claiming "interval basis not attempted" / "orthonormal already the production default"
+were BOTH stale — an earlier, already-merged "Continuation 12/13" lineage had already built and
+validated the interval basis + its from-scratch Hessian, and the actual wired driver default
+(`run_cm_upper_checkpointed`) is `:anchored`, not orthonormal, contradicting those docs. New real
+D=20/W=80,000 evidence this session: the D=4-only "orthonormal is 2.6-3.4x better conditioned"
+claim does NOT survive to D=20 (anchored/orthonormal are conditioning-equivalent there, <1.7%
+either direction); the interval-vs-cumulative D=20 conditioning gap (32.9x-38.1x worse for
+interval) was reconfirmed under both contrast schemes. Verdict:
+`CM_FEATURE_IMMUTABILITY=pass`, `CM_BASIS_DEFAULT=cumulative` (unchanged),
+`ORIGIN_CONTRAST_DEFAULT=inconclusive` (the doc/code mismatch is reported, not resolved),
+`INTERVAL_HESSIAN=correct_not_faster`. No production defaults flipped.
 
 ## Final verdict (this session's own scope — Phase A/B; see separate docs for Phase C / A-gradient)
 
@@ -112,20 +132,41 @@ FULL_G_MATERIALIZATION =
     zero_in_ordinary_FG_callback_for_4_of_5_families (unrestricted, flexible_cm, cm_plus_zc, zc_only all confirmed by real runtime counters; common_frechet has the operator available but not yet default) |
     present_in_Hessian_cross_blocks_by_design (H_EC/H_ER dense-column reads remain, deliberate Phase A scope boundary, task Section 10 not attempted)
 
-CM_FEATURE_IMMUTABILITY = see cm-basis-diagnosis-2026-07-27 background agent's own final doc
-CM_BASIS_DEFAULT = see cm-basis-diagnosis-2026-07-27 background agent's own final doc
-ORIGIN_CONTRAST_DEFAULT = see cm-basis-diagnosis-2026-07-27 background agent's own final doc
-INTERVAL_HESSIAN = see cm-basis-diagnosis-2026-07-27 background agent's own final doc
+CM_FEATURE_IMMUTABILITY = pass (per cm-basis-diagnosis-2026-07-27 agent)
+CM_BASIS_DEFAULT = cumulative, unchanged (per cm-basis-diagnosis-2026-07-27 agent; interval confirmed correct but 32.9x-38.1x worse conditioned at real D=20)
+ORIGIN_CONTRAST_DEFAULT = inconclusive (per cm-basis-diagnosis-2026-07-27 agent; also found the WIRED driver default is :anchored, contradicting two prior sessions' own docs claiming :orthonormal was already default -- a real doc/code mismatch, not resolved this session)
+INTERVAL_HESSIAN = correct_not_faster (per cm-basis-diagnosis-2026-07-27 agent)
+
+A_GRADIENT_BACKEND (per shared-a-gradient-2026-07-27 agent) =
+    unrestricted:composite_gradient_at_fast_buffered (unchanged)
+    flexible_cm/common_frechet/cm_plus_zc:legacy_unbuffered (not wired this session)
+    zc_only:shared_inplace_pooled (WIRED, DEFAULT -- 93.0%/86.3% allocation reduction at real D=20/W=80,000)
+A_GRADIENT_CORRECTNESS_BUG_FOUND_AND_FIXED =
+    dest_contrib_incremental_o1! used D instead of Ddest as index stride -- silently correct only
+    when D==Ddest, ~75x-magnitude-wrong gradients under the CURRENT real-D20 production default
+    (destination_sample=:exclude_row, D=20/Ddest=19); fixed this session
+A_GRADIENT_CORRECTNESS_BUG_FOUND_NOT_FIXED =
+    composite_gradient_at_fast_buffered/_pooled both hard-crash under the current D=20 default
+    (hardcoded square reshape) -- the prior allocation audit's own "756.5MB pooled" figure is
+    NOT currently reproducible under the real production default at all
 
 PRODUCTION_MERGE = port_ready_not_merged
-    (real, gated, committed work on this branch; not pushed to origin or merged to
-    production/fullA-exact this session -- per feedback-confirm-before-pushing-to-real-remote-2026-07-25,
-    push/merge requires explicit user authorization, not granted this session)
+    (real, gated, committed work on THIS session's own branch plus two further branches from
+    dispatched background agents -- see their own commits above; nothing pushed to origin or
+    merged to production/fullA-exact this session -- per
+    feedback-confirm-before-pushing-to-real-remote-2026-07-25, push/merge requires explicit user
+    authorization, not granted this session. The three branches (this session's own
+    port/finish-operator-stack-..., feature/shared-outer-a-gradient-2026-07-27,
+    diag/cm-basis-interval-orthonormal-2026-07-27) are NOT merged into each other either --
+    they share a common ancestor (a69b32d) but diverge from there; reconciling them is a
+    next-session task, not attempted here.)
 
 HIGHEST_PRIORITY_REMAINING_GAP =
-    common-Frechet's D=20 performance confirmation (the D=20 timing bench crashed with no
-    stack trace mid-run this session, cause not diagnosed -- D=4 evidence is strongly positive
-    (1.57x-1.87x speedup) and D=20 correctness is solid, but the task's own decision rule requires
-    a real D=20 timing result before flipping the default, which this session does not have clean
-    evidence for)
+    the shared-a-gradient agent's bug #2 (composite_gradient_at_fast_buffered/_pooled crash under
+    the real D=20 production default) -- this blocks wiring the shared A-gradient backend for the
+    4 remaining families and means NO restricted family currently has a working allocation-
+    efficient outer gradient at real D=20 scale except ZC-only. This is more consequential than
+    common-Frechet's own still-unresolved D=20 perf-bench crash (second priority: reproducible,
+    2/2 attempts, same failure point, not diagnosed -- see
+    docs/phaseA_item4_frechet_d20_perf_bench_crash_log.txt).
 ```
