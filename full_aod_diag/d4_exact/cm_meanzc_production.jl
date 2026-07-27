@@ -357,8 +357,15 @@ the reference for validating `cm_meanzc_production_gradient`'s (g,A_od)
 block.
 """
 function full_rebuild_gradient_fallback_meanzc(x_free0::AbstractVector, νvec::AbstractVector{Float64}, ctx_cm, pe, base::BaseDualState; h::Float64 = 0.01)
-    D = ctx_cm.D; D2 = D^2
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    # BUGFIX (shared-FG-verification-and-A-gradient release, 2026-07-27): same square-hardcoded
+    # D2=D^2/reshape(D,D) pattern as composite_gradient_at_fast_buffered/_pooled -- ctx_cm is built
+    # via `merge(ctx, (obj = obj_cm,))` (cm_production_bundle.jl), so it carries the same D_dest
+    # field as the plain ctx whenever the caller's context is rectangular (destination_sample=
+    # :exclude_row). This is a reference validator (full-rebuild ground truth for
+    # cm_meanzc_production_gradient's (g,A_od) block), not itself on the hot path, but was silently
+    # square-only -- fixed for consistency with the family's own production gradient.
+    D = ctx_cm.D; Ddest = hasproperty(ctx_cm, :D_dest) ? ctx_cm.D_dest : ctx_cm.D; D2 = D * Ddest
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
     g = zeros(D2)
     for k in 1:D2

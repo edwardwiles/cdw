@@ -124,6 +124,12 @@ function build_lfix_base_cache_KB!(ws::LFixKBPlusWorkspace, x_free0::AbstractVec
     ws.valid = false
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    # GUARD (shared-FG-verification-and-A-gradient release, 2026-07-27): same square-hardcoded-with-
+    # no-guard gap as the non-workspace `build_lfix_base_cache_KB` (lfix_kbplus.jl) -- see that
+    # function's own comment. This is the variant actually reachable from the real production driver
+    # (c10_d20_production_driver.jl, price_cache_backend=:kbplus, threaded=true path).
+    Ddest_here = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    Ddest_here == D || error("build_lfix_base_cache_KB!: Backend :kbplus is square-only (D=$D, Ddest=$Ddest_here) -- not implemented for destination_sample=:exclude_row.")
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
     γo = ctx.γ
     gammafac = spgamma(μ * (1 - σ) + 1)

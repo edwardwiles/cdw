@@ -21,11 +21,18 @@ include(joinpath(@__DIR__, "gradient_workspace.jl"))   # includes lfix_buffer_re
 println("Building real D=20 context (W=80000, delta=1.0) for gradient-workspace test...")
 ctx = d20_real_setup(W = 80000, δ = 1.0, find_smallest = true)
 pe = build_pivot_elimination(ctx)
-D = ctx.D; D2 = D^2; W = ctx.W
+# BUGFIX (shared-FG-verification-and-A-gradient release, 2026-07-27): this previously hardcoded
+# D2=D^2 and reshape(D,D), assuming a SQUARE A_od block -- correct only for destination_sample=
+# :all_legacy. `d20_real_setup`'s own default is destination_sample=:exclude_row (D=20/Ddest=19,
+# real production default), under which this test never even reached the functions it exists to
+# regression-test (it errored at setup, BoundsError on the D^2-sized slice, before ever calling
+# composite_gradient_at_fast_pooled/_buffered) -- this is the "permanent D=20 omit-ROW regression
+# test" gap task item 5 asks to close, not just the two production functions' own bug.
+D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D; D2 = D * Ddest; W = ctx.W
 
 x_free_from_w2(w) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
 Aod_theta_natural = ctx.θ0_up[ctx.Aod_offset+1:ctx.Aod_offset+D2]
-zfree0 = pivot_reduce(reshape(log.(Aod_theta_natural), D, D), pe)
+zfree0 = pivot_reduce(reshape(log.(Aod_theta_natural), D, Ddest), pe)
 gp0 = ctx.θ0_up[3+D]
 xf_calib = x_free_from_w2(vcat(gp0 * 1.01, zfree0))
 

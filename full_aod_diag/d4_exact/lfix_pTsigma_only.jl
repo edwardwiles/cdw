@@ -233,6 +233,18 @@ end
 function build_lfix_base_cache_B(x_free0::AbstractVector, ctx, base::BaseDualState; validate_dense::Bool = false)
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    # GUARD (shared-FG-verification-and-A-gradient release, 2026-07-27): this backend is entirely
+    # square-hardcoded internally (every array below is sized/looped D x D, origin and destination
+    # dimensions never distinguished) with NO prior guard -- unlike Backend A+'s
+    # `build_lfix_base_cache!` (lfix_base_workspace.jl), which already fails loudly on a rectangular
+    # context, this one would previously have silently built a wrong-shaped/wrong-content cache (or
+    # crashed with a confusing downstream BoundsError) under the real D=20 production default
+    # (destination_sample=:exclude_row, D=20/Ddest=19). Fail loudly and immediately instead --
+    # generalizing this experimental backend's own internals to D x Ddest (mirroring the allocating
+    # reference `build_lfix_base_cache`'s own Ddest-aware rewrite) is out of this release's bounded
+    # scope; see docs/SHARED_A_GRADIENT_RECTANGULAR_FIX_AND_RELEASE_2026-07-27.md.
+    Ddest_here = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    Ddest_here == D || error("build_lfix_base_cache_B: Backend B is square-only (D=$D, Ddest=$Ddest_here) -- not implemented for destination_sample=:exclude_row.")
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
     γo = ctx.γ
     gammafac = spgamma(μ * (1 - σ) + 1)

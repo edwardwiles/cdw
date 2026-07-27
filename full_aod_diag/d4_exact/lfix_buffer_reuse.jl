@@ -143,8 +143,15 @@ function composite_gradient_at_fast_buffered(x_free0::AbstractVector, ctx, pe;
 
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache(x_free0, ctx, base; validate_dense = false)
-    D = ctx.D; D2 = D^2; W = cache.W
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    # BUGFIX (shared-FG-verification-and-A-gradient release, 2026-07-27): this previously hardcoded
+    # a SQUARE D2=D^2 / reshape(D,D), silently correct only when D==Ddest (every :all_legacy /
+    # D=4 context) and a hard crash (DimensionMismatch inside `reshape`) at the current real-D20
+    # production default (destination_sample=:exclude_row, D=20, Ddest=19) -- see
+    # docs/SHARED_A_GRADIENT_RECTANGULAR_FIX_AND_RELEASE_2026-07-27.md. `dest_contrib_incremental_o1`
+    # (lfix_incremental.jl, called via `lfix_incremental_at!` below) already uses `cache.Ddest`
+    # internally, so this function's own D2/reshape were the only remaining square-hardcoded pieces.
+    D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D; D2 = D * Ddest; W = cache.W
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
 
     g = zeros(D2)

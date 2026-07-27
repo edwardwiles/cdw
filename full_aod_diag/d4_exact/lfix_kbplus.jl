@@ -74,6 +74,13 @@ VERBATIM, unmodified -- only `contrib0`'s winner-value reconstruction differs (r
 function build_lfix_base_cache_KB(x_free0::AbstractVector, ctx, base::BaseDualState; validate_dense::Bool = false)
     obj = ctx.obj
     D = ctx.D; W = size(obj.U, 1); oci = obj.outer_constr_index
+    # GUARD (shared-FG-verification-and-A-gradient release, 2026-07-27): same square-hardcoded-with-
+    # no-guard gap as Backend B (lfix_pTsigma_only.jl::build_lfix_base_cache_B) -- see that
+    # function's own comment. Backend :kbplus is reachable from the real production driver
+    # (c10_d20_production_driver.jl, price_cache_backend=:kbplus) so this guard closes a genuine
+    # latent crash/corruption risk under destination_sample=:exclude_row, not just a diagnostic nit.
+    Ddest_here = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    Ddest_here == D || error("build_lfix_base_cache_KB: Backend KB is square-only (D=$D, Ddest=$Ddest_here) -- not implemented for destination_sample=:exclude_row.")
     μ = base.θ_full0[1]; σ = ctx.σ; bi = ctx.bi
     γo = ctx.γ
     gammafac = spgamma(μ * (1 - σ) + 1)

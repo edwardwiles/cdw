@@ -221,8 +221,15 @@ function composite_gradient_at_fast_pooled(x_free0::AbstractVector, ctx, pe, poo
 
     base = base === nothing ? solve_base_state(x_free0, ctx) : base
     cache = build_lfix_base_cache(x_free0, ctx, base; validate_dense = false)
-    D = ctx.D; D2 = D^2; W = cache.W
-    z0 = log.(reshape(x_free0[2:end], D, D))
+    # BUGFIX (shared-FG-verification-and-A-gradient release, 2026-07-27): same square-hardcoded
+    # D2=D^2/reshape(D,D) bug as composite_gradient_at_fast_buffered -- see that function's own
+    # comment and docs/SHARED_A_GRADIENT_RECTANGULAR_FIX_AND_RELEASE_2026-07-27.md. This is the
+    # function the prior audit's own cited "756.5 MB/call pooled at real D=20/W=80,000" figure
+    # referred to; that figure could not be reproduced because this exact line crashed under the
+    # current real-D20 production default (destination_sample=:exclude_row) -- confirmed live,
+    # fixed here.
+    D = ctx.D; Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D; D2 = D * Ddest; W = cache.W
+    z0 = log.(reshape(x_free0[2:end], D, Ddest))
     w0 = vcat(x_free0[1], pivot_reduce(z0, pe))
 
     g = zeros(D2)
