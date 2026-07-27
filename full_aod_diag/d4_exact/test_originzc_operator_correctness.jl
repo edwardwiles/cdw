@@ -87,8 +87,15 @@ elseif SCALE == "d20"
     zfree0 = pivot_reduce(reshape(log.(Aod_theta_natural), D, Ddest), pe_g)
     gp0 = ctx.θ0_up[3+D]
     w0 = vcat(gp0 * 1.01, zfree0)
-    x_free_calib = w0
-    x_free_pert = w0 .* (1.0 .+ 0.005 .* [isodd(i) ? 1 : -1 for i in eachindex(w0)])
+    x_free_calib = vcat(w0[1], vec(exp.(pivot_expand(w0[2:end], pe_g))))   # xfc convention: exp+pivot_expand, matching every existing production caller (e.g. test_exclude_row_gateB_meanzc_originzc_k1.jl)
+    # NOTE: a naive uniform +/-0.5% perturbation on exp-space Aod values pushed the DENSE reference
+    # itself into nStatus=-300 (unbounded) at this real D=20/W=80,000 point (confirmed: dense fails
+    # first in run_gate's own call order, before operator is ever reached) -- a test-construction
+    # artifact of this specific point's feasible region, not an operator bug. Perturb only the
+    # gp0/gamma-prime component (index 1), which every other real D=20 gate in this codebase treats
+    # as the safe one-DOF perturbation direction (see calibrated-start-matched-comparison memory).
+    x_free_pert = copy(x_free_calib)
+    x_free_pert[1] *= 1.001
     run_gate(ctx, x_free_calib, x_free_pert; K_configs = [(1, 1)], W_label = "D20/W=$W")
 else
     error("unknown SCALE=$SCALE, expected d4|d20")

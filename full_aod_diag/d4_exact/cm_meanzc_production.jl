@@ -21,6 +21,10 @@
 
 using LinearAlgebra: BLAS, dot, norm
 
+# port/shared-inner-fg-operator-and-verification-2026-07-26: opt-in operator FG (`_meanzc_fg_dispatch`,
+# inner_fg_backend=:operator on CMBinHessCtx) -- self-guarded include, this codebase's own convention.
+isdefined(Main, :_meanzc_fg_dispatch) || include(joinpath(@__DIR__, "cm_meanzc_lookup_production.jl"))
+
 """
     build_cm_meanzc_bin_ctx(ctx, aug) -> CMBinHessCtx
 
@@ -35,7 +39,10 @@ independent of K_mean/K_pair.
 """
 function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
-        core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[])
+        core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[],
+        inner_fg_backend::Symbol = :dense_reference)
+    inner_fg_backend in (:dense_reference, :operator) ||
+        error("build_cm_meanzc_bin_ctx: inner_fg_backend must be :dense_reference or :operator, got :$inner_fg_backend (CM+ZC does not support :cm_lookup -- CMLookupState is CM-grid-only, no mean/pair block)")
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE_ext = aug.ncore_econ + aug.n_mean + aug.n_pair
@@ -49,6 +56,16 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     # `wrap_moments_with_cm_meanzc` (cm_meanzc_moments.jl), which now optionally builds a
     # `CompressedFactual` exactly like `wrap_moments_with_cm_archB` does for the CM-only family.
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
+    # port/shared-inner-fg-operator-and-verification-2026-07-26: build the ZC restriction operator
+    # EAGERLY (aug.Zraw_all/Zpairraw_all/K_mean/K_pair already available here), same pattern as
+    # origin-ZC's build_originzc_core_hess_ctx. SharedByPowerLayout(K_mean,K_pair) reproduces
+    # CM+ZC's own SCALAR-per-level nu_k targets exactly (mean_targets/pair_targets under that
+    # layout broadcast nu_k to every origin/pair -- confirmed equal to
+    # wrap_moments_with_cm_meanzc's own mean_columns_direct!(dest,Z,nu_k::Float64) by this file's
+    # own D=4 correctness gate, not assumed from reading alone).
+    isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
+    meanzc_zc_op = inner_fg_backend === :operator ? ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D) : nothing
+    meanzc_zc_layout = inner_fg_backend === :operator ? SharedByPowerLayout(aug.K_mean, aug.K_pair) : nothing
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE_ext, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE_ext, L1), zeros(D, D, L, L), zeros(D, NCORE_ext, L),
         Matrix{Float64}(undef, W, NCORE_ext), Matrix{Float64}(undef, NCORE_ext + ncm, NCORE_ext + ncm),
@@ -56,15 +73,13 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO), R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
         nothing, false,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
-        aug.ncore_econ, :dense_reference,   # Phase B1 remediation (2026-07-26): CM+ZC does not
-        # support inner_fg_backend=:cm_lookup (CMLookupState is CM-grid-only, no mean/pair block --
-        # see cm_lookup_production.jl's own header) -- hardcoded :dense_reference is the ONLY
-        # valid value here, not a caller-supplied kwarg.
-        nothing,   # cmlookup_st: always nothing here, :cm_lookup is unreachable for CM+ZC (see above)
-        Ref(false))   # skip_cm_fill_ref: never toggled here -- CM+ZC's own moments! wrapper
+        aug.ncore_econ, inner_fg_backend,
+        nothing,   # cmlookup_st: reused (Any-typed) for CMMeanZCOperatorState when inner_fg_backend=:operator
+        Ref(false),   # skip_cm_fill_ref: never toggled here -- CM+ZC's own moments! wrapper
         # (wrap_moments_with_cm_meanzc, cm_meanzc_moments.jl) is a SEPARATE closure from
         # wrap_moments_with_cm_archB and doesn't accept/check this kwarg at all; kept as an
         # inert Ref purely so every CMBinHessCtx has a uniformly non-nothing field.
+        meanzc_zc_op, meanzc_zc_layout)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -84,15 +99,17 @@ performance contract).
 """
 function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair::Int = 0,
                                              contrasts::Symbol = :orthonormal, meanzc_basis::Symbol = :direct,
-                                             probs::Union{Nothing,AbstractVector{Float64}} = nothing)
+                                             probs::Union{Nothing,AbstractVector{Float64}} = nothing,
+                                             inner_fg_backend::Symbol = :dense_reference)
     println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")
     println(stdout, "cm_internal_feature_storage [CM+mean/ZC] = bin_indices")
+    println(stdout, "inner_fg_backend [CM+mean/ZC] = ", inner_fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
     flush(stdout)
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, K_pair = K_pair,
         contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs)
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))
-    cctx = build_cm_meanzc_bin_ctx(ctx, aug)
+    cctx = build_cm_meanzc_bin_ctx(ctx, aug; inner_fg_backend = inner_fg_backend)
     bins = cm_bin_indices_for(ctx, aug)   # lfix_cm_aware.jl -- Unsigned-typed, for the CM fixed-contribution lookup
     return (ctx_cm = ctx_cm, aug = aug, cctx = cctx, bins = bins)
 end
@@ -110,8 +127,7 @@ function archC_meanzc_base_state(x_free0::AbstractVector, νvec::AbstractVector{
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νvec)
-    K, x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0;
-        hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+    K, x, nStatus, n_fg, n_hess = _meanzc_fg_dispatch(cctx, obj, θ_ext0)
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_meanzc_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νvec)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, copy(obj.arg1), nStatus)
@@ -138,8 +154,7 @@ function archC_meanzc_verified_state(x_free0::AbstractVector, νvec::AbstractVec
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    K, inner_x, nStatus, n_fg, n_hess = inner_loop_internal_archgeneric(obj, θ_ext0;
-        hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+    K, inner_x, nStatus, n_fg, n_hess = _meanzc_fg_dispatch(cctx, obj, θ_ext0)
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
         throw(CMExpectedSolveFailure("archC_meanzc_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νvec)"))
