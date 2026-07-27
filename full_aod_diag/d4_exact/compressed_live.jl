@@ -49,6 +49,7 @@ isdefined(Main, :fill_core_hessian_upper!) || include(joinpath(@__DIR__, "core_e
 # `build_compressed_factual` directly on EVERY inner solve, even when the production driver had
 # already attached a `ctx.cf_workspace` -- see ALLOCATING_COMPRESSED_FACTUAL_CALLSITE_AUDIT_2026-07-27.md).
 isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))
+isdefined(Main, :verify_inner_solution_operator_unrestricted!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): evaluate_fullA_fast_compressed's :operator verification backend below
 
 "Resolved backend/workers/storage for the UNRESTRICTED family's core Hessian -- read by `_callbackEvalH_inner_compressed!` and by `resolve_unrestricted_manifest` so the two can never silently diverge. Production default is the validated destination-pair-owned parallel kernel; set to :dense_reference for anti-regression / emergency-revert comparisons (see task §5). Worker count defaults via `resolve_core_hessian_workers_default()` (2026-07-25 final gate): 20 when >=20 Julia threads are available (measured 13-20% faster than 10, not a tie), else 10, else the bounded available count."
 const UNRESTRICTED_CORE_HESSIAN_BACKEND = Ref{Symbol}(:exact_winner_pair_parallel)
@@ -382,7 +383,8 @@ run after every change to either.
 """
 function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
         cache = nothing, use_cache::Bool = true,
-        mode::Symbol = :hard, warm::Bool = true, tag::String = "")
+        mode::Symbol = :hard, warm::Bool = true, tag::String = "",
+        verification_backend::Symbol = UNRESTRICTED_VERIFICATION_BACKEND_DEFAULT[])
 
     mode == :hard || error("evaluate_fullA_fast_compressed: mode=:$mode not implemented (matches oracle.jl)")
 
@@ -475,19 +477,47 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     fval = @prof "primal_weight_recovery_compressed" begin
         obj(inner_x, constr = @view(cbuf[1:ncon]))
     end
-    Delta_dual = cbuf[1] / 1e10
-    m_weights = copy(obj.arg1)
-    p_weights = m_weights ./ sum(m_weights)
-    Delta_primal = @prof "primal_divergence_compute_compressed" primal_divergence(m_weights)
-
-    mean_m_resid = abs(sum(m_weights) / W - 1.0)
     ζstar = inner_x[1]; λstar = inner_x[2:end]
-    nkkt = min(length(λstar), size(G, 2))
-    # Continuation 10 Section 9: BLAS-gemv swap (kkt_residual_blas, oracle_fast.jl) --
-    # see docs/fullA_D20_blas_audit_report.md, ~2.1-2.2x.
-    max_abs_moment_kkt_resid = @prof "kkt_residual_compute_compressed" kkt_residual_blas(G, m_weights, nkkt, W)
 
+    # Verification-defaults task (2026-07-27): `gravity_raw` (cbuf[2], a reporting-only diagnostic
+    # unrelated to the dual-solve verification/admission decision) and `K`/`benchmark_unweighted_
+    # moment_mean` (below) are NOT ported to the operator here -- they are outer-moment/gravity
+    # reporting outputs of THIS function, not part of `classify_inner_result`/`is_cacheable_result`/
+    # `is_verified_success`'s field set, so the dense `obj(inner_x,constr=...)` call and `G`
+    # materialization above still run unconditionally regardless of `verification_backend`
+    # (disclosed scope limit -- see docs/FIVE_FAMILY_OPERATOR_VERIFICATION_DEFAULT_RELEASE_2026-07-27.md).
+    # Only the verification-critical quantities that DO feed those three admission functions
+    # (Delta_dual, Delta_primal, primal_dual_gap, mean_m_resid, max_abs_moment_kkt_resid,
+    # weight_norm_resid, m_weights/m_mean/m_min/m_max) are dispatched below.
     gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
+
+    local m_weights, Delta_dual, Delta_primal, mean_m_resid, max_abs_moment_kkt_resid, weight_norm_resid_val
+    if verification_backend === :operator
+        cf = st.cf
+        cf isa CompressedFactual || error("evaluate_fullA_fast_compressed: verification_backend=:operator requires st.cf to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
+        ov = @prof "operator_verification_compressed" verify_inner_solution_operator_unrestricted!(ζstar, λstar, cf, obj, W)
+        m_weights, verify_op = verify_namedtuple_from_operator(ov, obj, W, nStatus)
+        Delta_dual = verify_op.Delta_dual
+        Delta_primal = verify_op.Delta_primal
+        mean_m_resid = verify_op.mean_m_resid
+        max_abs_moment_kkt_resid = verify_op.max_abs_moment_kkt_resid
+        weight_norm_resid_val = verify_op.weight_norm_resid
+    elseif verification_backend === :dense_reference
+        Delta_dual = cbuf[1] / 1e10
+        m_weights = copy(obj.arg1)
+        p_weights = m_weights ./ sum(m_weights)
+        Delta_primal = @prof "primal_divergence_compute_compressed" primal_divergence(m_weights)
+
+        mean_m_resid = abs(sum(m_weights) / W - 1.0)
+        nkkt = min(length(λstar), size(G, 2))
+        # Continuation 10 Section 9: BLAS-gemv swap (kkt_residual_blas, oracle_fast.jl) --
+        # see docs/fullA_D20_blas_audit_report.md, ~2.1-2.2x.
+        max_abs_moment_kkt_resid = @prof "kkt_residual_compute_compressed" kkt_residual_blas(G, m_weights, nkkt, W)
+        weight_norm_resid_val = abs(sum(p_weights) - 1.0)
+        record_dense_reference_verification!()
+    else
+        error("evaluate_fullA_fast_compressed: unknown verification_backend=:$verification_backend (expected :operator or :dense_reference)")
+    end
     D_dest_g = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*D_dest_g], ctx.D, D_dest_g)
     μ_here = θ_full[1]
@@ -521,7 +551,7 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
               benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
-              weight_norm_resid = abs(sum(p_weights) - 1.0),
+              weight_norm_resid = weight_norm_resid_val,
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               winner_hash = winner_hash, inner_status = nStatus, inner_iters = inner_iters,
               primal_dual_gap = abs(Delta_dual - Delta_primal),

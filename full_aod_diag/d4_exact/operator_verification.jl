@@ -323,3 +323,73 @@ function verify_inner_solution_operator_unrestricted!(zeta::Float64, lambda::Abs
     record_operator_verification!()
     return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
 end
+
+# ================================================================================================
+# Section 6 (verification-defaults task, 2026-07-27): production wiring layer. Each family's
+# dense `*_verified_state` tail (`archC_verified_state`/`archC_meanzc_verified_state`/
+# `archOZ_verified_state`/`archC_frechet_verified_state`, cm_production_bundle.jl/
+# cm_meanzc_production.jl/cm_originzc_production.jl/cm_frechet_cplus.jl -- plus unrestricted's own
+# tail in compressed_live.jl::evaluate_fullA_fast_compressed) builds an IDENTICAL-SHAPED `verify`
+# NamedTuple (fields: inner_status, Delta_dual, Delta_primal, primal_dual_gap, weight_norm_resid,
+# mean_m_resid, max_abs_moment_kkt_resid, m_mean, m_min, m_max) from
+# `CS.select_G_from_H(obj,obj.H)` + `obj(inner_x, constr=...)`. `verify_namedtuple_from_operator`
+# below builds the SAME-shaped NamedTuple from an operator-verifier's own `(r,f,g_lambda,
+# kkt_resid)` return, with NO dense G read anywhere in this function:
+#   - Delta_dual = -ov.f (sign verified from oracle.jl's own documented "constr[1] = -f*1e10"
+#     comment, not assumed -- see oracle.jl ~line 404-410).
+#   - m_weights = dPsi(ov.r), recomputed via the SAME obj.dPsi! both backends already call (ov.r
+#     is already returned by every verify_inner_solution_operator_*! function).
+#   - max_abs_moment_kkt_resid = ov.kkt_resid directly (both are the same max|g_lambda| quantity,
+#     see kkt_residual_blas's own docstring: "max_j |sum_ω m_weights[ω]*G[ω,j]|/W" == max|g_lambda|
+#     up to the sign already absorbed by abs()).
+# Because the returned NamedTuple has the identical field set the dense path produces,
+# `classify_inner_result`/`is_cacheable_result`/`is_verified_success` (oracle.jl) consume either
+# one identically -- this is what makes the "cache admission decision"/"incumbent admission
+# decision" comparisons in the gate scripts a literal function-level comparison, not a re-derived
+# approximation.
+# ================================================================================================
+
+"""
+    verify_namedtuple_from_operator(ov, obj, W, nStatus) -> (m_weights, verify)
+
+See file header above. `ov` is any `verify_inner_solution_operator_*!` return value (must have
+`r`, `f`, `kkt_resid` fields). Returns `(m_weights, verify)`: `m_weights` for building a
+`BaseDualState` the same way the dense path does, `verify` for `classify_inner_result` etc.
+Requires `primal_divergence` (oracle.jl) to already be defined in the caller's session -- same
+implicit dependency the dense `*_verified_state` tails already have (this file has never itself
+included oracle.jl, matching its existing include-discipline for CS.select_G_from_H etc.).
+"""
+function verify_namedtuple_from_operator(ov, obj, W::Int, nStatus::Integer)
+    m_weights = similar(ov.r)
+    obj.dPsi!(m_weights, ov.r)
+    s_m_weights = sum(m_weights)
+    Delta_dual = -ov.f
+    Delta_primal = primal_divergence(m_weights)
+    mean_m_resid = abs(s_m_weights / W - 1.0)
+    verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
+              primal_dual_gap = abs(Delta_dual - Delta_primal),
+              weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
+              mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = ov.kkt_resid,
+              m_mean = s_m_weights / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
+    return (m_weights, verify)
+end
+
+"""
+    *_VERIFICATION_BACKEND_DEFAULT::Ref{Symbol}
+
+One global Ref per family, `:dense_reference` | `:operator`, mirroring this codebase's existing
+backend-toggle discipline (`CM_INNER_FG_BACKEND_DEFAULT`/`ORIGINZC_FG_BACKEND_DEFAULT`/etc.,
+core_exact_hessian.jl) -- NOT a `CMBinHessCtx` struct field, deliberately: `CMBinHessCtx` lives in
+cm_hessian_architectures.jl, an explicitly off-limits Hessian-backend file for this task (two other
+agents are concurrently changing which Hessian backends are active on different branches); a global
+Ref threads through with zero struct-plumbing risk, same pattern `UNRESTRICTED_CORE_HESSIAN_BACKEND`
+(compressed_live.jl) already uses for a cross-cutting backend choice outside `CMBinHessCtx`.
+Defaults are `:dense_reference` for every family until Section 6.1's D=4+D=20 comparison gates
+pass for that family (see docs/FIVE_FAMILY_OPERATOR_VERIFICATION_DEFAULT_RELEASE_2026-07-27.md for
+per-family pass/fail and which defaults were actually flipped).
+"""
+const CM_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const CM_MEANZC_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const ORIGINZC_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const CM_FRECHET_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const UNRESTRICTED_VERIFICATION_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
