@@ -651,7 +651,11 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
     fval = obj(inner_x, constr = @view(cbuf[1:ncon]))
     Delta_dual = cbuf[1] / 1e10
     m_weights = copy(obj.arg1)
-    p_weights = m_weights ./ sum(m_weights)
+    # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
+    # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
+    # the bit-identity verification (sum(x -> x/s, m_weights) === sum(m_weights ./ s), checked
+    # directly at multiple W scales).
+    s_m_weights = sum(m_weights)
     Delta_primal = primal_divergence(m_weights)
 
     mean_m_resid = abs(sum(m_weights) / W - 1.0)
@@ -689,7 +693,7 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
               benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
-              weight_norm_resid = abs(sum(p_weights) - 1.0),
+              weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               winner_hash = winner_hash, inner_status = nStatus, inner_iters = inner_iters,
               primal_dual_gap = abs(Delta_dual - Delta_primal),
