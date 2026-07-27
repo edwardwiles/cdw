@@ -52,6 +52,7 @@
 # in test_shared_a_gradient.jl.
 # ============================================================================
 include(joinpath(@__DIR__, "gradient_workspace.jl"))
+include(joinpath(@__DIR__, "lfix_base_workspace.jl"))
 
 # ----------------------------------------------------------------------------
 # Fixed two-slot scratch (task §3: "a fixed two-slot structure or
@@ -373,11 +374,12 @@ mutable struct EconomicAGradientWorkspace
     grad_pool::GradWorkspacePool
     two_origin_pool::TwoOriginScratchPool
     bandwidth_cache::Dict{Int,Float64}
+    lfix_ws::Union{Nothing,LFixBaseWorkspace}
 end
 
-"`EconomicAGradientWorkspace(W; nT=Threads.maxthreadid())` -- one-time allocation for a problem of destination-count-scale `W`."
+"`EconomicAGradientWorkspace(W; nT=Threads.maxthreadid())` -- one-time allocation for a problem of destination-count-scale `W`. `lfix_ws` (the persistent, rectangular-capable `LFixBaseWorkspace` backing the PLAIN, non-restricted `cache=nothing` path -- see `lfix_base_workspace.jl`) is built lazily on first use, once `(D, Ddest)` are known from the caller's `ctx`; restriction-folded callers that pass their own pre-built `cache=` are unaffected."
 function EconomicAGradientWorkspace(W::Int; nT::Int = Threads.maxthreadid())
-    return EconomicAGradientWorkspace(build_grad_workspace_pool(W; nT = nT), build_two_origin_scratch_pool(W; nT = nT), Dict{Int,Float64}())
+    return EconomicAGradientWorkspace(build_grad_workspace_pool(W; nT = nT), build_two_origin_scratch_pool(W; nT = nT), Dict{Int,Float64}(), nothing)
 end
 
 """
@@ -447,9 +449,22 @@ function economic_A_gradient!(grad_A::AbstractVector, base::BaseDualState, ctx, 
     h_mode in (:fixed, :cached) || error("economic_A_gradient!: h_mode must be :fixed|:cached, got $h_mode")
 
     x_free0 = base.x_free0
-    cache = cache === nothing ? build_lfix_base_cache(x_free0, ctx, base; validate_dense = false) : cache
     D = ctx.D
     Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
+    if cache === nothing
+        # Persistent-workspace path (task §5): reuse `ws.lfix_ws` across calls instead of
+        # `build_lfix_base_cache`'s fresh W*D*Ddest allocation every gradient. Only rebuilds the
+        # workspace itself (not its contents -- that always happens fresh below, matching the
+        # allocating reference's own semantics) when `(D, Ddest, W)` change, mirroring
+        # `resize_pool_if_needed!`'s established reassignment pattern for `ws.grad_pool`.
+        Wc = size(ctx.obj.U, 1)
+        lws = ws.lfix_ws
+        if lws === nothing || lws.D != D || lws.Ddest != Ddest || lws.W != Wc
+            lws = build_lfix_base_workspace(D, Ddest, Wc)
+            ws.lfix_ws = lws
+        end
+        cache = build_lfix_base_cache!(lws, x_free0, ctx, base; validate_dense = false)
+    end
     D2 = D * Ddest
     length(grad_A) == D2 || error("economic_A_gradient!: grad_A must have length D2=$D2, got $(length(grad_A))")
     W = cache.W
