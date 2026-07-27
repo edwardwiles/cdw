@@ -1,0 +1,139 @@
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+PASS  contrasts=anchored L=10: winner_bin cctx backend set
+PASS  contrasts=anchored L=10: dense inner solve feasible
+PASS  contrasts=anchored L=10: winner_bin inner solve feasible
+PASS  contrasts=anchored L=10: complete inner solve status matches (nStatus -103 vs -103)
+PASS  contrasts=anchored L=10: complete inner solve dual point matches
+PASS  contrasts=anchored L=10 calib serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=7.771561172376096e-16)
+  contrasts=anchored L=10 calib serial: max|ΔH|=7.772e-16  scale=1.004e+00
+PASS  contrasts=anchored L=10 calib threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=7.216449660063518e-16)
+  contrasts=anchored L=10 calib threaded_v2: max|ΔH|=7.216e-16  scale=1.004e+00
+PASS  contrasts=anchored L=10 perturbed_A serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=8.049116928532385e-16)
+  contrasts=anchored L=10 perturbed_A serial: max|ΔH|=8.049e-16  scale=1.000e+00
+PASS  contrasts=anchored L=10 perturbed_A threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=9.43689570931383e-16)
+  contrasts=anchored L=10 perturbed_A threaded_v2: max|ΔH|=9.437e-16  scale=1.000e+00
+PASS  contrasts=anchored L=10 perturbed_B serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=7.316196259932184e-16)
+  contrasts=anchored L=10 perturbed_B serial: max|ΔH|=7.316e-16  scale=1.011e+00
+PASS  contrasts=anchored L=10 perturbed_B threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.973588373426765e-16)
+  contrasts=anchored L=10 perturbed_B threaded_v2: max|ΔH|=6.974e-16  scale=1.011e+00
+PASS  contrasts=anchored L=10: cross_scratch object identity stable across calls (no resize)
+  contrasts=anchored L=10: warm hessian_cm_structured_v2! (winner_bin) @allocated=39520 bytes
+PASS  contrasts=anchored L=20: winner_bin cctx backend set
+PASS  contrasts=anchored L=20: dense inner solve feasible
+PASS  contrasts=anchored L=20: winner_bin inner solve feasible
+PASS  contrasts=anchored L=20: complete inner solve status matches (nStatus -103 vs -103)
+PASS  contrasts=anchored L=20: complete inner solve dual point matches
+PASS  contrasts=anchored L=20 calib serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=9.575673587391975e-16)
+  contrasts=anchored L=20 calib serial: max|ΔH|=9.576e-16  scale=1.007e+00
+PASS  contrasts=anchored L=20 calib threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=9.71445146547012e-16)
+  contrasts=anchored L=20 calib threaded_v2: max|ΔH|=9.714e-16  scale=1.007e+00
+PASS  contrasts=anchored L=20 perturbed_A serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=7.494005416219807e-16)
+  contrasts=anchored L=20 perturbed_A serial: max|ΔH|=7.494e-16  scale=1.000e+00
+PASS  contrasts=anchored L=20 perturbed_A threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.108395039783332e-16)
+  contrasts=anchored L=20 perturbed_A threaded_v2: max|ΔH|=6.108e-16  scale=1.000e+00
+PASS  contrasts=anchored L=20 perturbed_B serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.551115123125783e-16)
+  contrasts=anchored L=20 perturbed_B serial: max|ΔH|=5.551e-16  scale=1.015e+00
+PASS  contrasts=anchored L=20 perturbed_B threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.828670879282072e-16)
+  contrasts=anchored L=20 perturbed_B threaded_v2: max|ΔH|=5.829e-16  scale=1.015e+00
+PASS  contrasts=anchored L=20: cross_scratch object identity stable across calls (no resize)
+  contrasts=anchored L=20: warm hessian_cm_structured_v2! (winner_bin) @allocated=39520 bytes
+PASS  contrasts=anchored L=50: winner_bin cctx backend set
+PASS  contrasts=anchored L=50: dense inner solve feasible
+PASS  contrasts=anchored L=50: winner_bin inner solve feasible
+PASS  contrasts=anchored L=50: complete inner solve status matches (nStatus -103 vs -103)
+PASS  contrasts=anchored L=50: complete inner solve dual point matches
+PASS  contrasts=anchored L=50 calib serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=1.016547956922409e-15)
+  contrasts=anchored L=50 calib serial: max|ΔH|=1.017e-15  scale=1.012e+00
+PASS  contrasts=anchored L=50 calib threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=1.0390993621101074e-15)
+  contrasts=anchored L=50 calib threaded_v2: max|ΔH|=1.039e-15  scale=1.012e+00
+PASS  contrasts=anchored L=50 perturbed_A serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=9.194034422677078e-16)
+  contrasts=anchored L=50 perturbed_A serial: max|ΔH|=9.194e-16  scale=1.002e+00
+PASS  contrasts=anchored L=50 perturbed_A threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=9.159339953157541e-16)
+  contrasts=anchored L=50 perturbed_A threaded_v2: max|ΔH|=9.159e-16  scale=1.002e+00
+PASS  contrasts=anchored L=50 perturbed_B serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.898059818321144e-16)
+  contrasts=anchored L=50 perturbed_B serial: max|ΔH|=5.898e-16  scale=1.022e+00
+PASS  contrasts=anchored L=50 perturbed_B threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.759281940243e-16)
+  contrasts=anchored L=50 perturbed_B threaded_v2: max|ΔH|=5.759e-16  scale=1.022e+00
+PASS  contrasts=anchored L=50: cross_scratch object identity stable across calls (no resize)
+  contrasts=anchored L=50: warm hessian_cm_structured_v2! (winner_bin) @allocated=39520 bytes
+PASS  contrasts=orthonormal L=10: winner_bin cctx backend set
+PASS  contrasts=orthonormal L=10: dense inner solve feasible
+PASS  contrasts=orthonormal L=10: winner_bin inner solve feasible
+PASS  contrasts=orthonormal L=10: complete inner solve status matches (nStatus -103 vs -103)
+PASS  contrasts=orthonormal L=10: complete inner solve dual point matches
+PASS  contrasts=orthonormal L=10 calib serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.106226635438361e-16)
+  contrasts=orthonormal L=10 calib serial: max|ΔH|=6.106e-16  scale=1.004e+00
+PASS  contrasts=orthonormal L=10 calib threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.828670879282072e-16)
+  contrasts=orthonormal L=10 calib threaded_v2: max|ΔH|=5.829e-16  scale=1.004e+00
+PASS  contrasts=orthonormal L=10 perturbed_A serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=4.85722573273506e-16)
+  contrasts=orthonormal L=10 perturbed_A serial: max|ΔH|=4.857e-16  scale=1.000e+00
+PASS  contrasts=orthonormal L=10 perturbed_A threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=4.549312315749177e-16)
+  contrasts=orthonormal L=10 perturbed_A threaded_v2: max|ΔH|=4.549e-16  scale=1.000e+00
+PASS  contrasts=orthonormal L=10 perturbed_B serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.38378239159465e-16)
+  contrasts=orthonormal L=10 perturbed_B serial: max|ΔH|=6.384e-16  scale=1.013e+00
+PASS  contrasts=orthonormal L=10 perturbed_B threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.880712583561376e-16)
+  contrasts=orthonormal L=10 perturbed_B threaded_v2: max|ΔH|=5.881e-16  scale=1.013e+00
+PASS  contrasts=orthonormal L=10: cross_scratch object identity stable across calls (no resize)
+  contrasts=orthonormal L=10: warm hessian_cm_structured_v2! (winner_bin) @allocated=39520 bytes
+PASS  contrasts=orthonormal L=20: winner_bin cctx backend set
+PASS  contrasts=orthonormal L=20: dense inner solve feasible
+PASS  contrasts=orthonormal L=20: winner_bin inner solve feasible
+PASS  contrasts=orthonormal L=20: complete inner solve status matches (nStatus -103 vs -103)
+PASS  contrasts=orthonormal L=20: complete inner solve dual point matches
+PASS  contrasts=orthonormal L=20 calib serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=3.400058012914542e-16)
+  contrasts=orthonormal L=20 calib serial: max|ΔH|=3.400e-16  scale=1.007e+00
+PASS  contrasts=orthonormal L=20 calib threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=3.5388358909926865e-16)
+  contrasts=orthonormal L=20 calib threaded_v2: max|ΔH|=3.539e-16  scale=1.007e+00
+PASS  contrasts=orthonormal L=20 perturbed_A serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=4.579669976578771e-16)
+  contrasts=orthonormal L=20 perturbed_A serial: max|ΔH|=4.580e-16  scale=1.000e+00
+PASS  contrasts=orthonormal L=20 perturbed_A threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=3.7470027081099033e-16)
+  contrasts=orthonormal L=20 perturbed_A threaded_v2: max|ΔH|=3.747e-16  scale=1.000e+00
+PASS  contrasts=orthonormal L=20 perturbed_B serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.204170427930421e-16)
+  contrasts=orthonormal L=20 perturbed_B serial: max|ΔH|=5.204e-16  scale=1.015e+00
+PASS  contrasts=orthonormal L=20 perturbed_B threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=5.967448757360216e-16)
+  contrasts=orthonormal L=20 perturbed_B threaded_v2: max|ΔH|=5.967e-16  scale=1.015e+00
+PASS  contrasts=orthonormal L=20: cross_scratch object identity stable across calls (no resize)
+  contrasts=orthonormal L=20: warm hessian_cm_structured_v2! (winner_bin) @allocated=39520 bytes
+PASS  contrasts=orthonormal L=50: winner_bin cctx backend set
+PASS  contrasts=orthonormal L=50: dense inner solve feasible
+PASS  contrasts=orthonormal L=50: winner_bin inner solve feasible
+PASS  contrasts=orthonormal L=50: complete inner solve status matches (nStatus -103 vs -103)
+PASS  contrasts=orthonormal L=50: complete inner solve dual point matches
+PASS  contrasts=orthonormal L=50 calib serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.25367813089639e-16)
+  contrasts=orthonormal L=50 calib serial: max|ΔH|=6.254e-16  scale=1.012e+00
+PASS  contrasts=orthonormal L=50 calib threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.140921104957897e-16)
+  contrasts=orthonormal L=50 calib threaded_v2: max|ΔH|=6.141e-16  scale=1.012e+00
+PASS  contrasts=orthonormal L=50 perturbed_A serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.496539417533143e-16)
+  contrasts=orthonormal L=50 perturbed_A serial: max|ΔH|=6.497e-16  scale=1.002e+00
+PASS  contrasts=orthonormal L=50 perturbed_A threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.583275591331983e-16)
+  contrasts=orthonormal L=50 perturbed_A threaded_v2: max|ΔH|=6.583e-16  scale=1.002e+00
+PASS  contrasts=orthonormal L=50 perturbed_B serial: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.210310043996969e-16)
+  contrasts=orthonormal L=50 perturbed_B serial: max|ΔH|=6.210e-16  scale=1.020e+00
+PASS  contrasts=orthonormal L=50 perturbed_B threaded_v2: complete packed Hessian dense vs winner_bin matches (max|Δ|=6.132247487578013e-16)
+  contrasts=orthonormal L=50 perturbed_B threaded_v2: max|ΔH|=6.132e-16  scale=1.020e+00
+PASS  contrasts=orthonormal L=50: cross_scratch object identity stable across calls (no resize)
+  contrasts=orthonormal L=50: warm hessian_cm_structured_v2! (winner_bin) @allocated=39520 bytes
+
+Winner cross-Hessian counters: (full_G_materializations = 0, dense_economic_G_materializations = 0, dense_CM_G_materializations = 0, dense_ZC_G_materializations = 0, dense_Frechet_G_materializations = 0, generic_dense_FG_calls = 0, operator_FG_calls = 172, operator_forward_calls = 172, operator_transpose_calls = 172, operator_economic_FG_calls = 0, operator_restriction_FG_calls = 0, operator_verification_calls = 0, dense_reference_verification_calls = 0, dense_cross_hessian_calls = 116, operator_cross_hessian_calls = 128, winner_cross_hessian_calls = 128)
+ALL PASS
