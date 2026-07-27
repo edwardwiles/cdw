@@ -136,6 +136,23 @@ const ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_core_hessian_work
 const ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT = Ref{Symbol}(:full_stride)
 
 """
+    CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT / ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT
+
+Winner-aware H_ER phase (2026-07-27), task Sections 4/5: which backend fills the economic x
+mean/pairwise-ZC cross block (`H_EM` for CM+ZC, `H_ER` for origin-ZC-only).
+`:winner_bin` (`winner_pair_cross_hessian_zc_block!`, `winner_pair_cross_hessian.jl`) reuses the
+SAME `WinnerPairHessCtx`/`CoreExactHessianWorkspace` H_EE precompute the shared exact-winner-pair
+backend already builds for this context -- no dense read of the economic (`E`) columns in the fast
+path (the mean/pair restriction columns themselves are still read densely from `obj.H`, unchanged
+-- see that file's header for why that is not part of this invariant). `:dense_reference` remains
+available as an explicit, named, non-default-once-flipped backend. Both start at `:dense_reference`
+and are only flipped here after this phase's own D=4 + real D=20 gates pass to machine precision --
+see `CM_MEANZC_WINNER_AWARE_HER_RELEASE_2026-07-27.md` / `ORIGIN_ZC_WINNER_AWARE_HEZ_RELEASE_2026-07-27.md`.
+"""
+const CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
+const ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
+
+"""
 Remediation task Phase B1 (production-audit continuation, 2026-07-26); flipped to `:cm_lookup`
 by the Phase 5.5 allocation-fix remediation (2026-07-26): which inner FG (forward/backward)
 callback the CM family's KNITRO inner dual solve registers.

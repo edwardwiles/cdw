@@ -44,7 +44,8 @@ Analog of `build_cm_meanzc_production_context`, minus the CM-specific
 `cctx`/`bins` (there is no CM block for this arm, hence nothing to
 precompute for it). `ctx_cm.obj` is `aug.obj_cm`.
 """
-function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; fg_backend::Symbol = ORIGINZC_FG_BACKEND_DEFAULT[])
+function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; fg_backend::Symbol = ORIGINZC_FG_BACKEND_DEFAULT[],
+        zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])
     println(stdout, "cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)")
     println(stdout, "cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)")
     println(stdout, "origin_fg_backend [origin-ZC] = ", fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
@@ -57,7 +58,7 @@ function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; 
     # functions across the codebase (cm_screen_bridge.jl, cm_originzc_profile.jl,
     # cm_originzc_cplus.jl, and a dozen+ diagnostic/test scripts) needs zero signature-call
     # changes and automatically picks up the shared H_EE backend.
-    octx = build_originzc_core_hess_ctx(aug; fg_backend = fg_backend)
+    octx = build_originzc_core_hess_ctx(aug; fg_backend = fg_backend, zc_cross_hessian_backend = zc_cross_hessian_backend)
     ctx_cm = merge(ctx, (obj = aug.obj_cm, octx = octx))
     return (ctx_cm = ctx_cm, aug = aug, octx = octx)
 end

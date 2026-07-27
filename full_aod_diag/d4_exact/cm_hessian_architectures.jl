@@ -451,6 +451,19 @@ mutable struct CMBinHessCtx
     # (campaign-lifetime constant in practice) -- NOT per Hessian callback, matching this file's
     # existing "built once, reused every call" discipline for core_ws/tls.
     cross_scratch::Union{Nothing,WinnerBinCrossScratch}
+    # Winner-aware H_ER phase (2026-07-27, task Section 4): which backend fills the economic x
+    # mean/pairwise-ZC cross block H_EM (CM+ZC's own `HEM = HEE[1:ncore_core, ncore_core+1:NCORE]`,
+    # `_fill_cm_HEE!`'s `ncore < NCORE` branch). :dense_reference (default until this section's own
+    # gates pass) | :winner_bin (winner_pair_cross_hessian_zc_block!, winner_pair_cross_hessian.jl
+    # -- reuses the SAME core_ws/wctx H_EE already builds). Only ever taken when `ncore_core <
+    # NCORE` (there IS a widened mean/pair block to fill at all -- plain flexible CM / common-
+    # Frechet never reach this branch, `ncore_core == NCORE` there). Always `:dense_reference` for
+    # plain CM (`build_cm_bin_ctx`, no ZC widening ever exists there).
+    zc_cross_hessian_backend::Symbol
+    # Persistent scratch for the ZC :winner_bin backend (WinnerZCCrossScratch, distinct struct from
+    # the CM-grid's WinnerBinCrossScratch -- no L-threshold binning, see winner_pair_cross_hessian.jl
+    # header), rebuilt only on a (W, n_restr) size change.
+    zc_cross_scratch::Union{Nothing,WinnerZCCrossScratch}
 end
 
 """
@@ -491,7 +504,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         nothing, false,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
         NCORE, inner_fg_backend, nothing, skip_cm_fill_ref, nothing, nothing,
-        cm_cross_hessian_backend, nothing)
+        cm_cross_hessian_backend, nothing,
+        :dense_reference, nothing)   # zc_cross_hessian_backend/zc_cross_scratch: plain CM never widens (no ZC block)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -611,12 +625,31 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
             # block by cm_meanzc_moments.jl's own column layout (not a separate CM-grid-style
             # restriction block) -- task §4.3's "retain the existing method for the non-core
             # blocks" applies to exactly this cross (core x mean/pair) and (mean/pair x mean/pair)
-            # corner, computed via the SAME dense BLAS this whole block used before the port.
+            # corner. HMM (mean/pair x mean/pair, H_RR) stays dense BLAS unconditionally -- out of
+            # scope (task Section 4). HEM (core x mean/pair, H_EM=H_ER) is winner-aware phase
+            # Section 4's own target: dispatches to `winner_pair_cross_hessian_zc_block!` when
+            # `cctx.zc_cross_hessian_backend === :winner_bin` and the SAME core_ws/cf guard
+            # `_fill_cm_HEE!`'s own H_EE fill just satisfied above holds -- ONLY `Ews[:,
+            # ncore+1:NCORE]` (EM, needed by HMM regardless of backend) is ever computed from `E`
+            # in that path; `E[:, 1:ncore]` (the economic columns) is never read.
             Ews = cctx.Ews
-            @views Ews[:, 1:NCORE] .= E[:, 1:NCORE] .* sqrt.(w)
-            EC = @view Ews[:, 1:ncore]; EM = @view Ews[:, ncore+1:NCORE]
+            @views Ews[:, ncore+1:NCORE] .= E[:, ncore+1:NCORE] .* sqrt.(w)
+            EM = @view Ews[:, ncore+1:NCORE]
             HEM = @view HEE[1:ncore, ncore+1:NCORE]
-            BLAS.gemm!('T', 'N', 1 / M, EC, EM, 0.0, HEM)
+            if _cm_zc_cross_hessian_wants_winner_bin(cctx, cf)
+                record_winner_cross_hessian_call!()
+                wctx = serial_ctx(cctx.core_ws)
+                n_restr = NCORE - ncore
+                cctx.zc_cross_scratch = _ensure_zc_cross_scratch!(cctx, wctx.W, n_restr)
+                winner_pair_cross_hessian_zc_prep!(cctx.zc_cross_scratch, wctx, w)
+                Z = @view E[:, ncore+1:NCORE]   # already-centered restriction columns, unweighted
+                winner_pair_cross_hessian_zc_block!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M)
+            else
+                record_dense_cross_hessian_call!()
+                @views Ews[:, 1:ncore] .= E[:, 1:ncore] .* sqrt.(w)
+                EC = @view Ews[:, 1:ncore]
+                BLAS.gemm!('T', 'N', 1 / M, EC, EM, 0.0, HEM)
+            end
             @views HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)
             HMM = @view HEE[ncore+1:NCORE, ncore+1:NCORE]
             BLAS.gemm!('T', 'N', 1 / M, EM, EM, 0.0, HMM)
@@ -649,6 +682,35 @@ function _cm_cross_hessian_wants_winner_bin(cctx::CMBinHessCtx, cf)
            cf isa CompressedFactual &&
            cctx.core_ws !== nothing &&
            cctx.core_ws_for === cf
+end
+
+"""
+Winner-aware H_ER phase (2026-07-27), Section 4: decide whether THIS Hessian callback may use the
+`:winner_bin` cross-Hessian backend for CM+ZC's H_EM (core x mean/pair cross) block, inside
+`_fill_cm_HEE!`'s own `ncore < NCORE` branch. Requires (a) the backend is actually requested, (b)
+`cctx.ncore_core < cctx.NCORE` (there IS a widened mean/pair block to fill -- plain flexible
+CM/common-Frechet never reach this branch at all, `ncore_core == NCORE` there), and (c)
+`cctx.core_ws`/`core_ws_for` were ACTUALLY refreshed for the CURRENT `cf` by `_fill_cm_HEE!`'s own
+H_EE fill just above (H_EE itself used the winner-pair backend this call, not a dense fallback) --
+same discipline `_cm_cross_hessian_wants_winner_bin` already established for the CM-grid H_EC
+block, reused here rather than re-derived. Not silent: callers that want `:winner_bin` but land
+here `false` fall back to the dense HEM path and record `record_dense_cross_hessian_call!`.
+"""
+function _cm_zc_cross_hessian_wants_winner_bin(cctx::CMBinHessCtx, cf)
+    return cctx.zc_cross_hessian_backend === :winner_bin &&
+           cctx.ncore_core < cctx.NCORE &&
+           cf isa CompressedFactual &&
+           cctx.core_ws !== nothing &&
+           cctx.core_ws_for === cf
+end
+
+"Ensure `cctx.zc_cross_scratch` is sized for the current (W,n_restr); rebuild only on a genuine size change (campaign-lifetime constant in practice), never per-Hessian-callback."
+function _ensure_zc_cross_scratch!(cctx::CMBinHessCtx, W::Int, n_restr::Int)
+    cs = cctx.zc_cross_scratch
+    if cs === nothing || cs.W != W || cs.max_nx < n_restr
+        cctx.zc_cross_scratch = WinnerZCCrossScratch(W, n_restr)
+    end
+    return cctx.zc_cross_scratch
 end
 
 "Ensure `cctx.cross_scratch` is sized for the current (ncolI,D,L); rebuild only on a genuine size change (campaign-lifetime constant in practice), never per-Hessian-callback."
@@ -916,6 +978,13 @@ mutable struct OriginZCCoreHessCtx
     fg_zc_op::Any                      # ZCRestrictionOperator, built once per campaign, or `nothing`
     fg_layout::Any                     # MeanZCTargetLayout, or `nothing`
     fg_lookup_st::Any                  # OriginZCOperatorState, cached once per octx, or `nothing`
+    # Winner-aware H_ER phase (2026-07-27, task Section 5): which backend fills H_ER (core x
+    # mean/pairwise-ZC cross block) in `archA_partitioned_hess_cb_builder`. :dense_reference
+    # (default until this section's own gates pass) | :winner_bin
+    # (winner_pair_cross_hessian_zc_block!, winner_pair_cross_hessian.jl -- reuses the SAME
+    # core_ws/wctx H_EE already builds). HRR stays dense BLAS unconditionally, out of scope.
+    zc_cross_hessian_backend::Symbol
+    zc_cross_scratch::Union{Nothing,WinnerZCCrossScratch}
 end
 
 """
@@ -931,7 +1000,8 @@ ZC-restriction-operator FG (port/shared-inner-fg-operator-and-verification-2026-
 """
 function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT[],
-        fg_backend::Symbol = :dense_reference)
+        fg_backend::Symbol = :dense_reference,
+        zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])
     n_eta_total = aug.obj_cm.outer_constr_index - aug.ncore_econ
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
     # port/shared-inner-fg-operator-and-verification-2026-07-26: build the ZC restriction operator
@@ -952,7 +1022,35 @@ function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = ORIGIN
     end
     return OriginZCCoreHessCtx(aug.ncore_econ, n_eta_total, core_cf_ref, nothing, nothing,
         core_hessian_backend, core_hessian_workers, core_hessian_storage,
-        fg_backend, fg_zc_op, fg_layout, nothing)
+        fg_backend, fg_zc_op, fg_layout, nothing,
+        zc_cross_hessian_backend, nothing)
+end
+
+"""
+Winner-aware H_ER phase (2026-07-27), Section 5: decide whether THIS Hessian callback may use the
+`:winner_bin` cross-Hessian backend for origin-ZC's H_ER (core x mean/pair cross) block. Requires
+(a) the backend is actually requested, (b) `octx.n_eta > 0` (there IS a restriction block to fill),
+and (c) `octx.core_ws`/`core_ws_for` were ACTUALLY refreshed for the CURRENT `cf` by this SAME
+callback's own H_EE fill just above (not stale, not a dense fallback) -- same discipline
+`_cm_cross_hessian_wants_winner_bin`/`_cm_zc_cross_hessian_wants_winner_bin` already establish.
+Not silent: callers that want `:winner_bin` but land here `false` fall back to the dense HER path
+and record `record_dense_cross_hessian_call!`.
+"""
+function _originzc_zc_cross_hessian_wants_winner_bin(octx::OriginZCCoreHessCtx, cf)
+    return octx.zc_cross_hessian_backend === :winner_bin &&
+           octx.n_eta > 0 &&
+           cf isa CompressedFactual &&
+           octx.core_ws !== nothing &&
+           octx.core_ws_for === cf
+end
+
+"Ensure `octx.zc_cross_scratch` is sized for the current (W,n_restr); rebuild only on a genuine size change, never per-Hessian-callback."
+function _ensure_originzc_zc_cross_scratch!(octx::OriginZCCoreHessCtx, W::Int, n_restr::Int)
+    cs = octx.zc_cross_scratch
+    if cs === nothing || cs.W != W || cs.max_nx < n_restr
+        octx.zc_cross_scratch = WinnerZCCrossScratch(W, n_restr)
+    end
+    return octx.zc_cross_scratch
 end
 
 """
@@ -985,12 +1083,32 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                 fill_core_hessian_upper!(HEE, arg2, obj, octx.core_ws;
                     backend = octx.core_hessian_backend, workers = octx.core_hessian_workers, storage = octx.core_hessian_storage)
                 if n_eta_total > 0
-                    @views H_copy[:, 2:1+n] .= H[:, 2:1+n]
-                    @views H_copy[:, 2:1+n] .*= .√arg2
-                    HC_core = @view H_copy[:, 2:1+NCORE]
+                    # Winner-aware H_ER phase (2026-07-27), task Section 5: HC_eta (sqrt(arg2)-
+                    # weighted mean/pair restriction columns) is needed by HRR (H_RR, unconditionally
+                    # dense, out of scope) REGARDLESS of which backend fills HER -- compute it once,
+                    # up front. HC_core (sqrt(arg2)-weighted CORE columns, i.e. the winner-conditioned
+                    # economic columns this whole phase is about NOT reading densely) is only computed
+                    # in the dense HER fallback branch below.
+                    @views H_copy[:, 2+NCORE:1+n] .= H[:, 2+NCORE:1+n]
+                    @views H_copy[:, 2+NCORE:1+n] .*= .√arg2
                     HC_eta = @view H_copy[:, 2+NCORE:1+n]
                     HER = @view ∂∂f_∂∂x[1:NCORE, NCORE+1:n]
-                    BLAS.gemm!('T', 'N', 1 / M, HC_core, HC_eta, 0.0, HER)
+                    if _originzc_zc_cross_hessian_wants_winner_bin(octx, cf)
+                        record_winner_cross_hessian_call!()
+                        wctx = serial_ctx(octx.core_ws)
+                        octx.zc_cross_scratch = _ensure_originzc_zc_cross_scratch!(octx, wctx.W, n_eta_total)
+                        winner_pair_cross_hessian_zc_prep!(octx.zc_cross_scratch, wctx, arg2)
+                        Z = @view H[:, 2+NCORE:1+n]   # already-centered restriction columns, UNweighted
+                        # (winner_pair_cross_hessian_zc_block! applies its own S=arg2 weighting
+                        # internally -- distinct from HC_eta above, which is pre-weighted for HRR's gemm)
+                        winner_pair_cross_hessian_zc_block!(HER, wctx, octx.zc_cross_scratch, arg2, Z, M)
+                    else
+                        record_dense_cross_hessian_call!()
+                        @views H_copy[:, 2:1+NCORE] .= H[:, 2:1+NCORE]
+                        @views H_copy[:, 2:1+NCORE] .*= .√arg2
+                        HC_core = @view H_copy[:, 2:1+NCORE]
+                        BLAS.gemm!('T', 'N', 1 / M, HC_core, HC_eta, 0.0, HER)
+                    end
                     @views ∂∂f_∂∂x[NCORE+1:n, 1:NCORE] .= transpose(HER)
                     HRR = @view ∂∂f_∂∂x[NCORE+1:n, NCORE+1:n]
                     BLAS.gemm!('T', 'N', 1 / M, HC_eta, HC_eta, 0.0, HRR)
