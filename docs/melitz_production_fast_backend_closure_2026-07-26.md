@@ -581,3 +581,70 @@ not expected to match exactly -- this session did not redesign the outer search,
 governing prompt's own explicit instruction). **This is an infrastructure confirmation, not a
 claim about outer-search quality** -- matching this repo's own established framing for this
 exact campaign.
+
+## Phase 13: commit and document the production closure (complete)
+
+`git diff --name-only` (pre-commit): exactly 10 modified files, all under `src/melitz/` or
+`test/melitz/` (`delta_star.jl`, `equilibrium.jl`, `finite_delta_outer.jl`,
+`include_melitz.jl`, `inner_screening.jl`, `inner_solve_config.jl`, `nuisance_profile.jl`,
+`pareto_calibration.jl`, `predictor_corrector.jl`, `test/melitz/runtests.jl`) plus 4 new
+`src/melitz/*.jl` files inherited from the prior (uncommitted) production-port session
+(`backend_config.jl`, `cc_bundle.jl`, `matrix_free_dual_solve.jl`, `moment_operator.jl`) and
+4 `docs/melitz_*.md` files (3 inherited, 1 -- this document -- new). **Zero diff in
+`cc_algo/`, `production/fullA-exact/`, `full_aod_diag/`, or any other Ricardian path** --
+confirmed directly, not merely asserted.
+
+Staged and committed exactly those 18 files (explicit filenames, never `git add -A`) --
+excluded the large amount of PRE-EXISTING, unrelated untracked cruft in the working tree
+(`full_aod_diag/batch_out_v2/`, `sequential_gravity/batch_out_*`, `results/fullA_d4/`, etc. --
+inherited from other sessions' work, not part of this closure). Local commit only, per
+explicit instruction -- **not pushed**.
+
+**Commit**: `42460f8` on branch `melitz/fullD-delta-star` (18 files changed, 6090
+insertions, 226 deletions).
+
+**Final status against the governing prompt's acceptance criteria**:
+
+1. Passing an evaluation cap necessarily activates KNITRO `lower_limit` -- **yes** (Phase 1).
+2. No production caller can silently omit the cap configuration -- **yes** for
+   `solve_melitz_finite_delta_bound`/`build_melitz_implicit_bundle` (Phase 1); `solve_melitz_nuisance_min_delta`
+   already required it before this session (pre-existing).
+3. Strict production-fast forbids every dense fallback -- **yes** (Phase 2), including the
+   nuisance-profile driver (Phase 6) and the range screen path (Phase 7).
+4. `g`, `kappa_ratio`, `GT` cannot be confused -- **yes** (Phase 3, `MelitzWelfareMetrics`).
+5. Production/validation timing differences explained -- **yes** (Phase 4, four benchmarks
+   reconciled, one new matched measurement added).
+6. Nuisance-profile path uses the production-fast matrix-free backend -- **yes** (Phase 6).
+7. Matrix-free range-screen value measured and adopted on evidence -- **yes** (Phase 7,
+   ~300x, zero mismatches, enabled by default).
+8. D=4 regression rerun with correct cap settings -- **yes** (Phase 8, a real backend-pinning
+   bug in this session's OWN first attempt found and fixed before reporting).
+9. Real-D20 additional seed or documented failure, plus W=160,000 attempt -- **yes** (Phase
+   9: canonical seed passes at both W=80k/160k; additional seed genuinely fails, reported
+   honestly).
+10. Every production entry point defaults through one backend configuration -- **yes**
+    (Phase 10 audit; one remaining dense default confirmed diagnostic-only).
+11. All hot callbacks remain allocation-stable -- unchanged from the production-port
+    session's own measurements (Phase 6/7 additions are new dispatch methods on the SAME
+    already-allocation-audited hot path, not new hot-path allocations; not independently
+    re-profiled this session).
+12. Full tests pass -- **yes**, repeatedly, throughout every phase.
+13. No Ricardian/shared source file changes -- **yes**, confirmed directly.
+14. The complete port is captured in a local commit -- **yes**, `42460f8`.
+15. The next session can focus entirely on outer-search behavior -- **yes**, modulo the
+    addendum below (parameterization selection), which this same session also attempts.
+
+**Remaining known gaps, carried forward explicitly** (not silently dropped):
+- `predictor_corrector.jl` remains dense-only and explicitly diagnostic (governing prompt's
+  own allowance -- "may remain dense-only... unless the user later chooses to revive it").
+- The origin-block LP screen remains dense-only and opt-in (Phase 7's own scope note).
+- A pre-existing `THREE`-dirname `real_data` path bug in several OTHER (not this session's)
+  real-D20 tests in `test/melitz/runtests.jl` (e.g. "Section 17") silently skips via their own
+  `isdir` guard -- found while building this session's own (correctly two-dirname) real-D20
+  tests; flagged for a future session, not fixed here (those tests are not part of this
+  session's own scope).
+- D=10 was validated for the range screen only (Phase 7), not a full outer/inner-solve
+  comparison (no D=10 fixture proved stable enough across available seeds for a heavier
+  campaign in the time available).
+- Hot-callback allocation stability (#11 above) was not independently re-profiled this
+  session -- inherited from the production-port session's own measurements.
