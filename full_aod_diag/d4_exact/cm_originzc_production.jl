@@ -26,6 +26,33 @@ using LinearAlgebra: BLAS, dot, norm
 # port/shared-inner-fg-operator-and-verification-2026-07-26: opt-in operator FG (`_originzc_fg_dispatch`,
 # fg_backend=:operator on OriginZCCoreHessCtx) -- self-guarded include, this codebase's own convention.
 isdefined(Main, :_originzc_fg_dispatch) || include(joinpath(@__DIR__, "cm_originzc_lookup_production.jl"))
+# shared outer-A-gradient task (2026-07-27): shared_a_gradient.jl provides economic_A_gradient!/
+# EconomicAGradientWorkspace, this arm's DEFAULT (g,A_od)-block gradient backend (see
+# cm_originzc_production_gradient below).
+isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))
+
+"""
+    get_or_build_econ_a_grad_ws(W::Int) -> EconomicAGradientWorkspace
+
+Process-wide cache of one `EconomicAGradientWorkspace` per problem scale `W`, built lazily on
+first use and reused thereafter (task §5: "Do not construct this workspace or its thread-local
+arrays on every outer gradient"). NOT a per-context cache -- if two DIFFERENT live contexts at the
+SAME `W` both call `cm_originzc_production_gradient` with the shared backend, they will share this
+one workspace. This is safe (no data race, no cross-contamination of results -- every buffer is
+fully overwritten before being read on each call) as long as this arm's own outer solver never
+issues two of ITS OWN gradient calls concurrently against the SAME workspace, which is true of
+every current production driver for this family (no threaded multi-context driver exists). A
+caller that DOES need strict per-context isolation should build its own `EconomicAGradientWorkspace`
+and pass it via `econ_ws=`.
+"""
+const _ECON_A_GRAD_WS_CACHE = Dict{Int,EconomicAGradientWorkspace}()
+function get_or_build_econ_a_grad_ws(W::Int)
+    ws = get(_ECON_A_GRAD_WS_CACHE, W, nothing)
+    ws === nothing || return ws
+    ws = EconomicAGradientWorkspace(W)
+    _ECON_A_GRAD_WS_CACHE[W] = ws
+    return ws
+end
 
 """
     build_originzc_production_context(ctx, CS, layout) -> (ctx_cm, aug)
@@ -106,7 +133,10 @@ function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{F
     obj(inner_x, constr = @view(cbuf[1:ncon]))
     Delta_dual = cbuf[1] / 1e10
     m_weights = copy(obj.arg1)
-    p_weights = m_weights ./ sum(m_weights)
+    # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
+    # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
+    # the bit-identity verification.
+    s_m_weights = sum(m_weights)
     Delta_primal = primal_divergence(m_weights)
 
     mean_m_resid = abs(sum(m_weights) / W - 1.0)
@@ -116,7 +146,7 @@ function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{F
     base = BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, m_weights, nStatus)
     verify = (inner_status = nStatus, Delta_dual = Delta_dual, Delta_primal = Delta_primal,
               primal_dual_gap = abs(Delta_dual - Delta_primal),
-              weight_norm_resid = abs(sum(p_weights) - 1.0),
+              weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               m_mean = sum(m_weights) / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
     dual_bank !== nothing && record_success_restricted!(dual_bank, eval_id, vcat(collect(x_free0), νfull), inner_x)
@@ -152,21 +182,51 @@ function build_lfix_base_cache_originzc(x_free0::AbstractVector, ctx_cm, base::B
 end
 
 """
-    cm_originzc_production_gradient(x_free0, νfull, pcx, ctx, pe; base=nothing, verify=nothing, kwargs...) -> (g_ext, meta)
+    cm_originzc_production_gradient(x_free0, νfull, pcx, ctx, pe; base=nothing, verify=nothing,
+                                     gradient_backend=:shared_inplace_pooled, econ_ws=nothing, kwargs...) -> (g_ext, meta)
 
-`:reference`-backend entry point for this arm's full outer gradient: the
-(g,A_od) block via UNCHANGED `composite_gradient_at_fast` (every nu_{o,k}
-held fixed, folded into q0 once), PLUS the analytic
-`d(Delta_dual)/d(eta_{o,k})` vector appended as the last `n_eta(layout)`
-components. `g_ext` has length `D^2 + n_eta(layout)`.
+Full outer gradient for this arm: the (g,A_od) block, PLUS the analytic
+`d(Delta_dual)/d(eta_{o,k})` vector appended as the last `n_eta(layout)` components. `g_ext` has
+length `D*Ddest + n_eta(layout)`.
+
+`gradient_backend` (shared outer-A-gradient task, 2026-07-27): controls how the (g,A_od) block is
+computed.
+  - `:shared_inplace_pooled` (DEFAULT): the shared `economic_A_gradient!` entry point
+    (shared_a_gradient.jl) -- writes directly into a preallocated buffer, uses the fixed-2-slot
+    `TwoOriginScratch` (no Dict, no per-coordinate W-length allocation for the winner-flip/2-origin
+    same-destination cases). Verified bit-for-bit identical to `:legacy_unbuffered` at D=4 and real
+    D=20/W=80,000 (test_shared_a_gradient.jl / test_cm_originzc_shared_a_gradient_gate.jl).
+  - `:legacy_unbuffered`: the ORIGINAL, fully-allocating `composite_gradient_at_fast` -- kept ONLY
+    as an explicit reference/debug backend (task requirement: "no restricted-family production
+    wrapper may call the original unbuffered composite_gradient_at_fast except through an explicit
+    reference/debug backend"). Not used by any default call site after this port.
+
+`econ_ws`: an `EconomicAGradientWorkspace` to reuse across calls (task §5: construct ONCE per live
+outer-solver context, never per gradient call). If not supplied, a process-wide cache keyed by `W`
+is used (`get_or_build_econ_a_grad_ws`, cm_originzc_production.jl) -- a pragmatic, disclosed
+approximation of "one workspace per live outer-solver context" (see that function's own docstring
+for the caveat: this shares one workspace across all concurrently-running contexts of the same W,
+which is safe as long as this arm's own outer solver never calls two of ITS OWN gradients
+concurrently -- true today, no threaded multi-context production driver exists for this arm).
 """
 function cm_originzc_production_gradient(x_free0::AbstractVector, νfull::AbstractVector{Float64}, pcx, ctx, pe;
-        base::Union{Nothing,BaseDualState} = nothing, verify = nothing, kwargs...)
+        base::Union{Nothing,BaseDualState} = nothing, verify = nothing,
+        gradient_backend::Symbol = :shared_inplace_pooled,
+        econ_ws::Union{Nothing,EconomicAGradientWorkspace} = nothing, kwargs...)
     if base === nothing || verify === nothing
         base, verify = archOZ_verified_state(x_free0, νfull, pcx.ctx_cm)
     end
     cache = build_lfix_base_cache_originzc(x_free0, pcx.ctx_cm, base, pcx.aug, νfull)
-    g_econ, meta = composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    if gradient_backend === :shared_inplace_pooled
+        D = pcx.ctx_cm.D; Ddest = hasproperty(pcx.ctx_cm, :D_dest) ? pcx.ctx_cm.D_dest : pcx.ctx_cm.D
+        ws = econ_ws === nothing ? get_or_build_econ_a_grad_ws(cache.W) : econ_ws
+        g_econ = zeros(D * Ddest)
+        meta = economic_A_gradient!(g_econ, base, pcx.ctx_cm, pe, ws; cache = cache, kwargs...)
+    elseif gradient_backend === :legacy_unbuffered
+        g_econ, meta = composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
+    else
+        error("cm_originzc_production_gradient: gradient_backend must be :shared_inplace_pooled|:legacy_unbuffered, got $gradient_backend")
+    end
     d_eta = d_delta_dual_d_eta_origin_vec(base.λstar, pcx.aug, νfull; mean_m = verify.m_mean)
     return vcat(g_econ, d_eta), meta
 end
