@@ -35,6 +35,9 @@
 # Full derivation: see docs/RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md (this session).
 # ================================================================================================
 
+isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
+isdefined(Main, :economic_forward!) || include(joinpath(@__DIR__, "economic_operator.jl"))
+
 """
     frechet_level_suffix_sums!(P, λ_level)
 
@@ -98,8 +101,20 @@ orthonormal contrast matrix for the CM block (or `nothing` for `:anchored`) -- t
 NEVER rotated by `R` (it is a single un-rotated column per threshold, not part of the CM block's
 per-threshold `nO`-dimensional rotation, per the math doc's `[C u]`/`[CR u]` construction).
 """
-mutable struct CMFrechetLookupState
-    obj::Any
+# port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26 Phase A item 4: `obj::O`
+# (was `obj::Any`) per docs/COMMON_FRECHET_OPERATOR_FG_FINAL_GATE_2026-07-26.md's own recommended
+# follow-on ("(a) restructuring the callable so obj's concrete type is captured once at construction
+# via a type parameter... rather than read fresh from an Any field on every property access") --
+# the prior session measured a real, reproducible 14,066,064 bytes/callback regression here vs
+# CMLookupState's near-identical `obj::Any`-fielded but textually SHORTER callable (2,384 bytes),
+# suspected to be a devirtualization failure that scales with function-body size/branch count. `O`
+# is inferred automatically from the `obj` argument at construction (Julia's default parametric-
+# struct outer constructor) -- no forward-type-reference load-order dependency is introduced (this
+# was the ONLY reason the field was `Any` in the first place; a type parameter has the same
+# load-order-agnostic property, since `O` is resolved from the CONCRETE runtime object passed in,
+# never a textual type name that needs `PsiObjectiveBundleImplicit` predeclared).
+mutable struct CMFrechetLookupState{O}
+    obj::O
     ncore::Int
     ncm_cm::Int         # (D-1)*L
     ncm_level::Int      # L
@@ -131,12 +146,24 @@ mutable struct CMFrechetLookupState
     g_block::Matrix{Float64}       # (nO, L)
     g_stored::Matrix{Float64}      # (nO, L)
     g_level::Vector{Float64}       # (L,)
+    # Phase A item 4 (second half): shared economic operator retrofit, IDENTICAL pattern/rationale
+    # to CMLookupState's own core_cf_ref/econ_ws/econ_ws_for/econ_buf/n_dense_econ_fallback fields
+    # -- see that struct's docstring for the full contract. `core_cf_ref` defaults to
+    # `Ref{Any}(nothing)` for the standalone constructor (dense fallback, byte-identical to
+    # pre-port); only `cm_frechet_lookup_production.jl`'s production wiring passes the real
+    # `cctx.core_cf_ref` (populated by `wrap_moments_with_cm_frechet_archB`, same box the shared
+    # winner-pair Hessian already reads).
+    core_cf_ref::Ref{Any}
+    econ_ws::Any
+    econ_ws_for::Any
+    econ_buf::Vector{Float64}
+    n_dense_econ_fallback::Int
 end
 
 function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::Int, D::Int,
                                origins::Vector{Int}, refIndex1::Int, bins::Matrix{<:Unsigned},
                                R::Union{Nothing,Matrix{Float64}}, level_targets::Vector{Float64};
-                               nthreads_use::Int = 1)
+                               nthreads_use::Int = 1, core_cf_ref::Ref{Any} = Ref{Any}(nothing))
     ncm_level == L || error("CMFrechetLookupState: ncm_level=$ncm_level must equal L=$L")
     length(level_targets) == L || error("CMFrechetLookupState: length(level_targets)=$(length(level_targets)) != L=$L")
     nO = length(origins)
@@ -152,7 +179,8 @@ function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::I
         nbins, nthreads_use, level_targets, 1.0 / sqrt(D), 0,
         zeros(M), zeros(M), zeros(M), zeros(M),
         zeros(1 + ncore1), zeros(nO, L), zeros(nO, L + 1), zeros(L + 1),
-        hist_partials, zeros(D, nbins), zeros(D, L), zeros(nO, L), zeros(nO, L), zeros(L))
+        hist_partials, zeros(D, nbins), zeros(D, L), zeros(nO, L), zeros(nO, L), zeros(L),
+        core_cf_ref, nothing, nothing, zeros(M), 0)
 end
 
 """
@@ -171,9 +199,24 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
     λ_level = @view x[2+ncore1+st.ncm_cm:1+ncore1+st.ncm_cm+st.ncm_level]
 
     # ---- forward: arg0 = -(ζ + G_core*λ_core + G_cm*λ_cm + G_level*λ_level) ----
-    st.xsub[1] = ζ
-    st.xsub[2:end] .= λ_core
-    @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
+    # Phase A item 4: shared economic_forward!/economic_transpose! when core_cf_ref[] holds a real
+    # CompressedFactual, else the original dense obj.H BLAS.gemv! -- identical contract to
+    # CMLookupState's own retrofit (cm_lookup_kernels.jl).
+    cf = st.core_cf_ref[]
+    if cf isa CompressedFactual
+        if st.econ_ws === nothing || st.econ_ws_for !== cf
+            st.econ_ws = economic_operator_workspace(cf)
+            st.econ_ws_for = cf
+        end
+        economic_forward!(st.econ_buf, λ_core, cf, st.econ_ws)
+        st.arg0 .= (-ζ) .- st.econ_buf
+    else
+        st.n_dense_econ_fallback += 1
+        record_dense_economic_G!()
+        st.xsub[1] = ζ
+        st.xsub[2:end] .= λ_core
+        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
+    end
 
     λmat_stored = reshape(λ_cm, st.nO, st.L)
     apply_contrast!(st.λmat_block, λmat_stored, st.R)
@@ -198,7 +241,13 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
         obj.dPsi!(st.arg1, st.arg0)
         sum_dPsi = sum(st.arg1)
         g[1] = 1.0 - sum_dPsi / M
-        @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
+        if cf isa CompressedFactual
+            g_E = @view g[2:1+ncore1]
+            economic_transpose!(g_E, st.arg1, cf, st.econ_ws)
+            g_E .*= -(1.0 / M)
+        else
+            @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
+        end
 
         build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, st.D, st.nbins)
         prefix_sums!(st.Hpre, st.hist_h, st.L)   # SHARED: CM and level backward both read this

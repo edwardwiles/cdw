@@ -90,7 +90,7 @@ function inner_loop_internal_cmfrechetlookup_production(obj, θ::AbstractVector,
         ncm_cm = cctx.ncm - cctx.L   # cctx.ncm = ncm_cm + ncm_level = (D-1)*L + L for common-Frechet
         cctx.cmlookup_st = CMFrechetLookupState(obj, cctx.NCORE, ncm_cm, cctx.L, cctx.L, cctx.D,
             cctx.origins, cctx.refIndex1, bins_u, cctx.R, level_targets;
-            nthreads_use = nthreads_use)
+            nthreads_use = nthreads_use, core_cf_ref = cctx.core_cf_ref)
     end
     st = cctx.cmlookup_st::CMFrechetLookupState
     st.n_fg_calls = 0
