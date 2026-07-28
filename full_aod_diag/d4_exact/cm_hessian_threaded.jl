@@ -163,7 +163,8 @@ divergent bug site.
 function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
                                     tls::Union{Nothing,ThreadLocalBinScratch} = nothing,
                                     use_syrk::Bool = true)
-    @unpack H, M, arg0, arg2, ddPsi! = obj
+    @unpack M, arg0, arg2, ddPsi! = obj
+    H = _dense_H_or_nothing(obj)
     ddPsi!(arg2, arg0)
     w = arg2
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D

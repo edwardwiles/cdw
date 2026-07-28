@@ -626,7 +626,7 @@ Section 2's own "do not alter the existing H_RR CM contingency-table block"). `S
 zeroed (defensive: stale values must never leak into a later `fill_S=true` call at a different
 context) but never populated.
 """
-function build_bin_tables!(cctx::CMBinHessCtx, H::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
+function build_bin_tables!(cctx::CMBinHessCtx, H::Union{Nothing,AbstractMatrix{Float64}}, w::AbstractVector{Float64}; fill_S::Bool = true)
     D = cctx.D; NCORE = cctx.NCORE; Bidx = cctx.Bidx
     T = cctx.Ttab; S = cctx.Stab
     fill!(T, 0.0); fill!(S, 0.0)
@@ -635,7 +635,12 @@ function build_bin_tables!(cctx::CMBinHessCtx, H::AbstractMatrix{Float64}, w::Ab
         # No-moments/no-composite-G task (2026-07-28): `E` is constructed HERE, lazily, only inside
         # the branch that actually reads it -- never at the caller's top level -- so that `H` need
         # not have `NCORE` economic columns at all when `fill_S=false` (the production default,
-        # `:winner_bin`), the precondition this task's H-elimination relies on.
+        # `:winner_bin`), the precondition this task's H-elimination relies on. Legacy-H removal
+        # (2026-07-28): `H` is now `Union{Nothing,...}` -- `nothing` for OperatorCMBundle callers,
+        # which always pass `fill_S=false` (production default `:winner_bin`), so this branch is
+        # provably unreachable for them; the explicit error below is a fail-fast if that invariant
+        # is ever violated, not expected to fire.
+        H === nothing && error("build_bin_tables!: fill_S=true requested for an operator-mode bundle with no H field -- should be unreachable in production.")
         E = @view H[:, 2:1+NCORE]
         @inbounds for s in 1:W
             ws = w[s]
@@ -712,7 +717,7 @@ explicitly opt-in fallback) whenever no compressed core is available for
 this point (`use_compressed_core=false`, or a `TiedWinnerError` this point),
 or `cctx.core_hessian_backend === :dense_reference`.
 """
-function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cctx::CMBinHessCtx, H::AbstractMatrix{Float64}, M)
+function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cctx::CMBinHessCtx, H::Union{Nothing,AbstractMatrix{Float64}}, M)
     ncore = cctx.ncore_core
     NCORE = cctx.NCORE
     cf = cctx.core_cf_ref[]   # a CompressedFactual (success) OR a Symbol fallback reason (:tied_winner / :compressed_state_unavailable)
@@ -769,6 +774,7 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 # in the (now unreachable in production -- see `check_ties=false` above) dense
                 # fallback -- never at this function's top level.
                 record_dense_cross_hessian_call!()
+                H === nothing && error("_fill_cm_HEE!: reached the dense H_EM/H_MM fallback for an operator-mode bundle with no H field -- this should be provably unreachable in production (winner_bin_ok && zc_direct_ready should always hold); indicates a real configuration bug, not expected behavior.")
                 E = @view H[:, 2:1+NCORE]
                 Ews = cctx.Ews
                 @views Ews[:, ncore+1:NCORE] .= E[:, ncore+1:NCORE] .* sqrt.(w)
@@ -782,6 +788,7 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
         end
     else
         # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
+        H === nothing && error("_fill_cm_HEE!: reached the dense H_EE fallback for an operator-mode bundle with no H field -- this should be provably unreachable in production (cf should always be a valid CompressedFactual and core_hessian_backend should never be :dense_reference on this construction path); indicates a real configuration bug, not expected behavior.")
         E = @view H[:, 2:1+NCORE]
         Ews = cctx.Ews
         @views Ews[:, 1:NCORE] .= E[:, 1:NCORE] .* sqrt.(w)
@@ -885,6 +892,20 @@ function _ensure_cm_cross_scratch!(cctx::CMBinHessCtx, ncolI::Int, D::Int, L::In
 end
 
 """
+    _dense_H_or_nothing(obj) -> Union{Nothing,Matrix{Float64}}
+
+Legacy-H removal (2026-07-28): dispatched accessor letting `hessian_cm_structured!`/`_v2!`
+(this file / `cm_hessian_threaded.jl`) work for BOTH `PsiObjectiveBundleImplicit`
+(`:dense_reference`, returns `obj.H`) and `OperatorCMBundle` (no `H` field at all, returns
+`nothing`) without an unconditional `@unpack H,...=obj` that would require every bundle type to
+carry that field. `H` is only ever actually read inside the explicit dense-fallback branches of
+`_fill_cm_HEE!`/`build_bin_tables!`, both of which fail fast (not silently) if handed `nothing`.
+"""
+_dense_H_or_nothing(obj::CS.PsiObjectiveBundleImplicit) = obj.H
+# The OperatorCMBundle method is defined in operator_cm_bundle.jl (included after this file --
+# adding it here would be a forward reference to a not-yet-defined type).
+
+"""
     pack_upper_cm_hessian!(h, Hfull, NCORE, n)
 
 Hessian upper-only cleanup (2026-07-28): the shared final packing step for `hessian_cm_structured!`
@@ -925,7 +946,8 @@ below). Writes the packed upper-triangular Hessian into `h`, matching
 `cc_algo/PsiObjectiveBundle.jl::hessian!`'s own packing exactly.
 """
 function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
-    @unpack H, M, arg0, arg2, ddPsi! = obj
+    @unpack M, arg0, arg2, ddPsi! = obj
+    H = _dense_H_or_nothing(obj)
     ddPsi!(arg2, arg0)
     w = arg2
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
