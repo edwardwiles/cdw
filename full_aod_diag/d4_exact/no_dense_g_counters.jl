@@ -63,6 +63,15 @@ Base.@kwdef mutable struct NoDenseGCounters
     hessian_weight_cache_misses::Int = 0
     hessian_weight_operator_recomputes::Int = 0
     hessian_weight_dense_recomputes::Int = 0
+    # Zc-caching release (2026-07-28), Section 10 / lifecycle-audit `HIGHEST_PRIORITY_REMAINING_GAP`:
+    # `zc_restriction_operator.jl::refresh_zc_centered!`'s own rebuild-vs-cache-hit counters. A
+    # "rebuild" is a genuine `Zc` recompute (always happens when `cache_across_callbacks=false`,
+    # the unchanged default; only happens on a genuine new outer point when `true`). A "cache hit"
+    # only ever fires under the new opt-in `cache_across_callbacks=true` mode -- production
+    # requires `zc_centered_rebuilds` to equal the number of DISTINCT outer points/inner solves
+    # (not the number of Hessian callbacks) once that mode is enabled.
+    zc_centered_rebuilds::Int = 0
+    zc_centered_cache_hits::Int = 0
 end
 
 const NO_DENSE_G_COUNTERS = Ref(NoDenseGCounters())
@@ -186,6 +195,11 @@ end
 "Call from a family's own structured/direct restriction-self-block (H_RR/H_CC) computation -- see the field's own docstring above."
 record_direct_restriction_hessian_call!() = (NO_DENSE_G_COUNTERS[].direct_restriction_hessian_calls += 1; nothing)
 
+"Call from refresh_zc_centered! (zc_restriction_operator.jl) whenever it actually rebuilds Zc (Zc-caching release, 2026-07-28)."
+record_zc_centered_rebuild!() = (NO_DENSE_G_COUNTERS[].zc_centered_rebuilds += 1; nothing)
+"Call from refresh_zc_centered! whenever cache_across_callbacks=true lets it skip a Zc rebuild (Zc-caching release, 2026-07-28)."
+record_zc_centered_cache_hit!() = (NO_DENSE_G_COUNTERS[].zc_centered_cache_hits += 1; nothing)
+
 """
     record_hessian_weight_cache_hit!() / _cache_miss!() / _operator_recompute!() / _dense_recompute!()
 
@@ -232,7 +246,9 @@ function no_dense_g_report()
             hessian_weight_cache_hits = c.hessian_weight_cache_hits,
             hessian_weight_cache_misses = c.hessian_weight_cache_misses,
             hessian_weight_operator_recomputes = c.hessian_weight_operator_recomputes,
-            hessian_weight_dense_recomputes = c.hessian_weight_dense_recomputes)
+            hessian_weight_dense_recomputes = c.hessian_weight_dense_recomputes,
+            zc_centered_rebuilds = c.zc_centered_rebuilds,
+            zc_centered_cache_hits = c.zc_centered_cache_hits)
 end
 
 """

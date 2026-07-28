@@ -33,6 +33,22 @@
 
 using LinearAlgebra: BLAS, dot
 
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))   # Zc-caching release (2026-07-28): record_zc_centered_rebuild!/_cache_hit! live there
+
+"""
+    ZC_CENTERED_CACHE_ACROSS_CALLBACKS
+
+Zc-caching release (2026-07-28, Section 10 / lifecycle-audit `HIGHEST_PRIORITY_REMAINING_GAP`):
+opt-in flag gating `refresh_zc_centered!`'s new "skip the `Zc` rebuild when the outer point hasn't
+changed since it was last built" behavior. **Defaults to `false`** -- today's unchanged
+always-rebuild-every-Hessian-callback behavior -- per this codebase's universal convention that new
+backends/optimizations are opt-in with the OLD behavior as the default. Flip to `true` in a gate
+script or (once independently validated at real D=20 scale by a future session) production wiring
+to eliminate the redundant per-callback `Zc` rebuild the lifecycle audit flagged. See
+`docs/ZC_CENTERING_LIFECYCLE_RELEASE_2026-07-28.md` for the D=4 bit-exact validation evidence.
+"""
+const ZC_CENTERED_CACHE_ACROSS_CALLBACKS = Ref{Bool}(false)
+
 """
     ZCRestrictionOperator
 
@@ -70,18 +86,41 @@ struct). `targets_mean[:,k]`/`targets_pair[:,k]` hold block `k`'s target vector.
 mutable struct ZCRestrictionWorkspace
     targets_mean::Matrix{Float64}   # (D, K_mean)
     targets_pair::Matrix{Float64}   # (npair, K_pair)
+    # Zc-caching release (2026-07-28, Section 10 / lifecycle-audit `HIGHEST_PRIORITY_REMAINING_GAP`):
+    # `gen` is a cheap "did the outer point actually change" signal `refresh_zc_centered!` compares
+    # against to decide whether `Zc` needs rebuilding. IMPORTANT CORRECTION vs the lifecycle audit
+    # doc's own wording ("refresh_zc_targets! ... called once per inner solve"): direct code reading
+    # while building this release shows `refresh_zc_targets!` is actually called from
+    # `_fill_cm_HEE!`/`archA_partitioned_hess_cb_builder` on EVERY Hessian callback (not once per
+    # inner solve as that sentence implies) -- it is only the VALUES it computes that are
+    # outer-point-static (idempotent across repeated calls with the same `νfull`), not the call
+    # frequency. So `gen` must NOT bump on every `refresh_zc_targets!` call (that would defeat the
+    # cache every time, since the call frequency itself never dropped) -- instead it bumps only when
+    # the `νfull` argument's OBJECT IDENTITY changes (`last_nu` below), mirroring `core_ws_for !==
+    # cf`'s exact idiom (cm_hessian_architectures.jl). This is safe because `cctx.nu_ref[]`/
+    # `octx.nu_ref[]` (the only ν vectors ever passed here in production) are reassigned via
+    # `nu_ref[] = collect(νvec)` -- a FRESH vector object -- exactly once per inner solve
+    # (`archC_meanzc_base_state`/`archOZ_base_state`, before the KNITRO solve starts) and never
+    # mutated or reassigned again until the next inner solve, so `===` correctly distinguishes "same
+    # outer point, called again" from "genuinely new outer point".
+    gen::Int
+    last_nu::Union{Nothing,AbstractVector{Float64}}
 end
 
 ZCRestrictionWorkspace(op::ZCRestrictionOperator) =
-    ZCRestrictionWorkspace(zeros(op.D, max(op.K_mean, 1)), zeros(op.npair, max(op.K_pair, 1)))
+    ZCRestrictionWorkspace(zeros(op.D, max(op.K_mean, 1)), zeros(op.npair, max(op.K_pair, 1)), 0, nothing)
 
 """
     refresh_zc_targets!(ws, op, layout, νfull) -> ws
 
-Recompute `targets_mean`/`targets_pair` for the CURRENT outer point's `νfull` -- call ONCE per
-inner solve (before the KNITRO solve starts), not per FG callback, since ν is fixed for the whole
-inner solve. Uses `mean_targets`/`pair_targets` (`cm_originzc_target_layout.jl`, UNCHANGED) as the
-source of truth for the target values themselves; this function only owns where they're stored.
+Recompute `targets_mean`/`targets_pair` for the CURRENT outer point's `νfull`. Called every Hessian
+callback in production (see `gen`'s own docstring above for why that's not the same thing as "the
+targets change every callback") -- the recompute itself stays UNCHANGED/unconditional (cheap,
+`O(D*K_mean + npair*K_pair)`, out of this release's scope) using `mean_targets`/`pair_targets`
+(`cm_originzc_target_layout.jl`, UNCHANGED) as the source of truth. Only `ws.gen`'s bump is now
+gated on `νfull`'s object identity actually changing since the last call (Zc-caching release,
+2026-07-28) -- this is what makes `gen` a correct "did the outer point change" signal for
+`refresh_zc_centered!`'s new opt-in cache.
 """
 function refresh_zc_targets!(ws::ZCRestrictionWorkspace, op::ZCRestrictionOperator, layout, νfull::AbstractVector{Float64})
     @inbounds for k in 1:op.K_mean
@@ -89,6 +128,10 @@ function refresh_zc_targets!(ws::ZCRestrictionWorkspace, op::ZCRestrictionOperat
     end
     @inbounds for k in 1:op.K_pair
         ws.targets_pair[:, k] .= pair_targets(layout, νfull, k, op.D)
+    end
+    if ws.last_nu === nothing || ws.last_nu !== νfull
+        ws.gen += 1   # Zc-caching release (2026-07-28): see this field's own docstring above.
+        ws.last_nu = νfull
     end
     return ws
 end
@@ -184,8 +227,13 @@ mutable struct ZCCenteredScratch
     max_nx::Int
     Zc::Matrix{Float64}
     ZcS::Matrix{Float64}
+    # Zc-caching release (2026-07-28, Section 10): the `ws.gen` value (ZCRestrictionWorkspace,
+    # above) that `Zc` was LAST built for, or `-1` if never built. `refresh_zc_centered!` compares
+    # this against the CURRENT `ws.gen` to decide whether `Zc` needs rebuilding when
+    # `cache_across_callbacks=true` -- see that function's own docstring.
+    built_gen::Int
 end
-ZCCenteredScratch(W::Int, max_nx::Int) = ZCCenteredScratch(W, max_nx, zeros(W, max_nx), zeros(W, max_nx))
+ZCCenteredScratch(W::Int, max_nx::Int) = ZCCenteredScratch(W, max_nx, zeros(W, max_nx), zeros(W, max_nx), -1)
 
 """
     ensure_zc_centered_scratch!(cs, op::ZCRestrictionOperator, W) -> ZCCenteredScratch
@@ -220,21 +268,42 @@ build their own row-weighted scratch directly from the immutable `Phi`, never re
 -- this kwarg only elides the strictly-H_ZZ-:reference-specific second pass. Mirrors this
 codebase's own `build_bin_tables!(...; fill_S=...)` idiom exactly (same "skip a whole read/write
 pass whose only consumer is a specific alternate backend" discipline).
+
+`cache_across_callbacks` (Section 10 / lifecycle-audit `HIGHEST_PRIORITY_REMAINING_GAP` release,
+2026-07-28): **opt-in, defaults to `ZC_CENTERED_CACHE_ACROSS_CALLBACKS[]` (itself defaulting to
+`false`, i.e. today's unchanged always-rebuild-every-callback behavior).** `Zc` depends ONLY on
+`op`'s immutable raw features and `ws`'s current targets (refreshed once per inner solve by
+`refresh_zc_targets!`, NOT per Hessian callback -- see the lifecycle audit doc) -- it does NOT
+depend on `S` (the dual-dynamic weight vector), so rebuilding it on every Hessian callback within
+one inner solve is provably redundant. When `true`, this function skips the `Zc` rebuild pass
+entirely whenever `cs.built_gen == ws.gen` (i.e. the outer point's targets have not changed since
+`Zc` was last built), leaving `cs.Zc`'s existing contents untouched (bit-identical to a fresh
+rebuild, since the inputs that produced it have not changed). `ZcS` (genuinely `S`-dependent) is
+COMPLETELY UNAFFECTED by this flag -- always refreshed from the current `cs.Zc` whenever
+`fill_S=true`, exactly as before caching existed.
 """
-function refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace, S::AbstractVector{Float64}; fill_S::Bool = true)
-    D = op.D; npair = op.npair
+function refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace, S::AbstractVector{Float64};
+                               fill_S::Bool = true, cache_across_callbacks::Bool = ZC_CENTERED_CACHE_ACROSS_CALLBACKS[])
     nx = n_restriction(op)
-    Zc = @view cs.Zc[:, 1:nx]
-    @inbounds for k in 1:op.K_mean
-        cols = (k-1)*D+1 : k*D
-        @views Zc[:, cols] .= op.Zraw_all[k] .- ws.targets_mean[:, k]'
-    end
-    off = op.K_mean * D
-    @inbounds for k in 1:op.K_pair
-        cols = off+(k-1)*npair+1 : off+k*npair
-        @views Zc[:, cols] .= op.Zpairraw_all[k] .- ws.targets_pair[:, k]'
+    if cache_across_callbacks && cs.built_gen == ws.gen
+        record_zc_centered_cache_hit!()
+    else
+        D = op.D; npair = op.npair
+        Zc = @view cs.Zc[:, 1:nx]
+        @inbounds for k in 1:op.K_mean
+            cols = (k-1)*D+1 : k*D
+            @views Zc[:, cols] .= op.Zraw_all[k] .- ws.targets_mean[:, k]'
+        end
+        off = op.K_mean * D
+        @inbounds for k in 1:op.K_pair
+            cols = off+(k-1)*npair+1 : off+k*npair
+            @views Zc[:, cols] .= op.Zpairraw_all[k] .- ws.targets_pair[:, k]'
+        end
+        cs.built_gen = ws.gen
+        record_zc_centered_rebuild!()
     end
     if fill_S
+        Zc = @view cs.Zc[:, 1:nx]
         ZcS = @view cs.ZcS[:, 1:nx]
         @views ZcS .= Zc .* S
     end
