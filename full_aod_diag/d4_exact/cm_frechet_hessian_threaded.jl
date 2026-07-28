@@ -203,14 +203,10 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
         end
     end
 
+    # harmonization task (2026-07-28): shared pack_upper_cm_hessian! -- see the serial
+    # hessian_cm_frechet_structured!'s identical note for the bit-exact-no-op verification.
     n = NCORE + ncm
-    k = 1
-    @inbounds for i in 1:n
-        for j in i:n
-            h[k] = 0.5 * (Hfull[i, j] + Hfull[j, i])
-            k += 1
-        end
-    end
+    pack_upper_cm_hessian!(h, Hfull, NCORE, n)
     return h
 end
 

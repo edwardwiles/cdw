@@ -222,16 +222,14 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
         end
     end
 
-    # symmetrize defensively (analytically symmetric; absorbs FP-order noise, same pattern as
-    # hessian_cm_structured!'s own final step)
+    # harmonization task (2026-07-28): now calls the ONE shared packing function
+    # (pack_upper_cm_hessian!, cm_hessian_architectures.jl) instead of an independently
+    # maintained copy of this loop. Verified bit-exact no-op vs the previous blanket-averaging
+    # loop: the H_EC block above (like every other off-diagonal block here) already writes the
+    # identical value into both triangles before packing, so pack_upper_cm_hessian!'s special
+    # case (skip the redundant average for i<=NCORE<j) returns the same value 0.5*(v+v) would.
     n = NCORE + ncm
-    k = 1
-    @inbounds for i in 1:n
-        for j in i:n
-            h[k] = 0.5 * (Hfull[i, j] + Hfull[j, i])
-            k += 1
-        end
-    end
+    pack_upper_cm_hessian!(h, Hfull, NCORE, n)
     return h
 end
 
