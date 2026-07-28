@@ -210,8 +210,18 @@ Refresh `cs.Zc`/`cs.ZcS` (`W x n_restriction(op)` views) directly from `op.Zraw_
 `refresh_zc_targets!` for this inner solve's ν -- caller's responsibility, not redone here) and the
 CURRENT Hessian callback's weights `S` (length `W`, `obj.arg2` after `ddPsi!`). Call once per
 Hessian callback, before `zc_restriction_gram!`/CM+ZC's `bin_zc_cross_hessian_fill!`.
+
+`fill_S=false` (optimize/structured-cross-hessian-ZC-CM-2026-07-28 ADDENDUM): skip the `ZcS = Zc .*
+S` pass -- `ZcS` is ONLY consumed by the `:reference` H_ZZ backend (`zc_restriction_gram!`) and by
+H_CZ's own bin-feature fill (`bin_zc_cross_hessian_fill!`); the addendum's new raw-Phi H_ZZ
+candidates (`zc_gram_blas_syrk!`/`_gemm!`/`zc_gram_threaded_packed!`, `zc_gram_blas_candidates.jl`)
+build their own row-weighted scratch directly from the immutable `Phi`, never read `cs.ZcS` at all.
+`Zc` itself (needed by H_EZ's `Z` argument regardless of H_ZZ backend, and by H_CZ) is ALWAYS built
+-- this kwarg only elides the strictly-H_ZZ-:reference-specific second pass. Mirrors this
+codebase's own `build_bin_tables!(...; fill_S=...)` idiom exactly (same "skip a whole read/write
+pass whose only consumer is a specific alternate backend" discipline).
 """
-function refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace, S::AbstractVector{Float64})
+function refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace, S::AbstractVector{Float64}; fill_S::Bool = true)
     D = op.D; npair = op.npair
     nx = n_restriction(op)
     Zc = @view cs.Zc[:, 1:nx]
@@ -224,8 +234,10 @@ function refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, 
         cols = off+(k-1)*npair+1 : off+k*npair
         @views Zc[:, cols] .= op.Zpairraw_all[k] .- ws.targets_pair[:, k]'
     end
-    ZcS = @view cs.ZcS[:, 1:nx]
-    @views ZcS .= Zc .* S
+    if fill_S
+        ZcS = @view cs.ZcS[:, 1:nx]
+        @views ZcS .= Zc .* S
+    end
     return cs
 end
 
