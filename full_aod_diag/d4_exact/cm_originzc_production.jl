@@ -27,6 +27,7 @@ using LinearAlgebra: BLAS, dot, norm
 # fg_backend=:operator on OriginZCCoreHessCtx) -- self-guarded include, this codebase's own convention.
 isdefined(Main, :_originzc_fg_dispatch) || include(joinpath(@__DIR__, "cm_originzc_lookup_production.jl"))
 isdefined(Main, :verify_inner_solution_operator_originzc!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archOZ_verified_state's :operator backend below
+isdefined(Main, :ORIGINZC_LIVE_PCX_STASH) || include(joinpath(@__DIR__, "cross_hessian_live_stash_2026-07-28.jl"))   # D=20 profiling task (2026-07-28): opt-in live-handle stash, see that file's header
 # shared outer-A-gradient task (2026-07-27): shared_a_gradient.jl provides economic_A_gradient!/
 # EconomicAGradientWorkspace, this arm's DEFAULT (g,A_od)-block gradient backend (see
 # cm_originzc_production_gradient below).
@@ -65,7 +66,10 @@ function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; 
     # changes and automatically picks up the shared H_EE backend.
     octx = build_originzc_core_hess_ctx(aug, ctx; fg_backend = fg_backend, zc_cross_hessian_backend = zc_cross_hessian_backend)
     ctx_cm = merge(ctx, (obj = aug.obj_cm, octx = octx))
-    return (ctx_cm = ctx_cm, aug = aug, octx = octx)
+    pcx_result = (ctx_cm = ctx_cm, aug = aug, octx = octx)
+    # D=20 profiling task (2026-07-28): opt-in live-handle stash (see cross_hessian_live_stash_2026-07-28.jl).
+    STASH_LIVE_PCX_ENABLED[] && (ORIGINZC_LIVE_PCX_STASH[] = pcx_result)
+    return pcx_result
 end
 
 "port/shared-winner-pair-core-hessian-production-2026-07-25: resolves to the shared-H_EE partitioned callback when `ctx_cm` carries an `octx` (every current production caller does, via `build_originzc_production_context`), else the original unpartitioned dense Architecture A (a caller that built `ctx_cm` some other way, or a diagnostic script that never rebuilt it after this port)."

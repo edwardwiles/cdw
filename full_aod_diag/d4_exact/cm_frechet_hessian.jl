@@ -1,3 +1,8 @@
+# D=20 profiling task (flexible_cm/common_frechet, 2026-07-28): self-include the opt-in
+# `@cmhess_prof` sub-block timing macro's defining file if not already loaded -- see the identical
+# guard/rationale in cm_hessian_architectures.jl.
+isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))
+
 # ================================================================================================
 # Fixed Fréchet as flexible CM plus a common-level anchor -- Part III (Architecture-C Hessian).
 #
@@ -86,22 +91,25 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
     # be explicitly zeroed each call; T1/Esum_wb/colsum/Hraw_cmlevel below are all fully overwritten
     # per call (direct assignment or a from-scratch BLAS/loop fill), so no reset is needed for those.
     Wtab = ext.Wtab
-    fill!(Wtab, 0.0)
-    @inbounds for s in 1:Wraw
-        ws = w[s]
-        for x in 1:D
-            Wtab[x, Bidx[s, x]] += ws
+    local T1, Wtot
+    @cmhess_prof "level_table_prep" begin
+        fill!(Wtab, 0.0)
+        @inbounds for s in 1:Wraw
+            ws = w[s]
+            for x in 1:D
+                Wtab[x, Bidx[s, x]] += ws
+            end
         end
-    end
-    T1 = ext.T1
-    @inbounds for x in 1:D
-        acc = 0.0
-        for l in 1:L
-            acc += Wtab[x, l]
-            T1[x, l] = acc
+        T1 = ext.T1
+        @inbounds for x in 1:D
+            acc = 0.0
+            for l in 1:L
+                acc += Wtab[x, l]
+                T1[x, l] = acc
+            end
         end
+        Wtot = sum(w)
     end
-    Wtot = sum(w)
 
     # ---- H_E,level (core x level), O(D*NCORE*L) + O(NCORE*L) correction ----
     # Winner-aware H_ER phase (2026-07-27), Section 3 Part B: only THIS block ever reads
@@ -111,7 +119,7 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
     # the SAME cumulative tables the H_EC block already built via `winner_pair_cross_hessian_fill!`
     # -- no dense `E`/`obj.H` read at all in the fast path.
     level_off = NCORE + ncm_cm   # level columns are level_off+1 : level_off+L
-    if use_winner_bin
+    @cmhess_prof "H_EF" if use_winner_bin
         Esum_wb = ext.Esum_wb
         winner_pair_cross_hessian_esum!(Esum_wb, wctx, cross_ws, w, Wtot)
         colsum = ext.colsum
@@ -146,7 +154,7 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
 
     # ---- H_CM,level (CM x level), O(D^2*L^2) worst case (same order as H_CC's own loop) ----
     Hraw_cmlevel = ext.Hraw_cmlevel
-    @inbounds for l in 1:L
+    @cmhess_prof "H_CF" @inbounds for l in 1:L
         for lp in 1:L
             tlp = level_targets[lp]
             for (oi, o) in enumerate(origins)
@@ -168,7 +176,7 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
 
     # ---- H_level,level (level x level), O(D^2*L^2) + O(D*L^2) correction ----
     invD = 1.0 / D
-    @inbounds for l in 1:L
+    @cmhess_prof "H_FF" @inbounds for l in 1:L
         tl = level_targets[l]
         sum_T1_l = sum(@view T1[:, l])
         for lp in 1:L

@@ -32,6 +32,7 @@ isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, 
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26): exact-point cache for this driver's real pcx shape
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
+isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))   # D=20 profiling task (2026-07-28): opt-in live-pcx stash this function writes below, default off
 
 const CM_CHECKPOINT_SCHEMA = 9
 # Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
@@ -907,6 +908,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins,
             inner_fg_backend = inner_fg_backend)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
+    # D=20 profiling task (flexible_cm/common_frechet, 2026-07-28): stash a live handle to this
+    # run's own (cctx, obj) the instant it is built -- ONLY while
+    # CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] is true (default false, see
+    # cm_hessian_subblock_profiling.jl). Lets a profiling/gate script reach the SAME mutable state
+    # every real Hessian/FG callback for THIS run reads/writes, entirely through this public,
+    # confirmed-working entry point -- never a second, direct low-level call.
+    CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] && (CM_LIVE_PCX_STASH[] = pcx)
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
     family_tag = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
     dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)

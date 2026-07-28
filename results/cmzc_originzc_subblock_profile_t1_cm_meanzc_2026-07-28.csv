@@ -1,0 +1,13 @@
+family,block,nthreads,t_min_s,t_mean_s,point
+cm_meanzc,H_EE(core-only),1,0.076696193,0.10731979433333333,calibration
+cm_meanzc,bintables(threaded),1,0.415758461,0.5359198578333333,calibration
+cm_meanzc,H_ZZ_centering_prep(fill_S=true),1,0.079881897,0.08218975266666666,calibration
+cm_meanzc,H_EZ_Snu_prep,1,0.000192988,0.00021118000000000002,calibration
+cm_meanzc,H_EZ(=HEM),1,1.148341637,1.2207390956666666,calibration
+cm_meanzc,H_EZ(=HEM)_threaded,1,1.0583056,1.2329566451666667,calibration
+cm_meanzc,H_ZZ(=HMM)_reference,1,0.227578406,0.23630081083333332,calibration
+cm_meanzc,H_ZZ(=HMM)_blas_syrk,1,0.168396015,0.17871166783333337,calibration
+cm_meanzc,H_ZZ(=HMM)_blas_gemm,1,0.302612989,0.3131737151666667,calibration
+cm_meanzc,H_ZZ(=HMM)_threaded_packed,1,4.148598704,4.226535387833334,calibration
+cm_meanzc,H_CZ_prep(fill),1,1.309608438,1.386424203,calibration
+cm_meanzc,H_CZ_prep(fill)_threaded,1,1.241708016,1.3625302603333334,calibration

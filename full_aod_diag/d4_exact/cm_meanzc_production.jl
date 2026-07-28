@@ -20,6 +20,7 @@
 # ============================================================================
 
 isdefined(Main, :verify_inner_solution_operator_cmmeanzc!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archC_meanzc_verified_state's :operator backend below
+isdefined(Main, :CMZC_LIVE_PCX_STASH) || include(joinpath(@__DIR__, "cross_hessian_live_stash_2026-07-28.jl"))   # D=20 profiling task (2026-07-28): opt-in live-handle stash, see that file's header
 
 using LinearAlgebra: BLAS, dot, norm
 
@@ -57,10 +58,14 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         # fills exactly that gap (bin_zc_cross_hessian_fill!/_block!, winner_pair_cross_hessian.jl),
         # so this now defaults to CM_MEANZC_CM_CROSS_HESSIAN_BACKEND_DEFAULT[] (:winner_bin, flipped
         # after this session's own D=4 + real D=20 gates -- see that Ref's own docstring).
-        zc_cross_hessian_backend::Symbol = CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])   # winner-aware H_ER
+        zc_cross_hessian_backend::Symbol = CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[],   # winner-aware H_ER
         # phase (2026-07-27), task Section 4: which backend fills H_EM (core x mean/pair cross),
         # cm_hessian_architectures.jl's _fill_cm_HEE! ncore<NCORE branch. :dense_reference (default
         # until this section's own gates pass) | :winner_bin (winner_pair_cross_hessian_zc_block!).
+        cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
+        cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
+        zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
+        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
     inner_fg_backend in (:dense_reference, :operator) ||
         error("build_cm_meanzc_bin_ctx: inner_fg_backend must be :dense_reference or :operator, got :$inner_fg_backend (CM+ZC does not support :cm_lookup -- CMLookupState is CM-grid-only, no mean/pair block)")
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
@@ -111,6 +116,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cm_cross_hessian_backend, nothing,
         zc_cross_hessian_backend, nothing,
         hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing, nothing,
+        cross_hessian_threaded, cross_hessian_workers,
+        zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: lazily built on first H_ZZ call
         ctx,   # econ_ctx: true no-H operator bundle continuation
         nothing)   # frechet_ext_cache: harmonization task -- CM+ZC never populates this (no level block)
     if threaded_bins
@@ -151,7 +158,12 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))
     cctx = build_cm_meanzc_bin_ctx(ctx, aug; inner_fg_backend = inner_fg_backend)
     bins = cm_bin_indices_for(ctx, aug)   # lfix_cm_aware.jl -- Unsigned-typed, for the CM fixed-contribution lookup
-    return (ctx_cm = ctx_cm, aug = aug, cctx = cctx, bins = bins)
+    pcx_result = (ctx_cm = ctx_cm, aug = aug, cctx = cctx, bins = bins)
+    # D=20 profiling task (2026-07-28): opt-in live-handle stash (see cross_hessian_live_stash_2026-07-28.jl)
+    # -- lets a profiling script reach the SAME live (cctx, ctx_cm.obj) this driver run itself is using,
+    # without ever calling this constructor (or the low-level inner-solve helpers) a second time.
+    STASH_LIVE_PCX_ENABLED[] && (CMZC_LIVE_PCX_STASH[] = pcx_result)
+    return pcx_result
 end
 
 """

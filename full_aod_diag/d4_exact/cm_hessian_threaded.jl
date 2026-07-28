@@ -1,3 +1,9 @@
+# D=20 profiling task (flexible_cm/common_frechet, 2026-07-28): self-include the opt-in
+# `@cmhess_prof` sub-block timing macro's defining file if not already loaded -- see the identical
+# guard/rationale in cm_hessian_architectures.jl (this file is used together with that one in every
+# existing caller, but this guard is repeated here defensively/idempotently).
+isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))
+
 # Continuation 14 (integration/fullA-cm-parallel-production), Task 2: combined CM-Hessian
 # benchmark support. PORTED (not re-invented) from diag/fullA-inner-blas-threading
 # (`git show ecc820d:full_aod_diag/d4_exact/cm_hessian_threaded.jl`), which built and validated
@@ -174,7 +180,7 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     # (cm_hessian_architectures.jl); see that function's own comment for the `Any`-typing rationale.
     @unpack M, arg0, arg2, ddPsi! = obj
     H = _dense_H_or_nothing(obj)
-    ddPsi!(arg2, arg0)
+    @cmhess_prof "ddpsi" ddPsi!(arg2, arg0)
     w = arg2
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
     refIndex1 = cctx.refIndex1; origins = cctx.origins
@@ -182,7 +188,7 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     # No-moments/no-composite-G task (2026-07-28): `E` no longer constructed eagerly -- see the
     # identical change/rationale in cm_hessian_architectures.jl::hessian_cm_structured!.
     Hfull = cctx.Hfull
-    fill!(Hfull, 0.0)
+    @cmhess_prof "misc_bookkeeping" fill!(Hfull, 0.0)
     cf = cctx.core_cf_ref[]
 
     # ---- H_EE: shared exact winner-pair backend (port/shared-winner-pair-core-hessian-
@@ -199,13 +205,13 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     # uses `gemm!`) -- kept as a no-op parameter rather than a breaking signature change for
     # existing callers.
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
+    @cmhess_prof "H_EE" _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
 
     # winner-aware H_ER phase (2026-07-27): SAME decision function as the serial
     # hessian_cm_structured! (cm_hessian_architectures.jl), reused not re-derived -- see that
     # function's own docstring for the exact gating rationale.
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
-    if threaded_bins
+    @cmhess_prof "bintables_prep" if threaded_bins
         tls === nothing && error("hessian_cm_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
         build_bin_tables_threaded!(cctx, tls, H, w; fill_S = !use_winner_bin)
         prefix_sum_tables_threaded!(cctx; fill_S = !use_winner_bin)
@@ -224,7 +230,14 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
         record_winner_cross_hessian_call!()
         wctx = serial_ctx(cctx.core_ws)
         cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
-        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+        # optimize/structured-cross-hessian-ZC-CM-2026-07-28: opt-in threaded H_EC raw-table fill
+        # (threaded_cross_hessian.jl), same output as the serial version (bit-identical, see that
+        # file's own header) -- gated behind cctx.cross_hessian_threaded, default false.
+        @cmhess_prof "H_EC_prep" if cctx.cross_hessian_threaded
+            winner_pair_cross_hessian_fill_threaded!(wctx, cross_ws, obj, cctx.Bidx; workers = cctx.cross_hessian_workers)
+        else
+            winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+        end
         if use_direct_hcz
             # CM+ZC E/C/Z block-partition + H_CZ release (2026-07-27): SAME pairing as the serial
             # hessian_cm_structured! (cm_hessian_architectures.jl) -- see that file's own comment.
@@ -233,7 +246,11 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
             nz = n_restriction(cctx.hzz_zc_op)
             bin_zc_ws = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz)
             cctx.bin_zc_cross = bin_zc_ws
-            bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
+            @cmhess_prof "H_CZ_prep" if cctx.cross_hessian_threaded
+                bin_zc_cross_hessian_fill_threaded!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS; workers = cctx.cross_hessian_workers)
+            else
+                bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
+            end
         end
     else
         record_dense_cross_hessian_call!()
@@ -251,7 +268,7 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     CS_ = cctx.CScum
     Hraw_EC = cctx.Hraw_EC
     ncore_core = cctx.ncore_core
-    @inbounds for l in 1:L
+    @cmhess_prof "H_EC_asm" @inbounds for l in 1:L
         if use_winner_bin
             Hraw_EC_core = use_direct_hcz ? (@view Hraw_EC[1:ncore_core, :]) : Hraw_EC
             winner_pair_cross_hessian_cm_block!(Hraw_EC_core, wctx, cross_ws, l, origins, refIndex1, M)
@@ -279,7 +296,7 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
     # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (cm_hessian_architectures.jl),
     # also used by common Fréchet -- previously a third verbatim copy of this loop.
-    fill_cm_HCC!(Hfull, cctx, M)
+    @cmhess_prof "H_CC" fill_cm_HCC!(Hfull, cctx, M)
 
     # harmonization task (2026-07-28): common Fréchet's level blocks -- see the serial
     # hessian_cm_structured!'s identical note (cm_hessian_architectures.jl). `extension !== nothing`
@@ -294,7 +311,7 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     # duplication as a risk ("Any change to the production function must be mirrored here by
     # hand"); factoring it out removes the risk for this specific loop going forward.
     n = NCORE + ncm
-    pack_upper_cm_hessian!(h, Hfull, NCORE, n)
+    @cmhess_prof "packing" pack_upper_cm_hessian!(h, Hfull, NCORE, n)
     return h
 end
 

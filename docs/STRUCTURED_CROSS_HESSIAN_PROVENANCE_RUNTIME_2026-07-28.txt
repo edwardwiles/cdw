@@ -1,0 +1,48 @@
+=== Provenance: structured cross-Hessian ZC/CM task, 2026-07-28 ===
+Branch: optimize/structured-cross-hessian-ZC-CM-2026-07-28
+Base: origin/production/fullA-exact @ fb6ad2ea4b0e0e4fc730af4d431e74a5ddc7b744
+Host: demand.mit.edu
+Julia: julia 1.12.6 via juliaup
+KNITRO: 13.0.1
+
+=== git status ===
+ M full_aod_diag/d4_exact/cm_hessian_architectures.jl
+ M full_aod_diag/d4_exact/cm_hessian_threaded.jl
+ M full_aod_diag/d4_exact/cm_meanzc_production.jl
+ M full_aod_diag/d4_exact/winner_pair_cross_hessian.jl
+ M full_aod_diag/d4_exact/zc_restriction_operator.jl
+?? docs/BIN_FEATURE_HCZ_RELEASE_2026-07-28.md
+?? docs/CROSS_HESSIAN_PRECOMPUTATION_LIFECYCLE_AUDIT_2026-07-28.md
+?? docs/SHARED_WINNER_BIN_HEC_RELEASE_2026-07-28.md
+?? docs/STRUCTURED_CROSS_HESSIAN_MASTER_REPORT_2026-07-28.md
+?? docs/STRUCTURED_CROSS_HESSIAN_PROVENANCE_2026-07-28.md
+?? docs/STRUCTURED_CROSS_HESSIAN_PROVENANCE_RUNTIME_2026-07-28.txt
+?? docs/THREADED_DIRECT_HZZ_RELEASE_2026-07-28.md
+?? docs/WINNER_FEATURE_HEZ_RELEASE_2026-07-28.md
+?? docs/ZC_FEATURE_AND_CENTERING_ALGEBRA_2026-07-28.md
+?? docs/ZC_GRAM_BLAS_EXPERIMENT_DESIGN_2026-07-28.md
+?? docs/key_results/CROSS_HESSIAN_WORKER_SWEEP_2026-07-28.csv
+?? docs/key_results/cross_hessian_subblock_profile_t1_origin_zc_2026-07-28.csv
+?? docs/key_results/cross_hessian_subblock_profile_t20_origin_zc_2026-07-28.csv
+?? full_aod_diag/d4_exact/diag_subblock_profile_2026-07-28.jl
+?? full_aod_diag/d4_exact/test_threaded_cross_hessian_d4.jl
+?? full_aod_diag/d4_exact/threaded_cross_hessian.jl
+?? full_aod_diag/d4_exact/zc_gram_blas_candidates.jl
+?? logs/
+?? results/cross_hessian_subblock_profile_t1_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t1_cm_meanzc_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t1_common_frechet_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t1_flexible_cm_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t1_origin_zc_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t20_cm_meanzc_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t20_common_frechet_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t20_flexible_cm_2026-07-28.csv
+?? results/cross_hessian_subblock_profile_t20_origin_zc_2026-07-28.csv
+
+=== git diff --stat ===
+ full_aod_diag/d4_exact/cm_hessian_architectures.jl | 94 +++++++++++++++++++---
+ full_aod_diag/d4_exact/cm_hessian_threaded.jl      | 15 +++-
+ full_aod_diag/d4_exact/cm_meanzc_production.jl     |  8 +-
+ .../d4_exact/winner_pair_cross_hessian.jl          | 28 ++++++-
+ full_aod_diag/d4_exact/zc_restriction_operator.jl  | 18 ++++-
+ 5 files changed, 145 insertions(+), 18 deletions(-)

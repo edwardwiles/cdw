@@ -1,0 +1,55 @@
+PRODUCTION_SHA=5b4f9da22c6bc2b2c6de9e9e55544451f0d410d4
+BRANCH_BASE_SHA=5b4f9da22c6bc2b2c6de9e9e55544451f0d410d4
+BRANCH=optimize/production-structured-CM-ZC-hessian-2026-07-28
+
+=== last 20 log ===
+5b4f9da (HEAD -> optimize/production-structured-CM-ZC-hessian-2026-07-28, origin/production/fullA-exact) Phase 2 canonical merge report + post-merge smoke results
+db786c0 (tag: common-frechet-shared-CM-core-release-2026-07-28) Phase 2 deliverables: dispatch proof, operator/Hessian equivalence gates, duplicated-code removal
+13d3aca Harmonization step 7: shared _verify_inner_solution_operator_cm_core (CM verification)
+680b0f9 Harmonization step 6: shared cumulative_backward_gradient_from_prefix! (CM transpose)
+d9db756 Harmonization steps 4-5: common Frechet's Hessian fill is now the shared hessian_cm_structured!
+19adac1 Harmonization step 3: CMFrechetExtension with persistent level-block scratch
+a2a867a Harmonization step 2: common Frechet uses the shared pack_upper_cm_hessian!
+4fbd720 Harmonization step 1: extract shared fill_cm_HCC! (H_CC block)
+7a185ec Phase 1 canonical-merge + post-merge-smoke reports; fix 2 real bugs in never-run smoke scripts
+fb6ad2e (tag: five-family-true-operator-no-H-release-2026-07-28) Phase 1 reconciliation + fresh pre-merge regression gate reports
+8b0c931 Add flexible-CM D=20 verification cross-check (Delta_dual/Delta_primal/KKT residual)
+fe4775e Final manifests, five-by-seven matrix, and master report -- all five families PASS
+ad1cd43 All five families: real D=20/W=100,000 equivalence gates -- ALL PASS
+6a8fadc All five families: wire and gate the true no-H OperatorPsiBundle (real KNITRO D=4)
+23ea76e Flexible-CM: structural + empirical field/allocation proof for OperatorPsiBundle
+ff3c740 Gravity: resolve as same_equality_exactly_eliminated (scoped), retain the inner moment
+352d609 Gravity: trace the outer pivot algebra vs. the inner-solve gravity moment + real 100-point test
+d7cedb3 Flexible-CM: operator-vs-dense-reference equivalence gate (real KNITRO D=4)
+6bd7196 Flexible-CM: wire the true no-H OperatorPsiBundle into production construction+priming
+84a4198 Update session documentation to reflect real fixes (not just design)
+
+=== tags pointing at or near HEAD ===
+
+=== recent tags overall ===
+common-frechet-shared-CM-core-release-2026-07-28
+five-family-true-operator-no-H-release-2026-07-28
+five-family-no-moments-no-composite-G-release-2026-07-28
+common-frechet-cdf-cm-plus-level-production-ready-2026-07-26
+fixed-transformed-A-production-ready-2026-07-26
+flexible-theta-transformed-A-production-ready-2026-07-26
+stable-cell-shortcut-A-gradient-production-2026-07-26
+shared-winner-pair-core-hessian-production-ready-2026-07-25
+allocation-hessian-production-release-2026-07-25
+cm-compressed-core-production-ready-2026-07-25
+threaded-exact-hessian-production-ready-2026-07-25
+unrestricted-preallocation-production-ready-2026-07-25
+cm-meanzc-immutable-workspace-production-ready-2026-07-24
+origin-zc-immutable-workspace-production-ready-2026-07-24
+canonical-top1-winner-engine-production-ready-2026-07-24
+
+=== clean status ===
+?? docs/provenance_2026-07-28.txt
+
+=== julia ===
+julia version 1.12.6
+
+=== nproc/mem ===
+208
+              total        used        free      shared  buff/cache   available
+Mem:          3.0Ti       349Gi       404Gi       371Mi       2.2Ti       2.6Ti

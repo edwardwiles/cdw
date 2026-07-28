@@ -1,0 +1,17 @@
+family,block,backend,nthreads,t_min_s,t_mean_s,speedup_vs_t1_same_backend
+origin_zc,H_EE,threaded(shared-prod),1,0.080242574,0.093532203875,1.00
+origin_zc,H_EE,threaded(shared-prod),20,0.041638208,0.046566898125,1.93
+origin_zc,H_EZ(=HER),serial,1,0.119131541,0.1282697465,1.00
+origin_zc,H_EZ(=HER),serial,20,0.116946025,0.137073983125,1.02
+origin_zc,H_EZ(=HER),threaded,1,0.101209057,0.109908370125,1.00
+origin_zc,H_EZ(=HER),threaded,20,0.029928899,0.040628078625,3.38
+origin_zc,H_ZZ(=HRR),reference(blas_gemm_centered),1,0.00777173,0.008181286875,1.00
+origin_zc,H_ZZ(=HRR),reference(blas_gemm_centered),20,0.007457795,0.008081541375,1.04
+origin_zc,H_ZZ(=HRR),blas_syrk,1,0.012403999,0.013639728999999998,1.00
+origin_zc,H_ZZ(=HRR),blas_syrk,20,0.012733488,0.01282718175,0.97
+origin_zc,H_ZZ(=HRR),blas_gemm,1,0.013227036,0.013769885,1.00
+origin_zc,H_ZZ(=HRR),blas_gemm,20,0.014002899,0.015198363375,0.94
+origin_zc,H_ZZ(=HRR),threaded_packed,1,0.038026424,0.042226076875,1.00
+origin_zc,H_ZZ(=HRR),threaded_packed,20,0.008463396,0.010485636125,4.49
+flexible_cm,H_EC(crossprep),serial,"1,2,4(D4)",bit-exact-vs-threaded,,n/a
+flexible_cm,H_EC(crossprep),threaded,"1,2,4(D4)",bit-exact-vs-serial,,n/a
