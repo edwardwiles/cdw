@@ -166,9 +166,12 @@ packed upper-triangular Hessian as `cm_hessian_architectures.jl::hessian_cm_stru
 tail is copied verbatim from the original (not re-derived) to minimize the chance of a second
 divergent bug site.
 """
-function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
+function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threaded_bins::Bool = false,
                                     tls::Union{Nothing,ThreadLocalBinScratch} = nothing,
                                     use_syrk::Bool = true)
+    # Harmonization task (2026-07-28): `extension` is `nothing` for flexible CM/CM+ZC (unchanged)
+    # or a `CMFrechetExtension` for common Fréchet -- same as the serial hessian_cm_structured!
+    # (cm_hessian_architectures.jl); see that function's own comment for the `Any`-typing rationale.
     @unpack M, arg0, arg2, ddPsi! = obj
     H = _dense_H_or_nothing(obj)
     ddPsi!(arg2, arg0)
@@ -212,7 +215,11 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     end
 
     use_direct_hcz = _cm_cross_hessian_wants_direct_hcz(cctx, cf)
+    # harmonization task (2026-07-28): initialized to `nothing` -- see the serial
+    # hessian_cm_structured!'s identical fix/comment (wctx/cross_ws are now also passed as plain
+    # function arguments to _fill_frechet_level_blocks! below).
     local wctx, cross_ws, bin_zc_ws
+    wctx = nothing; cross_ws = nothing; bin_zc_ws = nothing
     if use_winner_bin
         record_winner_cross_hessian_call!()
         wctx = serial_ctx(cctx.core_ws)
@@ -273,6 +280,13 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (cm_hessian_architectures.jl),
     # also used by common Fréchet -- previously a third verbatim copy of this loop.
     fill_cm_HCC!(Hfull, cctx, M)
+
+    # harmonization task (2026-07-28): common Fréchet's level blocks -- see the serial
+    # hessian_cm_structured!'s identical note (cm_hessian_architectures.jl). `extension !== nothing`
+    # (not `isa CMFrechetExtension`) for the same load-order reason documented there.
+    if extension !== nothing
+        _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension)
+    end
 
     # Hessian upper-only cleanup (2026-07-28): now calls the ONE shared packing function
     # (`pack_upper_cm_hessian!`, cm_hessian_architectures.jl) instead of an independently

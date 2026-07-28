@@ -1005,7 +1005,16 @@ CURRENT (zeta,lambda) (same precondition as `chunked_hessian.jl`'s
 below). Writes the packed upper-triangular Hessian into `h`, matching
 `cc_algo/PsiObjectiveBundle.jl::hessian!`'s own packing exactly.
 """
-function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
+function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = nothing)
+    # Harmonization task (2026-07-28): `extension` is `nothing` for flexible CM/CM+ZC (every
+    # existing call site, unchanged) or a `CMFrechetExtension` (cm_frechet_hessian.jl, included
+    # after this file -- `Any`-typed here purely to avoid a forward reference, same reason
+    # `cmlookup_st`/`frechet_ext_cache` are `Any` on `CMBinHessCtx` itself) for common Fréchet,
+    # which now calls this SAME function instead of its own separate
+    # `hessian_cm_frechet_structured!` copy. Julia specializes/compiles this method separately per
+    # concrete runtime type of `extension` (`Nothing` vs `CMFrechetExtension`), so this costs
+    # flexible CM's hot path nothing -- it is JIT-compiled exactly as if `extension` were typed
+    # `Nothing` for every one of its own calls.
     @unpack M, arg0, arg2, ddPsi! = obj
     H = _dense_H_or_nothing(obj)
     ddPsi!(arg2, arg0)
@@ -1028,7 +1037,13 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)
     prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
 
+    # harmonization task (2026-07-28): initialized to `nothing` (not left possibly-undefined) --
+    # `wctx`/`cross_ws` are now also passed as plain function arguments to
+    # `_fill_frechet_level_blocks!` below, which eagerly evaluates its arguments; an unassigned
+    # local would throw UndefVarError at that call site the instant use_winner_bin is ever false,
+    # even for calls that don't end up using them.
     local wctx, cross_ws, bin_zc_ws
+    wctx = nothing; cross_ws = nothing; bin_zc_ws = nothing
     if use_winner_bin
         record_winner_cross_hessian_call!()
         wctx = serial_ctx(cctx.core_ws)
@@ -1095,6 +1110,18 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (also used by common
     # Fréchet) -- previously two verbatim-identical copies, one per family.
     fill_cm_HCC!(Hfull, cctx, M)
+
+    # harmonization task (2026-07-28): common Fréchet's ONLY genuinely family-specific piece (the
+    # "CM-F" common-level anchor blocks H_E,level / H_CM,level / H_level,level) -- was
+    # hessian_cm_frechet_structured!'s own separate copy of everything above THIS point too;
+    # everything above is now the one shared implementation both families call.
+    # `extension !== nothing` (not `extension isa CMFrechetExtension`): this file must not reference
+    # the CMFrechetExtension type name directly -- flexible CM's own scripts (which always pass
+    # extension=nothing) do not load cm_frechet_hessian.jl at all, so a name reference here would
+    # throw UndefVarError for them even though they never take this branch.
+    if extension !== nothing
+        _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension)
+    end
 
     # symmetrize defensively (analytically symmetric; absorbs FP-order noise, same
     # defensive pattern as compressed_inner_alt_solvers.jl's denseaccum callback) -- see

@@ -55,112 +55,37 @@ function CMFrechetExtension(D::Int, L::Int, nO::Int, NCORE::Int, level_targets::
 end
 
 """
-    hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64})
+    _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, ext::CMFrechetExtension)
 
-Architecture-C Hessian callback for `marginal_restriction=:common_frechet`. Requires `cctx` to have
-been built (via the UNCHANGED `build_cm_bin_ctx`) from an `aug` with `aug.ncm = D*L` (i.e. from
-`build_cm_frechet_level_augmented_obj`/`build_cm_frechet_production_context`, NOT plain
-`build_cm_augmented_obj`) -- `cctx.ncm` sizes `Hfull` and the packed output, and the column layout
-this function writes matches `wrap_moments_with_cm_frechet_archB`'s own
-`[core | CM ((D-1)*L) | level (L) | gravity]` layout exactly (CM block first, level block last, both
-INSIDE the `NCORE+1 : NCORE+ncm` moment range). `level_targets` (`aug.level_targets`,
-`sqrt(D)*p_l`) is required because -- UNLIKE the CM block, whose raw features already have zero
-target baked in by construction (`f_o - f_ref`) -- the level feature has a NONZERO target
-(`level_l(omega) = u'f_l(omega) - target_l`), and an additive per-draw-CONSTANT shift in a moment
-column DOES change the `E'diag(w)E`-type quadratic Hessian form (unlike the FG/gradient side, which
-only sees the target through a harmless constant shift of `arg0`). See
-`docs/COMMON_FRECHET_HESSIAN_ARCHITECTURE_2026-07-25.md` for the full correction-term derivation.
-
-Same precondition as `hessian_cm_structured!`: `obj.arg0` must already reflect the current
-(zeta,lambda) (`_archC_prep_for_hessian!` first).
+Harmonization task (2026-07-28): the genuinely Fréchet-only "CM-F" computation -- the three common-
+level anchor blocks H_E,level / H_CM,level / H_level,level -- extracted verbatim from the former
+`hessian_cm_frechet_structured!` (this was previously the tail of that function's own separate copy
+of the ENTIRE H_EE/H_EC/H_CC computation; everything ABOVE this point is now the one shared
+`hessian_cm_structured!`, cm_hessian_architectures.jl, that flexible CM already uses). Called from
+`hessian_cm_structured!`/`_v2!` only when `extension !== nothing`.
 """
-function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext::CMFrechetExtension)
-    level_targets = frechet_ext.level_targets
-    # True no-H operator bundle (2026-07-28 continuation): was `@unpack H, M, arg0, arg2, ddPsi! =
-    # obj` -- an unconditional H unpack that would throw immediately on OperatorPsiBundle (no H
-    # field). Mirrors flexible-CM's own hessian_cm_structured! fix exactly (cm_hessian_architectures.jl):
-    # `H` is only ever actually read inside _fill_cm_HEE!/build_bin_tables!'s own dense-fallback
-    # branches, both already generic on Union{Nothing,AbstractMatrix}.
-    @unpack M, arg0, arg2, ddPsi! = obj
-    H = _dense_H_or_nothing(obj)
-    ddPsi!(arg2, arg0)
-    w = arg2
+function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_winner_bin::Bool, wctx, cross_ws, ext::CMFrechetExtension)
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
     refIndex1 = cctx.refIndex1; origins = cctx.origins
     ncm_cm = nO * L
     ncm_level = ncm - ncm_cm
-    @assert ncm_level == L "hessian_cm_frechet_structured!: cctx.ncm=$(cctx.ncm) inconsistent with D*L (got ncm_level=$ncm_level, expected L=$L) -- was cctx built from a :common_frechet aug?"
+    @assert ncm_level == L "_fill_frechet_level_blocks!: cctx.ncm=$(cctx.ncm) inconsistent with D*L (got ncm_level=$ncm_level, expected L=$L) -- was cctx built from a :common_frechet aug?"
     invsqrtD = 1.0 / sqrt(D)
-
-    # No-moments/no-composite-G task (2026-07-28): `E` no longer constructed eagerly -- see the
-    # identical change/rationale in cm_hessian_architectures.jl::hessian_cm_structured!.
-    Hfull = cctx.Hfull
-    fill!(Hfull, 0.0)
-    HEE = @view Hfull[1:NCORE, 1:NCORE]
-    cf = cctx.core_cf_ref[]
-    _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # UNCHANGED -- winner-pair backend, unaffected by level block; may rebuild cctx.core_ws/core_ws_for for this cf
-
-    # Winner-aware H_ER phase (2026-07-27), Section 3 Part A: SAME gating/dispatch as flexible-CM's
-    # own hessian_cm_structured! (cm_hessian_architectures.jl) -- _cm_cross_hessian_wants_winner_bin/
-    # _ensure_cm_cross_scratch! reused, not redefined. The CM-grid block (H_EC) is mathematically
-    # IDENTICAL to flexible-CM's own, so the same winner_pair_cross_hessian_fill!/_cm_block! calls
-    # apply verbatim here.
-    use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
-    build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)     # H_CC's own T/CT tables (from Bidx/w
-    prefix_sum_tables!(cctx; fill_S = !use_winner_bin)          # alone) are built regardless -- unaffected by fill_S
-
-    local wctx, cross_ws
-    if use_winner_bin
-        record_winner_cross_hessian_call!()
-        wctx = serial_ctx(cctx.core_ws)
-        cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
-        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
-    else
-        record_dense_cross_hessian_call!()
-    end
-
+    level_targets = ext.level_targets
     CS_ = cctx.CScum
     CT = cctx.CT
 
-    # ---- H_EC (core x CM), H_CC (CM x CM): IDENTICAL to hessian_cm_structured! ----
-    Hraw_EC = cctx.Hraw_EC
-    @inbounds for l in 1:L
-        if use_winner_bin
-            winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, cross_ws, l, origins, refIndex1, M)
-        else
-            for (oi, o) in enumerate(origins)
-                for j in 1:NCORE
-                    Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
-                end
-            end
-        end
-        cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-        block_ec = if cctx.R === nothing
-            Hraw_EC
-        else
-            mul!(cctx.block_ec, Hraw_EC, cctx.R)
-        end
-        @views Hfull[1:NCORE, cols] .= block_ec
-        @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
-    end
-
-    # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (cm_hessian_architectures.jl),
-    # also used by flexible CM -- previously two verbatim-identical copies, one per family.
-    fill_cm_HCC!(Hfull, cctx, M)
-
-    # ---- NEW: marginal weighted-count table T1[x,l] = sum_s w_s*1{bin(s,x)<=l} (D x L), Wtot, Esum.
+    # ---- marginal weighted-count table T1[x,l] = sum_s w_s*1{bin(s,x)<=l} (D x L), Wtot, Esum.
     # Needed because (unlike CM's own zero-target raw features) the level feature has a NONZERO
-    # target subtracted -- see this function's docstring for the correction-term derivation.
+    # target subtracted -- see this file's header docstring for the correction-term derivation.
     # O(W*D) for Wtab/T1 (cheap vs build_bin_tables!'s own O(W*(D*NCORE+D^2))), O(W*NCORE) for Esum
     # (one BLAS gemv). ----
     Bidx = cctx.Bidx
     Wraw = size(Bidx, 1)
-    # harmonization task (2026-07-28): Wtab/T1 are now persistent (frechet_ext), reused across
-    # calls instead of `zeros(...)`-reallocated on every single KNITRO Hessian callback -- Wtab is
-    # an accumulator (`+=`) so it must be explicitly zeroed each call; T1/Esum_wb/colsum/
-    # Hraw_cmlevel below are all fully overwritten per call (direct assignment or a from-scratch
-    # BLAS/loop fill), so no reset is needed for those.
-    Wtab = frechet_ext.Wtab
+    # Wtab/T1 are persistent (ext), reused across calls -- Wtab is an accumulator (`+=`) so it must
+    # be explicitly zeroed each call; T1/Esum_wb/colsum/Hraw_cmlevel below are all fully overwritten
+    # per call (direct assignment or a from-scratch BLAS/loop fill), so no reset is needed for those.
+    Wtab = ext.Wtab
     fill!(Wtab, 0.0)
     @inbounds for s in 1:Wraw
         ws = w[s]
@@ -168,7 +93,7 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext:
             Wtab[x, Bidx[s, x]] += ws
         end
     end
-    T1 = frechet_ext.T1
+    T1 = ext.T1
     @inbounds for x in 1:D
         acc = 0.0
         for l in 1:L
@@ -178,18 +103,18 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext:
     end
     Wtot = sum(w)
 
-    # ---- NEW: H_E,level (core x level), O(D*NCORE*L) + O(NCORE*L) correction ----
+    # ---- H_E,level (core x level), O(D*NCORE*L) + O(NCORE*L) correction ----
     # Winner-aware H_ER phase (2026-07-27), Section 3 Part B: only THIS block ever reads
     # sum_o CS_[o,j,l] / Esum[j] -- H_CM,level and H_level,level below use CT/T1/Wtot alone, never
     # E, and are UNCHANGED. Under :winner_bin, `winner_pair_cross_hessian_colsum!`/`_esum!`
     # (winner_pair_cross_hessian.jl) replace both dense reads with O(D)/O(1)-per-entry lookups from
-    # the SAME cumulative tables the H_EC block above just built via `winner_pair_cross_hessian_fill!`
+    # the SAME cumulative tables the H_EC block already built via `winner_pair_cross_hessian_fill!`
     # -- no dense `E`/`obj.H` read at all in the fast path.
     level_off = NCORE + ncm_cm   # level columns are level_off+1 : level_off+L
     if use_winner_bin
-        Esum_wb = frechet_ext.Esum_wb
+        Esum_wb = ext.Esum_wb
         winner_pair_cross_hessian_esum!(Esum_wb, wctx, cross_ws, w, Wtot)
-        colsum = frechet_ext.colsum
+        colsum = ext.colsum
         @inbounds for l in 1:L
             tl = level_targets[l]
             winner_pair_cross_hessian_colsum!(colsum, wctx, cross_ws, l)
@@ -203,7 +128,7 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext:
         # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
         record_dense_frechet_g!()
         E = @view H[:, 2:1+NCORE]
-        Esum = frechet_ext.Esum_wb
+        Esum = ext.Esum_wb
         mul!(Esum, E', w)
         @inbounds for l in 1:L
             tl = level_targets[l]
@@ -219,8 +144,8 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext:
         end
     end
 
-    # ---- NEW: H_CM,level (CM x level), O(D^2*L^2) worst case (same order as H_CC's own loop) ----
-    Hraw_cmlevel = frechet_ext.Hraw_cmlevel
+    # ---- H_CM,level (CM x level), O(D^2*L^2) worst case (same order as H_CC's own loop) ----
+    Hraw_cmlevel = ext.Hraw_cmlevel
     @inbounds for l in 1:L
         for lp in 1:L
             tlp = level_targets[lp]
@@ -241,7 +166,7 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext:
         end
     end
 
-    # ---- NEW: H_level,level (level x level), O(D^2*L^2) + O(D*L^2) correction ----
+    # ---- H_level,level (level x level), O(D^2*L^2) + O(D*L^2) correction ----
     invD = 1.0 / D
     @inbounds for l in 1:L
         tl = level_targets[l]
@@ -257,16 +182,7 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext:
                 invD * acc / M - tlp * invsqrtD * sum_T1_l / M - tl * invsqrtD * sum_T1_lp / M + tl * tlp * Wtot / M
         end
     end
-
-    # harmonization task (2026-07-28): now calls the ONE shared packing function
-    # (pack_upper_cm_hessian!, cm_hessian_architectures.jl) instead of an independently
-    # maintained copy of this loop. Verified bit-exact no-op vs the previous blanket-averaging
-    # loop: the H_EC block above (like every other off-diagonal block here) already writes the
-    # identical value into both triangles before packing, so pack_upper_cm_hessian!'s special
-    # case (skip the redundant average for i<=NCORE<j) returns the same value 0.5*(v+v) would.
-    n = NCORE + ncm
-    pack_upper_cm_hessian!(h, Hfull, NCORE, n)
-    return h
+    return Hfull
 end
 
 """
@@ -314,7 +230,7 @@ function archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector
             xloc = evalRequest.x
             @prof "inner_dual_hessian_callback_archC_frechet" begin
                 _prep_dual_index_for_archC!(cctx, o, xloc)
-                hessian_cm_frechet_structured_v2!(evalResult.hess, o, cctx, frechet_ext; threaded_bins = true, tls = cctx.tls)
+                hessian_cm_structured_v2!(evalResult.hess, o, cctx, frechet_ext; threaded_bins = true, tls = cctx.tls)
             end
             _INNER_CALL_COUNTERS[].n_hess_calls += 1
             return 0
@@ -333,9 +249,24 @@ function archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector
             # re-reading a real `obj.H` that already existed) and only became a hard failure once a
             # bundle with no `H` field at all was constructed. Fixed to match the threaded branch.
             _prep_dual_index_for_archC!(cctx, o, xloc)
-            hessian_cm_frechet_structured!(evalResult.hess, o, cctx, frechet_ext)
+            hessian_cm_structured!(evalResult.hess, o, cctx, frechet_ext)
         end
         _INNER_CALL_COUNTERS[].n_hess_calls += 1
         return 0
     end
+end
+
+"""
+    hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64})
+
+Harmonization task (2026-07-28): thin backward-compatibility wrapper. The real implementation is
+now the shared `hessian_cm_structured!` (cm_hessian_architectures.jl) with a resolved
+`CMFrechetExtension` -- kept here (not deleted) because several pre-existing, still-referenced
+diagnostic/gate scripts (`test_cm_frechet_threaded_hessian_gates.jl`,
+`test_frechet_winner_bin_her_wiring_d4.jl`/`_d20.jl`, `test_frechet_d20_gates.jl`/`_L50.jl`,
+`test_frechet_hessian_structured_vs_dense_d4.jl`, `diag_frechet_hardpoint_2026-07-27.jl`) call this
+exact name with a bare `level_targets::Vector{Float64}`, not through `archC_frechet_hess_cb_builder`.
+"""
+function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64})
+    return hessian_cm_structured!(h, obj, cctx, _resolve_frechet_ext!(cctx, level_targets))
 end

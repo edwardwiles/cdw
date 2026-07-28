@@ -89,9 +89,9 @@ function full_hessian_generic(ctx_cm, cctx, x::AbstractVector)
     obj = ctx_cm.obj
     _prep_dual_index_for_archC!(cctx, obj, x)
     h = Vector{Float64}(undef, n*(n+1)÷2)
-    # harmonization task (2026-07-28): hessian_cm_frechet_structured! now takes a persistent
-    # CMFrechetExtension, resolved/cached the same way archC_frechet_hess_cb_builder does.
-    hessian_cm_frechet_structured!(h, obj, cctx, _resolve_frechet_ext!(cctx, level_targets))
+    # harmonization task (2026-07-28): common Fréchet's Hessian fill is now the SAME shared
+    # hessian_cm_structured! flexible CM uses, with a resolved/cached CMFrechetExtension.
+    hessian_cm_structured!(h, obj, cctx, _resolve_frechet_ext!(cctx, level_targets))
     return unpack_packed(h, n)
 end
 
