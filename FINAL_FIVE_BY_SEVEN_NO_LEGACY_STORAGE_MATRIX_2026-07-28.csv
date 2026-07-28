@@ -1,0 +1,21 @@
+family,column,backend,legacy_H_owned_or_read,composite_G_owned_or_read,production_moments_calls,select_G_from_H_calls,g_sized_backing_storage_allocations,notes
+unrestricted,economic_moment_construction,build_economic_moment_state!/cf_build direct,partial (allocated, mostly unwritten),no,0,0,1,struct-mandated H allocation; only 2-3 columns ever written under default backend
+unrestricted,economic_FG,compressed_dual_index!/compressed_cc_value_grad!,no,no,0,0,0,operator
+unrestricted,H_EE,winner_pair_hessian! via operator_prep_for_hessian!,no,no,0,0,0,operator
+unrestricted,H_ER_H_RR,n/a,n/a,n/a,0,0,0,no restriction block
+flexible_cm,economic_moment_construction,wrap_moments_with_cm_archB,yes,yes,1,1,2,"1 live + 1 throwaway per context build (build_cm_augmented_obj, new finding)"
+flexible_cm,economic_FG,CMLookupState dual_index!/economic_forward!,no,no,0,0,0,operator
+flexible_cm,H_EE,fill_core_hessian_upper! via operator_prep_for_hessian!,no,no,0,0,0,operator
+flexible_cm,H_EC,winner_pair_cross_hessian_fill! (winner-bin),no,no,0,0,0,"this session: no-op averaging removed from packing loop"
+common_frechet,economic_moment_construction,wrap_moments_with_cm_frechet_archB,yes,yes,1,1,2,"1 live + 1 throwaway per context build (build_cm_frechet_level_augmented_obj, new finding); no skip mechanism engaged in production"
+common_frechet,economic_FG,CMFrechetLookupState dual_index!,no,no,0,0,0,operator
+common_frechet,H_EE,fill_core_hessian_upper! via operator_prep_for_hessian!,no,no,0,0,0,operator
+common_frechet,H_EC_H_Elevel,winner-pair cross-Hessian (winner-bin),no,no,0,0,0,"Hessian-upper-only cleanup audited but NOT fixed this session (4 analogous sites, honest gap)"
+cm_plus_zc,economic_moment_construction,wrap_moments_with_cm_meanzc,yes,yes,1,1,1,no skip mechanism exists at all
+cm_plus_zc,economic_FG,CMMeanZCOperatorState dual_index!,no,no,0,0,0,operator
+cm_plus_zc,H_EE_widened,_fill_cm_HEE! winner-pair branch,no,no,0,0,0,operator
+cm_plus_zc,H_EM_H_MM,winner_pair_cross_hessian_zc_block! from hzz_centered.Zc,no,no,0,0,0,"fixed by prior merged session; this session's pack-loop optimization also applies here (shares hessian_cm_structured!/_v2!)"
+zc_only,economic_moment_construction,wrap_moments_with_originzc,yes,yes,1,1,1,no skip mechanism exists at all
+zc_only,economic_FG,OriginZCOperatorState dual_index!,no,no,0,0,0,operator
+zc_only,H_EE,fill_core_hessian_upper! via operator_prep_for_hessian!,no,no,0,0,0,operator
+zc_only,H_ER_H_RR,winner_pair_cross_hessian_zc_block!/zc_restriction_gram!,no,no,0,0,0,"this session: provably dead mirror write deleted (cm_hessian_architectures.jl:1372)"
