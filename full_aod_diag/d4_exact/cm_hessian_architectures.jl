@@ -61,6 +61,9 @@ isdefined(Main, :ThreadLocalBinScratch) || include(joinpath(@__DIR__, "cm_hessia
 # referenced by CMBinHessCtx's own struct definition below, so this include must run before that
 # struct is parsed -- same self-guard convention every other dependency in this file already uses.
 isdefined(Main, :WinnerBinCrossScratch) || include(joinpath(@__DIR__, "winner_pair_cross_hessian.jl"))
+# Default-flips task (2026-07-27), Task C: MOMENT_REPRESENTATION selector + record_generic_dense_fg!/
+# record_dense_cm_g! counters, same self-guard convention as every other dependency above.
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
 
 # ----------------------------------------------------------------------------
 # Shared: per-draw bin indices w.r.t. the SAME thresholds `z` that
@@ -260,6 +263,10 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             cm_cols = pregrav + 1 : pregrav + L * nO
             fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
                                         chunk_size = chunk_size, prod_scratch = prod_scratch)
+            record_dense_cm_g!()   # Task C (2026-07-27): fires exactly when the dense CM-column fill
+            # actually executes -- 0 whenever archC_base_state's skip_cm_fill_ref is engaged (i.e.
+            # moment_representation[]==:operator AND inner_fg_backend==:cm_lookup), nonzero under
+            # :dense_reference or the :cm_lookup-but-forced-dense diagnostic combination.
         end
         return nothing
     end
@@ -926,6 +933,15 @@ function inner_loop_KNITRO_archgeneric(obj; hess_cb_builder = nothing, hvp::Bool
 end
 
 function inner_loop_internal_archgeneric(obj, θ; hess_cb_builder = nothing, hvp::Bool = false)
+    # Task C (2026-07-27): inner_loop_KNITRO_archgeneric (below) ALWAYS registers the generic dense
+    # FG callback (callbackEvalFG_inner!, cc_algo/inner_loop_functions.jl) -- every operator-FG family
+    # dispatches through a DIFFERENT top-level function instead (inner_loop_internal_cmlookup_production/
+    # _cmfrechetlookup_production/etc., each with its own dedicated operator FG callback), so this
+    # function firing at all is unconditionally equivalent to "the dense-reference generic FG path was
+    # used for this inner solve" -- safe to record unconditionally, no branch needed (this was the
+    # counter's own documented gap, see docs/GLOBAL_NO_DENSE_G_INNER_SOLVE_PROOF_2026-07-27.md B.2:
+    # "NOT wired at the one site that would make it meaningful ... inner_loop_internal_archgeneric").
+    record_generic_dense_fg!()
     @prof "inner_moment_build" begin
         obj.moments!(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
     end

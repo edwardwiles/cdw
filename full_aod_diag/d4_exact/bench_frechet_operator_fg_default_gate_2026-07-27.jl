@@ -42,13 +42,13 @@ end
 
 function timed_median(f, nreps)
     f()   # warm-up
-    times = Float64[]; allocs = Int[]
+    times = Float64[]; allocs = Int[]; gcts = Float64[]
     for _ in 1:nreps
         s = @timed f()
-        push!(times, s.time); push!(allocs, s.bytes)
+        push!(times, s.time); push!(allocs, s.bytes); push!(gcts, s.gctime)
     end
     k = cld(nreps, 2)
-    return (time = sort(times)[k], bytes = sort(allocs)[k])
+    return (time = sort(times)[k], bytes = sort(allocs)[k], gctime = sort(gcts)[k])
 end
 
 println("Building real D=20 context (W=80000, delta=1.0)..."); flush(stdout)
@@ -104,10 +104,12 @@ for contrasts in (:anchored, :orthonormal)
         end
         speedup = sd.time / sl.time
         alloc_ratio = sl.bytes / max(sd.bytes, 1)
-        @printf "  n_fg: dense=%d lookup=%d   n_hess: dense=%d lookup=%d   speedup=%.3fx   alloc_ratio(lookup/dense)=%.4f\n" nfgd nfgl nhd nhl speedup alloc_ratio
+        gc_ratio = sl.gctime / max(sd.gctime, 1e-9)
+        @printf "  n_fg: dense=%d lookup=%d   n_hess: dense=%d lookup=%d   speedup=%.3fx   alloc_ratio(lookup/dense)=%.4f   gctime(d/l)=%.4fs/%.4fs (ratio=%.3fx)\n" nfgd nfgl nhd nhl speedup alloc_ratio sd.gctime sl.gctime gc_ratio
         push!(results, (contrasts=contrasts, label=label, t_dense=sd.time, t_lookup=sl.time,
-            b_dense=sd.bytes, b_lookup=sl.bytes, nfg_dense=nfgd, nfg_lookup=nfgl,
-            nhess_dense=nhd, nhess_lookup=nhl, speedup=speedup, alloc_ratio=alloc_ratio,
+            b_dense=sd.bytes, b_lookup=sl.bytes, gct_dense=sd.gctime, gct_lookup=sl.gctime,
+            nfg_dense=nfgd, nfg_lookup=nfgl,
+            nhess_dense=nhd, nhess_lookup=nhl, speedup=speedup, alloc_ratio=alloc_ratio, gc_ratio=gc_ratio,
             status_dense=nsd, status_lookup=nsl))
         flush(stdout)
     end
@@ -130,8 +132,10 @@ println("="^90)
 println("SUMMARY")
 println("="^90)
 for r in results
-    @printf "%-12s %-22s speedup=%.3fx  alloc_ratio=%.4f  n_fg(d/l)=%d/%d  n_hess(d/l)=%d/%d  status(d/l)=%d/%d\n" String(r.contrasts) r.label r.speedup r.alloc_ratio r.nfg_dense r.nfg_lookup r.nhess_dense r.nhess_lookup r.status_dense r.status_lookup
+    @printf "%-12s %-22s speedup=%.3fx  alloc_ratio=%.4f  gc_ratio=%.3fx  n_fg(d/l)=%d/%d  n_hess(d/l)=%d/%d  status(d/l)=%d/%d\n" String(r.contrasts) r.label r.speedup r.alloc_ratio r.gc_ratio r.nfg_dense r.nfg_lookup r.nhess_dense r.nhess_lookup r.status_dense r.status_lookup
 end
+println()
+println("CM_FRECHET_INNER_FG_BACKEND_DEFAULT[] at end of run: ", CM_FRECHET_INNER_FG_BACKEND_DEFAULT[])
 
 println(ALL_PASS[] ? "ALL PASS (correctness/feasibility checks)" : "SOME FAILURES (correctness/feasibility checks)")
 ALL_PASS[] || exit(1)
