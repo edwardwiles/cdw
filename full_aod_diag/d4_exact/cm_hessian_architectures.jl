@@ -69,6 +69,16 @@ isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_
 # this include must run before that struct is parsed -- same self-guard convention every other
 # dependency in this file already uses.
 isdefined(Main, :ZCCenteredScratch) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
+# optimize/structured-cross-hessian-ZC-CM-2026-07-28: threaded (output-ownership) variants of the
+# four raw-table-fill cross-Hessian primitives above -- see that file's own header for why. Must
+# load after both includes above (references WinnerBinCrossScratch/WinnerZCCrossScratch/
+# BinZCrossScratch/ZCCenteredScratch).
+isdefined(Main, :cross_hessian_chunk_ranges) || include(joinpath(@__DIR__, "threaded_cross_hessian.jl"))
+# optimize/structured-cross-hessian-ZC-CM-2026-07-28 ADDENDUM: H_ZZ BLAS/threaded candidates
+# (SYRK/GEMM/threaded_packed), built directly from the immutable raw Phi -- must load after
+# threaded_cross_hessian.jl (uses cross_hessian_chunk_ranges/resolve_cross_hessian_workers_default)
+# and zc_restriction_operator.jl (uses ZCRestrictionOperator/ZCCenteredScratch/zc_restriction_gram!).
+isdefined(Main, :ZCRawWeightedWorkspace) || include(joinpath(@__DIR__, "zc_gram_blas_candidates.jl"))
 # No-moments/no-composite-G task (2026-07-28): operator_prep_for_hessian!/HessianWeightCache, used
 # by archC_hess_cb_builder/archA_partitioned_hess_cb_builder below in place of the dense
 # _archC_prep_for_hessian! fallback.
@@ -561,6 +571,20 @@ mutable struct CMBinHessCtx
     nu_ref::Base.RefValue{Vector{Float64}}
     hzz_centered::Union{Nothing,ZCCenteredScratch}
     bin_zc_cross::Union{Nothing,BinZCrossScratch}
+    # optimize/structured-cross-hessian-ZC-CM-2026-07-28: opt-in threading for the H_EC/H_EZ/H_CZ/
+    # H_ZZ raw-table-fill primitives above (`threaded_cross_hessian.jl`). Mirrors `use_threaded_bins`'s
+    # own "field on the ctx, defaulted from a global Ref, flippable per-context" discipline exactly.
+    # Defaults to `false` (opt-in) until the performance/correctness gates in this task's own
+    # deliverable docs justify flipping the default -- see `CROSS_HESSIAN_CROSS_THREADED_DEFAULT`.
+    cross_hessian_threaded::Bool
+    cross_hessian_workers::Int
+    # optimize/structured-cross-hessian-ZC-CM-2026-07-28 ADDENDUM: H_ZZ backend selector + its own
+    # persistent raw-Phi workspace (zc_gram_blas_candidates.jl). `raw_zc_ws` is `nothing` for plain
+    # CM/common-Frechet (no ZC block, `hzz_zc_op===nothing`) and lazily built (once, campaign-
+    # lifetime) on first use for CM+ZC.
+    zc_gram_backend::Symbol
+    zc_gram_workers::Int
+    raw_zc_ws::Union{Nothing,ZCRawWeightedWorkspace}
     # True no-H operator bundle (2026-07-28 continuation): the base economic ctx (has `.γ`, `.D`,
     # etc.), needed by `prime_operator!` (cf_build/fill_K_directgp!/compressed_gravity_raw all take
     # `ctx`, not `cctx`). Every existing `moments!` closure (`wrap_moments_with_cm_archB` etc.)
@@ -592,7 +616,11 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[],
         inner_fg_backend::Symbol = CM_INNER_FG_BACKEND_DEFAULT[],
-        cm_cross_hessian_backend::Symbol = CM_CROSS_HESSIAN_BACKEND_DEFAULT[])
+        cm_cross_hessian_backend::Symbol = CM_CROSS_HESSIAN_BACKEND_DEFAULT[],
+        cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
+        cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
+        zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
+        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE = aug.ncore; ncm = aug.ncm
@@ -623,6 +651,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cm_cross_hessian_backend, nothing,
         :dense_reference, nothing,   # zc_cross_hessian_backend/zc_cross_scratch: plain CM never widens (no ZC block)
         nothing, nothing, nothing, Ref(Float64[]), nothing, nothing,   # hzz_zc_op/layout/ws/nu_ref/hzz_centered/bin_zc_cross: plain CM has no ZC block at all
+        cross_hessian_threaded, cross_hessian_workers,
+        zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: plain CM has no ZC block, lazily unused
         ctx,   # econ_ctx: true no-H operator bundle continuation
         nothing)   # frechet_ext_cache: harmonization task -- lazily built, nothing until first common-Fréchet Hessian call
     if threaded_bins
@@ -778,7 +808,11 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 op = cctx.hzz_zc_op
                 refresh_zc_targets!(cctx.hzz_zc_ws, op, cctx.hzz_zc_layout, cctx.nu_ref[])
                 cctx.hzz_centered = ensure_zc_centered_scratch!(cctx.hzz_centered, op, size(w, 1))
-                refresh_zc_centered!(cctx.hzz_centered, op, cctx.hzz_zc_ws, w)
+                # ADDENDUM (2026-07-28): ZcS (the S-weighted centered copy) is only needed by the
+                # :reference H_ZZ backend below -- elided for the new raw-Phi candidates (see
+                # refresh_zc_centered!'s own updated docstring). Zc itself (needed by H_EZ/HEM's `Z`
+                # argument regardless of backend) is always built.
+                refresh_zc_centered!(cctx.hzz_centered, op, cctx.hzz_zc_ws, w; fill_S = cctx.zc_gram_backend === :reference)
                 record_winner_cross_hessian_call!()
                 wctx = serial_ctx(cctx.core_ws)
                 n_restr = NCORE - ncore
@@ -786,8 +820,21 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 winner_pair_cross_hessian_zc_prep!(cctx.zc_cross_scratch, wctx, w)
                 nx = n_restriction(op)
                 Z = @view cctx.hzz_centered.Zc[:, 1:nx]   # already-centered restriction columns, unweighted
-                winner_pair_cross_hessian_zc_block!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M)
-                zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
+                if cctx.cross_hessian_threaded
+                    winner_pair_cross_hessian_zc_block_threaded!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M; workers = cctx.cross_hessian_workers)
+                else
+                    winner_pair_cross_hessian_zc_block!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M)
+                end
+                # ADDENDUM (2026-07-28): H_ZZ backend dispatch -- :reference (existing, centered-Zc
+                # BLAS gemm) | :blas_syrk | :blas_gemm | :threaded_packed (all three built directly
+                # from the immutable raw Phi, zc_gram_blas_candidates.jl).
+                if cctx.zc_gram_backend === :reference
+                    zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
+                else
+                    cctx.raw_zc_ws = ensure_zc_raw_weighted_workspace!(cctx.raw_zc_ws, op, wctx.W)
+                    refresh_zc_raw_target_vector!(cctx.raw_zc_ws, cctx.hzz_zc_ws, op)
+                    zc_gram_dispatch!(HMM, cctx.zc_gram_backend, nothing, op, cctx.raw_zc_ws, w, M; workers = cctx.zc_gram_workers)
+                end
             else
                 # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here,
                 # in the (now unreachable in production -- see `check_ties=false` above) dense
@@ -1349,6 +1396,14 @@ mutable struct OriginZCCoreHessCtx
     # moments! closure (economic-block-only skip, sharing the same core_cf_ref), mirroring
     # CMBinHessCtx's own `moments_skip!` field exactly. `nothing` until built.
     moments_skip!::Union{Nothing,Function}
+    # optimize/structured-cross-hessian-ZC-CM-2026-07-28 (+ ADDENDUM): mirrors CMBinHessCtx's own
+    # cross_hessian_threaded/cross_hessian_workers/zc_gram_backend/zc_gram_workers/raw_zc_ws fields
+    # exactly -- see that struct's own docstrings.
+    cross_hessian_threaded::Bool
+    cross_hessian_workers::Int
+    zc_gram_backend::Symbol
+    zc_gram_workers::Int
+    raw_zc_ws::Union{Nothing,ZCRawWeightedWorkspace}
     # True no-H operator bundle (2026-07-28 continuation): mirrors CMBinHessCtx's own econ_ctx field.
     econ_ctx::Any
 end
@@ -1367,7 +1422,11 @@ ZC-restriction-operator FG (port/shared-inner-fg-operator-and-verification-2026-
 function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::Symbol = ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT[],
         fg_backend::Symbol = :dense_reference,
-        zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])
+        zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[],
+        cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
+        cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
+        zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
+        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
     n_eta_total = aug.obj_cm.outer_constr_index - aug.ncore_econ
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
     # port/shared-inner-fg-operator-and-verification-2026-07-26: build the ZC restriction operator
@@ -1407,6 +1466,8 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
         zc_cross_hessian_backend, nothing,
         hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing,
         hasproperty(aug, Symbol("moments_skip!")) ? aug.moments_skip! : nothing,
+        cross_hessian_threaded, cross_hessian_workers,
+        zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: lazily built on first H_ZZ call
         ctx)   # econ_ctx: true no-H operator bundle continuation
 end
 
@@ -1519,14 +1580,21 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         op = octx.hzz_zc_op
                         refresh_zc_targets!(octx.hzz_zc_ws, op, octx.hzz_zc_layout, octx.nu_ref[])
                         octx.hzz_centered = ensure_zc_centered_scratch!(octx.hzz_centered, op, size(arg2, 1))
-                        refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2)
+                        # ADDENDUM (2026-07-28): this call's OWN ZcS is never read (HRR's block below
+                        # redoes refresh_zc_centered! independently right before it needs ZcS) -- skip
+                        # it here unconditionally, mirroring CM+ZC's own fill_S gating.
+                        refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2; fill_S = false)
                         record_winner_cross_hessian_call!()
                         wctx = serial_ctx(octx.core_ws)
                         octx.zc_cross_scratch = _ensure_originzc_zc_cross_scratch!(octx, wctx.W, n_eta_total)
                         winner_pair_cross_hessian_zc_prep!(octx.zc_cross_scratch, wctx, arg2)
                         nx = n_restriction(op)
                         Z = @view octx.hzz_centered.Zc[:, 1:nx]   # already-centered restriction columns, UNweighted
-                        winner_pair_cross_hessian_zc_block!(HER, wctx, octx.zc_cross_scratch, arg2, Z, M)
+                        if octx.cross_hessian_threaded
+                            winner_pair_cross_hessian_zc_block_threaded!(HER, wctx, octx.zc_cross_scratch, arg2, Z, M; workers = octx.cross_hessian_workers)
+                        else
+                            winner_pair_cross_hessian_zc_block!(HER, wctx, octx.zc_cross_scratch, arg2, Z, M)
+                        end
                     else
                         record_dense_cross_hessian_call!()
                         @views H_copy[:, 2+NCORE:1+n] .= H[:, 2+NCORE:1+n]
@@ -1565,8 +1633,16 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         # exactly M rows by construction, this was only ever using H for its size,
                         # never its contents.
                         octx.hzz_centered = ensure_zc_centered_scratch!(octx.hzz_centered, op, M)
-                        refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2)
-                        zc_restriction_gram!(HRR, octx.hzz_centered, op, M)
+                        # ADDENDUM (2026-07-28): H_ZZ (=HRR) backend dispatch, same options/dispatcher
+                        # as CM+ZC's HMM -- shared, not a separate implementation.
+                        refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2; fill_S = octx.zc_gram_backend === :reference)
+                        if octx.zc_gram_backend === :reference
+                            zc_restriction_gram!(HRR, octx.hzz_centered, op, M)
+                        else
+                            octx.raw_zc_ws = ensure_zc_raw_weighted_workspace!(octx.raw_zc_ws, op, M)
+                            refresh_zc_raw_target_vector!(octx.raw_zc_ws, octx.hzz_zc_ws, op)
+                            zc_gram_dispatch!(HRR, octx.zc_gram_backend, nothing, op, octx.raw_zc_ws, arg2, M; workers = octx.zc_gram_workers)
+                        end
                     else
                         record_dense_cross_hessian_call!()
                         BLAS.gemm!('T', 'N', 1 / M, HC_eta, HC_eta, 0.0, HRR)

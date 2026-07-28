@@ -54,6 +54,13 @@ mutable struct WinnerBinCrossScratch
     NuCScum::Matrix{Float64}   # D x L
     SOnlyCScum::Matrix{Float64}  # D x L
     QCfCScum::Matrix{Float64}  # D x L
+    # optimize/structured-cross-hessian-ZC-CM-2026-07-28: persistent `Threads.@spawn` task buffer
+    # for `winner_pair_cross_hessian_fill_threaded!` (threaded_cross_hessian.jl), sized to
+    # `Threads.nthreads()` at construction so no `Vector{Task}` is allocated per Hessian callback.
+    # Shared by BOTH raw-table passes in that function (origin-owned and slot-owned) -- neither
+    # holds a reference into the other's iteration, so reusing the same buffer sequentially (fill
+    # + fetch all, THEN reuse for the second pass) is safe.
+    tasks_ec::Vector{Task}
     # Common-Fréchet winner-aware H_ER phase (2026-07-27), Part B: UN-binned (no threshold/bin
     # dimension) per-economic-column accumulator `EsumEcon[j] = sum_w Snu[w]*y[w,slot(j)]*
     # 1{winner(w,slot(j))=o(j)}` (length ncolI, `wctx`'s own 1:ncolI numbering, NOT NCORE-offset).
@@ -67,7 +74,7 @@ function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
     return WinnerBinCrossScratch(ncolI, D, L,
         zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
         zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L),
-        zeros(ncolI))
+        zeros(ncolI), Vector{Task}(undef, Threads.nthreads()))
 end
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(ncolI, D, L)` -- mirrors this codebase's own `resize_*_if_needed!` idiom."
@@ -264,10 +271,21 @@ mutable struct WinnerZCCrossScratch
     crs_buf::Vector{Float64}
     v::Vector{Float64}
     NuZ_buf::Vector{Float64}
+    # optimize/structured-cross-hessian-ZC-CM-2026-07-28: persistent scratch for
+    # `winner_pair_cross_hessian_zc_block_threaded!` (threaded_cross_hessian.jl) -- `tasks_ez`
+    # (sized to `Threads.nthreads()`) avoids a per-callback `Vector{Task}` allocation;
+    # `thread_scratch_ez[k]` is a dedicated length-`W` buffer for worker-slot `k`'s `v[w] =
+    # Snu[w]*y[w,slot]` scratch (one per worker slot, not one per `slot` value, so at most
+    # `Threads.nthreads()` buffers regardless of `Ddest`) -- avoids the serial version's single
+    # shared `ws.v` field, which would race if reused directly across concurrent worker tasks.
+    tasks_ez::Vector{Task}
+    thread_scratch_ez::Vector{Vector{Float64}}
 end
 
 WinnerZCCrossScratch(W::Int, max_nx::Int) =
-    WinnerZCCrossScratch(W, max_nx, zeros(W), zeros(W), zeros(W), zeros(max_nx))
+    WinnerZCCrossScratch(W, max_nx, zeros(W), zeros(W), zeros(W), zeros(max_nx),
+        Vector{Task}(undef, Threads.nthreads()),
+        [zeros(W) for _ in 1:Threads.nthreads()])
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(W, max_nx)` -- mirrors this file's own `ensure_winner_bin_cross_scratch!` idiom."
 function ensure_winner_zc_cross_scratch!(ws_ref::Base.RefValue{Union{Nothing,WinnerZCCrossScratch}}, W::Int, max_nx::Int)
@@ -543,9 +561,13 @@ mutable struct BinZCrossScratch
     nz::Int
     ZBinTab::Array{Float64,3}
     ZBinCScum::Array{Float64,3}
+    # optimize/structured-cross-hessian-ZC-CM-2026-07-28: persistent `Threads.@spawn` task buffer
+    # for `bin_zc_cross_hessian_fill_threaded!` (threaded_cross_hessian.jl), sized to
+    # `Threads.nthreads()` at construction -- no per-callback `Vector{Task}` allocation.
+    tasks_cz::Vector{Task}
 end
 BinZCrossScratch(D::Int, L::Int, nz::Int) =
-    BinZCrossScratch(D, L, nz, zeros(D, nz, L + 1), zeros(D, nz, L))
+    BinZCrossScratch(D, L, nz, zeros(D, nz, L + 1), zeros(D, nz, L), Vector{Task}(undef, Threads.nthreads()))
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(D,L,nz)` -- mirrors this file's own `ensure_*_scratch!` idiom."
 function ensure_bin_zc_cross_scratch!(ws::Union{Nothing,BinZCrossScratch}, D::Int, L::Int, nz::Int)

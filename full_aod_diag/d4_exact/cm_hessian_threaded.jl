@@ -224,7 +224,14 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
         record_winner_cross_hessian_call!()
         wctx = serial_ctx(cctx.core_ws)
         cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
-        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+        # optimize/structured-cross-hessian-ZC-CM-2026-07-28: opt-in threaded H_EC raw-table fill
+        # (threaded_cross_hessian.jl), same output as the serial version (bit-identical, see that
+        # file's own header) -- gated behind cctx.cross_hessian_threaded, default false.
+        if cctx.cross_hessian_threaded
+            winner_pair_cross_hessian_fill_threaded!(wctx, cross_ws, obj, cctx.Bidx; workers = cctx.cross_hessian_workers)
+        else
+            winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+        end
         if use_direct_hcz
             # CM+ZC E/C/Z block-partition + H_CZ release (2026-07-27): SAME pairing as the serial
             # hessian_cm_structured! (cm_hessian_architectures.jl) -- see that file's own comment.
@@ -233,7 +240,11 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
             nz = n_restriction(cctx.hzz_zc_op)
             bin_zc_ws = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz)
             cctx.bin_zc_cross = bin_zc_ws
-            bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
+            if cctx.cross_hessian_threaded
+                bin_zc_cross_hessian_fill_threaded!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS; workers = cctx.cross_hessian_workers)
+            else
+                bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
+            end
         end
     else
         record_dense_cross_hessian_call!()

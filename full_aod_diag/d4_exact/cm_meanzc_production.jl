@@ -57,10 +57,14 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         # fills exactly that gap (bin_zc_cross_hessian_fill!/_block!, winner_pair_cross_hessian.jl),
         # so this now defaults to CM_MEANZC_CM_CROSS_HESSIAN_BACKEND_DEFAULT[] (:winner_bin, flipped
         # after this session's own D=4 + real D=20 gates -- see that Ref's own docstring).
-        zc_cross_hessian_backend::Symbol = CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])   # winner-aware H_ER
+        zc_cross_hessian_backend::Symbol = CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[],   # winner-aware H_ER
         # phase (2026-07-27), task Section 4: which backend fills H_EM (core x mean/pair cross),
         # cm_hessian_architectures.jl's _fill_cm_HEE! ncore<NCORE branch. :dense_reference (default
         # until this section's own gates pass) | :winner_bin (winner_pair_cross_hessian_zc_block!).
+        cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
+        cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
+        zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
+        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
     inner_fg_backend in (:dense_reference, :operator) ||
         error("build_cm_meanzc_bin_ctx: inner_fg_backend must be :dense_reference or :operator, got :$inner_fg_backend (CM+ZC does not support :cm_lookup -- CMLookupState is CM-grid-only, no mean/pair block)")
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
@@ -111,6 +115,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cm_cross_hessian_backend, nothing,
         zc_cross_hessian_backend, nothing,
         hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing, nothing,
+        cross_hessian_threaded, cross_hessian_workers,
+        zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: lazily built on first H_ZZ call
         ctx,   # econ_ctx: true no-H operator bundle continuation
         nothing)   # frechet_ext_cache: harmonization task -- CM+ZC never populates this (no level block)
     if threaded_bins
