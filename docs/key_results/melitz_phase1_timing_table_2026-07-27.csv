@@ -1,0 +1,10 @@
+kernel,n_threads,seconds,bytes,calls_per_fc
+operator_update_total,1,0.129398026,32432,1
+matrix_free_Gx,1,0.003474939,0,missing
+matrix_free_Gtv,1,0.004456313,0,missing
+structured_hessian_callback,1,0.073406049,192,missing
+complete_outer_gradient_serial,1,12.064158293,0,1
+complete_finite_inner_solve,1,0.543909137,missing,1
+complete_finite_FC_variant_C,1,0.018972411,missing,1
+complete_finite_GA_after_FC_same_theta,1,12.578063947,missing,1
+above_eval_cap_FC,1,0.020428994,missing,1

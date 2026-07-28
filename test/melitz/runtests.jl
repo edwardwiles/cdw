@@ -57,6 +57,7 @@ include(joinpath(MELITZ_DIR, "localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "argument_localized_gradient.jl"))
 include(joinpath(MELITZ_DIR, "direct_gradient.jl"))
 include(joinpath(MELITZ_DIR, "sorted_crossing_gradient.jl"))
+include(joinpath(MELITZ_DIR, "touched_row_gradient.jl"))
 include(joinpath(MELITZ_DIR, "cc_bundle.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(MELITZ_DIR, "nuisance_profile.jl"))
@@ -2685,6 +2686,55 @@ if KNITRO_AVAILABLE
                 direction=:upper, gradient_backend=:B_direct_argument_sorted_parallel, inner_loop_opt=inner_opt_cg)
             @test r_probe_sorted_parallel.nStatus == 0
             @test r_probe_sorted_parallel.obj_value == r_probe_ref.obj_value
+        end
+
+        # ====================================================================
+        # Governing prompt Phase 4 (2026-07-XX outer-search session): touched-row
+        # no-full-copy gradient backend -- must reproduce the sorted crossing-slice
+        # backend's own output EXACTLY (same formula, only the apply/evaluate step
+        # changes: no full-W copyto!, no full-W Psi! call, see touched_row_gradient.jl's
+        # own header for the exact identity this relies on).
+        # ====================================================================
+        @testset "Phase 4: touched-row backend (:B_direct_argument_touched_row_serial) matches the sorted backend EXACTLY, every D=4 coordinate" begin
+            direct_touched_cg = make_melitz_gradient_delta_direct_touched_row_serial(1e-4)
+            g_touched = zeros(n_cg)
+            direct_touched_cg(g_touched, theta_cg, ctx_cg, obj_cg, x_cg)
+            @test any(cc -> cc.touches_link, melitz_compact_columns_map(ctx_cg))   # confirms the link-touching coordinate is exercised
+            for r in 1:n_cg
+                rel = abs(g_sorted[r] - g_touched[r]) / max(abs(g_sorted[r]), 1.0)
+                @test rel < 1e-10
+            end
+
+            @testset "requires ctx.sorted_tail_ctx -- rejects a ctx built without it" begin
+                obj_plain_inner3, theta_plain3 = build_melitz_psi_bundle(fixture_cg; inner_loop_opt=inner_opt_cg,
+                    needs_outer_moment_jacobian=false, backend=:dense_reference, moment_backend=:dense_reference)
+                ctx_plain3 = obj_plain_inner3.γ
+                g_bad3 = zeros(n_cg)
+                @test_throws ArgumentError direct_touched_cg(g_bad3, theta_plain3, ctx_plain3, obj_cg, x_cg)
+            end
+
+            @testset "wired end-to-end through melitz_fixed_point_probe, matches the sorted backend's objective" begin
+                # `r_probe_ref` (the `:B_direct_argument_serial` reference run) lives in a
+                # SIBLING @testset block above -- Test.jl scopes each @testset independently, so
+                # it is not visible here; recomputed locally rather than relying on it leaking
+                # across sibling blocks (the bug this comment replaces: caught by the very first
+                # run of this test, not shipped silently).
+                r_probe_ref_local = melitz_fixed_point_probe(ctx_cg, obj_cg_inner, theta_cg; delta=1e-2,
+                    direction=:upper, gradient_backend=:B_direct_argument_serial, inner_loop_opt=inner_opt_cg)
+                r_probe_touched = melitz_fixed_point_probe(ctx_cg, obj_cg_inner, theta_cg; delta=1e-2,
+                    direction=:upper, gradient_backend=:B_direct_argument_touched_row_serial, inner_loop_opt=inner_opt_cg)
+                @test r_probe_touched.nStatus == 0
+                @test r_probe_touched.obj_value == r_probe_ref_local.obj_value
+            end
+
+            @testset "repeated calls (stale-generation-stamp regression: a bug caught before this backend ever ran)" begin
+                # A second, independent call must not read stale delta_plus/delta_minus values
+                # left over from the FIRST call's own generation stamps (this file's header:
+                # the generation counter must be monotonic ACROSS calls, never reset to 1).
+                g_touched2 = zeros(n_cg)
+                direct_touched_cg(g_touched2, theta_cg, ctx_cg, obj_cg, x_cg)
+                @test g_touched2 == g_touched
+            end
         end
     end
 
@@ -6017,6 +6067,7 @@ end
             op9 = build_melitz_moment_operator(ctx9.sorted_tail_ctx, ctx9.moment_layout)
             obj9 = build_melitz_cc_bundle(op9, ctx9; mode=:delta, U=z_draws9,
                 outer_constr_index=ctx9.moment_layout.num_moments + 1,
+                lower_limit=-KNITRO.KN_INFINITY,   # deliberate: a pure fixed-point evaluation test, not an outer search -- no cap needed, but now an explicit choice, not a silently-inherited default
                 inner_loop_opt=ctx9.inner_loop_opt, outer_loop_opt=ctx9.outer_loop_opt,
                 hessian_backend=:structured_serial)
             r9 = evaluate_melitz_delta(theta09, ctx9, obj9; cold=true, store_G=false)

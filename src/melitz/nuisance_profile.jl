@@ -137,10 +137,11 @@ function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backen
                          gradient_backend == :B_direct_argument_parallel ? make_melitz_gradient_delta_direct_parallel(h) :
                          gradient_backend == :B_direct_argument_sorted_serial ? make_melitz_gradient_delta_direct_sorted_serial(h) :
                          gradient_backend == :B_direct_argument_sorted_parallel ? make_melitz_gradient_delta_direct_sorted_parallel(h) :
+                         gradient_backend == :B_direct_argument_touched_row_serial ? make_melitz_gradient_delta_direct_touched_row_serial(h) :
                          error("melitz_build_nuisance_profile_callbacks: gradient_backend must be " *
                                ":B_direct_argument_serial, :B_direct_argument_parallel, " *
-                               ":B_direct_argument_sorted_serial, or :B_direct_argument_sorted_parallel, " *
-                               "got $gradient_backend")
+                               ":B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel, " *
+                               "or :B_direct_argument_touched_row_serial, got $gradient_backend")
     if forbid_dense_fallback && !(obj_inner isa MelitzCCBundle)
         throw(ArgumentError(
             "melitz_build_nuisance_profile_callbacks: forbid_dense_fallback=true (strict " *

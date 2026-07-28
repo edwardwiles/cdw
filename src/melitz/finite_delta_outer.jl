@@ -428,7 +428,8 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
     # build_melitz_psi_bundle*'s own moment_backend kwarg) to be present; that check happens
     # inside the gradient closure itself (a clear ArgumentError there), not here.
     is_direct = gradient_backend in (:B_direct_argument_serial, :B_direct_argument_parallel,
-                                      :B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel)
+                                      :B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel,
+                                      :B_direct_argument_touched_row_serial)
     mj! = gradient_backend == :B ? make_melitz_moments_jacobian_b(h) :
           gradient_backend == :B_localized ? make_melitz_moments_jacobian_b_localized(h) :
           gradient_backend == :B_localized_parallel ? make_melitz_moments_jacobian_b_localized_parallel(h) :
@@ -439,7 +440,8 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
           error("gradient_backend must be :B, :B_localized, :B_localized_parallel, " *
                 ":B_argument_localized_serial, :B_argument_localized_parallel, " *
                 ":B_direct_argument_serial, :B_direct_argument_parallel, " *
-                ":B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel, or :D for " *
+                ":B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel, " *
+                ":B_direct_argument_touched_row_serial, or :D for " *
                 "the KNITRO-native Implicit path (Backend R does not fit the moments_jacobian! hook -- see file header)")
 
     if backend == :matrix_free
@@ -939,6 +941,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                          resolved_gradient_backend == :B_direct_argument_parallel ? make_melitz_gradient_delta_direct_parallel(h) :
                          resolved_gradient_backend == :B_direct_argument_sorted_serial ? make_melitz_gradient_delta_direct_sorted_serial(h) :
                          resolved_gradient_backend == :B_direct_argument_sorted_parallel ? make_melitz_gradient_delta_direct_sorted_parallel(h) :
+                         resolved_gradient_backend == :B_direct_argument_touched_row_serial ? make_melitz_gradient_delta_direct_touched_row_serial(h) :
                          nothing
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
     live_candidates = MelitzOuterCandidate[]
@@ -1018,8 +1021,20 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         # `G_precomputed` (the matrix-free `melitz_recover_lfd_from_solution` method ignores
         # it entirely, always using mul_G!/mul_Gt! on the operator already at this theta).
         G_now = melitz_bundle_current_G(obj)
+        # Governing prompt Phase 2 (2026-07-XX outer-search session): `full_equilibrium_check=
+        # false` -- this LIVE per-trial registration path only ever needs `gravity_feasible`
+        # (via `melitz_classify_outer_feasibility`, called immediately below), which reads
+        # ONLY `gravity_residual_A`/`gravity_residual_f` from the returned `.equilibrium_check`
+        # -- both computed identically either way (see `evaluate_melitz_delta_from_solution`'s
+        # own comment). Skips ~99.7% of a real-D20 FC's wall time (confirmed live,
+        # `docs/melitz_outer_search_scaling_and_profile_2026-07-XX.md` Phase 2) with NO change
+        # to which points get classified outer-feasible or registered as live candidates. The
+        # eventual COLD-VERIFIED incumbent this outer solve reports is always re-derived from
+        # scratch via `evaluate_melitz_delta(...; cold=true)` (below, unaffected by this kwarg,
+        # full diagnostic detail) -- never this live registration's own (deliberately partial)
+        # `check`.
         r = evaluate_melitz_delta_from_solution(theta, ctx, obj, Delta_val, x, nStatus;
-            G_precomputed=G_now)
+            G_precomputed=G_now, full_equilibrium_check=false)
         cls = melitz_classify_outer_feasibility(r, delta)
         cls.outer_feasible || return nothing
         push!(live_candidates, MelitzOuterCandidate(signed_objective(theta), r, cls, :live))
@@ -1103,7 +1118,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             # (Section 4.2), so a later call passed the same cache object -- even at a
             # DIFFERENT outer `delta`/`delta_evaluation_cap` -- can reuse this entry
             # (`DeltaStar(theta)` does not depend on the outer budget OR the evaluation cap).
-            melitz_exact_cache_insert!(exact_cache, key, result.Delta, result.x, result.nStatus,
+            @melitz_profile :fc_cache_insert melitz_exact_cache_insert!(exact_cache, key, result.Delta, result.x, result.nStatus,
                 melitz_heavy_snapshot(obj), ctx, obj.U)
             return (result.Delta, result.x, result.nStatus, :solved)
         elseif result isa InfiniteDeltaCertified

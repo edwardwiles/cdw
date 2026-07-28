@@ -1,0 +1,15 @@
+category,count,total_s,mean_ms,median_ms,p90_ms,max_ms,pct_of_fc_total
+fc_total_callback_success,1,0.01884433,18.84433,18.84433,18.84433,18.84433,99.32
+fc_candidate_registration,1,0.010985591,10.985591,10.985591,10.985591,10.985591,57.9
+fc_reg_lfd_recover,1,0.010808395,10.808395,10.808395,10.808395,10.808395,56.97
+fc_inner_obj_eval,1,0.004561649,4.561649,4.561649,4.561649,4.561649,24.04
+fc_inner_dpsi_eval,1,0.000909676,0.909676,0.909676,0.909676,0.909676,4.79
+fc_reg_outer_state,1,0.000112403,0.112403,0.112403,0.112403,0.112403,0.59
+outer_state_cutoff,1,5.2769e-5,0.052769,0.052769,0.052769,0.052769,0.28
+fc_reg_kkt_equilibrium_check,1,4.0337e-5,0.040337,0.040337,0.040337,0.040337,0.21
+outer_state_expand,1,3.7343e-5,0.037343,0.037343,0.037343,0.037343,0.2
+outer_state_constraints,1,1.5692e-5,0.015692,0.015692,0.015692,0.015692,0.08
+inner_solve_cache_hit,1,0.0,0.0,0.0,0.0,0.0,0.0
+VARIANT_A_direct_inner_solve,1,0.543909137,,,,,
+VARIANT_B_derived_fc_minus_registration,1,0.007986820000000002,,,,,
+VARIANT_C_complete_fc,1,0.018972411,,,,,100.0

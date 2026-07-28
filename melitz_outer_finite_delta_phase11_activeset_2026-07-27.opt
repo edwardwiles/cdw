@@ -1,0 +1,19 @@
+# Phase 11 (2026-07-27 outer-search session): real-D20 short diagnosis run.
+# algorithm=3 (Active Set) -- Phase 8's own D=4 finding: more robust to an untuned scaled
+# trust-region radius than the default Interior/Direct (algorithm=1), which ran away
+# catastrophically with the SAME scale set at D=4 (docs/key_results/
+# melitz_phase8_d4_scaled_algorithm_comparison_2026-07-27.csv). maxit raised (this is a time-
+# budgeted diagnosis run, not a quick maxit=25 regression check) and maxtime_real caps total
+# wall-clock directly.
+algorithm       3
+eval_fcga       no
+gradopt         exact
+hessopt         2
+feastol         1e-7
+feastol_abs     1e-8
+opttol          1e-3
+opttol_abs      1e-4
+maxit           2000
+maxtime_real    480
+outlev          3
+honorbnds       always

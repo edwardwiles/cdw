@@ -1,0 +1,16 @@
+metric,value
+wall,77.776792051
+nStatus,-101
+n_fc_calls,60
+n_ga_calls,4
+inner_solve_count,40
+inner_infeas_count,0
+dg_raw,0.0
+dA_raw_max,0.0
+df_raw_max,0.0
+fixed_af_kappa_ratio,0.9796971896005351
+fixed_af_GT,0.02030281039946491
+cold_verified_g,-0.418770712787832
+cold_verified_Delta,0.0004072069930638879
+cold_verified_kappa_ratio,0.9796971896005351
+cold_verified_GT,0.02030281039946491

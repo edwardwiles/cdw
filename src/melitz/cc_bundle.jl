@@ -189,19 +189,42 @@ end
 
 """
     build_melitz_cc_bundle(op, ctx; mode, U, outer_constr_index, find_smallest=true,
-                            lower_limit=-KNITRO.KN_INFINITY, inner_loop_opt, outer_loop_opt,
+                            lower_limit, inner_loop_opt, outer_loop_opt,
                             hessian_backend=:structured_serial) -> MelitzCCBundle
 
 `op` must already be constructed (`build_melitz_moment_operator`) for the same `(D, W)` as
 `U`; its fixed-outer-point fields are left stale until the first
 `melitz_update_operator_at_theta!` call (mirrors `MelitzMomentOperator`'s own construction
 contract).
+
+**`lower_limit` has NO default -- it is a required keyword argument, deliberately.** This
+codebase's own recorded history (see this repo's `CLAUDE.md` and the memory this exact class
+of mistake generated) shows the evaluation-cap early-abort (`(Q::MelitzCCBundle)`'s own
+functor: `if f <= Q.lower_limit; return -KN_INFINITY` -- telling KNITRO's inner solve to stop
+immediately once a point is certifiably bad) has been SILENTLY left inactive, repeatedly,
+across multiple sessions, because the previous default (`-KNITRO.KN_INFINITY`, i.e. "never
+fires") was easy to omit by accident -- especially from ad hoc diagnostic scripts that build a
+bundle directly rather than going through `build_melitz_implicit_bundle`/
+`solve_melitz_finite_delta_bound` (the only call sites that used to wire this up correctly). A
+previous session's own fix (`@assert isfinite(obj.lower_limit)` inside
+`solve_melitz_finite_delta_bound`) did not close this gap because that assert lives in ONE
+high-level convenience wrapper that a direct call to THIS constructor bypasses entirely --
+confirmed live: every diagnostic script this session wrote before this fix built a bundle
+this way and silently got an inert cap, one of them burning 10+ real minutes on an
+uncapped/poorly-conditioned inner solve as a direct, reproduced consequence. Removing the
+default converts this from "an easy-to-miss runtime footgun three call-levels away" into an
+immediate `MethodError`/`UndefKeywordError` at the exact construction call site, for every
+current AND future caller, including a future session's own throwaway script -- the
+compile-time enforcement a runtime assert elsewhere could not provide. Callers that
+deliberately want no cap (a handful of legitimate uncapped-evaluation test/diagnostic uses
+exist) must now pass `lower_limit=-KNITRO.KN_INFINITY` EXPLICITLY -- a conscious, visible
+choice at the call site, not a silent inherited default.
 """
 function build_melitz_cc_bundle(op::MelitzMomentOperator, ctx;
                                  mode::Symbol, U::AbstractMatrix,
                                  outer_constr_index::Int=op.layout.num_moments + 1,
                                  find_smallest::Bool=true,
-                                 lower_limit::Float64=-KNITRO.KN_INFINITY,
+                                 lower_limit::Float64,
                                  inner_loop_opt::AbstractString,
                                  outer_loop_opt::AbstractString,
                                  hessian_backend::Symbol=:structured_serial)
@@ -247,13 +270,23 @@ function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float
     zeta = x[1]
     mu = @view x[2:end]
 
-    mul_G!(Q.arg0, Q.op, zeta, mu)
-    melitz_cc_Psi!(Q.arg1, Q.arg0)
+    # Governing prompt Phase 2: this functor is KNITRO's own registered objective/gradient/
+    # Hessian callback for the inner dual solve -- called many times per single FC's inner
+    # KNITRO solve (every Newton iteration), so these are the direct, per-callback-body
+    # timers Phase 2 asks for ("inner objective/gradient/Hessian callback wall"), as opposed
+    # to the coarser whole-inner-solve wrapper timing that already existed
+    # (`:inner_solve_warm_success` etc., finite_delta_outer.jl). `@melitz_profile`'s own
+    # `time_ns()` overhead (~tens of ns) is negligible next to the real compute cost measured
+    # here even at this call frequency, and is exactly zero when MELITZ_PROFILE[] is off.
+    @melitz_profile :fc_inner_obj_eval begin
+        mul_G!(Q.arg0, Q.op, zeta, mu)
+        melitz_cc_Psi!(Q.arg1, Q.arg0)
+    end
     f = sum(Q.arg1) / Q.M + zeta
     MELITZ_MATRIX_FREE_OBJECTIVE_CALLS[] += 1
 
     if length(g) > 0 || length(h) > 0 || length(constr) > 0
-        melitz_cc_dPsi!(Q.arg1, Q.arg0)
+        @melitz_profile :fc_inner_dpsi_eval melitz_cc_dPsi!(Q.arg1, Q.arg0)
     end
 
     if length(constr) > 0
@@ -268,27 +301,31 @@ function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float
     end
 
     if length(g) > 0
-        g[1] = 1.0 - sum(Q.arg1) / Q.M
-        gmu = @view g[2:end]
-        mul_Gt!(gmu, Q.op, Q.arg1)
-        gmu .*= -1.0 / Q.M
+        @melitz_profile :fc_inner_grad_eval begin
+            g[1] = 1.0 - sum(Q.arg1) / Q.M
+            gmu = @view g[2:end]
+            mul_Gt!(gmu, Q.op, Q.arg1)
+            gmu .*= -1.0 / Q.M
+        end
         MELITZ_MATRIX_FREE_GRADIENT_CALLS[] += 1
     end
 
     if length(h) > 0
-        melitz_cc_ddPsi!(Q.arg2, Q.arg0)
-        if Q.hessian_backend == :structured_parallel
-            melitz_full_weighted_gram_parallel!(Q.Hfull, Q.op, Q.arg2)
-        else
-            melitz_full_weighted_gram!(Q.Hfull, Q.op, Q.arg2)
-        end
-        n = Q.d + 1
-        invM = 1.0 / Q.M
-        k = 1
-        @inbounds for i in 1:n
-            for j in i:n
-                h[k] = Q.Hfull[i, j] * invM
-                k += 1
+        @melitz_profile :fc_inner_hess_eval begin
+            melitz_cc_ddPsi!(Q.arg2, Q.arg0)
+            if Q.hessian_backend == :structured_parallel
+                melitz_full_weighted_gram_parallel!(Q.Hfull, Q.op, Q.arg2)
+            else
+                melitz_full_weighted_gram!(Q.Hfull, Q.op, Q.arg2)
+            end
+            n = Q.d + 1
+            invM = 1.0 / Q.M
+            k = 1
+            @inbounds for i in 1:n
+                for j in i:n
+                    h[k] = Q.Hfull[i, j] * invM
+                    k += 1
+                end
             end
         end
         MELITZ_MATRIX_FREE_HESSIAN_CALLS[] += 1
@@ -327,7 +364,14 @@ for `:implicit`-mode bundles (mirrors `melitz_moments_adapter!`'s own `K .=
 p.gamma_prime_target - 1`).
 """
 function melitz_update_operator_at_theta!(op::MelitzMomentOperator, theta::AbstractVector, ctx)
-    A, f, gamma_prime_j, f_jj = melitz_expand_theta(theta, ctx)
+    # Governing prompt Phase 2 (2026-07-XX outer-search session): split this function's own
+    # two economically distinct steps -- theta expansion (gravity-pivot reconstruction, O(D^2))
+    # and the moment-operator merge sweep (O(W*D)) -- into separate `@melitz_profile`
+    # categories, since a prior closure session's own audit (docs/melitz_final_allocation_and_
+    # gradient_closure_2026-07-27.md Phase 1.4) measured this whole function at ~2KB/32KB
+    # (D=4/real D=20) but never isolated which of the two sub-steps a real FC's wall-time
+    # actually goes to. Zero-cost when MELITZ_PROFILE[] is off (the macro's own guarantee).
+    A, f, gamma_prime_j, f_jj = @melitz_profile :fc_theta_expand melitz_expand_theta(theta, ctx)
     D = ctx.D
     primitives = MelitzPrimitives(D, ctx.sigma, ctx.theta_star, ctx.target_country,
                                    ctx.tau, ctx.w, A, f, gamma_prime_j)
@@ -335,7 +379,7 @@ function melitz_update_operator_at_theta!(op::MelitzMomentOperator, theta::Abstr
     eq = MelitzEquilibrium(ctx.expenditure, ones(Float64, D), cutoff, ctx.X_data)
     expenditure_prime = ctx.w_prime * ctx.L[ctx.target_country]
     cf = MelitzCounterfactual(ctx.target_country, ctx.w_prime, expenditure_prime, 1.0, expenditure_prime)
-    melitz_update_moment_operator!(op, primitives, eq, cf; X_data=ctx.X_data)
+    @melitz_profile :fc_operator_merge melitz_update_moment_operator!(op, primitives, eq, cf; X_data=ctx.X_data)
     MELITZ_OPERATOR_REBUILDS[] += 1
     return gamma_prime_j
 end
@@ -598,6 +642,79 @@ function _direct_coordinate_grad_sorted(cc::MelitzCompactColumns, theta_p::Abstr
     L_plus = sum(psi_buf) / W
     melitz_cc_Psi!(psi_buf, u_minus)
     L_minus = sum(psi_buf) / W
+
+    return -1e10 * (L_plus - L_minus) / (2h)
+end
+
+"""
+_direct_coordinate_grad_touched_row (touched_row_gradient.jl) for the matrix-free bundle:
+same touched-row-only accumulate/evaluate as the generic method, `gbase` reconstructed from
+operator fields (`_melitz_op_gbase`/`op.ell`) instead of `obj.H`, mirroring
+`_direct_coordinate_grad_sorted`'s own MelitzCCBundle-specific method immediately above.
+"""
+function _direct_coordinate_grad_touched_row(cc::MelitzCompactColumns, theta_p::AbstractVector{Float64},
+                                              theta_m::AbstractVector{Float64}, ctx, obj::MelitzCCBundle,
+                                              sorted_ctx::MelitzSortedTailContext, lambda::AbstractVector{Float64},
+                                              arg0_base::AbstractVector{Float64}, psi_base::AbstractVector{Float64},
+                                              base_scalar_sum::Float64, h::Real,
+                                              Gp::AbstractMatrix{Float64}, Gm::AbstractMatrix{Float64},
+                                              union_start::AbstractVector{Int}, linkp::AbstractVector{Float64},
+                                              linkm::AbstractVector{Float64}, profit::AbstractVector{Float64},
+                                              delta_plus::Vector{Float64}, delta_minus::Vector{Float64},
+                                              touched_gen::Vector{Int}, gen::Int, touched_list::Vector{Int},
+                                              state_p::MelitzExpandedState, state_m::MelitzExpandedState,
+                                              ws::MelitzThetaExpansionWorkspace)
+    W = length(arg0_base)
+    layout = ctx.moment_layout
+    ncols = length(cc.direct_cols)
+    op = obj.op
+    empty!(touched_list)
+
+    melitz_expand_theta!(state_p, theta_p, ctx, ws)
+    melitz_expand_theta!(state_m, theta_m, ctx, ws)
+
+    if ncols > 0
+        _fill_compact_direct_columns_crossing_sorted!(Gp, Gm, union_start, ctx, sorted_ctx,
+            cc.direct_cells, ncols, state_p, state_m)
+        @inbounds for idx in 1:ncols
+            gcol = cc.direct_cols[idx]
+            lam_k = lambda[gcol]
+            (o, d) = cc.direct_cells[idx]
+            perm_o = @view sorted_ctx.permutation[:, o]
+            kunion = union_start[idx]
+            for pos in kunion:W
+                w = perm_o[pos]
+                gbase = _melitz_op_gbase(op, o, d, w)
+                cp = -lam_k * (Gp[w, idx] - gbase)
+                cm = -lam_k * (Gm[w, idx] - gbase)
+                _touch_row!(w, cp, cm, delta_plus, delta_minus, touched_gen, gen, touched_list)
+            end
+        end
+    end
+
+    if cc.touches_link
+        _fill_compact_link_from_state!(linkp, profit, ctx, obj, state_p)
+        _fill_compact_link_from_state!(linkm, profit, ctx, obj, state_m)
+        lam_link = lambda[layout.focal_link_index]
+        ell = op.ell
+        @inbounds for w in 1:W
+            gbase = ell[w]
+            cp = -lam_link * (linkp[w] - gbase)
+            cm = -lam_link * (linkm[w] - gbase)
+            _touch_row!(w, cp, cm, delta_plus, delta_minus, touched_gen, gen, touched_list)
+        end
+    end
+
+    scalar_plus = 0.0
+    scalar_minus = 0.0
+    @inbounds for w in touched_list
+        up_val = arg0_base[w] + delta_plus[w]
+        um_val = arg0_base[w] + delta_minus[w]
+        scalar_plus += _touched_row_psi_scalar(up_val) - psi_base[w]
+        scalar_minus += _touched_row_psi_scalar(um_val) - psi_base[w]
+    end
+    L_plus = (base_scalar_sum + scalar_plus) / W
+    L_minus = (base_scalar_sum + scalar_minus) / W
 
     return -1e10 * (L_plus - L_minus) / (2h)
 end

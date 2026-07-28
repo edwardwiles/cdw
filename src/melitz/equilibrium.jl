@@ -869,16 +869,40 @@ function recover_N_prime_price_index(p::MelitzPrimitives, cf::MelitzCounterfactu
 end
 
 """
-    check_profiled_melitz_equilibrium(p, eq, cf, z_draws, weights) -> MelitzEquilibriumCheck
+    check_profiled_melitz_equilibrium(p, eq, cf, z_draws, weights; full=true) -> MelitzEquilibriumCheck
 
 Main prompt Section 9 / addendum Section 9: every omitted-equilibrium-equation residual,
 evaluated under the recovered LFD `weights` (never reference/equal weights). See
 `MelitzEquilibriumCheck`'s docstring for the field-by-field mapping to Section 9.1-9.9.
+
+Governing prompt Phase 2 (2026-07-XX outer-search session): `full=false` skips every `O(D^2*W)`
+loop above (Sections 9.1-9.6, 9.9 -- confirmed live to be the ENTIRE cost of this function,
+`docs/melitz_outer_search_scaling_and_profile_2026-07-XX.md` Phase 2: ~99.8% of one real-D20
+finite FC's own wall time) and computes ONLY `gravity_residual_A`/`gravity_residual_f`
+(Section 9.8, `gravity_residuals(p)` -- a function of `p` ALONE, `O(D^2)`, no dependence on
+`z_draws`/`weights` at all) -- the ONLY two fields any production code path actually reads
+(confirmed by grep: `melitz_classify_outer_feasibility`'s own `gravity_feasible` line is the
+SOLE consumer of `.equilibrium_check` anywhere in `src/melitz/`). Every other field is filled
+with `NaN` (or the appropriately NaN-filled vector), never a stale/zero value that could be
+silently mistaken for a real diagnostic -- callers that need the full diagnostic detail (the
+eventual cold-verified final answer, which always calls `evaluate_melitz_delta(...; cold=true)`
+fresh, never reusing a live registration's own possibly-cheap check) must pass `full=true`
+(the default, byte-identical to this function's pre-existing behavior for every existing
+caller).
 """
 function check_profiled_melitz_equilibrium(p::MelitzPrimitives, eq::MelitzEquilibrium,
                                             cf::MelitzCounterfactual,
-                                            z_draws::AbstractMatrix, weights::AbstractVector)
+                                            z_draws::AbstractMatrix, weights::AbstractVector;
+                                            full::Bool=true)
     D = p.D
+    if !full
+        gravity_residual_A, gravity_residual_f = gravity_residuals(p)
+        Tg = typeof(gravity_residual_A)
+        nanD = fill(Tg(NaN), D)
+        nanS = Tg(NaN)
+        return MelitzEquilibriumCheck(nanD, nanD, nanD, nanS, nanS, nanS, nanS, nanS, nanS, nanS, nanS,
+            nanS, nanS, nanS, nanS, gravity_residual_A, gravity_residual_f)
+    end
     j = p.target_country
 
     # 9.1 baseline price-index identities

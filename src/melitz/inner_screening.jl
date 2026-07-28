@@ -790,7 +790,7 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     # (default `:previous`, a no-op reproducing all pre-existing behavior) immediately before
     # the one real KNITRO attempt -- never a routine cold retry, addendum Section 1's policy
     # is otherwise unchanged.
-    melitz_resolve_warm_start!(obj, bank, theta, warm_start_source)
+    @melitz_profile :fc_warm_start_resolve melitz_resolve_warm_start!(obj, bank, theta, warm_start_source)
     t_solve_start_ns = time_ns()   # evaluation-cap-correction session: base for crossing_time_s below
     # 2026-07-26 production-port session: melitz_bundle_inner_solve! (cc_bundle.jl) dispatches
     # to CS.inner_loop_internal for the legacy bundles (generic method) or the Melitz-owned

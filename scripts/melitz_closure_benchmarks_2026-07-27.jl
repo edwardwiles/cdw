@@ -61,6 +61,7 @@ n20 = length(theta0_20)
 op20 = build_melitz_moment_operator(ctx20.sorted_tail_ctx, ctx20.moment_layout)
 obj20 = build_melitz_cc_bundle(op20, ctx20; mode=:delta, U=z_draws,
     outer_constr_index=ctx20.moment_layout.num_moments + 1,
+    lower_limit=-10.0,   # explicit evaluation-cap wire-up -- build_melitz_cc_bundle no longer has a dangerous default (see cc_bundle.jl docstring); matches this session's standard delta_evaluation_cap=10.0 convention so a poorly-conditioned point fails fast instead of grinding on an uncapped inner solve
     inner_loop_opt=ctx20.inner_loop_opt, outer_loop_opt=ctx20.outer_loop_opt,
     hessian_backend=:structured_serial)
 r0_20 = evaluate_melitz_delta(theta0_20, ctx20, obj20; cold=true, store_G=false)

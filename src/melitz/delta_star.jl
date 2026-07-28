@@ -1092,9 +1092,10 @@ function evaluate_melitz_delta_from_solution(theta_free::AbstractVector, ctx, ob
                                               Delta_val::Real, x::AbstractVector, nStatus::Integer;
                                               kkt_opt_error::Real=NaN, kkt_feas_error::Real=NaN,
                                               store_G::Bool=false,
-                                              G_precomputed::Union{Nothing,AbstractMatrix}=nothing)
-    state = melitz_outer_state(theta_free, ctx)
-    lfd = melitz_recover_lfd_from_solution(Float64(Delta_val), x, nStatus, theta_free, obj_like;
+                                              G_precomputed::Union{Nothing,AbstractMatrix}=nothing,
+                                              full_equilibrium_check::Bool=true)
+    state = @melitz_profile :fc_reg_outer_state melitz_outer_state(theta_free, ctx)
+    lfd = @melitz_profile :fc_reg_lfd_recover melitz_recover_lfd_from_solution(Float64(Delta_val), x, nStatus, theta_free, obj_like;
         kkt_opt_error=kkt_opt_error, kkt_feas_error=kkt_feas_error, G_precomputed=G_precomputed)
 
     G_out = nothing
@@ -1111,8 +1112,24 @@ function evaluate_melitz_delta_from_solution(theta_free::AbstractVector, ctx, ob
     end
 
     verified = state.feasible && lfd.lfd_ok && lfd.nStatus == 0
-    check = verified ? check_profiled_melitz_equilibrium(
-        state.primitives, state.equilibrium, state.counterfactual, obj_like.U, lfd.weights) : nothing
+    # Governing prompt Phase 2 (2026-07-XX outer-search session): `full_equilibrium_check=false`
+    # (opt-in, default `true` preserves every pre-existing caller's behavior byte-for-byte)
+    # skips the O(D^2*W) diagnostic loops inside `check_profiled_melitz_equilibrium` --
+    # confirmed live to be ~99.7% of one real-D20 finite FC's own wall time
+    # (`docs/melitz_outer_search_scaling_and_profile_2026-07-XX.md` Phase 2) -- and computes
+    # only the two fields `melitz_classify_outer_feasibility`'s own `gravity_feasible` line
+    # actually reads (`gravity_residual_A`/`gravity_residual_f`, an O(D^2) function of the
+    # primitives alone, confirmed by grep to be the SOLE production consumer of
+    # `.equilibrium_check` anywhere in this codebase). `register_live_candidate!`
+    # (`finite_delta_outer.jl`) -- the per-trial LIVE registration hot path, called on every
+    # accepted finite FC, not just the final answer -- passes `full_equilibrium_check=false`;
+    # the eventual cold-verified incumbent is ALWAYS re-derived via a fresh
+    # `evaluate_melitz_delta(...; cold=true)` call (this function's own caller two levels up),
+    # which does NOT pass this kwarg and therefore gets the complete diagnostic detail,
+    # unaffected.
+    check = verified ? (@melitz_profile :fc_reg_kkt_equilibrium_check check_profiled_melitz_equilibrium(
+        state.primitives, state.equilibrium, state.counterfactual, obj_like.U, lfd.weights;
+        full=full_equilibrium_check)) : nothing
 
     return MelitzDeltaEvalResult(
         Vector{Float64}(theta_free), state.A, state.f, state.gamma_prime_j, state.f_jj,
