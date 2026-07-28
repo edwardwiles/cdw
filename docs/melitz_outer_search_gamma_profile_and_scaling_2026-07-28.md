@@ -159,6 +159,22 @@ Script: `scripts/melitz_phase2_fixed_af_gamma_profile_2026-07-28.jl`. Full CSVs:
 ![D4 DeltaStar vs GT](key_results/melitz_phase2_gamma_profile_d4_GT_2026-07-28.png)
 ![real D20 DeltaStar vs GT](key_results/melitz_phase2_gamma_profile_realD20_GT_2026-07-28.png)
 
+**On the two `NumericalFailure` rows (D4 `frac=0.50`, D20 `frac=0.80`) -- verified NOT the
+historical missing-`lower_limit` bug**: both fixtures' bundles were constructed with an
+explicit `MelitzInnerSolveConfig(:diagnostic; delta_evaluation_cap=50.0)` passed as
+`inner_solve_config` (`scripts/melitz_phase2_fixed_af_gamma_profile_2026-07-28.jl:163,183`),
+which sets `obj.lower_limit=-50.0` at construction (never the disabled `-KN_INFINITY`
+default) -- the exact mandatory-cap pattern this repo's 2026-07-26 session made "impossible
+to omit." Both `NumericalFailure` rows carry the underlying KNITRO status `nStatus=-300`
+(`KN_RC_UNBOUNDED`, confirmed directly against the installed `knitro.h`: "the problem was
+determined to be unbounded") and returned in **0.061s** (D4) / **1.41s** (D20) -- this
+repo's own `docs/melitz_optimization_report_2026-07-23_screening_continuation.md` documents
+that `-300` fires in `7-15ms` WITH the guard active vs. far longer without it, so this fast
+return is itself evidence the cap was live, not a symptom of it being missing.
+`NumericalFailure` is the taxonomy's deliberately conservative "no certificate obtained"
+bucket -- distinct from a solved point, a proven-infinite point, and a cap certificate --
+and is expected behavior at a `theta` the model genuinely cannot rationalize, not a bug.
+
 **Cross-validation**: the interpolated `Delta=1` boundary (between frac 0.50 and 0.65) matches
 the 2026-07-24 companion report's own independently-bisected root `g_fixed=-0.49783321,
 Delta=0.9969` closely (that point sits at frac~0.55 on this grid). **Both fixtures show a
