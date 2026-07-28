@@ -71,10 +71,23 @@ mutable struct WinnerBinCrossScratch
 end
 
 function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
+    # D=20 profiling task (2026-07-28) bugfix: the last two positional args here were swapped
+    # relative to the struct's own field order (`tasks_ec::Vector{Task}` THEN
+    # `EsumEcon::Vector{Float64}`) -- this constructor was passing `zeros(ncolI)` (a
+    # Vector{Float64}) into the `tasks_ec::Vector{Task}` slot and `Vector{Task}(undef,...)` into
+    # the `EsumEcon::Vector{Float64}` slot, which Julia's auto-generated inner constructor cannot
+    # convert (confirmed live: `MethodError: Cannot convert an object of type Float64 to an
+    # object of type Task`, thrown from this exact call). Reproduced on a genuinely FRESH build
+    # (`cctx.cross_scratch === nothing`, i.e. `_ensure_cm_cross_scratch!`'s first-ever call for a
+    # given (ncolI,D,L)) -- a real, pre-existing latent bug in this task's own `tasks_ec` field
+    # addition (introduced when `tasks_ec` was inserted ahead of the pre-existing `EsumEcon`
+    # field without updating this positional call), not something this profiling task's own edits
+    # caused. Fix: swap the two arguments to match field order (Vector{Task} first, then the
+    # zeros(ncolI) Vector{Float64}).
     return WinnerBinCrossScratch(ncolI, D, L,
         zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
         zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L),
-        zeros(ncolI), Vector{Task}(undef, Threads.nthreads()))
+        Vector{Task}(undef, Threads.nthreads()), zeros(ncolI))
 end
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(ncolI, D, L)` -- mirrors this codebase's own `resize_*_if_needed!` idiom."
