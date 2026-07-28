@@ -52,6 +52,10 @@ function frechet_level_targets(D::Int, L::Int; probs::Union{Nothing,AbstractVect
     p = frechet_level_probs(L; probs = probs)
     return sqrt(D) .* p
 end
+# CMFrechetExtension is defined in cm_frechet_hessian.jl (not here) -- every current include-list
+# ordering (D=4/D=20 equivalence gates, smoke scripts) loads cm_frechet_hessian.jl either before
+# or independently of this file, but the reverse is not true for the two equivalence-gate scripts,
+# which load cm_frechet_hessian.jl BEFORE cm_frechet_level.jl.
 
 """
     precalc_frechet_level_dense(U, z, D, targets) -> Matrix{Float64}  (W x L)
@@ -405,6 +409,10 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
         # archC_verified_state exactly.
         cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins, inner_fg_backend = inner_fg_backend,
             cm_cross_hessian_backend = cm_cross_hessian_backend)
+        # harmonization task (2026-07-28): archC_frechet_hess_cb_builder's public signature is
+        # unchanged (still bare level_targets) -- it now internally resolves and caches a
+        # persistent CMFrechetExtension on cctx.frechet_ext_cache (_resolve_frechet_ext!,
+        # cm_frechet_hessian.jl), so this call site needs no change beyond this comment.
         hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, aug.level_targets)
         aug = merge(aug, (cctx = cctx,))
     else

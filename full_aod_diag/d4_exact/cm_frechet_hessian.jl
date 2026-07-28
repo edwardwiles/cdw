@@ -26,6 +26,35 @@
 # ================================================================================================
 
 """
+    CMFrechetExtension(D, L, nO, NCORE, level_targets)
+
+Harmonization task (2026-07-28): the narrow, genuinely Fréchet-only "CM-F" (common-level anchor)
+state -- owns `level_targets` (previously threaded as a bare positional argument through every
+Fréchet function) plus the level-block Hessian scratch (`Wtab`/`T1`/`Esum_wb`/`colsum`/
+`Hraw_cmlevel`), which `hessian_cm_frechet_structured!`/`_v2!` previously reallocated FRESH on
+every single KNITRO Hessian callback (`zeros(D, L+1)`, `zeros(D, L)`, two `Vector{Float64}(undef,
+NCORE)`, `Vector{Float64}(undef, nO)`) -- now sized once here and reused, the same persistent-
+scratch pattern `CMBinHessCtx` already uses for `Hraw_EC`/`Hraw_CC`/etc. Does NOT own or duplicate
+any economic state, CM bins/contrasts, or `CMBinHessCtx` fields -- only what §10 of the
+harmonization task explicitly scopes to the extension. Defined here (not in cm_frechet_level.jl,
+where `level_targets` itself is computed) because every current include-list ordering loads this
+file no later than that one, and the two real equivalence-gate scripts load it strictly earlier.
+"""
+mutable struct CMFrechetExtension
+    level_targets::Vector{Float64}
+    Wtab::Matrix{Float64}
+    T1::Matrix{Float64}
+    Esum_wb::Vector{Float64}
+    colsum::Vector{Float64}
+    Hraw_cmlevel::Vector{Float64}
+end
+
+function CMFrechetExtension(D::Int, L::Int, nO::Int, NCORE::Int, level_targets::Vector{Float64})
+    return CMFrechetExtension(level_targets, zeros(D, L + 1), zeros(D, L),
+        Vector{Float64}(undef, NCORE), Vector{Float64}(undef, NCORE), Vector{Float64}(undef, nO))
+end
+
+"""
     hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64})
 
 Architecture-C Hessian callback for `marginal_restriction=:common_frechet`. Requires `cctx` to have
@@ -45,7 +74,8 @@ only sees the target through a harmless constant shift of `arg0`). See
 Same precondition as `hessian_cm_structured!`: `obj.arg0` must already reflect the current
 (zeta,lambda) (`_archC_prep_for_hessian!` first).
 """
-function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64})
+function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, frechet_ext::CMFrechetExtension)
+    level_targets = frechet_ext.level_targets
     # True no-H operator bundle (2026-07-28 continuation): was `@unpack H, M, arg0, arg2, ddPsi! =
     # obj` -- an unconditional H unpack that would throw immediately on OperatorPsiBundle (no H
     # field). Mirrors flexible-CM's own hessian_cm_structured! fix exactly (cm_hessian_architectures.jl):
@@ -125,14 +155,20 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
     # (one BLAS gemv). ----
     Bidx = cctx.Bidx
     Wraw = size(Bidx, 1)
-    Wtab = zeros(D, L + 1)
+    # harmonization task (2026-07-28): Wtab/T1 are now persistent (frechet_ext), reused across
+    # calls instead of `zeros(...)`-reallocated on every single KNITRO Hessian callback -- Wtab is
+    # an accumulator (`+=`) so it must be explicitly zeroed each call; T1/Esum_wb/colsum/
+    # Hraw_cmlevel below are all fully overwritten per call (direct assignment or a from-scratch
+    # BLAS/loop fill), so no reset is needed for those.
+    Wtab = frechet_ext.Wtab
+    fill!(Wtab, 0.0)
     @inbounds for s in 1:Wraw
         ws = w[s]
         for x in 1:D
             Wtab[x, Bidx[s, x]] += ws
         end
     end
-    T1 = zeros(D, L)
+    T1 = frechet_ext.T1
     @inbounds for x in 1:D
         acc = 0.0
         for l in 1:L
@@ -151,9 +187,9 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
     # -- no dense `E`/`obj.H` read at all in the fast path.
     level_off = NCORE + ncm_cm   # level columns are level_off+1 : level_off+L
     if use_winner_bin
-        Esum_wb = Vector{Float64}(undef, NCORE)
+        Esum_wb = frechet_ext.Esum_wb
         winner_pair_cross_hessian_esum!(Esum_wb, wctx, cross_ws, w, Wtot)
-        colsum = Vector{Float64}(undef, NCORE)
+        colsum = frechet_ext.colsum
         @inbounds for l in 1:L
             tl = level_targets[l]
             winner_pair_cross_hessian_colsum!(colsum, wctx, cross_ws, l)
@@ -167,7 +203,7 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
         # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
         record_dense_frechet_g!()
         E = @view H[:, 2:1+NCORE]
-        Esum = Vector{Float64}(undef, NCORE)
+        Esum = frechet_ext.Esum_wb
         mul!(Esum, E', w)
         @inbounds for l in 1:L
             tl = level_targets[l]
@@ -184,7 +220,7 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
     end
 
     # ---- NEW: H_CM,level (CM x level), O(D^2*L^2) worst case (same order as H_CC's own loop) ----
-    Hraw_cmlevel = Vector{Float64}(undef, nO)
+    Hraw_cmlevel = frechet_ext.Hraw_cmlevel
     @inbounds for l in 1:L
         for lp in 1:L
             tlp = level_targets[lp]
@@ -234,6 +270,26 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
 end
 
 """
+    _resolve_frechet_ext!(cctx::CMBinHessCtx, level_targets::Vector{Float64}) -> CMFrechetExtension
+
+Harmonization task (2026-07-28): lazily builds and caches a `CMFrechetExtension` on
+`cctx.frechet_ext_cache` (the same "typed Any cache field, built once, reused every call" pattern
+`core_ws`/`cmlookup_st` already use on this struct), keeping every EXISTING external caller of
+`archC_frechet_hess_cb_builder` (which historically passed a bare `level_targets::Vector{Float64}`)
+unchanged, while still giving `hessian_cm_frechet_structured!`/`_v2!` a persistent, concretely-typed
+extension object instead of reallocating scratch on every KNITRO Hessian callback. `level_targets`
+identity is not re-checked on the fast path (this cctx is built once per campaign for one fixed
+`level_targets` vector, exactly like every other "fixed once `cctx` is built" field on this struct).
+"""
+function _resolve_frechet_ext!(cctx::CMBinHessCtx, level_targets::Vector{Float64})
+    cached = cctx.frechet_ext_cache
+    cached isa CMFrechetExtension && return cached
+    ext = CMFrechetExtension(cctx.D, cctx.L, cctx.nO, cctx.NCORE, level_targets)
+    cctx.frechet_ext_cache = ext
+    return ext
+end
+
+"""
     archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector{Float64})
 
 KNITRO callback builder for the common-Fréchet level-block Hessian, mirroring
@@ -245,15 +301,20 @@ W=80,000/L=50 point, `test_cm_frechet_threaded_hessian_gates.jl`), falling back 
 serial `hessian_cm_frechet_structured!` unchanged when `cctx.use_threaded_bins` is false. Closes
 the disclosed gap in the prior session's own verdict ("the threaded bin-table variant is NOT
 extended for the level block yet").
+
+Harmonization task (2026-07-28): resolves (and caches, see `_resolve_frechet_ext!`) a
+`CMFrechetExtension` from `level_targets` -- the public signature is unchanged so every existing
+caller (production, tests, diagnostics) needs no update.
 """
 function archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector{Float64})
+    frechet_ext = _resolve_frechet_ext!(cctx, level_targets)
     if cctx.use_threaded_bins
         return (kc, cb, evalRequest, evalResult, userParams) -> begin
             o = userParams
             xloc = evalRequest.x
             @prof "inner_dual_hessian_callback_archC_frechet" begin
                 _prep_dual_index_for_archC!(cctx, o, xloc)
-                hessian_cm_frechet_structured_v2!(evalResult.hess, o, cctx, level_targets; threaded_bins = true, tls = cctx.tls)
+                hessian_cm_frechet_structured_v2!(evalResult.hess, o, cctx, frechet_ext; threaded_bins = true, tls = cctx.tls)
             end
             _INNER_CALL_COUNTERS[].n_hess_calls += 1
             return 0
@@ -272,7 +333,7 @@ function archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector
             # re-reading a real `obj.H` that already existed) and only became a hard failure once a
             # bundle with no `H` field at all was constructed. Fixed to match the threaded branch.
             _prep_dual_index_for_archC!(cctx, o, xloc)
-            hessian_cm_frechet_structured!(evalResult.hess, o, cctx, level_targets)
+            hessian_cm_frechet_structured!(evalResult.hess, o, cctx, frechet_ext)
         end
         _INNER_CALL_COUNTERS[].n_hess_calls += 1
         return 0

@@ -33,9 +33,10 @@ correctness gate. `use_syrk` is intentionally omitted (matching `hessian_cm_stru
 note: `_fill_cm_HEE!`'s shared dense fallback always uses `gemm!`; H_EE dispatch is identical
 either way).
 """
-function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64};
+function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, frechet_ext::CMFrechetExtension;
                                             threaded_bins::Bool = false,
                                             tls::Union{Nothing,ThreadLocalBinScratch} = nothing)
+    level_targets = frechet_ext.level_targets
     # True no-H operator bundle (2026-07-28 continuation): same fix as the serial
     # hessian_cm_frechet_structured! (cm_frechet_hessian.jl) -- see that function's own comment.
     @unpack M, arg0, arg2, ddPsi! = obj
@@ -110,16 +111,19 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
     fill_cm_HCC!(Hfull, cctx, M)
 
     # ---- level-block terms: verbatim from hessian_cm_frechet_structured! ----
+    # harmonization task (2026-07-28): Wtab/T1 now persistent (frechet_ext) -- see the serial
+    # function's identical note.
     Bidx = cctx.Bidx
     Wraw = size(Bidx, 1)
-    Wtab = zeros(D, L + 1)
+    Wtab = frechet_ext.Wtab
+    fill!(Wtab, 0.0)
     @inbounds for s in 1:Wraw
         ws = w[s]
         for x in 1:D
             Wtab[x, Bidx[s, x]] += ws
         end
     end
-    T1 = zeros(D, L)
+    T1 = frechet_ext.T1
     @inbounds for x in 1:D
         acc = 0.0
         for l in 1:L
@@ -134,9 +138,9 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
     # bin-table construction above it. ----
     level_off = NCORE + ncm_cm
     if use_winner_bin
-        Esum_wb = Vector{Float64}(undef, NCORE)
+        Esum_wb = frechet_ext.Esum_wb
         winner_pair_cross_hessian_esum!(Esum_wb, wctx, cross_ws, w, Wtot)
-        colsum = Vector{Float64}(undef, NCORE)
+        colsum = frechet_ext.colsum
         @inbounds for l in 1:L
             tl = level_targets[l]
             winner_pair_cross_hessian_colsum!(colsum, wctx, cross_ws, l)
@@ -150,7 +154,7 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
         # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
         record_dense_frechet_g!()
         E = @view H[:, 2:1+NCORE]
-        Esum = Vector{Float64}(undef, NCORE)
+        Esum = frechet_ext.Esum_wb
         mul!(Esum, E', w)
         @inbounds for l in 1:L
             tl = level_targets[l]
@@ -166,7 +170,7 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
         end
     end
 
-    Hraw_cmlevel = Vector{Float64}(undef, nO)
+    Hraw_cmlevel = frechet_ext.Hraw_cmlevel
     @inbounds for l in 1:L
         for lp in 1:L
             tlp = level_targets[lp]
@@ -210,24 +214,9 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
     return h
 end
 
-"""
-    archC_frechet_hess_cb_builder_v2(cctx, level_targets; threaded_bins=false, tls=nothing)
-
-KNITRO Hessian-callback builder wrapping `hessian_cm_frechet_structured_v2!`, mirroring
-`archC_hess_cb_builder_v2`'s wiring exactly (same `@prof` label suffixed `_v2`,
-`_INNER_CALL_COUNTERS[].n_hess_calls` bookkeeping).
-"""
-function archC_frechet_hess_cb_builder_v2(cctx::CMBinHessCtx, level_targets::Vector{Float64};
-                                           threaded_bins::Bool = false,
-                                           tls::Union{Nothing,ThreadLocalBinScratch} = nothing)
-    return (kc, cb, evalRequest, evalResult, userParams) -> begin
-        o = userParams
-        xloc = evalRequest.x
-        @prof "inner_dual_hessian_callback_archC_frechet_v2" begin
-            _archC_prep_for_hessian!(o, xloc)
-            hessian_cm_frechet_structured_v2!(evalResult.hess, o, cctx, level_targets; threaded_bins = threaded_bins, tls = tls)
-        end
-        _INNER_CALL_COUNTERS[].n_hess_calls += 1
-        return 0
-    end
-end
+    # harmonization task (2026-07-28): removed dead archC_frechet_hess_cb_builder_v2 -- confirmed
+    # zero call sites in the repo (only archC_frechet_hess_cb_builder in cm_frechet_hessian.jl is
+    # the real production dispatcher, which already handles both threaded_bins branches). This
+    # dead function also called the legacy dense-only _archC_prep_for_hessian! rather than the
+    # dense-G-free _prep_dual_index_for_archC! flexible CM/the real Fréchet builder use -- another
+    # sign it predates the no-H work and was never updated because nothing calls it.

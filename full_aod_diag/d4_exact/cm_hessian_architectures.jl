@@ -568,6 +568,16 @@ mutable struct CMBinHessCtx
     # `inner_loop_internal_cmlookup_production` (which only receives `cctx`, not `ctx`) the same
     # access without threading a new argument through every call site.
     econ_ctx::Any
+    # Harmonization task (2026-07-28): lazily-built, persistent CMFrechetExtension (level_targets +
+    # level-block Hessian scratch), reused across EVERY subsequent common-Fréchet Hessian callback
+    # at this cctx -- same "typed Any purely to avoid a forward reference, nothing until first use"
+    # pattern as `cmlookup_st` above (CMFrechetExtension is defined in cm_frechet_hessian.jl,
+    # included after this file). `nothing` for every other family (plain CM/CM+ZC/origin-ZC/
+    # unrestricted never populate this). Kept as a cache resolved inside
+    # `archC_frechet_hess_cb_builder` rather than threaded through every one of that function's own
+    # (many, historical) callers as a new required argument -- this field is the substitute for
+    # widening that public call chain.
+    frechet_ext_cache::Any
 end
 
 """
@@ -613,7 +623,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cm_cross_hessian_backend, nothing,
         :dense_reference, nothing,   # zc_cross_hessian_backend/zc_cross_scratch: plain CM never widens (no ZC block)
         nothing, nothing, nothing, Ref(Float64[]), nothing, nothing,   # hzz_zc_op/layout/ws/nu_ref/hzz_centered/bin_zc_cross: plain CM has no ZC block at all
-        ctx)   # econ_ctx: true no-H operator bundle continuation
+        ctx,   # econ_ctx: true no-H operator bundle continuation
+        nothing)   # frechet_ext_cache: harmonization task -- lazily built, nothing until first common-Fréchet Hessian call
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
