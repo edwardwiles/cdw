@@ -1,0 +1,11 @@
+quantity,value
+lower_limit_active,true
+resolved_gradient_backend,B_direct_argument_sorted_parallel
+dense_moment_calls,0
+dense_G_materializations,0
+explicit_serial_despite_parallel_count,0
+finite_FC_wall_s,6.57970404624939
+infinite_or_abovecap_FC_wall_s,0.8283979892730713
+outer_gradient_wall_s,6.615340948104858
+n_theta,798
+julia_threads,20

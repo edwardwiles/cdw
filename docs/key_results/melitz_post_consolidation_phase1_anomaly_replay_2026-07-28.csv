@@ -1,0 +1,11 @@
+quantity,value
+cap,10.0
+g_pt,-0.48546126592859407
+r0_result_type,FiniteSolved
+r0_Delta,0.4832764950468894
+r_new_result_type,InfiniteDeltaCertified
+r_new_FiniteSolved,false
+r_new_column,12
+r_new_kind,origin_block
+wall_r0_s,7.572422027587891
+wall_r_new_s,0.5023539066314697

@@ -1,0 +1,12 @@
+prior_result,triage,evidence
+1.5e14 FiniteSolved anomaly,confirmed_fixed,"Phase 1: bit-exact InfiniteDeltaCertified(column=12 kind=origin_block) reproduction; assertion that r_new != FiniteSolved passed"
+D4 fixed-A/f profile,confirmed_unchanged,"Phase 2: pareto/delta~0.1/delta~0.5 all FiniteSolved nStatus=0 Delta values match original profile closely; delta~1/2 correctly unreachable (matches known corridor limit)"
+real-D20 fixed-A/f profile,confirmed_unchanged,"Phase 2: all 4 targets 0.1/0.5/1/2 FiniteSolved nStatus=0; delta~0.5 point Delta=0.4832764950468894 bit-exact match to Phase1/Phase3/historical CSV"
+D4 full 234-cell frontier,not_rerun_but_low_risk,"Explicitly out of scope (no broad frontier rerun); underlying solve_melitz_finite_delta_bound driver independently validated bit-exact in Phase 4 Part B"
+participation-gradient mismatch,confirmed_unchanged,"Phase 3: near bit-exact reproduction of original headline numbers at both interior and near-budget points"
+intensive-vs-switching decomposition,not_rerun_but_low_risk,"Reuses Phase 3 own validated trials; decomposition is a bookkeeping identity on data already confirmed unchanged"
+D20 nested block-search pattern,not_rerun_but_low_risk,"Explicitly out of scope (no long D20 outer campaign); the one block rerun (gamma_only Phase 4 Part B) reproduced bit-exact via the SAME driver used for all four nested blocks"
+selected nuisance-profile improvements D4,quantitatively_changed,"Phase 5: frac=0.10 confirmed near-exactly (5.5x reduction full A/f); frac=0.35 directionally confirmed but weaker (2.7x vs original 3.3x)"
+nuisance-profile infeasibility-rescue claim D4 frac 0.50/0.65,invalid_due_to_old_uncapped_fixture,"NOT independently reconfirmed or refuted: Phase 5 simplified script failed with a KNITRO evaluation error at these fracs; Phase 5b root-caused this as a warm-start-design difference NOT a stale/poisoned dual and NOT evidence of a consolidation regression -- genuinely inconclusive"
+outer-parameterization six-way tournament,not_rerun_but_low_risk,"Explicitly out of scope; no architecture-specific mechanism plausibly affects algorithm/parameterization choice"
+engineering speedups,confirmed_unchanged_structurally,"Phase 6: parallel backend correctly resolved and active zero dense-G materializations zero explicit-serial-despite-parallel warnings; wall-clock magnitude not cleanly re-measured under this session's own concurrent load"
