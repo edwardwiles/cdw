@@ -1,0 +1,6 @@
+family,bundle_type,has_H_field,has_moments_field,fg_backend_dense_free,hessian_backend_dense_free,d4_gate,d20_w100k_gate,d20_dense_nstatus,d20_operator_nstatus
+unrestricted,OperatorPsiBundle,false,false,true,true,pass_exact,pass_exact,0,0
+flexible_cm,OperatorPsiBundle,false,false,true,true,pass_exact,pass_exact,-103,-103
+common_frechet,OperatorPsiBundle,false,false,true,true,pass_exact,pass_exact,0,0
+cm_plus_zc,OperatorPsiBundle,false,false,true,true,pass_exact,pass_exact,0,0
+zc_only,OperatorPsiBundle,false,false,true,true,pass_exact,pass_exact,0,0
