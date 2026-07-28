@@ -14,7 +14,8 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "zc_restriction_operator.jl", "zc_gram_blas_candidates.jl", "cm_hessian_architectures.jl",
           "cm_production_bundle.jl", "cm_outer_driver.jl",
           "cm_originzc_target_layout.jl", "cm_meanzc_moments.jl", "cm_meanzc_production.jl",
-          "cm_originzc_moments.jl", "cm_originzc_production.jl"]
+          "cm_originzc_moments.jl", "cm_originzc_production.jl",
+          "cm_config.jl", "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl"]
     include(joinpath(D4X, f))
 end
 using Printf, LinearAlgebra, Random
@@ -78,6 +79,57 @@ for (plabel, x) in (("calib", vcat(base_fc.ζstar, base_fc.λstar)),
 end
 cctx_fc.cross_hessian_threaded = false
 end # run_family("flexible_cm")
+
+# ============================================================================
+# common_frechet: threaded H_EC vs serial, workers in {1,2,4}. Uses the REAL production
+# constructor (build_cm_production_context_v2/CMConfig, matching this family's own existing D=4/
+# D=20 gates -- test_frechet_hessian_structured_vs_dense_d4.jl, test_cm_frechet_threaded_hessian_
+# gates.jl) rather than the older build_cm_augmented_obj flexible_cm's own section above uses --
+# CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT[] is :winner_bin and use_compressed_core defaults true
+# for this constructor, so (unlike flexible_cm's own section, which -- see the cm_meanzc root-cause
+# writeup in docs/ZC_CENTERING_LIFECYCLE_RELEASE_2026-07-28.md -- never populates core_cf_ref and
+# therefore never actually exercises the :winner_bin H_EC path) this section's threaded-vs-serial
+# comparison genuinely exercises `_ensure_cm_cross_scratch!`/`WinnerBinCrossScratch` and this
+# task's `winner_pair_cross_hessian_fill_threaded!` kernel, not just the dense fallback.
+# `hessian_cm_frechet_structured_v2!` is now a thin wrapper around the SAME shared
+# `hessian_cm_structured_v2!` flexible_cm/cm_meanzc use (harmonization task, 2026-07-28), so
+# `cctx.cross_hessian_threaded`/`cross_hessian_workers` apply identically.
+# ============================================================================
+if run_family("common_frechet")
+println("\n=== common_frechet: threaded H_EC vs serial ===")
+cfg_frechet = CMConfig(common_marginals = true, cm_grid_size = 10, cm_hessian_backend = :structured,
+                        contrasts = :anchored, marginal_restriction = :common_frechet)
+pcx_fr = build_cm_production_context_v2(ctx, CS, cfg_frechet; L = 10)
+cctx_fr = pcx_fr.cctx
+level_targets_fr = pcx_fr.aug.level_targets
+obj_fr = pcx_fr.ctx_cm.obj
+θ_full0_fr = CS.reconstruct_full(x_free_calib, pcx_fr.ctx_cm.m)
+K_fr, x_sol_fr, nStatus_fr, n_fg_fr, n_hess_fr = inner_loop_internal_archgeneric(obj_fr, θ_full0_fr; hess_cb_builder = pcx_fr.hess_cb_builder)
+check("common_frechet: inner solve feasible (nStatus=$nStatus_fr)", nStatus_fr in (0, -100, -101, -102, -103, -400, -401, -402))
+n_fr = cctx_fr.NCORE + cctx_fr.ncm
+println("common_frechet: cf type after solve = ", typeof(cctx_fr.core_cf_ref[]),
+        ", cross_hessian_backend wants winner_bin = ", _cm_cross_hessian_wants_winner_bin(cctx_fr, cctx_fr.core_cf_ref[]))
+
+for (plabel, x) in (("calib", collect(x_sol_fr)),
+                     ("perturbed", vcat(x_sol_fr[1] + 0.01, x_sol_fr[2:end] .+ 0.02 .* randn(length(x_sol_fr) - 1))))
+    _archC_prep_for_hessian!(obj_fr, x)
+    h_serial = Vector{Float64}(undef, n_fr * (n_fr + 1) ÷ 2)
+    cctx_fr.cross_hessian_threaded = false
+    hessian_cm_frechet_structured_v2!(h_serial, obj_fr, cctx_fr, level_targets_fr; threaded_bins = true, tls = cctx_fr.tls)
+    H_serial = unpack_packed(h_serial, n_fr)
+    for workers in (1, 2, 4)
+        _archC_prep_for_hessian!(obj_fr, x)
+        h_th = Vector{Float64}(undef, n_fr * (n_fr + 1) ÷ 2)
+        cctx_fr.cross_hessian_threaded = true
+        cctx_fr.cross_hessian_workers = workers
+        hessian_cm_frechet_structured_v2!(h_th, obj_fr, cctx_fr, level_targets_fr; threaded_bins = true, tls = cctx_fr.tls)
+        H_th = unpack_packed(h_th, n_fr)
+        maxdiff = maximum(abs.(H_serial .- H_th))
+        check("common_frechet $plabel workers=$workers: complete Hessian bit-exact (maxdiff=$maxdiff)", maxdiff < 1e-12)
+    end
+end
+cctx_fr.cross_hessian_threaded = false
+end # run_family("common_frechet")
 
 # ============================================================================
 # cm_meanzc: threaded H_EC/H_EZ/H_CZ + H_ZZ backend sweep, several K configs
