@@ -6,6 +6,7 @@ isdefined(Main, :RestrictedDualBank) || include(joinpath(@__DIR__, "cm_dual_bank
 isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))   # Phase E remediation (2026-07-26)
 isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))   # shared-FG-verification-and-A-gradient release (2026-07-27): flexible-CM's DEFAULT (g,A_od)-block gradient backend, see cm_production_gradient below
 isdefined(Main, :verify_inner_solution_operator_cm!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archC_verified_state's :operator backend below
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))   # default-flips task (2026-07-27), Task C: MOMENT_REPRESENTATION selector used by archC_base_state below
 
 # ============================================================================
 # Continuation 13, Sections 3A + 5: production combined bundle.
@@ -196,8 +197,21 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
     # skip_cm_fill_ref true for ONLY the duration of this one moments!+inner-solve call, reset in a
     # `finally` so it can never leak `true` into some other caller on the same cctx (in particular
     # archC_verified_state below, which DOES need those columns for its post-solve recompute).
+    #
+    # Default-flips task (2026-07-27), Task C: the SKIP decision (below) is gated additionally on
+    # MOMENT_REPRESENTATION[]==:operator (the explicit no-composite-G-setup selector) AND
+    # cctx.cm_cross_hessian_backend==:winner_bin -- the skip is only safe when the Hessian's own H_EC
+    # cross-block is ALSO operator-based (confirmed live,
+    # docs/GLOBAL_NO_DENSE_G_INNER_SOLVE_PROOF_2026-07-27.md C.2); if cm_cross_hessian_backend were
+    # ever reverted to :dense_reference for a diagnostic run, this guard correctly falls back to
+    # filling the dense CM columns rather than silently starving that Hessian backend the way common-
+    # Fréchet's own analogous skip once did (see MOMENT_REPRESENTATION's docstring). This is
+    # DELIBERATELY a separate boolean from `use_lookup` -- `use_lookup` alone still governs which FG
+    # backend/dispatch function is used (an already-settled, unrelated decision); only the fill-skip
+    # additionally requires the two extra conditions.
     use_lookup = cctx.inner_fg_backend == :cm_lookup
-    use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = true)
+    skip_fill_safe = use_lookup && MOMENT_REPRESENTATION[] == :operator && cctx.cm_cross_hessian_backend == :winner_bin
+    skip_fill_safe && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = true)
     local K, x, nStatus, n_fg, n_hess
     try
         K, x, nStatus, n_fg, n_hess = use_lookup ?
@@ -205,7 +219,7 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
             inner_loop_internal_archgeneric(obj, θ_full0;
                 hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
     finally
-        use_lookup && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
+        skip_fill_safe && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
     end
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)

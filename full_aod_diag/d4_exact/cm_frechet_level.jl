@@ -190,6 +190,8 @@ end
 # silently producing a wrong Hessian.
 # ================================================================================================
 
+isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))   # default-flips task (2026-07-27), Task C: record_dense_frechet_g! used below
+
 """
     wrap_moments_with_cm_frechet_archB(core_moments!, ncore_full, Bidx, origins, refIndex1, L, R, D,
                                         level_targets, ctx; chunk_size, use_compressed_core, core_cf_ref)
@@ -202,6 +204,7 @@ columns via the UNCHANGED `fill_cm_columns_from_bins!`, plus the level columns v
 `[core (pregrav) | CM ((D-1)*L) | level (L) | gravity]` -- level block placed after CM, before the
 sole trailing gravity column, matching `wrap_moments_with_cm`'s own splicing convention.
 """
+
 function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full::Int,
                                              Bidx::Matrix{Int}, origins::Vector{Int}, refIndex1::Int, L::Int,
                                              R::Union{Nothing,Matrix{Float64}}, D::Int, level_targets::Vector{Float64},
@@ -251,6 +254,14 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
             level_cols = pregrav + L * nO + 1 : pregrav + L * nO + L
             fill_frechet_level_columns_from_bins!(@view(G[:, level_cols]), Bidx, D, L, level_targets;
                                                    chunk_size = chunk_size)
+            # Task C (2026-07-27): common-Fréchet's skip_cm_fill_ref is PERMANENTLY unset by
+            # archC_frechet_base_state (see that function's own comment -- the Hessian callback reads
+            # these columns regardless of FG backend, so skipping here was tried once and produced a
+            # real nStatus=-400 regression). This branch therefore fires on EVERY inner solve for this
+            # family today, by design, not by omission -- recorded honestly rather than left as a dead
+            # counter (docs/GLOBAL_NO_DENSE_G_INNER_SOLVE_PROOF_2026-07-27.md B.2 listed this as the
+            # natural, not-yet-wired site for dense_Frechet_G_materializations).
+            record_dense_frechet_g!()
         end
         return nothing
     end

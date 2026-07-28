@@ -50,6 +50,46 @@ const NO_DENSE_G_COUNTERS = Ref(NoDenseGCounters())
 reset_no_dense_g_counters!() = (NO_DENSE_G_COUNTERS[] = NoDenseGCounters(); nothing)
 
 """
+    MOMENT_REPRESENTATION
+
+Default-flips task (2026-07-27), Task C: explicit dispatch for whether a family's generic
+inner-solve SETUP (the once-per-inner-solve `obj.moments!(@view(H[:,1]), select_G_from_H(obj,H),
+θ, obj.U, obj)` call in `inner_loop_internal_archgeneric`/`inner_loop_internal_cm*lookup_production`
+-- NOT the per-Newton-iterate FG callback, which was already correctly operator-vs-dense-forked
+before this task) is allowed to skip filling the family-specific "restriction" G columns (CM bins,
+Fréchet level anchor, ZC mean/pair) that the operator FG callback never reads.
+
+`:operator` (default): skip the restriction-column dense fill wherever it is SAFE to do so, i.e.
+wherever nothing downstream in the SAME inner solve (Hessian callback included) still reads those
+columns. `:dense_reference`: always fill everything, exactly as the pre-existing code did --
+retained as an explicit diagnostic backend, not deleted.
+
+**"Safe to skip" is decided per family, not globally** -- flipping this Ref to `:operator` does NOT
+blindly skip every family's restriction fill:
+  - Flexible CM (`cm_production_bundle.jl::archC_base_state`): SAFE, and now wired to this selector.
+    `:cm_lookup` FG + `:winner_bin` H_EC cross-Hessian means NEITHER the FG callback NOR the Hessian
+    reads the dense CM columns anymore (confirmed live, `docs/GLOBAL_NO_DENSE_G_INNER_SOLVE_PROOF_
+    2026-07-27.md` C.2: `dense_cross_hessian_calls=0`, `winner_cross_hessian_calls>0`).
+  - Common-Fréchet (`cm_frechet_cplus.jl::archC_frechet_base_state`): **NOT SAFE, deliberately NOT
+    wired to this selector.** `archC_frechet_hess_cb_builder`'s Hessian callback reads the dense
+    CM/level columns regardless of FG backend -- skipping their fill under `:cm_frechet_lookup` was
+    tried once already (Phase 5.2, `skip_cm_fill_ref`) and produced a real, reproduced (4/4)
+    `nStatus=-400` infeasible termination away from the calibration point, root-caused and fixed by
+    REMOVING the skip (see the long comment at the top of `archC_frechet_base_state` and
+    `docs/COMMON_FRECHET_FG_D20_FINAL_GATE_2026-07-27.md`). Re-wiring this family to `:operator`
+    without a corresponding operator/winner-bin Hessian cross-block first would silently reintroduce
+    that exact bug -- do not do this without re-validating the Hessian side first.
+  - CM+ZC / origin-ZC: out of this task's scope (a separate agent owns their Hessian internals;
+    `production_backend_manifest.jl` already records `cross_hessian_backend=:dense_exact`/
+    `restriction_hessian_backend=:dense_exact` for origin-ZC's H_ER/H_RR, and CM+ZC's H_EC is
+    structurally excluded from `:winner_bin` whenever `ncore_core<NCORE`) -- not wired here.
+  - Unrestricted: not applicable -- its compressed-only FG path never goes through
+    `inner_loop_internal_archgeneric`/`select_G_from_H` at all (predates this counter set), so there
+    is no composite-G setup call for this selector to gate in the first place.
+"""
+const MOMENT_REPRESENTATION = Ref{Symbol}(:operator)
+
+"""
     FAIL_FAST_ON_DENSE_G
 
 Opt-in guard (task §12, "an opt-in fail-fast mode that throws if a production hot path attempts to
