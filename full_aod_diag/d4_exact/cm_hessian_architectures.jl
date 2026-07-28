@@ -561,6 +561,13 @@ mutable struct CMBinHessCtx
     nu_ref::Base.RefValue{Vector{Float64}}
     hzz_centered::Union{Nothing,ZCCenteredScratch}
     bin_zc_cross::Union{Nothing,BinZCrossScratch}
+    # True no-H operator bundle (2026-07-28 continuation): the base economic ctx (has `.γ`, `.D`,
+    # etc.), needed by `prime_operator!` (cf_build/fill_K_directgp!/compressed_gravity_raw all take
+    # `ctx`, not `cctx`). Every existing `moments!` closure (`wrap_moments_with_cm_archB` etc.)
+    # already closes over this same `ctx` object directly -- this field just gives
+    # `inner_loop_internal_cmlookup_production` (which only receives `cctx`, not `ctx`) the same
+    # access without threading a new argument through every call site.
+    econ_ctx::Any
 end
 
 """
@@ -605,7 +612,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         NCORE, inner_fg_backend, nothing, moments_skip_fn, nothing, nothing,
         cm_cross_hessian_backend, nothing,
         :dense_reference, nothing,   # zc_cross_hessian_backend/zc_cross_scratch: plain CM never widens (no ZC block)
-        nothing, nothing, nothing, Ref(Float64[]), nothing, nothing)   # hzz_zc_op/layout/ws/nu_ref/hzz_centered/bin_zc_cross: plain CM has no ZC block at all
+        nothing, nothing, nothing, Ref(Float64[]), nothing, nothing,   # hzz_zc_op/layout/ws/nu_ref/hzz_centered/bin_zc_cross: plain CM has no ZC block at all
+        ctx)   # econ_ctx: true no-H operator bundle continuation
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true

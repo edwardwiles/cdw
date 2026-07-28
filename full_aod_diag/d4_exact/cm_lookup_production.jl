@@ -120,10 +120,21 @@ function inner_loop_internal_cmlookup_production(obj, θ::AbstractVector, cctx::
         # is only ever safe (and only ever passed) when `cctx.moments_skip!` was actually built --
         # falls back to the always-fill `obj.moments!` otherwise, matching the pre-refactor "no ref
         # present -> always fill" default.
-    moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
-    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
-    obj.H[:, 2] .= 1.0
-    obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    # True no-H operator bundle (2026-07-28 continuation), Part A.2: when `obj` is the concrete
+    # no-H `OperatorPsiBundle`, priming goes through `prime_operator!` directly -- no
+    # `obj.moments!`/`CS.select_G_from_H`/dense economic or CM-grid fill at all, regardless of
+    # `skip_fill` (that kwarg, and `cctx.moments_skip!`, exist only for the `PsiObjectiveBundleImplicit`
+    # dense-reference bundle below). `cctx.econ_ctx` is the base economic ctx `prime_operator!`
+    # needs (cf_build/fill_K_directgp!/compressed_gravity_raw all take it), threaded onto `cctx` at
+    # construction time (`build_cm_bin_ctx`/`build_cm_meanzc_bin_ctx`) for exactly this purpose.
+    if obj isa OperatorPsiBundle
+        prime_operator!(obj, θ, cctx.econ_ctx, cctx.core_cf_ref; restriction_state = cctx)
+    else
+        moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
+        moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
+        obj.H[:, 2] .= 1.0
+        obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    end
 
     # method defaults to :suffix (cumulative-basis lookup), NOT :interval, because
     # build_cm_production_context's own `aug = build_cm_augmented_obj(...)` (cm_production_bundle.jl

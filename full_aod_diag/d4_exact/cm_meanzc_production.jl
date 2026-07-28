@@ -110,7 +110,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         meanzc_zc_op, meanzc_zc_layout,
         cm_cross_hessian_backend, nothing,
         zc_cross_hessian_backend, nothing,
-        hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing, nothing)
+        hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing, nothing,
+        ctx)   # econ_ctx: true no-H operator bundle continuation
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true

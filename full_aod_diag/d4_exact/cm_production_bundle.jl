@@ -7,6 +7,7 @@ isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buf
 isdefined(Main, :EconomicAGradientWorkspace) || include(joinpath(@__DIR__, "shared_a_gradient.jl"))   # shared-FG-verification-and-A-gradient release (2026-07-27): flexible-CM's DEFAULT (g,A_od)-block gradient backend, see cm_production_gradient below
 isdefined(Main, :verify_inner_solution_operator_cm!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archC_verified_state's :operator backend below
 isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))   # default-flips task (2026-07-27), Task C: MOMENT_REPRESENTATION selector used by archC_base_state below
+isdefined(Main, :OperatorPsiBundle) || include(joinpath(@__DIR__, "operator_psi_bundle.jl"))   # true no-H operator bundle (2026-07-28 continuation): OperatorPsiBundle/prime_operator!, load-bearing for build_cm_production_context below
 
 # ============================================================================
 # Continuation 13, Sections 3A + 5: production combined bundle.
@@ -78,9 +79,22 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
                                       # remediation (2026-07-26): pass-through to build_cm_bin_ctx --
                                       # :dense_reference (default, unchanged) | :cm_lookup (plain
                                       # flexible CM only, see cm_lookup_production.jl).
-                                      cm_cross_hessian_backend::Symbol = CM_CROSS_HESSIAN_BACKEND_DEFAULT[])   # winner-aware
+                                      cm_cross_hessian_backend::Symbol = CM_CROSS_HESSIAN_BACKEND_DEFAULT[],   # winner-aware
                                       # H_ER phase (2026-07-27): pass-through to build_cm_bin_ctx -- :dense_reference
                                       # (default, unchanged) | :winner_bin (winner_pair_cross_hessian.jl).
+                                      moment_representation::Symbol = MOMENT_REPRESENTATION[])   # true no-H operator
+                                      # bundle (2026-07-28 continuation), Part A.2: `:operator` (production default)
+                                      # constructs `OperatorPsiBundle` (no H/H_copy/K/ones/moments! field at all,
+                                      # `prime_operator!`-primed); `:dense_reference` (explicit reference-gate opt-in,
+                                      # unchanged byte-for-byte) constructs `PsiObjectiveBundleImplicit` exactly as
+                                      # before. NOT derived silently from the mutable global alone -- `archC_verified_
+                                      # state`'s own `:dense_reference` comparison arm passes this explicitly so it
+                                      # keeps getting a dense bundle regardless of the ambient production default.
+    moment_representation in (:operator, :dense_reference) ||
+        error("build_cm_production_context: moment_representation must be :operator or :dense_reference, got :$moment_representation")
+    moment_representation === :operator && inner_fg_backend !== :cm_lookup &&
+        error("build_cm_production_context: moment_representation=:operator requires inner_fg_backend=:cm_lookup " *
+              "(OperatorPsiBundle is only primed by inner_loop_internal_cmlookup_production) -- got inner_fg_backend=:$inner_fg_backend")
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
@@ -111,30 +125,42 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     # box so the Hessian callback sees an identical publish regardless of which one ran. See
     # wrap_moments_with_cm_archB's own kwarg docstring for the full rationale.
     moments_archB_skip! = nothing
-    if use_archB_moments
-        # NOTE: common_marginals_interval.jl and cm_hessian_architectures.jl both define
-        # `compute_bin_indices(U,z)` with overlapping-but-distinct signatures (z::Vector{Float64}
-        # vs z::AbstractVector{Float64}) -- Julia's most-specific-method dispatch silently prefers
-        # the FORMER (Unsigned-typed, for interval_forward_contribution!) regardless of include
-        # order, which is NOT what fill_cm_columns_from_bins! below expects (Matrix{Int}). Force
-        # the Int-typed variant explicitly rather than depend on ambient method resolution.
-        Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
-        R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
-        moments_archB! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
-                                                     use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
-                                                     skip_fill = false)
-        moments_archB_skip! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
-                                                     use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
-                                                     skip_fill = true)
-        obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj_cm.δ, find_smallest = obj_cm.find_smallest,
-            γ = obj_cm.γ, (moments!) = moments_archB!, moments_jacobian! = error,
-            d = obj_cm.d, outer_constr_index = obj_cm.outer_constr_index,
+    if moment_representation === :dense_reference
+        if use_archB_moments
+            # NOTE: common_marginals_interval.jl and cm_hessian_architectures.jl both define
+            # `compute_bin_indices(U,z)` with overlapping-but-distinct signatures (z::Vector{Float64}
+            # vs z::AbstractVector{Float64}) -- Julia's most-specific-method dispatch silently prefers
+            # the FORMER (Unsigned-typed, for interval_forward_contribution!) regardless of include
+            # order, which is NOT what fill_cm_columns_from_bins! below expects (Matrix{Int}). Force
+            # the Int-typed variant explicitly rather than depend on ambient method resolution.
+            Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
+            R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
+            moments_archB! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
+                                                         use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+                                                         skip_fill = false)
+            moments_archB_skip! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
+                                                         use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+                                                         skip_fill = true)
+            obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj_cm.δ, find_smallest = obj_cm.find_smallest,
+                γ = obj_cm.γ, (moments!) = moments_archB!, moments_jacobian! = error,
+                d = obj_cm.d, outer_constr_index = obj_cm.outer_constr_index,
+                inequality_index = obj_cm.inequality_index, complement_index = obj_cm.complement_index,
+                l = obj_cm.l, U = obj_cm.U, N = obj_cm.N, lower_limit = obj_cm.lower_limit,
+                use_cached_x = obj_cm.use_cached_x,
+                threshold_state = obj_cm.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
+                outer_loop_opt = obj_cm.outer_loop_opt, inner_loop_opt = obj_cm.inner_loop_opt,
+                needs_outer_moment_jacobian = obj_cm.needs_outer_moment_jacobian)
+        end
+    else   # :operator -- true no-H production bundle, task Part A. No moments!/H/H_copy/K/ones
+        # field at all; NO wrap_moments_with_cm_archB closure is even built (production priming
+        # uses prime_operator! directly, called from inner_loop_internal_cmlookup_production below).
+        obj_cm = OperatorPsiBundle(δ = obj_cm.δ, find_smallest = obj_cm.find_smallest,
+            γ = obj_cm.γ, l = obj_cm.l, outer_constr_index = obj_cm.outer_constr_index,
             inequality_index = obj_cm.inequality_index, complement_index = obj_cm.complement_index,
-            l = obj_cm.l, U = obj_cm.U, N = obj_cm.N, lower_limit = obj_cm.lower_limit,
+            U = obj_cm.U, N = obj_cm.N, lower_limit = obj_cm.lower_limit,
             use_cached_x = obj_cm.use_cached_x,
-            threshold_state = obj_cm.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
-            outer_loop_opt = obj_cm.outer_loop_opt, inner_loop_opt = obj_cm.inner_loop_opt,
-            needs_outer_moment_jacobian = obj_cm.needs_outer_moment_jacobian)
+            threshold_state = obj_cm.threshold_state,
+            inner_loop_opt = obj_cm.inner_loop_opt)
     end
     ctx_cm = merge(ctx, (obj = obj_cm,))
     bins = cm_bin_indices_for(ctx, aug)
