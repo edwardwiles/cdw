@@ -2735,6 +2735,33 @@ if KNITRO_AVAILABLE
                 direct_touched_cg(g_touched2, theta_cg, ctx_cg, obj_cg, x_cg)
                 @test g_touched2 == g_touched
             end
+
+            # User-motivated follow-up (2026-07-XX): tested whether the touched-row backend's
+            # measured ~5.7x memory-traffic reduction (serial) translates into a real 20-thread
+            # wall-clock gain once threads contend for shared DRAM bandwidth -- confirmed live
+            # it does NOT (0.947x -- marginally SLOWER than the sorted-parallel backend,
+            # `docs/key_results/melitz_touched_row_parallel_benchmark_2026-07-27.csv`). Only
+            # correctness is asserted here at D=4 (a per-thread generation-stamp analogue of
+            # the serial regression test above); the parallel variant is not adopted either.
+            @testset "2026-07-XX: :B_direct_argument_touched_row_parallel matches the sorted-parallel backend" begin
+                direct_touched_parallel_cg = make_melitz_gradient_delta_direct_touched_row_parallel(1e-4)
+                g_touched_par = zeros(n_cg)
+                direct_touched_parallel_cg(g_touched_par, theta_cg, ctx_cg, obj_cg, x_cg)
+                for r in 1:n_cg
+                    rel = abs(g_sorted[r] - g_touched_par[r]) / max(abs(g_sorted[r]), 1.0)
+                    @test rel < 1e-10
+                end
+                g_bad_par2 = zeros(n_cg)
+                obj_plain_inner4, theta_plain4 = build_melitz_psi_bundle(fixture_cg; inner_loop_opt=inner_opt_cg,
+                    needs_outer_moment_jacobian=false, backend=:dense_reference, moment_backend=:dense_reference)
+                ctx_plain4 = obj_plain_inner4.γ
+                @test_throws ArgumentError direct_touched_parallel_cg(g_bad_par2, theta_plain4, ctx_plain4, obj_cg, x_cg)
+
+                # repeated calls: per-thread generation stamps must also be monotonic ACROSS calls
+                g_touched_par2 = zeros(n_cg)
+                direct_touched_parallel_cg(g_touched_par2, theta_cg, ctx_cg, obj_cg, x_cg)
+                @test g_touched_par2 == g_touched_par
+            end
         end
     end
 

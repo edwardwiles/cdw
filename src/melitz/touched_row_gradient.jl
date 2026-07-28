@@ -257,3 +257,125 @@ function make_melitz_gradient_delta_direct_touched_row_serial(h::Real)
     end
     return melitz_gradient_delta_direct_touched_row_serial!
 end
+
+"""
+    make_melitz_gradient_delta_direct_touched_row_parallel(h) -> Function
+
+Backend `:B_direct_argument_touched_row_parallel`: `Threads.@threads :static` coordinate sweep
+on top of the touched-row serial backend above, mirroring `sorted_crossing_gradient.jl`'s own
+`make_melitz_gradient_delta_direct_sorted_parallel` pattern (thread-local buffers, one
+generation counter PER THREAD since each thread owns its own `touched_gen` array -- no
+cross-thread stamp collision is possible even without a shared counter). `arg0_base`/
+`psi_base`/`base_scalar_sum` are shared, READ-ONLY across threads once built before the
+parallel region (identical convention to the sorted-parallel backend's own shared `arg0_base`).
+
+User-motivated addition (2026-07-XX): the serial touched-row backend measured only a 1.02x
+wall-clock gain over the sorted backend despite a measured ~5.7x memory-traffic reduction --
+a real dissociation suggesting memory BANDWIDTH is not the bottleneck for a single thread. This
+parallel variant tests the different, actually-production-relevant hypothesis: with 20
+threads simultaneously contending for shared DRAM bandwidth, a per-thread traffic reduction
+that did nothing serially could plausibly become the binding constraint. See the benchmark
+script for the direct measurement -- do not assume speedup transfers from the single-thread
+result without checking.
+"""
+function make_melitz_gradient_delta_direct_touched_row_parallel(h::Real)
+    compact_cache = Ref{Union{Nothing,Vector{MelitzCompactColumns}}}(nothing)
+    ctx_cache = Ref{Any}(nothing)
+    arg0_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    psi_base_buf = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    Gp_bufs = Ref{Union{Nothing,Vector{Matrix{Float64}}}}(nothing)
+    Gm_bufs = Ref{Union{Nothing,Vector{Matrix{Float64}}}}(nothing)
+    union_start_bufs = Ref{Union{Nothing,Vector{Vector{Int}}}}(nothing)
+    linkp_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    linkm_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    profit_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    delta_plus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    delta_minus_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    touched_gen_bufs = Ref{Union{Nothing,Vector{Vector{Int}}}}(nothing)
+    touched_list_bufs = Ref{Union{Nothing,Vector{Vector{Int}}}}(nothing)
+    thetap_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    thetam_bufs = Ref{Union{Nothing,Vector{Vector{Float64}}}}(nothing)
+    nthreads_alloc = Ref(0)
+    ws_bufs = Ref{Union{Nothing,Vector{MelitzThetaExpansionWorkspace}}}(nothing)
+    statep_bufs = Ref{Union{Nothing,Vector{MelitzExpandedState}}}(nothing)
+    statem_bufs = Ref{Union{Nothing,Vector{MelitzExpandedState}}}(nothing)
+    gen_counters = Ref{Union{Nothing,Vector{Int}}}(nothing)   # one per thread, never reset, mirrors the serial backend's own never-reset convention
+
+    function melitz_gradient_delta_direct_touched_row_parallel!(g::AbstractVector{Float64}, theta::AbstractVector{Float64},
+                                                                   ctx, obj, x::AbstractVector{Float64})
+        sorted_ctx = get(ctx, :sorted_tail_ctx, nothing)
+        sorted_ctx === nothing && throw(ArgumentError(
+            "melitz_gradient_delta_direct_touched_row_parallel!: ctx.sorted_tail_ctx is nothing -- " *
+            "build the bundle with moment_backend=:sorted_tail_serial or :sorted_tail_parallel " *
+            "before selecting gradient_backend=:B_direct_argument_touched_row_parallel"))
+        n = length(theta)
+        W = size(obj.U, 1)
+        nt = Threads.maxthreadid()
+
+        if compact_cache[] === nothing || ctx_cache[] !== ctx
+            compact_cache[] = melitz_compact_columns_map(ctx)
+            ctx_cache[] = ctx
+        end
+        compact = compact_cache[]
+        maxcols = maximum(length(c.direct_cols) for c in compact)
+        if arg0_buf[] === nothing || length(arg0_buf[]) != W ||
+           nthreads_alloc[] != nt || size(Gp_bufs[][1]) != (W, maxcols)
+            arg0_buf[] = zeros(Float64, W)
+            psi_base_buf[] = zeros(Float64, W)
+            Gp_bufs[] = [zeros(Float64, W, maxcols) for _ in 1:nt]
+            Gm_bufs[] = [zeros(Float64, W, maxcols) for _ in 1:nt]
+            union_start_bufs[] = [zeros(Int, maxcols) for _ in 1:nt]
+            linkp_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            linkm_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            profit_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            delta_plus_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            delta_minus_bufs[] = [zeros(Float64, W) for _ in 1:nt]
+            touched_gen_bufs[] = [zeros(Int, W) for _ in 1:nt]
+            touched_list_bufs[] = [sizehint!(Int[], 4 * ctx.D) for _ in 1:nt]
+            gen_counters[] = zeros(Int, nt)
+            nthreads_alloc[] = nt
+        end
+        if thetap_bufs[] === nothing || length(thetap_bufs[]) != nt || length(thetap_bufs[][1]) != n
+            thetap_bufs[] = [zeros(Float64, n) for _ in 1:nt]
+            thetam_bufs[] = [zeros(Float64, n) for _ in 1:nt]
+        end
+        if ws_bufs[] === nothing || length(ws_bufs[]) != nt || ws_bufs[][1].D != ctx.D
+            ws_bufs[] = [MelitzThetaExpansionWorkspace(ctx.D) for _ in 1:nt]
+            statep_bufs[] = [MelitzExpandedState(ctx.D) for _ in 1:nt]
+            statem_bufs[] = [MelitzExpandedState(ctx.D) for _ in 1:nt]
+        end
+        arg0_base = arg0_buf[]
+        _base_arg0!(arg0_base, obj, x)
+        psi_base = psi_base_buf[]
+        @inbounds for w in 1:W
+            psi_base[w] = _touched_row_psi_scalar(arg0_base[w])
+        end
+        base_scalar_sum = sum(psi_base)
+        lambda = @view x[2:end]
+
+        prev_blas_threads = BLAS.get_num_threads()
+        guards_on = isdefined(Main, :CounterfactualSensitivity)
+        BLAS.set_num_threads(1)
+        guards_on && Main.CounterfactualSensitivity.guard_enter_coord_pool!()
+        try
+            Threads.@threads :static for r in 1:n
+                tid = Threads.threadid()
+                cc = compact[r]
+                theta_p = thetap_bufs[][tid]; copyto!(theta_p, theta); theta_p[r] += h
+                theta_m = thetam_bufs[][tid]; copyto!(theta_m, theta); theta_m[r] -= h
+                gen_counters[][tid] += 1
+                g[r] = _direct_coordinate_grad_touched_row(cc, theta_p, theta_m, ctx, obj, sorted_ctx, lambda,
+                    arg0_base, psi_base, base_scalar_sum, h,
+                    Gp_bufs[][tid], Gm_bufs[][tid], union_start_bufs[][tid], linkp_bufs[][tid], linkm_bufs[][tid],
+                    profit_bufs[][tid], delta_plus_bufs[][tid], delta_minus_bufs[][tid],
+                    touched_gen_bufs[][tid], gen_counters[][tid], touched_list_bufs[][tid],
+                    statep_bufs[][tid], statem_bufs[][tid], ws_bufs[][tid])
+            end
+        finally
+            guards_on && Main.CounterfactualSensitivity.guard_exit_coord_pool!()
+            BLAS.set_num_threads(prev_blas_threads)
+        end
+        return nothing
+    end
+    return melitz_gradient_delta_direct_touched_row_parallel!
+end

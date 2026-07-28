@@ -1,0 +1,11 @@
+backend,rep,seconds
+sorted_parallel,1,1.007355665
+sorted_parallel,2,0.882427124
+sorted_parallel,3,0.979680501
+sorted_parallel,4,1.023379215
+sorted_parallel,5,0.801919415
+touched_row_parallel,1,1.018607376
+touched_row_parallel,2,1.091297784
+touched_row_parallel,3,0.854776958
+touched_row_parallel,4,0.953954856
+touched_row_parallel,5,1.039680173

@@ -352,6 +352,47 @@ gain" alone -- the backend does exactly what it was designed to do (cut memory t
 it simply is not what this kernel's wall time is bottlenecked on at D=20/W=80,000 on this
 host.
 
+### Follow-up, directly user-motivated: does the memory-traffic reduction matter at the ACTUAL production thread count (20), where cores contend for shared bandwidth?
+
+The serial-only test above cannot answer this -- a single thread has the entire memory bus to
+itself, so "not bandwidth-bound serially" does not rule out "bandwidth-bound once 20 cores
+compete for it." Built a parallel touched-row variant
+(`make_melitz_gradient_delta_direct_touched_row_parallel`, mirroring `sorted_crossing_
+gradient.jl`'s own `_sorted_parallel` pattern exactly: per-thread buffers, one generation
+counter per thread since each thread owns its own `touched_gen` array) and measured it directly
+against the existing `sorted_parallel` backend at real D=20/W=80,000, 20 threads
+(`scripts/melitz_touched_row_parallel_benchmark_2026-07-27.jl`).
+
+**Correctness**: confirmed first (`max relative diff: 9.38e-11` vs. the sorted-parallel
+backend, matching the serial comparison's own precision; a second consecutive call reproduces
+the first exactly, ruling out a per-thread analogue of the generation-stamp bug the serial
+backend's own development already caught once).
+
+**Result: still no material gain -- if anything, marginally SLOWER**: `sorted_parallel`
+mean `0.939s` (range `0.802-1.023s`) vs. `touched_row_parallel` mean `0.992s` (range
+`0.855-1.091s`) over 5 repetitions each -- **speedup `0.947x`** (i.e. touched-row is ~5.6%
+slower, though the min/max ranges overlap enough that this is close to run-to-run noise, not a
+large, confident regression). Full CSV: `docs/key_results/melitz_touched_row_parallel_
+benchmark_2026-07-27.csv`.
+
+**This directly answers the follow-up question, and strengthens rather than overturns the
+original recommendation**: memory bandwidth is not the bottleneck for this kernel even at the
+actual production thread count on this host (208 cores / 3.0TiB RAM -- evidently generously
+provisioned relative to this kernel's per-thread working set, `W=80,000` doubles `=640KB`,
+comfortably prefetchable/cacheable). The most likely reason the touched-row backend does not
+win even where memory traffic is genuinely ~5.7x lower: its own bookkeeping (a generation-stamp
+comparison branch plus a first-touch-vs-accumulate conditional on every touched row) adds real
+per-row CPU overhead the sorted backend's simpler, branch-free `u_plus[w] -= ...`/dense-`Psi!`
+does not pay -- on an arithmetic-bound kernel, trading memory traffic for extra branching is a
+wash at best. **Final recommendation unchanged, now on stronger evidence: do not adopt the
+touched-row backend as a production default** (serial or parallel) -- it is correctness-
+validated and available as an explicit opt-in (`:B_direct_argument_touched_row_serial`/
+`_parallel`) for any future session that wants to revisit this on different hardware or at a
+larger `W` where memory traffic could plausibly become binding, but nothing in this session's
+own direct, repeated measurement (serial AND parallel, both tested because a direct challenge
+correctly pointed out the serial-only test could not settle the production-relevant question)
+supports adopting it now.
+
 ## Phase 5: KNITRO 13.0.1 algorithm/scaling API audit
 
 Re-confirmed live against the exact installed `include/knitro.h` (not from memory) --
