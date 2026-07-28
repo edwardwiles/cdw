@@ -1,0 +1,34 @@
+# Post-merge production smoke test (2026-07-28): delta=1, unrestricted, real D=20/W=80,000.
+# c10_d20_production_driver.jl is self-contained (includes everything it needs).
+include(joinpath(@__DIR__, "c10_d20_production_driver.jl"))
+using Printf
+lp(xs...) = (println(xs...); flush(stdout))
+
+const FIND_SMALLEST = length(ARGS) >= 1 ? (ARGS[1] == "true") : true
+const DIRECTION = FIND_SMALLEST ? "upper" : "lower"
+const W = 80_000
+const DELTA = 1.0
+const BUDGET = 600.0
+
+ctx_probe = d20_real_setup(W = W, find_smallest = FIND_SMALLEST, δ = DELTA)
+pe_probe = build_pivot_elimination(ctx_probe)
+D = ctx_probe.D; D2 = D^2
+Aod_theta_natural = ctx_probe.θ0_up[ctx_probe.Aod_offset+1:ctx_probe.Aod_offset+D2]
+z0 = log.(Aod_theta_natural)
+zfree0 = pivot_reduce(reshape(z0, D, D), pe_probe)
+gp0 = ctx_probe.θ0_up[3+D]
+
+CKPT_DIR = joinpath(D4X_ROOT, "results", "postmerge_smoke_2026-07-28", "unrestricted_$DIRECTION")
+rm(CKPT_DIR; recursive = true, force = true); mkpath(CKPT_DIR)
+
+lp("=== UNRESTRICTED smoke ($DIRECTION, find_smallest=$FIND_SMALLEST) ==="); flush(stdout)
+t0 = time()
+res = run_profile_checkpointed("unrestricted_$DIRECTION", gp0 * 1.01, FIND_SMALLEST, zfree0;
+    maxtime_real = BUDGET, W_in = W, delta_in = DELTA, draw_seed_in = 20260719,
+    ckpt_dir = CKPT_DIR, checkpoint_interval_s = 60.0)
+wall = time() - t0
+
+println("="^90)
+@printf("RESULT unrestricted(%s): wall=%.1fs n_eval=%d\n", DIRECTION, wall, res.n_eval)
+println("best=", res.best)
+println("="^90)
