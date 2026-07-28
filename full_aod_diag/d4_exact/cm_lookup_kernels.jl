@@ -284,6 +284,21 @@ end
 function cumulative_backward_gradient!(g::AbstractMatrix{Float64}, Hpre::AbstractMatrix{Float64}, h::AbstractMatrix{Float64},
                                         refIndex1::Int, origins::Vector{Int}, L::Int, M::Int)
     prefix_sums!(Hpre, h, L)
+    return cumulative_backward_gradient_from_prefix!(g, Hpre, refIndex1, origins, L, M)
+end
+
+"""
+    cumulative_backward_gradient_from_prefix!(g, Hpre, refIndex1, origins, L, M)
+
+Harmonization task (2026-07-28): the shared CM-transpose kernel both flexible CM
+(`cumulative_backward_gradient!` above) and common Fréchet
+(`cm_frechet_lookup_kernels.jl::cumulative_backward_gradient_from_prefix!`, moved here) call --
+previously two verbatim-identical copies. Takes an ALREADY-COMPUTED `Hpre` (D x L
+prefix-sum-of-histogram) rather than building its own from `h`, so common Fréchet's CM and level
+backward passes can share ONE `prefix_sums!` call per callback instead of two.
+"""
+function cumulative_backward_gradient_from_prefix!(g::AbstractMatrix{Float64}, Hpre::AbstractMatrix{Float64},
+                                                     refIndex1::Int, origins::Vector{Int}, L::Int, M::Int)
     nO = length(origins)
     @inbounds for l in 1:L, oi in 1:nO
         g[oi, l] = -(Hpre[origins[oi], l] - Hpre[refIndex1, l]) / M

@@ -56,21 +56,11 @@ function frechet_level_suffix_sums!(P::AbstractVector{Float64}, λ_level::Abstra
     return P
 end
 
-"""
-    cumulative_backward_gradient_from_prefix!(g, Hpre, refIndex1, origins, L, M)
 
-Identical formula to `cumulative_backward_gradient!` (cm_lookup_kernels.jl), but takes an
-ALREADY-COMPUTED `Hpre` (D x L prefix-sum-of-histogram) instead of building its own from `h` --
-lets the CM and level backward passes share ONE `prefix_sums!` call per callback instead of two.
-"""
-function cumulative_backward_gradient_from_prefix!(g::AbstractMatrix{Float64}, Hpre::AbstractMatrix{Float64},
-                                                     refIndex1::Int, origins::Vector{Int}, L::Int, M::Int)
-    nO = length(origins)
-    @inbounds for l in 1:L, oi in 1:nO
-        g[oi, l] = -(Hpre[origins[oi], l] - Hpre[refIndex1, l]) / M
-    end
-    return g
-end
+# Harmonization task (2026-07-28): cumulative_backward_gradient_from_prefix! moved to
+# cm_lookup_kernels.jl (defined right next to cumulative_backward_gradient!, which now delegates
+# to it) -- every current include-list ordering (both equivalence-gate scripts, smoke scripts)
+# loads that file no later than this one, so this is a pure move, not a duplication.
 
 """
     frechet_level_backward_gradient!(g_level, Hpre, D, L, M, invsqrtD, targets, sum_dPsi)
