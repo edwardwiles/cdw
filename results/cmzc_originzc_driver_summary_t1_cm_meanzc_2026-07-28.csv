@@ -1,0 +1,2 @@
+family,point,nthreads,wall_s,knitro_status,n_eval,n_grad,kappa
+cm_meanzc,calibration,1,99.83915495872498,-502,0,0,NaN
