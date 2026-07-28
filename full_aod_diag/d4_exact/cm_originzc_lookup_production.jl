@@ -85,7 +85,10 @@ this task) -- what changes is that the FG callback itself never reads `obj.H` in
 (campaign-lifetime, `fg_backend=:operator` only); `octx.fg_lookup_st` is cached here on first call
 and reused across every subsequent inner solve at this `octx` (same pattern as `cctx.cmlookup_st`).
 """
-function inner_loop_internal_originzc_operator(obj, θ_ext::AbstractVector, octx::OriginZCCoreHessCtx)
+function inner_loop_internal_originzc_operator(obj, θ_ext::AbstractVector, octx::OriginZCCoreHessCtx; skip_fill::Bool = false)
+    # Legacy-H cleanup (2026-07-28): mirrors inner_loop_internal_cmlookup_production/
+    # inner_loop_internal_meanzc_operator's identical dispatch.
+    moments_fn = (skip_fill && octx.moments_skip! !== nothing) ? octx.moments_skip! : obj.moments!
     octx.fg_zc_op === nothing &&
         error("inner_loop_internal_originzc_operator: octx.fg_zc_op is nothing -- octx was not built with fg_backend=:operator")
     # NOTE: `octx.n_eta` (= n_mean+n_pair, the RESTRICTION-COLUMN count) is a DIFFERENT quantity
@@ -98,7 +101,7 @@ function inner_loop_internal_originzc_operator(obj, θ_ext::AbstractVector, octx
     n_eta_params = n_eta(octx.fg_layout)
     νfull = @view θ_ext[end-n_eta_params+1:end]
 
-    obj.moments!(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
+    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
     obj.H[:, 2] .= 1.0
     obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
 
@@ -132,10 +135,10 @@ goes through the UNCHANGED `inner_loop_internal_archgeneric`; `:operator` goes t
 shared-economic-operator + ZC-restriction-operator path. `ctx_cm.octx.fg_backend` is the single
 source of truth for which.
 """
-function _originzc_fg_dispatch(ctx_cm, obj, θ_ext::AbstractVector)
+function _originzc_fg_dispatch(ctx_cm, obj, θ_ext::AbstractVector; skip_fill::Bool = false)
     octx = ctx_cm.octx
     if octx.fg_backend === :operator
-        return inner_loop_internal_originzc_operator(obj, θ_ext, octx)
+        return inner_loop_internal_originzc_operator(obj, θ_ext, octx; skip_fill = skip_fill)
     elseif octx.fg_backend === :dense_reference
         record_generic_dense_fg!()
         return inner_loop_internal_archgeneric(obj, θ_ext; hess_cb_builder = _ -> _originzc_hess_cb_builder(ctx_cm))

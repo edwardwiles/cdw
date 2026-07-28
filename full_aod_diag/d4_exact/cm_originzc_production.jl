@@ -82,7 +82,13 @@ function archOZ_base_state(x_free0::AbstractVector, νfull::AbstractVector{Float
     # octx.nu_ref for the Hessian callback's shared H_ZZ primitive to read (mirrors core_cf_ref's
     # own "wrapper publishes, callback reads" pattern). Must happen BEFORE the inner solve.
     hasproperty(ctx_cm, :octx) && (ctx_cm.octx.nu_ref[] = collect(νfull))
-    K, x, nStatus, n_fg, n_hess = _originzc_fg_dispatch(ctx_cm, obj, θ_ext0)
+    # Legacy-H cleanup (2026-07-28): same skip_fill_safe pattern as archC_base_state/
+    # archC_meanzc_base_state, including the core_hessian_backend guard -- see
+    # cm_production_bundle.jl::archC_base_state's history comment for the full root-cause writeup.
+    octx = hasproperty(ctx_cm, :octx) ? ctx_cm.octx : nothing
+    skip_fill_safe = octx !== nothing && octx.fg_backend === :operator &&
+                      MOMENT_REPRESENTATION[] == :operator && octx.core_hessian_backend !== :dense_reference
+    K, x, nStatus, n_fg, n_hess = _originzc_fg_dispatch(ctx_cm, obj, θ_ext0; skip_fill = skip_fill_safe)
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archOZ_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, copy(obj.arg1), nStatus)

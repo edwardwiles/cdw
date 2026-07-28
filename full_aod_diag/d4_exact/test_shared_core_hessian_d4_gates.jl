@@ -183,7 +183,13 @@ for (K_mean, K_pair, label) in [(1, 0, "K1_mean_only"), (1, 1, "K1_mean_zc")]
     function full_hessian_mz(base, ctx_cm, cctx)
         obj = ctx_cm.obj
         x = vcat(base.ζstar, base.λstar)
-        _archC_prep_for_hessian!(obj, x)
+        # TEMPORARY DIAG (see Section B's identical fix): route by core_hessian_backend, not the
+        # dense-only prep unconditionally.
+        if cctx.core_hessian_backend === :dense_reference
+            _archC_prep_for_hessian!(obj, x)
+        else
+            _prep_dual_index_for_archC!(cctx, obj, x)
+        end
         h = Vector{Float64}(undef, n*(n+1)÷2)
         hessian_cm_structured!(h, obj, cctx)
         return unpack_packed(h, n)

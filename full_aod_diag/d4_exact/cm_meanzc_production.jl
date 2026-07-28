@@ -102,12 +102,11 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
         aug.ncore_econ, inner_fg_backend,
         nothing,   # cmlookup_st: reused (Any-typed) for CMMeanZCOperatorState when inner_fg_backend=:operator
-        nothing,   # moments_skip! (skip_cm_fill_ref removal, 2026-07-27): CM+ZC's own moments!
-        # wrapper (wrap_moments_with_cm_meanzc, cm_meanzc_moments.jl) is a SEPARATE closure from
-        # wrap_moments_with_cm_archB and never built a skip variant at all -- confirmed live
-        # (skip_cm_fill_ref[] was always `false`, never toggled, before this removal) --
-        # `nothing` here (matching build_cm_bin_ctx's own `hasproperty`-absent fallback) is exactly
-        # equivalent, not a behavior change.
+        # Legacy-H cleanup (2026-07-28): wrap_moments_with_cm_meanzc now DOES build a skip variant
+        # (economic-block-only skip, sharing core_cf_ref with the always-fill variant, mirroring
+        # build_cm_production_context's dual-closure pattern) -- picked up here exactly like that
+        # function's own `hasproperty(aug, :moments_skip!)` check.
+        hasproperty(aug, Symbol("moments_skip!")) ? aug.moments_skip! : nothing,
         meanzc_zc_op, meanzc_zc_layout,
         cm_cross_hessian_backend, nothing,
         zc_cross_hessian_backend, nothing,
@@ -165,7 +164,13 @@ function archC_meanzc_base_state(x_free0::AbstractVector, νvec::AbstractVector{
     # function already owns νvec directly). Must happen BEFORE the inner solve (KNITRO's Hessian
     # callback may fire during it).
     cctx.nu_ref[] = collect(νvec)
-    K, x, nStatus, n_fg, n_hess = _meanzc_fg_dispatch(cctx, obj, θ_ext0)
+    # Legacy-H cleanup (2026-07-28): same skip_fill_safe pattern as archC_base_state
+    # (cm_production_bundle.jl), including its now-fixed core_hessian_backend guard -- see that
+    # function's own history comment for the full root-cause writeup (this family shares the
+    # exact same class of bug/fix, not independently re-derived).
+    skip_fill_safe = cctx.inner_fg_backend === :operator && MOMENT_REPRESENTATION[] == :operator &&
+                      cctx.core_hessian_backend !== :dense_reference
+    K, x, nStatus, n_fg, n_hess = _meanzc_fg_dispatch(cctx, obj, θ_ext0; skip_fill = skip_fill_safe)
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_meanzc_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νvec)"))
     ζstar = x[1]; λstar = collect(x[2:end])
     return BaseDualState(collect(x_free0), θ_econ0, ζstar, λstar, copy(obj.arg1), nStatus)

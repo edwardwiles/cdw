@@ -94,7 +94,10 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
                                      Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}},
                                      layout::MeanZCTargetLayout;
                                      ctx = nothing, use_compressed_core::Bool = true,
-                                     core_cf_ref::Ref{Any} = Ref{Any}(nothing))
+                                     core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                                     skip_fill::Bool = false)   # Legacy-H cleanup (2026-07-28):
+                                     # mirrors wrap_moments_with_cm_archB/wrap_moments_with_cm_meanzc's
+                                     # now-fixed skip_fill kwarg -- economic-block-only skip.
     pregrav = ncore_econ - 1
     D = size(Zraw_all[1], 2)
     K_mean = layout.K_mean
@@ -121,7 +124,9 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
             # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
             # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB.
             cf = cf_build(collect(θ_econ), ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-            materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
+            if !skip_fill
+                materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
+            end
             grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
             fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
             fill_K_directgp!(K, collect(θ_econ), ctx)
@@ -130,7 +135,9 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
             core_moments!(K, G_tmp, θ_econ, U, obj)
             core_cf_ref[] = :compressed_state_unavailable
         end
-        @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
+        if !skip_fill
+            @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
+        end
         for k in 1:K_mean
             cols = pregrav+(k-1)*D+1 : pregrav+k*D
             dest = @view G[:, cols]
@@ -228,7 +235,11 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout)
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair
     core_cf_ref = Ref{Any}(nothing)
     moments_originzc! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
-        ctx = ctx, core_cf_ref = core_cf_ref)
+        ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
+    # Legacy-H cleanup (2026-07-28): second closure, same shared core_cf_ref, skip_fill=true --
+    # mirrors build_cm_meanzc_augmented_obj's identical dual-closure pattern.
+    moments_originzc_skip! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
+        ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
 
     obj_oz = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_originzc!, moments_jacobian! = error,
@@ -244,7 +255,7 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout)
     return (obj_cm = obj_oz, ncore = ncore_econ,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, layout = layout,
             K_mean = K_mean, K_pair = K_pair, n_mean = n_mean, n_pair = n_pair,
-            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_originzc_skip!)
 end
 
 """

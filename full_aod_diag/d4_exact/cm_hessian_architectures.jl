@@ -1256,6 +1256,10 @@ mutable struct OriginZCCoreHessCtx
     hzz_zc_ws::Any
     nu_ref::Base.RefValue{Vector{Float64}}
     hzz_centered::Union{Nothing,ZCCenteredScratch}
+    # Legacy-H cleanup (2026-07-28): the skip-fill variant of `wrap_moments_with_originzc`'s
+    # moments! closure (economic-block-only skip, sharing the same core_cf_ref), mirroring
+    # CMBinHessCtx's own `moments_skip!` field exactly. `nothing` until built.
+    moments_skip!::Union{Nothing,Function}
 end
 
 """
@@ -1310,7 +1314,8 @@ function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = ORIGIN
         core_hessian_backend, core_hessian_workers, core_hessian_storage,
         fg_backend, fg_zc_op, fg_layout, nothing,
         zc_cross_hessian_backend, nothing,
-        hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing)
+        hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing,
+        hasproperty(aug, Symbol("moments_skip!")) ? aug.moments_skip! : nothing)
 end
 
 """

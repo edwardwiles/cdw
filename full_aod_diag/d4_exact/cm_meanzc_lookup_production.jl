@@ -70,14 +70,18 @@ contract exactly. `θ_ext`'s trailing block has length `cctx.meanzc_zc_layout.K_
 `n_eta(cctx.meanzc_zc_layout)` for `SharedByPowerLayout` -- K_mean itself, NOT K_mean+K_pair; see
 `cm_meanzc_moments.jl`'s own `θ_econ = @view θ_ext[1:end-K_mean]`).
 """
-function inner_loop_internal_meanzc_operator(obj, θ_ext::AbstractVector, cctx::CMBinHessCtx)
+function inner_loop_internal_meanzc_operator(obj, θ_ext::AbstractVector, cctx::CMBinHessCtx; skip_fill::Bool = false)
+    # Legacy-H cleanup (2026-07-28): mirrors inner_loop_internal_cmlookup_production's identical
+    # dispatch (cm_lookup_production.jl) -- skip_fill=true only ever safe when cctx.moments_skip!
+    # was actually built, falls back to the always-fill obj.moments! otherwise.
+    moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
     cctx.meanzc_zc_op === nothing &&
         error("inner_loop_internal_meanzc_operator: cctx.meanzc_zc_op is nothing -- cctx was not built with inner_fg_backend=:operator")
     layout = cctx.meanzc_zc_layout
     n_eta_params = n_eta(layout)   # = K_mean (SharedByPowerLayout), NOT K_mean+K_pair
     νs = @view θ_ext[end-n_eta_params+1:end]
 
-    obj.moments!(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
+    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
     obj.H[:, 2] .= 1.0
     obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
 
@@ -112,9 +116,9 @@ Single dispatch point `archC_meanzc_base_state`/`archC_meanzc_verified_state` ca
 `:dense_reference` (default) -> UNCHANGED `inner_loop_internal_archgeneric`; `:operator` -> the new
 shared-economic-operator + CM-lookup + ZC-restriction-operator path.
 """
-function _meanzc_fg_dispatch(cctx::CMBinHessCtx, obj, θ_ext::AbstractVector)
+function _meanzc_fg_dispatch(cctx::CMBinHessCtx, obj, θ_ext::AbstractVector; skip_fill::Bool = false)
     if cctx.inner_fg_backend === :operator
-        return inner_loop_internal_meanzc_operator(obj, θ_ext, cctx)
+        return inner_loop_internal_meanzc_operator(obj, θ_ext, cctx; skip_fill = skip_fill)
     elseif cctx.inner_fg_backend === :dense_reference
         record_generic_dense_fg!()
         return inner_loop_internal_archgeneric(obj, θ_ext; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))

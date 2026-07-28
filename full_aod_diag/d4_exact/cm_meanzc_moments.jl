@@ -281,7 +281,15 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
                                       Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}};
                                       meanzc_basis::Symbol = :direct, refIndex1::Int = 1,
                                       ctx = nothing, use_compressed_core::Bool = true,
-                                      core_cf_ref::Ref{Any} = Ref{Any}(nothing))
+                                      core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                                      skip_fill::Bool = false)   # Hessian upper-only / legacy-H cleanup
+                                      # (2026-07-28): mirrors wrap_moments_with_cm_archB's now-fixed
+                                      # skip_fill kwarg (cm_hessian_architectures.jl) -- see that
+                                      # function's own docstring for the full root-cause history.
+                                      # This family previously had NO skip mechanism at all; adding
+                                      # only the economic-block skip here (not mean/pair/CM columns,
+                                      # which stay unconditional -- narrower scope than flexible-CM's
+                                      # fix, matching only what was actually validated this session).
     meanzc_basis in (:direct, :anchored) || error("wrap_moments_with_cm_meanzc: meanzc_basis must be :direct or :anchored, got $meanzc_basis")
     pregrav = ncore_econ - 1
     D = size(Zraw_all[1], 2)
@@ -311,7 +319,9 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
             # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
             # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB.
             cf = cf_build(collect(θ_econ), ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-            materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
+            if !skip_fill
+                materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
+            end
             grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
             fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
             fill_K_directgp!(K, collect(θ_econ), ctx)
@@ -320,7 +330,9 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
             core_moments!(K, G_tmp, θ_econ, U, obj)
             core_cf_ref[] = :compressed_state_unavailable
         end
-        @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
+        if !skip_fill
+            @views G[:, 1:pregrav] .= G_tmp[:, 1:pregrav]
+        end
         for k in 1:K_mean
             cols = pregrav+(k-1)*D+1 : pregrav+k*D
             dest = @view G[:, cols]
@@ -434,7 +446,15 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
     core_cf_ref = Ref{Any}(nothing)
     moments_meanzc! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
                                                    meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
-                                                   ctx = ctx, core_cf_ref = core_cf_ref)
+                                                   ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
+    # Legacy-H cleanup (2026-07-28): mirrors build_cm_production_context's dual-closure pattern
+    # (cm_production_bundle.jl) -- a SECOND, separate closure sharing the SAME core_cf_ref, built
+    # with skip_fill=true, installed on cctx.moments_skip! (build_cm_meanzc_bin_ctx below) and used
+    # only by inner_loop_internal_meanzc_operator's priming call when archC_meanzc_base_state's own
+    # skip_fill_safe is true.
+    moments_meanzc_skip! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
+                                                        meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
+                                                        ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
 
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_meanzc!, moments_jacobian! = error,
@@ -451,7 +471,7 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
             L = L, contrasts = contrasts, refIndex1 = refIndex1,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, K_mean = K_mean, K_pair = K_pair,
             n_mean = n_mean, n_pair = n_pair, meanzc_basis = meanzc_basis,
-            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_meanzc_skip!)
 end
 
 """
