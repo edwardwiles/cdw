@@ -106,23 +106,8 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
         @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
     end
 
-    Hraw_CC = cctx.Hraw_CC
-    @inbounds for l in 1:L
-        for lp in 1:L
-            for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
-                Hraw_CC[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
-            end
-            rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-            cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
-            block = if cctx.R === nothing
-                Hraw_CC
-            else
-                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
-                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
-            end
-            @views Hfull[rows, cols] .= block
-        end
-    end
+    # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (cm_hessian_architectures.jl).
+    fill_cm_HCC!(Hfull, cctx, M)
 
     # ---- level-block terms: verbatim from hessian_cm_frechet_structured! ----
     Bidx = cctx.Bidx

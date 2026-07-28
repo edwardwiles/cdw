@@ -270,24 +270,9 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     end
 
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
-    CT = cctx.CT
-    Hraw_CC = cctx.Hraw_CC
-    @inbounds for l in 1:L
-        for lp in 1:L
-            for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
-                Hraw_CC[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
-            end
-            rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-            cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
-            block = if cctx.R === nothing
-                Hraw_CC
-            else
-                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
-                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
-            end
-            @views Hfull[rows, cols] .= block
-        end
-    end
+    # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (cm_hessian_architectures.jl),
+    # also used by common Fréchet -- previously a third verbatim copy of this loop.
+    fill_cm_HCC!(Hfull, cctx, M)
 
     # Hessian upper-only cleanup (2026-07-28): now calls the ONE shared packing function
     # (`pack_upper_cm_hessian!`, cm_hessian_architectures.jl) instead of an independently

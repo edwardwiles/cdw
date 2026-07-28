@@ -114,23 +114,9 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
         @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
     end
 
-    Hraw_CC = cctx.Hraw_CC
-    @inbounds for l in 1:L
-        for lp in 1:L
-            for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
-                Hraw_CC[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
-            end
-            rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-            cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
-            block = if cctx.R === nothing
-                Hraw_CC
-            else
-                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
-                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
-            end
-            @views Hfull[rows, cols] .= block
-        end
-    end
+    # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (cm_hessian_architectures.jl),
+    # also used by flexible CM -- previously two verbatim-identical copies, one per family.
+    fill_cm_HCC!(Hfull, cctx, M)
 
     # ---- NEW: marginal weighted-count table T1[x,l] = sum_s w_s*1{bin(s,x)<=l} (D x L), Wtot, Esum.
     # Needed because (unlike CM's own zero-target raw features) the level feature has a NONZERO

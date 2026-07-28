@@ -954,6 +954,38 @@ function pack_upper_cm_hessian!(h::AbstractVector, Hfull::AbstractMatrix, NCORE:
 end
 
 """
+    fill_cm_HCC!(Hfull, cctx::CMBinHessCtx, M)
+
+H_CC (CM-CM restriction self-block): raw per-threshold-block-pair computation, then optional R
+congruence. Shared between flexible CM and common Fréchet (harmonization task, 2026-07-28) --
+previously two verbatim-identical copies, one per family. `M` is `obj.M` (not a `CMBinHessCtx`
+field), passed through exactly as both pre-existing call sites already had it in scope.
+"""
+function fill_cm_HCC!(Hfull::AbstractMatrix, cctx::CMBinHessCtx, M)
+    CT = cctx.CT
+    Hraw_CC = cctx.Hraw_CC
+    L = cctx.L; nO = cctx.nO; NCORE = cctx.NCORE
+    origins = cctx.origins; refIndex1 = cctx.refIndex1
+    @inbounds for l in 1:L
+        for lp in 1:L
+            for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
+                Hraw_CC[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
+            end
+            rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
+            cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
+            block = if cctx.R === nothing
+                Hraw_CC
+            else
+                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
+                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
+            end
+            @views Hfull[rows, cols] .= block
+        end
+    end
+    return Hfull
+end
+
+"""
     hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
 
 Architecture C Hessian callback. Requires `obj.arg0` to already reflect the
@@ -1049,29 +1081,9 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     end
 
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
-    # Allocation/Hessian port task §4.2 (extended): Hraw_CC/RtHraw_CC/block_cc now live in cctx
-    # (persistent) instead of Hraw_CC being reallocated once per call and `cctx.R' * Hraw_CC *
-    # cctx.R` allocating TWO fresh matrices on EVERY one of the L^2 (l,l') iterations within that
-    # call -- found live while porting §6.1's threaded Hessian backend (missed in the original
-    # §4.2 pass, which only named the smaller H_EC-side allocation).
-    CT = cctx.CT
-    Hraw_CC = cctx.Hraw_CC
-    @inbounds for l in 1:L
-        for lp in 1:L
-            for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
-                Hraw_CC[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
-            end
-            rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-            cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
-            block = if cctx.R === nothing
-                Hraw_CC
-            else
-                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
-                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
-            end
-            @views Hfull[rows, cols] .= block
-        end
-    end
+    # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (also used by common
+    # Fréchet) -- previously two verbatim-identical copies, one per family.
+    fill_cm_HCC!(Hfull, cctx, M)
 
     # symmetrize defensively (analytically symmetric; absorbs FP-order noise, same
     # defensive pattern as compressed_inner_alt_solvers.jl's denseaccum callback) -- see
