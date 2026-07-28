@@ -10,6 +10,7 @@ for f in ["context.jl","context_real_d20.jl","draw_design.jl","winners.jl","orac
           "cm_lookup_kernels.jl","lfix_cm_aware.jl","cm_hessian_architectures.jl","cm_production_bundle.jl","cm_screen_bridge.jl",
           "nested_quantile_grids.jl","lfix_factorized.jl","lfix_factorized_workspace.jl","lfix_cm_cplus.jl",
           "cm_frechet_level.jl","cm_frechet_hessian.jl","cm_frechet_hessian_threaded.jl","cm_frechet_cplus.jl",
+          "cm_frechet_lookup_kernels.jl","cm_frechet_lookup_production.jl",
           "operator_verification.jl","verification_gate_utils.jl"]
     include(joinpath(D4X, f))
 end

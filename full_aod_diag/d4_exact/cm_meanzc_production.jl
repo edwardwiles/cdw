@@ -102,10 +102,12 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_cf_ref, nothing, nothing, core_hessian_backend, core_hessian_workers, core_hessian_storage,
         aug.ncore_econ, inner_fg_backend,
         nothing,   # cmlookup_st: reused (Any-typed) for CMMeanZCOperatorState when inner_fg_backend=:operator
-        Ref(false),   # skip_cm_fill_ref: never toggled here -- CM+ZC's own moments! wrapper
-        # (wrap_moments_with_cm_meanzc, cm_meanzc_moments.jl) is a SEPARATE closure from
-        # wrap_moments_with_cm_archB and doesn't accept/check this kwarg at all; kept as an
-        # inert Ref purely so every CMBinHessCtx has a uniformly non-nothing field.
+        nothing,   # moments_skip! (skip_cm_fill_ref removal, 2026-07-27): CM+ZC's own moments!
+        # wrapper (wrap_moments_with_cm_meanzc, cm_meanzc_moments.jl) is a SEPARATE closure from
+        # wrap_moments_with_cm_archB and never built a skip variant at all -- confirmed live
+        # (skip_cm_fill_ref[] was always `false`, never toggled, before this removal) --
+        # `nothing` here (matching build_cm_bin_ctx's own `hasproperty`-absent fallback) is exactly
+        # equivalent, not a behavior change.
         meanzc_zc_op, meanzc_zc_layout,
         cm_cross_hessian_backend, nothing,
         zc_cross_hessian_backend, nothing,

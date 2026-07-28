@@ -9,12 +9,14 @@
 # operator-based verification is achievable with the SAME shared operators this branch already
 # built and validated (economic_forward!/economic_transpose!, restriction_forward!/
 # restriction_transpose!). Extending this to CM+ZC/flexible-CM/common-Frechet (whose own
-# verification today reads dense obj.H via `obj(inner_x, constr=...)` and `CS.select_G_from_H`,
-# and whose CM-block verification also still needs the `skip_cm_fill_ref`-toggled dense CM-column
-# fill) is NOT done in this pass -- see docs/OPERATOR_BASED_INNER_VERIFICATION_2026-07-26.md for
-# the explicit remaining-work list. `skip_cm_fill_ref` itself is NOT removed by this file (task
-# §10's ask) -- that requires the CM/Frechet family verification to also go operator-based first,
-# which this file does not attempt.
+# verification today reads dense obj.H via `obj(inner_x, constr=...)` and `CS.select_G_from_H`)
+# is NOT done in this pass -- see docs/OPERATOR_BASED_INNER_VERIFICATION_2026-07-26.md for
+# the explicit remaining-work list. (`verify_inner_solution_operator_cm!`/`_cm_frechet!` below
+# were added in a LATER pass -- see their own docstrings -- and do cover flexible-CM/common-
+# Fréchet's :operator verification_backend branch; this header note describes this file's
+# original, narrower scope at the time it was written.) The now-removed `skip_cm_fill_ref` Ref
+# (docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md) was UNRELATED to this file's own scope --
+# CM/Frechet's dense-CM-column fill is unconditional today regardless of verification_backend.
 #
 # "Independent" here means: recomputes from `cf`/`op`/`layout` (immutable/campaign-level state)
 # with FRESH scratch buffers, never touching the live FG callback's own `st.arg0`/`st.arg1`/etc --

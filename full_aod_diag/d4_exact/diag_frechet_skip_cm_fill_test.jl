@@ -1,13 +1,24 @@
 # ============================================================================
 # Root-cause investigation, part 3 (shared-FG-verification-and-A-gradient release, 2026-07-27):
-# archC_frechet_base_state sets cctx.skip_cm_fill_ref[]=true whenever inner_fg_backend=
+# archC_frechet_base_state USED TO set cctx.skip_cm_fill_ref[]=true whenever inner_fg_backend=
 # :cm_frechet_lookup, based on a comment's claim that the level block's own dense fill is ALSO
 # skippable under the same condition -- i.e. that archC_frechet_hess_cb_builder (the SAME Hessian
 # callback used by BOTH dense and lookup, via a thin adapter) never reads obj.H's CM/level dense
 # columns either. Part 2 of this investigation showed the lookup FG kernel's own math is correct
-# (near-zero gradient at dense's own converged optimum) -- this script tests whether the SKIP
-# itself is the bug, by forcibly disabling it (leaving the dense CM/level column fill ON even
+# (near-zero gradient at dense's own converged optimum) -- this script tested whether the SKIP
+# itself was the bug, by forcibly disabling it (leaving the dense CM/level column fill ON even
 # under the lookup FG backend) and re-running the exact failing solve.
+#
+# STATUS UPDATE (skip_cm_fill_ref removal, 2026-07-27): this investigation's conclusion (Test B
+# below) was already applied as a permanent fix in cm_frechet_cplus.jl/cm_frechet_level.jl BEFORE
+# this later session started -- archC_frechet_base_state no longer touches any skip ref at all, and
+# `wrap_moments_with_cm_frechet_archB`'s dense CM/level fill is unconditional. The later session
+# then REMOVED the `skip_cm_fill_ref` `Ref{Bool}` field/plumbing from `CMBinHessCtx` entirely (see
+# docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md). Both tests below are updated to not
+# reference the now-deleted field; Test A necessarily always "succeeds" now (there is no skip left
+# to reproduce the original bug with) and Test B's forced-fill is simply the ONLY behavior that
+# exists post-removal -- kept as a smoke check that both call paths still solve correctly, not as a
+# live root-cause reproduction anymore.
 # ============================================================================
 const D4X = @__DIR__
 cd(D4X)
@@ -40,31 +51,30 @@ pcx_lookup = build_cm_frechet_production_context(ctx, CS; L = L, contrasts = :an
     cm_hessian_backend = :structured, inner_fg_backend = :cm_frechet_lookup)
 
 cctx = pcx_lookup.cctx
-lp("cctx.skip_cm_fill_ref[] currently (before any solve) = ", cctx.skip_cm_fill_ref === nothing ? "nothing (no ref)" : cctx.skip_cm_fill_ref[])
+lp("cctx.skip_cm_fill_ref no longer exists (removed 2026-07-27) -- the dense CM/level fill is unconditional now")
 
 lp("")
-lp("=== Test A: baseline repro (skip_cm_fill_ref active, as archC_frechet_base_state normally does it) ===")
+lp("=== Test A: baseline (archC_frechet_base_state, as it normally runs today -- fill always ON) ===")
 try
     st = archC_frechet_base_state(x_free, pcx_lookup.ctx_cm, cctx, pcx_lookup.aug.level_targets)
-    lp("  SUCCESS (unexpected!): inner_status=", st.inner_status, "  zeta*=", st.ζstar)
+    lp("  SUCCESS (expected -- fill is unconditional post-fix/post-removal): inner_status=", st.inner_status, "  zeta*=", st.ζstar)
 catch e
-    lp("  FAILED as expected: ", sprint(showerror, e)[1:min(150,end)])
+    lp("  UNEXPECTED FAILURE (regression): ", sprint(showerror, e)[1:min(150,end)])
 end
 
 lp("")
-lp("=== Test B: same solve, but with the CM/level dense column fill FORCED ON (skip disabled) ===")
+lp("=== Test B: same solve, direct inner_loop_internal_cmfrechetlookup_production call (fill always ON, unconditionally, no ref/kwarg to force) ===")
 obj_l = pcx_lookup.ctx_cm.obj
 theta_full0 = CS.reconstruct_full(x_free, pcx_lookup.ctx_cm.m)
-cctx.skip_cm_fill_ref === nothing || (cctx.skip_cm_fill_ref[] = false)
 cctx.cmlookup_st = nothing
 K, xsol, nStatus, n_fg, n_hess = inner_loop_internal_cmfrechetlookup_production(obj_l, theta_full0, cctx,
     pcx_lookup.aug.level_targets; hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, pcx_lookup.aug.level_targets))
 lp("  nStatus = ", nStatus, "  (0/-100/-101/-103 = success, -400 = infeasible -- the original crash)")
 if nStatus in (0, -100, -101, -103)
-    lp("  *** SUCCESS with the fill forced ON -- this CONFIRMS skip_cm_fill_ref was unsafe for the Hessian path ***")
+    lp("  SUCCESS with the fill unconditionally ON -- consistent with the fix already applied (Test A above uses the identical, now-only, code path)")
     lp("  zeta* = ", xsol[1])
 else
-    lp("  Still fails even with the fill forced ON -- skip_cm_fill_ref is NOT the (sole) root cause, rule it out")
+    lp("  UNEXPECTED FAILURE -- regression, investigate")
 end
 
 lp("")

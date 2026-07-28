@@ -28,8 +28,11 @@
 # (by `moments!`, for the Hessian's legitimate use) even after this port -- what changes is that
 # the FG *callback* stops READING them for its own forward/backward, exactly the same "producer
 # still exists, but this particular consumer stops using it" pattern already established for the CM
-# block's `skip_cm_fill_ref` (RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md §2). This is
-# documented in full in docs/SHARED_ECONOMIC_FG_OPERATOR_DESIGN_2026-07-26.md.
+# block's flexible-CM skip-fill mechanism (RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md
+# §2; that mechanism's OWN implementation was later ported off the mutable `skip_cm_fill_ref` Ref
+# onto explicit `skip_fill::Bool` call-site threading, docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md
+# -- the "producer/consumer" design point this comment makes is unaffected by that later port).
+# This is documented in full in docs/SHARED_ECONOMIC_FG_OPERATOR_DESIGN_2026-07-26.md.
 # ================================================================================================
 
 isdefined(Main, :EconomicFGWorkspace) || include(joinpath(@__DIR__, "compressed_cc_inner.jl"))

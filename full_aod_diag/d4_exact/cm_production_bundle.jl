@@ -99,11 +99,18 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     # `pcx.cctx.core_cf_ref[] === nothing` after a real feasible archC_base_state solve, before this
     # fix. Fixed by building ONE `core_cf_ref` here and threading it to BOTH call sites.
     core_cf_ref = Ref{Any}(nothing)
-    # Phase 5.5 follow-on (2026-07-26): shared box archC_base_state/archC_verified_state toggle
-    # around each inner solve so wrap_moments_with_cm_archB's closure can skip materializing the
-    # dense CM columns when they are about to go completely unread (:cm_lookup FG backend AND no
-    # post-solve verified-state recompute). See wrap_moments_with_cm_archB's own kwarg docstring.
-    skip_cm_fill_ref = Ref(false)
+    # skip_cm_fill_ref removal (2026-07-27): archC_base_state/archC_verified_state used to toggle a
+    # shared `Ref{Bool}` around each inner solve so wrap_moments_with_cm_archB's closure could skip
+    # materializing the dense CM columns when they are about to go completely unread (:cm_lookup FG
+    # backend AND no post-solve verified-state recompute). Replaced with two SEPARATE, immutable
+    # closures built once here -- `moments_archB!` (skip_fill=false, always fills; installed as
+    # ctx_cm.obj.moments!, used by every non-skip path AND by archC_verified_state's own inner
+    # solve) and `moments_archB_skip!` (skip_fill=true, never fills; installed on `cctx.
+    # moments_skip!`, used ONLY by inner_loop_internal_cmlookup_production's priming call when
+    # archC_base_state explicitly threads skip_fill=true through). Both share the SAME `core_cf_ref`
+    # box so the Hessian callback sees an identical publish regardless of which one ran. See
+    # wrap_moments_with_cm_archB's own kwarg docstring for the full rationale.
+    moments_archB_skip! = nothing
     if use_archB_moments
         # NOTE: common_marginals_interval.jl and cm_hessian_architectures.jl both define
         # `compute_bin_indices(U,z)` with overlapping-but-distinct signatures (z::Vector{Float64}
@@ -115,7 +122,10 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
         R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
         moments_archB! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
                                                      use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
-                                                     skip_cm_fill_ref = skip_cm_fill_ref)
+                                                     skip_fill = false)
+        moments_archB_skip! = wrap_moments_with_cm_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins, aug.refIndex1, aug.L, R, ctx;
+                                                     use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+                                                     skip_fill = true)
         obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj_cm.δ, find_smallest = obj_cm.find_smallest,
             γ = obj_cm.γ, (moments!) = moments_archB!, moments_jacobian! = error,
             d = obj_cm.d, outer_constr_index = obj_cm.outer_constr_index,
@@ -128,8 +138,9 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     end
     ctx_cm = merge(ctx, (obj = obj_cm,))
     bins = cm_bin_indices_for(ctx, aug)
-    aug = merge(aug, (core_cf_ref = core_cf_ref, skip_cm_fill_ref = skip_cm_fill_ref))   # so build_cm_bin_ctx's
-    # hasproperty(aug, :core_cf_ref)/hasproperty(aug, :skip_cm_fill_ref) pick up the SAME refs the moments closure reads/writes
+    aug = merge(aug, (core_cf_ref = core_cf_ref, moments_skip! = moments_archB_skip!))   # so build_cm_bin_ctx's
+    # hasproperty(aug, :core_cf_ref)/hasproperty(aug, :moments_skip!) pick up the SAME core_cf_ref
+    # box and skip-variant closure moments_archB!/moments_archB_skip! above use/build
     # inner_fg_backend=:cm_lookup is only ever reachable through THIS function (build_cm_production_context
     # is the plain flexible-CM builder -- common-Frechet and CM+meanZC each have their OWN separate
     # build_cm_frechet_production_context/build_cm_meanzc_production_context, neither of which
@@ -190,37 +201,36 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    # Phase 5.5 follow-on (2026-07-26): archC_base_state NEVER reads obj.H's CM columns (it only
-    # returns ζ*/λ*/obj.arg1) -- when the :cm_lookup FG backend is registered (which recomputes the
-    # CM contribution from bin lookups, never from obj.H), the dense CM-column materialization
-    # wrap_moments_with_cm_archB's closure would otherwise do is pure waste. Toggle the shared
-    # skip_cm_fill_ref true for ONLY the duration of this one moments!+inner-solve call, reset in a
-    # `finally` so it can never leak `true` into some other caller on the same cctx (in particular
-    # archC_verified_state below, which DOES need those columns for its post-solve recompute).
-    #
-    # Default-flips task (2026-07-27), Task C: the SKIP decision (below) is gated additionally on
-    # MOMENT_REPRESENTATION[]==:operator (the explicit no-composite-G-setup selector) AND
-    # cctx.cm_cross_hessian_backend==:winner_bin -- the skip is only safe when the Hessian's own H_EC
-    # cross-block is ALSO operator-based (confirmed live,
-    # docs/GLOBAL_NO_DENSE_G_INNER_SOLVE_PROOF_2026-07-27.md C.2); if cm_cross_hessian_backend were
-    # ever reverted to :dense_reference for a diagnostic run, this guard correctly falls back to
-    # filling the dense CM columns rather than silently starving that Hessian backend the way common-
-    # Fréchet's own analogous skip once did (see MOMENT_REPRESENTATION's docstring). This is
-    # DELIBERATELY a separate boolean from `use_lookup` -- `use_lookup` alone still governs which FG
-    # backend/dispatch function is used (an already-settled, unrelated decision); only the fill-skip
-    # additionally requires the two extra conditions.
+    # skip_cm_fill_ref removal, then REVERTED 2026-07-28 (final-architecture-closure task, Goal 10):
+    # this comment previously claimed "archC_base_state NEVER reads obj.H's CM columns" -- that claim
+    # is FALSE. `archC_hess_cb_builder(cctx)` (passed as `hess_cb_builder` below) calls
+    # `_archC_prep_for_hessian!(o, xloc)` on EVERY Hessian callback (cm_hessian_architectures.jl),
+    # which computes `arg0 = H[:, 2:1+outer_constr_index] * (-x)` via a DENSE BLAS.gemv! --
+    # `outer_constr_index == obj.d` for this family (`build_cm_augmented_obj`'s own
+    # `outer_constr_index_new = obj0.outer_constr_index + ncm`, confirmed by direct read), so this
+    # slice genuinely spans the CM-grid columns, real economic-model dependency, not a leftover
+    # unused read. `arg0` feeds `w = ddPsi!(arg0)`, the per-draw weight vector EVERY block of the
+    # packed Hessian is built from (including the winner_bin H_EE/H_EC blocks, via `_fill_cm_HEE!`/
+    # `build_bin_tables!`'s own `w` argument) -- so leaving the CM columns unfilled corrupts the
+    # ENTIRE Hessian, not just a CM-specific sub-block. A real D=20/W=80,000 re-test
+    # (`cm_skip_retest_d20_perturbed.jl`, calibration + 2 perturbed points, SAME points/seed as
+    # common-Fréchet's own re-test) confirmed this empirically: calibration agreed closely (benign
+    # nStatus 0-vs--103 shift, |Δzeta*|=9.1e-13), but BOTH perturbed points reproduced a real
+    # `nStatus=-400` solve failure with the skip enabled, while the SAME points solved cleanly
+    # (nStatus=0) with the fill left in place -- the exact same failure mode common-Fréchet's own
+    # skip re-test found, for the identical shared-mechanism reason. This family's skip was
+    # PREVIOUSLY REPORTED as fully closed/safe based only on a calibration-point isolated check and
+    # D=4-scale gates -- that was premature; see docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md
+    # for the full corrected record. `skip_fill_safe` is now kept at `false` unconditionally. Do not
+    # re-enable without first fixing `_archC_prep_for_hessian!` itself to not require the dense CM
+    # columns (a genuine architectural change, not a re-test).
     use_lookup = cctx.inner_fg_backend == :cm_lookup
-    skip_fill_safe = use_lookup && MOMENT_REPRESENTATION[] == :operator && cctx.cm_cross_hessian_backend == :winner_bin
-    skip_fill_safe && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = true)
-    local K, x, nStatus, n_fg, n_hess
-    try
-        K, x, nStatus, n_fg, n_hess = use_lookup ?
-            inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
-            inner_loop_internal_archgeneric(obj, θ_full0;
-                hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
-    finally
-        skip_fill_safe && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
-    end
+    skip_fill_safe = false   # ALWAYS false -- see HISTORY comment above
+    K, x, nStatus, n_fg, n_hess = use_lookup ?
+        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx),
+            skip_fill = skip_fill_safe) :
+        inner_loop_internal_archgeneric(obj, θ_full0;
+            hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
         throw(CMExpectedSolveFailure("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
@@ -268,16 +278,24 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    # Phase 5.5 follow-on (2026-07-26): UNLIKE archC_base_state, this function's own :dense_reference
-    # post-solve recompute below (`obj(inner_x, constr=...)`, `CS.select_G_from_H(obj, obj.H)`) DOES
-    # read obj.H's CM columns -- explicitly force skip_cm_fill_ref false (defensively, not just
-    # relying on archC_base_state's own finally-reset) so that path always gets a correctly-filled
-    # G regardless of what any prior call on this SAME cctx left the shared ref set to. Verification-
-    # defaults task (2026-07-27): the :operator backend below never reads obj.H at all, so this fill
-    # is skipped entirely when verification_backend===:operator (no wasted dense materialization).
-    verification_backend === :dense_reference && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
+    # skip_cm_fill_ref removal, REVISED, then REVERTED AGAIN 2026-07-28 (final-architecture-closure
+    # task, Goal 10): a prior revision of this comment argued the skip was safe here because neither
+    # `verify_inner_solution_operator_cm!` nor anything in the real production call chain reads
+    # `obj.H` under `verification_backend===:operator` -- that reasoning is correct as far as it goes,
+    # but incomplete: `skip_fill` here ALSO controls the SAME `_archC_prep_for_hessian!` dense-column
+    # dependency documented in `archC_base_state`'s own HISTORY comment above (identical
+    # `hess_cb_builder = archC_hess_cb_builder(cctx)`, identical inner-solve mechanism) -- the
+    # verification step itself may be safe, but the LIVE INNER SOLVE that happens before it is not.
+    # A real D=20/W=80,000 re-test at non-calibration points (see `archC_base_state`'s own comment)
+    # confirmed this empirically for the base_state call site; the identical mechanism applies here.
+    # `skip_fill_verify` is now kept at `false` unconditionally. Do not re-enable without first fixing
+    # `_archC_prep_for_hessian!` itself (a genuine architectural change, not a re-test) -- see
+    # docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md for the full corrected record.
+    use_lookup_verify = cctx.inner_fg_backend == :cm_lookup
+    skip_fill_verify = false   # ALWAYS false -- see HISTORY comment above
     K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
-        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx)) :
+        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx),
+            skip_fill = skip_fill_verify) :
         inner_loop_internal_archgeneric(obj, θ_full0;
             hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
     if nStatus ∉ (0, -100, -101, -103)

@@ -111,30 +111,39 @@ end
 function archC_frechet_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx, level_targets::Vector{Float64})
     obj = ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free0, ctx_cm.m)
-    # BUGFIX (shared-FG-verification-and-A-gradient release, 2026-07-27): this function used to set
-    # cctx.skip_cm_fill_ref[]=true whenever inner_fg_backend=:cm_frechet_lookup, on the Phase 5.2
-    # remediation (2026-07-26) comment's claim that "archC_frechet_base_state never reads obj.H's
-    # CM/level columns... skip their now-wasted dense fill when :cm_frechet_lookup is registered
-    # (which never reads them either)". That claim is FALSE for the Hessian side: BOTH branches
-    # below share the SAME archC_frechet_hess_cb_builder(cctx, level_targets) Hessian callback
-    # (the lookup branch reaches it via the thin `_adapt_hess_cb_for_lookup` wrapper, not a
-    # different implementation), and that Hessian callback DOES read obj.H's CM/level dense
-    # columns. Skipping their fill left the lookup path's Hessian reading stale/unfilled data,
-    # sending KNITRO's Newton steps in a wrong direction and producing a reproducible real
-    # infeasible termination (nStatus=-400) at points beyond the narrow calibration point the
-    # original allocation-fix gates happened to cover -- see
-    # docs/COMMON_FRECHET_FG_D20_FINAL_GATE_2026-07-27.md for the full root-cause trace (a direct
-    # A/B: identical solve, skip forced off -> nStatus=0, zeta* agrees with dense to 9 significant
-    # figures; skip left on -> nStatus=-400, reproduced 4/4 times across two sessions). The
-    # skip_cm_fill_ref optimization is REMOVED here for common-Frechet; the CM/level dense columns
-    # are always filled regardless of inner_fg_backend, exactly as the pre-Phase-5.2 code did. The
-    # plain-CM family's OWN skip_cm_fill_ref usage (cm_production_bundle.jl::archC_base_state) is
-    # a SEPARATE, independently-validated call site for a DIFFERENT Hessian builder
-    # (archC_hess_cb_builder, not archC_frechet_hess_cb_builder) and is unaffected by this fix.
+    # HISTORY: this function briefly set cctx.skip_cm_fill_ref[]=true whenever inner_fg_backend=
+    # :cm_frechet_lookup (Phase 5.2, 2026-07-26), on the claim that the Hessian callback below never
+    # reads obj.H's CM/level columns. That claim was found FALSE at the time (commit 5fd6347,
+    # 2026-07-27 10:52: reproducible nStatus=-400 beyond the calibration point) and the skip was
+    # removed -- CM/level dense columns filled unconditionally, exactly as the pre-Phase-5.2 code did.
+    #
+    # RE-INVESTIGATED 2026-07-27/28 (final-architecture-closure task, Goal 10): hypothesized the
+    # winner-bin H_E,level Hessian path (winner_pair_cross_hessian_colsum!/_esum!, added in commits
+    # e3bce93/d458702, which POSTDATE the nStatus=-400 bugfix commit 5fd6347 by ~7.5 hours, confirmed
+    # via `git merge-base --is-ancestor 5fd6347 d458702`) might have made the skip safe again, since
+    # neither `hessian_cm_frechet_structured!` nor `CMFrechetLookupState` were found (by static code
+    # read) to depend on obj.H's CM/level columns anymore. D=4 multi-point re-test (calibration + 3
+    # perturbed/hard points) supported this: all feasible, values agreed to 8-11 significant figures,
+    # winner_bin genuinely engaged throughout. **A real D=20/W=80,000 re-test (destination_sample=
+    # :exclude_row) then DISPROVED the hypothesis**: calibration agreed closely (nStatus -103 vs 0,
+    # |Δzeta*|=4.4e-11, a benign KN_RC_FEAS_FTOL-vs-KN_RC_OPTIMAL label difference -- see
+    # docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md), but BOTH tested non-calibration points
+    # reproduced the EXACT original nStatus=-400 failure with the skip enabled, while the SAME points
+    # solved cleanly (nStatus=0) with the fill left in place -- i.e. this codebase's own
+    # Hessian/gradient path for common-Fréchet genuinely still depends on this dense fill somewhere
+    # not caught by the static trace, exactly as the original 2026-07-26 finding said, and exactly
+    # reproducing that finding's own "missed at the calibration point, caught beyond it" pattern. The
+    # skip is REMOVED again here -- CM/level dense columns are filled UNCONDITIONALLY for common-
+    # Fréchet, matching the pre-2026-07-26-Phase-5.2 and pre-this-reinvestigation behavior exactly.
+    # Do not re-attempt this skip without first root-causing (not just re-testing) exactly which read
+    # inside the actual Hessian/gradient callback chain depends on these columns -- a passing D=4-only
+    # gate is NOT sufficient evidence, per this exact history repeating itself twice now.
     use_lookup = cctx.inner_fg_backend == :cm_frechet_lookup
+    skip_fill_safe_frechet = false   # ALWAYS false for common-Fréchet -- see HISTORY comment above
     K, x, nStatus, n_fg, n_hess = use_lookup ?
         inner_loop_internal_cmfrechetlookup_production(obj, θ_full0, cctx, level_targets;
-            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets)) :
+            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets),
+            skip_fill = skip_fill_safe_frechet) :
         inner_loop_internal_archgeneric(obj, θ_full0;
             hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_frechet_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
@@ -233,15 +242,23 @@ function archC_frechet_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMB
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    # Phase 5.2 remediation (2026-07-26): UNLIKE archC_frechet_base_state, this function's own
-    # :dense_reference post-solve recompute below DOES read obj.H's CM/level columns -- defensively
-    # force the shared ref false before dispatch, regardless of what any prior call on this cctx
-    # left it set to. Verification-defaults task (2026-07-27): skipped entirely under :operator,
-    # which never reads obj.H.
-    verification_backend === :dense_reference && cctx.skip_cm_fill_ref !== nothing && (cctx.skip_cm_fill_ref[] = false)
+    # RE-INVESTIGATED then REVERTED 2026-07-27/28 (final-architecture-closure task, Goal 10): the
+    # POST-solve `:operator` verification branch below (`verify_inner_solution_operator_cm_frechet!`)
+    # genuinely never reads `obj.H` (confirmed by reading it in full, operator_verification.jl) -- that
+    # narrower claim is correct and is NOT what this comment is walking back. But the `skip_fill`
+    # argument passed into `inner_loop_internal_cmfrechetlookup_production` below controls the SAME
+    # underlying dense CM/level column fill that feeds the live INNER SOLVE's own Hessian callback
+    # (`archC_frechet_hess_cb_builder`, identical mechanism to `archC_frechet_base_state`'s own call) --
+    # a real D=20/W=80,000 re-test (see archC_frechet_base_state's own HISTORY comment and
+    # docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md) found that skipping this fill reproduces the
+    # original nStatus=-400 failure at non-calibration points. Kept at `false` unconditionally here for
+    # the same reason -- do not re-enable without root-causing the actual dependency first.
+    use_lookup_verify_frechet = cctx.inner_fg_backend == :cm_frechet_lookup
+    skip_fill_verify_frechet = false   # ALWAYS false for common-Fréchet -- see HISTORY comment above and archC_frechet_base_state's own
     K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_frechet_lookup ?
         inner_loop_internal_cmfrechetlookup_production(obj, θ_full0, cctx, level_targets;
-            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets)) :
+            hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets),
+            skip_fill = skip_fill_verify_frechet) :
         inner_loop_internal_archgeneric(obj, θ_full0;
             hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, level_targets))
     if nStatus ∉ (0, -100, -101, -103)

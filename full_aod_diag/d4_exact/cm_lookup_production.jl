@@ -109,8 +109,19 @@ top of each solve so the returned `n_fg` still means "FG calls THIS inner solve"
 pre-caching contract.
 """
 function inner_loop_internal_cmlookup_production(obj, θ::AbstractVector, cctx::CMBinHessCtx;
-        hess_cb_builder, method::Symbol = :suffix, nthreads_use::Int = Threads.nthreads())
-    obj.moments!(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
+        hess_cb_builder, method::Symbol = :suffix, nthreads_use::Int = Threads.nthreads(),
+        skip_fill::Bool = false)   # skip_cm_fill_ref removal (2026-07-27): explicit, non-mutating
+        # replacement for the old caller-toggled `cctx.skip_cm_fill_ref[]` read inside the moments!
+        # closure itself. This ONE priming call (below) is the only place `obj.moments!`/`cctx.
+        # moments_skip!` is invoked for the :cm_lookup FG path (every subsequent per-iterate FG
+        # evaluation during the inner solve goes through CMLookupState's own callback, which never
+        # touches the dense CM columns at all) -- so threading the decision explicitly through THIS
+        # one call site is sufficient; no closure-internal mutable state is needed. `skip_fill=true`
+        # is only ever safe (and only ever passed) when `cctx.moments_skip!` was actually built --
+        # falls back to the always-fill `obj.moments!` otherwise, matching the pre-refactor "no ref
+        # present -> always fill" default.
+    moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
+    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
     obj.H[:, 2] .= 1.0
     obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
 

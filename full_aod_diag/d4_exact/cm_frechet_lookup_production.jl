@@ -74,14 +74,26 @@ end
 Common-Frechet analogue of `inner_loop_internal_cmlookup_production` -- same contract
 `(K, x, nStatus, n_fg, n_hess)`, same `cctx.cmlookup_st` cache reuse (typed `Any`, shared with
 plain-CM's own `CMLookupState` cache -- a `cctx` is only ever built for ONE family, so no
-collision risk), same `cctx.skip_cm_fill_ref` wiring for archC_frechet_base_state to skip the
-now-wasted dense CM-column fill exactly as archC_base_state does for plain CM (the level block's
-own dense fill, `fill_frechet_level_columns_from_bins!`, is ALSO skippable under the same
-condition -- see wrap_moments_with_cm_frechet_archB's own skip_cm_fill_ref-gated call below).
+collision risk).
+
+History: an earlier draft (Phase 5.2, 2026-07-26) gave this priming call a skip variant, found
+unsafe (nStatus=-400, commit 5fd6347) and removed. RE-INVESTIGATED 2026-07-27/28
+(docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md) on the hypothesis that the winner-bin
+H_E,level Hessian path (`winner_pair_cross_hessian_colsum!`/`_esum!`, cm_frechet_hessian.jl, a git
+DESCENDANT of the original bugfix by ~7.5h) might have made the skip safe again. D=4 multi-point
+testing supported the hypothesis; a real D=20/W=80,000 re-test then DISPROVED it -- both tested
+non-calibration points reproduced the exact nStatus=-400 failure with the skip enabled. The `skip_fill`
+parameter below is kept (mirrors the other families' shared call signature, and `cctx.moments_skip!`
+still exists as a built-but-unused closure) but common-Fréchet's own two call sites
+(`archC_frechet_base_state`/`archC_frechet_verified_state`, cm_frechet_cplus.jl) now always pass
+`skip_fill=false` -- see those functions' own HISTORY comments for the full chronology and real
+D=20 evidence. Do not re-enable without root-causing the actual dependency first.
 """
 function inner_loop_internal_cmfrechetlookup_production(obj, θ::AbstractVector, cctx::CMBinHessCtx,
-        level_targets::Vector{Float64}; hess_cb_builder, nthreads_use::Int = Threads.nthreads())
-    obj.moments!(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
+        level_targets::Vector{Float64}; hess_cb_builder, nthreads_use::Int = Threads.nthreads(),
+        skip_fill::Bool = false)
+    moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
+    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
     obj.H[:, 2] .= 1.0
     obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
 

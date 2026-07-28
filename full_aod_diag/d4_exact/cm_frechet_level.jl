@@ -210,13 +210,29 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
                                              R::Union{Nothing,Matrix{Float64}}, D::Int, level_targets::Vector{Float64},
                                              ctx; chunk_size::Int = 2000, use_compressed_core::Bool = true,
                                              core_cf_ref::Ref{Any} = Ref{Any}(nothing),
-                                             skip_cm_fill_ref::Union{Nothing,Ref{Bool}} = nothing)   # Phase
-                                             # 5.2 remediation (2026-07-26): same contract as
-                                             # wrap_moments_with_cm_archB's own kwarg -- when true,
-                                             # skips BOTH the CM-column and level-column dense fills
-                                             # (neither is read by the :cm_frechet_lookup FG callback
-                                             # or by Architecture C's Hessian; only archC_frechet_
-                                             # verified_state's post-solve recompute needs them).
+                                             skip_fill::Bool = false)
+                                             # RE-INTRODUCED then kept UNUSED in production 2026-07-27/28
+                                             # (docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md): a
+                                             # skip variant of this kwarg existed originally (Phase 5.2,
+                                             # 2026-07-26), was found unsafe and removed (commit
+                                             # 5fd6347, 2026-07-27 10:52 -- nStatus=-400, see
+                                             # docs/COMMON_FRECHET_FG_D20_FINAL_GATE_2026-07-27.md).
+                                             # Re-tested on the hypothesis that the winner-bin H_E,level
+                                             # Hessian path (winner_pair_cross_hessian_colsum!/_esum!,
+                                             # commits e3bce93/d458702, a git DESCENDANT of the bugfix by
+                                             # ~7.5h) made the skip safe again -- D=4 multi-point testing
+                                             # supported this, but a real D=20/W=80,000 re-test then
+                                             # DISPROVED it: both tested non-calibration points reproduced
+                                             # the exact nStatus=-400 failure with the skip enabled. The
+                                             # `skip_fill` PARAMETER stays (shared call signature with the
+                                             # other CM-family wrappers, and `cctx.moments_skip!` still
+                                             # exists as a built-but-unused closure for any future
+                                             # re-investigation), but common-Fréchet's own two call sites
+                                             # (archC_frechet_base_state/archC_frechet_verified_state,
+                                             # cm_frechet_cplus.jl) always pass `skip_fill=false` now --
+                                             # see those functions' own HISTORY comments for the real
+                                             # D=20 evidence. Do not re-enable without root-causing the
+                                             # actual dependency first.
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
@@ -247,21 +263,17 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
         end
         @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         @views G[:, end] .= Gtmp[:, end]
-        if skip_cm_fill_ref === nothing || !skip_cm_fill_ref[]
+        if !skip_fill
             cm_cols = pregrav + 1 : pregrav + L * nO
             fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
                                         chunk_size = chunk_size, prod_scratch = prod_scratch)
             level_cols = pregrav + L * nO + 1 : pregrav + L * nO + L
             fill_frechet_level_columns_from_bins!(@view(G[:, level_cols]), Bidx, D, L, level_targets;
                                                    chunk_size = chunk_size)
-            # Task C (2026-07-27): common-Fréchet's skip_cm_fill_ref is PERMANENTLY unset by
-            # archC_frechet_base_state (see that function's own comment -- the Hessian callback reads
-            # these columns regardless of FG backend, so skipping here was tried once and produced a
-            # real nStatus=-400 regression). This branch therefore fires on EVERY inner solve for this
-            # family today, by design, not by omission -- recorded honestly rather than left as a dead
-            # counter (docs/GLOBAL_NO_DENSE_G_INNER_SOLVE_PROOF_2026-07-27.md B.2 listed this as the
-            # natural, not-yet-wired site for dense_Frechet_G_materializations).
-            record_dense_frechet_g!()
+            record_dense_frechet_g!()   # fires exactly when the dense CM/level-column fill actually
+            # executes -- 0 for the `skip_fill=true` closure variant (installed as cctx.moments_skip!,
+            # used only when archC_frechet_base_state's/archC_frechet_verified_state's own skip_fill_safe
+            # is true), nonzero for the `skip_fill=false` variant (every other case).
         end
         return nothing
     end
@@ -315,12 +327,19 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
     Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
 
     core_cf_ref = Ref{Any}(nothing)
-    skip_cm_fill_ref = Ref(false)   # Phase 5.2/5.5: shared box archC_frechet_base_state/
-    # archC_frechet_verified_state toggle around each inner solve (see wrap_moments_with_cm_frechet_
-    # archB's own kwarg docstring and cm_production_bundle.jl's plain-CM precedent).
+    # Re-tested and RE-ENABLED 2026-07-27 (see wrap_moments_with_cm_frechet_archB's own header
+    # comment for the full chronology/rationale): build BOTH the always-fill closure
+    # (`moments_archB!`, installed as `obj_cm.moments!`, used by every non-skip path AND by
+    # archC_frechet_verified_state's own inner solve) and the skip variant (`moments_archB_skip!`,
+    # installed on `cctx.moments_skip!`, used ONLY when archC_frechet_base_state/
+    # archC_frechet_verified_state explicitly thread `skip_fill=true` through under production
+    # defaults) -- mirrors build_cm_production_context's identical dual-closure pattern exactly.
     moments_archB! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
         refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
-        skip_cm_fill_ref = skip_cm_fill_ref)
+        skip_fill = false)
+    moments_archB_skip! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
+        refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+        skip_fill = true)
 
     obj0 = aug.obj_cm
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
@@ -333,7 +352,7 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
         needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
 
     ctx_cm = merge(ctx, (obj = obj_cm,))
-    aug = merge(aug, (core_cf_ref = core_cf_ref, skip_cm_fill_ref = skip_cm_fill_ref, Bidx = Bidx))
+    aug = merge(aug, (core_cf_ref = core_cf_ref, moments_skip! = moments_archB_skip!, Bidx = Bidx))
     bins = cm_bin_indices_for(ctx, aug)   # top-level field, matches build_cm_production_context's own pcx shape
 
     cctx = nothing
