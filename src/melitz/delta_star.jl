@@ -607,7 +607,7 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
                                   inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
                                   outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
                                   needs_outer_moment_jacobian::Bool=false,
-                                  inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
+                                  policy::MelitzInnerSolvePolicy,
                                   backend::Symbol=:auto_from_moment_backend,
                                   moment_backend::Symbol=:auto,
                                   hessian_backend::Symbol=:auto,
@@ -698,7 +698,7 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
         resolved_hessian_backend = melitz_resolve_hessian_backend(cfg, D)
         obj = build_melitz_cc_bundle(op, ctx; mode=:delta, U=z_draws,
             outer_constr_index=moment_layout.num_moments + 1,
-            lower_limit=(inner_solve_config === nothing ? -KNITRO.KN_INFINITY : inner_solve_config.lower_limit),
+            policy=policy,
             inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
             hessian_backend=resolved_hessian_backend)
         return obj, theta_free
@@ -714,13 +714,13 @@ function build_melitz_psi_bundle(data::MelitzSyntheticData;
         inner_loop_opt=inner_loop_opt,
         outer_loop_opt=outer_loop_opt,
         needs_outer_moment_jacobian=needs_outer_moment_jacobian,
-        # 2026-07-25 (inner_solve_config.jl): `inner_solve_config === nothing` (every existing
-        # call site) preserves the struct default (-KNITRO.KN_INFINITY, uncapped) exactly --
-        # a caller that wants a guarded PsiObjectiveBundleDelta (e.g. before handing it to
-        # solve_melitz_nuisance_min_delta for REPEATED nested inner solves) now has an explicit
-        # way to request that at construction time too, not only via that function's own
-        # mandatory inner_solve_config kwarg.
-        lower_limit=(inner_solve_config === nothing ? -KNITRO.KN_INFINITY : inner_solve_config.lower_limit),
+        # 2026-07-28 inner-solver architecture-consolidation session: `policy` is now a
+        # mandatory keyword (no default) -- `lower_limit` is derived from it directly, never
+        # from a `=== nothing` sentinel. A caller that wants a guarded PsiObjectiveBundleDelta
+        # (e.g. before handing it to solve_melitz_nuisance_min_delta for REPEATED nested inner
+        # solves) passes CappedEvaluation(cap) here explicitly; FullValueEvaluation() reproduces
+        # every pre-existing uncapped call site's behavior exactly, but only when named.
+        lower_limit=melitz_policy_lower_limit(policy),
     )
 
     return obj, theta_free

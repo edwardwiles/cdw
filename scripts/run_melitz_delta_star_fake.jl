@@ -124,7 +124,8 @@ end
 
 if knitro_ok
     lfd, obj = run_melitz_inner_delta(data;
-        inner_loop_opt=joinpath(REPO_ROOT, "melitz_inner_loop_options.opt"))
+        inner_loop_opt=joinpath(REPO_ROOT, "melitz_inner_loop_options.opt"),
+        policy=FullValueEvaluation())
 
     @printf("Delta(theta*) = %.6e\n", lfd.Delta)
     println("KNITRO status = ", lfd.nStatus, (lfd.nStatus == 0 ? " (optimal)" : ""))

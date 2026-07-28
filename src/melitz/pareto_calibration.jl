@@ -1240,7 +1240,7 @@ function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration
         inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
         outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
         needs_outer_moment_jacobian::Bool=false,
-        inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
+        policy::MelitzInnerSolvePolicy,
         backend::Symbol=:auto_from_moment_backend,
         moment_backend::Symbol=:auto,
         hessian_backend::Symbol=:auto,
@@ -1287,7 +1287,7 @@ function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration
         resolved_hessian_backend = melitz_resolve_hessian_backend(cfg, D)
         obj = build_melitz_cc_bundle(op, ctx; mode=:delta, U=z_draws,
             outer_constr_index=ctx.moment_layout.num_moments + 1,
-            lower_limit=(inner_solve_config === nothing ? -KNITRO.KN_INFINITY : inner_solve_config.lower_limit),
+            policy=policy,
             inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
             hessian_backend=resolved_hessian_backend)
         return obj, theta_free
@@ -1298,10 +1298,10 @@ function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration
         l=length(theta_free), inequality_index=Int64[], U=z_draws,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
         needs_outer_moment_jacobian=needs_outer_moment_jacobian,
-        # See build_melitz_psi_bundle's identical kwarg (delta_star.jl) for why this is
-        # optional here (preserves every existing call site's exact uncapped behavior) and
-        # where the cap is made MANDATORY instead (solve_melitz_nuisance_min_delta).
-        lower_limit=(inner_solve_config === nothing ? -KNITRO.KN_INFINITY : inner_solve_config.lower_limit))
+        # 2026-07-28 inner-solver architecture-consolidation session: see
+        # build_melitz_psi_bundle's identical kwarg (delta_star.jl) -- policy is mandatory,
+        # no default; lower_limit is derived from it directly.
+        lower_limit=melitz_policy_lower_limit(policy))
 
     return obj, theta_free
 end

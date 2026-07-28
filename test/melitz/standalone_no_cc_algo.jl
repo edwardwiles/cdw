@@ -39,7 +39,7 @@ outer_opt = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"
 
 println(">>> standalone_no_cc_algo.jl: constructing a production-fast (matrix-free) MelitzCCBundle...")
 obj, theta_free = build_melitz_psi_bundle(data; backend=:matrix_free, forbid_dense_fallback=true,
-    inner_loop_opt=inner_opt, outer_loop_opt=outer_opt)
+    inner_loop_opt=inner_opt, outer_loop_opt=outer_opt, policy=FullValueEvaluation())
 
 @assert obj isa MelitzCCBundle "standalone_no_cc_algo.jl: expected a MelitzCCBundle (matrix-free, cc_algo-independent), got $(typeof(obj))"
 
@@ -74,7 +74,7 @@ r0 = evaluate_melitz_delta(theta_free, obj.γ, obj; cold=true, store_G=false)
 delta_loose = max(r0.Delta * 5, 1e-3)
 
 outer_result = solve_melitz_finite_delta_bound(obj.γ, obj, theta_free;
-    delta=delta_loose, direction=:upper, delta_evaluation_cap=10.0,
+    delta=delta_loose, direction=:upper, policy=CappedEvaluation(10.0),
     gradient_backend=:B_direct_argument_sorted_serial, h=1e-4, theta_box=0.5,
     inner_loop_opt=inner_opt, outer_loop_opt=outer_opt)
 

@@ -160,10 +160,15 @@ function melitz_predictor_corrector_continuation(ctx, obj_inner, theta0::Abstrac
         # new matrix-free default (which would break this function with a field-not-found
         # error); porting this Stage 2 path to the matrix-free bundle is out of scope this
         # session (docs/melitz_production_fast_backend_2026-07-26.md).
+        # policy=FullValueEvaluation(): this bundle's KNITRO lower_limit is never actually
+        # exercised here -- fresh_gradient never calls KN_solve, only obj.moments!/obj.H
+        # (a moment fill) and a fixed-dual gradient probe at the CALLER-supplied x -- so no
+        # cap semantics apply; FullValueEvaluation is the truthful, explicit choice for a
+        # bundle that is never used for a real divergence solve.
         obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta; delta=Float64(delta),
             find_smallest=true, gradient_backend=gradient_backend, h=h,
             inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
-            backend=:dense_reference)
+            backend=:dense_reference, policy=FullValueEvaluation())
         CS = CounterfactualSensitivity
         G_now = CS.select_G_from_H(obj, obj.H)
         obj.moments!(@view(obj.H[:, 1]), G_now, theta, obj.U, obj)

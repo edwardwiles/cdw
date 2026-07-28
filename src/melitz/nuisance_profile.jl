@@ -75,7 +75,14 @@ function melitz_nuisance_free_mask(ctx; block::Symbol)
 end
 
 """
-    melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backend, h, on_eval) -> NamedTuple
+    melitz_build_nuisance_profile_callbacks(obj_inner, ctx; policy, gradient_backend, h, on_eval) -> NamedTuple
+
+`policy::MelitzInnerSolvePolicy` (2026-07-28 inner-solver architecture-consolidation session,
+mandatory, no default): used by `_accept_or_reject` (below) to enforce the SAME
+`FiniteSolved`-above-cap invariant `inner_screening.jl`'s classifier enforces, applied to this
+driver's own accept/reject convention (`DomainError` on rejection, no typed `MelitzInnerResult`
+here). Must match whatever `policy` `obj_inner.lower_limit` was actually set from -- pass the
+SAME object `solve_melitz_nuisance_min_delta` was given.
 
 Builds the `cb_F!`/`cb_G!` pair for the Stage 2 outer NLP: `cb_F!` runs a genuine (warm-
 continued, per `obj_inner`'s own `use_cached_x`/`x` cache) inner CC dual solve at the trial
@@ -119,7 +126,8 @@ argument COUNT and this file has zero call sites yet passing only 4) to also rep
 `cache_hit::Bool` -- the direct, measured answer to "how much is the cache actually saving,"
 rather than an inferred/guessed contribution.
 """
-function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backend::Symbol=:B_direct_argument_parallel,
+function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; policy::MelitzInnerSolvePolicy,
+                                                  gradient_backend::Symbol=:B_direct_argument_parallel,
                                                   h::Real=1e-4, on_eval=nothing, on_start=nothing,
                                                   exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
                                                   forbid_dense_fallback::Bool=false)
@@ -196,6 +204,29 @@ function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backen
         return (val, x_concrete, nStatus, elapsed_s, false)
     end
 
+    # 2026-07-28 inner-solver architecture-consolidation session (governing prompt Section 7):
+    # a shared accept-gate/invariant check, used by BOTH cb_F!/cb_G! below -- mirrors
+    # inner_screening.jl's own `_melitz_classified_inner_solve!` hardening (the anomaly
+    # session's fix): an approximate/stalled status (-100/-101/-103, NOT genuine KKT-optimal 0)
+    # whose raw value already violates the bundle's own configured cap must not be silently
+    # accepted as a clean objective value here either -- this driver has no `FiniteSolved`
+    # type to gate at construction time (its accept/reject convention is throw-on-reject, not
+    # a typed result), so the SAME invariant is enforced directly as a `DomainError` (routine
+    # rejection, matching this driver's own established convention) rather than an `@assert`
+    # (which would be a genuine bug, not a routine rejection, at the classifier level).
+    function _accept_or_reject(theta, val, nStatus, kind)
+        accepted = nStatus == 0 || (nStatus in (-100, -101, -103) && val >= obj_inner.lower_limit)
+        accepted || throw(DomainError(theta[1],
+            "melitz nuisance-profile $kind: inner CC dual solve failed, nStatus=$nStatus -- " *
+            "rejecting this trial point (no budget-style finite fallback exists for this problem)"))
+        cap = melitz_policy_cap(policy)
+        isfinite(cap) && val > cap + max(1e-6, 1e-6 * abs(cap)) && throw(DomainError(theta[1],
+            "melitz nuisance-profile $kind: INVARIANT VIOLATION -- accepted Delta=$val > " *
+            "policy cap=$cap (obj_inner.lower_limit=$(obj_inner.lower_limit), nStatus=$nStatus) -- " *
+            "see inner_screening.jl's identical FiniteSolved-above-cap invariant."))
+        return nothing
+    end
+
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         theta = collect(evalRequest.x)
         n_fc_calls[] += 1
@@ -212,10 +243,7 @@ function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backen
         # time/iteration cap was reached" from the nStatus value alone, without which a
         # failure was previously indistinguishable from "never returned at all."
         on_eval !== nothing && on_eval(theta, val, nStatus, :fc, elapsed_s, cache_hit)
-        accepted = nStatus in (0, -100, -101, -103)
-        accepted || throw(DomainError(theta[1],
-            "melitz nuisance-profile FC: inner CC dual solve failed, nStatus=$nStatus -- " *
-            "rejecting this trial point (no budget-style finite fallback exists for this problem)"))
+        _accept_or_reject(theta, val, nStatus, "FC")
         evalResult.obj[1] = val   # Delta(theta) directly -- inner_loop's own sign/scale convention
         return 0
     end
@@ -227,9 +255,7 @@ function melitz_build_nuisance_profile_callbacks(obj_inner, ctx; gradient_backen
         on_start !== nothing && on_start(theta, n_ga_calls[], :ga)
         val, x, nStatus, elapsed_s, cache_hit = inner_solve_cached(theta)
         on_eval !== nothing && on_eval(theta, val, nStatus, :ga, elapsed_s, cache_hit)
-        accepted = nStatus in (0, -100, -101, -103)
-        accepted || throw(DomainError(theta[1],
-            "melitz nuisance-profile GA: inner CC dual solve failed, nStatus=$nStatus"))
+        _accept_or_reject(theta, val, nStatus, "GA")
         local_jac = zeros(n_)
         # Genuine envelope-theorem-exact gradient: x is a true local optimum of the inner
         # problem at this theta (unlike finite_delta_outer.jl's AboveEvaluationCap-rejection
@@ -316,23 +342,26 @@ scalar (uniform) or a length-`n` vector.
 dual). Default `nothing`: whatever `obj_inner`'s cache already holds (an ordinary warm
 continuation from the caller's own prior use of `obj_inner`).
 
-`inner_solve_config::MelitzInnerSolveConfig` (2026-07-25 local-geometry/continuation
-session, REQUIRED, no default -- see `inner_solve_config.jl`'s file header for the full
-incident this closes): this function is THE nested-repeated-inner-solve driver in this
-codebase -- every accepted outer trial point triggers at least two full inner CC dual solves
-(`cb_F!`/`cb_G!`) against the CALLER-supplied `obj_inner`, whose own construction
-(`build_melitz_psi_bundle`/`build_melitz_psi_bundle_from_calibration`) may or may not have
-set a cap. Confirmed live in a prior session
-(`docs/melitz_real_d20_outer_correction_2026-07-24.md` Section 10.4): `obj_inner.lower_limit`
-sitting at its uncapped struct default here turned repeated divergent trial points into
-~90-second grinds instead of near-instant certified rejections. This function now applies
-`inner_solve_config.lower_limit` to `obj_inner.lower_limit` UNCONDITIONALLY at entry --
-independent of how `obj_inner` was built -- and restores `obj_inner`'s PRIOR `lower_limit`
-in a `finally` block before returning, so a caller sharing `obj_inner` across multiple
-purposes (e.g. also using it for an uncapped cold end-of-run reverification elsewhere) is
-never surprised by a silently-mutated shared object after this call returns. Pass
-`MelitzInnerSolveConfig(:full_value)` explicitly if an uncapped nuisance-minimization run is
-genuinely intended -- there is no way to reach the old silent-omission behavior by accident.
+`policy::MelitzInnerSolvePolicy` (mandatory, no default -- renamed from `inner_solve_config`
+in the 2026-07-28 inner-solver architecture-consolidation session, same requiredness, now a
+`CappedEvaluation`/`FullValueEvaluation` object rather than a `MelitzInnerSolveConfig`; see
+`inner_solve_policy.jl`'s file header for the full incident history this closes): this
+function is THE nested-repeated-inner-solve driver in this codebase -- every accepted outer
+trial point triggers at least two full inner CC dual solves (`cb_F!`/`cb_G!`) against the
+CALLER-supplied `obj_inner`, whose own construction (`build_melitz_psi_bundle`/
+`build_melitz_psi_bundle_from_calibration`) may or may not have set a cap. Confirmed live in a
+prior session (`docs/melitz_real_d20_outer_correction_2026-07-24.md` Section 10.4):
+`obj_inner.lower_limit` sitting at its uncapped struct default here turned repeated divergent
+trial points into ~90-second grinds instead of near-instant certified rejections. This
+function now applies `melitz_policy_lower_limit(policy)` to `obj_inner.lower_limit`
+UNCONDITIONALLY at entry -- independent of how `obj_inner` was built -- and restores
+`obj_inner`'s PRIOR `lower_limit` in a `finally` block before returning, so a caller sharing
+`obj_inner` across multiple purposes (e.g. also using it for an uncapped cold end-of-run
+reverification elsewhere) is never surprised by a silently-mutated shared object after this
+call returns. Pass `FullValueEvaluation()` explicitly if an uncapped nuisance-minimization run
+is genuinely intended -- there is no way to reach the old silent-omission behavior by accident.
+Also enforces the SAME `FiniteSolved`-above-cap invariant `inner_screening.jl`'s classifier
+enforces (`melitz_build_nuisance_profile_callbacks`'s own `_accept_or_reject`, Section 7).
 
 `exact_cache::Union{Nothing,MelitzExactPointCache}` (2026-07-25, same-day follow-up,
 user-directed): ports `finite_delta_outer.jl`'s exact-point cache to this driver
@@ -352,7 +381,7 @@ function solve_melitz_nuisance_min_delta(ctx, obj_inner, theta_start::AbstractVe
                                           on_eval=nothing,
                                           on_start=nothing,
                                           warm_start_x::Union{Nothing,AbstractVector}=nothing,
-                                          inner_solve_config::MelitzInnerSolveConfig,
+                                          policy::MelitzInnerSolvePolicy,
                                           exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
                                           forbid_dense_fallback::Bool=false)
     n = length(theta_start)
@@ -366,7 +395,7 @@ function solve_melitz_nuisance_min_delta(ctx, obj_inner, theta_start::AbstractVe
         obj_inner.use_cached_x = true
     end
 
-    cbset = melitz_build_nuisance_profile_callbacks(obj_inner, ctx;
+    cbset = melitz_build_nuisance_profile_callbacks(obj_inner, ctx; policy=policy,
         gradient_backend=gradient_backend, h=h, on_eval=on_eval, on_start=on_start,
         exact_cache=exact_cache, forbid_dense_fallback=forbid_dense_fallback)
 
@@ -390,7 +419,7 @@ function solve_melitz_nuisance_min_delta(ctx, obj_inner, theta_start::AbstractVe
     melitz_register_nuisance_profile_knitro_problem!(kc, ctx, cbset, xIndices, n)
 
     saved_lower_limit = obj_inner.lower_limit
-    obj_inner.lower_limit = inner_solve_config.lower_limit
+    obj_inner.lower_limit = melitz_policy_lower_limit(policy)
     local nStatus, objVal, theta_final_raw, wall
     try
         t0 = time()

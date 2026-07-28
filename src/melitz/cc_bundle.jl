@@ -160,6 +160,7 @@ mutable struct MelitzCCBundle
     outer_constr_index::Int
     find_smallest::Bool
     lower_limit::Float64
+    policy::MelitzInnerSolvePolicy
     use_cached_x::Bool
     x::Vector{Float64}
     H_save::Float64              # :implicit-mode only: (gamma_prime_j - 1) * (-1)^find_smallest
@@ -189,7 +190,7 @@ end
 
 """
     build_melitz_cc_bundle(op, ctx; mode, U, outer_constr_index, find_smallest=true,
-                            lower_limit, inner_loop_opt, outer_loop_opt,
+                            policy::MelitzInnerSolvePolicy, inner_loop_opt, outer_loop_opt,
                             hessian_backend=:structured_serial) -> MelitzCCBundle
 
 `op` must already be constructed (`build_melitz_moment_operator`) for the same `(D, W)` as
@@ -197,34 +198,40 @@ end
 `melitz_update_operator_at_theta!` call (mirrors `MelitzMomentOperator`'s own construction
 contract).
 
-**`lower_limit` has NO default -- it is a required keyword argument, deliberately.** This
-codebase's own recorded history (see this repo's `CLAUDE.md` and the memory this exact class
-of mistake generated) shows the evaluation-cap early-abort (`(Q::MelitzCCBundle)`'s own
-functor: `if f <= Q.lower_limit; return -KN_INFINITY` -- telling KNITRO's inner solve to stop
-immediately once a point is certifiably bad) has been SILENTLY left inactive, repeatedly,
-across multiple sessions, because the previous default (`-KNITRO.KN_INFINITY`, i.e. "never
-fires") was easy to omit by accident -- especially from ad hoc diagnostic scripts that build a
-bundle directly rather than going through `build_melitz_implicit_bundle`/
-`solve_melitz_finite_delta_bound` (the only call sites that used to wire this up correctly). A
-previous session's own fix (`@assert isfinite(obj.lower_limit)` inside
-`solve_melitz_finite_delta_bound`) did not close this gap because that assert lives in ONE
-high-level convenience wrapper that a direct call to THIS constructor bypasses entirely --
-confirmed live: every diagnostic script this session wrote before this fix built a bundle
-this way and silently got an inert cap, one of them burning 10+ real minutes on an
-uncapped/poorly-conditioned inner solve as a direct, reproduced consequence. Removing the
-default converts this from "an easy-to-miss runtime footgun three call-levels away" into an
-immediate `MethodError`/`UndefKeywordError` at the exact construction call site, for every
-current AND future caller, including a future session's own throwaway script -- the
-compile-time enforcement a runtime assert elsewhere could not provide. Callers that
-deliberately want no cap (a handful of legitimate uncapped-evaluation test/diagnostic uses
-exist) must now pass `lower_limit=-KNITRO.KN_INFINITY` EXPLICITLY -- a conscious, visible
-choice at the call site, not a silent inherited default.
+**`policy::MelitzInnerSolvePolicy` has NO default -- it is a required keyword argument,
+deliberately** (2026-07-28 inner-solver architecture-consolidation session, superseding this
+docstring's own prior `lower_limit::Float64` description). `lower_limit` (the evaluation-cap
+early-abort threshold: `(Q::MelitzCCBundle)`'s own functor, `if f <= Q.lower_limit; return
+-KN_INFINITY` -- telling KNITRO's inner solve to stop immediately once a point is certifiably
+bad) is now DERIVED from `policy` (`melitz_policy_lower_limit(policy)`, `inner_solve_policy.jl`)
+rather than accepted as an independent `Float64` -- the bundle's own `policy` field
+(`melitz_apply_policy_to_knitro!`, `melitz_cc_inner_loop_knitro!` below) is also the SAME
+object `melitz_classified_inner_solve`'s successor, `_melitz_classified_inner_solve!`
+(`inner_screening.jl`), reads its cap from via the wrapping `MelitzInnerSession` -- there is
+no second, independently-suppliable cap value anywhere in this bundle's lifecycle.
+
+This codebase's own recorded history (see this repo's `CLAUDE.md` and the memory this exact
+class of mistake generated) shows the evaluation cap has been SILENTLY left inactive,
+repeatedly, across multiple sessions, because a previous `lower_limit::Float64` REQUIRED
+keyword (itself a fix for an even earlier silent default) was still just a bare number that a
+caller three levels up could compute incorrectly or omit propagating (confirmed live as the
+root cause of the `1.510118e14` `FiniteSolved`-above-cap anomaly,
+`docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md`: a wrapper
+translated a missing config into `-KNITRO.KN_INFINITY` one layer up from this constructor).
+Requiring a `policy::MelitzInnerSolvePolicy` object here instead of a raw `Float64` closes
+that: `CappedEvaluation`/`FullValueEvaluation` (`inner_solve_policy.jl`) are the only two ways
+to construct one, both validating at construction, and the object itself (not a derived
+number) is what every downstream consumer (this constructor, the KNITRO-instance policy
+application below, the classifier's cap-derivation) reads from -- there is no intermediate
+step where a caller computes or forgets to pass the RIGHT number. Callers that deliberately
+want no cap must pass `policy=FullValueEvaluation()` EXPLICITLY -- a conscious, visible,
+NAMED choice at the call site, not a silent inherited default or a bare `-Inf`.
 """
 function build_melitz_cc_bundle(op::MelitzMomentOperator, ctx;
                                  mode::Symbol, U::AbstractMatrix,
                                  outer_constr_index::Int=op.layout.num_moments + 1,
                                  find_smallest::Bool=true,
-                                 lower_limit::Float64,
+                                 policy::MelitzInnerSolvePolicy,
                                  inner_loop_opt::AbstractString,
                                  outer_loop_opt::AbstractString,
                                  hessian_backend::Symbol=:structured_serial)
@@ -233,8 +240,9 @@ function build_melitz_cc_bundle(op::MelitzMomentOperator, ctx;
         "build_melitz_cc_bundle: hessian_backend must be :structured_serial or :structured_parallel, got $hessian_backend"))
     W = op.W
     d = op.layout.num_moments
+    lower_limit = melitz_policy_lower_limit(policy)
     return MelitzCCBundle(op, mode, ctx, Matrix{Float64}(U), W, d, outer_constr_index,
-        find_smallest, lower_limit, false, fill(NaN, outer_constr_index), 0.0,
+        find_smallest, lower_limit, policy, false, fill(NaN, outer_constr_index), 0.0,
         zeros(W), zeros(W), zeros(W), zeros(d + 1, d + 1),
         melitz_cc_Psi!, melitz_cc_dPsi!, melitz_cc_ddPsi!,
         String(inner_loop_opt), String(outer_loop_opt), hessian_backend,
@@ -423,6 +431,14 @@ function melitz_cc_inner_loop_knitro!(bundle::MelitzCCBundle)
 
         cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], cbEvalFG!)
         KNITRO.KN_load_param_file(kc, bundle.inner_loop_opt)
+        # 2026-07-28 inner-solver architecture-consolidation session (governing prompt
+        # Section 3): apply bundle.policy's own max_iterations/max_seconds directly to this
+        # KNITRO instance, AFTER the static .opt file load, so the policy's values win. Only
+        # done here, on the Melitz-owned matrix-free driver -- the legacy dense bundles'
+        # KNITRO instance is constructed inside cc_algo/inner_loop_functions.jl (Ricardian,
+        # never touched by this session); see CappedEvaluation's own docstring
+        # (inner_solve_policy.jl) for that disclosed limitation.
+        melitz_apply_policy_to_knitro!(kc, bundle.policy)
         if melitz_kn_get_int_param(kc, "hessopt") == 1
             KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, cbEvalH!)
         end

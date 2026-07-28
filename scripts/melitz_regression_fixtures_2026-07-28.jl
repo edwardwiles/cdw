@@ -7,10 +7,25 @@
 # repo's own 2026-07-24 through 2026-07-28 sessions have used throughout.
 #
 # `include`d by every script in this session, never run standalone.
+#
+# 2026-07-28 inner-solver architecture-consolidation session: `build_melitz_psi_bundle`/
+# `build_melitz_psi_bundle_from_calibration` now REQUIRE an explicit `policy` keyword (no
+# `=nothing` default) -- this file's own `build_d4_fixture`/`build_realD20_fixture` were the
+# CONFIRMED ROOT CAUSE of the `1.510118e14` `FiniteSolved`-above-cap anomaly
+# (`docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md` Phase 2/6):
+# every 2026-07-27/07-28 phase script calling either function here inherited a permanently
+# uncapped bundle. Both now take `policy::MelitzInnerSolvePolicy=CappedEvaluation(10.0)` --
+# an explicit, NAMED default (not a `nothing` sentinel silently translated into `-Inf`) that
+# matches this codebase's own production routine-inner-solve cap
+# (`solve_melitz_finite_delta_bound`'s own default) -- so every existing phase script calling
+# `build_d4_fixture()`/`build_realD20_fixture()` with no `policy` argument now gets a SAFELY
+# CAPPED bundle by default, closing the confirmed gap for the entire 2026-07-27/07-28 script
+# corpus from this ONE choke point, without editing each of those ~30 scripts individually.
 
-function build_d4_fixture(; W::Int=20_000, seed::Int=29, backend::Symbol=:matrix_free)
+function build_d4_fixture(; W::Int=20_000, seed::Int=29, backend::Symbol=:matrix_free,
+                            policy::MelitzInnerSolvePolicy=CappedEvaluation(10.0))
     data4 = generate_fake_melitz_data(; D=4, sigma=2.5, theta_star=6.8, target_country=1, seed=seed, W=W)
-    obj4, theta0_4 = build_melitz_psi_bundle(data4; forbid_dense_fallback=true, backend=backend)
+    obj4, theta0_4 = build_melitz_psi_bundle(data4; forbid_dense_fallback=true, backend=backend, policy=policy)
     ctx4 = obj4.γ
     r0_4 = evaluate_melitz_delta(theta0_4, ctx4, obj4; cold=true, store_G=false)
     @assert r0_4.verified "D=4 fixture (seed=$seed, W=$W) base point failed to verify"
@@ -18,7 +33,8 @@ function build_d4_fixture(; W::Int=20_000, seed::Int=29, backend::Symbol=:matrix
 end
 
 function build_realD20_fixture(; W::Int=80_000, seed::Int=1,
-                                 inner_loop_opt::AbstractString=joinpath(dirname(@__DIR__), "melitz_inner_loop_options_capped_2026-07-24.opt"))
+                                 inner_loop_opt::AbstractString=joinpath(dirname(@__DIR__), "melitz_inner_loop_options_capped_2026-07-24.opt"),
+                                 policy::MelitzInnerSolvePolicy=CappedEvaluation(10.0))
     real_dir = joinpath(dirname(@__DIR__), "real_data", "noah_D20")
     @assert isdir(real_dir) "real_data/noah_D20 not found at $real_dir"
     lambdaData = readdlm(joinpath(real_dir, "pi.csv"), ',')
@@ -30,7 +46,7 @@ function build_realD20_fixture(; W::Int=80_000, seed::Int=1,
     calib = calibrate_melitz_pareto(observed; sigma=2.5, theta_star=:estimate, focal_country=focal,
         p_min=0.001, wage_tol=1e-8, gravity_tol=1e-6)
     obj20, theta0_20 = build_melitz_psi_bundle_from_calibration(calib; W=W, seed=seed,
-        inner_loop_opt=inner_loop_opt, forbid_dense_fallback=true)
+        inner_loop_opt=inner_loop_opt, forbid_dense_fallback=true, policy=policy)
     ctx20 = obj20.γ
     r0_20 = evaluate_melitz_delta(theta0_20, ctx20, obj20; cold=true, store_G=false)
     @assert r0_20.verified "real-D20 fixture (seed=$seed, W=$W) base point failed to verify"

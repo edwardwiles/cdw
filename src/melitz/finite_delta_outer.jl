@@ -279,7 +279,7 @@ end
 """
     build_melitz_implicit_bundle(ctx, theta_free_init; delta, find_smallest,
         gradient_backend=:B, h=1e-4, inner_loop_opt=..., outer_loop_opt=...,
-        delta_evaluation_cap=nothing) -> PsiObjectiveBundleImplicit
+        policy::MelitzInnerSolvePolicy) -> PsiObjectiveBundleImplicit
 
 Constructs the SAME `PsiObjectiveBundleImplicit` struct the Ricardian model uses
 (`cc_algo/PsiObjectiveBundle.jl`, unmodified), wired to Melitz's own moments/gradient:
@@ -289,55 +289,47 @@ Constructs the SAME `PsiObjectiveBundleImplicit` struct the Ricardian model uses
 see this file's header), `l = length(theta_free_init)`, `U = z_draws` (the SAME reference
 draws the inner Delta(theta) solve uses).
 
-`delta_evaluation_cap` (2026-07-24 evaluation-cap-correction session, governing prompt
-Sections 2-3, superseding this docstring's own prior `delta`-coupled description): `cc_algo`'s
-shared functor (`PsiObjectiveBundle.jl`'s `(Q::PsiObjectiveBundleImplicit)(...)`) already
-contains an objective-threshold early-stop mechanism -- `if f <= lower_limit; return
--KNITRO.KN_INFINITY; else; return f; end`, where `f` is the raw dual objective KNITRO
-minimizes (`f = -Delta` at the optimum, and `-f(x) <= Delta` for EVERY dual point `x` by weak
-duality, since the CC dual here is unconstrained -- see inner_screening.jl's header). An
-EARLIER session tied this to the OUTER BUDGET `delta` (`lower_limit = -(delta + margin)`) --
-diagnosed as a central conceptual error: a certified lower bound above the CURRENT outer
-budget is not evidence the point is unsolvable, only that it exceeds that one budget, so
-aborting there threw away an ordinary finite, fully-solvable point (Case A: `FiniteSolved`,
-`inner_screening.jl`). This early-stop must instead be gated on the SEPARATE
-`delta_evaluation_cap` (governing prompt Section 2's evaluation cap, e.g. `10.0` -- routine
-solves are never aborted merely for exceeding `delta`, only for certifiably exceeding this
-cap): `lower_limit = -delta_evaluation_cap`, exactly.
+`policy::MelitzInnerSolvePolicy` (2026-07-28 inner-solver architecture-consolidation session,
+superseding this docstring's own prior `delta_evaluation_cap`/`inner_solve_config`-coupled
+description -- mandatory keyword, no default, replacing BOTH of those independently-optional
+kwargs with one required typed object): `cc_algo`'s shared functor
+(`PsiObjectiveBundle.jl`'s `(Q::PsiObjectiveBundleImplicit)(...)`) already contains an
+objective-threshold early-stop mechanism -- `if f <= lower_limit; return -KNITRO.KN_INFINITY;
+else; return f; end`, where `f` is the raw dual objective KNITRO minimizes (`f = -Delta` at
+the optimum, and `-f(x) <= Delta` for EVERY dual point `x` by weak duality, since the CC dual
+here is unconstrained -- see inner_screening.jl's header). An EARLIER session tied this to the
+OUTER BUDGET `delta` (`lower_limit = -(delta + margin)`) -- diagnosed as a central conceptual
+error: a certified lower bound above the CURRENT outer budget is not evidence the point is
+unsolvable, only that it exceeds that one budget, so aborting there threw away an ordinary
+finite, fully-solvable point (Case A: `FiniteSolved`, `inner_screening.jl`). This early-stop
+must instead be gated on the SEPARATE evaluation cap carried by `policy`
+(`melitz_policy_lower_limit(policy)`, `inner_solve_policy.jl`) -- routine solves are never
+aborted merely for exceeding `delta`, only for certifiably exceeding this cap.
 
-2026-07-26 production-closure session (governing prompt Phase 1, "make the evaluation cap
-impossible to omit"): CORRECTED activation rule, superseding this docstring's own prior
-description. The previous rule left `lower_limit` disabled whenever a separate
-`lower_limit_guard` kwarg was omitted, EVEN IF `delta_evaluation_cap` was supplied -- a
-caller passing `delta_evaluation_cap=10.0` alone got a silently-disabled cap (confirmed
-live, `docs/melitz_production_fast_backend_2026-07-26.md` Section 5.5: a `13.5x` slower
-campaign, 31 spurious `NumericalFailure`s). The corrected rule -- and, per direct user
-feedback the same session, simplified further by removing the separate `lower_limit_guard`/
-`guard` margin entirely (it was inherited from the OLD `delta`-coupled design, which
-genuinely needed a margin because aborting exactly AT `delta` was itself the bug; once the
-threshold is the evaluation cap itself -- a value chosen deliberately far from any routine
-`Delta` -- the cap IS the threshold, and a second number to reason about added nothing):
-
-  - `inner_solve_config::MelitzInnerSolveConfig` given -- use it as-is (preferred going
-    forward); an error to also pass `delta_evaluation_cap`.
-  - `delta_evaluation_cap !== nothing` -- the cap is ALWAYS active:
-    `lower_limit = -delta_evaluation_cap`, exactly.
-  - NEITHER kwarg given -- `lower_limit = -KNITRO.KN_INFINITY` (disabled), the one remaining
-    way to get an uncapped bundle, and now an all-defaults, self-evident choice rather than
-    a trap a caller falls into while believing a cap is active.
+2026-07-28 session (this session, superseding the 2026-07-26 "make the evaluation cap
+impossible to omit" fix's own `delta_evaluation_cap::Union{Nothing,Real}`/
+`inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}` pair): that fix made A cap
+impossible to omit ONLY once a caller chose to supply either kwarg -- both still defaulted to
+`nothing`, which resolved to `lower_limit=-KNITRO.KN_INFINITY` (uncapped) whenever NEITHER was
+passed, confirmed live as the root cause of the `1.510118e14` `FiniteSolved`-above-cap anomaly
+(`docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md`: this exact
+default was what every 2026-07-27/07-28 shared fixture/phase script silently inherited).
+`policy::MelitzInnerSolvePolicy` has NO default at all -- omitting it is an
+`UndefKeywordError`, not a silently-resolved uncapped bundle. Pass `policy=CappedEvaluation(cap)`
+for the production routine-inner-solve mode, or `policy=FullValueEvaluation()` EXPLICITLY for a
+deliberately uncapped bundle -- there is no way to reach an uncapped bundle by omission.
 
 The KNITRO-native mid-solve stop this produces is classified
-`AboveEvaluationCap(...,:live_dual_threshold,...)` by `melitz_classified_inner_solve`
-(inner_screening.jl), never `NumericalFailure` and never `BudgetInfeasible` (that name/type
-no longer exists as of this session).
+`AboveEvaluationCap(...,:live_dual_threshold,...)` by `_melitz_classified_inner_solve!`
+(inner_screening.jl, called via `solve_melitz_delta!`), never `NumericalFailure` and never
+`BudgetInfeasible` (that name/type no longer exists as of the 2026-07-24 session).
 """
 function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_init::AbstractVector;
                                        delta::Real, find_smallest::Bool,
                                        gradient_backend::Symbol=:auto, h::Real=1e-4,
                                        inner_loop_opt::AbstractString,
                                        outer_loop_opt::AbstractString,
-                                       delta_evaluation_cap::Union{Nothing,Real}=nothing,
-                                       inner_solve_config::Union{Nothing,MelitzInnerSolveConfig}=nothing,
+                                       policy::MelitzInnerSolvePolicy,
                                        backend::Symbol=:auto_from_gradient_backend,
                                        hessian_backend::Symbol=:auto,
                                        forbid_dense_fallback::Bool=false)
@@ -396,25 +388,10 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
             "forbid_dense_fallback=false (MELITZ_PRODUCTION_COMPAT) if this dense choice is " *
             "genuinely intended."))
     end
-    # 2026-07-26 production-closure session (governing prompt Phase 1, then simplified same
-    # day per direct user feedback removing the separate guard/margin -- see this function's
-    # own docstring and inner_solve_config.jl's file header for the full history). The ONLY
-    # way to end up with a disabled (`-KN_INFINITY`) `lower_limit` is to supply NEITHER
-    # `inner_solve_config` NOR `delta_evaluation_cap` at all -- an explicit, all-defaults
-    # choice (still the right default for a single bounded D=4/D=20 one-shot solve that never
-    # mentions a cap). The MOMENT a caller supplies `delta_evaluation_cap`, the cap is active,
-    # exactly at that value: `lower_limit = -delta_evaluation_cap`.
-    local lower_limit
-    if inner_solve_config !== nothing
-        delta_evaluation_cap !== nothing && throw(ArgumentError(
-            "build_melitz_implicit_bundle: pass EITHER inner_solve_config OR delta_evaluation_cap, not both"))
-        lower_limit = inner_solve_config.lower_limit
-    elseif delta_evaluation_cap !== nothing
-        lower_limit = melitz_configure_lower_limit(:evaluation_cap;
-            delta_evaluation_cap=delta_evaluation_cap, outer_delta=delta)
-    else
-        lower_limit = -KNITRO.KN_INFINITY
-    end
+    # 2026-07-28 inner-solver architecture-consolidation session: `policy` is now the ONLY
+    # source of `lower_limit` -- no `=== nothing` branch, no separate `delta_evaluation_cap`
+    # kwarg to reconcile against it. See this function's own docstring for the full history.
+    lower_limit = melitz_policy_lower_limit(policy)
 
     # ADDITIVE (continuation4, Section 4): the two new "direct" backends never touch
     # moments_jacobian!/jac_h at all -- cb_G! (below) bypasses this bundle's own theta-branch
@@ -456,7 +433,7 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
         op = build_melitz_moment_operator(sorted_tail_ctx, ctx.moment_layout)
         resolved_hessian_backend = melitz_resolve_hessian_backend(cfg, D)
         obj = build_melitz_cc_bundle(op, ctx; mode=:implicit, U=z_draws,
-            outer_constr_index=d + 1, find_smallest=find_smallest, lower_limit=lower_limit,
+            outer_constr_index=d + 1, find_smallest=find_smallest, policy=policy,
             inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
             hessian_backend=resolved_hessian_backend)
         return obj
@@ -829,9 +806,16 @@ function melitz_exact_cache_insert!(cache::MelitzExactPointCache, key::Vector{Fl
 end
 
 """
-    melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
-        delta_evaluation_cap=10.0,
+    melitz_build_finite_delta_callbacks(session::MelitzInnerSession, ctx, delta, find_smallest;
         n_live_candidates_tracked=5, exact_cache=nothing) -> NamedTuple
+
+2026-07-28 inner-solver architecture-consolidation session: takes `session` (`obj`, `ctx`,
+`policy`, and the dual-bank warm-start state all bundled, `inner_session.jl`) instead of a
+bare `obj` plus an independent `delta_evaluation_cap::Float64` kwarg -- `delta_evaluation_cap`
+below is now `melitz_policy_cap(session.policy)`, derived from the SAME policy `session.obj`
+was itself constructed with (asserted consistent by `MelitzInnerSession`'s own constructor),
+never a second number a caller could supply out of sync with `obj.lower_limit`. The dual bank
+is `session.bank`, not a fresh one built from a separate `dual_bank_max_size` kwarg here.
 
 Section 6/7: factors the finite-delta outer NLP's combined callback pair (objective +
 divergence-budget + cutoff constraints, Sections 3.1/4.1/5.2) out of
@@ -891,8 +875,7 @@ exact value (`AboveEvaluationCap`+`InfiniteDeltaCertified`+`NumericalFailure`) -
 session, only the `NumericalFailure` subset of that count corresponds to an actual KNITRO
 evaluation error; the other two are successful (sentinel) evaluations.
 """
-function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smallest::Bool;
-                                              delta_evaluation_cap::Float64=10.0,
+function melitz_build_finite_delta_callbacks(session, ctx, delta::Float64, find_smallest::Bool;
                                               n_live_candidates_tracked::Int=5,
                                               cutoff_constraint_backend::Symbol=:nonlinear_reference,
                                               on_inner_result=nothing,
@@ -902,7 +885,6 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                                               screen_order::Symbol=:A,
                                               warm_start_source::Symbol=:previous,
                                               exact_cache::Union{Nothing,MelitzExactPointCache}=nothing,
-                                              dual_bank_max_size::Int=8,
                                               gradient_backend::Symbol=:auto,
                                               h::Real=1e-4,
                                               divergence_constraint_scaling::Symbol=:dimensionless,
@@ -912,6 +894,10 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     divergence_constraint_scaling in (:dimensionless, :legacy_1e10) || throw(ArgumentError(
         "melitz_build_finite_delta_callbacks: divergence_constraint_scaling must be :dimensionless " *
         "or :legacy_1e10, got $divergence_constraint_scaling"))
+    # 2026-07-28 inner-solver architecture-consolidation session: obj/delta_evaluation_cap
+    # bound off session -- see this function's own docstring.
+    obj = session.obj
+    delta_evaluation_cap = melitz_policy_cap(session.policy)
     # 2026-07-26 closure session (governing prompt Phase 5): `:dimensionless`
     # (c_delta(theta)=DeltaStar(theta)/delta<=1) is this codebase's OWN production default
     # since the 2026-07-23 correctness-repair session (this file's own header, "OPAQUE 1e10
@@ -985,14 +971,9 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
     n_ga_calls = Ref(0)
 
     # Addendum Sections 3-6: front-loaded screens + stored-dual bank + no-routine-cold-retry
-    # typed classification (inner_screening.jl). `dual_bank` is fresh per outer KNITRO solve
-    # (never shared across solves), seeded lazily as verified inner solves accumulate.
-    # Continuation session (2026-07-23, memory-scalability): `dual_bank_max_size` (default 8,
-    # matching the pre-existing `MelitzDualBank()` default exactly -- this kwarg is purely
-    # additive) makes this tier's already-bounded capacity CONFIGURABLE from the outer-solve
-    # entry points too (`MelitzDualBank` itself has always been bounded via `max_size`/
-    # `policy` eviction, Phase I.6 -- this just threads the knob through one more layer).
-    dual_bank = MelitzDualBank(dual_bank_max_size)
+    # typed classification (inner_screening.jl). `session.bank` is `MelitzInnerSession`'s own
+    # dual bank -- sized/scoped by the caller at session-construction time (this function no
+    # longer allocates one itself; see this function's own docstring).
     n_infinite_delta_reject = Ref(0)
     n_above_cap_reject = Ref(0)
     n_numerical_failure_reject = Ref(0)
@@ -1131,15 +1112,16 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         end
         n_exact_cache_misses[] += 1
 
-        # Addendum Section 3/6, CORRECTED this session: `melitz_classified_inner_solve`
-        # (inner_screening.jl) now takes `delta_evaluation_cap`, NEVER `delta` -- the routine
-        # inner evaluation solves fully for every finite value up to the cap, regardless of
-        # the outer budget (governing prompt Section 3). Front-loaded range + stored-dual
-        # screens run BEFORE attempting KNITRO; exactly ONE KNITRO attempt (no cold retry) if
-        # neither screen rejects.
+        # 2026-07-28 inner-solver architecture-consolidation session: routed through the one
+        # public `solve_melitz_delta!` (`inner_session.jl`), never `_melitz_classified_inner_solve!`
+        # directly -- the cap is `melitz_policy_cap(session.policy)`, NEVER `delta` -- the
+        # routine inner evaluation solves fully for every finite value up to the cap,
+        # regardless of the outer budget (governing prompt Section 3). Front-loaded range +
+        # stored-dual screens run BEFORE attempting KNITRO; exactly ONE KNITRO attempt (no
+        # cold retry) if neither screen rejects.
         t0 = time_ns()
-        result = melitz_classified_inner_solve(obj, theta, ctx; delta_evaluation_cap=delta_evaluation_cap,
-            bank=dual_bank, on_result=on_inner_result, dual_polish_screen=dual_polish_screen,
+        result = solve_melitz_delta!(session, theta, session.policy;
+            on_result=on_inner_result, dual_polish_screen=dual_polish_screen,
             dual_polish_steps=dual_polish_steps, origin_block_screen=origin_block_screen,
             screen_order=screen_order, warm_start_source=warm_start_source)
         elapsed = (time_ns() - t0) / 1e9
@@ -1361,7 +1343,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
             n_fc_calls = n_fc_calls, n_ga_calls = n_ga_calls,
             n_exact_cache_hits = n_exact_cache_hits, n_exact_cache_misses = n_exact_cache_misses,
             exact_cache = exact_cache,
-            dual_bank = dual_bank, n_infinite_delta_reject = n_infinite_delta_reject,
+            dual_bank = session.bank, n_infinite_delta_reject = n_infinite_delta_reject,
             n_above_cap_reject = n_above_cap_reject,
             n_numerical_failure_reject = n_numerical_failure_reject,
             n_inner_solved = n_inner_solved)
@@ -1497,6 +1479,18 @@ self-consistent sentinel is NOT the original bug's path-dependent certificate va
 `NumericalFailure`, the one case with no certificate of any kind, remains a genuine
 eval-error).
 
+**CORRECTED 2026-07-28 (inner-solver architecture-consolidation session)**: the paragraphs
+above describe the pre-2026-07-28 `delta_evaluation_cap::Real=10.0` kwarg, which no longer
+exists on this function -- superseded by the mandatory `policy::MelitzInnerSolvePolicy`
+keyword (default `CappedEvaluation(10.0)`, matching the OLD default's own numeric value
+exactly, but now a typed, self-documenting object rather than a bare `Float64`).
+`melitz_policy_cap(policy)` is the current source of the cap value described everywhere
+above; `melitz_policy_lower_limit(policy)` is threaded into `build_melitz_implicit_bundle`
+AND the `MelitzInnerSession` this function constructs internally, so the two can no longer
+independently drift (see `_melitz_classified_inner_solve!`'s docstring, `inner_screening.jl`,
+for the full architectural rationale -- this was the confirmed root cause of the
+`1.510118e14` anomaly this session closes).
+
 Also implements Section 2's incumbent bookkeeping: `theta_init` is cold-evaluated and
 installed as `initial_incumbent` BEFORE `KN_solve` runs (survives even a
 zero/one-iteration KNITRO run, Section 2.1); every outer-feasible point evaluated during
@@ -1574,7 +1568,7 @@ deliberate scale-sensitivity sweep). The resolved value actually used is returne
 """
 function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVector;
                                           delta::Real, direction::Symbol,
-                                          delta_evaluation_cap::Real=10.0,
+                                          policy::MelitzInnerSolvePolicy=CappedEvaluation(10.0),
                                           gradient_backend::Symbol=:auto, h::Real=1e-4,
                                           theta_box::Union{Real,AbstractVector}=2.0,
                                           n_live_candidates_tracked::Int=5,
@@ -1604,35 +1598,20 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     D = ctx.D
     n = length(theta_init)
     delta = Float64(delta)
-    delta_evaluation_cap = Float64(delta_evaluation_cap)
 
-    # 2026-07-24 evaluation-cap-correction session: `delta_evaluation_cap` is threaded to
-    # `build_melitz_implicit_bundle` (never the outer budget `delta`) -- see that function's
-    # docstring for why the two must not be conflated.
-    #
-    # 2026-07-26 production-closure session (governing prompt Phase 1, simplified same day
-    # per direct user feedback removing the separate guard/margin entirely): `delta_evaluation_cap`
-    # here is `::Real` (never `Union{Nothing,Real}`) -- this driver's cap is ALWAYS meant to be
-    # active, by construction, never an opt-in a caller can forget. Combined with this
-    # session's fix to `build_melitz_implicit_bundle` (a supplied `delta_evaluation_cap`
-    # always activates `lower_limit = -delta_evaluation_cap`, exactly), simply calling this
-    # function with NO cap-related kwargs at all -- the exact confirmed-live incident (Section
-    # 5.5 of docs/melitz_production_fast_backend_2026-07-26.md: `delta_evaluation_cap=10.0`'s
-    # own default, previously left disabled, 13.5x slower campaign, 31 spurious
-    # `NumericalFailure`s) -- now yields an ACTIVE cap automatically. The assertion below is a
-    # live, unconditional runtime guarantee of that fact (not merely a documentation claim): if
-    # a future refactor ever reintroduces a silent disabled-cap path here, this fails loudly
-    # the very first call, not just in a test file that might not be re-run.
+    # 2026-07-28 inner-solver architecture-consolidation session: `policy` is threaded to
+    # BOTH `build_melitz_implicit_bundle` (which sets `obj.lower_limit` from it) AND the
+    # `MelitzInnerSession` this function constructs immediately below -- the SAME object,
+    # never two independently-supplied numbers. This is what makes the session-consistency
+    # assert (`MelitzInnerSession`'s own constructor, `inner_session.jl`) a structural
+    # guarantee rather than a value-equality hope: there is no code path left in this function
+    # where the bundle's cap and the classifier's cap could be built from different sources.
     obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta_init; delta=delta,
         find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
-        delta_evaluation_cap=delta_evaluation_cap, backend=backend,
+        policy=policy, backend=backend,
         forbid_dense_fallback=forbid_dense_fallback)
-    @assert isfinite(obj.lower_limit) (
-        "solve_melitz_finite_delta_bound: obj.lower_limit=$(obj.lower_limit) is not finite -- " *
-        "the evaluation cap (delta_evaluation_cap=$delta_evaluation_cap) failed to activate. " *
-        "This should be impossible after the 2026-07-26 production-closure fix; see " *
-        "build_melitz_implicit_bundle's docstring.")
+    session = MelitzInnerSession(obj, ctx, policy; dual_bank_max_size=dual_bank_max_size)
 
     # 2026-07-28 step-control/robustness session (governing prompt Phase 1): make the
     # `var_scale`<->`objective_scale` pairing automatic and fail-safe, replacing the prior
@@ -1733,14 +1712,13 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
     # `on_inner_result`, if given, is a diagnostic hook (see inner_screening.jl) invoked
     # on every classified inner-solve outcome -- default `nothing`, zero risk to production
     # callers.
-    cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
-        delta_evaluation_cap=delta_evaluation_cap,
+    cbset = melitz_build_finite_delta_callbacks(session, ctx, delta, find_smallest;
         n_live_candidates_tracked=n_live_candidates_tracked,
         cutoff_constraint_backend=cutoff_constraint_backend, on_inner_result=on_inner_result,
         dual_polish_screen=dual_polish_screen, dual_polish_steps=dual_polish_steps,
         origin_block_screen=origin_block_screen, screen_order=screen_order,
         warm_start_source=warm_start_source, exact_cache=exact_cache,
-        dual_bank_max_size=dual_bank_max_size, gradient_backend=gradient_backend, h=h,
+        gradient_backend=gradient_backend, h=h,
         divergence_constraint_scaling=divergence_constraint_scaling, objective_scale=resolved_objective_scale)
 
     kc = KNITRO.KN_new()
@@ -1815,7 +1793,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         initial_incumbent, best_live_incumbent, cold_verified_incumbent,
         nStatus, solve_inner_count, solve_infeas_count, cbset.n_inner_eval_failures[], time() - t0,
         cutoff_constraint_backend, cbset.n_fc_calls[], cbset.n_ga_calls[],
-        delta_evaluation_cap,
+        melitz_policy_cap(policy),
         cbset.n_inner_solved[], cbset.n_infinite_delta_reject[],
         cbset.n_above_cap_reject[], cbset.n_numerical_failure_reject[], diagnostics,
         resolved_objective_scale)
@@ -1866,12 +1844,21 @@ const MELITZ_KNITRO_EVAL_ERROR_STATUSES = (-500, -501, -502, -503, -504, -505, -
 
 """
     melitz_fixed_point_probe(ctx, obj_inner, theta_probe; delta, direction,
-        gradient_backend=:B, h=1e-4, inner_loop_opt, outer_loop_opt=<default>)
-        -> MelitzFixedPointProbeResult
+        gradient_backend=:B, h=1e-4, inner_loop_opt, outer_loop_opt=<default>,
+        policy=CappedEvaluation(10.0)) -> MelitzFixedPointProbeResult
 
 Section 6 Tests A-D: fixes ALL outer variables at `theta_probe` (KNITRO lower bound ==
 upper bound, zero degrees of freedom) and runs the finite-delta outer NLP's real,
 production combined callback (`melitz_build_finite_delta_callbacks`) exactly once.
+
+`policy` (2026-07-28 inner-solver architecture-consolidation session -- this function was
+CONFIRMED LIVE-UNSAFE before this session, `docs/melitz_constructor_cap_audit_2026-07-28.csv`
+row 4: built its own `obj` via `build_melitz_implicit_bundle` with NEITHER a cap NOR a policy
+at all, permanently uncapped, while directly used by `test/melitz/runtests.jl` Test D/D').
+Defaults to `CappedEvaluation(10.0)` -- the SAME production cap `solve_melitz_finite_delta_bound`
+itself defaults to -- so a fixed-point probe of a production trajectory point is capped
+consistently with the production driver by default, closing the confirmed gap for every
+existing caller that omits this kwarg, not merely ones that pass it explicitly.
 """
 function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
                                    delta::Real, direction::Symbol,
@@ -1880,7 +1867,8 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
                                    inner_loop_opt::AbstractString,
                                    outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta.opt"),
                                    backend::Symbol=:auto_from_gradient_backend,
-                                   divergence_constraint_scaling::Symbol=:dimensionless)
+                                   divergence_constraint_scaling::Symbol=:dimensionless,
+                                   policy::MelitzInnerSolvePolicy=CappedEvaluation(10.0))
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     find_smallest = direction == :upper
     D = ctx.D
@@ -1890,9 +1878,11 @@ function melitz_fixed_point_probe(ctx, obj_inner, theta_probe::AbstractVector;
 
     obj = build_melitz_implicit_bundle(ctx, obj_inner.U, theta_probe_v; delta=delta,
         find_smallest=find_smallest, gradient_backend=gradient_backend, h=h,
-        inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt, backend=backend)
+        inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt, backend=backend,
+        policy=policy)
+    session = MelitzInnerSession(obj, ctx, policy)
 
-    cbset = melitz_build_finite_delta_callbacks(obj, ctx, delta, find_smallest;
+    cbset = melitz_build_finite_delta_callbacks(session, ctx, delta, find_smallest;
         cutoff_constraint_backend=cutoff_constraint_backend, gradient_backend=gradient_backend, h=h,
         divergence_constraint_scaling=divergence_constraint_scaling)
 

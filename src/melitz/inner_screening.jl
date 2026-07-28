@@ -619,10 +619,31 @@ function melitz_resolve_warm_start!(obj, bank::MelitzDualBank, theta::AbstractVe
 end
 
 """
-    melitz_classified_inner_solve(obj, theta, ctx; delta_evaluation_cap, bank,
+    _melitz_classified_inner_solve!(session::MelitzInnerSession, theta;
         range_screen=true, stored_dual_screen=true, dual_polish_screen=false,
         dual_polish_steps=3, origin_block_screen=false, screen_order=:A,
         warm_start_source=:previous, on_result=nothing) -> MelitzInnerResult
+
+**INTERNAL as of the 2026-07-28 inner-solver architecture-consolidation session -- call
+`solve_melitz_delta!` (`inner_session.jl`) instead of this function directly.** This is the
+one node every sanctioned entry path (outer FC/GA, fixed-point probe, nuisance profile,
+final verification, calibration fixture, diagnostic script, test fixture) funnels through
+before a `FiniteSolved`/`AboveEvaluationCap`/`InfiniteDeltaCertified`/`NumericalFailure`
+verdict can ever be produced -- `solve_melitz_delta!` is the only caller this session adds,
+and is itself the ONLY function outside this one that production code/tests should call.
+
+Governing prompt Section 3 (this session): the evaluation cap is no longer a separate
+`delta_evaluation_cap::Real` argument passed independently of the bundle's own `lower_limit`
+-- that independence was the root cause of the `1.510118e14` `FiniteSolved`-above-cap anomaly
+(`docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md`): a caller could
+pass `delta_evaluation_cap=10.0` here while `obj.lower_limit` (set once, at bundle
+CONSTRUCTION time, by an entirely different code path) remained `-KNITRO.KN_INFINITY`, so the
+two numbers silently disagreed. `session::MelitzInnerSession` now carries BOTH `obj` (whose
+`lower_limit` was set FROM `session.policy` at construction, asserted consistent by
+`MelitzInnerSession`'s own constructor and re-asserted by `solve_melitz_delta!`) and the
+`policy` itself (`melitz_policy_cap(session.policy)` is the ONE place this function reads the
+cap from) -- there is no longer a second number that could drift out of sync with the first;
+`obj`/`ctx`/`bank` are likewise read off `session`, not passed independently.
 
 Addendum Section 3/6's production order, extended by this session's Phase I.3/I.5/I.8: (1)
 fill `obj.H`'s moment matrix at `theta` (the same `obj.moments!` call
@@ -641,21 +662,40 @@ reusing the caller's existing `obj.use_cached_x`/`obj.x` exactly as before this 
 existed) -- NO routine cold retry on a numerical failure (addendum Section 1), regardless of
 `warm_start_source`.
 
-2026-07-24 evaluation-cap-correction session (governing prompt Section 3, THE central fix
-of this session): every early-abort threshold in this function -- the two pre-solve screens
-AND the KNITRO-native mid-solve `lower_limit` bailout (via `obj.lower_limit`, set by the
-CALLER of this function, `build_melitz_implicit_bundle`) -- is now gated on
-`delta_evaluation_cap` ONLY. The prior session's version took a `delta::Real` kwarg here
-(the OUTER BUDGET) and rejected as soon as a certified lower bound exceeded `delta+guard` --
-this is EXACTLY the conceptual error the governing prompt diagnoses: a certificate that
+2026-07-24 evaluation-cap-correction session (governing prompt Section 3): every early-abort
+threshold this function relies on is conceptually gated on the evaluation cap, never the
+OUTER budget `delta`. The prior (pre-2026-07-24) version took a `delta::Real` kwarg here and
+rejected as soon as a certified lower bound exceeded `delta+guard` -- this was EXACTLY the
+conceptual error that session's governing prompt diagnosed: a certificate that
 `DeltaStar(theta) > delta` (the CURRENT outer budget) is not evidence the point is
 unsolvable or that `DeltaStar` is large/infinite, only that it exceeds THIS budget -- a
 value of 1.5 at `delta=1` is an ordinary, fully solvable finite point (Case A) that the old
-code intercepted and mislabeled before ever finding out. This function therefore no longer
-accepts a `delta` argument at all (governing prompt Section 3: "the budget delta is used
-only by the outer nonlinear constraint... it is not the routine inner stopping threshold" --
-the caller, `finite_delta_outer.jl`'s `cb_F!`/`cb_G!`, is the ONLY place `delta` is still
-used, to form `c(theta)=DeltaStar(theta)/delta` from a GENUINELY-solved `FiniteSolved.Delta`).
+code intercepted and mislabeled before ever finding out. This function has never accepted a
+`delta` argument since (governing prompt Section 3: "the budget delta is used only by the
+outer nonlinear constraint... it is not the routine inner stopping threshold" -- the caller,
+`finite_delta_outer.jl`'s `cb_F!`/`cb_G!`, is the ONLY place `delta` is still used, to form
+`c(theta)=DeltaStar(theta)/delta` from a GENUINELY-solved `FiniteSolved.Delta`).
+
+**CORRECTED 2026-07-28 (inner-solver architecture-consolidation session) -- this docstring
+previously overclaimed here that "the KNITRO-native mid-solve `lower_limit` bailout... is now
+gated on `delta_evaluation_cap` ONLY."** That sentence was not accurate for how `obj.lower_limit`
+was actually set on four of this function's five call paths, and is the documented, concrete
+mechanism the 2026-07-28 anomaly session identified as a contributing cause of the
+`1.510118e14` `FiniteSolved`-above-cap incident (a session reading it at face value had a
+textual reason to believe the argument alone controlled the live KNITRO threshold; see
+`docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md` Phase 6b and
+`docs/melitz_inner_solver_architecture_consolidation_2026-07-28.md`). As of this session there
+is no `delta_evaluation_cap` ARGUMENT to this function at all: `session::MelitzInnerSession`
+(`inner_session.jl`) carries `obj` (whose `lower_limit` was set from `session.policy` at
+CONSTRUCTION time, by whichever sanctioned constructor built it -- `build_melitz_cc_bundle`/
+`build_melitz_implicit_bundle`/`build_melitz_psi_bundle`/`build_melitz_psi_bundle_from_calibration`,
+all of which now take `policy::MelitzInnerSolvePolicy` as a mandatory keyword) and `policy`
+itself; this function reads `delta_evaluation_cap = melitz_policy_cap(session.policy)` as a
+LOCAL variable derived from the exact same object, never a second independently-suppliable
+number. This is not merely a documentation fix -- it is a structural guarantee: there is no
+remaining code path in this codebase where the live KNITRO threshold and this function's own
+cap-based screening/assert could be built from two different sources. Call `solve_melitz_delta!`
+(`inner_session.jl`), never this function directly, from any production or diagnostic caller.
 
 `dual_polish_screen`/`origin_block_screen` (Phase I.5/I.3, default `false` each -- opt-in
 until the Phase I.8 screen-order benchmark decides a production default): the former runs
@@ -668,8 +708,7 @@ a zero-risk (default `nothing`, skipped entirely) hook for a diagnostic caller t
 benchmark, which needs a representative sample of thetas that produced `NumericalFailure`
 during a real trajectory) without adding any collection state to this function itself.
 """
-function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
-                                        delta_evaluation_cap::Real, bank::MelitzDualBank,
+function _melitz_classified_inner_solve!(session, theta::AbstractVector;
                                         range_screen::Bool=true,
                                         matrix_free_range_screen::Bool=true,
                                         stored_dual_screen::Bool=true,
@@ -680,6 +719,12 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
                                         warm_start_source::Symbol=:previous,
                                         on_result=nothing)::MelitzInnerResult
     screen_order in (:A, :B, :C) || throw(ArgumentError("screen_order must be :A, :B, or :C, got $screen_order"))
+    # Section 3 (this session): obj/ctx/bank/cap all read off the ONE session object --
+    # see this function's own docstring for why that closes the anomaly's root cause.
+    obj = session.obj
+    ctx = session.ctx
+    bank = session.bank
+    delta_evaluation_cap = melitz_policy_cap(session.policy)
     # 2026-07-26 production-port session: routed through the Melitz-owned
     # melitz_bundle_prepare_at_theta! dispatcher (cc_bundle.jl) instead of hardcoding
     # `CS.select_G_from_H`/`obj.moments!` -- the legacy bundles get the EXACT same two lines
