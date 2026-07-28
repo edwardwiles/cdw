@@ -23,6 +23,7 @@
 isdefined(Main, :economic_forward!) || include(joinpath(@__DIR__, "economic_operator.jl"))
 isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
 isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
+isdefined(Main, :HessianWeightCache) || include(joinpath(@__DIR__, "operator_hessian_weights.jl"))
 
 """
     OriginZCOperatorState
@@ -46,12 +47,54 @@ mutable struct OriginZCOperatorState
     econ_buf::Vector{Float64}
     n_fg_calls::Int
     n_dense_econ_fallback::Int   # counts calls where core_cf_ref[] was not a usable CompressedFactual (tie/unavailable)
+    # No-moments/no-composite-G task (2026-07-28): same-point cache for the Hessian-weight prep
+    # (operator_hessian_weights.jl) -- see that file's own docstring for the full contract.
+    hw_cache::HessianWeightCache
 end
 
 function OriginZCOperatorState(obj, ncore1::Int, op::ZCRestrictionOperator, layout, core_cf_ref::Ref{Any})
     W = size(obj.U, 1)
+    n_x = 1 + ncore1 + n_mean(op) + n_pair(op)
     OriginZCOperatorState(obj, ncore1, op, layout, core_cf_ref, nothing, nothing,
-        ZCRestrictionWorkspace(op), zeros(W), zeros(W), zeros(W), 0, 0)
+        ZCRestrictionWorkspace(op), zeros(W), zeros(W), zeros(W), 0, 0,
+        HessianWeightCache(n_x))
+end
+
+"""
+    dual_index!(st::OriginZCOperatorState, x) -> st.arg0
+
+Computes `st.arg0 = r = -ζ·1 - E·λ_E - Z(mean,pair)·λ` in place -- extracted VERBATIM from this
+state's own FG functor (no mathematics changed).
+"""
+function dual_index!(st::OriginZCOperatorState, x::AbstractVector{Float64})
+    obj = st.obj
+    ncore1 = st.ncore1
+    op = st.op
+
+    ζ = x[1]
+    λ_E = @view x[2:1+ncore1]
+    λ_mean = @view x[2+ncore1 : 1+ncore1+n_mean(op)]
+    λ_pair = @view x[2+ncore1+n_mean(op) : 1+ncore1+n_mean(op)+n_pair(op)]
+
+    fill!(st.arg0, -ζ)
+
+    cf = st.core_cf_ref[]
+    if cf isa CompressedFactual
+        if st.econ_ws === nothing || st.econ_ws_for !== cf
+            st.econ_ws = economic_operator_workspace(cf)
+            st.econ_ws_for = cf
+        end
+        economic_forward!(st.econ_buf, λ_E, cf, st.econ_ws)
+        st.arg0 .-= st.econ_buf
+    else
+        st.n_dense_econ_fallback += 1
+        record_dense_economic_G!()
+        xsub_ext = vcat(ζ, collect(λ_E))
+        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], xsub_ext, 0.0, st.arg0)
+    end
+
+    restriction_forward!(st.arg0, λ_mean, λ_pair, op, st.zc_ws)
+    return st.arg0
 end
 
 """
@@ -83,30 +126,12 @@ function (st::OriginZCOperatorState)(x::AbstractVector{Float64}, g::AbstractVect
     op = st.op
 
     ζ = x[1]
-    λ_E = @view x[2:1+ncore1]
-    λ_mean = @view x[2+ncore1 : 1+ncore1+n_mean(op)]
-    λ_pair = @view x[2+ncore1+n_mean(op) : 1+ncore1+n_mean(op)+n_pair(op)]
 
-    fill!(st.arg0, -ζ)
-
+    # No-moments/no-composite-G task (2026-07-28): forward computation extracted into the shared
+    # `dual_index!(st, x)` (this file, above) -- see CMLookupState's own functor for the identical
+    # rationale.
     cf = st.core_cf_ref[]
-    if cf isa CompressedFactual
-        if st.econ_ws === nothing || st.econ_ws_for !== cf
-            st.econ_ws = economic_operator_workspace(cf)
-            st.econ_ws_for = cf
-        end
-        economic_forward!(st.econ_buf, λ_E, cf, st.econ_ws)
-        st.arg0 .-= st.econ_buf
-    else
-        # Fallback (tied winner / compressed state unavailable this outer point): dense economic
-        # contraction against obj.H, same BLAS.gemv! CMLookupState uses for its own core block.
-        st.n_dense_econ_fallback += 1
-        record_dense_economic_G!()
-        xsub_ext = vcat(ζ, collect(λ_E))
-        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], xsub_ext, 0.0, st.arg0)
-    end
-
-    restriction_forward!(st.arg0, λ_mean, λ_pair, op, st.zc_ws)
+    dual_index!(st, x)
 
     obj.Psi!(st.arg1, st.arg0)
     f = sum(st.arg1) / M + ζ

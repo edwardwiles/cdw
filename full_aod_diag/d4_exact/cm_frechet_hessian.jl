@@ -56,13 +56,13 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
     @assert ncm_level == L "hessian_cm_frechet_structured!: cctx.ncm=$(cctx.ncm) inconsistent with D*L (got ncm_level=$ncm_level, expected L=$L) -- was cctx built from a :common_frechet aug?"
     invsqrtD = 1.0 / sqrt(D)
 
-    E = @view H[:, 2:1+NCORE]
-
+    # No-moments/no-composite-G task (2026-07-28): `E` no longer constructed eagerly -- see the
+    # identical change/rationale in cm_hessian_architectures.jl::hessian_cm_structured!.
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
     HEE = @view Hfull[1:NCORE, 1:NCORE]
     cf = cctx.core_cf_ref[]
-    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # UNCHANGED -- winner-pair backend, unaffected by level block; may rebuild cctx.core_ws/core_ws_for for this cf
+    _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # UNCHANGED -- winner-pair backend, unaffected by level block; may rebuild cctx.core_ws/core_ws_for for this cf
 
     # Winner-aware H_ER phase (2026-07-27), Section 3 Part A: SAME gating/dispatch as flexible-CM's
     # own hessian_cm_structured! (cm_hessian_architectures.jl) -- _cm_cross_hessian_wants_winner_bin/
@@ -70,7 +70,7 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
     # IDENTICAL to flexible-CM's own, so the same winner_pair_cross_hessian_fill!/_cm_block! calls
     # apply verbatim here.
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
-    build_bin_tables!(cctx, E, w; fill_S = !use_winner_bin)     # H_CC's own T/CT tables (from Bidx/w
+    build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)     # H_CC's own T/CT tables (from Bidx/w
     prefix_sum_tables!(cctx; fill_S = !use_winner_bin)          # alone) are built regardless -- unaffected by fill_S
 
     local wctx, cross_ws
@@ -172,7 +172,9 @@ function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_target
             end
         end
     else
+        # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
         record_dense_frechet_g!()
+        E = @view H[:, 2:1+NCORE]
         Esum = Vector{Float64}(undef, NCORE)
         mul!(Esum, E', w)
         @inbounds for l in 1:L
@@ -260,7 +262,7 @@ function archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector
             o = userParams
             xloc = evalRequest.x
             @prof "inner_dual_hessian_callback_archC_frechet" begin
-                _archC_prep_for_hessian!(o, xloc)
+                _prep_dual_index_for_archC!(cctx, o, xloc)
                 hessian_cm_frechet_structured_v2!(evalResult.hess, o, cctx, level_targets; threaded_bins = true, tls = cctx.tls)
             end
             _INNER_CALL_COUNTERS[].n_hess_calls += 1

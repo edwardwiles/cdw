@@ -37,6 +37,7 @@
 
 isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
 isdefined(Main, :economic_forward!) || include(joinpath(@__DIR__, "economic_operator.jl"))
+isdefined(Main, :HessianWeightCache) || include(joinpath(@__DIR__, "operator_hessian_weights.jl"))
 
 """
     frechet_level_suffix_sums!(P, λ_level)
@@ -158,6 +159,9 @@ mutable struct CMFrechetLookupState{O}
     econ_ws_for::Any
     econ_buf::Vector{Float64}
     n_dense_econ_fallback::Int
+    # No-moments/no-composite-G task (2026-07-28): same-point cache for the Hessian-weight prep
+    # (operator_hessian_weights.jl) -- see that file's own docstring for the full contract.
+    hw_cache::HessianWeightCache
 end
 
 function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::Int, D::Int,
@@ -180,17 +184,18 @@ function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::I
         zeros(M), zeros(M), zeros(M), zeros(M),
         zeros(1 + ncore1), zeros(nO, L), zeros(nO, L + 1), zeros(L + 1),
         hist_partials, zeros(D, nbins), zeros(D, L), zeros(nO, L), zeros(nO, L), zeros(L),
-        core_cf_ref, nothing, nothing, zeros(M), 0)
+        core_cf_ref, nothing, nothing, zeros(M), 0,
+        HessianWeightCache(1 + ncore1 + ncm_cm + ncm_level))
 end
 
 """
-    (st::CMFrechetLookupState)(x, g=Float64[]) -> f
+    dual_index!(st::CMFrechetLookupState, x) -> st.arg0
 
-FG evaluator, same signature/semantics as `obj(x, g)`. `x = [ζ; λ_core; λ_cm; λ_level]`.
+Computes `st.arg0 = r = -ζ·1 - E·λ_core - cm_contribution - level_contribution` in place --
+extracted VERBATIM from this state's own FG functor (no mathematics changed).
 """
-function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float64} = Float64[])
+function dual_index!(st::CMFrechetLookupState, x::AbstractVector{Float64})
     obj = st.obj
-    M = size(obj.U, 1)
     ncore1 = st.ncore - 1
 
     ζ = x[1]
@@ -198,10 +203,6 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
     λ_cm = @view x[2+ncore1:1+ncore1+st.ncm_cm]
     λ_level = @view x[2+ncore1+st.ncm_cm:1+ncore1+st.ncm_cm+st.ncm_level]
 
-    # ---- forward: arg0 = -(ζ + G_core*λ_core + G_cm*λ_cm + G_level*λ_level) ----
-    # Phase A item 4: shared economic_forward!/economic_transpose! when core_cf_ref[] holds a real
-    # CompressedFactual, else the original dense obj.H BLAS.gemv! -- identical contract to
-    # CMLookupState's own retrofit (cm_lookup_kernels.jl).
     cf = st.core_cf_ref[]
     if cf isa CompressedFactual
         if st.econ_ws === nothing || st.econ_ws_for !== cf
@@ -230,9 +231,29 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
     @inbounds for l in 1:st.L
         const_term += λ_level[l] * st.level_targets[l]
     end
-    @inbounds for s in 1:M
+    @inbounds for s in 1:length(st.arg0)
         st.arg0[s] -= st.invsqrtD * st.level_contrib[s] - const_term
     end
+    return st.arg0
+end
+
+"""
+    (st::CMFrechetLookupState)(x, g=Float64[]) -> f
+
+FG evaluator, same signature/semantics as `obj(x, g)`. `x = [ζ; λ_core; λ_cm; λ_level]`.
+"""
+function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float64} = Float64[])
+    obj = st.obj
+    M = size(obj.U, 1)
+    ncore1 = st.ncore - 1
+
+    ζ = x[1]
+
+    # No-moments/no-composite-G task (2026-07-28): forward computation extracted into the shared
+    # `dual_index!(st, x)` (this file, above) -- see CMLookupState's own functor (cm_lookup_kernels.jl)
+    # for the identical rationale.
+    cf = st.core_cf_ref[]
+    dual_index!(st, x)
 
     obj.Psi!(st.arg1, st.arg0)
     f = sum(st.arg1) / M + ζ
@@ -261,6 +282,7 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
     end
 
     obj.arg0 .= st.arg0
+    _publish_dual_index_cache!(st, x)   # let a same-point Hessian call reuse this r instead of recomputing
     st.n_fg_calls += 1
     return f
 end

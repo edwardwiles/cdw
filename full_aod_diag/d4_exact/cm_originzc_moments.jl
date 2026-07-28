@@ -118,18 +118,14 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
         end
         G_tmp = Gtmp_cache[]
         if can_compress
-            try
-                cf = cf_build(collect(θ_econ), ctx; check_ties = true)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-                materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
-                grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
-                fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
-                fill_K_directgp!(K, collect(θ_econ), ctx)
-                core_cf_ref[] = cf
-            catch e
-                e isa TiedWinnerError || rethrow()
-                core_moments!(K, G_tmp, θ_econ, U, obj)
-                core_cf_ref[] = :tied_winner
-            end
+            # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
+            # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB.
+            cf = cf_build(collect(θ_econ), ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
+            materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
+            grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
+            fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
+            fill_K_directgp!(K, collect(θ_econ), ctx)
+            core_cf_ref[] = cf
         else
             core_moments!(K, G_tmp, θ_econ, U, obj)
             core_cf_ref[] = :compressed_state_unavailable

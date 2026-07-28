@@ -45,6 +45,7 @@ using LinearAlgebra: mul!
 # already uses successfully across those same call sites.
 isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
 isdefined(Main, :economic_forward!) || include(joinpath(@__DIR__, "economic_operator.jl"))
+isdefined(Main, :HessianWeightCache) || include(joinpath(@__DIR__, "operator_hessian_weights.jl"))
 
 # ---- weighted histogram (Part B.2), threaded over draw chunks, thread-local buffers, no atomics ----
 
@@ -350,6 +351,9 @@ mutable struct CMLookupState
     econ_ws_for::Any
     econ_buf::Vector{Float64}
     n_dense_econ_fallback::Int
+    # No-moments/no-composite-G task (2026-07-28): same-point cache for the Hessian-weight prep
+    # (operator_hessian_weights.jl) -- see that file's own docstring for the full contract.
+    hw_cache::HessianWeightCache
 end
 
 function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, refIndex1::Int,
@@ -368,7 +372,53 @@ function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, 
                   zeros(M), zeros(M), zeros(M), zeros(nO, L + 1), 0,
                   zeros(1 + ncore1), zeros(nO, L), hist_partials, zeros(D, nbins), zeros(D, L),
                   zeros(nO, L), zeros(nO, L),
-                  core_cf_ref, nothing, nothing, zeros(M), 0)
+                  core_cf_ref, nothing, nothing, zeros(M), 0,
+                  HessianWeightCache(1 + ncore1 + ncm))
+end
+
+"""
+    dual_index!(st::CMLookupState, x) -> st.arg0
+
+Computes `st.arg0 = r = -ζ·1 - E·λ_core - cm_contribution` in place -- extracted VERBATIM (no
+mathematics changed) from this state's own FG functor, so the FG callback and the Hessian-weight
+prep (`operator_hessian_weights.jl::operator_prep_for_hessian!`) call the exact same code path.
+"""
+function dual_index!(st::CMLookupState, x::AbstractVector{Float64})
+    obj = st.obj
+    ncore1 = st.ncore - 1
+
+    ζ = x[1]
+    λ_core = @view x[2:1+ncore1]
+    λ_cm = @view x[2+ncore1:1+ncore1+st.ncm]
+
+    cf = st.core_cf_ref[]
+    if cf isa CompressedFactual
+        if st.econ_ws === nothing || st.econ_ws_for !== cf
+            st.econ_ws = economic_operator_workspace(cf)
+            st.econ_ws_for = cf
+        end
+        economic_forward!(st.econ_buf, λ_core, cf, st.econ_ws)
+        st.arg0 .= (-ζ) .- st.econ_buf
+    else
+        st.n_dense_econ_fallback += 1
+        record_dense_economic_G!()
+        st.xsub[1] = ζ
+        st.xsub[2:end] .= λ_core
+        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
+    end
+
+    λmat_stored = reshape(λ_cm, st.nO, st.L)
+    apply_contrast!(st.λmat_block, λmat_stored, st.R)
+    if st.method == :interval
+        st.λmat_ext[:, 1:st.L] .= st.λmat_block
+        st.λmat_ext[:, st.L+1] .= 0.0
+        interval_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
+    else # :suffix (cumulative basis diagnostic)
+        suffix_sums!(st.λmat_ext, st.λmat_block)
+        cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
+    end
+    st.arg0 .-= st.cm_contrib
+    return st.arg0
 end
 
 """
@@ -383,50 +433,15 @@ function (st::CMLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float
     ncore1 = st.ncore - 1   # number of core (non-CM, non-gravity) inner columns
 
     ζ = x[1]
-    λ_core = @view x[2:1+ncore1]
-    λ_cm = @view x[2+ncore1:1+ncore1+st.ncm]
 
-    # ---- forward: arg0 = -(ζ .+ G_core*λ_core .+ cm_contribution) ----
-    # port/finish-operator-stack-no-dense-G-and-CM-basis-diagnosis-2026-07-26 Phase A item 3: use
-    # the SHARED economic_forward!/economic_transpose! (economic_operator.jl) against the SAME
-    # `core_cf_ref[]` CompressedFactual `wrap_moments_with_cm_archB`'s moments! closure already
-    # publishes on every outer point for the winner-pair Hessian, exactly the pattern
-    # OriginZCOperatorState/CMMeanZCOperatorState already established -- see those files' own
-    # `core_cf_ref`-branch docstrings for the full rationale. Falls back to the ORIGINAL dense
-    # `obj.H` BLAS.gemv! (Phase 5.5's own persistent-scratch version, byte-identical to pre-port)
-    # whenever `core_cf_ref[]` is not a usable `CompressedFactual` (tied winner / compressed state
-    # unavailable / caller never wired a real core_cf_ref -- the default for every pre-existing
-    # call site of this constructor), so this is a pure win-or-neutral change, never a regression.
+    # No-moments/no-composite-G task (2026-07-28): forward computation extracted into the shared
+    # `dual_index!(st, x)` (this file, above) -- now called from BOTH this FG functor and the
+    # Hessian-weight prep (operator_hessian_weights.jl::operator_prep_for_hessian!), so the two are
+    # provably running the identical code path rather than two independently-maintained copies.
+    # `cf` is re-read here (not returned by `dual_index!`) only to select the economic-transpose
+    # branch below -- identical value `dual_index!` itself just used internally.
     cf = st.core_cf_ref[]
-    if cf isa CompressedFactual
-        if st.econ_ws === nothing || st.econ_ws_for !== cf
-            st.econ_ws = economic_operator_workspace(cf)
-            st.econ_ws_for = cf
-        end
-        economic_forward!(st.econ_buf, λ_core, cf, st.econ_ws)
-        st.arg0 .= (-ζ) .- st.econ_buf
-    else
-        st.n_dense_econ_fallback += 1
-        record_dense_economic_G!()
-        # Phase 5.5: st.xsub is persistent scratch (was a fresh `vcat(ζ, λ_core)` allocation every
-        # FG call); the sign flip that used to live on `-xsub` moves onto BLAS's own alpha (-1.0)
-        # instead, since gemv!(alpha, A, x) == alpha*A*x regardless of which factor carries the sign.
-        st.xsub[1] = ζ
-        st.xsub[2:end] .= λ_core
-        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
-    end
-
-    λmat_stored = reshape(λ_cm, st.nO, st.L)  # threshold-major storage, col-major reshape: [oi,k] <-> j=(k-1)*nO+oi
-    apply_contrast!(st.λmat_block, λmat_stored, st.R)   # block-space coefficients (R===nothing -> copy)
-    if st.method == :interval
-        st.λmat_ext[:, 1:st.L] .= st.λmat_block
-        st.λmat_ext[:, st.L+1] .= 0.0
-        interval_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
-    else # :suffix (cumulative basis diagnostic)
-        suffix_sums!(st.λmat_ext, st.λmat_block)   # writes the (nO, L+1) suffix-sum-extended matrix directly
-        cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
-    end
-    st.arg0 .-= st.cm_contrib
+    dual_index!(st, x)
 
     obj.Psi!(st.arg1, st.arg0)
     f = sum(st.arg1) / M + ζ
@@ -453,6 +468,7 @@ function (st::CMLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float
     end
 
     obj.arg0 .= st.arg0   # keep obj in sync for a subsequent dense Hessian callback, same trick as compressed_live.jl
+    _publish_dual_index_cache!(st, x)   # let a same-point Hessian call reuse this r instead of recomputing
     st.n_fg_calls += 1
     return f
 end

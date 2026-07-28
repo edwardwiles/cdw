@@ -52,6 +52,17 @@ Base.@kwdef mutable struct NoDenseGCounters
     # family-owned path fires, not as a violation signal (there is no "should be zero" requirement
     # on it, unlike the composite-G/dense-reference counters above).
     direct_restriction_hessian_calls::Int = 0
+    # No-moments/no-composite-G task (2026-07-28): the shared Hessian-weight prep
+    # (operator_hessian_weights.jl::operator_prep_for_hessian!) replacing `_archC_prep_for_hessian!`'s
+    # dense `H[:,2:1+outer_constr_index]` gemv for flexible-CM/common-Fréchet/CM+ZC/ZC-only. A "hit"
+    # reuses the exact-same-point `r` the FG callback already published into `st.obj.arg0`; a "miss"
+    # recomputes `r` fresh via the family's own operator forward kernel (`dual_index!`) -- both paths
+    # are dense-G-free, `hessian_weight_dense_recomputes` is the ONLY one that is not (the retained,
+    # explicit-opt-in `_archC_prep_for_hessian!` fallback under `moment_representation=:dense_reference`).
+    hessian_weight_cache_hits::Int = 0
+    hessian_weight_cache_misses::Int = 0
+    hessian_weight_operator_recomputes::Int = 0
+    hessian_weight_dense_recomputes::Int = 0
 end
 
 const NO_DENSE_G_COUNTERS = Ref(NoDenseGCounters())
@@ -176,6 +187,25 @@ end
 record_direct_restriction_hessian_call!() = (NO_DENSE_G_COUNTERS[].direct_restriction_hessian_calls += 1; nothing)
 
 """
+    record_hessian_weight_cache_hit!() / _cache_miss!() / _operator_recompute!() / _dense_recompute!()
+
+No-moments/no-composite-G task (2026-07-28): call exactly once per Hessian callback invocation from
+`operator_hessian_weights.jl::operator_prep_for_hessian!` (hit or miss+operator_recompute, mutually
+exclusive) or from the retained `_archC_prep_for_hessian!` dense fallback (dense_recompute, only
+reachable under explicit `moment_representation=:dense_reference`). Production requires
+`hessian_weight_dense_recomputes == 0`.
+"""
+record_hessian_weight_cache_hit!() = (NO_DENSE_G_COUNTERS[].hessian_weight_cache_hits += 1; nothing)
+record_hessian_weight_cache_miss!() = (NO_DENSE_G_COUNTERS[].hessian_weight_cache_misses += 1; nothing)
+record_hessian_weight_operator_recompute!() = (NO_DENSE_G_COUNTERS[].hessian_weight_operator_recomputes += 1; nothing)
+function record_hessian_weight_dense_recompute!()
+    NO_DENSE_G_COUNTERS[].hessian_weight_dense_recomputes += 1
+    FAIL_FAST_ON_DENSE_G[] &&
+        error("record_hessian_weight_dense_recompute!: a production Hessian callback used the dense _archC_prep_for_hessian! fallback while FAIL_FAST_ON_DENSE_G[]=true")
+    return nothing
+end
+
+"""
     no_dense_g_report() -> NamedTuple
 
 Snapshot of every counter, for a gate script to print/assert against.
@@ -198,7 +228,11 @@ function no_dense_g_report()
             dense_cross_hessian_calls = c.dense_cross_hessian_calls,
             operator_cross_hessian_calls = c.operator_cross_hessian_calls,
             winner_cross_hessian_calls = c.winner_cross_hessian_calls,
-            direct_restriction_hessian_calls = c.direct_restriction_hessian_calls)
+            direct_restriction_hessian_calls = c.direct_restriction_hessian_calls,
+            hessian_weight_cache_hits = c.hessian_weight_cache_hits,
+            hessian_weight_cache_misses = c.hessian_weight_cache_misses,
+            hessian_weight_operator_recomputes = c.hessian_weight_operator_recomputes,
+            hessian_weight_dense_recomputes = c.hessian_weight_dense_recomputes)
 end
 
 """

@@ -69,6 +69,10 @@ isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_
 # this include must run before that struct is parsed -- same self-guard convention every other
 # dependency in this file already uses.
 isdefined(Main, :ZCCenteredScratch) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
+# No-moments/no-composite-G task (2026-07-28): operator_prep_for_hessian!/HessianWeightCache, used
+# by archC_hess_cb_builder/archA_partitioned_hess_cb_builder below in place of the dense
+# _archC_prep_for_hessian! fallback.
+isdefined(Main, :HessianWeightCache) || include(joinpath(@__DIR__, "operator_hessian_weights.jl"))
 
 # ----------------------------------------------------------------------------
 # Shared: per-draw bin indices w.r.t. the SAME thresholds `z` that
@@ -248,23 +252,40 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
         end
         Gtmp = Gtmp_cache[]
         if use_compressed_core
-            try
-                cf = cf_build(θ, ctx; check_ties = true)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-                materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
-                grav_raw = compressed_gravity_raw(θ, ctx)
-                fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
-                fill_K_directgp!(K, θ, ctx)
-                # port/shared-winner-pair-core-hessian-production-2026-07-25: publish the
-                # freshly-built `cf` for `hessian_cm_structured!`/`_v2!` (via `cctx.core_cf_ref`,
-                # the SAME shared box) to pick up -- KNITRO always calls the FG/moments! callback
-                # at a new point before the first Hessian call there, so this is set before any
-                # Hessian callback that needs it runs.
-                core_cf_ref[] = cf
-            catch e
-                e isa TiedWinnerError || rethrow()
-                core_moments!(K, Gtmp, θ, U, obj)
-                core_cf_ref[] = :tied_winner   # dense fallback for this point -- Hessian must also fall back
-            end
+            # No-moments/no-composite-G task (2026-07-28): `check_ties=false` -- was `true`, which
+            # threw `TiedWinnerError` on a literal (machine-precision) price tie and fell back to a
+            # dense `core_moments!`/`core_cf_ref[]=:tied_winner` reconstruction that the Hessian
+            # callback would then also have to serve from dense `obj.H`. Per direct read of the
+            # winner-assignment code (compressed_factual_buffer_reuse.jl/compressed_moments.jl): the
+            # winner (`winner[w,s] = bo`, the argmin) is computed UNCONDITIONALLY regardless of
+            # `check_ties` -- the tie check is a pure, side-effect-free diagnostic scan bolted on
+            # AFTER the winner is already assigned, it does not change which winner gets picked.
+            # Since a literal machine-precision tie is a measure-zero event for continuous draws and
+            # the assignment is already deterministic (first-argmin) either way, there is no reason
+            # to special-case it: `core_cf_ref[]` is now ALWAYS a valid `CompressedFactual` in
+            # operator mode, never a `:tied_winner` Symbol, which makes the dense H_EC/H_ER fallback
+            # branches in the Hessian callbacks provably unreachable in production (not merely rare)
+            # -- the precondition this task's G/H storage elimination relies on.
+            cf = cf_build(θ, ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
+            materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
+            grav_raw = compressed_gravity_raw(θ, ctx)
+            fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
+            fill_K_directgp!(K, θ, ctx)
+            # port/shared-winner-pair-core-hessian-production-2026-07-25: publish the
+            # freshly-built `cf` for `hessian_cm_structured!`/`_v2!` (via `cctx.core_cf_ref`,
+            # the SAME shared box) to pick up -- KNITRO always calls the FG/moments! callback
+            # at a new point before the first Hessian call there, so this is set before any
+            # Hessian callback that needs it runs.
+            core_cf_ref[] = cf
+            # No-moments/no-composite-G task (2026-07-28): an attempt was made live to ALSO gate
+            # this dense economic fill behind `!skip_fill` (extending the existing CM-grid-only skip
+            # to the economic block too), reasoning that `_fill_cm_HEE!`'s only economic-column read
+            # is now confined to the unreachable-in-production dense fallback. That change was
+            # REVERTED after `test_shared_core_hessian_d4_gates.jl` caught a real, unexplained
+            # numerical regression (H_EE mismatch, max|Δ|=0.0336, not FP noise) that wasn't isolated
+            # before the session's time budget ran out -- left as an explicitly named, NOT-YET-SAFE
+            # follow-on rather than shipped un-debugged. The economic block is therefore still
+            # unconditionally materialized here, for both skip_fill=true and skip_fill=false.
         else
             core_moments!(K, Gtmp, θ, U, obj)
             core_cf_ref[] = :compressed_state_unavailable   # use_compressed_core=false: no winner-form cf built this call, Hessian must fall back to dense
@@ -580,12 +601,17 @@ Section 2's own "do not alter the existing H_RR CM contingency-table block"). `S
 zeroed (defensive: stale values must never leak into a later `fill_S=true` call at a different
 context) but never populated.
 """
-function build_bin_tables!(cctx::CMBinHessCtx, E::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
+function build_bin_tables!(cctx::CMBinHessCtx, H::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
     D = cctx.D; NCORE = cctx.NCORE; Bidx = cctx.Bidx
     T = cctx.Ttab; S = cctx.Stab
     fill!(T, 0.0); fill!(S, 0.0)
-    W = size(E, 1)
+    W = length(w)
     if fill_S
+        # No-moments/no-composite-G task (2026-07-28): `E` is constructed HERE, lazily, only inside
+        # the branch that actually reads it -- never at the caller's top level -- so that `H` need
+        # not have `NCORE` economic columns at all when `fill_S=false` (the production default,
+        # `:winner_bin`), the precondition this task's H-elimination relies on.
+        E = @view H[:, 2:1+NCORE]
         @inbounds for s in 1:W
             ws = w[s]
             for x in 1:D
@@ -661,7 +687,7 @@ explicitly opt-in fallback) whenever no compressed core is available for
 this point (`use_compressed_core=false`, or a `TiedWinnerError` this point),
 or `cctx.core_hessian_backend === :dense_reference`.
 """
-function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cctx::CMBinHessCtx, E::AbstractMatrix{Float64}, M)
+function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cctx::CMBinHessCtx, H::AbstractMatrix{Float64}, M)
     ncore = cctx.ncore_core
     NCORE = cctx.NCORE
     cf = cctx.core_cf_ref[]   # a CompressedFactual (success) OR a Symbol fallback reason (:tied_winner / :compressed_state_unavailable)
@@ -686,50 +712,52 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
             # `_fill_cm_HEE!`'s own H_EE fill just satisfied above holds -- ONLY `Ews[:,
             # ncore+1:NCORE]` (EM, needed by HMM regardless of backend) is ever computed from `E`
             # in that path; `E[:, 1:ncore]` (the economic columns) is never read.
-            Ews = cctx.Ews
-            @views Ews[:, ncore+1:NCORE] .= E[:, ncore+1:NCORE] .* sqrt.(w)
-            EM = @view Ews[:, ncore+1:NCORE]
             HEM = @view HEE[1:ncore, ncore+1:NCORE]
-            if _cm_zc_cross_hessian_wants_winner_bin(cctx, cf)
+            HMM = @view HEE[ncore+1:NCORE, ncore+1:NCORE]
+            zc_direct_ready = cctx.hzz_zc_op !== nothing
+            winner_bin_ok = _cm_zc_cross_hessian_wants_winner_bin(cctx, cf)
+            # No-moments/no-composite-G task (2026-07-28): `Z` (the "already-centered restriction
+            # columns") is now sourced from `cctx.hzz_centered.Zc` instead of `@view E[:,
+            # ncore+1:NCORE]` -- `zc_restriction_operator.jl`'s own docstring confirms this is
+            # BIT-IDENTICAL to `wrap_moments_with_cm_meanzc`'s dense `obj.H` Z columns ("the SAME
+            # quantity... never read from obj.H"), and it is the SAME scratch H_ZZ/`zc_restriction_
+            # gram!` below already uses (gated at D=4/D=20) -- refreshed once here, shared by both
+            # HEM and HMM, so `obj.H`'s restriction columns are no longer read anywhere in this
+            # callback. Falls back to the dense `E`-based path only when the direct ZC state isn't
+            # available at all (plain CM/common-Frechet, which never widen `ncore < NCORE`).
+            if winner_bin_ok && zc_direct_ready
+                op = cctx.hzz_zc_op
+                refresh_zc_targets!(cctx.hzz_zc_ws, op, cctx.hzz_zc_layout, cctx.nu_ref[])
+                cctx.hzz_centered = ensure_zc_centered_scratch!(cctx.hzz_centered, op, size(w, 1))
+                refresh_zc_centered!(cctx.hzz_centered, op, cctx.hzz_zc_ws, w)
                 record_winner_cross_hessian_call!()
                 wctx = serial_ctx(cctx.core_ws)
                 n_restr = NCORE - ncore
                 cctx.zc_cross_scratch = _ensure_zc_cross_scratch!(cctx, wctx.W, n_restr)
                 winner_pair_cross_hessian_zc_prep!(cctx.zc_cross_scratch, wctx, w)
-                Z = @view E[:, ncore+1:NCORE]   # already-centered restriction columns, unweighted
+                nx = n_restriction(op)
+                Z = @view cctx.hzz_centered.Zc[:, 1:nx]   # already-centered restriction columns, unweighted
                 winner_pair_cross_hessian_zc_block!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M)
+                zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
             else
+                # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here,
+                # in the (now unreachable in production -- see `check_ties=false` above) dense
+                # fallback -- never at this function's top level.
                 record_dense_cross_hessian_call!()
+                E = @view H[:, 2:1+NCORE]
+                Ews = cctx.Ews
+                @views Ews[:, ncore+1:NCORE] .= E[:, ncore+1:NCORE] .* sqrt.(w)
+                EM = @view Ews[:, ncore+1:NCORE]
                 @views Ews[:, 1:ncore] .= E[:, 1:ncore] .* sqrt.(w)
                 EC = @view Ews[:, 1:ncore]
                 BLAS.gemm!('T', 'N', 1 / M, EC, EM, 0.0, HEM)
-            end
-            @views HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)
-            HMM = @view HEE[ncore+1:NCORE, ncore+1:NCORE]
-            # CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): H_ZZ (task's HMM, mean/
-            # pair x mean/pair) now dispatches to the shared `zc_restriction_gram!`
-            # (zc_restriction_operator.jl) -- computed DIRECTLY from `cctx.hzz_zc_op`'s raw
-            # `Zraw_all`/`Zpairraw_all` feature matrices plus the current outer point's targets
-            # (`cctx.nu_ref[]`, published by `archC_meanzc_base_state`/`_verified_state`,
-            # cm_meanzc_production.jl), NEVER from `EM`/`obj.H` -- unlike HEM just above, which the
-            # winner-aware H_ER phase's own Section 4 release doc explains is fine to source from
-            # `obj.H`'s already-centered Z view. Falls back to the ORIGINAL dense `EM'*EM` gemm
-            # (byte-identical to pre-refactor production) whenever the same guard `_cm_zc_cross_
-            # hessian_wants_winner_bin` already uses for HEM doesn't hold, OR `cctx.hzz_zc_op` was
-            # never built (plain CM/common-Frechet never reach this branch at all).
-            if _cm_zc_wants_direct_hzz(cctx, cf)
-                record_winner_cross_hessian_call!()
-                op = cctx.hzz_zc_op
-                refresh_zc_targets!(cctx.hzz_zc_ws, op, cctx.hzz_zc_layout, cctx.nu_ref[])
-                cctx.hzz_centered = ensure_zc_centered_scratch!(cctx.hzz_centered, op, size(E, 1))
-                refresh_zc_centered!(cctx.hzz_centered, op, cctx.hzz_zc_ws, w)
-                zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
-            else
-                record_dense_cross_hessian_call!()
                 BLAS.gemm!('T', 'N', 1 / M, EM, EM, 0.0, HMM)
             end
+            @views HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)
         end
     else
+        # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
+        E = @view H[:, 2:1+NCORE]
         Ews = cctx.Ews
         @views Ews[:, 1:NCORE] .= E[:, 1:NCORE] .* sqrt.(w)
         BLAS.gemm!('T', 'N', 1 / M, @view(Ews[:, 1:NCORE]), @view(Ews[:, 1:NCORE]), 0.0, HEE)
@@ -847,17 +875,19 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
     refIndex1 = cctx.refIndex1; origins = cctx.origins
 
-    E = @view H[:, 2:1+NCORE]
-
+    # No-moments/no-composite-G task (2026-07-28): `E` is no longer constructed eagerly here --
+    # `_fill_cm_HEE!`/`build_bin_tables!` now construct it lazily, only inside their own
+    # (unreachable-in-production, `:dense_reference`-only) fallback branches, so `H` need not have
+    # `NCORE` economic columns at all on the production `:winner_bin` path.
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
     HEE = @view Hfull[1:NCORE, 1:NCORE]
     cf = cctx.core_cf_ref[]
-    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
+    _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
 
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
     use_direct_hcz = _cm_cross_hessian_wants_direct_hcz(cctx, cf)
-    build_bin_tables!(cctx, E, w; fill_S = !use_winner_bin)
+    build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)
     prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
 
     local wctx, cross_ws, bin_zc_ws
@@ -961,13 +991,50 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     return h
 end
 
-"Same prep step chunked_hessian.jl uses (`_prep_for_hessian!`), duplicated here so this file has no load-order dependency on chunked_hessian.jl."
+"""
+Same prep step chunked_hessian.jl uses (`_prep_for_hessian!`), duplicated here so this file has no
+load-order dependency on chunked_hessian.jl.
+
+No-moments/no-composite-G task (2026-07-28): this dense `H[:,2:1+outer_constr_index]` gemv
+reconstruction of `r` (plus its downstream-unused `Psi!(arg1,arg0)` call) is now the EXPLICIT
+`:dense_reference` fallback only -- every production Hessian callback (flexible-CM, common-Fréchet,
+CM+ZC, ZC-only) calls `operator_hessian_weights.jl::operator_prep_for_hessian!` instead, which
+recomputes `r` via the same dense-G-free operator forward kernels the FG callback already uses (or
+reuses the FG callback's own already-published `obj.arg0` under a strict same-point cache). This
+function is retained, byte-identical, purely for `moment_representation=:dense_reference` reference
+gates -- see docs/SHARED_OPERATOR_DUAL_INDEX_AND_HESSIAN_WEIGHTS_2026-07-28.md.
+"""
 function _archC_prep_for_hessian!(obj, x)
     @unpack H, arg0, arg1, outer_constr_index, Psi! = obj
     BLAS.gemv!('N', 1.0, @view(H[:, 2:1+outer_constr_index]), -x, 0.0, arg0)
     Psi!(arg1, arg0)
+    record_hessian_weight_dense_recompute!()
     return nothing
 end
+
+"""
+    _prep_dual_index_for_archC!(cctx::CMBinHessCtx, obj, x)
+    _prep_dual_index_for_archA!(octx::OriginZCCoreHessCtx, obj, x)
+
+No-moments/no-composite-G task (2026-07-28): the ONE call every `archC_hess_cb_builder`/
+`archA_partitioned_hess_cb_builder` closure makes to obtain `obj.arg0` -- dispatches to the shared
+`operator_prep_for_hessian!(st, x)` (dense-G-free, cached) whenever this context's operator-mode FG
+state is available, else falls back to the retained `_archC_prep_for_hessian!` (explicit
+`:dense_reference` reference path). `cctx.cmlookup_st`/`octx.fg_lookup_st` are the SAME `Any`-typed
+lazily-built state fields the FG-callback side already populates (`CMLookupState`/
+`CMFrechetLookupState`/`CMMeanZCOperatorState` for `cctx`, `OriginZCOperatorState` for `octx`) --
+these closures never construct or own a separate state, purely read what the FG side already built.
+"""
+function _prep_dual_index_for_archC!(cctx::CMBinHessCtx, obj, x)
+    st = cctx.cmlookup_st
+    if st !== nothing && cctx.inner_fg_backend !== :dense_reference
+        operator_prep_for_hessian!(st, x)
+    else
+        _archC_prep_for_hessian!(obj, x)
+    end
+    return nothing
+end
+
 
 # ============================================================================
 # ARCHITECTURE D: matrix-free Hessian-vector-product diagnostic.
@@ -1223,6 +1290,22 @@ function _ensure_originzc_zc_cross_scratch!(octx::OriginZCCoreHessCtx, W::Int, n
 end
 
 """
+    _prep_dual_index_for_archA!(octx::OriginZCCoreHessCtx, obj, x)
+
+No-moments/no-composite-G task (2026-07-28): ZC-only's analogue of
+`_prep_dual_index_for_archC!` -- see that function's docstring above for the full contract.
+"""
+function _prep_dual_index_for_archA!(octx::OriginZCCoreHessCtx, obj, x)
+    st = octx.fg_lookup_st
+    if st !== nothing && octx.fg_backend !== :dense_reference
+        operator_prep_for_hessian!(st, x)
+    else
+        _archC_prep_for_hessian!(obj, x)
+    end
+    return nothing
+end
+
+"""
     archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
 
 Origin-ZC's production hess_cb_builder: partitions the Hessian into
@@ -1237,7 +1320,7 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
         obj = userParams
         xloc = evalRequest.x
         @prof "inner_dual_hessian_callback_archA_partitioned" begin
-            _archC_prep_for_hessian!(obj, xloc)   # same generic prep as Architecture C -- refreshes obj.arg0 from the current dual point, precondition for ddPsi!(arg2,arg0) below
+            _prep_dual_index_for_archA!(octx, obj, xloc)   # refreshes obj.arg0 from the current dual point (operator-cached or dense-fallback), precondition for ddPsi!(arg2,arg0) below
             @unpack H, H_copy, M, arg0, arg2, ddPsi!, ∂∂f_∂∂x = obj
             ddPsi!(arg2, arg0)
             NCORE = octx.NCORE; n_eta_total = octx.n_eta; n = NCORE + n_eta_total
@@ -1252,27 +1335,35 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                 fill_core_hessian_upper!(HEE, arg2, obj, octx.core_ws;
                     backend = octx.core_hessian_backend, workers = octx.core_hessian_workers, storage = octx.core_hessian_storage)
                 if n_eta_total > 0
-                    # Winner-aware H_ER phase (2026-07-27), task Section 5: HC_eta (sqrt(arg2)-
-                    # weighted mean/pair restriction columns) is needed by HRR (H_RR, unconditionally
-                    # dense, out of scope) REGARDLESS of which backend fills HER -- compute it once,
-                    # up front. HC_core (sqrt(arg2)-weighted CORE columns, i.e. the winner-conditioned
-                    # economic columns this whole phase is about NOT reading densely) is only computed
-                    # in the dense HER fallback branch below.
-                    @views H_copy[:, 2+NCORE:1+n] .= H[:, 2+NCORE:1+n]
-                    @views H_copy[:, 2+NCORE:1+n] .*= .√arg2
-                    HC_eta = @view H_copy[:, 2+NCORE:1+n]
                     HER = @view ∂∂f_∂∂x[1:NCORE, NCORE+1:n]
-                    if _originzc_zc_cross_hessian_wants_winner_bin(octx, cf)
+                    zc_ready = octx.zc_cross_hessian_backend === :winner_bin && octx.hzz_zc_op !== nothing
+                    winner_bin_ok = _originzc_zc_cross_hessian_wants_winner_bin(octx, cf)
+                    if winner_bin_ok && zc_ready
+                        # No-moments/no-composite-G task (2026-07-28): `Z` (the "already-centered
+                        # restriction columns") is now sourced from `octx.hzz_centered.Zc` --
+                        # `zc_restriction_operator.jl`'s own docstring confirms this is BIT-IDENTICAL
+                        # to `wrap_moments_with_originzc`'s dense `obj.H` Z columns ("the SAME
+                        # quantity... never read from obj.H"), and it is already independently
+                        # validated (this IS the same scratch H_RR/`zc_restriction_gram!` below
+                        # already uses, gated at D=4/D=20). Refreshed HERE (before H_ER, not after)
+                        # so both H_ER and H_RR share the one computation -- `obj.H`'s restriction
+                        # columns are no longer read anywhere in this callback.
+                        op = octx.hzz_zc_op
+                        refresh_zc_targets!(octx.hzz_zc_ws, op, octx.hzz_zc_layout, octx.nu_ref[])
+                        octx.hzz_centered = ensure_zc_centered_scratch!(octx.hzz_centered, op, size(arg2, 1))
+                        refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2)
                         record_winner_cross_hessian_call!()
                         wctx = serial_ctx(octx.core_ws)
                         octx.zc_cross_scratch = _ensure_originzc_zc_cross_scratch!(octx, wctx.W, n_eta_total)
                         winner_pair_cross_hessian_zc_prep!(octx.zc_cross_scratch, wctx, arg2)
-                        Z = @view H[:, 2+NCORE:1+n]   # already-centered restriction columns, UNweighted
-                        # (winner_pair_cross_hessian_zc_block! applies its own S=arg2 weighting
-                        # internally -- distinct from HC_eta above, which is pre-weighted for HRR's gemm)
+                        nx = n_restriction(op)
+                        Z = @view octx.hzz_centered.Zc[:, 1:nx]   # already-centered restriction columns, UNweighted
                         winner_pair_cross_hessian_zc_block!(HER, wctx, octx.zc_cross_scratch, arg2, Z, M)
                     else
                         record_dense_cross_hessian_call!()
+                        @views H_copy[:, 2+NCORE:1+n] .= H[:, 2+NCORE:1+n]
+                        @views H_copy[:, 2+NCORE:1+n] .*= .√arg2
+                        HC_eta = @view H_copy[:, 2+NCORE:1+n]
                         @views H_copy[:, 2:1+NCORE] .= H[:, 2:1+NCORE]
                         @views H_copy[:, 2:1+NCORE] .*= .√arg2
                         HC_core = @view H_copy[:, 2:1+NCORE]
@@ -1341,7 +1432,7 @@ function archC_hess_cb_builder(cctx::CMBinHessCtx)
             o = userParams
             xloc = evalRequest.x
             @prof "inner_dual_hessian_callback_archC" begin
-                _archC_prep_for_hessian!(o, xloc)
+                _prep_dual_index_for_archC!(cctx, o, xloc)
                 hessian_cm_structured_v2!(evalResult.hess, o, cctx; threaded_bins = true, tls = cctx.tls, use_syrk = true)
             end
             _INNER_CALL_COUNTERS[].n_hess_calls += 1
@@ -1352,7 +1443,7 @@ function archC_hess_cb_builder(cctx::CMBinHessCtx)
         o = userParams
         xloc = evalRequest.x
         @prof "inner_dual_hessian_callback_archC" begin
-            _archC_prep_for_hessian!(o, xloc)
+            _prep_dual_index_for_archC!(cctx, o, xloc)
             hessian_cm_structured!(evalResult.hess, o, cctx)
         end
         _INNER_CALL_COUNTERS[].n_hess_calls += 1

@@ -46,14 +46,14 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
     @assert ncm_level == L "hessian_cm_frechet_structured_v2!: cctx.ncm=$(cctx.ncm) inconsistent with D*L (got ncm_level=$ncm_level, expected L=$L) -- was cctx built from a :common_frechet aug?"
     invsqrtD = 1.0 / sqrt(D)
 
-    E = @view H[:, 2:1+NCORE]
-
+    # No-moments/no-composite-G task (2026-07-28): `E` no longer constructed eagerly -- see the
+    # identical change/rationale in cm_hessian_architectures.jl::hessian_cm_structured!.
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
     cf = cctx.core_cf_ref[]
 
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # UNCHANGED -- shared winner-pair backend; may rebuild cctx.core_ws/core_ws_for for this cf
+    _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # UNCHANGED -- shared winner-pair backend; may rebuild cctx.core_ws/core_ws_for for this cf
 
     # Winner-aware H_ER phase (2026-07-27), Section 3 Part A: SAME decision function as the serial
     # hessian_cm_frechet_structured! (cm_frechet_hessian.jl) and as flexible-CM's own
@@ -61,10 +61,10 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
     if threaded_bins
         tls === nothing && error("hessian_cm_frechet_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
-        build_bin_tables_threaded!(cctx, tls, E, w; fill_S = !use_winner_bin)
+        build_bin_tables_threaded!(cctx, tls, H, w; fill_S = !use_winner_bin)
         prefix_sum_tables_threaded!(cctx; fill_S = !use_winner_bin)
     else
-        build_bin_tables!(cctx, E, w; fill_S = !use_winner_bin)
+        build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)
         prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
     end
 
@@ -159,7 +159,9 @@ function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_tar
             end
         end
     else
+        # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
         record_dense_frechet_g!()
+        E = @view H[:, 2:1+NCORE]
         Esum = Vector{Float64}(undef, NCORE)
         mul!(Esum, E', w)
         @inbounds for l in 1:L

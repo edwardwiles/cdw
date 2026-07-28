@@ -134,6 +134,22 @@ function EconomicFGWorkspace(cf::CompressedFactual)
 end
 
 """
+    compressed_dual_index!(ws::EconomicFGWorkspace, ζ, λ, cf::CompressedFactual) -> ws.q
+
+No-moments/no-composite-G task (2026-07-28): the unrestricted family's own "compute r" step,
+extracted VERBATIM out of `compressed_cc_value_grad!` (no mathematics changed) so it can also be
+called from the shared Hessian-weight prep (`operator_hessian_weights.jl::operator_prep_for_hessian!`,
+via the `dual_index!(st::CompressedCBState, x)` method in compressed_live.jl) -- the SAME "one
+function feeds both FG and Hessian" discipline the 4 restricted families use, per this task's
+explicit preference for a single shared mechanism rather than a bespoke one for restricted families.
+"""
+function compressed_dual_index!(ws::EconomicFGWorkspace, ζ::Real, λ::AbstractVector, cf::CompressedFactual)
+    compressed_dual_contraction!(ws.contr, λ, cf, ws.κ, ws.C)
+    @inbounds @. ws.q = -ζ - ws.contr
+    return ws.q
+end
+
+"""
     compressed_cc_value_grad!(ws, g_λ_out, ζ, λ, cf; Psi!, dPsi!) -> (f, g_ζ)
 
 Addendum Part A remediation (2026-07-26): in-place analogue of `compressed_cc_value_grad`. Writes
@@ -148,8 +164,7 @@ role the allocating original's returned `q` served).
 function compressed_cc_value_grad!(ws::EconomicFGWorkspace, g_λ_out::AbstractVector{Float64},
                                     ζ::Real, λ::AbstractVector, cf::CompressedFactual; Psi!, dPsi!)
     W = cf.W; M = W
-    compressed_dual_contraction!(ws.contr, λ, cf, ws.κ, ws.C)
-    @inbounds @. ws.q = -ζ - ws.contr
+    compressed_dual_index!(ws, ζ, λ, cf)
     Psi!(ws.Psq, ws.q)
     dPsi!(ws.dPsq, ws.q)
     f = sum(ws.Psq) / M + ζ

@@ -201,31 +201,38 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
         warm_label == :neutral ? (RESTRICTED_DUAL_BANK_COUNTERS[].cold_inner_solves += 1) :
                                   (RESTRICTED_DUAL_BANK_COUNTERS[].warm_inner_solves += 1)
     end
-    # skip_cm_fill_ref removal, then REVERTED 2026-07-28 (final-architecture-closure task, Goal 10):
-    # this comment previously claimed "archC_base_state NEVER reads obj.H's CM columns" -- that claim
-    # is FALSE. `archC_hess_cb_builder(cctx)` (passed as `hess_cb_builder` below) calls
-    # `_archC_prep_for_hessian!(o, xloc)` on EVERY Hessian callback (cm_hessian_architectures.jl),
-    # which computes `arg0 = H[:, 2:1+outer_constr_index] * (-x)` via a DENSE BLAS.gemv! --
-    # `outer_constr_index == obj.d` for this family (`build_cm_augmented_obj`'s own
-    # `outer_constr_index_new = obj0.outer_constr_index + ncm`, confirmed by direct read), so this
-    # slice genuinely spans the CM-grid columns, real economic-model dependency, not a leftover
-    # unused read. `arg0` feeds `w = ddPsi!(arg0)`, the per-draw weight vector EVERY block of the
-    # packed Hessian is built from (including the winner_bin H_EE/H_EC blocks, via `_fill_cm_HEE!`/
-    # `build_bin_tables!`'s own `w` argument) -- so leaving the CM columns unfilled corrupts the
-    # ENTIRE Hessian, not just a CM-specific sub-block. A real D=20/W=80,000 re-test
-    # (`cm_skip_retest_d20_perturbed.jl`, calibration + 2 perturbed points, SAME points/seed as
-    # common-Fréchet's own re-test) confirmed this empirically: calibration agreed closely (benign
-    # nStatus 0-vs--103 shift, |Δzeta*|=9.1e-13), but BOTH perturbed points reproduced a real
-    # `nStatus=-400` solve failure with the skip enabled, while the SAME points solved cleanly
-    # (nStatus=0) with the fill left in place -- the exact same failure mode common-Fréchet's own
-    # skip re-test found, for the identical shared-mechanism reason. This family's skip was
-    # PREVIOUSLY REPORTED as fully closed/safe based only on a calibration-point isolated check and
-    # D=4-scale gates -- that was premature; see docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md
-    # for the full corrected record. `skip_fill_safe` is now kept at `false` unconditionally. Do not
-    # re-enable without first fixing `_archC_prep_for_hessian!` itself to not require the dense CM
-    # columns (a genuine architectural change, not a re-test).
+    # skip_cm_fill_ref removal, REVERTED 2026-07-28 pending a fix (Goal 10), RE-ENABLED 2026-07-28
+    # (no-moments/no-composite-G task): Goal 10 correctly found that `archC_hess_cb_builder`'s
+    # Hessian callback called `_archC_prep_for_hessian!(o, xloc)` unconditionally, which recomputes
+    # `arg0` via a DENSE `BLAS.gemv!` over `H[:, 2:1+outer_constr_index]` -- spanning the CM-grid
+    # columns for this family -- so skipping their fill left that gemv reading stale/garbage data,
+    # corrupting the whole Hessian (reproduced empirically, real D=20/W=80,000, 2/2 perturbed points
+    # -> nStatus=-400). Goal 10's own fix instruction: "do not re-enable without first fixing
+    # `_archC_prep_for_hessian!` itself to not require the dense CM columns (a genuine architectural
+    # change, not a re-test)". That architectural change is now done:
+    # `archC_hess_cb_builder`/`archA_partitioned_hess_cb_builder` now call
+    # `_prep_dual_index_for_archC!`/`_prep_dual_index_for_archA!` (cm_hessian_architectures.jl),
+    # which route through `operator_hessian_weights.jl::operator_prep_for_hessian!` -- computing
+    # `arg0` via the SAME dense-G-free `dual_index!`/`economic_forward!`/bin-lookup forward kernels
+    # `CMLookupState`'s own FG callback already uses (never reading `obj.H`'s CM columns), whenever
+    # `cctx.inner_fg_backend != :dense_reference`. Re-validated D=4 and real D=20/W=80,000 via
+    # test_shared_core_hessian_d4_gates.jl / test_d20_restricted_full_hessian_gates.jl (which
+    # exercise this exact skip_fill_safe=true path for flexible-CM).
+    #
+    # A `cctx.core_hessian_backend !== :dense_reference` guard was added live (2026-07-28) then
+    # REMOVED again in the same session: the economic-fill-skip extension it was protecting against
+    # (wrap_moments_with_cm_archB) was itself reverted after causing an unrelated, unexplained H_EE
+    # regression, and with that extension gone, `skip_fill=true` only ever skips the CM-grid columns
+    # (never the economic ones) -- exactly the pre-existing, already-validated behavior this
+    # condition had before today. Isolated empirically: re-adding the guard reproduced the SAME H_EE
+    # mismatch `test_shared_core_hessian_d4_gates.jl` caught, even with the economic-skip extension
+    # fully reverted -- root cause not yet isolated (suspected `core_ws`/`cf`-identity interaction
+    # between the two priming-closure instances sharing `core_cf_ref`, not yet confirmed), so the
+    # guard is left OUT rather than shipped with an unexplained side effect. Not a live production
+    # concern: `core_hessian_backend=:dense_reference` is never set outside this repo's own explicit
+    # comparison gates.
     use_lookup = cctx.inner_fg_backend == :cm_lookup
-    skip_fill_safe = false   # ALWAYS false -- see HISTORY comment above
+    skip_fill_safe = use_lookup && MOMENT_REPRESENTATION[] == :operator && cctx.cm_cross_hessian_backend == :winner_bin
     K, x, nStatus, n_fg, n_hess = use_lookup ?
         inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx),
             skip_fill = skip_fill_safe) :

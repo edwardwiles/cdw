@@ -50,6 +50,7 @@ isdefined(Main, :fill_core_hessian_upper!) || include(joinpath(@__DIR__, "core_e
 # already attached a `ctx.cf_workspace` -- see ALLOCATING_COMPRESSED_FACTUAL_CALLSITE_AUDIT_2026-07-27.md).
 isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))
 isdefined(Main, :verify_inner_solution_operator_unrestricted!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): evaluate_fullA_fast_compressed's :operator verification backend below
+isdefined(Main, :HessianWeightCache) || include(joinpath(@__DIR__, "operator_hessian_weights.jl"))   # no-moments/no-composite-G task (2026-07-28): shared cache/prep, see below
 
 "Resolved backend/workers/storage for the UNRESTRICTED family's core Hessian -- read by `_callbackEvalH_inner_compressed!` and by `resolve_unrestricted_manifest` so the two can never silently diverge. Production default is the validated destination-pair-owned parallel kernel; set to :dense_reference for anti-regression / emergency-revert comparisons (see task §5). Worker count defaults via `resolve_core_hessian_workers_default()` (2026-07-25 final gate): 20 when >=20 Julia threads are available (measured 13-20% faster than 10, not a tie), else 10, else the bounded available count."
 const UNRESTRICTED_CORE_HESSIAN_BACKEND = Ref{Symbol}(:exact_winner_pair_parallel)
@@ -160,11 +161,40 @@ mutable struct CompressedCBState
     # _callbackEvalFG_inner_compressed! (compressed_cc_value_grad!) -- eliminates the per-FG-callback
     # allocations compressed_cc_value_grad used to incur. Built once per inner solve (same lifecycle
     # as `cf`, sized from it), not per callback.
+    # No-moments/no-composite-G task (2026-07-28): same-point cache for the shared Hessian-weight
+    # prep (operator_hessian_weights.jl) -- unrestricted now goes through the EXACT same
+    # `operator_prep_for_hessian!`/`dual_index!` mechanism as the 4 restricted families (previously
+    # it unconditionally trusted `obj.arg0` with no same-point check at all; this is a strictly
+    # stronger guarantee, not a behavior change on any already-passing gate).
+    hw_cache::HessianWeightCache
 end
 
 "Backward-compatible outer constructor for the 4 existing call sites that predate the shared core-Hessian workspace field (compressed_live.jl/compressed_live_v2.jl/fast_range_screen.jl/infeasibility_screen.jl/compressed_inner_alt_solvers.jl) -- none of them need to change."
 CompressedCBState(obj, cf::CompressedFactual, grav_raw::Float64, dense_materialized::Bool) =
-    CompressedCBState(obj, cf, grav_raw, dense_materialized, nothing, EconomicFGWorkspace(cf))
+    CompressedCBState(obj, cf, grav_raw, dense_materialized, nothing, EconomicFGWorkspace(cf),
+                       HessianWeightCache(1 + obj.outer_constr_index))   # x = [ζ; λ], length(λ) == outer_constr_index (same convention _archC_prep_for_hessian!'s H[:,2:1+outer_constr_index] slice uses)
+
+# No-moments/no-composite-G task (2026-07-28): unrestricted's own dispatched accessors for the
+# shared operator_hessian_weights.jl mechanism -- `st.fg_ws.q` is unrestricted's equivalent of the
+# 4 restricted families' `st.arg0`, and `st.cf` (held directly, not behind a `Ref{Any}`) is its
+# equivalent of their `core_cf_ref[]`.
+_r_buffer(st::CompressedCBState) = st.fg_ws.q
+_cf_identity(st::CompressedCBState) = st.cf
+
+"""
+    dual_index!(st::CompressedCBState, x) -> st.fg_ws.q
+
+Computes `st.fg_ws.q = r = -ζ·1 - E·λ` in place via the shared `compressed_dual_index!`
+(compressed_cc_inner.jl) -- the SAME primitive `compressed_cc_value_grad!` (the FG callback) calls,
+so FG and the Hessian-weight prep (operator_hessian_weights.jl::operator_prep_for_hessian!) run the
+identical code path.
+"""
+function dual_index!(st::CompressedCBState, x::AbstractVector{Float64})
+    ζ = x[1]
+    λ = @view x[2:end]
+    compressed_dual_index!(st.fg_ws, ζ, λ, st.cf)
+    return st.fg_ws.q
+end
 
 """
     _callbackEvalFG_inner_compressed!
@@ -193,6 +223,7 @@ function _callbackEvalFG_inner_compressed!(kc, cb, evalRequest, evalResult, user
         evalResult.obj[1] = f <= obj.lower_limit ? -KNITRO.KN_INFINITY : f
         evalResult.objGrad[1] = g_ζ
         obj.arg0 .= st.fg_ws.q
+        _publish_dual_index_cache!(st, x)   # no-moments/no-composite-G task (2026-07-28): let a same-point Hessian call reuse this r
     end
     _INNER_CALL_COUNTERS[].n_fg_calls += 1
     return 0
@@ -237,6 +268,16 @@ function _callbackEvalH_inner_compressed!(kc, cb, evalRequest, evalResult, userP
             CS.hessian!(evalResult.hess, obj)
             record_core_hessian_call!(:dense_reference; fallback_reason = :debug_reference_requested)
         else
+            # No-moments/no-composite-G task (2026-07-28): route through the SAME shared
+            # operator_prep_for_hessian!/HessianWeightCache mechanism the 4 restricted families use,
+            # instead of unconditionally trusting `obj.arg0` with no same-point check at all (the
+            # prior behavior here) -- one function, used everywhere it conceptually applies, per this
+            # task's explicit design preference. On the common case (KNITRO's Hessian call
+            # immediately follows its FG call at the same point) this is a cache hit, zero extra
+            # work; on any other point it recomputes `r` via `dual_index!(st, x)` (the same
+            # `compressed_dual_index!` primitive the FG callback itself calls), never a dense `obj.H`
+            # read either way.
+            operator_prep_for_hessian!(st, evalRequest.x)
             if st.core_ws === nothing
                 st.core_ws = build_core_exact_hessian_workspace(st.cf)
                 record_compressed_core_rebuild!()
@@ -339,7 +380,12 @@ function inner_loop_internal_compressed(obj, θ_full, ctx)
     # whenever ctx.cf_workspace is attached (bit-identical output either way -- same guarantee
     # build_compressed_factual!'s docstring establishes), and falls back to the allocating builder
     # unchanged for any ctx that never attached one (no regression for non-production callers).
-    cf = @prof "inner_moment_build_compressed" build_economic_moment_state!(θ_full, ctx; check_ties = true)   # may throw TiedWinnerError
+    # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
+    # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB. The winner
+    # (argmin) assignment itself is computed unconditionally regardless of this flag; disabling the
+    # check just means a literal machine-precision tie no longer throws/falls back to the entire
+    # dense evaluate_fullA_fast for that point.
+    cf = @prof "inner_moment_build_compressed" build_economic_moment_state!(θ_full, ctx; check_ties = false)
 
     W = size(obj.U, 1)
     SW = ctx.γ.SamplingWeights[1:W]
@@ -426,18 +472,11 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
 
     local K_hard, inner_x, nStatus, n_fg, n_hess, st
     t_inner0 = time()
-    try
-        K_hard, inner_x, nStatus, n_fg, n_hess, st = inner_loop_internal_compressed(obj, θ_full, ctx)
-    catch e
-        if e isa TiedWinnerError
-            COMPRESSED_FALLBACK_COUNT[] += 1
-            @warn "compressed mode: exact price tie detected, falling back to dense for this point" n_tied_pairs=e.n_tied_pairs examples=e.examples fallback_count=COMPRESSED_FALLBACK_COUNT[] x_free_hash=hash(round.(collect(x_free), digits = 12))
-            return evaluate_fullA_fast(x_free, ctx; cache = cache, use_cache = use_cache,
-                                        mode = mode, warm = warm, tag = tag, moment_representation = :dense)
-        else
-            rethrow()
-        end
-    end
+    # No-moments/no-composite-G task (2026-07-28): the TiedWinnerError-catch-and-redispatch-to-
+    # dense fallback this try/catch used to serve is now unreachable -- `inner_loop_internal_
+    # compressed` builds its `cf` with `check_ties=false` (above), so a literal price tie no longer
+    # throws here at all (the winner/argmin is still assigned deterministically either way).
+    K_hard, inner_x, nStatus, n_fg, n_hess, st = inner_loop_internal_compressed(obj, θ_full, ctx)
     t_inner = time() - t_inner0
 
     inner_iters = try

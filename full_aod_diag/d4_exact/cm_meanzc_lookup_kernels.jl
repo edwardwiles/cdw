@@ -28,6 +28,7 @@
 isdefined(Main, :economic_forward!) || include(joinpath(@__DIR__, "economic_operator.jl"))
 isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
 isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))
+isdefined(Main, :HessianWeightCache) || include(joinpath(@__DIR__, "operator_hessian_weights.jl"))
 
 """
     CMMeanZCOperatorState
@@ -69,6 +70,9 @@ mutable struct CMMeanZCOperatorState
     econ_buf::Vector{Float64}
     n_fg_calls::Int
     n_dense_econ_fallback::Int
+    # No-moments/no-composite-G task (2026-07-28): same-point cache for the Hessian-weight prep
+    # (operator_hessian_weights.jl) -- see that file's own docstring for the full contract.
+    hw_cache::HessianWeightCache
 end
 
 function CMMeanZCOperatorState(obj, ncore1::Int, zc_op::ZCRestrictionOperator, zc_layout, core_cf_ref::Ref{Any},
@@ -80,23 +84,23 @@ function CMMeanZCOperatorState(obj, ncore1::Int, zc_op::ZCRestrictionOperator, z
     D_bins = size(bins, 2)
     nt = max(1, min(nthreads_use, W_))
     hist_partials = [zeros(D_bins, nbins) for _ in 1:nt]
+    n_x = 1 + ncore1 + n_mean(zc_op) + n_pair(zc_op) + ncm
     CMMeanZCOperatorState(obj, ncore1, zc_op, zc_layout, core_cf_ref, nothing, nothing, ZCRestrictionWorkspace(zc_op),
         ncm, L, nO, origins, refIndex1, bins, R, nbins, nthreads_use,
         zeros(nO, L + 1), zeros(W_), zeros(nO, L), hist_partials, zeros(D_bins, nbins), zeros(D_bins, L),
         zeros(nO, L), zeros(nO, L),
-        zeros(W_), zeros(W_), zeros(W_), 0, 0)
+        zeros(W_), zeros(W_), zeros(W_), 0, 0,
+        HessianWeightCache(n_x))
 end
 
-"Call ONCE per inner solve: refresh Z-block targets for the current outer point's ν, reset counters."
-function reset_for_solve!(st::CMMeanZCOperatorState, νs::AbstractVector{Float64})
-    refresh_zc_targets!(st.zc_ws, st.zc_op, st.zc_layout, νs)
-    st.n_fg_calls = 0
-    return st
-end
+"""
+    dual_index!(st::CMMeanZCOperatorState, x) -> st.arg0
 
-function (st::CMMeanZCOperatorState)(x::AbstractVector{Float64}, g::AbstractVector{Float64} = Float64[])
+Computes `st.arg0 = r = -ζ·1 - E·λ_E - Z(mean,pair)·λ - cm_contribution` in place -- extracted
+VERBATIM from this state's own FG functor (no mathematics changed).
+"""
+function dual_index!(st::CMMeanZCOperatorState, x::AbstractVector{Float64})
     obj = st.obj
-    M = length(st.arg0)
     ncore1 = st.ncore1
     op = st.zc_op
 
@@ -125,12 +129,35 @@ function (st::CMMeanZCOperatorState)(x::AbstractVector{Float64}, g::AbstractVect
 
     restriction_forward!(st.arg0, λ_mean, λ_pair, op, st.zc_ws)
 
-    # CM-grid block (reuses cm_lookup_kernels.jl's own suffix-sum forward, unchanged)
     λmat_stored = reshape(λ_cm, st.nO, st.L)
     apply_contrast!(st.λmat_block, λmat_stored, st.R)
     suffix_sums!(st.λmat_ext, st.λmat_block)
     cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
     st.arg0 .-= st.cm_contrib
+    return st.arg0
+end
+
+"Call ONCE per inner solve: refresh Z-block targets for the current outer point's ν, reset counters."
+function reset_for_solve!(st::CMMeanZCOperatorState, νs::AbstractVector{Float64})
+    refresh_zc_targets!(st.zc_ws, st.zc_op, st.zc_layout, νs)
+    st.n_fg_calls = 0
+    return st
+end
+
+function (st::CMMeanZCOperatorState)(x::AbstractVector{Float64}, g::AbstractVector{Float64} = Float64[])
+    obj = st.obj
+    M = length(st.arg0)
+    ncore1 = st.ncore1
+    op = st.zc_op
+
+    ζ = x[1]
+    λ_E = @view x[2:1+ncore1]
+
+    # No-moments/no-composite-G task (2026-07-28): forward computation extracted into the shared
+    # `dual_index!(st, x)` (this file, above) -- see CMLookupState's own functor for the identical
+    # rationale.
+    cf = st.core_cf_ref[]
+    dual_index!(st, x)
 
     obj.Psi!(st.arg1, st.arg0)
     f = sum(st.arg1) / M + ζ
@@ -157,6 +184,7 @@ function (st::CMMeanZCOperatorState)(x::AbstractVector{Float64}, g::AbstractVect
     end
 
     obj.arg0 .= st.arg0
+    _publish_dual_index_cache!(st, x)   # let a same-point Hessian call reuse this r instead of recomputing
     st.n_fg_calls += 1
     return f
 end

@@ -245,18 +245,20 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
         end
         Gtmp = Gtmp_cache[]
         if use_compressed_core
-            try
-                cf = cf_build(θ, ctx; check_ties = true)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-                materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
-                grav_raw = compressed_gravity_raw(θ, ctx)
-                fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
-                fill_K_directgp!(K, θ, ctx)
-                core_cf_ref[] = cf
-            catch e
-                e isa TiedWinnerError || rethrow()
-                core_moments!(K, Gtmp, θ, U, obj)
-                core_cf_ref[] = :tied_winner
-            end
+            # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
+            # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB.
+            cf = cf_build(θ, ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
+            materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
+            grav_raw = compressed_gravity_raw(θ, ctx)
+            fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
+            fill_K_directgp!(K, θ, ctx)
+            core_cf_ref[] = cf
+            # No-moments/no-composite-G task (2026-07-28): a live attempt to also gate this dense
+            # economic fill behind `!skip_fill` was REVERTED after an unexplained regression was
+            # caught in the flexible-CM analogue (test_shared_core_hessian_d4_gates.jl, H_EE
+            # mismatch) -- see cm_hessian_architectures.jl::wrap_moments_with_cm_archB's identical
+            # note. Not attempted further here since common-Fréchet's own `skip_fill_safe` isn't
+            # re-enabled in production anyway (separate, deliberately out-of-scope item).
         else
             core_moments!(K, Gtmp, θ, U, obj)
             core_cf_ref[] = :compressed_state_unavailable
@@ -300,6 +302,21 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
                                               probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                               use_compressed_core::Bool = true,
                                               cm_hessian_backend::Symbol = :dense_reference,
+                                              # No-moments/no-composite-G task (2026-07-28): was
+                                              # unconditionally hardcoded `false` below with no
+                                              # override -- meaning every real production run took
+                                              # the SERIAL `hessian_cm_frechet_structured!` branch
+                                              # despite `archC_frechet_hess_cb_builder`'s own comments
+                                              # (and `build_cm_bin_ctx`'s own default of `true`)
+                                              # describing the threaded branch as "the production
+                                              # default". The threaded variant
+                                              # (`hessian_cm_frechet_structured_v2!`) is independently
+                                              # validated against the serial one at real D=20/W=80,000
+                                              # (`test_cm_frechet_threaded_hessian_gates.jl`, PASS per
+                                              # docs/COMMON_FRECHET_WINNER_AWARE_HER_RELEASE_2026-07-27.md)
+                                              # -- default flipped to `true` here to match flexible-CM's
+                                              # own default and actually deliver the documented speedup.
+                                              threaded_bins::Bool = true,
                                               inner_fg_backend::Symbol = CM_FRECHET_INNER_FG_BACKEND_DEFAULT[],   # Phase
                                               # 5.2 remediation (2026-07-26): :dense_reference (default
                                               # until gated) | :cm_frechet_lookup (cm_frechet_lookup_
@@ -362,7 +379,7 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
         # archC_frechet_verified_state (cm_frechet_cplus.jl) never read cctx.inner_fg_backend at all;
         # those two functions now dispatch on it, mirroring plain-CM's archC_base_state/
         # archC_verified_state exactly.
-        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = false, inner_fg_backend = inner_fg_backend,
+        cctx = build_cm_bin_ctx(ctx, aug; threaded_bins = threaded_bins, inner_fg_backend = inner_fg_backend,
             cm_cross_hessian_backend = cm_cross_hessian_backend)
         hess_cb_builder = _obj -> archC_frechet_hess_cb_builder(cctx, aug.level_targets)
         aug = merge(aug, (cctx = cctx,))

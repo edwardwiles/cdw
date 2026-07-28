@@ -57,9 +57,9 @@ loop -- the only per-thread read of `E` -- mirroring the serial `build_bin_table
 kwarg exactly, so the production default (`use_threaded_bins=true`) gets the SAME
 no-dense-economic-column-read property when the `:winner_bin` cross-Hessian backend is active.
 """
-function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, E::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
+function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
     D = cctx.D; NCORE = cctx.NCORE; Bidx = cctx.Bidx
-    W = size(E, 1)
+    W = length(w)
     nt = Threads.nthreads()
 
     for t in 1:nt
@@ -68,6 +68,8 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, E::Abstrac
     end
 
     if fill_S
+        # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
+        E = @view H[:, 2:1+NCORE]
         Threads.@threads :static for tid in 1:nt
             lo = 1 + div((tid - 1) * W, nt)
             hi = div(tid * W, nt)
@@ -167,8 +169,8 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
     refIndex1 = cctx.refIndex1; origins = cctx.origins
 
-    E = @view H[:, 2:1+NCORE]
-
+    # No-moments/no-composite-G task (2026-07-28): `E` no longer constructed eagerly -- see the
+    # identical change/rationale in cm_hessian_architectures.jl::hessian_cm_structured!.
     Hfull = cctx.Hfull
     fill!(Hfull, 0.0)
     cf = cctx.core_cf_ref[]
@@ -187,7 +189,7 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     # uses `gemm!`) -- kept as a no-op parameter rather than a breaking signature change for
     # existing callers.
     HEE = @view Hfull[1:NCORE, 1:NCORE]
-    _fill_cm_HEE!(HEE, w, obj, cctx, E, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
+    _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
 
     # winner-aware H_ER phase (2026-07-27): SAME decision function as the serial
     # hessian_cm_structured! (cm_hessian_architectures.jl), reused not re-derived -- see that
@@ -195,10 +197,10 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
     if threaded_bins
         tls === nothing && error("hessian_cm_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
-        build_bin_tables_threaded!(cctx, tls, E, w; fill_S = !use_winner_bin)
+        build_bin_tables_threaded!(cctx, tls, H, w; fill_S = !use_winner_bin)
         prefix_sum_tables_threaded!(cctx; fill_S = !use_winner_bin)
     else
-        build_bin_tables!(cctx, E, w; fill_S = !use_winner_bin)
+        build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)
         prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
     end
 
