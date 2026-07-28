@@ -147,3 +147,103 @@ function restriction_transpose!(g_mean::AbstractVector{Float64}, g_pair::Abstrac
     end
     return g_mean, g_pair
 end
+
+# ================================================================================================
+# CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): shared H_ZZ = (1/M) Z' diag(S) Z
+# primitive, computed DIRECTLY from this operator's own raw feature matrices (`Zraw_all`/
+# `Zpairraw_all`) plus the current outer point's targets (`ZCRestrictionWorkspace`, already
+# refreshed via `refresh_zc_targets!` above) -- NEVER from a dense `obj.H` column view, unlike the
+# already-existing `winner_pair_cross_hessian_zc_block!` (H_EZ/H_ER), which the task brief's own
+# Section 4/5 release doc explains is fine to read from `obj.H` (a cheap, always-populated,
+# already-centered column) but which this NEW block deliberately avoids anyway, per this phase's
+# explicit "raw/reusable ZC feature state, not composite-matrix columns" requirement -- the point
+# being architectural decoupling from `obj.H`'s column layout/fill discipline, not eliminating a
+# real cost (the recompute below costs O(W*n_restriction) extra, negligible next to the O(W*D*n_x)
+# terms elsewhere in the same Hessian callback).
+#
+# ONE routine, shared by BOTH CM+ZC (`cm_hessian_architectures.jl::_fill_cm_HEE!`'s widened HMM
+# block) and origin-ZC (`archA_partitioned_hess_cb_builder`'s HRR block) -- task's explicit
+# "write this ONE routine so it is literally shared/called by both" requirement.
+# ================================================================================================
+
+"""
+    ZCCenteredScratch
+
+Persistent `(W, max_nx)`-sized scratch, shared by the H_ZZ gram routine below and CM+ZC's own
+H_CZ bin-cross primitive (`bin_zc_cross_hessian_fill!`, `winner_pair_cross_hessian.jl`): `Zc[w,j]`
+= the centered mean/pair restriction feature value for restriction column `j`
+(`= Φ[w,j] - t[j]`, the SAME quantity `wrap_moments_with_cm_meanzc`/`wrap_moments_with_originzc`
+write into `obj.H`'s Z columns -- recomputed HERE directly from `op.Zraw_all`/`op.Zpairraw_all` +
+`ws.targets_mean`/`ws.targets_pair`, never read from `obj.H`), `ZcS[w,j] = S[w]*Zc[w,j]` (the
+CURRENT Hessian callback's weighted copy). Built once (campaign-lifetime, keyed on `(W,max_nx)`),
+refreshed every Hessian callback via `refresh_zc_centered!` (cheap: O(W*n_restriction), no
+allocation once sized).
+"""
+mutable struct ZCCenteredScratch
+    W::Int
+    max_nx::Int
+    Zc::Matrix{Float64}
+    ZcS::Matrix{Float64}
+end
+ZCCenteredScratch(W::Int, max_nx::Int) = ZCCenteredScratch(W, max_nx, zeros(W, max_nx), zeros(W, max_nx))
+
+"""
+    ensure_zc_centered_scratch!(cs, op::ZCRestrictionOperator, W) -> ZCCenteredScratch
+
+`cs` is the caller's own current `Union{Nothing,ZCCenteredScratch}` field value; rebuilds only on a
+genuine `(W, n_restriction(op))` size change (campaign-lifetime constant in practice), mirroring
+this file's own `ensure_*_scratch!`-adjacent idiom used throughout `winner_pair_cross_hessian.jl`.
+"""
+function ensure_zc_centered_scratch!(cs::Union{Nothing,ZCCenteredScratch}, op::ZCRestrictionOperator, W::Int)
+    nx = n_restriction(op)
+    if cs === nothing || cs.W != W || cs.max_nx < nx
+        return ZCCenteredScratch(W, nx)
+    end
+    return cs
+end
+
+"""
+    refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace, S) -> cs
+
+Refresh `cs.Zc`/`cs.ZcS` (`W x n_restriction(op)` views) directly from `op.Zraw_all`/
+`op.Zpairraw_all` and the CURRENT outer point's targets in `ws` (already refreshed via
+`refresh_zc_targets!` for this inner solve's ν -- caller's responsibility, not redone here) and the
+CURRENT Hessian callback's weights `S` (length `W`, `obj.arg2` after `ddPsi!`). Call once per
+Hessian callback, before `zc_restriction_gram!`/CM+ZC's `bin_zc_cross_hessian_fill!`.
+"""
+function refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace, S::AbstractVector{Float64})
+    D = op.D; npair = op.npair
+    nx = n_restriction(op)
+    Zc = @view cs.Zc[:, 1:nx]
+    @inbounds for k in 1:op.K_mean
+        cols = (k-1)*D+1 : k*D
+        @views Zc[:, cols] .= op.Zraw_all[k] .- ws.targets_mean[:, k]'
+    end
+    off = op.K_mean * D
+    @inbounds for k in 1:op.K_pair
+        cols = off+(k-1)*npair+1 : off+k*npair
+        @views Zc[:, cols] .= op.Zpairraw_all[k] .- ws.targets_pair[:, k]'
+    end
+    ZcS = @view cs.ZcS[:, 1:nx]
+    @views ZcS .= Zc .* S
+    return cs
+end
+
+"""
+    zc_restriction_gram!(HZZ, cs::ZCCenteredScratch, op::ZCRestrictionOperator, M) -> HZZ
+
+Shared H_ZZ = (1/M) Z' diag(S) Z primitive -- called by BOTH CM+ZC (`_fill_cm_HEE!`'s widened HMM
+block) and origin-ZC (`archA_partitioned_hess_cb_builder`'s HRR block). Small dense BLAS gemm
+(`n_restriction(op) x n_restriction(op)`, always modest -- production K_mean=1/K_pair=1 configs
+are at most a few hundred wide) on the already-centered, already-S-weighted scratch
+`refresh_zc_centered!` just built. Requires `refresh_zc_centered!` to have been called this SAME
+Hessian callback against the SAME `cs`.
+"""
+function zc_restriction_gram!(HZZ::AbstractMatrix{Float64}, cs::ZCCenteredScratch, op::ZCRestrictionOperator, M::Real)
+    nx = n_restriction(op)
+    size(HZZ) == (nx, nx) || error("zc_restriction_gram!: size(HZZ)=$(size(HZZ)) != ($nx, $nx)")
+    Zc = @view cs.Zc[:, 1:nx]
+    ZcS = @view cs.ZcS[:, 1:nx]
+    BLAS.gemm!('T', 'N', 1.0 / M, Zc, ZcS, 0.0, HZZ)
+    return HZZ
+end

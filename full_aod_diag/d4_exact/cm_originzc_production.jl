@@ -78,6 +78,10 @@ function archOZ_base_state(x_free0::AbstractVector, νfull::AbstractVector{Float
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νfull)
+    # CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): publish the CURRENT νfull into
+    # octx.nu_ref for the Hessian callback's shared H_ZZ primitive to read (mirrors core_cf_ref's
+    # own "wrapper publishes, callback reads" pattern). Must happen BEFORE the inner solve.
+    hasproperty(ctx_cm, :octx) && (ctx_cm.octx.nu_ref[] = collect(νfull))
     K, x, nStatus, n_fg, n_hess = _originzc_fg_dispatch(ctx_cm, obj, θ_ext0)
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archOZ_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νfull)"))
     ζstar = x[1]; λstar = collect(x[2:end])
@@ -96,6 +100,7 @@ function archOZ_verified_state(x_free0::AbstractVector, νfull::AbstractVector{F
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νfull)
+    hasproperty(ctx_cm, :octx) && (ctx_cm.octx.nu_ref[] = collect(νfull))   # see archOZ_base_state's identical comment
     warm_label = :unset
     if dual_bank !== nothing
         x0, warm_label, _ = select_warm_start_restricted(dual_bank, obj, vcat(collect(x_free0), νfull))

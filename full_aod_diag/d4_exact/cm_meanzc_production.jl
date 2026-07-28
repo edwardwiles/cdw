@@ -48,11 +48,15 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         core_hessian_backend::Symbol = CM_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = CM_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = CM_CORE_HESSIAN_STORAGE_DEFAULT[],
         inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
-        cm_cross_hessian_backend::Symbol = :dense_reference,   # CM+ZC's OWN CM-grid block (task Section 4's
-        # "does enabling :winner_bin for the CM-grid block become safe now" question) -- see
-        # _cm_cross_hessian_wants_winner_bin's own doc for why this stays :dense_reference by
-        # default even after Section 4's own zc_cross_hessian_backend flips (investigated, not
-        # enabled by default -- see CM_MEANZC_WINNER_AWARE_HER_RELEASE_2026-07-27.md).
+        cm_cross_hessian_backend::Symbol = CM_MEANZC_CM_CROSS_HESSIAN_BACKEND_DEFAULT[],   # CM+ZC's OWN
+        # CM-grid block (task Section 4's "does enabling :winner_bin for the CM-grid block become
+        # safe now" question). CM_MEANZC_WINNER_AWARE_HER_RELEASE_2026-07-27.md's own "Investigation"
+        # section left this :dense_reference-only because relaxing _cm_cross_hessian_wants_winner_bin's
+        # old ncore_core==NCORE guard was unsafe without a genuinely new CM-grid-vs-Z cross primitive
+        # to cover the widened rows -- CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27)
+        # fills exactly that gap (bin_zc_cross_hessian_fill!/_block!, winner_pair_cross_hessian.jl),
+        # so this now defaults to CM_MEANZC_CM_CROSS_HESSIAN_BACKEND_DEFAULT[] (:winner_bin, flipped
+        # after this session's own D=4 + real D=20 gates -- see that Ref's own docstring).
         zc_cross_hessian_backend::Symbol = CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])   # winner-aware H_ER
         # phase (2026-07-27), task Section 4: which backend fills H_EM (core x mean/pair cross),
         # cm_hessian_architectures.jl's _fill_cm_HEE! ncore<NCORE branch. :dense_reference (default
@@ -82,6 +86,13 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
     meanzc_zc_op = inner_fg_backend === :operator ? ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D) : nothing
     meanzc_zc_layout = inner_fg_backend === :operator ? SharedByPowerLayout(aug.K_mean, aug.K_pair) : nothing
+    # CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): DEDICATED raw-ZC-feature state
+    # for the NEW direct H_CZ/H_ZZ Hessian primitives, built ALWAYS (independent of
+    # inner_fg_backend, unlike `meanzc_zc_op`/`meanzc_zc_layout` above -- see CMBinHessCtx's own
+    # `hzz_zc_op` field docstring for why this is a separate object, not a repurposing of those).
+    hzz_zc_op = ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D)
+    hzz_zc_layout = SharedByPowerLayout(aug.K_mean, aug.K_pair)
+    hzz_zc_ws = ZCRestrictionWorkspace(hzz_zc_op)
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE_ext, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE_ext, L1), zeros(D, D, L, L), zeros(D, NCORE_ext, L),
         Matrix{Float64}(undef, W, NCORE_ext), Matrix{Float64}(undef, NCORE_ext + ncm, NCORE_ext + ncm),
@@ -97,7 +108,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         # inert Ref purely so every CMBinHessCtx has a uniformly non-nothing field.
         meanzc_zc_op, meanzc_zc_layout,
         cm_cross_hessian_backend, nothing,
-        zc_cross_hessian_backend, nothing)
+        zc_cross_hessian_backend, nothing,
+        hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing, nothing)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -145,6 +157,12 @@ function archC_meanzc_base_state(x_free0::AbstractVector, νvec::AbstractVector{
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νvec)
+    # CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): publish the CURRENT νvec into
+    # cctx.nu_ref for the Hessian callback's shared H_ZZ/H_CZ primitives to read (mirrors
+    # core_cf_ref's own "wrapper publishes, callback reads" pattern -- explicit here since this
+    # function already owns νvec directly). Must happen BEFORE the inner solve (KNITRO's Hessian
+    # callback may fire during it).
+    cctx.nu_ref[] = collect(νvec)
     K, x, nStatus, n_fg, n_hess = _meanzc_fg_dispatch(cctx, obj, θ_ext0)
     nStatus in (0, -100, -101, -103) || throw(CMExpectedSolveFailure("archC_meanzc_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0, ν=$νvec)"))
     ζstar = x[1]; λstar = collect(x[2:end])
@@ -166,6 +184,7 @@ function archC_meanzc_verified_state(x_free0::AbstractVector, νvec::AbstractVec
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     θ_ext0 = vcat(θ_econ0, νvec)
+    cctx.nu_ref[] = collect(νvec)   # see archC_meanzc_base_state's identical comment
     warm_label = :unset
     if dual_bank !== nothing
         x0, warm_label, _ = select_warm_start_restricted(dual_bank, obj, vcat(collect(x_free0), νvec))

@@ -202,12 +202,23 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
         prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
     end
 
-    local wctx, cross_ws
+    use_direct_hcz = _cm_cross_hessian_wants_direct_hcz(cctx, cf)
+    local wctx, cross_ws, bin_zc_ws
     if use_winner_bin
         record_winner_cross_hessian_call!()
         wctx = serial_ctx(cctx.core_ws)
         cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
         winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+        if use_direct_hcz
+            # CM+ZC E/C/Z block-partition + H_CZ release (2026-07-27): SAME pairing as the serial
+            # hessian_cm_structured! (cm_hessian_architectures.jl) -- see that file's own comment.
+            # `cctx.hzz_centered` was already refreshed this callback by `_fill_cm_HEE!` (H_ZZ, above).
+            record_winner_cross_hessian_call!()
+            nz = n_restriction(cctx.hzz_zc_op)
+            bin_zc_ws = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz)
+            cctx.bin_zc_cross = bin_zc_ws
+            bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
+        end
     else
         record_dense_cross_hessian_call!()
     end
@@ -223,9 +234,15 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
     # a confound from one side having stale unfixed allocation the other doesn't.
     CS_ = cctx.CScum
     Hraw_EC = cctx.Hraw_EC
+    ncore_core = cctx.ncore_core
     @inbounds for l in 1:L
         if use_winner_bin
-            winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, cross_ws, l, origins, refIndex1, M)
+            Hraw_EC_core = use_direct_hcz ? (@view Hraw_EC[1:ncore_core, :]) : Hraw_EC
+            winner_pair_cross_hessian_cm_block!(Hraw_EC_core, wctx, cross_ws, l, origins, refIndex1, M)
+            if use_direct_hcz
+                Hraw_EC_z = @view Hraw_EC[ncore_core+1:NCORE, :]
+                bin_zc_cross_hessian_block!(Hraw_EC_z, bin_zc_ws, l, origins, refIndex1, M)
+            end
         else
             for (oi, o) in enumerate(origins)
                 for j in 1:NCORE
