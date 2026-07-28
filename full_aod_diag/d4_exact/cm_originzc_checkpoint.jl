@@ -19,6 +19,7 @@ using LinearAlgebra: BLAS
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3/§7
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26)
+isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
 # Bumped 4 -> 5 (origin-specific-ZC integration, 2026-07-23): adds
@@ -460,6 +461,10 @@ dimension is small and fixed-size (no CM threshold grid to structure), not becau
 dense.
 """
 function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
+        find_smallest::Bool = true,   # 2026-07-28 lower-direction wiring: true="upper" (minimize gp,
+        # the real larger-kappa branch), false="lower" (maximize gp) -- see direction_bounds.jl's own
+        # audit for the evidenced find_smallest<->upper/lower mapping. Default true preserves every
+        # pre-existing caller's exact behavior byte-for-byte.
         W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
@@ -531,10 +536,17 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     K_mean_r, K_pair_r = originzc_resolve_K(cfg)   # raises on any config inconsistency
 
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint_v10(resume_from)
-    find_smallest = true
     backend_switched = false
 
     if resumed !== nothing
+        # 2026-07-28 lower-direction wiring: direction is a more fundamental identity than any of
+        # the backend/config checks below -- refuse outright on mismatch, no override (matches this
+        # function's own established no-escape-hatch discipline for the other structural fields).
+        resumed.find_smallest == find_smallest ||
+            error("run_originzc_upper_checkpointed($label): direction MISMATCH on resume -- checkpoint " *
+                  "was written with find_smallest=$(resumed.find_smallest) (branch=:$(resumed.branch)), " *
+                  "this call requests find_smallest=$find_smallest -- refusing to silently resume a " *
+                  "different upper/lower direction under the same checkpoint.")
         (resumed.distribution_restriction == distribution_restriction && resumed.origin_K_mean == K_mean_r &&
          resumed.origin_K_pair == K_pair_r && resumed.power_target_layout == power_target_layout) ||
             error("run_originzc_upper_checkpointed($label): distribution_restriction/K/layout MISMATCH on resume -- " *
@@ -681,7 +693,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         eta_now = w_current[D2_econ+1:end]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = pcx.ctx_cm.obj.x
-        ckpt = CMCheckpointV10(CM_CHECKPOINT_SCHEMA_V10, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV10(CM_CHECKPOINT_SCHEMA_V10, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             0, Float64[], :anchored, :equal, :cumulative, :dense_reference, cm_gradient_backend,
             :cm_only, 0, 0, :direct, 0,
@@ -718,13 +730,14 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
             reject_point(w[1], "run_originzc_upper_checkpointed($label): infeasible/failed inner solve at this point")
         end
         Δ = verify.Delta_dual
-        evalResult.obj[1] = w[1]
+        evalResult.obj[1] = find_smallest ? w[1] : -w[1]
         evalResult.c[1] = Δ
         n_eval[] += 1
         last_F_state[] = (w = copy(w), base = base, verify = verify)
         feasible = isfinite(Δ) && Δ <= delta + 1e-6
         verified = is_verified_success(verify)
-        is_new_best = feasible && verified && (best_feasible[] === nothing || w[1] < best_feasible[].gp)
+        is_new_best = feasible && verified &&
+            is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, n_eval = n_eval[], t = prior_wall + (time() - t_start))
             do_checkpoint(:new_best, collect(w))
@@ -753,7 +766,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
                 base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
         end
         n_grad[] += 1
-        evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
+        evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
         # Transformed-A restricted-family port: gfull is ALWAYS the z-space gradient (unchanged
         # cm_originzc_production_gradient_cplus/cm_originzc_production_gradient); rescale the
         # A-block (indices 2:D2_econ) by the constant scalar -theta_cm when the outer search is
@@ -798,4 +811,16 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
             best = b, kappa = κ, xsol = collect(xsol), trace = trace, final_checkpoint = final_ckpt,
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"),
             screen_summary = as_namedtuple(pcx.screen_counters))
+end
+
+"""
+    run_originzc_lower_checkpointed(w0=nothing; kwargs...)
+
+2026-07-28 lower-direction wiring: thin wrapper around `run_originzc_upper_checkpointed` with
+`find_smallest=false` hardcoded (the real lower-kappa direction, per `direction_bounds.jl`'s own
+audit). Forwards every other argument unchanged; defaults `label` to `"originzc_lower"` instead
+of silently inheriting `run_originzc_upper_checkpointed`'s own `"originzc_upper"` default.
+"""
+function run_originzc_lower_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing; label::String = "originzc_lower", kwargs...)
+    return run_originzc_upper_checkpointed(w0; find_smallest = false, label = label, kwargs...)
 end

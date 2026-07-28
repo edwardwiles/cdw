@@ -31,6 +31,7 @@ isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_p
 isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # allocation/Hessian port task §1.3/§4: opt-in pinned outer algorithm for matched benchmarks only -- see that file's module docstring; NOT applied unless a caller passes pin_outer_algorithm=true
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26): exact-point cache for this driver's real pcx shape
+isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 
 const CM_CHECKPOINT_SCHEMA = 9
 # Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
@@ -587,6 +588,10 @@ best-effort) if the regenerated draw checksums don't match -- same guarantee sch
 the unrestricted path.
 """
 function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
+        find_smallest::Bool = true,   # 2026-07-28 lower-direction wiring: true="upper" (minimize gp,
+        # the real larger-kappa branch), false="lower" (maximize gp) -- see direction_bounds.jl's own
+        # audit for the evidenced find_smallest<->upper/lower mapping. Default true preserves every
+        # pre-existing caller's exact behavior byte-for-byte.
         W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
         L::Int = 10, contrasts::Symbol = :anchored, probs::Union{Nothing,AbstractVector{Float64}} = nothing,
         cm_hessian_backend::Symbol = :structured, cm_grid_rule::Symbol = :equal,
@@ -743,10 +748,17 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         lp("[", label, "] marginal_restriction=common_frechet (fixed Frechet as CM plus a common-level anchor)")
 
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
-    find_smallest = true   # :cm_upper is the only wired direction today, matches run_cm_upper's own docstring
     backend_switched = false   # Part II.4 follow-up -- set true below only on an explicit, audited cross-backend resume
 
     if resumed !== nothing
+        # 2026-07-28 lower-direction wiring: direction is a more fundamental identity than any of
+        # the backend/config checks below -- refuse outright on mismatch, no override (matches this
+        # function's own established no-escape-hatch discipline for the other structural fields).
+        resumed.find_smallest == find_smallest ||
+            error("run_cm_upper_checkpointed($label): direction MISMATCH on resume -- checkpoint " *
+                  "was written with find_smallest=$(resumed.find_smallest) (branch=:$(resumed.branch)), " *
+                  "this call requests find_smallest=$find_smallest -- refusing to silently resume a " *
+                  "different upper/lower direction under the same checkpoint.")
         # CM+moments(+ZC) integration: the moment-column layout (hence the outer vector's own
         # dimension and meaning) is FIXED by (cm_extension,K_mean,K_pair,meanzc_basis) at
         # checkpoint-write time -- unlike cm_gradient_backend (a pure outer-gradient-kernel
@@ -1015,7 +1027,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         eta_nu_now = is_meanzc ? w_current[D2_econ+1:end] : Float64[]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = (is_meanzc || is_frechet) ? pcx.ctx_cm.obj.x : ctx.obj.x
-        ckpt = CMCheckpointV9(CM_CHECKPOINT_SCHEMA, run_id, label, :cm_upper, find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV9(CM_CHECKPOINT_SCHEMA, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
             cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, MEANZC_MOMENT_LAYOUT_VERSION,
@@ -1071,7 +1083,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # machine precision, and the two diverge (by a real, if usually small, amount) at
         # tail-active points.
         Δ = verify.Delta_dual
-        evalResult.obj[1] = w[1]
+        evalResult.obj[1] = find_smallest ? w[1] : -w[1]
         evalResult.c[1] = Δ
         n_eval[] += 1
         last_F_state[] = (w = copy(w), base = base, verify = verify)
@@ -1082,7 +1094,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # classify_inner_result(verify) == VerifiedSolved before this point may become the
         # incumbent -- see docs/fullA_independent_audit_remediation.md AUD-04.
         verified = is_verified_success(verify)
-        is_new_best = feasible && verified && (best_feasible[] === nothing || w[1] < best_feasible[].gp)
+        is_new_best = feasible && verified &&
+            is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, n_eval = n_eval[], t = prior_wall + (time() - t_start))
             do_checkpoint(:new_best, collect(w))
@@ -1130,7 +1143,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             end
         end
         n_grad[] += 1
-        evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
+        evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
         # Transformed-A restricted-family port: gfull is ALWAYS the z-space gradient (the shared
         # numerical kernel -- cm_production_gradient_cplus/cm_meanzc_production_gradient_cplus/
         # cm_frechet_production_gradient_cplus, ALL unchanged) regardless of A_coordinate_mode;
@@ -1205,4 +1218,18 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             best = b, kappa = κ, xsol = collect(xsol), trace = trace, final_checkpoint = final_ckpt,
             ckpt_path = joinpath(ckpt_dir, "$(label)_latest.jls"),
             screen_summary = as_namedtuple(pcx.screen_counters))
+end
+
+"""
+    run_cm_lower_checkpointed(w0=nothing; kwargs...)
+
+2026-07-28 lower-direction wiring: thin wrapper around `run_cm_upper_checkpointed` with
+`find_smallest=false` hardcoded (the real lower-kappa direction, per `direction_bounds.jl`'s own
+audit). Added for naming parity/discoverability -- the `branch::Symbol` checkpoint field's own
+comment (`:cm_upper (only direction wired today; kept for parity/future :cm_lower)`) anticipated
+exactly this sibling. Forwards every other argument unchanged; defaults `label` to `"cm_lower"`
+instead of silently inheriting `run_cm_upper_checkpointed`'s own `"cm_upper"` default.
+"""
+function run_cm_lower_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing; label::String = "cm_lower", kwargs...)
+    return run_cm_upper_checkpointed(w0; find_smallest = false, label = label, kwargs...)
 end
