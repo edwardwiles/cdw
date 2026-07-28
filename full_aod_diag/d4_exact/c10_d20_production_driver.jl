@@ -479,14 +479,25 @@ Finalization task Phase 3: single source of truth for which gradient backend a d
 uses, reconciling the OLD `use_pooled_gradient::Union{Nothing,Bool}` flag (nothing = caller
 didn't specify) with the NEW `price_cache_backend::Union{Nothing,Symbol}` selector (nothing =
 caller didn't specify). Never lets one silently override the other:
-- neither given -> `:cplus` (finalization task Phase 6 default, changed from `:buffered`
-  2026-07-22: C+ is 4.0-4.2x faster / 66.8x less memory than the prior default at real
-  D=20/W=80,000 points, correct to ~4.3e-17, and its remaining gates -- independent
-  optimized-value directional check, cross_delta+backend integration, checkpoint/resume,
-  D=20 short trajectories at δ=1/δ=2 -- all closed. See
-  docs/fullA_ALLOCATION_CROSSDELTA_KB_GATE_2026-07-22.md §6 for the full adoption record,
-  including why `:kbplus` -- also fully correct -- was NOT chosen (measured ~15-17% slower
-  than C+, despite eliminating the W-scale `exp` calls it was built to remove).
+- neither given -> `:shared` (default-flip task, 2026-07-27: the unrestricted family was the
+  only one of the five families NOT yet defaulting onto the shared `economic_A_gradient!`
+  entry point -- CM+ZC, origin-ZC, common-Frechet, and flexible-CM all already default to it
+  under their own local `:shared_inplace_pooled`-style selector. `economic_A_gradient!` is
+  gated bit-identical to the unrestricted family's own reference kernel
+  (`composite_gradient_at_fast`) at D=4 (`test_shared_a_gradient.jl`) and real D=20/W=80,000
+  under the current production `destination_sample=:exclude_row` rectangular regime
+  (`test_shared_a_gradient_d20.jl`), and exercised through this exact driver via
+  `c20b_shared_backend_driver_smoke.jl` (real D=20/W=80,000, `run_polish_checkpointed`,
+  `:shared` vs `:buffered`, identical kappa). See
+  `docs/UNRESTRICTED_SHARED_A_GRADIENT_DEFAULT_FLIP_2026-07-27.md` for the full gate re-run
+  under this default. Previously (finalization task Phase 6, 2026-07-22) the no-kwarg default
+  was `:cplus` (changed from `:buffered`: 4.0-4.2x faster / 66.8x less memory than `:buffered`
+  at real D=20/W=80,000, correct to ~4.3e-17) -- `:cplus` remains fully supported as an
+  explicit, non-default backend (pass `price_cache_backend=:cplus`), not deleted; only the
+  no-kwarg default changed. See docs/fullA_ALLOCATION_CROSSDELTA_KB_GATE_2026-07-22.md §6 for
+  `:cplus`'s own original adoption record, including why `:kbplus` -- also fully correct --
+  was NOT chosen (measured ~15-17% slower than C+, despite eliminating the W-scale `exp` calls
+  it was built to remove).
 - explicit `use_pooled_gradient=false` (OLD API) still means `:buffered`, literally, not the
   new default -- backward compatibility for existing callers of the old boolean flag is
   preserved exactly, never silently reinterpreted.
@@ -513,7 +524,7 @@ function resolve_price_cache_backend(label::AbstractString, use_pooled_gradient:
     elseif use_pooled_gradient !== nothing
         return use_pooled_gradient ? :pooled : :buffered
     else
-        return :cplus   # finalization task Phase 6 default (was :buffered) -- see docstring above
+        return :shared   # default-flip task default (was :cplus, and :buffered before that) -- see docstring above
     end
 end
 
@@ -550,15 +561,18 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         # silently overriding the other). nothing behaves exactly like the old `false` default
         # when price_cache_backend is also omitted.
         price_cache_backend::Union{Nothing,Symbol} = nothing,   # finalization task Phase 3: single
-        # selector for which gradient backend to use -- :buffered (default) | :pooled (=
+        # selector for which gradient backend to use -- :buffered | :pooled (=
         # composite_gradient_at_fast_pooled, GradWorkspacePool only) | :aplus (persistent two-
         # tensor LFixBaseWorkspace + GradWorkspacePool, bit-identical to :pooled, ~1.1-1.2x
         # faster) | :cplus (factorized O(W*D) LFixFactorizedWorkspace + GradWorkspacePool,
         # ~4x faster / ~67x less allocation than :buffered at D=20/W=80000, correct to ~1e-17;
-        # see docs/fullA_factorized_price_production_gate.md). Reconciled with the older
+        # see docs/fullA_factorized_price_production_gate.md) | :shared (the shared
+        # economic_A_gradient! entry point also used by the other 4 families; bit-identical to
+        # :buffered's own reference kernel, see docs/UNRESTRICTED_SHARED_A_GRADIENT_DEFAULT_
+        # FLIP_2026-07-27.md -- **`:shared` is the resolved default as of that flip**, when both
+        # this kwarg and use_pooled_gradient are left at nothing). Reconciled with the older
         # use_pooled_gradient kwarg via resolve_price_cache_backend -- see that function's
-        # docstring for the exact precedence/contradiction rules. nothing (default): behavior
-        # governed entirely by use_pooled_gradient, i.e. zero change for existing callers.
+        # docstring for the exact precedence/contradiction rules, including this default.
         maxit_override::Union{Nothing,Int} = nothing,   # finalization task Phase 2B: override the
         # hardcoded maxit=1_000_000 outer-iteration cap so two arms of an A/B comparison (e.g.
         # cross_delta on/off) can be capped at an IDENTICAL iteration count, not just an identical
