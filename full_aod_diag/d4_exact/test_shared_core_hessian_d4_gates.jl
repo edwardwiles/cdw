@@ -127,7 +127,14 @@ let
     function full_hessian(base, ctx_cm, cctx)
         obj = ctx_cm.obj
         x = vcat(base.ζstar, base.λstar)
-        _archC_prep_for_hessian!(obj, x)
+        # TEMPORARY DIAG: the dispatcher (_prep_dual_index_for_archC!) keys off inner_fg_backend,
+        # which defaults to :cm_lookup for BOTH pcx_d/pcx_p here -- explicitly route by
+        # core_hessian_backend instead, matching what this test is actually trying to compare.
+        if cctx.core_hessian_backend === :dense_reference
+            _archC_prep_for_hessian!(obj, x)
+        else
+            _prep_dual_index_for_archC!(cctx, obj, x)
+        end
         h = Vector{Float64}(undef, n*(n+1)÷2)
         hessian_cm_structured!(h, obj, cctx)
         return unpack_packed(h, n)
@@ -146,7 +153,7 @@ let
     base_t = archC_base_state(x_free_calib, pcx_t.ctx_cm, pcx_t.cctx)
     check("CM: threaded-bins inner solve feasible with shared H_EE", base_t.inner_status in (0,-100,-101,-103))
     x_t = vcat(base_t.ζstar, base_t.λstar)
-    _archC_prep_for_hessian!(pcx_t.ctx_cm.obj, x_t)
+    _prep_dual_index_for_archC!(pcx_t.cctx, pcx_t.ctx_cm.obj, x_t)  # TEMPORARY DIAG: same fix as full_hessian above -- pcx_t is operator, not dense
     h_t = Vector{Float64}(undef, n*(n+1)÷2)
     hessian_cm_structured_v2!(h_t, pcx_t.ctx_cm.obj, pcx_t.cctx; threaded_bins = true, tls = pcx_t.cctx.tls, use_syrk = true)
     Ht = unpack_packed(h_t, n)

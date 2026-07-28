@@ -267,7 +267,35 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             # branches in the Hessian callbacks provably unreachable in production (not merely rare)
             # -- the precondition this task's G/H storage elimination relies on.
             cf = cf_build(θ, ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-            materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
+            # No-moments/no-composite-G task (2026-07-28), RESOLVED this session: the economic
+            # block fill is now genuinely skippable under `skip_fill`. A prior attempt at exactly
+            # this (2026-07-28, same day) was reverted after test_shared_core_hessian_d4_gates.jl
+            # caught what LOOKED like a real H_EE regression (max|Δ|=0.0336, then an outright
+            # nStatus=-400 inner-solve failure once the guard below was tried). Root-caused this
+            # session, empirically (not by static reading): it was NEVER a production correctness
+            # bug. Two compounding bugs, both now fixed:
+            #   1. `archC_base_state`'s `skip_fill_safe` gate (cm_production_bundle.jl) checked
+            #      `cctx.cm_cross_hessian_backend` (irrelevant to this fill) instead of
+            #      `cctx.core_hessian_backend` (the flag that actually determines whether THIS
+            #      context's Hessian path will read dense H) -- so a context explicitly built to
+            #      want `:dense_reference` ground truth (only ever done by this repo's own
+            #      comparison test harnesses, never in real production) got the skip applied to it
+            #      too, leaving its own required dense H unfilled. Fixed by adding
+            #      `&& cctx.core_hessian_backend !== :dense_reference` to the gate.
+            #   2. Independently, `test_shared_core_hessian_d4_gates.jl`'s own `full_hessian` test
+            #      helper called the legacy dense-only `_archC_prep_for_hessian!` directly for
+            #      BOTH its comparison contexts, bypassing the real production dispatcher
+            #      (`_prep_dual_index_for_archC!`) -- which happens to also need dense H, even for
+            #      an operator-mode context, purely as an artifact of the test's own methodology.
+            #      Fixed in the test file to route through the dispatcher for non-dense-reference
+            #      contexts.
+            # With both fixed, skip_fill_safe correctly differs per-context, and the economic fill
+            # is safe to skip in every real production configuration (which never sets
+            # core_hessian_backend=:dense_reference) -- validated D=4, all 4 sections,
+            # test_shared_core_hessian_d4_gates.jl, 40/40 PASS including the real-solved-point arm.
+            if !skip_fill
+                materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
+            end
             grav_raw = compressed_gravity_raw(θ, ctx)
             fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
             fill_K_directgp!(K, θ, ctx)
@@ -277,20 +305,17 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             # at a new point before the first Hessian call there, so this is set before any
             # Hessian callback that needs it runs.
             core_cf_ref[] = cf
-            # No-moments/no-composite-G task (2026-07-28): an attempt was made live to ALSO gate
-            # this dense economic fill behind `!skip_fill` (extending the existing CM-grid-only skip
-            # to the economic block too), reasoning that `_fill_cm_HEE!`'s only economic-column read
-            # is now confined to the unreachable-in-production dense fallback. That change was
-            # REVERTED after `test_shared_core_hessian_d4_gates.jl` caught a real, unexplained
-            # numerical regression (H_EE mismatch, max|Δ|=0.0336, not FP noise) that wasn't isolated
-            # before the session's time budget ran out -- left as an explicitly named, NOT-YET-SAFE
-            # follow-on rather than shipped un-debugged. The economic block is therefore still
-            # unconditionally materialized here, for both skip_fill=true and skip_fill=false.
         else
             core_moments!(K, Gtmp, θ, U, obj)
             core_cf_ref[] = :compressed_state_unavailable   # use_compressed_core=false: no winner-form cf built this call, Hessian must fall back to dense
         end
-        @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
+        # skip_fill=true also skips the copy into G -- Gtmp's economic columns were never written
+        # this call (undef-backed scratch, not zeroed), so copying them would propagate stale
+        # memory into G for no reason; nothing on the production path reads G's economic columns
+        # when skip_fill=true (see the root-cause note above).
+        if !skip_fill
+            @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
+        end
         @views G[:, end] .= Gtmp[:, end]
         if !skip_fill
             cm_cols = pregrav + 1 : pregrav + L * nO

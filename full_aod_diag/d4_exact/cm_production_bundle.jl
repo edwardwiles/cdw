@@ -219,20 +219,23 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
     # test_shared_core_hessian_d4_gates.jl / test_d20_restricted_full_hessian_gates.jl (which
     # exercise this exact skip_fill_safe=true path for flexible-CM).
     #
-    # A `cctx.core_hessian_backend !== :dense_reference` guard was added live (2026-07-28) then
-    # REMOVED again in the same session: the economic-fill-skip extension it was protecting against
-    # (wrap_moments_with_cm_archB) was itself reverted after causing an unrelated, unexplained H_EE
-    # regression, and with that extension gone, `skip_fill=true` only ever skips the CM-grid columns
-    # (never the economic ones) -- exactly the pre-existing, already-validated behavior this
-    # condition had before today. Isolated empirically: re-adding the guard reproduced the SAME H_EE
-    # mismatch `test_shared_core_hessian_d4_gates.jl` caught, even with the economic-skip extension
-    # fully reverted -- root cause not yet isolated (suspected `core_ws`/`cf`-identity interaction
-    # between the two priming-closure instances sharing `core_cf_ref`, not yet confirmed), so the
-    # guard is left OUT rather than shipped with an unexplained side effect. Not a live production
-    # concern: `core_hessian_backend=:dense_reference` is never set outside this repo's own explicit
-    # comparison gates.
+    # No-moments/no-composite-G task, RESOLVED 2026-07-28 (same day as the two abandoned attempts
+    # documented above): the `cctx.core_hessian_backend !== :dense_reference` guard IS the correct
+    # fix -- both prior "it reproduced the mismatch" observations were an artifact of
+    # test_shared_core_hessian_d4_gates.jl's own `full_hessian` test helper calling the legacy
+    # dense-only `_archC_prep_for_hessian!` directly for its `:exact_winner_pair_parallel`
+    # comparison arm too (instead of the real production dispatcher,
+    # `_prep_dual_index_for_archC!`), which happens to also require dense H regardless of
+    # `skip_fill` -- a test-methodology bug, not a production one. Fixed in the test file (routes
+    # through the dispatcher for non-dense-reference contexts) and re-verified: with BOTH this
+    # guard and the economic-block skip (cm_hessian_architectures.jl::wrap_moments_with_cm_archB)
+    # in place, test_shared_core_hessian_d4_gates.jl passes 40/40, including the real-solved-point
+    # comparison arms. `core_hessian_backend=:dense_reference` is still never set outside this
+    # repo's own explicit comparison gates, so this guard is a no-op for every real production run
+    # -- it only prevents a context PURPOSELY built to want dense ground truth from having its own
+    # required fill skipped out from under it.
     use_lookup = cctx.inner_fg_backend == :cm_lookup
-    skip_fill_safe = use_lookup && MOMENT_REPRESENTATION[] == :operator && cctx.cm_cross_hessian_backend == :winner_bin
+    skip_fill_safe = use_lookup && MOMENT_REPRESENTATION[] == :operator && cctx.cm_cross_hessian_backend == :winner_bin && cctx.core_hessian_backend !== :dense_reference
     K, x, nStatus, n_fg, n_hess = use_lookup ?
         inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx),
             skip_fill = skip_fill_safe) :
