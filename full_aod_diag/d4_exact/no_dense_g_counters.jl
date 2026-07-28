@@ -42,6 +42,16 @@ Base.@kwdef mutable struct NoDenseGCounters
     dense_cross_hessian_calls::Int = 0
     operator_cross_hessian_calls::Int = 0
     winner_cross_hessian_calls::Int = 0
+    # Final-architecture-closure task (2026-07-27), §11/§13: family-specific structured/direct
+    # restriction-self-block (H_RR/H_CC) computations -- e.g. hessian_cm_structured!/_v2!'s own
+    # H_CC raw+congruence block, the shared zc_restriction_gram! H_ZZ primitive when called for its
+    # OWN self-block role rather than as an H_EZ/H_CZ cross term. These are ALWAYS a small dense/
+    # structured calculation by design (never dependent on composite G, per this task's Goal 5
+    # architecture table: "H_RR: family-specific structured/direct restriction method, never
+    # dependent on composite G") -- this counter exists purely for visibility into how often that
+    # family-owned path fires, not as a violation signal (there is no "should be zero" requirement
+    # on it, unlike the composite-G/dense-reference counters above).
+    direct_restriction_hessian_calls::Int = 0
 end
 
 const NO_DENSE_G_COUNTERS = Ref(NoDenseGCounters())
@@ -162,6 +172,9 @@ function record_dense_cross_hessian_call!()
     return nothing
 end
 
+"Call from a family's own structured/direct restriction-self-block (H_RR/H_CC) computation -- see the field's own docstring above."
+record_direct_restriction_hessian_call!() = (NO_DENSE_G_COUNTERS[].direct_restriction_hessian_calls += 1; nothing)
+
 """
     no_dense_g_report() -> NamedTuple
 
@@ -184,5 +197,36 @@ function no_dense_g_report()
             dense_reference_verification_calls = c.dense_reference_verification_calls,
             dense_cross_hessian_calls = c.dense_cross_hessian_calls,
             operator_cross_hessian_calls = c.operator_cross_hessian_calls,
-            winner_cross_hessian_calls = c.winner_cross_hessian_calls)
+            winner_cross_hessian_calls = c.winner_cross_hessian_calls,
+            direct_restriction_hessian_calls = c.direct_restriction_hessian_calls)
+end
+
+"""
+    no_dense_g_report_task_names() -> NamedTuple
+
+Final-architecture-closure task (2026-07-27), §11: the SAME snapshot as `no_dense_g_report()`,
+keyed by the exact 13 counter names that task's own §11 lists verbatim
+(`composite_G_materializations`, `dense_economic_block_materializations`, etc.). Added as a
+DISTINCT accessor rather than renaming the underlying struct fields, to avoid a repository-wide
+rename across the ~30 existing call sites (gate scripts, docs, other counters' own cross-references)
+that already read `no_dense_g_report()`'s current field names -- both accessors read the SAME
+underlying `NO_DENSE_G_COUNTERS[]` state, there is no drift risk between them (verified by
+construction: this function is a pure relabeling of `no_dense_g_report()`'s own return value, not a
+second independent counter store).
+"""
+function no_dense_g_report_task_names()
+    r = no_dense_g_report()
+    return (composite_G_materializations = r.full_G_materializations,
+            dense_economic_block_materializations = r.dense_economic_G_materializations,
+            dense_CM_block_materializations = r.dense_CM_G_materializations,
+            dense_Frechet_block_materializations = r.dense_Frechet_G_materializations,
+            dense_ZC_block_materializations = r.dense_ZC_G_materializations,
+            generic_dense_FG_calls = r.generic_dense_FG_calls,
+            dense_reference_verification_calls = r.dense_reference_verification_calls,
+            dense_cross_hessian_calls = r.dense_cross_hessian_calls,
+            operator_economic_FG_calls = r.operator_economic_FG_calls,
+            operator_restriction_FG_calls = r.operator_restriction_FG_calls,
+            operator_verification_calls = r.operator_verification_calls,
+            winner_cross_hessian_calls = r.winner_cross_hessian_calls,
+            direct_restriction_hessian_calls = r.direct_restriction_hessian_calls)
 end
