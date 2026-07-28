@@ -1,0 +1,31 @@
+family,metric,mode,value_s,unit,speedup,source,note
+flexible_cm,complete_hessian_callback,serial,0.443,seconds_mean,,FLEXCM_FRECHET_D20_PROFILE_AND_GATES_2026-07-28.md,mean over captured real KNITRO Hessian callbacks
+flexible_cm,complete_hessian_callback,threaded_t20,0.312,seconds_mean,1.42,FLEXCM_FRECHET_D20_PROFILE_AND_GATES_2026-07-28.md,mean over captured real KNITRO Hessian callbacks
+flexible_cm,H_EC_prep,serial,0.197,seconds_mean,,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_flexcm_frechet.csv,
+flexible_cm,H_EC_prep,threaded_t20,0.061,seconds_mean,3.23,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_flexcm_frechet.csv,
+common_frechet,complete_hessian_callback,serial,0.413,seconds_mean,,FLEXCM_FRECHET_D20_PROFILE_AND_GATES_2026-07-28.md,mean over captured real KNITRO Hessian callbacks
+common_frechet,complete_hessian_callback,threaded_t20,0.290,seconds_mean,1.42,FLEXCM_FRECHET_D20_PROFILE_AND_GATES_2026-07-28.md,mean over captured real KNITRO Hessian callbacks
+common_frechet,H_EC_prep,serial,0.177,seconds_mean,,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_flexcm_frechet.csv,
+common_frechet,H_EC_prep,threaded_t20,0.058,seconds_mean,3.05,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_flexcm_frechet.csv,
+origin_zc,H_EZ,serial_t1,1.141,seconds_min,,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_cmzc_originzc.csv,real solved economic states
+origin_zc,H_EZ,threaded_t20,0.253,seconds_min,4.5,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_cmzc_originzc.csv,"real solved economic states; peak 5.3x at t=10"
+origin_zc,H_ZZ,reference_t1,0.233,seconds_min,,HZZ_BACKEND_PRODUCTION_WIDTH_BENCHMARK_2026-07-28.csv,real solved economic states; nx=210
+origin_zc,H_ZZ,blas_gemm_blasthreads10,0.084,seconds,2.77,HZZ_BACKEND_PRODUCTION_WIDTH_BENCHMARK_2026-07-28.csv,"real solved economic states; new recommended default at production width nx=210"
+origin_zc,dominant_blocks_sum,best_available_backend_t20_solver_trajectory,0.604,seconds,,CMZC_ORIGINZC_D20_PROFILE_AND_HZZ_BENCHMARK_2026-07-28.md,"H_EZ(threaded) 41.9% + H_ZZ(:blas_gemm) 33.6% + H_ZZ_centering_prep 17.3% + H_EE 7.3% of this total"
+cm_meanzc,H_EZ,serial_t1,1.115,seconds_min,,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_cmzc_originzc.csv,"UNSOLVED_TIMING_ONLY -- see note below"
+cm_meanzc,H_EZ,threaded_t20,0.185,seconds_min,6.0,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_cmzc_originzc.csv,UNSOLVED_TIMING_ONLY
+cm_meanzc,H_CZ_prep,serial_t1,1.063,seconds_min,,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_cmzc_originzc.csv,UNSOLVED_TIMING_ONLY
+cm_meanzc,H_CZ_prep,threaded_t20,0.775,seconds_min,1.37,CURRENT_PRODUCTION_HESSIAN_SUBBLOCK_PROFILE_2026-07-28_cmzc_originzc.csv,"UNSOLVED_TIMING_ONLY; weak gain, slower than serial at t=4/t=8, only wins at t=20"
+cm_meanzc,dominant_blocks_sum,best_available_backend_t20_calibration,1.460,seconds,,CMZC_ORIGINZC_D20_PROFILE_AND_HZZ_BENCHMARK_2026-07-28.md,"UNSOLVED_TIMING_ONLY -- H_CZ(threaded) 53.1% + bintables 13.6% + H_ZZ 12.8% + H_EZ(threaded) 12.7% + H_ZZ_prep 5.0% + H_EE 2.7%"
+#
+# UNSOLVED_TIMING_ONLY (cm_meanzc rows): the real public driver (run_cm_upper_checkpointed) reliably
+# fails cm_meanzc's own inner KNITRO solve on this exact branch base (origin/production/fullA-exact@
+# 5b4f9da), nStatus=-500/-502, before any real Hessian callback fires -- reproduced 5/5 + 15/15, and
+# confirmed NOT caused by this task's own kernel work (see CMZC_ORIGINZC_D20_PROFILE_AND_HZZ_BENCHMARK
+# _2026-07-28.md Section 2 for the full evidence chain). These timing/speedup numbers are real
+# measurements of the shape/threading behavior of the kernels at genuine production dimensions
+# (n_E=382, n_Z=210, n_C=950), but S was left at an unwritten all-ones default rather than a true
+# solved dual -- they should NOT be read as "cm_meanzc's real production Hessian callback is now Xs".
+# cm_meanzc's cross-backend CORRECTNESS gates (135/135, in CMZC_ORIGINZC_D20_CORRECTNESS_GATES_2026-
+# 07-28.csv) are unaffected by this caveat -- they test algebraic backend-equivalence at whatever S is,
+# not convergence to a particular economic state.
