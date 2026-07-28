@@ -1,0 +1,4 @@
+label,g,Delta,source
+initial_incumbent,-0.49783321,0.9969029697109884,initial
+best_live_incumbent,-0.4978358677598357,0.9971205159509748,live
+cold_verified_incumbent,-0.4978358677598357,0.9971205159509748,cold_verified

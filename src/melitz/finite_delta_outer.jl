@@ -896,7 +896,8 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                                               dual_bank_max_size::Int=8,
                                               gradient_backend::Symbol=:auto,
                                               h::Real=1e-4,
-                                              divergence_constraint_scaling::Symbol=:dimensionless)
+                                              divergence_constraint_scaling::Symbol=:dimensionless,
+                                              objective_scale::Union{Nothing,Real}=nothing)
     cutoff_constraint_backend in (:linear, :nonlinear_reference) || throw(ArgumentError(
         "cutoff_constraint_backend must be :linear or :nonlinear_reference, got $cutoff_constraint_backend"))
     divergence_constraint_scaling in (:dimensionless, :legacy_1e10) || throw(ArgumentError(
@@ -944,6 +945,30 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
                          resolved_gradient_backend == :B_direct_argument_touched_row_serial ? make_melitz_gradient_delta_direct_touched_row_serial(h) :
                          nothing
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
+    # 2026-07-28 outer-search gamma-profile session (governing prompt Phase 1): `objective_scale`
+    # is a Melitz-owned, purely KNITRO-facing divisor on evalResult.obj[1]/.objGrad[1] --
+    # orthogonal to `var_scale`/`var_center` (2026-07-25, KN_set_var_scalings_all), which
+    # rescales VARIABLES only. KNITRO's own variable scaling does not touch the objective/
+    # gradient the callback returns (callback-facing x/obj/objGrad are always raw, confirmed
+    # 2026-07-25/2026-07-27 audits) -- so with objective = raw theta[1] (linear, gradient
+    # exactly +-1 in raw units) and a tiny variable scale s_g (e.g. 1e-4, this session's own
+    # Phase 7 choice), KNITRO's own INTERNAL scaled-space gradient (raw objGrad .* xScaleFactors,
+    # the chain rule KNITRO applies itself) is only +-s_g -- order 1e-4, not order 1 -- a
+    # plausible, previously undiagnosed contributor to a scaled trust-region algorithm reporting
+    # spurious xtol convergence at (or near) the starting point. `objective_scale` corrects this:
+    # `evalResult.obj[1]`/`.objGrad[1]` are divided by it before being registered with KNITRO,
+    # so the EFFECTIVE scaled-space objective gradient KNITRO sees is `+-var_scale[1]/objective_scale`
+    # -- choosing `objective_scale ~ var_scale[1]` (e.g. 1e-4) restores an order-1 scaled gradient.
+    # `nothing` (default) is an EXACT no-op (`obj_scale_divisor=1.0`), preserving every existing
+    # caller's behavior byte-for-byte -- this is purely additive, opt-in.
+    #
+    # Deliberately NOT applied to `signed_objective` (used for live-candidate/incumbent
+    # comparison, cold-verified-incumbent selection, and reported `g`) -- those must stay in
+    # raw economic theta[1] units regardless of this KNITRO-facing scale, so a caller can never
+    # observe a different ANSWER purely from choosing a different `objective_scale`, only a
+    # different KNITRO SEARCH TRAJECTORY getting there.
+    obj_scale_divisor = objective_scale === nothing ? 1.0 : Float64(objective_scale)
+    scaled_objective(theta) = signed_objective(theta) / obj_scale_divisor
     live_candidates = MelitzOuterCandidate[]
     n_inner_eval_failures = Ref(0)
     n_fc_calls = Ref(0)
@@ -1171,7 +1196,11 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
 
             # Section 3.1: the outer objective is ALWAYS the finite, deterministic gamma
             # coordinate -- never the inner solve's own return value or a failure sentinel.
-            evalResult.obj[1] = signed_objective(theta)
+            # 2026-07-28 session (Phase 1): registered in KNITRO-facing SCALED units
+            # (scaled_objective = signed_objective/obj_scale_divisor); `obj_scale_divisor=1.0`
+            # (objective_scale=nothing, the default) makes this byte-identical to the prior
+            # `signed_objective(theta)` registration.
+            evalResult.obj[1] = scaled_objective(theta)
 
             # `kind == :certified_bad` (AboveEvaluationCap/InfiniteDeltaCertified):
             # install the FIXED sentinel `delta_evaluation_cap/delta` -- the SAME constant
@@ -1247,8 +1276,11 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
 
             # Section 3.1: d(±theta[1])/dtheta -- exact, trivial, independent of the inner
             # solve (which is still needed below, for the constraint Jacobian only).
+            # 2026-07-28 session (Phase 1): divided by the SAME obj_scale_divisor as
+            # evalResult.obj[1] above -- consistent value/gradient scaling, exact no-op at
+            # obj_scale_divisor=1.0.
             evalResult.objGrad .= 0.0
-            evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
+            evalResult.objGrad[1] = (find_smallest ? 1.0 : -1.0) / obj_scale_divisor
 
             # `kind == :certified_bad`: the SAME fixed sentinel's own gradient is EXACTLY
             # ZERO -- the true derivative of "always report the constant
@@ -1539,7 +1571,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           var_center::Union{Nothing,AbstractVector}=nothing,
                                           backend::Symbol=:auto_from_gradient_backend,
                                           forbid_dense_fallback::Bool=false,
-                                          divergence_constraint_scaling::Symbol=:dimensionless)
+                                          divergence_constraint_scaling::Symbol=:dimensionless,
+                                          objective_scale::Union{Nothing,Real}=nothing)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     t0 = time()
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
@@ -1622,7 +1655,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         origin_block_screen=origin_block_screen, screen_order=screen_order,
         warm_start_source=warm_start_source, exact_cache=exact_cache,
         dual_bank_max_size=dual_bank_max_size, gradient_backend=gradient_backend, h=h,
-        divergence_constraint_scaling=divergence_constraint_scaling)
+        divergence_constraint_scaling=divergence_constraint_scaling, objective_scale=objective_scale)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
