@@ -860,6 +860,37 @@ function _ensure_cm_cross_scratch!(cctx::CMBinHessCtx, ncolI::Int, D::Int, L::In
 end
 
 """
+    pack_upper_cm_hessian!(h, Hfull, NCORE, n)
+
+Hessian upper-only cleanup (2026-07-28): the shared final packing step for `hessian_cm_structured!`
+(this file) and `hessian_cm_structured_v2!` (`cm_hessian_threaded.jl`) -- factored out of both
+(previously two independently-maintained, byte-identical copies of this loop, flagged in
+`PRODUCTION_HESSIAN_UPPER_ONLY_AUDIT_2026-07-28.md` as a manual-sync risk the threaded file's own
+header already warned about) so there is exactly one place this logic can drift.
+
+The H_EC region (`i<=NCORE<j`) is filled by a MECHANICAL mirror (never independently re-derived --
+see the H_EC block-fill loop above/in `cm_hessian_threaded.jl`), so `Hfull[i,j]` alone is exact;
+averaging it against `Hfull[j,i]` is a provable no-op there, at real per-callback cost. H_EE
+(`i,j<=NCORE`) and H_CC (`i,j>NCORE`) both keep full averaging: H_EE can be filled via a dense BLAS
+`gemm!` fallback whose bit-exact cross-diagonal symmetry is a BLAS-implementation property, not a
+language guarantee; H_CC's `(l,lp)` grid is genuinely independently accumulated from a fresh
+prefix-sum evaluation per pair, not copied. `Hfull`'s own mirror writes are intentionally left in
+place elsewhere (not removed) -- `cctx.Hfull` is read directly, both triangles, by several
+diagnostic/test scripts (`diag_frechet_hardpoint_2026-07-27.jl`,
+`test_frechet_winner_bin_her_wiring_d4.jl`), so breaking that invariant is out of scope here.
+"""
+function pack_upper_cm_hessian!(h::AbstractVector, Hfull::AbstractMatrix, NCORE::Int, n::Int)
+    k = 1
+    @inbounds for i in 1:n
+        for j in i:n
+            h[k] = i <= NCORE < j ? Hfull[i, j] : 0.5 * (Hfull[i, j] + Hfull[j, i])
+            k += 1
+        end
+    end
+    return h
+end
+
+"""
     hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
 
 Architecture C Hessian callback. Requires `obj.arg0` to already reflect the
@@ -979,15 +1010,10 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx)
     end
 
     # symmetrize defensively (analytically symmetric; absorbs FP-order noise, same
-    # defensive pattern as compressed_inner_alt_solvers.jl's denseaccum callback)
+    # defensive pattern as compressed_inner_alt_solvers.jl's denseaccum callback) -- see
+    # pack_upper_cm_hessian!'s own docstring (above) for the per-block rationale.
     n = NCORE + ncm
-    k = 1
-    @inbounds for i in 1:n
-        for j in i:n
-            h[k] = 0.5 * (Hfull[i, j] + Hfull[j, i])
-            k += 1
-        end
-    end
+    pack_upper_cm_hessian!(h, Hfull, NCORE, n)
     return h
 end
 
@@ -1369,7 +1395,14 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         HC_core = @view H_copy[:, 2:1+NCORE]
                         BLAS.gemm!('T', 'N', 1 / M, HC_core, HC_eta, 0.0, HER)
                     end
-                    @views ∂∂f_∂∂x[NCORE+1:n, 1:NCORE] .= transpose(HER)
+                    # Hessian upper-only cleanup (2026-07-28): this family's final packing loop
+                    # (below) is a plain copy that only ever reads i<=j -- there is no averaging
+                    # step downstream (unlike CM/common-Frechet's `0.5*(Hfull[i,j]+Hfull[j,i])`).
+                    # `∂∂f_∂∂x[NCORE+1:n, 1:NCORE]` (row>NCORE>=col, strictly lower-triangular) is
+                    # therefore never read by anything -- the mirror write that used to populate it
+                    # was provably dead computation. Removed; HER's upper-triangle position
+                    # (`∂∂f_∂∂x[1:NCORE, NCORE+1:n]`, filled by whichever branch above ran) is the
+                    # only copy the packer needs. See PRODUCTION_HESSIAN_UPPER_ONLY_AUDIT_2026-07-28.md.
                     HRR = @view ∂∂f_∂∂x[NCORE+1:n, NCORE+1:n]
                     # CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): origin-ZC's HRR
                     # (task's H_ZZ) now dispatches to the SAME shared `zc_restriction_gram!`

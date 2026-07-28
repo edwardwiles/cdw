@@ -282,14 +282,13 @@ function hessian_cm_structured_v2!(h, obj, cctx; threaded_bins::Bool = false,
         end
     end
 
+    # Hessian upper-only cleanup (2026-07-28): now calls the ONE shared packing function
+    # (`pack_upper_cm_hessian!`, cm_hessian_architectures.jl) instead of an independently
+    # maintained copy of this loop -- this file's own header already flagged that manual-sync
+    # duplication as a risk ("Any change to the production function must be mirrored here by
+    # hand"); factoring it out removes the risk for this specific loop going forward.
     n = NCORE + ncm
-    k = 1
-    @inbounds for i in 1:n
-        for j in i:n
-            h[k] = 0.5 * (Hfull[i, j] + Hfull[j, i])
-            k += 1
-        end
-    end
+    pack_upper_cm_hessian!(h, Hfull, NCORE, n)
     return h
 end
 
