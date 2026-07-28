@@ -71,10 +71,21 @@ mutable struct WinnerBinCrossScratch
 end
 
 function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
+    # BUGFIX (2026-07-28, D=4 cm_meanzc gate root-cause): the last two positional args here were
+    # previously swapped relative to the struct's OWN declared field order (`tasks_ec::Vector{Task}`
+    # THEN `EsumEcon::Vector{Float64}`) -- passing `zeros(ncolI)::Vector{Float64}` into the
+    # `tasks_ec::Vector{Task}` slot and `Vector{Task}(...)` into the `EsumEcon::Vector{Float64}`
+    # slot. Julia's default memberwise constructor tries to `convert` each positional arg to its
+    # field's declared type, so this raised `MethodError: Cannot convert Float64 to Task` (via
+    # `unsafe_copyto!`) the FIRST time this constructor was ever reached with a genuinely fresh
+    # `(ncolI,D,L)` (i.e. the first Hessian callback for a context whose `core_cf_ref[]` is an
+    # actual `CompressedFactual`, engaging the `:winner_bin` H_EC cross-Hessian backend) -- see
+    # `docs/ZC_CENTERING_LIFECYCLE_RELEASE_2026-07-28.md` / the D=4 gate report for the full
+    # reproduction (this exact struct/constructor, not a KNITRO/synthetic-data issue).
     return WinnerBinCrossScratch(ncolI, D, L,
         zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
         zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L),
-        zeros(ncolI), Vector{Task}(undef, Threads.nthreads()))
+        Vector{Task}(undef, Threads.nthreads()), zeros(ncolI))
 end
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(ncolI, D, L)` -- mirrors this codebase's own `resize_*_if_needed!` idiom."
