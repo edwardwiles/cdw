@@ -209,7 +209,12 @@ one evaluation, not a cumulative counter diff).
 function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
         cache = nothing, use_cache::Bool = true,
         mode::Symbol = :hard, warm::Bool = true, tag::String = "",
-        moment_representation::Symbol = :dense)
+        moment_representation::Symbol = :dense,
+        # Final-architecture-closure task (2026-07-27), Goal 9: passthrough to
+        # evaluate_fullA_fast_compressed's own dense_reference_diagnostics kwarg (see that
+        # function's docstring) -- only meaningful when moment_representation=:compressed; ignored
+        # (never read) on the :dense path below, which always computes these fields in full.
+        dense_reference_diagnostics::Bool = false)
 
     # ADDITIVE (continuation 8, workstream 2): opt-in compressed winner-form
     # inner-dual evaluation, see compressed_live.jl. Default :dense preserves
@@ -220,7 +225,8 @@ function evaluate_fullA_fast(x_free::AbstractVector{Float64}, ctx;
     # moment_representation=:dense on any TiedWinnerError -- never silently.
     if moment_representation === :compressed
         return evaluate_fullA_fast_compressed(x_free, ctx; cache = cache, use_cache = use_cache,
-                                               mode = mode, warm = warm, tag = tag)
+                                               mode = mode, warm = warm, tag = tag,
+                                               dense_reference_diagnostics = dense_reference_diagnostics)
     elseif moment_representation !== :dense
         error("evaluate_fullA_fast: moment_representation=:$moment_representation not implemented (only :dense, :compressed)")
     end

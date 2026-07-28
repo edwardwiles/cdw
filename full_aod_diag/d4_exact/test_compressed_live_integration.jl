@@ -50,7 +50,13 @@ MAXDIFF_SEEN = Dict{Symbol, Float64}()  # per-field worst-case abs diff across t
 
 function compare(label, x_free; warm = true, cache_a = nothing, cache_b = nothing, verbose = true)
     ra, meta_a = evaluate_fullA_fast(x_free, ctx; cache = cache_a, warm = warm, moment_representation = :dense)
-    rb, meta_b = evaluate_fullA_fast(x_free, ctx; cache = cache_b, warm = warm, moment_representation = :compressed)
+    # Final-architecture-closure task (2026-07-27), Goal 9: this comparison's FIELDS_NUMERIC
+    # includes gravity_raw/max_abs_moment_resid, both now NaN/empty at the compressed side's
+    # production default (dense_reference_diagnostics=false) -- this integration test's whole
+    # purpose is exact dense-vs-compressed field parity, so it explicitly opts back into the full
+    # dense reporting block here rather than silently comparing against NaN.
+    rb, meta_b = evaluate_fullA_fast(x_free, ctx; cache = cache_b, warm = warm, moment_representation = :compressed,
+                                      dense_reference_diagnostics = true)
     ok = true
     maxdiff = 0.0
     for f in FIELDS_NUMERIC

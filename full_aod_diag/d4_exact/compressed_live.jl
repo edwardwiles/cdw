@@ -384,7 +384,22 @@ run after every change to either.
 function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
         cache = nothing, use_cache::Bool = true,
         mode::Symbol = :hard, warm::Bool = true, tag::String = "",
-        verification_backend::Symbol = UNRESTRICTED_VERIFICATION_BACKEND_DEFAULT[])
+        verification_backend::Symbol = UNRESTRICTED_VERIFICATION_BACKEND_DEFAULT[],
+        # Final-architecture-closure task (2026-07-27), Goal 9: `gravity_raw` (cbuf[2], via a dense
+        # `obj(inner_x, constr=...)` call) and `benchmark_unweighted_moment_mean`/`max_abs_moment_resid`
+        # (via `CS.select_G_from_H(obj, obj.H)`) are reporting-only outputs -- NOT consumed by
+        # `classify_inner_result`/`is_cacheable_result`/`is_verified_success` (see the comment at this
+        # function's `gravity_raw` assignment below, unchanged from the prior verification-defaults
+        # phase) -- yet were unconditionally materializing dense obj.H/G even under
+        # verification_backend=:operator. Default false: these three fields report NaN/empty (same
+        # convention the pre-existing `!solved` failure branch above already uses for them), and the
+        # dense materialize/select_G_from_H/constr-eval work is skipped entirely. Pass `true` to get
+        # the full dense reporting values back (unchanged behavior from before this flag existed) --
+        # e.g. for an explicit diagnostic/debug run. Independent of `verification_backend`: an
+        # :operator-verified inner solve with dense_reference_diagnostics=true still verifies via the
+        # operator (Delta_dual/Delta_primal/etc. untouched), it just ALSO pays for these three extra
+        # reporting fields.
+        dense_reference_diagnostics::Bool = false)
 
     mode == :hard || error("evaluate_fullA_fast_compressed: mode=:$mode not implemented (matches oracle.jl)")
 
@@ -452,44 +467,56 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
         return result, prof_meta
     end
 
-    # ---- ensure obj.H's dense G columns are populated (lazy; may already be done by the
-    # Hessian callback -- if KNITRO converged without ever calling it, e.g. a warm-started
-    # already-converged point, do it here instead) so the REST of this tail can reuse the
-    # SAME post-processing formulas the dense path uses, unchanged. ----
-    if !st.dense_materialized
-        @prof "materialize_dense_for_postproc" begin
-            ncolI = st.cf.oci - 1
-            # Continuation 10 Section 9: same structured swap as the Hessian callback above,
-            # kept consistent so this (rarely-hit) fallback path can never drift from it.
-            materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
-            fill_gravity_column!(obj, st.grav_raw)
-            st.dense_materialized = true
-        end
-    end
-
     W = size(obj.U, 1); d = obj.d
-    K, G = @prof "moments_reuse_compressed" begin
-        (copy(@view(obj.H[:, 1])), copy(CS.select_G_from_H(obj, obj.H)))
-    end
+    # Final-architecture-closure task (2026-07-27), Goal 9: the dense obj.H materialization +
+    # `CS.select_G_from_H`/`obj(inner_x, constr=...)` block below feeds THREE kinds of consumer:
+    # (a) `:dense_reference` verification's own Delta_dual/Delta_primal/mean_m_resid/
+    #     max_abs_moment_kkt_resid (cbuf[1], obj.arg1, G -- genuinely needs it, that backend IS the
+    #     dense path); (b) reporting-only `gravity_raw`/`benchmark_unweighted_moment_mean`/
+    #     `max_abs_moment_resid` (cbuf[2], G again -- NOT consumed by
+    #     classify_inner_result/is_cacheable_result/is_verified_success, disclosed scope limit, see
+    #     docs/FIVE_FAMILY_OPERATOR_VERIFICATION_DEFAULT_RELEASE_2026-07-27.md). Under
+    #     verification_backend=:operator this block used to run UNCONDITIONALLY just to serve (b) --
+    #     a real dense-G materialization in an otherwise fully operator/compressed production hot
+    #     path. `need_dense_block` gates it: on whenever :dense_reference verification needs it
+    #     regardless, OR the caller explicitly asked for the extra reporting fields via
+    #     `dense_reference_diagnostics=true`.
+    need_dense_block = (verification_backend === :dense_reference) || dense_reference_diagnostics
+    local K, G, cbuf, gravity_raw
+    if need_dense_block
+        # ---- ensure obj.H's dense G columns are populated (lazy; may already be done by the
+        # Hessian callback -- if KNITRO converged without ever calling it, e.g. a warm-started
+        # already-converged point, do it here instead) so the REST of this tail can reuse the
+        # SAME post-processing formulas the dense path uses, unchanged. ----
+        if !st.dense_materialized
+            @prof "materialize_dense_for_postproc" begin
+                ncolI = st.cf.oci - 1
+                # Continuation 10 Section 9: same structured swap as the Hessian callback above,
+                # kept consistent so this (rarely-hit) fallback path can never drift from it.
+                materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
+                fill_gravity_column!(obj, st.grav_raw)
+                st.dense_materialized = true
+            end
+        end
 
-    ncon = obj.d - obj.outer_constr_index + 2
-    cbuf = zeros(ncon)
-    fval = @prof "primal_weight_recovery_compressed" begin
-        obj(inner_x, constr = @view(cbuf[1:ncon]))
+        K, G = @prof "moments_reuse_compressed" begin
+            (copy(@view(obj.H[:, 1])), copy(CS.select_G_from_H(obj, obj.H)))
+        end
+
+        ncon = obj.d - obj.outer_constr_index + 2
+        cbuf = zeros(ncon)
+        @prof "primal_weight_recovery_compressed" begin
+            obj(inner_x, constr = @view(cbuf[1:ncon]))
+        end
+        gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
+    else
+        K = Float64[]; G = zeros(0, 0); cbuf = Float64[]
+        gravity_raw = NaN   # reporting-only diagnostic, not computed at this default -- see
+        # dense_reference_diagnostics kwarg docstring above; NOT read by classify_inner_result/
+        # is_cacheable_result/is_verified_success (same convention the pre-existing !solved failure
+        # branch above already uses for this field).
     end
     ζstar = inner_x[1]; λstar = inner_x[2:end]
-
-    # Verification-defaults task (2026-07-27): `gravity_raw` (cbuf[2], a reporting-only diagnostic
-    # unrelated to the dual-solve verification/admission decision) and `K`/`benchmark_unweighted_
-    # moment_mean` (below) are NOT ported to the operator here -- they are outer-moment/gravity
-    # reporting outputs of THIS function, not part of `classify_inner_result`/`is_cacheable_result`/
-    # `is_verified_success`'s field set, so the dense `obj(inner_x,constr=...)` call and `G`
-    # materialization above still run unconditionally regardless of `verification_backend`
-    # (disclosed scope limit -- see docs/FIVE_FAMILY_OPERATOR_VERIFICATION_DEFAULT_RELEASE_2026-07-27.md).
-    # Only the verification-critical quantities that DO feed those three admission functions
-    # (Delta_dual, Delta_primal, primal_dual_gap, mean_m_resid, max_abs_moment_kkt_resid,
-    # weight_norm_resid, m_weights/m_mean/m_min/m_max) are dispatched below.
-    gravity_raw = obj.outer_constr_index <= d ? cbuf[2] : NaN
 
     local m_weights, Delta_dual, Delta_primal, mean_m_resid, max_abs_moment_kkt_resid, weight_norm_resid_val
     if verification_backend === :operator
@@ -533,7 +560,8 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
 
     # Continuation 10 Section 9: BLAS-gemv swap (moment_resid_blas, oracle_fast.jl) --
     # see docs/fullA_D20_blas_audit_report.md, ~2.1x.
-    benchmark_unweighted_moment_mean = @prof "moment_resid_compute_compressed" moment_resid_blas(G, d, W)
+    benchmark_unweighted_moment_mean = need_dense_block ?
+        (@prof "moment_resid_compute_compressed" moment_resid_blas(G, d, W)) : Float64[]
     max_abs_moment_resid = isempty(benchmark_unweighted_moment_mean) ? NaN : maximum(abs.(benchmark_unweighted_moment_mean))
 
     winner, price_, gap_ = @prof "winner_compute_compressed" compute_winners_fast(θ_full, ctx)
