@@ -15,9 +15,9 @@ for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments
           "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_aspace_coordinate.jl",
           "cm_config.jl", "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
           "cm_originzc_target_layout.jl", "cm_originzc_config.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl",
-          "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
+          "cm_frechet_level.jl", "cm_frechet_lookup_production.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
           "cm_exact_cache_production.jl", "cm_dual_bank_production.jl",
-          "cm_checkpoint.jl", "cm_originzc_checkpoint.jl"]
+          "cm_checkpoint.jl", "cm_originzc_checkpoint.jl", "postmerge_smoke_diagnostics.jl"]
     include(joinpath(_D4E, f))
 end
 using Printf, Dates
@@ -25,9 +25,9 @@ lp(xs...) = (println(xs...); flush(stdout))
 
 const FIND_SMALLEST = length(ARGS) >= 1 ? (ARGS[1] == "true") : true
 const DIRECTION = FIND_SMALLEST ? "upper" : "lower"
-const W = 80_000
+const W = 100_000
 const DELTA = 1.0
-const BUDGET = 600.0
+const BUDGET = 90.0
 const OUT = joinpath(_D4E, "..", "..", "results", "postmerge_smoke_2026-07-28", "flexcm_$DIRECTION")
 rm(OUT; force = true, recursive = true); mkpath(OUT)
 
@@ -46,6 +46,10 @@ w_a_calib = vcat(gp_calib, a_calib)
 const SNAPS = nested_grid_sequence([10, 20, 50])
 const PROBS_L50 = SNAPS[50]
 
+lp("D=", D, " Ddest=", Ddest)
+print_no_h_bundle_facts("flexible_cm")
+reset_no_h_counters!()
+
 t0 = time()
 result = run_cm_upper_checkpointed(copy(w_a_calib);
     W = W, delta = DELTA, draw_design = :pseudorandom, draw_seed = 20260719, L = 50, contrasts = :orthonormal, probs = PROBS_L50,
@@ -57,4 +61,5 @@ wall = time() - t0
 lp("="^90)
 @printf("RESULT flexcm(%s): wall=%.1fs knitro_status=%s n_eval=%d n_grad=%d kappa=%s\n",
     DIRECTION, wall, string(result.knitro_status), result.n_eval, result.n_grad, string(result.kappa))
+print_no_h_counters("flexible_cm")
 lp("="^90)

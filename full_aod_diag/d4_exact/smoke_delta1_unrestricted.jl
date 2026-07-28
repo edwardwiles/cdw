@@ -6,16 +6,26 @@ lp(xs...) = (println(xs...); flush(stdout))
 
 const FIND_SMALLEST = length(ARGS) >= 1 ? (ARGS[1] == "true") : true
 const DIRECTION = FIND_SMALLEST ? "upper" : "lower"
-const W = 80_000
+const W = 100_000
 const DELTA = 1.0
-const BUDGET = 600.0
+const BUDGET = 90.0
 
-ctx_probe = d20_real_setup(W = W, find_smallest = FIND_SMALLEST, δ = DELTA)
+ctx_probe = d20_real_setup(W = W, find_smallest = FIND_SMALLEST, δ = DELTA, destination_sample = :exclude_row)
 pe_probe = build_pivot_elimination(ctx_probe)
 D = ctx_probe.D; D2 = D^2
-Aod_theta_natural = ctx_probe.θ0_up[ctx_probe.Aod_offset+1:ctx_probe.Aod_offset+D2]
+lp("D=", D, " Ddest=", ctx_probe.D_dest)
+lp("-"^90)
+lp("NO-H BUNDLE FACTS: unrestricted  (bundle_type = OperatorPsiBundle, production default;")
+lp("  has_H_field = false, has_H_copy_field = false, has_moments!_field = false, has_K_field = false (renamed payoff)")
+lp("  -- structural absence proven fresh this session in TRUE_OPERATOR_NO_H_PREMERGE_GATE_2026-07-28.md, same commit.")
+lp("  Unrestricted's own inline priming analog is family-specific -- no_dense_g_counters.jl's runtime")
+lp("  Refs are not wired for this family's separate code path (c10_d20_production_driver.jl); its own")
+lp("  print_production_backend_manifest(resolve_unrestricted_manifest(...)) call below is this family's")
+lp("  live backend-selection record.)")
+lp("-"^90)
+Aod_theta_natural = ctx_probe.θ0_up[ctx_probe.Aod_offset+1:ctx_probe.Aod_offset+ctx_probe.D*ctx_probe.D_dest]
 z0 = log.(Aod_theta_natural)
-zfree0 = pivot_reduce(reshape(z0, D, D), pe_probe)
+zfree0 = pivot_reduce(reshape(z0, ctx_probe.D, ctx_probe.D_dest), pe_probe)
 gp0 = ctx_probe.θ0_up[3+D]
 
 CKPT_DIR = joinpath(D4X_ROOT, "results", "postmerge_smoke_2026-07-28", "unrestricted_$DIRECTION")
