@@ -379,6 +379,7 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
             melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:matrix_free), D) :
             melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:dense_reference), D)
     gradient_backend = resolved_gradient_backend
+    melitz_note_explicit_gradient_backend_choice(gradient_backend, D)
     # 2026-07-26 closure session (governing prompt Phase 2): strict production-fast callers
     # (MELITZ_PRODUCTION_FAST's own forbid_dense_fallback=true) must fail HERE, at
     # construction, if the resolved backend is dense -- never after an expensive callback
@@ -941,6 +942,7 @@ function melitz_build_finite_delta_callbacks(obj, ctx, delta::Float64, find_smal
         (obj isa MelitzCCBundle || get(ctx, :sorted_tail_ctx, nothing) !== nothing) ?
             melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:matrix_free), ctx.D) :
             melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:dense_reference), ctx.D)
+    melitz_note_explicit_gradient_backend_choice(resolved_gradient_backend, ctx.D)
     # ADDITIVE (continuation4, Section 4): when gradient_backend is one of the two "direct"
     # backends, cb_G! (below) calls this closure directly instead of the shared
     # PsiObjectiveBundleImplicit functor's own theta-branch (obj(x, dummy_g, theta; jac=...)),

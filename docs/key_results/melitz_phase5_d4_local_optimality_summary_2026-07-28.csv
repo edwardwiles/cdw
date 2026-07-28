@@ -1,0 +1,7 @@
+label,seed,delta_budget,direction,g,any_improving_direction_found,n_probes
+seed29_delta0.001_upper_g-0.0472,29,0.001,upper,-0.04721115407308989,true,30
+seed29_delta0.001_lower_g-0.0381,29,0.001,lower,-0.038127564592453346,true,30
+seed29_delta0.01_upper_g-0.0588,29,0.01,upper,-0.05877817444033576,true,30
+seed29_delta0.01_lower_g-0.03,29,0.01,lower,-0.03003995761504758,true,30
+seed29_delta0.1_upper_g-0.0999,29,0.1,upper,-0.09990782556349809,false,30
+seed29_delta0.1_lower_g-0.0185,29,0.1,lower,-0.0185350879704246,false,30

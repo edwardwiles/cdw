@@ -5255,6 +5255,163 @@ end
 end
 
 # ============================================================================
+# 2026-07-28 outer-search step-control/robustness continuation (governing prompt Phase 0):
+# "make 20-thread behaviour the explicit Melitz default." `melitz_thread_startup_report`
+# (warn-or-throw below a required thread count) and `melitz_note_explicit_gradient_backend_choice`
+# (visible warning + counter whenever an EXPLICIT serial gradient backend is requested despite
+# a parallel variant being eligible) are both pure/injectable (accept `nthreads_available`
+# explicitly) so they are fully testable regardless of the test suite's own `-t 1` convention
+# (this repo's standing single-thread test-suite default -- see this file's own header).
+# ============================================================================
+@testset "Phase 0 (2026-07-28 continuation): 20-thread default reporting + explicit-serial-despite-parallel warning" begin
+    @testset "melitz_thread_startup_report: warn-not-throw below requirement, meets_requirement flag correct" begin
+        r_low = melitz_thread_startup_report(require=20, strict=false, nthreads_available=1)
+        @test r_low.julia_threads == 1
+        @test r_low.meets_requirement == false
+        r_ok = melitz_thread_startup_report(require=20, strict=false, nthreads_available=20)
+        @test r_ok.meets_requirement == true
+        r_over = melitz_thread_startup_report(require=20, strict=false, nthreads_available=40)
+        @test r_over.meets_requirement == true
+        # BLAS thread count is always reported, regardless of the Julia-thread outcome.
+        @test r_low.blas_threads == r_ok.blas_threads == BLAS.get_num_threads()
+    end
+
+    @testset "melitz_thread_startup_report: strict=true throws below requirement, not at/above it" begin
+        @test_throws ErrorException melitz_thread_startup_report(require=20, strict=true, nthreads_available=19)
+        r = melitz_thread_startup_report(require=20, strict=true, nthreads_available=20)
+        @test r.meets_requirement == true
+    end
+
+    @testset "melitz_note_explicit_gradient_backend_choice: counts + warns only when D>=threshold AND nthreads>1 AND backend is an explicit serial direct backend" begin
+        MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] = 0
+        # D=20, 20 threads, explicit serial sorted backend -- the EXACT configuration found
+        # live in scripts/melitz_phase8_9_10_realD20_2026-07-28.jl:172 -- must be counted.
+        melitz_note_explicit_gradient_backend_choice(:B_direct_argument_sorted_serial, 20; nthreads_available=20)
+        @test MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] == 1
+        melitz_note_explicit_gradient_backend_choice(:B_direct_argument_serial, 20; nthreads_available=20)
+        @test MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] == 2
+
+        # Single-threaded process: no parallel alternative exists, nothing to warn about.
+        melitz_note_explicit_gradient_backend_choice(:B_direct_argument_sorted_serial, 20; nthreads_available=1)
+        @test MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] == 2
+
+        # D=4 (below MELITZ_AUTO_PARALLEL_D_THRESHOLD=10): serial is the CORRECT :auto choice
+        # at this size (Phase 2/3 2026-07-26 benchmark: parallel loses at D=4) -- not a
+        # silent-fallback case, must not warn.
+        melitz_note_explicit_gradient_backend_choice(:B_direct_argument_sorted_serial, 4; nthreads_available=20)
+        @test MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] == 2
+
+        # An explicit PARALLEL choice, or :auto's own resolution, never counts.
+        melitz_note_explicit_gradient_backend_choice(:B_direct_argument_sorted_parallel, 20; nthreads_available=20)
+        @test MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] == 2
+        MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] = 0   # leave the global counter clean for later tests
+    end
+
+    if KNITRO_AVAILABLE
+        @testset "build_melitz_implicit_bundle / melitz_build_finite_delta_callbacks resolve :auto to a PARALLEL gradient backend at D=20-scale conditions, never silently to serial" begin
+            # Not a live 20-thread run (the test suite itself runs -t 1, this repo's own
+            # convention) -- confirms the RESOLUTION LOGIC itself (melitz_resolve_gradient_backend,
+            # backend_config.jl) picks the parallel name once D/thread conditions are met,
+            # independent of how many threads this particular test process happens to have.
+            @test melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:matrix_free), 20) in
+                  (Threads.nthreads() > 1 ? (:B_direct_argument_sorted_parallel,) : (:B_direct_argument_sorted_serial,))
+            @test melitz_resolve_gradient_backend(MelitzBackendConfig(inner_backend=:matrix_free), 4) ==
+                  :B_direct_argument_sorted_serial   # D=4 always serial by design (below threshold)
+        end
+    end
+end
+
+# ============================================================================
+# 2026-07-28 outer-search gradient/redundancy/sensitivity continuation (governing prompt
+# Phase 3): "correct incumbent retention before further search work ... use an artificial
+# pair of known feasible incumbents to test direction handling." By direct code reading
+# (finite_delta_outer.jl, solve_melitz_finite_delta_bound, ~line 1805), the final selection
+# is `reduce((a,b) -> b.objective < a.objective ? b : a, all_candidates)` -- an argmin over
+# `.objective`, which is ALWAYS the SIGNED objective (`find_smallest ? theta[1] : -theta[1]`,
+# "smaller is better" uniformly regardless of direction) for every one of
+# {cold_verified_incumbent, initial_incumbent, external_incumbent_candidate} -- structurally
+# direction-safe by construction, not by a per-direction branch that could get the sign wrong
+# in one direction only. These tests verify that live, both directions, with a genuine
+# artificial pair of feasible points (not a synthetic mock) -- a `theta_box=0.0` (zero-degree-
+# of-freedom) outer KNITRO problem is used so the trajectory can NEVER move away from
+# `theta_init` itself (mirroring `melitz_fixed_point_probe`'s own established degenerate-box
+# pattern) -- isolating the external-incumbent-vs-initial-incumbent selection logic from any
+# possible confound with what KNITRO's own (here, nonexistent) trajectory found.
+# ============================================================================
+@testset "Phase 3 (2026-07-28 continuation): incumbent retention is direction-correct for an artificial feasible pair" begin
+    if KNITRO_AVAILABLE
+        inner_opt3 = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        outer_opt3 = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt")
+        obj4, theta0_4 = build_melitz_psi_bundle(FIXTURE; inner_loop_opt=inner_opt3, forbid_dense_fallback=true)
+        ctx4 = obj4.γ
+
+        # The artificial pair: two genuinely different, independently cold-verified feasible
+        # points, symmetric around theta0_4 in theta[1] (raw g). `theta_lo` has the SMALLER
+        # theta[1] (better for :upper, worse for :lower); `theta_hi` has the LARGER theta[1]
+        # (better for :lower, worse for :upper) -- both directions/both better-worse cases are
+        # therefore covered by the SAME two constructed points, exactly the governing prompt's
+        # "an artificial pair" (not four separately-constructed ones).
+        theta_lo = copy(theta0_4); theta_lo[1] -= 0.01
+        theta_hi = copy(theta0_4); theta_hi[1] += 0.01
+        r_lo = evaluate_melitz_delta(theta_lo, ctx4, obj4; cold=true)
+        r_hi = evaluate_melitz_delta(theta_hi, ctx4, obj4; cold=true)
+        @test r_lo.verified && isfinite(r_lo.Delta)
+        @test r_hi.verified && isfinite(r_hi.Delta)
+        loose_delta = 3.0 * max(r_lo.Delta, r_hi.Delta, 1e-6)   # generous enough that theta0_4/theta_lo/theta_hi are ALL outer-feasible
+
+        @testset ":upper direction (find_smallest=true, signed_objective=+theta[1]): the SMALLER-theta[1] external candidate (theta_lo) is adopted over theta_init" begin
+            res = solve_melitz_finite_delta_bound(ctx4, obj4, theta0_4; delta=loose_delta, direction=:upper,
+                theta_box=0.0, inner_loop_opt=inner_opt3, outer_loop_opt=outer_opt3,
+                external_incumbent=theta_lo, forbid_dense_fallback=true)
+            @test res.cold_verified_incumbent !== nothing
+            @test res.cold_verified_incumbent.eval.theta_free[1] ≈ theta_lo[1] atol=1e-9
+            @test res.cold_verified_incumbent.source == :external
+        end
+
+        @testset ":upper direction: the LARGER-theta[1] external candidate (theta_hi, objectively WORSE) is NOT adopted -- theta_init's own value is retained" begin
+            res = solve_melitz_finite_delta_bound(ctx4, obj4, theta0_4; delta=loose_delta, direction=:upper,
+                theta_box=0.0, inner_loop_opt=inner_opt3, outer_loop_opt=outer_opt3,
+                external_incumbent=theta_hi, forbid_dense_fallback=true)
+            @test res.cold_verified_incumbent !== nothing
+            @test res.cold_verified_incumbent.eval.theta_free[1] ≈ theta0_4[1] atol=1e-9
+            @test res.cold_verified_incumbent.source != :external
+        end
+
+        @testset ":lower direction (find_smallest=false, signed_objective=-theta[1]): the LARGER-theta[1] external candidate (theta_hi) is adopted over theta_init" begin
+            res = solve_melitz_finite_delta_bound(ctx4, obj4, theta0_4; delta=loose_delta, direction=:lower,
+                theta_box=0.0, inner_loop_opt=inner_opt3, outer_loop_opt=outer_opt3,
+                external_incumbent=theta_hi, forbid_dense_fallback=true)
+            @test res.cold_verified_incumbent !== nothing
+            @test res.cold_verified_incumbent.eval.theta_free[1] ≈ theta_hi[1] atol=1e-9
+            @test res.cold_verified_incumbent.source == :external
+        end
+
+        @testset ":lower direction: the SMALLER-theta[1] external candidate (theta_lo, objectively WORSE) is NOT adopted -- theta_init's own value is retained" begin
+            res = solve_melitz_finite_delta_bound(ctx4, obj4, theta0_4; delta=loose_delta, direction=:lower,
+                theta_box=0.0, inner_loop_opt=inner_opt3, outer_loop_opt=outer_opt3,
+                external_incumbent=theta_lo, forbid_dense_fallback=true)
+            @test res.cold_verified_incumbent !== nothing
+            @test res.cold_verified_incumbent.eval.theta_free[1] ≈ theta0_4[1] atol=1e-9
+            @test res.cold_verified_incumbent.source != :external
+        end
+
+        @testset "the full RETURNED incumbent is never worse than either supplied verified point, either direction (governing prompt's core acceptance criterion)" begin
+            for direction in (:upper, :lower)
+                sgn(theta) = direction == :upper ? theta[1] : -theta[1]
+                for ext in (theta_lo, theta_hi)
+                    res = solve_melitz_finite_delta_bound(ctx4, obj4, theta0_4; delta=loose_delta, direction=direction,
+                        theta_box=0.0, inner_loop_opt=inner_opt3, outer_loop_opt=outer_opt3,
+                        external_incumbent=ext, forbid_dense_fallback=true)
+                    @test res.cold_verified_incumbent !== nothing
+                    @test sgn(res.cold_verified_incumbent.eval.theta_free) <= sgn(theta0_4) + 1e-9
+                    @test sgn(res.cold_verified_incumbent.eval.theta_free) <= sgn(ext) + 1e-9
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
 # 2026-07-26 production-closure session (governing prompt Phase 3): "centralize and type the
 # welfare metrics." See equilibrium.jl's MelitzWelfareMetrics/melitz_welfare_metrics_from_g/
 # melitz_welfare_metrics/kappa_ratio_of_g for the implementation and full incident writeup

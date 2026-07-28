@@ -1,0 +1,2 @@
+julia_threads,blas_threads,meets_20_thread_requirement,t_serial_s,t_parallel_s,speedup,n_theta,D,warning_fired_for_known_bug_config
+20,1,true,8.811783644,0.984424108,8.951206672398966,798,20,true

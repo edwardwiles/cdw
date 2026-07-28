@@ -1,3 +1,5 @@
+using LinearAlgebra: BLAS
+
 # Melitz production-backend configuration + usage counters (2026-07-26 production-port
 # session). See docs/melitz_production_fast_backend_2026-07-26.md.
 #
@@ -142,6 +144,98 @@ const MELITZ_DENSE_REFERENCE = MelitzBackendConfig(inner_backend=:dense_referenc
 
 const MELITZ_AUTO_PARALLEL_D_THRESHOLD = 10
 
+# ----------------------------------------------------------------------------------------
+# 2026-07-28 outer-search step-control/robustness continuation (governing prompt Phase 0):
+# "use 20 Julia threads by default whenever parallelism is useful ... do not silently
+# benchmark or run these paths serially." This repo has repeatedly reverted to serial
+# execution in later sessions DESPITE `melitz_resolve_*_backend`'s own `:auto` logic already
+# correctly selecting a parallel backend whenever `D>=10 && Threads.nthreads()>1` -- the
+# actual failure mode observed live (2026-07-28 step-control session's own Phase 9/10
+# script, `scripts/melitz_phase8_9_10_realD20_2026-07-28.jl:172`) is a caller EXPLICITLY
+# passing a `*_serial` `gradient_backend` under `-t 20`, bypassing `:auto` entirely -- not a
+# defect in the resolver itself. Two additive fixes below: (1) `melitz_thread_startup_report`
+# gives every production entry point one required startup banner (Julia threads/BLAS
+# threads/warn-or-throw below 20); (2) `melitz_note_explicit_gradient_backend_choice`
+# increments a counter and prints a visible warning (never silent) whenever an EXPLICIT
+# `*_serial` gradient_backend is requested while a parallel variant would resolve instead --
+# called from `build_melitz_implicit_bundle`/`melitz_build_finite_delta_callbacks`.
+# ----------------------------------------------------------------------------------------
+
+const MELITZ_REQUIRED_PRODUCTION_THREADS = 20
+
+"""
+    melitz_thread_startup_report(; require::Int=MELITZ_REQUIRED_PRODUCTION_THREADS,
+        strict::Bool=false, nthreads_available::Int=Threads.nthreads()) -> NamedTuple
+
+Phase 0.3's required startup banner: prints Julia threads available and BLAS threads
+selected (the outer-gradient/structured-Hessian/moment-construction thread counts
+themselves are printed separately by `melitz_print_backend_summary`, which calls the
+resolvers directly). If `nthreads_available < require`: prints a clear warning always;
+additionally `throw`s an `ErrorException` if `strict=true` (Phase 0.3's "in strict
+production mode, optionally throw if JULIA_NUM_THREADS < 20"). Returns
+`(julia_threads, blas_threads, meets_requirement)` so a caller/report can record what
+actually ran without re-deriving it.
+"""
+function melitz_thread_startup_report(; require::Int=MELITZ_REQUIRED_PRODUCTION_THREADS,
+                                       strict::Bool=false,
+                                       nthreads_available::Int=Threads.nthreads())
+    blas_threads = BLAS.get_num_threads()
+    println("Melitz thread startup report:")
+    println("  Julia threads available = ", nthreads_available, " (require >= ", require, ")")
+    println("  BLAS threads selected   = ", blas_threads)
+    meets_requirement = nthreads_available >= require
+    if !meets_requirement
+        msg = "melitz_thread_startup_report: Threads.nthreads()=$nthreads_available < " *
+              "required $require -- using all $nthreads_available available Julia threads " *
+              "instead of the $require-thread production default. Outer-gradient/structured-" *
+              "Hessian/moment-construction kernels will run with less parallelism than the " *
+              "documented Melitz production default (src/melitz/CLAUDE.md)."
+        println("  WARNING: ", msg)
+        strict && error(msg)
+    end
+    return (julia_threads=nthreads_available, blas_threads=blas_threads, meets_requirement=meets_requirement)
+end
+
+const MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT = Ref(0)
+
+const MELITZ_SERIAL_GRADIENT_BACKEND_NAMES = (:B_direct_argument_serial, :B_direct_argument_sorted_serial,
+    :B_direct_argument_touched_row_serial)
+const MELITZ_PARALLEL_GRADIENT_BACKEND_OF = Dict(
+    :B_direct_argument_serial => :B_direct_argument_parallel,
+    :B_direct_argument_sorted_serial => :B_direct_argument_sorted_parallel,
+)
+
+"""
+    melitz_note_explicit_gradient_backend_choice(gradient_backend, D;
+        nthreads_available=Threads.nthreads()) -> nothing
+
+Phase 0/1: called from every production gradient-backend resolution site. If `gradient_backend`
+is one of the direct-family `*_serial` backends (an EXPLICIT, non-`:auto` choice -- `:auto`
+itself never resolves to a name this function is called with while a parallel variant would
+apply, since `melitz_resolve_gradient_backend` already picks the parallel one in that case)
+AND a parallel variant would have been eligible (`D >= MELITZ_AUTO_PARALLEL_D_THRESHOLD &&
+nthreads_available > 1`), increments the module-global counter and prints a visible warning
+-- "do not silently benchmark or run these paths serially" (governing prompt Phase 0.2). Not
+an error: a genuine serial cross-check/ablation is a legitimate, disclosed choice (e.g. this
+session's own Phase 3 step-control lab deliberately compares serial vs parallel) -- only
+SILENCE is prohibited, not the choice itself.
+"""
+function melitz_note_explicit_gradient_backend_choice(gradient_backend::Symbol, D::Int;
+                                                        nthreads_available::Int=Threads.nthreads())
+    if gradient_backend in MELITZ_SERIAL_GRADIENT_BACKEND_NAMES &&
+       D >= MELITZ_AUTO_PARALLEL_D_THRESHOLD && nthreads_available > 1
+        MELITZ_EXPLICIT_SERIAL_GRADIENT_DESPITE_PARALLEL_COUNT[] += 1
+        faster = get(MELITZ_PARALLEL_GRADIENT_BACKEND_OF, gradient_backend, :a_parallel_variant)
+        println("WARNING: gradient_backend=", gradient_backend, " explicitly requested at D=", D,
+                " with Threads.nthreads()=", nthreads_available, " (>1) -- ", faster,
+                " is available and measured ~11x faster on this fixture (docs/",
+                "melitz_outer_search_scaling_and_profile_2026-07-27.md, Phase 3). Proceeding with ",
+                "the explicitly requested serial backend (not silently), but this is very likely ",
+                "not what a production/timed campaign wants.")
+    end
+    return nothing
+end
+
 """
     melitz_resolve_moment_backend(cfg, D) -> Symbol
 
@@ -206,7 +300,8 @@ function melitz_print_backend_summary(cfg::MelitzBackendConfig, D::Int)
     println("  Hessian     = ", cfg.inner_backend == :matrix_free ? melitz_resolve_hessian_backend(cfg, D) : :dense_gemm)
     println("  screening   = ", cfg.screening_backend)
     println("  dense fallbacks allowed = ", !cfg.forbid_dense_fallback)
-    println("  threads     = ", cfg.threads)
+    println("  Julia threads = ", cfg.threads)
+    println("  BLAS threads  = ", BLAS.get_num_threads())
     return nothing
 end
 
