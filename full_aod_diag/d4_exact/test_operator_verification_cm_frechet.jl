@@ -10,7 +10,8 @@ for f in ["context.jl","draw_design.jl","winners.jl","oracle.jl",
           "composite_gradient.jl","composite_gradient_fast.jl","gradient_workspace.jl","shared_a_gradient.jl",
           "cm_lookup_kernels.jl","lfix_cm_aware.jl","cm_hessian_architectures.jl","cm_production_bundle.jl","cm_screen_bridge.jl",
           "nested_quantile_grids.jl","lfix_factorized.jl","lfix_factorized_workspace.jl","lfix_cm_cplus.jl",
-          "cm_frechet_level.jl","cm_frechet_hessian.jl","cm_frechet_hessian_threaded.jl","cm_frechet_cplus.jl",
+          "cm_frechet_level.jl","cm_frechet_lookup_kernels.jl","cm_frechet_hessian.jl","cm_frechet_hessian_threaded.jl",
+          "cm_frechet_lookup_production.jl","cm_frechet_cplus.jl",
           "operator_verification.jl"]
     include(joinpath(D4X, f))
 end

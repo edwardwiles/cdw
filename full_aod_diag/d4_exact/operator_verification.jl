@@ -160,50 +160,7 @@ touches a live `CMLookupState`'s own `st.arg0`/`st.hist_h`/etc).
 function verify_inner_solution_operator_cm!(zeta::Float64, lambda::AbstractVector{Float64},
         cf::CompressedFactual, L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int,
         bins::Matrix{<:Unsigned}, R::Union{Nothing,Matrix{Float64}}, obj, W::Int)
-    ncore1 = cf.oci - 1
-    ncm = nO * L
-    λ_E = @view lambda[1:ncore1]
-    λ_cm = @view lambda[ncore1+1:ncore1+ncm]
-    length(lambda) == ncore1 + ncm || error("verify_inner_solution_operator_cm!: length(lambda)=$(length(lambda)) != ncore1+ncm=$(ncore1+ncm)")
-
-    econ_ws = economic_operator_workspace(cf)
-
-    r = fill(-zeta, W)
-    econ_buf = zeros(W)
-    economic_forward!(econ_buf, λ_E, cf, econ_ws)
-    r .-= econ_buf
-
-    D_bins = size(bins, 2)
-    nbins = L + 1
-    λmat_stored = reshape(λ_cm, nO, L)
-    λmat_block = zeros(nO, L)
-    apply_contrast!(λmat_block, λmat_stored, R)
-    λmat_ext = zeros(nO, L + 1)
-    suffix_sums!(λmat_ext, λmat_block)
-    cm_contrib = zeros(W)
-    cumulative_forward_contribution!(cm_contrib, bins, refIndex1, origins, λmat_ext)
-    r .-= cm_contrib
-
-    Psi_r = similar(r); obj.Psi!(Psi_r, r)
-    f = sum(Psi_r) / W + zeta
-
-    dPsi_r = similar(r); obj.dPsi!(dPsi_r, r)
-    g_E = zeros(ncore1)
-    economic_transpose!(g_E, dPsi_r, cf, econ_ws)
-    g_E .*= -(1.0 / W)
-
-    hist_partials = [zeros(D_bins, nbins)]
-    hist_h = zeros(D_bins, nbins)
-    build_weighted_histogram!(hist_h, hist_partials, bins, dPsi_r, D_bins, nbins)
-    Hpre = zeros(D_bins, L)
-    g_block = zeros(nO, L)
-    cumulative_backward_gradient!(g_block, Hpre, hist_h, refIndex1, origins, L, W)
-    g_stored = zeros(nO, L)
-    apply_contrast!(g_stored, g_block, R)
-
-    g_lambda = vcat(g_E, vec(g_stored))
-    record_operator_verification!()
-    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
+    return _verify_inner_solution_operator_cm_core(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R, obj, W, nothing)
 end
 
 isdefined(Main, :CMFrechetLookupState) || include(joinpath(@__DIR__, "cm_frechet_lookup_kernels.jl"))
@@ -212,27 +169,42 @@ isdefined(Main, :CMFrechetLookupState) || include(joinpath(@__DIR__, "cm_frechet
     verify_inner_solution_operator_cm_frechet!(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R,
         level_targets, obj, W) -> NamedTuple
 
-shared-FG-verification-and-A-gradient release (2026-07-27), Phase A continuation: common-Frechet
-analogue of `verify_inner_solution_operator_cm!`, extended to `G=[E|C|Level]` (economic + CM-grid +
-the common-level anchor block that turns flexible CM into fixed Frechet). This is the genuinely NEW
-verifier of the 4 built this session -- the level block has no existing verification-side
-precedent, only a production FG kernel (`CMFrechetLookupState`'s callable, `cm_frechet_lookup_
-kernels.jl`) to independently re-derive against, using FRESH scratch instead of a live `st`'s own
-`arg0`/`arg1`/`Hpre`/etc. `lambda = [lambda_E; lambda_cm; lambda_level]`, matching
-`CMFrechetLookupState`'s own `x = [zeta; lambda_core; lambda_cm; lambda_level]` layout.
+Harmonization task (2026-07-28): thin public wrapper matching this family's existing external
+call signature (`level_targets` positioned before `obj, W`, unlike a trailing optional argument,
+so this couldn't just become an optional-argument extension of `verify_inner_solution_operator_cm!`
+without breaking every existing caller). Delegates to the shared
+`_verify_inner_solution_operator_cm_core` below -- see that function's own docstring.
 """
 function verify_inner_solution_operator_cm_frechet!(zeta::Float64, lambda::AbstractVector{Float64},
         cf::CompressedFactual, L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int,
         bins::Matrix{<:Unsigned}, R::Union{Nothing,Matrix{Float64}}, level_targets::Vector{Float64},
         obj, W::Int)
+    return _verify_inner_solution_operator_cm_core(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R, obj, W, level_targets)
+end
+
+"""
+    _verify_inner_solution_operator_cm_core(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R, obj, W, level_targets)
+
+Harmonization task (2026-07-28): the ONE shared implementation behind both
+`verify_inner_solution_operator_cm!` (flexible CM, CM+ZC -- `level_targets=nothing`) and
+`verify_inner_solution_operator_cm_frechet!` (common Fréchet -- `level_targets` a `Vector{Float64}`)
+-- previously two independent, near-duplicate functions (economic + CM-grid verification
+byte-identical; common Fréchet's copy additionally computed the level-block forward/backward
+contribution). `G=[E|C]` when `level_targets===nothing`, `G=[E|C|Level]` otherwise.
+"""
+function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::AbstractVector{Float64},
+        cf::CompressedFactual, L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int,
+        bins::Matrix{<:Unsigned}, R::Union{Nothing,Matrix{Float64}}, obj, W::Int,
+        level_targets::Union{Nothing,Vector{Float64}})
     D_bins = size(bins, 2)
     ncore1 = cf.oci - 1
     ncm = nO * L
-    length(lambda) == ncore1 + ncm + L ||
-        error("verify_inner_solution_operator_cm_frechet!: length(lambda)=$(length(lambda)) != ncore1+ncm+L=$(ncore1+ncm+L)")
+    expected_len = level_targets === nothing ? ncore1 + ncm : ncore1 + ncm + L
+    length(lambda) == expected_len ||
+        error("_verify_inner_solution_operator_cm_core: length(lambda)=$(length(lambda)) != expected=$(expected_len)")
     λ_E = @view lambda[1:ncore1]
     λ_cm = @view lambda[ncore1+1:ncore1+ncm]
-    λ_level = @view lambda[ncore1+ncm+1:ncore1+ncm+L]
+    λ_level = level_targets === nothing ? nothing : (@view lambda[ncore1+ncm+1:ncore1+ncm+L])
 
     econ_ws = economic_operator_workspace(cf)
 
@@ -252,16 +224,18 @@ function verify_inner_solution_operator_cm_frechet!(zeta::Float64, lambda::Abstr
     r .-= cm_contrib
 
     invsqrtD = 1.0 / sqrt(D_bins)
-    P_level = zeros(L + 1)
-    frechet_level_suffix_sums!(P_level, λ_level)
-    level_contrib = zeros(W)
-    frechet_level_forward_sum!(level_contrib, bins, D_bins, P_level)
-    const_term = 0.0
-    @inbounds for l in 1:L
-        const_term += λ_level[l] * level_targets[l]
-    end
-    @inbounds for s in 1:W
-        r[s] -= invsqrtD * level_contrib[s] - const_term
+    if level_targets !== nothing
+        P_level = zeros(L + 1)
+        frechet_level_suffix_sums!(P_level, λ_level)
+        level_contrib = zeros(W)
+        frechet_level_forward_sum!(level_contrib, bins, D_bins, P_level)
+        const_term = 0.0
+        @inbounds for l in 1:L
+            const_term += λ_level[l] * level_targets[l]
+        end
+        @inbounds for s in 1:W
+            r[s] -= invsqrtD * level_contrib[s] - const_term
+        end
     end
 
     Psi_r = similar(r); obj.Psi!(Psi_r, r)
@@ -277,17 +251,23 @@ function verify_inner_solution_operator_cm_frechet!(zeta::Float64, lambda::Abstr
     hist_h = zeros(D_bins, nbins)
     build_weighted_histogram!(hist_h, hist_partials, bins, dPsi_r, D_bins, nbins)
     Hpre = zeros(D_bins, L)
-    prefix_sums!(Hpre, hist_h, L)
-
     g_block = zeros(nO, L)
-    cumulative_backward_gradient_from_prefix!(g_block, Hpre, refIndex1, origins, L, W)
+    if level_targets === nothing
+        cumulative_backward_gradient!(g_block, Hpre, hist_h, refIndex1, origins, L, W)
+    else
+        prefix_sums!(Hpre, hist_h, L)
+        cumulative_backward_gradient_from_prefix!(g_block, Hpre, refIndex1, origins, L, W)
+    end
     g_stored = zeros(nO, L)
     apply_contrast!(g_stored, g_block, R)
 
-    g_level = zeros(L)
-    frechet_level_backward_gradient!(g_level, Hpre, D_bins, L, W, invsqrtD, level_targets, sum_dPsi)
-
-    g_lambda = vcat(g_E, vec(g_stored), g_level)
+    g_lambda = if level_targets === nothing
+        vcat(g_E, vec(g_stored))
+    else
+        g_level = zeros(L)
+        frechet_level_backward_gradient!(g_level, Hpre, D_bins, L, W, invsqrtD, level_targets, sum_dPsi)
+        vcat(g_E, vec(g_stored), g_level)
+    end
     record_operator_verification!()
     return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
 end
