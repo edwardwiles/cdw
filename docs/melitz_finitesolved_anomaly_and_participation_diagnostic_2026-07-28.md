@@ -252,6 +252,152 @@ from a single choke point (`melitz_classified_inner_solve` itself) rather than r
 separate, invasive constructor-level changes across scripts and production call sites that
 this session's scope explicitly rules out ("Do not refactor unrelated code").
 
+## Phase 6b: why this keeps recurring -- structural analysis (user follow-up)
+
+This repo already contained **two** prior, independent fixes aimed at exactly this failure
+mode before this session started. The user asked, reasonably, how the anomaly could still
+happen given that. This section answers that directly, in writing, for the record.
+
+### The two pre-existing checks, and what each actually protects
+
+**Check #1** -- `build_melitz_cc_bundle` (`src/melitz/cc_bundle.jl:223-241`) removed the
+*default* on its own `lower_limit` keyword argument, making it a required, no-default
+parameter. Its own docstring documents the history: an earlier session found the cap
+"silently left inactive, repeatedly, across multiple sessions... one of them burning 10+ real
+minutes on an uncapped/poorly-conditioned inner solve," and closed it by converting an
+easy-to-miss runtime footgun into an immediate `UndefKeywordError` at that one call site.
+
+**Check #2** -- `solve_melitz_finite_delta_bound` (`src/melitz/finite_delta_outer.jl:1631-1635`)
+asserts `isfinite(obj.lower_limit)` immediately after building its own bundle.
+
+Both checks are real, both are correct, and both still pass today. **Neither is a property of
+the object type -- each is a property of one specific caller's own behavior at one specific
+call site.**
+
+### The construction/call graph: four constructors, three drivers, one classifier
+
+```
+CONSTRUCTORS (build an obj with SOME lower_limit baked in at construction time)
+├─ build_melitz_cc_bundle(...)                    -- lower_limit: REQUIRED, no default (Check #1)
+│     called BY the three wrappers below, never directly by ordinary scripts
+├─ build_melitz_implicit_bundle(...)               -- inner_solve_config=nothing DEFAULT -> uncapped
+├─ build_melitz_psi_bundle(...)                    -- inner_solve_config=nothing DEFAULT -> uncapped
+└─ build_melitz_psi_bundle_from_calibration(...)   -- inner_solve_config=nothing DEFAULT -> uncapped
+      (used by build_realD20_fixture / build_d4_fixture -- THE shared fixture behind
+       every 2026-07-27/07-28 phase script, and behind this anomaly)
+
+DRIVERS (call the classifier on an obj they either built themselves or were handed)
+├─ solve_melitz_finite_delta_bound      -- builds its OWN obj via build_melitz_implicit_bundle
+│                                          WITH delta_evaluation_cap threaded through + asserts (Check #2)
+│                                          => SAFE, but ONLY for this one driver's own obj
+├─ solve_melitz_nuisance_min_delta      -- inner_solve_config MANDATORY (no default at all),
+│                                          mutates obj.lower_limit in/out unconditionally
+│                                          => SAFE, by a THIRD, independent mechanism
+├─ melitz_fixed_point_probe             -- builds its OWN obj via build_melitz_implicit_bundle
+│                                          WITHOUT delta_evaluation_cap/inner_solve_config -> uncapped;
+│                                          then calls melitz_build_finite_delta_callbacks, which has
+│                                          its OWN separate delta_evaluation_cap=10.0 default that is
+│                                          NEVER reconciled against the obj it was just handed
+│                                          => UNSAFE, live in production (test/melitz/runtests.jl
+│                                             Test D/D' calls this directly)
+└─ (no driver at all -- a script builds a fixture and calls the classifier directly)
+      => UNSAFE -- this is the anomaly's actual path
+
+     ↓ every one of the above eventually calls ↓
+
+melitz_classified_inner_solve(obj, theta, ctx; delta_evaluation_cap, ...)
+   -- the ONE function that actually produces a FiniteSolved/AboveEvaluationCap/... verdict.
+   -- takes delta_evaluation_cap as a per-CALL argument that gates only the two cheap
+      pre-solve screens (stored_dual, dual_polish).
+   -- the live KNITRO-native threshold is governed by obj.lower_limit, a property FIXED AT
+      CONSTRUCTION TIME by whichever of the four constructors above built this obj --
+      completely decoupled from the delta_evaluation_cap argument passed here.
+   -- BEFORE this session: no check anywhere in this function that these two numbers agree.
+   -- AFTER this session (Phase 5): both checks live HERE instead, so they apply
+      UNIFORMLY regardless of which constructor/driver produced obj.
+```
+
+### Why the two prior checks don't compose into a guarantee
+
+Check #1 stops a caller from *forgetting* to pass `lower_limit` to
+`build_melitz_cc_bundle` -- it does nothing to stop a wrapper one level up from *choosing* the
+dangerous value as ITS OWN default and passing it explicitly. That is exactly what
+`build_melitz_psi_bundle_from_calibration` does:
+
+```julia
+lower_limit=(inner_solve_config === nothing ? -KNITRO.KN_INFINITY : inner_solve_config.lower_limit)
+```
+
+This line satisfies check #1 to the letter -- an explicit `Float64` is always passed, no
+`UndefKeywordError` is possible -- while silently reintroducing the identical bug one layer
+up, now as a deliberate (if unlabeled) default rather than an accidental omission. Check #1's
+protection does not propagate through a wrapper that re-exposes the same unsafe choice under
+a new name.
+
+Check #2 only fires inside `solve_melitz_finite_delta_bound`'s own function body, on the `obj`
+that function itself constructed a few lines earlier. It has no visibility into, and no power
+over, any OTHER function that builds a DIFFERENT `obj` (`melitz_fixed_point_probe`) or any
+script that builds a fixture directly and calls `melitz_classified_inner_solve` on it without
+ever calling `solve_melitz_finite_delta_bound` at all -- which is precisely the anomaly's own
+path (`scripts/melitz_phase9_10_realD20_nested_and_basis_2026-07-28.jl`'s `phase10_main`).
+
+So: two genuinely correct, genuinely tested fixes, each scoped to exactly the one incident
+that motivated it, sitting on two of at least **five** independent routes to the same
+underlying KNITRO call. Fixing an entry ramp does not close the other four ramps, and nothing
+in the code enforces that new entry ramps (or wrappers around old ones) inherit the fix.
+
+### A second contributing cause: the classifier's own docstring overclaims
+
+`melitz_classified_inner_solve`'s docstring (`src/melitz/inner_screening.jl`, pre-existing
+this session) states:
+
+> "every early-abort threshold in this function -- the two pre-solve screens AND the
+> KNITRO-native mid-solve `lower_limit` bailout -- is now gated on `delta_evaluation_cap`
+> ONLY."
+
+This sentence is **not accurate** for how `obj.lower_limit` is actually set. It is true that
+the *screens* are gated on the `delta_evaluation_cap` argument. It is not true of the live
+KNITRO threshold, which depends on `obj.lower_limit` -- a value fixed by whichever of the four
+constructors built `obj`, at a time and place entirely disconnected from the
+`delta_evaluation_cap` value later passed into this function. A session reading this
+docstring at face value has a documented, textual reason to believe that passing
+`delta_evaluation_cap=10.0` here **is** the cap. That is a plausible, concrete mechanism for
+why this specific misunderstanding recurred across multiple independent sessions, not only
+"forgetting to check" -- the code's own comments assert a guarantee it does not actually
+provide on four of its five entry paths. This docstring was not corrected this session (out of
+the narrow diagnostic scope), and doing so is one of the concrete follow-ups below.
+
+### Why this session's fix is structurally different from the first two
+
+Checks #1 and #2 each sit on one entry ramp. This session's Phase 5 fix sits **inside
+`melitz_classified_inner_solve` itself** -- the one node every entry ramp above funnels
+through before a `FiniteSolved` can ever be returned. It does not matter which of the four
+constructors built `obj`, or which of the three drivers (or no driver at all) called it: the
+classifier now refuses to hand back `Delta > delta_evaluation_cap` regardless. That is a
+different KIND of fix (a property of the shared bottleneck, not of one more caller), which is
+why it closes all five rows of the Phase 6 audit table at once rather than requiring five
+separate patches.
+
+It is still **not** a complete structural fix, and should not be reported to the user as one.
+It converts a silent wrong answer into a loud, immediate crash -- real progress, since a crash
+gets noticed and a wrong number does not -- but it does not make any of the four constructors'
+own defaults safe, and a hypothetical future code path that calls
+`melitz_bundle_inner_solve!`/`melitz_cc_inner_loop_knitro!` even more directly, bypassing
+`melitz_classified_inner_solve` itself, would reopen the same class of bug a fifth way. The
+genuine structural fix -- not done this session, disclosed as a scoped-out recommendation, not
+an oversight -- would be to remove the `=nothing` default on `inner_solve_config` from
+`build_melitz_implicit_bundle`, `build_melitz_psi_bundle`, and
+`build_melitz_psi_bundle_from_calibration`, mirroring `solve_melitz_nuisance_min_delta`'s
+already-established mandatory-kwarg pattern, so there is exactly one way to obtain an
+uncapped bundle anywhere in this codebase: an explicit, named `:full_value` choice at the
+construction call site, never a default anyone can silently inherit. That is a breaking change
+across dozens of existing call sites (every script/test currently omitting the kwarg) and was
+explicitly out of scope for this session ("no broad campaign," "fix only paths that can
+accidentally omit the requested cap... do not refactor unrelated code") -- but it is the
+difference between "this specific incident can no longer happen" (delivered this session) and
+"this class of bug cannot exist in this codebase" (not delivered, and worth doing as its own
+scoped piece of work if wanted).
+
 ## Phase 7: participation-gradient diagnostic
 
 Two real-D20 points, both built on the SAME properly-capped (`obj.lower_limit=-10.0`, this
