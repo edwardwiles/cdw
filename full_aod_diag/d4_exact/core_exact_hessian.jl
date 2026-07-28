@@ -212,15 +212,22 @@ const CM_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:cm_lookup)
     CM_FRECHET_INNER_FG_BACKEND_DEFAULT
 
 Phase 5.2 remediation (2026-07-26): common-Frechet analogue of `CM_INNER_FG_BACKEND_DEFAULT`.
-`:dense_reference` (default, unchanged) | `:cm_frechet_lookup` (new matrix-free CM+level operator,
-`cm_frechet_lookup_kernels.jl`/`cm_frechet_lookup_production.jl` -- only reachable when
-`cm_hessian_backend=:structured`, see `build_cm_frechet_production_context`'s own check). Kept
-`:dense_reference` until D=4/D=20 correctness and performance gates pass (mirrors
-`CM_INNER_FG_BACKEND_DEFAULT`'s own history: available-but-not-default until validated, THEN
-flipped -- see docs/RESTRICTED_OPERATOR_FG_PRODUCTION_PORT_2026-07-26.md for the flip criteria and
-this family's own gate results once run).
+`:dense_reference` (retained as an explicit, selectable diagnostic backend -- not deleted) |
+`:cm_frechet_lookup` (new matrix-free CM+level operator, `cm_frechet_lookup_kernels.jl`/
+`cm_frechet_lookup_production.jl` -- only reachable when `cm_hessian_backend=:structured`, see
+`build_cm_frechet_production_context`'s own check).
+
+**Flipped to `:cm_frechet_lookup` 2026-07-27** (`docs/COMMON_FRECHET_OPERATOR_FG_DEFAULT_FLIP_2026-07-27.md`).
+`docs/COMMON_FRECHET_OPERATOR_FG_DEFAULT_FINAL_GATE_2026-07-27.md` (Section 3.3 of the winner-aware
+H_ER phase) found the operator backend correct (24/24 checks, real D=20/W=80,000, both contrasts,
+3 points) and 1.1-1.2x faster, but held the flip back solely because of a 3.94% allocation
+regression under an old blanket "any allocation increase blocks the flip" rule. That rule has been
+superseded by an explicit priority order (correctness/stability > architecture/no-dense-G >
+runtime > memory/GC > small relative allocation deltas): a 3.94% allocation increase with no
+runtime regression, no peak-memory/GC regression, and no dense-G dependency does not block a
+default flip. See the flip doc for the confirmation gate re-run under the new default.
 """
-const CM_FRECHET_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:dense_reference)
+const CM_FRECHET_INNER_FG_BACKEND_DEFAULT = Ref{Symbol}(:cm_frechet_lookup)
 
 """
     ORIGINZC_FG_BACKEND_DEFAULT
