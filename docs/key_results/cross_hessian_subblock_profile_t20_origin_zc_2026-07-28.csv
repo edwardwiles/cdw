@@ -1,0 +1,10 @@
+family,block,nthreads,t_min_s,t_mean_s
+origin_zc,H_EE,20,0.041638208,0.046566898125
+origin_zc,H_ZZ_centering_prep(fill_S=true),20,0.01015649,0.011301841625
+origin_zc,H_EZ_Snu_prep(=H_ER prep),20,0.000191385,0.000217229625
+origin_zc,H_EZ(=HER),20,0.116946025,0.137073983125
+origin_zc,H_EZ(=HER,threaded),20,0.029928899,0.040628078625
+origin_zc,H_ZZ(=HRR)_gram_reference,20,0.007457795,0.008081541375
+origin_zc,H_ZZ(=HRR)_blas_syrk,20,0.012733488,0.01282718175
+origin_zc,H_ZZ(=HRR)_blas_gemm,20,0.014002899,0.015198363375
+origin_zc,H_ZZ(=HRR)_threaded_packed,20,0.008463396,0.010485636125

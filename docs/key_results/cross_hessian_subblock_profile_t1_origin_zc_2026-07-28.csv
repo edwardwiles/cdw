@@ -1,0 +1,10 @@
+family,block,nthreads,t_min_s,t_mean_s
+origin_zc,H_EE,1,0.099764662,0.12005066325000001
+origin_zc,H_ZZ_centering_prep(fill_S=true),1,0.007060915,0.007288530500000001
+origin_zc,H_EZ_Snu_prep(=H_ER prep),1,0.000188806,0.00020501712499999998
+origin_zc,H_EZ(=HER),1,0.12409579,0.13436686412499999
+origin_zc,H_EZ(=HER,threaded),1,0.10598127,0.12756699275
+origin_zc,H_ZZ(=HRR)_gram_reference,1,0.005982548,0.0062996115
+origin_zc,H_ZZ(=HRR)_blas_syrk,1,0.009750787,0.011529482
+origin_zc,H_ZZ(=HRR)_blas_gemm,1,0.010358444,0.011397348250000001
+origin_zc,H_ZZ(=HRR)_threaded_packed,1,0.039364625,0.04454010725
