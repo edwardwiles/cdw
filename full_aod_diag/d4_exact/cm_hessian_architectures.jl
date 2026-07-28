@@ -1,3 +1,11 @@
+# D=20 profiling task (flexible_cm/common_frechet, 2026-07-28): this file's Hessian callbacks use
+# the opt-in `@cmhess_prof` sub-block timing macro (default off, zero overhead) -- self-include the
+# defining file if a caller hasn't already loaded it, same defensive pattern this codebase's own
+# cm_checkpoint.jl already uses for its own optional-dependency includes. Requires instrumentation.jl
+# (PROF_ENABLED/prof_record!) to already be loaded -- true of every existing caller of this file,
+# since this file's OWN pre-existing `@prof` uses already assumed that ordering.
+isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))
+
 # ============================================================================
 # Continuation (branch diag/fullA-d4-exact-cm-hessian-arch): Hessian
 # architecture comparison for the CM-augmented inner CC dual solve, D=4.
@@ -1213,11 +1221,14 @@ lazily-built state fields the FG-callback side already populates (`CMLookupState
 these closures never construct or own a separate state, purely read what the FG side already built.
 """
 function _prep_dual_index_for_archC!(cctx::CMBinHessCtx, obj, x)
-    st = cctx.cmlookup_st
-    if st !== nothing && cctx.inner_fg_backend !== :dense_reference
-        operator_prep_for_hessian!(st, x)
-    else
-        _archC_prep_for_hessian!(obj, x)
+    _record_cm_hessian_capture_x!(x)   # D=20 profiling task (2026-07-28): opt-in, see cm_hessian_subblock_profiling.jl
+    @cmhess_prof "hessw_operator_prep" begin
+        st = cctx.cmlookup_st
+        if st !== nothing && cctx.inner_fg_backend !== :dense_reference
+            operator_prep_for_hessian!(st, x)
+        else
+            _archC_prep_for_hessian!(obj, x)
+        end
     end
     return nothing
 end
