@@ -1,0 +1,25 @@
+field,value
+target_delta,0.5
+direction,svd_near_null
+sign,-1.0
+step_norm,0.05
+g_pt,-0.48546126592859407
+Delta0_r0,0.4832764950468894
+r0_nStatus,0
+r0_x_norm,737.7952220697374
+obj_lower_limit_at_construction,-1.7976931348623157e308
+obj_lower_limit_equals_neg_KN_INFINITY,true
+range_screen_at_theta_new,PASS (no single-column certificate -- necessary-only test)
+origin_block_screen_at_theta_new,InfiniteDeltaCertified(column=12,kind=:origin_block) -- exact joint infeasibility certificate
+r_new_classification_uncapped,FiniteSolved
+r_new_Delta_uncapped,1.510118285974391e14
+r_new_nStatus_uncapped,-103
+r_new_x_norm_uncapped,2.1777318769389142e17
+r_new_x_all_finite,true
+independent_reevaluation_matches_exactly,true
+r_new_classification_capped10_stale_warmstart,NumericalFailure
+r_new_classification_capped50_stale_warmstart,NumericalFailure
+r_new_classification_capped10_neutral_warmstart,NumericalFailure
+r_new_nStatus_capped10_neutral_warmstart,-300
+threshold_crossed_ever_fired_capped10,false
+csv_row_reproduced_exactly,true

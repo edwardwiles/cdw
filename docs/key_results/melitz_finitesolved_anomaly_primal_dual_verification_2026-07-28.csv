@@ -1,0 +1,9 @@
+check,result,verdict
+all dual variables finite (isfinite.(x)),true,PASS (finiteness alone)
+dual vector norm ||x||,2.1777318769389142e17,FLAG -- physically implausible magnitude for a converged CC dual
+raw dual objective (Delta_theta) finite,true,PASS (finiteness alone)
+KNITRO status code,-103 (approximate/stalled),FLAG -- NOT nStatus==0 (genuine KKT-optimal convergence)
+independent re-evaluation of obj(x_recovered) reproduces reported Delta exactly,true,PASS (internal self-consistency only -- does not certify validity)
+origin_block_screen (exact joint D-block feasibility LP) at theta_new,InfiniteDeltaCertified(column=12),FAIL -- proves the TRUE DeltaStar(theta_new) is +infinity
+range_screen (necessary-only single-column test) at theta_new,PASS,uninformative here -- necessary but not sufficient, exactly as documented
+conclusion,the reported FiniteSolved(Delta=1.510118e14) was NEVER a valid finite optimum,the true value is +infinity; KNITRO's dual iterate diverged chasing an unbounded (uncapped) objective and was accepted under a stalled/approximate status code rather than genuine convergence

@@ -798,7 +798,20 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     # bundle/operator by melitz_bundle_prepare_at_theta! above, so this call does not repeat
     # that work for the matrix-free path (see that dispatcher's own docstring).
     objSol, x, nStatus = melitz_bundle_inner_solve!(obj, theta)
-    accepted = nStatus in (0, -100, -101, -103)
+    # 2026-07-28 anomaly-hardening (docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md):
+    # mirror the ALREADY-established `cc_algo/inner_loop_functions.jl` acceptance rule
+    # (`nStatus == 0 || (nStatus in [-100,-101,-103] && objSol >= obj.lower_limit)`), which
+    # Melitz's own classifier had silently dropped the `objSol >= obj.lower_limit` half of --
+    # an approximate/stalled status code (-100/-101/-103, NOT a genuine KKT-optimal 0) whose
+    # raw objective already violates the configured cap must not be treated as a clean
+    # accepted solve. Confirmed live: a genuinely InfiniteDeltaCertified real-D20 point
+    # produced nStatus=-103 with a runaway dual (||x||~2e17) that the OLD unconditional
+    # `nStatus in (0,-100,-101,-103)` rule accepted outright, reporting a bogus
+    # `FiniteSolved(Delta=1.51e14)`. This gate alone does not fully close that anomaly (it
+    # only fires when `obj.lower_limit` is itself finite/active -- see the output-side
+    # invariant a few lines below for the case where the cap never reached `obj.lower_limit`
+    # at all), but it is real, cheap, precedented hardening and must not regress.
+    accepted = nStatus == 0 || (nStatus in (-100, -101, -103) && objSol >= obj.lower_limit)
     if !accepted
         if obj.threshold_crossed[]
             # The KNITRO-native `lower_limit` early-stop branch (`cc_algo/PsiObjectiveBundle.jl`)
@@ -843,6 +856,29 @@ function melitz_classified_inner_solve(obj, theta::AbstractVector, ctx;
     localc = zeros(1)
     obj(x, constr=localc)
     Delta_theta = localc[1] / 1e10
+    # 2026-07-28 anomaly-hardening (docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md):
+    # `FiniteSolved`'s OWN docstring already documents the intended invariant -- "only
+    # delta_evaluation_cap ... CAN abort a solve before this point" -- i.e. reaching this
+    # branch at all is supposed to mean `Delta_theta` is within the cap; only the OUTER
+    # budget `delta` (a different, separate quantity) is allowed to be exceeded here. Live
+    # confirmed: a genuinely InfiniteDeltaCertified real-D20 point (independently proven by
+    # `melitz_origin_block_screen`) produced `Delta_theta=1.51e14` under `delta_evaluation_cap
+    # =10.0` because the requested cap never propagated into `obj.lower_limit` at bundle-
+    # construction time (`build_melitz_psi_bundle`/`build_melitz_psi_bundle_from_calibration`'s
+    # own `inner_solve_config=nothing` default) -- a silent configuration-propagation bug, not
+    # a screen or classification-logic defect. This assert converts that failure mode from a
+    # silently-mislabeled `FiniteSolved` into a loud, unambiguous, always-on error, exactly
+    # mirroring `build_melitz_cc_bundle`'s own no-default `lower_limit` precedent (cc_bundle.jl)
+    # and `solve_melitz_finite_delta_bound`'s own `@assert isfinite(obj.lower_limit)`.
+    @assert Delta_theta <= delta_evaluation_cap + max(1e-6, 1e-6 * abs(delta_evaluation_cap)) (
+        "melitz_classified_inner_solve: INVARIANT VIOLATION -- about to return FiniteSolved " *
+        "with Delta=$(Delta_theta) > delta_evaluation_cap=$(delta_evaluation_cap) " *
+        "(obj.lower_limit=$(obj.lower_limit), nStatus=$(nStatus)). A capped inner solve must " *
+        "never report a genuine FiniteSolved value above its own cap -- either the cap never " *
+        "propagated into obj.lower_limit at bundle construction (check the bundle builder's " *
+        "inner_solve_config), or this point is not actually finite (check " *
+        "melitz_origin_block_screen). See " *
+        "docs/melitz_finitesolved_anomaly_and_participation_diagnostic_2026-07-28.md.")
     x_copy = collect(Float64.(x))
     melitz_dual_bank_insert!(bank, x_copy; theta=theta)
     result = FiniteSolved(Delta_theta, x_copy, Int(nStatus))

@@ -1,0 +1,9 @@
+point,direction,sign,step,dGT_pp,total_fixed_dual_change,reoptimized_dDelta,n_switches,classification
+interior_Delta0.5,composite_xi,1.0,1.0e-5,0.0,4.492355568375128e-6,5.180902197532422e-6,12,FiniteSolved
+interior_Delta0.5,composite_xi,-1.0,1.0e-5,0.0,6.903550781423018e-6,1.001917942095032e-5,11,FiniteSolved
+interior_Delta0.5,cutoff_decomposition,1.0,1.0e-5,0.0,1.617234288486813e-6,5.206548958303081e-6,9,FiniteSolved
+interior_Delta0.5,cutoff_decomposition,-1.0,1.0e-5,0.0,1.0866830964073593e-5,1.297943164851878e-5,12,FiniteSolved
+nearbudget_Delta1,composite_xi,1.0,1.0e-5,0.0,2.3190252274041256e-7,1.2498628830792669e-6,12,FiniteSolved
+nearbudget_Delta1,composite_xi,-1.0,1.0e-5,0.0,7.293468712088469e-6,1.449866586056281e-5,11,FiniteSolved
+nearbudget_Delta1,cutoff_decomposition,1.0,1.0e-5,0.0,9.32870807801578e-6,1.8081110414347457e-5,9,FiniteSolved
+nearbudget_Delta1,cutoff_decomposition,-1.0,1.0e-5,0.0,1.0732065246488176e-5,1.2736266631119264e-5,12,FiniteSolved
