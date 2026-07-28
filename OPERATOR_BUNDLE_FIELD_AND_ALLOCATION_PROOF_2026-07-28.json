@@ -1,0 +1,16 @@
+{
+  "flexible_cm": {
+    "bundle_type": "OperatorPsiBundle",
+    "has_H_field": false,
+    "has_H_copy_field": false,
+    "has_moments_field": false,
+    "has_K_field": false,
+    "has_ones_field": false,
+    "fieldnames": "(:δ, :find_smallest, :γ, :l, :inequality_index, :complement_index, :U, :M, :N, :outer_constr_index, :inner_loop_opt, :lower_limit, :use_cached_x, :Psi!, :dPsi!, :ddPsi!, :payoff, :grav_col, :H_save, :arg0, :arg1, :arg2, :x, :threshold_state, :economic_state, :restriction_state)",
+    "inner_status_calib": 0,
+    "per_inner_solve_alloc_bytes_warm": 1809416,
+    "reference_W_x_NCORE_dense_block_bytes": 1152000,
+    "note": "other 4 families not covered by this run -- see master report scope"
+  },
+  "other_families_not_yet_wired": ["unrestricted", "common_frechet", "cm_plus_zc", "zc_only"]
+}
