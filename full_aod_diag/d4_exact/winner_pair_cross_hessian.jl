@@ -503,3 +503,112 @@ function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::Wi
     end
     return Esum
 end
+
+# ============================================================================
+# CM+ZC E/C/Z block-partition + H_CZ release (2026-07-27): H_CZ = C'SZ, the CM-grid (common-
+# marginals bin/threshold restriction, `C`) x mean/pairwise-ZC-restriction (`Z`) cross Hessian.
+# Bin-index-keyed analogue of `winner_pair_cross_hessian_cm_block!` above, with the ZC-restriction's
+# ALREADY-CENTERED, ALREADY-S-weighted `ZcS` (`zc_restriction_operator.jl::ZCCenteredScratch`,
+# built directly from the family's own raw `Zraw_all`/`Zpairraw_all` feature matrices, never from
+# `obj.H`) taking the role the winner-selected economic column `Q`/`QTab` plays in that function --
+# there is no winner-selection here at all (`Z`'s columns are plain per-draw feature values, not a
+# winner-argmin outcome), only a bin-membership test, so this is considerably simpler: a single
+# `SBinTab`-style accumulation, no separate `pi_vec`/nu-power correction term (that correction was
+# needed there because `E`'s own columns are `nu*(y*1{winner}-pi)`-shaped; `ZcS` here is already the
+# raw, already-centered, already-weighted quantity to sum).
+#
+# CM+ZC's H_EC/H_CZ split (`cm_hessian_architectures.jl::hessian_cm_structured!`): once `E`'s
+# widened NCORE columns are split into the TRUE economic sub-block (`1:ncore_core`, filled via the
+# EXISTING `winner_pair_cross_hessian_cm_block!`, using `wctx` which is ALREADY exactly
+# `ncore_core`-wide, unaffected by CM+ZC's Z-widening) and the Z sub-block (`ncore_core+1:NCORE`,
+# filled via THIS new primitive), the two together reconstruct the FULL widened `H_EC` block the
+# dense `CS_`-table path used to build in one pass -- WITHOUT ever reading the dense economic (E)
+# columns of `obj.H`, satisfying this phase's own "H_CZ ... NOT via dense CM columns read from
+# obj.H" requirement (the CM-grid restriction `C` itself is reconstructed from `Bidx`/bin
+# membership directly, exactly as the dense path already did, never from a materialized `obj.H`
+# CM-grid block, which under `:cm_lookup`/`:operator` inner FG backends may not even be filled).
+# ============================================================================
+
+"""
+    BinZCrossScratch
+
+Persistent scratch for `bin_zc_cross_hessian_fill!`/`_block!`: `ZBinTab[x,j,k] =
+Σ_{w: bin(U[w,x])=k} ZcS[w,j]` (`D x nz x (L+1)`, `nz = n_restriction(op)`), cumulative
+`ZBinCScum[x,j,l] = Σ_{k<=l} ZBinTab[x,j,k]` (`D x nz x L`) -- same `CS_x(j,l)` prefix-sum
+convention `cm_hessian_architectures.jl`'s own `CScum`/this file's own `QCScum` already use.
+"""
+mutable struct BinZCrossScratch
+    D::Int
+    L::Int
+    nz::Int
+    ZBinTab::Array{Float64,3}
+    ZBinCScum::Array{Float64,3}
+end
+BinZCrossScratch(D::Int, L::Int, nz::Int) =
+    BinZCrossScratch(D, L, nz, zeros(D, nz, L + 1), zeros(D, nz, L))
+
+"Rebuild (or reuse, if already the right size) `ws` for the current `(D,L,nz)` -- mirrors this file's own `ensure_*_scratch!` idiom."
+function ensure_bin_zc_cross_scratch!(ws::Union{Nothing,BinZCrossScratch}, D::Int, L::Int, nz::Int)
+    if ws === nothing || ws.D != D || ws.L != L || ws.nz != nz
+        return BinZCrossScratch(D, L, nz)
+    end
+    return ws
+end
+
+"""
+    bin_zc_cross_hessian_fill!(ws::BinZCrossScratch, Bidx, ZcS) -> ws
+
+Fills `ws.ZBinTab`/`ws.ZBinCScum` from the CURRENT Hessian callback's `ZcS`
+(`zc_restriction_operator.jl::ZCCenteredScratch`'s own `ZcS` view, `W x nz`, already
+`S`-weighted and already target-centered -- built by `refresh_zc_centered!`, called once per
+callback before this function). `Bidx` is the SAME `W x D` bin-index matrix `cctx.Bidx` already
+carries (theta-independent, precomputed once per campaign).
+"""
+function bin_zc_cross_hessian_fill!(ws::BinZCrossScratch, Bidx::AbstractMatrix{<:Integer}, ZcS::AbstractMatrix{Float64})
+    D = ws.D; L = ws.L; nz = ws.nz
+    W = size(ZcS, 1)
+    size(Bidx, 1) == W || error("bin_zc_cross_hessian_fill!: size(Bidx,1)=$(size(Bidx,1)) != size(ZcS,1)=$W")
+    size(ZcS, 2) >= nz || error("bin_zc_cross_hessian_fill!: size(ZcS,2)=$(size(ZcS,2)) < ws.nz=$nz")
+    ZBinTab = ws.ZBinTab
+    fill!(ZBinTab, 0.0)
+    @inbounds for w in 1:W
+        for x in 1:D
+            b = Bidx[w, x]
+            for j in 1:nz
+                ZBinTab[x, j, b] += ZcS[w, j]
+            end
+        end
+    end
+    ZBinCScum = ws.ZBinCScum
+    @inbounds for x in 1:D, j in 1:nz
+        acc = 0.0
+        for l in 1:L
+            acc += ZBinTab[x, j, l]
+            ZBinCScum[x, j, l] = acc
+        end
+    end
+    return ws
+end
+
+"""
+    bin_zc_cross_hessian_block!(HCZ, ws::BinZCrossScratch, l, origins, refIndex1, M) -> HCZ
+
+Per-threshold-block (`l`) raw `H_CZ` slab, `nz x nO` (`nz = ws.nz`, `nO = length(origins)`) --
+same `(o,ref)`-DIFFERENCE convention `winner_pair_cross_hessian_cm_block!` already establishes for
+`H_EC`'s own raw block, so this drops into `hessian_cm_structured!`'s SAME per-`l` loop as a
+direct sibling call (see that file's own `Hraw_EC`/`block_ec` handling -- H_CZ gets the SAME
+optional `R`-congruence treatment before being written into `Hfull`). Caller must call
+`bin_zc_cross_hessian_fill!` ONCE per Hessian callback first.
+"""
+function bin_zc_cross_hessian_block!(HCZ::AbstractMatrix{Float64}, ws::BinZCrossScratch,
+        l::Int, origins::Vector{Int}, refIndex1::Int, M)
+    size(HCZ) == (ws.nz, length(origins)) || error("bin_zc_cross_hessian_block!: size(HCZ)=$(size(HCZ)) != ($(ws.nz), $(length(origins)))")
+    ZBinCScum = ws.ZBinCScum
+    invM = 1.0 / M
+    @inbounds for (oi, o) in enumerate(origins)
+        for j in 1:ws.nz
+            HCZ[j, oi] = invM * (ZBinCScum[o, j, l] - ZBinCScum[refIndex1, j, l])
+        end
+    end
+    return HCZ
+end

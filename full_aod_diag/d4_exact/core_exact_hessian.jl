@@ -180,6 +180,25 @@ const CM_MEANZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
 const ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
 
 """
+    CM_MEANZC_CM_CROSS_HESSIAN_BACKEND_DEFAULT
+
+CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): CM+ZC's OWN analogue of
+`CM_CROSS_HESSIAN_BACKEND_DEFAULT`, for its CM-grid cross block (`H_EC`/NEW `H_CZ` together,
+`cm_hessian_architectures.jl::_cm_cross_hessian_wants_winner_bin`/`_cm_cross_hessian_wants_direct_hcz`).
+This is what `CM_MEANZC_WINNER_AWARE_HER_RELEASE_2026-07-27.md`'s own "Investigation" section left
+as a deliberately-deferred `:dense_reference`-only gap (relaxing `_cm_cross_hessian_wants_winner_bin`'s
+old `ncore_core==NCORE` guard for CM+ZC was unsafe without a genuinely new CM-grid-vs-Z cross
+primitive to cover the widened rows -- that gap is what this session's `H_CZ`
+(`bin_zc_cross_hessian_fill!`/`_block!`, `winner_pair_cross_hessian.jl`) fills). Deliberately a
+SEPARATE `Ref` from `CM_CROSS_HESSIAN_BACKEND_DEFAULT` (plain flexible CM's), same rationale
+`CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT`'s own docstring gives. Flipped `:dense_reference` ->
+`:winner_bin` (2026-07-27) after this session's own D=4 (test_cm_meanzc_hcz_hzz_direct_d4.jl) and
+real D=20/W=80,000/L=50 (test_cm_meanzc_hcz_hzz_direct_d20.jl) gates passed to machine precision --
+see docs/CM_MEANZC_BLOCK_PARTITION_AND_HCZ_RELEASE_2026-07-27.md.
+"""
+const CM_MEANZC_CM_CROSS_HESSIAN_BACKEND_DEFAULT = Ref{Symbol}(:winner_bin)
+
+"""
 Remediation task Phase B1 (production-audit continuation, 2026-07-26); flipped to `:cm_lookup`
 by the Phase 5.5 allocation-fix remediation (2026-07-26): which inner FG (forward/backward)
 callback the CM family's KNITRO inner dual solve registers.
