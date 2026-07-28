@@ -1,0 +1,13 @@
+family,point,check,key,maxdiff,tol,pass
+origin_zc,calibration,H_EZ_threaded_vs_serial,workers=1,0.0,1.0e-12,true
+origin_zc,calibration,H_ZZ_blas_syrk_vs_reference,K1_1,7.105427357601002e-15,1.0e-9,true
+origin_zc,calibration,H_ZZ_blas_gemm_vs_reference,K1_1,7.105427357601002e-15,1.0e-9,true
+origin_zc,calibration,H_ZZ_threaded_packed_vs_reference,K1_1_workers=1,1.212363542890671e-13,1.0e-9,true
+origin_zc,non_calibration,H_EZ_threaded_vs_serial,workers=1,0.0,1.0e-12,true
+origin_zc,non_calibration,H_ZZ_blas_syrk_vs_reference,K1_1,7.549516567451064e-15,1.0e-9,true
+origin_zc,non_calibration,H_ZZ_blas_gemm_vs_reference,K1_1,8.881784197001252e-15,1.0e-9,true
+origin_zc,non_calibration,H_ZZ_threaded_packed_vs_reference,K1_1_workers=1,1.0658141036401503e-13,1.0e-9,true
+origin_zc,solver_trajectory,H_EZ_threaded_vs_serial,workers=1,0.0,1.0e-12,true
+origin_zc,solver_trajectory,H_ZZ_blas_syrk_vs_reference,K1_1,7.105427357601002e-15,1.0e-9,true
+origin_zc,solver_trajectory,H_ZZ_blas_gemm_vs_reference,K1_1,7.105427357601002e-15,1.0e-9,true
+origin_zc,solver_trajectory,H_ZZ_threaded_packed_vs_reference,K1_1_workers=1,1.212363542890671e-13,1.0e-9,true

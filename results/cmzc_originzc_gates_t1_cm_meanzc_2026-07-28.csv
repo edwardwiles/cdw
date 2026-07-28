@@ -1,0 +1,6 @@
+family,point,check,key,maxdiff,tol,pass
+cm_meanzc,calibration,H_EZ_threaded_vs_serial,workers=1,0.0,1.0e-12,true
+cm_meanzc,calibration,H_ZZ_blas_syrk_vs_reference,K1_1,7.549516567451064e-15,1.0e-9,true
+cm_meanzc,calibration,H_ZZ_blas_gemm_vs_reference,K1_1,7.549516567451064e-15,1.0e-9,true
+cm_meanzc,calibration,H_ZZ_threaded_packed_vs_reference,K1_1_workers=1,1.283417816466681e-13,1.0e-9,true
+cm_meanzc,calibration,H_CZ_threaded_vs_serial,workers=1,0.0,1.0e-12,true

@@ -1,0 +1,28 @@
+family,block,nthreads,t_min_s,t_mean_s,point
+origin_zc,H_EE,1,0.127501819,0.1446956415,calibration
+origin_zc,H_ZZ_centering_prep(fill_S=true),1,0.095423472,0.1036592145,calibration
+origin_zc,H_EZ_Snu_prep(=H_ER prep),1,0.000199102,0.00022214583333333334,calibration
+origin_zc,H_EZ(=HER),1,1.241103443,1.2847068778333333,calibration
+origin_zc,H_EZ(=HER)_threaded,1,1.245726675,1.3716356440000002,calibration
+origin_zc,H_ZZ(=HRR)_reference,1,0.15338253,0.21275574666666666,calibration
+origin_zc,H_ZZ(=HRR)_blas_syrk,1,0.198333362,0.20648999783333333,calibration
+origin_zc,H_ZZ(=HRR)_blas_gemm,1,0.249871044,0.3580861783333333,calibration
+origin_zc,H_ZZ(=HRR)_threaded_packed,1,4.16041625,4.2503192023333325,calibration
+origin_zc,H_EE,1,0.078248605,0.08596756550000001,non_calibration
+origin_zc,H_ZZ_centering_prep(fill_S=true),1,0.080642626,0.08423928416666666,non_calibration
+origin_zc,H_EZ_Snu_prep(=H_ER prep),1,0.000202859,0.00022549683333333335,non_calibration
+origin_zc,H_EZ(=HER),1,1.18428977,1.2490798403333334,non_calibration
+origin_zc,H_EZ(=HER)_threaded,1,1.144221583,1.2098311475,non_calibration
+origin_zc,H_ZZ(=HRR)_reference,1,0.179673573,0.2547064768333333,non_calibration
+origin_zc,H_ZZ(=HRR)_blas_syrk,1,0.206969093,0.22129721216666667,non_calibration
+origin_zc,H_ZZ(=HRR)_blas_gemm,1,0.264608436,0.2909635235,non_calibration
+origin_zc,H_ZZ(=HRR)_threaded_packed,1,4.288236603,4.387235392833333,non_calibration
+origin_zc,H_EE,1,0.082803606,0.09047498766666666,solver_trajectory
+origin_zc,H_ZZ_centering_prep(fill_S=true),1,0.084644054,0.08758211816666667,solver_trajectory
+origin_zc,H_EZ_Snu_prep(=H_ER prep),1,0.000193893,0.00021951200000000005,solver_trajectory
+origin_zc,H_EZ(=HER),1,1.152597817,1.2324111855000002,solver_trajectory
+origin_zc,H_EZ(=HER)_threaded,1,1.118065125,1.2212008676666666,solver_trajectory
+origin_zc,H_ZZ(=HRR)_reference,1,0.162744627,0.23394947883333336,solver_trajectory
+origin_zc,H_ZZ(=HRR)_blas_syrk,1,0.197084534,0.23047019366666668,solver_trajectory
+origin_zc,H_ZZ(=HRR)_blas_gemm,1,0.244178412,0.2897877721666667,solver_trajectory
+origin_zc,H_ZZ(=HRR)_threaded_packed,1,4.078982504,4.185826232999999,solver_trajectory

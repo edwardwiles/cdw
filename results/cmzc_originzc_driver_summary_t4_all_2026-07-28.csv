@@ -1,0 +1,7 @@
+family,point,nthreads,wall_s,knitro_status,n_eval,n_grad,kappa
+origin_zc,calibration,4,87.24408388137817,-401,1,1,0.020293896607184836
+origin_zc,non_calibration,4,108.88612699508667,-401,3,2,0.03594176749091682
+origin_zc,solver_trajectory,4,141.7189860343933,-401,4,4,0.05838387926385502
+cm_meanzc,calibration,4,87.74928379058838,-502,0,0,NaN
+cm_meanzc,non_calibration,4,52.28278207778931,-502,0,0,NaN
+cm_meanzc,solver_trajectory,4,50.84949493408203,-502,0,0,NaN

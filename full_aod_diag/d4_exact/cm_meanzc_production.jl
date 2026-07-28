@@ -20,6 +20,7 @@
 # ============================================================================
 
 isdefined(Main, :verify_inner_solution_operator_cmmeanzc!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): archC_meanzc_verified_state's :operator backend below
+isdefined(Main, :CMZC_LIVE_PCX_STASH) || include(joinpath(@__DIR__, "cross_hessian_live_stash_2026-07-28.jl"))   # D=20 profiling task (2026-07-28): opt-in live-handle stash, see that file's header
 
 using LinearAlgebra: BLAS, dot, norm
 
@@ -157,7 +158,12 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))
     cctx = build_cm_meanzc_bin_ctx(ctx, aug; inner_fg_backend = inner_fg_backend)
     bins = cm_bin_indices_for(ctx, aug)   # lfix_cm_aware.jl -- Unsigned-typed, for the CM fixed-contribution lookup
-    return (ctx_cm = ctx_cm, aug = aug, cctx = cctx, bins = bins)
+    pcx_result = (ctx_cm = ctx_cm, aug = aug, cctx = cctx, bins = bins)
+    # D=20 profiling task (2026-07-28): opt-in live-handle stash (see cross_hessian_live_stash_2026-07-28.jl)
+    # -- lets a profiling script reach the SAME live (cctx, ctx_cm.obj) this driver run itself is using,
+    # without ever calling this constructor (or the low-level inner-solve helpers) a second time.
+    STASH_LIVE_PCX_ENABLED[] && (CMZC_LIVE_PCX_STASH[] = pcx_result)
+    return pcx_result
 end
 
 """
