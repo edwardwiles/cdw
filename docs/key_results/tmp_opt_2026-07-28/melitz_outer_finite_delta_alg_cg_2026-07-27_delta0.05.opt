@@ -1,0 +1,21 @@
+# KNITRO options for the Melitz finite-delta bound outer NLP (Section 3, 2026-07-23
+# governing-correction session). Minimal (partial) options file -- unlisted options keep
+# KNITRO's own defaults. Modeled on ek_outer_loop_options.opt (algorithm=0, eval_fcga=no,
+# quasi-Newton Hessian since no exact Hessian callback is supplied here) but with looser
+# opttol than the Ricardian model's own tight settings: the divergence-budget constraint's
+# gradient here comes from a finite-bandwidth secant or hand-derived branch derivative
+# (Section 1), not an exact analytic Jacobian, so an opttol tighter than that gradient's
+# own accuracy would either never satisfy KNITRO's stopping test or falsely report
+# convergence on gradient noise.
+algorithm       2
+eval_fcga       no
+gradopt         exact
+hessopt         2
+feastol         1e-7
+feastol_abs     1e-8
+opttol          1e-3
+opttol_abs      1e-4
+maxit           25
+outlev          3
+honorbnds       always
+delta           0.05

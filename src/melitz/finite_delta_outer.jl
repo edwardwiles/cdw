@@ -624,6 +624,14 @@ struct MelitzFiniteDeltaOuterResult
     # field is the authoritative source; the two scalar fields are kept for backward
     # compatibility with existing callers/tests that read them by name.
     diagnostics::MelitzRunDiagnostics
+    # 2026-07-28 step-control/robustness session (governing prompt Phase 1.2): the ACTUAL
+    # divisor applied to evalResult.obj[1]/.objGrad[1] this solve, after resolving
+    # `objective_scale=:auto`/an explicit value/`nothing` against `var_scale` (see
+    # `solve_melitz_finite_delta_bound`'s own docstring). `nothing` here means the objective
+    # was genuinely unscaled (either because `var_scale===nothing`, so no compatible scale is
+    # needed, or because `allow_unscaled_objective=true` was passed deliberately). Carried on
+    # the result so a caller/report never has to re-derive or guess what scaling actually ran.
+    objective_scale_resolved::Union{Nothing,Float64}
 end
 
 """
@@ -1547,6 +1555,20 @@ is needed -- KNITRO performs the chain rule internally. `var_scale` entries must
 positive (KNITRO's own convention: a non-positive entry silently disables scaling for that
 one coordinate rather than erroring -- this function does not additionally validate that,
 matching KNITRO's own documented behavior).
+
+`objective_scale`/`allow_unscaled_objective` (2026-07-28 step-control/robustness session,
+hardening the 2026-07-28 gamma-profile session's own opt-in fix): default `:auto`
+automatically derives a compatible objective scale from `var_scale[1]` whenever `var_scale`
+is set (`objective_scale = var_scale[1]`, exact for this file's always-linear-in-`theta[1]`
+objective; `nothing` when `var_scale===nothing`, since no variable scaling means no
+compatible objective scale is needed). Passing `objective_scale=nothing` explicitly while
+`var_scale` is set THROWS an `ArgumentError` unless `allow_unscaled_objective=true` is also
+passed -- this is the exact combination that produced the 2026-07-27 session's own spurious
+"xtol convergence at the starting point" bug (a tiny `var_scale[1]` with an unscaled linear
+objective collides with `opttol_abs`), and it can no longer happen by omission. An explicit
+positive `Real` for `objective_scale` is still honored exactly as given (e.g. for a
+deliberate scale-sensitivity sweep). The resolved value actually used is returned on
+`MelitzFiniteDeltaOuterResult.objective_scale_resolved` and printed at solve start.
 """
 function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVector;
                                           delta::Real, direction::Symbol,
@@ -1572,7 +1594,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
                                           backend::Symbol=:auto_from_gradient_backend,
                                           forbid_dense_fallback::Bool=false,
                                           divergence_constraint_scaling::Symbol=:dimensionless,
-                                          objective_scale::Union{Nothing,Real}=nothing)
+                                          objective_scale::Union{Nothing,Real,Symbol}=:auto,
+                                          allow_unscaled_objective::Bool=false)
     direction in (:upper, :lower) || throw(ArgumentError("direction must be :upper or :lower"))
     t0 = time()
     find_smallest = direction == :upper   # minimize g for the upper GT bound, maximize for lower
@@ -1608,6 +1631,67 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         "the evaluation cap (delta_evaluation_cap=$delta_evaluation_cap) failed to activate. " *
         "This should be impossible after the 2026-07-26 production-closure fix; see " *
         "build_melitz_implicit_bundle's docstring.")
+
+    # 2026-07-28 step-control/robustness session (governing prompt Phase 1): make the
+    # `var_scale`<->`objective_scale` pairing automatic and fail-safe, replacing the prior
+    # session's opt-in-only `objective_scale=nothing` default (a live footgun: the 2026-07-27
+    # session's own "false xtol convergence at the exact starting point" bug, root-caused
+    # 2026-07-28, was produced by exactly this combination -- `var_scale` set,
+    # `objective_scale` left at its old default of `nothing`). The registered objective is
+    # ALWAYS `signed_objective(theta) = +-theta[1]` (Section 3.1, traced and confirmed
+    # 2026-07-28) -- exactly linear in `theta[1]` with constant gradient `+-1` in raw units --
+    # so the unique scale that restores an order-one SCALED-coordinate objective gradient is
+    # `objective_scale = var_scale[1]` (chain rule: `grad_y(objective)[1] = var_scale[1] *
+    # grad_theta(objective)[1] = +-var_scale[1]`; dividing the objective by `var_scale[1]`
+    # before registration makes this exactly `+-1`). This rule is specific to this file's own
+    # linear-in-theta[1] objective, not a generic autoscaler -- if a future session changes
+    # `signed_objective` to a nonlinear function of `theta`, this rule must be revisited (the
+    # governing prompt's own more general "local derivative at the scaling center" recipe
+    # applies then; not needed today since the objective has been raw `g` since Section 3.1).
+    #
+    # Resolution table for `objective_scale`:
+    #   :auto (new default) + var_scale===nothing  -> nothing (no variable scaling in play,
+    #       so no compatible objective scale is needed either -- byte-identical to every
+    #       pre-2026-07-28 unscaled caller).
+    #   :auto (new default) + var_scale!==nothing  -> var_scale[1] (the automatic rule above).
+    #   an explicit Real                            -> used exactly as given (manual override,
+    #       e.g. for the step-control laboratory's own deliberate scale sweeps).
+    #   nothing + var_scale===nothing               -> nothing (harmless: no scaling requested,
+    #       none needed).
+    #   nothing + var_scale!==nothing               -> THROWS unless
+    #       `allow_unscaled_objective=true` -- this is the exact 2026-07-27 bug configuration;
+    #       the explicit, differently-named override kwarg (never the bare `objective_scale`
+    #       value alone) is required to reproduce it deliberately, e.g. for the Phase 11
+    #       regression test that recreates this bug and proves it can no longer happen by
+    #       accident.
+    resolved_objective_scale = if objective_scale === :auto
+        var_scale === nothing ? nothing : Float64(var_scale[1])
+    elseif objective_scale === nothing
+        if var_scale !== nothing && !allow_unscaled_objective
+            throw(ArgumentError(
+                "solve_melitz_finite_delta_bound: var_scale is set (var_scale[1]=$(var_scale[1])) " *
+                "but objective_scale=nothing (unscaled objective) was passed explicitly. This is " *
+                "the exact 2026-07-27 configuration that produced spurious xtol convergence at the " *
+                "starting point (docs/melitz_outer_search_gamma_profile_and_scaling_2026-07-28.md, " *
+                "Phase 1/3): a tiny variable scale with an unscaled linear objective makes KNITRO's " *
+                "own scaled-space objective gradient collide with opttol_abs. Pass objective_scale=" *
+                ":auto (the default -- automatically derives var_scale[1]) or an explicit positive " *
+                "Real, or set allow_unscaled_objective=true if you deliberately want this diagnostic " *
+                "configuration (e.g. to reproduce the historical bug in a regression test)."))
+        end
+        nothing
+    else
+        Float64(objective_scale)
+    end
+    resolved_objective_scale === nothing || isfinite(resolved_objective_scale) && resolved_objective_scale > 0 || throw(
+        ArgumentError("solve_melitz_finite_delta_bound: resolved objective_scale=$resolved_objective_scale " *
+                       "must be finite and strictly positive."))
+    # Printed unconditionally (not just under some verbosity flag): the governing prompt's own
+    # Phase 1.2 explicitly requires this be visible in every run summary, not just discoverable
+    # via the returned struct.
+    println("solve_melitz_finite_delta_bound: objective scaling resolved -- objective_scale=",
+            objective_scale, " var_scale[1]=", var_scale === nothing ? nothing : var_scale[1],
+            " -> obj_scale_divisor=", resolved_objective_scale === nothing ? 1.0 : resolved_objective_scale)
 
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
 
@@ -1655,7 +1739,7 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         origin_block_screen=origin_block_screen, screen_order=screen_order,
         warm_start_source=warm_start_source, exact_cache=exact_cache,
         dual_bank_max_size=dual_bank_max_size, gradient_backend=gradient_backend, h=h,
-        divergence_constraint_scaling=divergence_constraint_scaling, objective_scale=objective_scale)
+        divergence_constraint_scaling=divergence_constraint_scaling, objective_scale=resolved_objective_scale)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, obj.outer_loop_opt)
@@ -1731,7 +1815,8 @@ function solve_melitz_finite_delta_bound(ctx, obj_inner, theta_init::AbstractVec
         cutoff_constraint_backend, cbset.n_fc_calls[], cbset.n_ga_calls[],
         delta_evaluation_cap,
         cbset.n_inner_solved[], cbset.n_infinite_delta_reject[],
-        cbset.n_above_cap_reject[], cbset.n_numerical_failure_reject[], diagnostics)
+        cbset.n_above_cap_reject[], cbset.n_numerical_failure_reject[], diagnostics,
+        resolved_objective_scale)
 end
 
 # ============================================================================

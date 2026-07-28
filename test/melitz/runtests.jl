@@ -2889,6 +2889,83 @@ if KNITRO_AVAILABLE
             @test abs(res3_scaled.cold_verified_incumbent.eval.equilibrium_check.gravity_residual_f) < 1e-8
         end
         end
+
+        # ========================================================================
+        # Phase 1/11 (2026-07-28 step-control/robustness session): automatic objective
+        # scaling is fail-safe and structurally eliminates the 2026-07-27 session's own
+        # "false xtol convergence at the exact starting point" bug (root-caused 2026-07-28,
+        # docs/melitz_outer_search_gamma_profile_and_scaling_2026-07-28.md Phase 1/3): a tiny
+        # var_scale[1] paired with the always-linear-in-theta[1] objective left unscaled makes
+        # KNITRO's own internal scaled-space objective gradient (order var_scale[1]) collide
+        # with opttol_abs (order 1e-4 in every algorithm option file this repo uses). Uses the
+        # Active-Set option file (2026-07-27's own selection, the one config known to reproduce
+        # genuine xtol convergence rather than Interior/Direct's unrelated untuned-trust-region
+        # runaway) so a "stuck at start" result here is unambiguous evidence of THIS bug, not a
+        # different pathology.
+        # ========================================================================
+        @testset "Phase 1/11 (2026-07-28): automatic objective scaling is fail-safe" begin
+            n3 = length(theta0_3fd)
+            vs_bug = vcat([1e-4], fill(1e-5, n3 - 1))
+            vc_bug = collect(Float64.(theta0_3fd))
+            active_opt = joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta_alg_active_2026-07-27.opt")
+            inner_opt = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+
+            @testset "var_scale set + objective_scale=nothing explicit -> throws (no silent footgun)" begin
+                @test_throws ArgumentError solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd;
+                    delta=delta_loose, direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                    inner_loop_opt=inner_opt, outer_loop_opt=active_opt,
+                    var_scale=vs_bug, var_center=vc_bug, objective_scale=nothing)
+            end
+
+            @testset "same config + allow_unscaled_objective=true reproduces the historical stuck-at-start bug" begin
+                res_stuck = solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd;
+                    delta=delta_loose, direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                    inner_loop_opt=inner_opt, outer_loop_opt=active_opt,
+                    var_scale=vs_bug, var_center=vc_bug,
+                    objective_scale=nothing, allow_unscaled_objective=true)
+                @test res_stuck.objective_scale_resolved === nothing
+                @test res_stuck.terminal_theta[1] ≈ theta0_3fd[1] atol=1e-8
+            end
+
+            @testset "default :auto derives objective_scale=var_scale[1] and restores real movement" begin
+                res_fixed = solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd;
+                    delta=delta_loose, direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                    inner_loop_opt=inner_opt, outer_loop_opt=active_opt,
+                    var_scale=vs_bug, var_center=vc_bug)
+                @test res_fixed.objective_scale_resolved == vs_bug[1]
+                @test !isapprox(res_fixed.terminal_theta[1], theta0_3fd[1]; atol=1e-8)
+                @test res_fixed.cold_verified_incumbent !== nothing
+                @test res_fixed.cold_verified_incumbent.classification.outer_feasible
+            end
+
+            @testset "explicit objective_scale==var_scale[1] matches :auto exactly (identical divisor -> identical trajectory)" begin
+                res_manual = solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd;
+                    delta=delta_loose, direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                    inner_loop_opt=inner_opt, outer_loop_opt=active_opt,
+                    var_scale=vs_bug, var_center=vc_bug, objective_scale=vs_bug[1])
+                res_auto = solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd;
+                    delta=delta_loose, direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                    inner_loop_opt=inner_opt, outer_loop_opt=active_opt,
+                    var_scale=vs_bug, var_center=vc_bug)
+                @test res_manual.terminal_theta ≈ res_auto.terminal_theta atol=1e-12
+                @test res_manual.objective_scale_resolved == res_auto.objective_scale_resolved
+            end
+
+            @testset "var_scale===nothing: :auto is an exact no-op" begin
+                @test res3.objective_scale_resolved === nothing
+            end
+
+            @testset "resolved objective_scale must be finite and positive" begin
+                @test_throws ArgumentError solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd;
+                    delta=delta_loose, direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                    inner_loop_opt=inner_opt, outer_loop_opt=active_opt,
+                    var_scale=vs_bug, var_center=vc_bug, objective_scale=-1.0)
+                @test_throws ArgumentError solve_melitz_finite_delta_bound(ctx3fd, obj3fd, theta0_3fd;
+                    delta=delta_loose, direction=:upper, gradient_backend=:B, h=1e-4, theta_box=0.5,
+                    inner_loop_opt=inner_opt, outer_loop_opt=active_opt,
+                    var_scale=vs_bug, var_center=vc_bug, objective_scale=NaN)
+            end
+        end
     end
 
     # ========================================================================
