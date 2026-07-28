@@ -181,35 +181,53 @@ nuisance stages (A-only/f-only/full) = 12 solves (the governing prompt's own bud
 |---:|---:|---|---:|---:|
 | 0.10 | 0.03422 | full | 0.006176 | **5.5x** (original: 5.5x) |
 | 0.35 | 0.57206 | full | 0.21439 | **2.7x** (original: 3.3x) |
-| 0.50 | NumericalFailure | none | NaN | -- (see below) |
-| 0.65 | AboveEvaluationCap (cap=10) | none | NaN | -- (see below) |
+| 0.50 | NumericalFailure | none | NaN | initial script design gap -- see follow-up below |
+| 0.65 | AboveEvaluationCap (cap=10) | none | NaN | initial script design gap -- see follow-up below |
 
 The never-worse-than-fixed invariant held everywhere it could be checked (no violation).
 
-**frac=0.50/0.65 divergence, investigated (Phase 5b,
-`scripts/melitz_phase5b_nuisance_neutral_warmstart_check_2026-07-28.jl`, 1 extra solve)**: at
-these two fractions (where fixed-A/f itself is `NumericalFailure`/`AboveEvaluationCap`), this
-session's simplified nuisance script's A-only/f-only/full stages all failed immediately with a
-KNITRO `grad_callback -502` evaluation error -- a divergence from the original session's own
-"genuine rescue" finding at `frac=0.50` (`nStatus=-101`, `Delta=5.05e-1`). Root-caused directly:
-`obj.x` was left `NaN`-poisoned after the immediately-preceding failed fixed-A/f solve at the
-SAME theta point (`||x||=NaN` confirmed live). **A neutral reset (`obj.x .= NaN;
-use_cached_x=false`) did NOT fix it** -- the A-only stage still returned `nStatus=-502`. This
-rules out a simple stale-dual artifact and instead indicates the failure is intrinsic to
-evaluating this script's cold/near-cold nuisance search AT a theta point where even the fully
-fixed model cannot evaluate cleanly. The ORIGINAL session's own nuisance script instead
-threaded a CONTINUATION warm-start across fractions (each fraction's A-only/f-only stage
-warm-started from the PRECEDING fraction's own successful dual, not from a cold/neutral
-state) -- a design difference this validation session's own simplified script did not
-replicate. **This is NOT evidence of a consolidation regression** (the neutral-reset check
-independently rules out the one consolidation-adjacent mechanism -- a poisoned warm-start bank
--- that could plausibly have been architecture-caused) but it also does NOT independently
-reconfirm the original "flexibility rescues infeasibility" claim at these two fractions.
-**Genuinely inconclusive; flagged as the one concrete follow-up recommendation (Phase 8).**
+**frac=0.50/0.65 gap, diagnosed and resolved (Phase 5b/5c follow-up, done in this same
+session at the user's direct request, 13 additional solves: 1 diagnostic + 12 for a full
+continuation-threaded rerun)**: the first-pass script above failed immediately at these two
+fractions with a KNITRO `grad_callback -502` evaluation error. The initial hypothesis (a
+stale/poisoned dual warm start, since `obj.x` was observed `NaN` after the immediately
+preceding failed fixed-A/f solve) was **tested directly and REJECTED**: re-reading
+`melitz_cc_inner_loop_knitro!` (`cc_bundle.jl:420`) shows `use_cached_x=false` already forces
+a clean `zeros(n)` inner-dual start regardless of `obj.x`'s own contents, so a "neutral reset"
+re-run (`scripts/melitz_phase5b_nuisance_neutral_warmstart_check_2026-07-28.jl`) starting from
+a genuinely clean dual **still failed identically** -- ruling out the dual as the mechanism.
+The KNITRO message itself ("Could not evaluate objective or constraints at the **initial
+point**") is the correct signal: this is a PRIMAL evaluation failure at the raw `theta_fixed`
+point itself, consistent with the fact that the FIXED-A/f model (no search at all) *also*
+fails to evaluate cleanly at that exact theta. Starting any search -- warm or cold -- literally
+AT that point cannot succeed, independent of dual state; this has nothing to do with the
+2026-07-28 consolidation.
 
-**Conclusion: the core nuisance-profile finding (full A/f flexibility delivers a substantial,
-multi-x reduction) is confirmed unchanged; the specific "rescues outright infeasibility" claim
-at `frac=0.50/0.65` needs a properly continuation-threaded rerun to independently verify.**
+The original 2026-07-28 gamma-profile session's own script sidesteps this not via a better
+dual guess but via a **different primal starting point**: each fraction's A-only/f-only stage
+starts from the PRECEDING fraction's own converged A-only/f-only THETA (already-adjusted A/f
+values, not the raw calibrated ones), with only `g` overwritten to the new target -- never
+from `theta_fixed` directly. `scripts/melitz_phase5c_nuisance_continuation_rerun_2026-07-28.jl`
+replicates exactly this (continuation-threaded `theta` AND dual across the full 0.10->0.35->
+0.50->0.65 grid, in order) and **confirms the original claim survives the consolidated
+architecture**:
+
+| frac | Delta_fixed | best source | best Delta |
+|---:|---:|---|---:|
+| 0.50 | NumericalFailure | full | **0.5196** (nStatus=-101, genuine convergence; original session found 0.505) |
+| 0.65 | AboveEvaluationCap | full | **1.3724** (nStatus=-101, genuine convergence) |
+
+One smaller, honestly-disclosed residual wrinkle: at `frac=0.65`, `f-only` ALONE still fails
+(`nStatus=-502`) even with continuation -- only `A-only` and `full` (seeded from `A-only`)
+succeed there. Continuation fully resolves the headline fixed-vs-best-flexible comparison at
+both fractions, but not every individual restricted stage.
+
+**Conclusion: the nuisance-profile findings, INCLUDING the "flexibility rescues outright
+infeasibility" claim at frac=0.50/0.65, are confirmed unchanged under the consolidated
+architecture.** The initial apparent divergence was a gap in this validation session's own
+first-pass script (missing cross-fraction continuation), not a consolidation regression and
+not fixable by warm-starting the dual -- it required starting the outer search from a
+different, non-pathological primal theta.
 
 ## Phase 6: production-fast performance smoke test
 
@@ -252,7 +270,7 @@ Full table: `docs/key_results/melitz_post_consolidation_phase7_triage_2026-07-28
 | intensive-vs-switching decomposition | not rerun but low risk |
 | D20 nested block-search pattern | not rerun but low risk |
 | D4 nuisance-profile improvements (frac=0.10/0.35) | quantitatively changed (directionally confirmed, magnitude drifted at frac=0.35) |
-| D4 nuisance infeasibility-rescue claim (frac=0.50/0.65) | **inconclusive -- needs rerun** |
+| D4 nuisance infeasibility-rescue claim (frac=0.50/0.65) | **confirmed unchanged** (resolved via continuation-threaded rerun, Phase 5c) |
 | outer-parameterization six-way tournament | not rerun but low risk |
 | engineering speedups (parallel/matrix-free/no dense G) | confirmed unchanged structurally; wall-clock magnitude not cleanly re-measured |
 
@@ -264,22 +282,16 @@ explicitly out of this session's bounded scope).
 
 ## Phase 8: recommendation
 
-**Recommendation 2 of 3: one narrowly identified result needs a larger rerun.**
+**Recommendation 1 of 3: no further reruns needed before outer-search work.**
 
-Specifically: **a D4 nuisance-profile rerun at `frac=0.50/0.65` using a properly
-continuation-threaded warm-start design (matching the original 2026-07-28 gamma-profile
-session's own cross-fraction dual continuation, not this validation session's simplified
-independent-per-fraction design)**, to determine whether the "flexibility rescues outright
-fixed-A/f infeasibility" claim at those two fractions survives the consolidated architecture.
-Phase 5b's own investigation already rules out the one consolidation-adjacent explanation (a
-poisoned warm-start bank) via a direct neutral-reset test, so this is very likely a bounded,
-small (a handful of nuisance solves, similar order to Phase 5's own 12-solve budget), narrowly
-scoped follow-up -- not a broad campaign.
-
-Everything else validated this session (the anomaly fix itself, both fixed-A/f profiles, the
+The one item flagged inconclusive after the initial Phase 5 pass (the D4 nuisance
+"rescues infeasibility" claim at `frac=0.50/0.65`) was resolved within this same session
+(Phase 5c, continuation-threaded rerun): confirmed unchanged, not a consolidation regression.
+Every result validated this session (the anomaly fix, both fixed-A/f profiles, the
 participation-gradient finding, the archived-point classifications, the `gamma_only` outer
-driver, and the structural engineering-kernel checks) is **confirmed and does not need
-rerunning** before outer-search work resumes.
+driver, the full nuisance-profile picture including the infeasibility-rescue claim, and the
+structural engineering-kernel checks) is now **confirmed and does not need rerunning** before
+outer-search work resumes.
 
 ## Acceptance criteria
 
@@ -290,8 +302,9 @@ rerunning** before outer-search work resumes.
    **met** (Phase 3).
 5. Representative archived D20 trial points reclassified: **met**, via a disclosed substitute
    source given no full theta vectors were ever persisted (Phase 4).
-6. Selected nuisance-profile conclusions rechecked: **met**, with one item (frac=0.50/0.65
-   rescue claim) explicitly flagged inconclusive rather than falsely confirmed (Phase 5).
+6. Selected nuisance-profile conclusions rechecked: **met**, including the frac=0.50/0.65
+   rescue claim, resolved to confirmed-unchanged via a continuation-threaded rerun after the
+   first pass surfaced a genuine (script-design, not consolidation) gap (Phase 5/5b/5c).
 7. No broad frontier or long outer campaign run: **met** -- only one `gamma_only` nested-block
    rerun (Phase 4 Part B) and no multi-seed/tournament/long-D20 work.
 8. No delta below 0.1 investigated: **met**.
@@ -316,6 +329,7 @@ scripts/melitz_phase4_archived_d20_replay_2026-07-28.jl
 scripts/melitz_phase4b_gamma_only_rerun_2026-07-28.jl
 scripts/melitz_phase5_nuisance_recert_2026-07-28.jl
 scripts/melitz_phase5b_nuisance_neutral_warmstart_check_2026-07-28.jl
+scripts/melitz_phase5c_nuisance_continuation_rerun_2026-07-28.jl
 scripts/melitz_phase6_perf_smoke_2026-07-28.jl
 docs/key_results/melitz_post_consolidation_phase1_anomaly_replay_2026-07-28.csv
 docs/key_results/melitz_post_consolidation_phase2_profile_recert_2026-07-28.csv
@@ -324,6 +338,7 @@ docs/key_results/melitz_post_consolidation_phase4a_archived_d20_replay_2026-07-2
 docs/key_results/melitz_post_consolidation_phase4b_gamma_only_rerun_2026-07-28.csv
 docs/key_results/melitz_post_consolidation_phase5_nuisance_recert_2026-07-28.csv
 docs/key_results/melitz_post_consolidation_phase5b_neutral_warmstart_check_2026-07-28.csv
+docs/key_results/melitz_post_consolidation_phase5c_nuisance_continuation_rerun_2026-07-28.csv
 docs/key_results/melitz_post_consolidation_phase6_perf_smoke_2026-07-28.csv
 docs/key_results/melitz_post_consolidation_phase7_triage_2026-07-28.csv
 ```
