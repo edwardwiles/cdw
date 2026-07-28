@@ -1,5 +1,13 @@
 # Five-family no-legacy-H-storage gate — 2026-07-28
 
+**PARTIALLY SUPERSEDED — see `SESSION_MASTER_VERDICT_2026-07-28.md` for the accurate final
+state.** This document was written before this session's real, root-caused, D=4-validated fixes
+(flexible-CM/CM+ZC/origin-ZC's priming-side economic-block skip, and the `OperatorPsiBundle` type)
+landed. The specific numeric gate below (`LEGACY_CC_H_MATRIX_ALLOCATIONS = 0`, an actual field/
+allocation removal) is still **not met** — that part of this document remains accurate — but the
+framing that nothing changed this session is now wrong; real, validated progress was made toward
+it (see the master verdict for what).
+
 This is the gate the task requires to reach `LEGACY_CC_H_MATRIX_ALLOCATIONS = 0` /
 `G_SIZED_BACKING_STORAGE_ALLOCATIONS = 0`. **Not met this session** — reported honestly below
 rather than claimed passing.

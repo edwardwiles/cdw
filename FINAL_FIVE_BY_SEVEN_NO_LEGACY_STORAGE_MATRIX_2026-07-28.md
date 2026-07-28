@@ -1,5 +1,13 @@
 # Final 5×7 no-legacy-storage matrix — 2026-07-28
 
+**PARTIALLY SUPERSEDED — see `SESSION_MASTER_VERDICT_2026-07-28.md`.** Column 1 (economic moment
+construction) below was written before this session's real fixes landed: flexible-CM/CM+ZC/
+origin-ZC's priming-side economic-block dense fill is now genuinely *skipped* (not merely
+"unconditional" as this doc still says for those three), root-caused and D=4-validated. Common-
+Fréchet's own row is accurate as-is (investigated separately this session, left unresolved and
+unchanged). The struct-level claims (every family still constructs `PsiObjectiveBundleImplicit`,
+still has a legacy `H` field) remain accurate — only the *priming behavior* changed, not the type.
+
 Columns: (1) economic moment construction, (2) outer A-gradient (out of scope, unchanged), (3)
 economic FG, (4) restriction FG, (5) H_EE, (6) H_ER/H_EC (cross-block), (7) H_RR/H_CC (restriction
 self-block). This session independently re-verified every claim against current source (not copied
