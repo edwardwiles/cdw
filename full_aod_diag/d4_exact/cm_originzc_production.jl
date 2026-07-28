@@ -45,20 +45,25 @@ Analog of `build_cm_meanzc_production_context`, minus the CM-specific
 precompute for it). `ctx_cm.obj` is `aug.obj_cm`.
 """
 function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; fg_backend::Symbol = ORIGINZC_FG_BACKEND_DEFAULT[],
-        zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])
+        zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[],
+        moment_representation::Symbol = :dense_reference)   # true no-H operator bundle (2026-07-28
+        # continuation): :dense_reference (default, unchanged) | :operator (explicit opt-in,
+        # requires fg_backend=:operator).
+    moment_representation === :operator && fg_backend !== :operator &&
+        error("build_originzc_production_context: moment_representation=:operator requires fg_backend=:operator")
     println(stdout, "cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)")
     println(stdout, "cm_internal_feature_storage [origin-ZC] = none (no bin indices -- raw Zraw_all/Zpairraw_all power features only)")
     println(stdout, "origin_fg_backend [origin-ZC] = ", fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
     flush(stdout)
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
-    aug = build_originzc_augmented_obj(ctx, CS, layout)
+    aug = build_originzc_augmented_obj(ctx, CS, layout; moment_representation = moment_representation)
     # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.4): `octx` rides on
     # `ctx_cm` itself (rather than as a new positional argument to
     # `archOZ_base_state`/`archOZ_verified_state`) so every EXISTING caller of those two
     # functions across the codebase (cm_screen_bridge.jl, cm_originzc_profile.jl,
     # cm_originzc_cplus.jl, and a dozen+ diagnostic/test scripts) needs zero signature-call
     # changes and automatically picks up the shared H_EE backend.
-    octx = build_originzc_core_hess_ctx(aug; fg_backend = fg_backend, zc_cross_hessian_backend = zc_cross_hessian_backend)
+    octx = build_originzc_core_hess_ctx(aug, ctx; fg_backend = fg_backend, zc_cross_hessian_backend = zc_cross_hessian_backend)
     ctx_cm = merge(ctx, (obj = aug.obj_cm, octx = octx))
     return (ctx_cm = ctx_cm, aug = aug, octx = octx)
 end

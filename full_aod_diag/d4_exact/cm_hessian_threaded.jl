@@ -57,7 +57,7 @@ loop -- the only per-thread read of `E` -- mirroring the serial `build_bin_table
 kwarg exactly, so the production default (`use_threaded_bins=true`) gets the SAME
 no-dense-economic-column-read property when the `:winner_bin` cross-Hessian backend is active.
 """
-function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::AbstractMatrix{Float64}, w::AbstractVector{Float64}; fill_S::Bool = true)
+function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::Union{Nothing,AbstractMatrix{Float64}}, w::AbstractVector{Float64}; fill_S::Bool = true)
     D = cctx.D; NCORE = cctx.NCORE; Bidx = cctx.Bidx
     W = length(w)
     nt = Threads.nthreads()
@@ -69,6 +69,12 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::Abstrac
 
     if fill_S
         # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
+        # True no-H operator bundle (2026-07-28 continuation): was `H::AbstractMatrix{Float64}` --
+        # rejected `nothing` at the METHOD SIGNATURE level (a MethodError, before this function body
+        # ever ran) even though `E`/`H` is never read when `fill_S=false` -- this is the actual gap
+        # `build_bin_tables!` (serial, cm_hessian_architectures.jl) already closed but this threaded
+        # sibling did not. Mirrors that function's explicit fail-fast guard.
+        H === nothing && error("build_bin_tables_threaded!: fill_S=true requested for an operator-mode bundle with no H field -- should be unreachable in production.")
         E = @view H[:, 2:1+NCORE]
         Threads.@threads :static for tid in 1:nt
             lo = 1 + div((tid - 1) * W, nt)

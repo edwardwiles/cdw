@@ -74,16 +74,27 @@ function inner_loop_internal_meanzc_operator(obj, θ_ext::AbstractVector, cctx::
     # Legacy-H cleanup (2026-07-28): mirrors inner_loop_internal_cmlookup_production's identical
     # dispatch (cm_lookup_production.jl) -- skip_fill=true only ever safe when cctx.moments_skip!
     # was actually built, falls back to the always-fill obj.moments! otherwise.
-    moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
     cctx.meanzc_zc_op === nothing &&
         error("inner_loop_internal_meanzc_operator: cctx.meanzc_zc_op is nothing -- cctx was not built with inner_fg_backend=:operator")
     layout = cctx.meanzc_zc_layout
     n_eta_params = n_eta(layout)   # = K_mean (SharedByPowerLayout), NOT K_mean+K_pair
     νs = @view θ_ext[end-n_eta_params+1:end]
 
-    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
-    obj.H[:, 2] .= 1.0
-    obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    # True no-H operator bundle (2026-07-28 continuation): same dispatch as flexible-CM's
+    # inner_loop_internal_cmlookup_production. θ_econ is θ_ext with the trailing ν-block stripped --
+    # cf_build/fill_K_directgp!/compressed_gravity_raw only ever read a PREFIX of their theta
+    # argument (bounded by ctx.l_full/ctx.Aod_offset), so passing the full θ_ext would also be
+    # numerically safe, but stripping matches wrap_moments_with_cm_meanzc's own established
+    # convention (cm_meanzc_moments.jl: `θ_econ = @view θ_ext[1:end-K_mean]`) exactly.
+    if obj isa OperatorPsiBundle
+        θ_econ = @view θ_ext[1:end-n_eta_params]
+        prime_operator!(obj, θ_econ, cctx.econ_ctx, cctx.core_cf_ref; restriction_state = cctx)
+    else
+        moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
+        moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
+        obj.H[:, 2] .= 1.0
+        obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    end
 
     if cctx.cmlookup_st === nothing
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)

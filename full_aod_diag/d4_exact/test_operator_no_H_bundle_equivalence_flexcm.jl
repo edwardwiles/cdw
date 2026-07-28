@@ -159,6 +159,25 @@ lp("  Δζ*=$e_zeta   max|Δλ*|=$e_lambda   status_d=$(base_d.inner_status) sta
 check("full solve: delta* (ζ*) agrees to 1e-10", e_zeta < 1e-10)
 check("full solve: dual vector (λ*) agrees to 1e-8", e_lambda < 1e-8)
 
+# --- THREADED-BINS re-check (production default is threaded_bins=true; the above used false).
+# Added after finding build_bin_tables_threaded! had a dense-only method signature that would have
+# broken exactly this path -- re-verify the actual production default config, not just the serial one.
+lp("="^90); lp("Threaded-bins (production default) re-check")
+pcx_d_t = build_cm_production_context(ctx, CS; L = 10, contrasts = :orthonormal, use_compressed_core = true,
+                                       threaded_bins = true, moment_representation = :dense_reference)
+pcx_o_t = build_cm_production_context(ctx, CS; L = 10, contrasts = :orthonormal, use_compressed_core = true,
+                                       threaded_bins = true, moment_representation = :operator)
+pcx_d_t.cctx.core_hessian_backend = :exact_winner_pair_parallel
+pcx_o_t.cctx.core_hessian_backend = :exact_winner_pair_parallel
+base_dt = archC_base_state(x_free_calib, pcx_d_t.ctx_cm, pcx_d_t.cctx)
+base_ot = archC_base_state(x_free_calib, pcx_o_t.ctx_cm, pcx_o_t.cctx)
+check("threaded: both backends feasible", base_dt.inner_status in (0,-100,-101,-103) && base_ot.inner_status in (0,-100,-101,-103))
+e_zeta_t = abs(base_dt.ζstar - base_ot.ζstar)
+e_lambda_t = maximum(abs.(base_dt.λstar .- base_ot.λstar))
+lp("  Δζ*=$e_zeta_t   max|Δλ*|=$e_lambda_t   status_d=$(base_dt.inner_status) status_o=$(base_ot.inner_status)")
+check("threaded: delta* (ζ*) agrees to 1e-10", e_zeta_t < 1e-10)
+check("threaded: dual vector (λ*) agrees to 1e-8", e_lambda_t < 1e-8)
+
 println("="^90)
 if isempty(FAILURES)
     println("ALL OPERATOR-VS-DENSE FLEXIBLE-CM EQUIVALENCE GATES PASSED")

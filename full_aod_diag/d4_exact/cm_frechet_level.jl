@@ -191,6 +191,7 @@ end
 # ================================================================================================
 
 isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_counters.jl"))   # default-flips task (2026-07-27), Task C: record_dense_frechet_g! used below
+isdefined(Main, :OperatorPsiBundle) || include(joinpath(@__DIR__, "operator_psi_bundle.jl"))   # true no-H operator bundle (2026-07-28 continuation): OperatorPsiBundle/prime_operator!, load-bearing for build_cm_frechet_production_context below
 
 """
     wrap_moments_with_cm_frechet_archB(core_moments!, ncore_full, Bidx, origins, refIndex1, L, R, D,
@@ -323,18 +324,31 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
                                               # kernels.jl/cm_frechet_lookup_production.jl). Only
                                               # reachable when cm_hessian_backend=:structured (needs a
                                               # real cctx -- see the check below).
-                                              cm_cross_hessian_backend::Symbol = CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT[])   # winner-aware
+                                              cm_cross_hessian_backend::Symbol = CM_FRECHET_CROSS_HESSIAN_BACKEND_DEFAULT[],   # winner-aware
                                               # H_ER phase (2026-07-27), Section 3: pass-through to build_cm_bin_ctx --
                                               # :dense_reference (default, unchanged until this family's own gates
                                               # pass) | :winner_bin (winner_pair_cross_hessian.jl). Deliberately reads
                                               # a SEPARATE Ref from flexible-CM's own CM_CROSS_HESSIAN_BACKEND_DEFAULT
                                               # -- see that Ref's own docstring (core_exact_hessian.jl).
+                                              moment_representation::Symbol = :dense_reference)   # true no-H operator
+                                              # bundle (2026-07-28 continuation): kept :dense_reference DEFAULT for
+                                              # THIS family specifically (unlike flexible-CM's :operator default) --
+                                              # this family's own documented history (archC_frechet_base_state's
+                                              # HISTORY comment) records TWO real, reproduced nStatus=-400 failures
+                                              # from skipping the dense CM/level fill under the FG-lookup backend, at
+                                              # real D=20/W=80,000, root cause not yet identified. :operator is
+                                              # available as an explicit opt-in for gating/investigation, not yet the
+                                              # default -- see FIVE_FAMILY_NO_H_BUNDLE_GATE_2026-07-28.md.
     cm_hessian_backend in (:dense_reference, :structured) ||
         error("build_cm_frechet_production_context: cm_hessian_backend must be :dense_reference or :structured, got $cm_hessian_backend")
     inner_fg_backend in (:dense_reference, :cm_frechet_lookup) ||
         error("build_cm_frechet_production_context: inner_fg_backend must be :dense_reference or :cm_frechet_lookup, got $inner_fg_backend")
     inner_fg_backend == :cm_frechet_lookup && cm_hessian_backend != :structured &&
         error("build_cm_frechet_production_context: inner_fg_backend=:cm_frechet_lookup requires cm_hessian_backend=:structured (needs a real CMBinHessCtx)")
+    moment_representation in (:operator, :dense_reference) ||
+        error("build_cm_frechet_production_context: moment_representation must be :operator or :dense_reference, got :$moment_representation")
+    moment_representation === :operator && inner_fg_backend !== :cm_frechet_lookup &&
+        error("build_cm_frechet_production_context: moment_representation=:operator requires inner_fg_backend=:cm_frechet_lookup")
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
 
     aug = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
@@ -344,29 +358,39 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
     Bidx = Int.(compute_bin_indices(ctx.U, aug.z))
 
     core_cf_ref = Ref{Any}(nothing)
-    # Re-tested and RE-ENABLED 2026-07-27 (see wrap_moments_with_cm_frechet_archB's own header
-    # comment for the full chronology/rationale): build BOTH the always-fill closure
-    # (`moments_archB!`, installed as `obj_cm.moments!`, used by every non-skip path AND by
-    # archC_frechet_verified_state's own inner solve) and the skip variant (`moments_archB_skip!`,
-    # installed on `cctx.moments_skip!`, used ONLY when archC_frechet_base_state/
-    # archC_frechet_verified_state explicitly thread `skip_fill=true` through under production
-    # defaults) -- mirrors build_cm_production_context's identical dual-closure pattern exactly.
-    moments_archB! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
-        refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
-        skip_fill = false)
-    moments_archB_skip! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
-        refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
-        skip_fill = true)
-
     obj0 = aug.obj_cm
-    obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
-        γ = obj0.γ, (moments!) = moments_archB!, moments_jacobian! = error,
-        d = obj0.d, outer_constr_index = obj0.outer_constr_index,
-        inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
-        l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
-        use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
-        outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
-        needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
+    moments_archB_skip! = nothing
+    if moment_representation === :dense_reference
+        # Re-tested and RE-ENABLED 2026-07-27 (see wrap_moments_with_cm_frechet_archB's own header
+        # comment for the full chronology/rationale): build BOTH the always-fill closure
+        # (`moments_archB!`, installed as `obj_cm.moments!`, used by every non-skip path AND by
+        # archC_frechet_verified_state's own inner solve) and the skip variant (`moments_archB_skip!`,
+        # installed on `cctx.moments_skip!`, used ONLY when archC_frechet_base_state/
+        # archC_frechet_verified_state explicitly thread `skip_fill=true` through under production
+        # defaults) -- mirrors build_cm_production_context's identical dual-closure pattern exactly.
+        moments_archB! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
+            refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+            skip_fill = false)
+        moments_archB_skip! = wrap_moments_with_cm_frechet_archB(ctx.obj.moments!, aug.ncore, Bidx, aug.origins,
+            refIndex1, L, R, D, aug.level_targets, ctx; use_compressed_core = use_compressed_core, core_cf_ref = core_cf_ref,
+            skip_fill = true)
+
+        obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
+            γ = obj0.γ, (moments!) = moments_archB!, moments_jacobian! = error,
+            d = obj0.d, outer_constr_index = obj0.outer_constr_index,
+            inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
+            l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
+            use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
+            outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
+            needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
+    else   # :operator -- true no-H production bundle, task Part A, explicit opt-in for this family
+        obj_cm = OperatorPsiBundle(δ = obj0.δ, find_smallest = obj0.find_smallest,
+            γ = obj0.γ, l = obj0.l, outer_constr_index = obj0.outer_constr_index,
+            inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
+            U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
+            use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
+            inner_loop_opt = obj0.inner_loop_opt)
+    end
 
     ctx_cm = merge(ctx, (obj = obj_cm,))
     aug = merge(aug, (core_cf_ref = core_cf_ref, moments_skip! = moments_archB_skip!, Bidx = Bidx))

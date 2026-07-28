@@ -51,6 +51,7 @@ isdefined(Main, :fill_core_hessian_upper!) || include(joinpath(@__DIR__, "core_e
 isdefined(Main, :cf_build) || include(joinpath(@__DIR__, "compressed_factual_buffer_reuse.jl"))
 isdefined(Main, :verify_inner_solution_operator_unrestricted!) || include(joinpath(@__DIR__, "operator_verification.jl"))   # verification-defaults task (2026-07-27): evaluate_fullA_fast_compressed's :operator verification backend below
 isdefined(Main, :HessianWeightCache) || include(joinpath(@__DIR__, "operator_hessian_weights.jl"))   # no-moments/no-composite-G task (2026-07-28): shared cache/prep, see below
+isdefined(Main, :OperatorPsiBundle) || include(joinpath(@__DIR__, "operator_psi_bundle.jl"))   # true no-H operator bundle (2026-07-28 continuation): load-bearing for inner_loop_internal_compressed's dispatch below
 
 "Resolved backend/workers/storage for the UNRESTRICTED family's core Hessian -- read by `_callbackEvalH_inner_compressed!` and by `resolve_unrestricted_manifest` so the two can never silently diverge. Production default is the validated destination-pair-owned parallel kernel; set to :dense_reference for anti-regression / emergency-revert comparisons (see task §5). Worker count defaults via `resolve_core_hessian_workers_default()` (2026-07-25 final gate): 20 when >=20 Julia threads are available (measured 13-20% faster than 10, not a tie), else 10, else the bounded available count."
 const UNRESTRICTED_CORE_HESSIAN_BACKEND = Ref{Symbol}(:exact_winner_pair_parallel)
@@ -389,9 +390,19 @@ function inner_loop_internal_compressed(obj, θ_full, ctx)
 
     W = size(obj.U, 1)
     SW = ctx.γ.SamplingWeights[1:W]
-    obj.H[:, 1] .= θ_full[3 + ctx.D] .* SW
-    obj.H[:, 2] .= 1.0
-    obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    # True no-H operator bundle (2026-07-28 continuation): unrestricted's own priming convention
+    # already differs from the 4 restricted families' (a bare scalar grav_raw threaded through
+    # CompressedCBState, not a materialized column) -- prime_operator! doesn't fit this family
+    # cleanly (see operator_psi_bundle.jl's own header note), so this dispatches directly rather
+    # than calling it, writing into `obj.payoff` instead of `obj.H[:,1]`.
+    if obj isa OperatorPsiBundle
+        obj.payoff .= θ_full[3 + ctx.D] .* SW
+        obj.H_save = obj.payoff[1] * (-1.0)^obj.find_smallest
+    else
+        obj.H[:, 1] .= θ_full[3 + ctx.D] .* SW
+        obj.H[:, 2] .= 1.0
+        obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    end
 
     grav_raw = compressed_gravity_raw(θ_full, ctx)
 

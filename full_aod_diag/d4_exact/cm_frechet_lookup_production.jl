@@ -92,10 +92,16 @@ D=20 evidence. Do not re-enable without root-causing the actual dependency first
 function inner_loop_internal_cmfrechetlookup_production(obj, θ::AbstractVector, cctx::CMBinHessCtx,
         level_targets::Vector{Float64}; hess_cb_builder, nthreads_use::Int = Threads.nthreads(),
         skip_fill::Bool = false)
-    moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
-    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
-    obj.H[:, 2] .= 1.0
-    obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    # True no-H operator bundle (2026-07-28 continuation): same dispatch as flexible-CM's
+    # inner_loop_internal_cmlookup_production -- see that function's own comment for the rationale.
+    if obj isa OperatorPsiBundle
+        prime_operator!(obj, θ, cctx.econ_ctx, cctx.core_cf_ref; restriction_state = cctx)
+    else
+        moments_fn = (skip_fill && cctx.moments_skip! !== nothing) ? cctx.moments_skip! : obj.moments!
+        moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ, obj.U, obj)
+        obj.H[:, 2] .= 1.0
+        obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    end
 
     if cctx.cmlookup_st === nothing
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)

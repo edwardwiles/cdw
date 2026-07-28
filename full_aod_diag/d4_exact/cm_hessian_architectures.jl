@@ -910,8 +910,17 @@ carry that field. `H` is only ever actually read inside the explicit dense-fallb
 `_fill_cm_HEE!`/`build_bin_tables!`, both of which fail fast (not silently) if handed `nothing`.
 """
 _dense_H_or_nothing(obj::CS.PsiObjectiveBundleImplicit) = obj.H
-# The OperatorCMBundle method is defined in operator_cm_bundle.jl (included after this file --
+# The OperatorPsiBundle method is defined in operator_psi_bundle.jl (included after this file --
 # adding it here would be a forward reference to a not-yet-defined type).
+
+"""
+    _dense_H_copy_or_nothing(obj) -> Union{Nothing,Matrix{Float64}}
+
+Same dispatch pattern as `_dense_H_or_nothing`, for `archA_partitioned_hess_cb_builder`'s
+(origin-ZC) `H_copy` scratch -- only read inside that callback's own dense-fallback branches.
+"""
+_dense_H_copy_or_nothing(obj::CS.PsiObjectiveBundleImplicit) = obj.H_copy
+# The OperatorPsiBundle method is defined in operator_psi_bundle.jl.
 
 """
     pack_upper_cm_hessian!(h, Hfull, NCORE, n)
@@ -1290,10 +1299,12 @@ mutable struct OriginZCCoreHessCtx
     # moments! closure (economic-block-only skip, sharing the same core_cf_ref), mirroring
     # CMBinHessCtx's own `moments_skip!` field exactly. `nothing` until built.
     moments_skip!::Union{Nothing,Function}
+    # True no-H operator bundle (2026-07-28 continuation): mirrors CMBinHessCtx's own econ_ctx field.
+    econ_ctx::Any
 end
 
 """
-    build_originzc_core_hess_ctx(aug; core_hessian_backend=:exact_winner_pair_parallel, core_hessian_workers=10, core_hessian_storage=:full_stride, fg_backend=:dense_reference) -> OriginZCCoreHessCtx
+    build_originzc_core_hess_ctx(aug, ctx; core_hessian_backend=:exact_winner_pair_parallel, core_hessian_workers=10, core_hessian_storage=:full_stride, fg_backend=:dense_reference) -> OriginZCCoreHessCtx
 
 `aug` is `build_originzc_augmented_obj(...)`'s return value -- needs
 `aug.ncore_econ` and `aug.core_cf_ref` (the shared box
@@ -1303,7 +1314,7 @@ end
 ZC-restriction-operator FG (port/shared-inner-fg-operator-and-verification-2026-07-26); default
 `:dense_reference` preserves the pre-existing `inner_loop_internal_archgeneric` dense path exactly.
 """
-function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT[],
+function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::Symbol = ORIGINZC_CORE_HESSIAN_BACKEND_DEFAULT[],
         core_hessian_workers::Int = ORIGINZC_CORE_HESSIAN_WORKERS_DEFAULT[], core_hessian_storage::Symbol = ORIGINZC_CORE_HESSIAN_STORAGE_DEFAULT[],
         fg_backend::Symbol = :dense_reference,
         zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[])
@@ -1345,7 +1356,8 @@ function build_originzc_core_hess_ctx(aug; core_hessian_backend::Symbol = ORIGIN
         fg_backend, fg_zc_op, fg_layout, nothing,
         zc_cross_hessian_backend, nothing,
         hzz_zc_op, hzz_zc_layout, hzz_zc_ws, Ref(Float64[]), nothing,
-        hasproperty(aug, Symbol("moments_skip!")) ? aug.moments_skip! : nothing)
+        hasproperty(aug, Symbol("moments_skip!")) ? aug.moments_skip! : nothing,
+        ctx)   # econ_ctx: true no-H operator bundle continuation
 end
 
 """
@@ -1402,12 +1414,32 @@ Architecture A) whenever `octx.core_cf_ref[]` is unavailable for this point
 or `octx.core_hessian_backend === :dense_reference`.
 """
 function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
+    # True no-H operator bundle (2026-07-28 continuation): `∂∂f_∂∂x` (used below purely as a
+    # per-call n x n scratch buffer for assembling the block Hessian before packing -- every entry
+    # used is fully OVERWRITTEN by the HEE/HER/HRR fills before being read, never relies on a prior
+    # value) is ALSO a `PsiObjectiveBundleImplicit`-only field, absent from `OperatorPsiBundle`.
+    # Rather than adding an obj-type-dispatched accessor for this one purely-local scratch use, this
+    # closure now owns its OWN persistent scratch matrix (built once per KNITRO solve, when this
+    # builder is constructed -- not once per Hessian callback invocation), used identically for
+    # BOTH bundle types. This removes the obj.∂∂f_∂∂x dependency entirely rather than working around it.
+    n_scratch = octx.NCORE + octx.n_eta
+    scratch_full = Matrix{Float64}(undef, n_scratch, n_scratch)
     return (kc, cb, evalRequest, evalResult, userParams) -> begin
         obj = userParams
         xloc = evalRequest.x
         @prof "inner_dual_hessian_callback_archA_partitioned" begin
             _prep_dual_index_for_archA!(octx, obj, xloc)   # refreshes obj.arg0 from the current dual point (operator-cached or dense-fallback), precondition for ddPsi!(arg2,arg0) below
-            @unpack H, H_copy, M, arg0, arg2, ddPsi!, ∂∂f_∂∂x = obj
+            # True no-H operator bundle (2026-07-28 continuation): was `@unpack H, H_copy, M, arg0,
+            # arg2, ddPsi!, ∂∂f_∂∂x = obj` -- an unconditional H/H_copy unpack that would throw
+            # immediately on OperatorPsiBundle (no H/H_copy field). H/H_copy are only actually read
+            # inside this callback's own dense-fallback branches below (all already guarded by
+            # `winner_bin_ok`/`cf isa CompressedFactual` checks); `_dense_H_or_nothing`/
+            # `_dense_H_copy_or_nothing` mirror the identical dispatch flexible-CM's
+            # hessian_cm_structured! already uses.
+            @unpack M, arg0, arg2, ddPsi! = obj
+            H = _dense_H_or_nothing(obj)
+            H_copy = _dense_H_copy_or_nothing(obj)
+            ∂∂f_∂∂x = scratch_full
             ddPsi!(arg2, arg0)
             NCORE = octx.NCORE; n_eta_total = octx.n_eta; n = NCORE + n_eta_total
             cf = octx.core_cf_ref[]   # a CompressedFactual (success) OR a Symbol fallback reason
@@ -1477,7 +1509,12 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         record_winner_cross_hessian_call!()
                         op = octx.hzz_zc_op
                         refresh_zc_targets!(octx.hzz_zc_ws, op, octx.hzz_zc_layout, octx.nu_ref[])
-                        octx.hzz_centered = ensure_zc_centered_scratch!(octx.hzz_centered, op, size(H, 1))
+                        # True no-H operator bundle (2026-07-28 continuation): was `size(H, 1)` --
+                        # would throw on OperatorPsiBundle (H===nothing). `M` (already unpacked
+                        # above, = obj.M = the draw count) is the identical value: H always has
+                        # exactly M rows by construction, this was only ever using H for its size,
+                        # never its contents.
+                        octx.hzz_centered = ensure_zc_centered_scratch!(octx.hzz_centered, op, M)
                         refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2)
                         zc_restriction_gram!(HRR, octx.hzz_centered, op, M)
                     else

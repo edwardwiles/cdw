@@ -52,6 +52,8 @@
 
 using LinearAlgebra: dot
 
+isdefined(Main, :OperatorPsiBundle) || include(joinpath(@__DIR__, "operator_psi_bundle.jl"))   # true no-H operator bundle (2026-07-28 continuation): OperatorPsiBundle/prime_operator!, load-bearing for build_cm_meanzc_augmented_obj below
+
 """
     packed_pair_index(D::Int) -> Vector{Tuple{Int,Int}}
 
@@ -423,7 +425,13 @@ callers must go through `cm_meanzc_production.jl`'s
 function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int = 0,
                                         contrasts::Symbol = :anchored, meanzc_basis::Symbol = :direct,
                                         probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                        refIndex1::Int = ctx.γ.refIndex1)
+                                        refIndex1::Int = ctx.γ.refIndex1,
+                                        moment_representation::Symbol = :dense_reference)   # true no-H
+                                        # operator bundle (2026-07-28 continuation): :dense_reference
+                                        # (default, unchanged) constructs PsiObjectiveBundleImplicit +
+                                        # both moments! closures exactly as before; :operator constructs
+                                        # OperatorPsiBundle and skips building the closures entirely
+                                        # (never called in that mode -- priming uses prime_operator!).
     K_mean >= 1 || error("build_cm_meanzc_augmented_obj: K_mean must be >= 1, got $K_mean")
     0 <= K_pair <= K_mean || error("build_cm_meanzc_augmented_obj: K_pair must satisfy 0 <= K_pair <= K_mean, got K_pair=$K_pair, K_mean=$K_mean")
     meanzc_basis in (:direct, :anchored) || error("build_cm_meanzc_augmented_obj: meanzc_basis must be :direct or :anchored, got $meanzc_basis")
@@ -444,28 +452,40 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
     d_new = ncore_econ + n_mean + n_pair + ncm
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair + ncm
     core_cf_ref = Ref{Any}(nothing)
-    moments_meanzc! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
-                                                   meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
-                                                   ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
-    # Legacy-H cleanup (2026-07-28): mirrors build_cm_production_context's dual-closure pattern
-    # (cm_production_bundle.jl) -- a SECOND, separate closure sharing the SAME core_cf_ref, built
-    # with skip_fill=true, installed on cctx.moments_skip! (build_cm_meanzc_bin_ctx below) and used
-    # only by inner_loop_internal_meanzc_operator's priming call when archC_meanzc_base_state's own
-    # skip_fill_safe is true.
-    moments_meanzc_skip! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
-                                                        meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
-                                                        ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
+    moments_meanzc_skip! = nothing
+    if moment_representation === :dense_reference
+        moments_meanzc! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
+                                                       meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
+                                                       ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
+        # Legacy-H cleanup (2026-07-28): mirrors build_cm_production_context's dual-closure pattern
+        # (cm_production_bundle.jl) -- a SECOND, separate closure sharing the SAME core_cf_ref, built
+        # with skip_fill=true, installed on cctx.moments_skip! (build_cm_meanzc_bin_ctx below) and used
+        # only by inner_loop_internal_meanzc_operator's priming call when archC_meanzc_base_state's own
+        # skip_fill_safe is true.
+        moments_meanzc_skip! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
+                                                            meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
+                                                            ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
 
-    obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
-        γ = obj0.γ, (moments!) = moments_meanzc!, moments_jacobian! = error,
-        d = d_new, outer_constr_index = outer_constr_index_new,
-        inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
-        l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
-        use_cached_x = obj0.use_cached_x,
-        threshold_state = obj0.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
-        outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
-        needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
-    @assert obj_cm.outer_constr_index == obj_cm.d
+        obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
+            γ = obj0.γ, (moments!) = moments_meanzc!, moments_jacobian! = error,
+            d = d_new, outer_constr_index = outer_constr_index_new,
+            inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
+            l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
+            use_cached_x = obj0.use_cached_x,
+            threshold_state = obj0.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
+            outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
+            needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
+        @assert obj_cm.outer_constr_index == obj_cm.d
+    elseif moment_representation === :operator
+        obj_cm = OperatorPsiBundle(δ = obj0.δ, find_smallest = obj0.find_smallest,
+            γ = obj0.γ, l = obj0.l, outer_constr_index = outer_constr_index_new,
+            inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
+            U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
+            use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
+            inner_loop_opt = obj0.inner_loop_opt)
+    else
+        error("build_cm_meanzc_augmented_obj: moment_representation must be :operator or :dense_reference, got :$moment_representation")
+    end
 
     return (obj_cm = obj_cm, CM = CM, z = z, origins = origins, ncore = ncore_econ, ncm = ncm,
             L = L, contrasts = contrasts, refIndex1 = refIndex1,

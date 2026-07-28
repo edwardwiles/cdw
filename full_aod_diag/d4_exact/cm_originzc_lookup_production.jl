@@ -88,7 +88,6 @@ and reused across every subsequent inner solve at this `octx` (same pattern as `
 function inner_loop_internal_originzc_operator(obj, θ_ext::AbstractVector, octx::OriginZCCoreHessCtx; skip_fill::Bool = false)
     # Legacy-H cleanup (2026-07-28): mirrors inner_loop_internal_cmlookup_production/
     # inner_loop_internal_meanzc_operator's identical dispatch.
-    moments_fn = (skip_fill && octx.moments_skip! !== nothing) ? octx.moments_skip! : obj.moments!
     octx.fg_zc_op === nothing &&
         error("inner_loop_internal_originzc_operator: octx.fg_zc_op is nothing -- octx was not built with fg_backend=:operator")
     # NOTE: `octx.n_eta` (= n_mean+n_pair, the RESTRICTION-COLUMN count) is a DIFFERENT quantity
@@ -101,9 +100,17 @@ function inner_loop_internal_originzc_operator(obj, θ_ext::AbstractVector, octx
     n_eta_params = n_eta(octx.fg_layout)
     νfull = @view θ_ext[end-n_eta_params+1:end]
 
-    moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
-    obj.H[:, 2] .= 1.0
-    obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    # True no-H operator bundle (2026-07-28 continuation): same dispatch as flexible-CM's
+    # inner_loop_internal_cmlookup_production.
+    if obj isa OperatorPsiBundle
+        θ_econ = @view θ_ext[1:end-n_eta_params]
+        prime_operator!(obj, θ_econ, octx.econ_ctx, octx.core_cf_ref; restriction_state = octx)
+    else
+        moments_fn = (skip_fill && octx.moments_skip! !== nothing) ? octx.moments_skip! : obj.moments!
+        moments_fn(@view(obj.H[:, 1]), CS.select_G_from_H(obj, obj.H), θ_ext, obj.U, obj)
+        obj.H[:, 2] .= 1.0
+        obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    end
 
     if octx.fg_lookup_st === nothing
         octx.fg_lookup_st = OriginZCOperatorState(obj, octx.NCORE - 1, octx.fg_zc_op::ZCRestrictionOperator, octx.fg_layout, octx.core_cf_ref)

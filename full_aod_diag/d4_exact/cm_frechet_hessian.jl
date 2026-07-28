@@ -46,7 +46,13 @@ Same precondition as `hessian_cm_structured!`: `obj.arg0` must already reflect t
 (zeta,lambda) (`_archC_prep_for_hessian!` first).
 """
 function hessian_cm_frechet_structured!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64})
-    @unpack H, M, arg0, arg2, ddPsi! = obj
+    # True no-H operator bundle (2026-07-28 continuation): was `@unpack H, M, arg0, arg2, ddPsi! =
+    # obj` -- an unconditional H unpack that would throw immediately on OperatorPsiBundle (no H
+    # field). Mirrors flexible-CM's own hessian_cm_structured! fix exactly (cm_hessian_architectures.jl):
+    # `H` is only ever actually read inside _fill_cm_HEE!/build_bin_tables!'s own dense-fallback
+    # branches, both already generic on Union{Nothing,AbstractMatrix}.
+    @unpack M, arg0, arg2, ddPsi! = obj
+    H = _dense_H_or_nothing(obj)
     ddPsi!(arg2, arg0)
     w = arg2
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
@@ -273,7 +279,15 @@ function archC_frechet_hess_cb_builder(cctx::CMBinHessCtx, level_targets::Vector
         o = userParams
         xloc = evalRequest.x
         @prof "inner_dual_hessian_callback_archC_frechet" begin
-            _archC_prep_for_hessian!(o, xloc)
+            # True no-H operator bundle (2026-07-28 continuation): was hardcoded to the DENSE-only
+            # `_archC_prep_for_hessian!` (unconditional `obj.H` read) -- unlike this same function's
+            # own threaded branch above (and flexible-CM's `archC_hess_cb_builder`, both branches),
+            # which already call the dense-G-free dispatcher `_prep_dual_index_for_archC!`. This was
+            # a real, pre-existing asymmetry between the threaded/serial branches, not something
+            # introduced by the no-H bundle -- it just happened to be harmless before (redundantly
+            # re-reading a real `obj.H` that already existed) and only became a hard failure once a
+            # bundle with no `H` field at all was constructed. Fixed to match the threaded branch.
+            _prep_dual_index_for_archC!(cctx, o, xloc)
             hessian_cm_frechet_structured!(evalResult.hess, o, cctx, level_targets)
         end
         _INNER_CALL_COUNTERS[].n_hess_calls += 1

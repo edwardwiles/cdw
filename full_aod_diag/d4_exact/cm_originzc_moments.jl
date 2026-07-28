@@ -18,6 +18,9 @@
 # for the SharedByPowerLayout special case (unused in production for this
 # arm, kept for the mean-only-arm implementation-equivalence test, task
 # brief Section 3) via new AbstractVector-argument methods added here.
+# ============================================================================
+
+isdefined(Main, :OperatorPsiBundle) || include(joinpath(@__DIR__, "operator_psi_bundle.jl"))   # true no-H operator bundle (2026-07-28 continuation): OperatorPsiBundle/prime_operator!, load-bearing for build_originzc_augmented_obj below
 #
 # Column layout (no CM-grid block at all):
 #     [ economic (ncore_econ-1) | mean_1(D) ... mean_{K_mean}(D)
@@ -55,6 +58,7 @@ methods above (mirrors `cm_meanzc_moments.jl`'s own `mean_columns_direct!`/
 `pair_columns!`). `dest` is expected to be a view directly into the
 destination moment matrix `G`.
 """
+
 function mean_columns_direct!(dest::AbstractMatrix{Float64}, Z::AbstractMatrix{Float64}, νtargets::AbstractVector{Float64})
     @. dest = Z - νtargets'
     return dest
@@ -216,7 +220,9 @@ the CM-specific fields (`CM, z, origins, ncm, L, contrasts, refIndex1`),
 PLUS `layout` itself (so callers can recover `K_mean`/`K_pair`/target-index
 mapping without re-threading them separately).
 """
-function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout)
+function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
+        moment_representation::Symbol = :dense_reference)   # true no-H operator bundle (2026-07-28
+        # continuation): :dense_reference (default, unchanged) | :operator (explicit opt-in).
     layout isa OriginByPowerLayout || layout isa SharedByPowerLayout ||
         error("build_originzc_augmented_obj: unsupported layout type $(typeof(layout))")
 
@@ -234,23 +240,35 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout)
     d_new = ncore_econ + n_mean + n_pair
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair
     core_cf_ref = Ref{Any}(nothing)
-    moments_originzc! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
-        ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
-    # Legacy-H cleanup (2026-07-28): second closure, same shared core_cf_ref, skip_fill=true --
-    # mirrors build_cm_meanzc_augmented_obj's identical dual-closure pattern.
-    moments_originzc_skip! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
-        ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
+    moments_originzc_skip! = nothing
+    if moment_representation === :dense_reference
+        moments_originzc! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
+            ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
+        # Legacy-H cleanup (2026-07-28): second closure, same shared core_cf_ref, skip_fill=true --
+        # mirrors build_cm_meanzc_augmented_obj's identical dual-closure pattern.
+        moments_originzc_skip! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
+            ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
 
-    obj_oz = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
-        γ = obj0.γ, (moments!) = moments_originzc!, moments_jacobian! = error,
-        d = d_new, outer_constr_index = outer_constr_index_new,
-        inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
-        l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
-        use_cached_x = obj0.use_cached_x,
-        threshold_state = obj0.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
-        outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
-        needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
-    @assert obj_oz.outer_constr_index == obj_oz.d
+        obj_oz = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
+            γ = obj0.γ, (moments!) = moments_originzc!, moments_jacobian! = error,
+            d = d_new, outer_constr_index = outer_constr_index_new,
+            inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
+            l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
+            use_cached_x = obj0.use_cached_x,
+            threshold_state = obj0.threshold_state,   # 2026-07-24 release fix: was defaulting to Inf (disabled) on every rebuild
+            outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
+            needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
+        @assert obj_oz.outer_constr_index == obj_oz.d
+    elseif moment_representation === :operator
+        obj_oz = OperatorPsiBundle(δ = obj0.δ, find_smallest = obj0.find_smallest,
+            γ = obj0.γ, l = obj0.l, outer_constr_index = outer_constr_index_new,
+            inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
+            U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
+            use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
+            inner_loop_opt = obj0.inner_loop_opt)
+    else
+        error("build_originzc_augmented_obj: moment_representation must be :operator or :dense_reference, got :$moment_representation")
+    end
 
     return (obj_cm = obj_oz, ncore = ncore_econ,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, layout = layout,

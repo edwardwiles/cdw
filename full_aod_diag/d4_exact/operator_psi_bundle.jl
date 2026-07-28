@@ -155,3 +155,4 @@ function prime_operator!(obj::OperatorPsiBundle, θ_econ::AbstractVector, ctx, c
 end
 
 _dense_H_or_nothing(obj::OperatorPsiBundle) = nothing
+_dense_H_copy_or_nothing(obj::OperatorPsiBundle) = nothing

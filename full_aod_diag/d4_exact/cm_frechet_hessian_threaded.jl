@@ -36,7 +36,10 @@ either way).
 function hessian_cm_frechet_structured_v2!(h, obj, cctx::CMBinHessCtx, level_targets::Vector{Float64};
                                             threaded_bins::Bool = false,
                                             tls::Union{Nothing,ThreadLocalBinScratch} = nothing)
-    @unpack H, M, arg0, arg2, ddPsi! = obj
+    # True no-H operator bundle (2026-07-28 continuation): same fix as the serial
+    # hessian_cm_frechet_structured! (cm_frechet_hessian.jl) -- see that function's own comment.
+    @unpack M, arg0, arg2, ddPsi! = obj
+    H = _dense_H_or_nothing(obj)
     ddPsi!(arg2, arg0)
     w = arg2
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D

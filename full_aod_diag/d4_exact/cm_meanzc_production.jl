@@ -132,14 +132,21 @@ performance contract).
 function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair::Int = 0,
                                              contrasts::Symbol = :orthonormal, meanzc_basis::Symbol = :direct,
                                              probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                             inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[])
+                                             inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
+                                             moment_representation::Symbol = :dense_reference)   # true no-H
+                                             # operator bundle (2026-07-28 continuation): pass-through to
+                                             # build_cm_meanzc_augmented_obj -- :dense_reference (default,
+                                             # unchanged) | :operator (explicit opt-in, requires
+                                             # inner_fg_backend=:operator).
+    moment_representation === :operator && inner_fg_backend !== :operator &&
+        error("build_cm_meanzc_production_context: moment_representation=:operator requires inner_fg_backend=:operator")
     println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")
     println(stdout, "cm_internal_feature_storage [CM+mean/ZC] = bin_indices")
     println(stdout, "inner_fg_backend [CM+mean/ZC] = ", inner_fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
     flush(stdout)
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, K_pair = K_pair,
-        contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs)
+        contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = moment_representation)
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))
     cctx = build_cm_meanzc_bin_ctx(ctx, aug; inner_fg_backend = inner_fg_backend)
     bins = cm_bin_indices_for(ctx, aug)   # lfix_cm_aware.jl -- Unsigned-typed, for the CM fixed-contribution lookup
