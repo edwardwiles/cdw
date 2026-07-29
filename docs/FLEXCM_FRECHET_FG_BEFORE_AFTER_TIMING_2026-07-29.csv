@@ -1,0 +1,11 @@
+family,D,scale,metric,contrasts,point,pre_refactor,post_refactor,unit,pct_change,note
+common_frechet,20,W80000_L50,complete_solve_speedup_vs_dense,anchored,calib,1.260,1.356,x,+7.6%,noise-level (host load 62-96 throughout)
+common_frechet,20,W80000_L50,complete_solve_speedup_vs_dense,anchored,near_delta1_perturbed,1.080,1.264,x,+17.0%,noise-level
+common_frechet,20,W80000_L50,complete_solve_speedup_vs_dense,anchored,hard_point_x1.01,1.619,1.251,x,-22.7%,noise-level (pre-refactor run got a favorably-scheduled dense-side timing)
+common_frechet,20,W80000_L50,complete_solve_speedup_vs_dense,orthonormal,calib,1.183,1.242,x,+5.0%,noise-level
+common_frechet,20,W80000_L50,complete_solve_speedup_vs_dense,orthonormal,near_delta1_perturbed,1.109,1.211,x,+9.2%,noise-level
+common_frechet,20,W80000_L50,complete_solve_speedup_vs_dense,orthonormal,hard_point_x1.01,1.195,1.242,x,+3.9%,noise-level
+common_frechet,20,W80000_L50,isolated_per_fg_callback_allocation,anchored,warm,3360,3376,bytes,+0.5%,O(1) in W both before/after; no new W-scale allocation
+common_frechet,20,W80000_L50,complete_solve_alloc_ratio_lookup_over_dense,both,all_cells,1.0393,1.0393,ratio,0.0%,identical to 4 decimal places every cell, both runs
+flexible_cm,4,L10-50_both_contrasts,d4_equivalence_gate_pass_rate,both,8pt_battery,96/96,96/96,cells,0.0%,c12i_validate_lookup_fg.jl (interval+suffix) + new suffix-only harness; both PASS pre/post
+common_frechet,20,W80000_L50,zeta_star_absdiff_at_calib_anchored,anchored,calib,6.522560269672795e-16,6.522560269672795e-16,abs,0.0%,IDENTICAL to 16 significant digits pre vs post refactor

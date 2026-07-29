@@ -1,0 +1,8 @@
+family,D,W,L,contrasts,point,status_dense,status_lookup,zeta_star_absdiff,t_dense_s,t_lookup_s,alloc_dense_MB,alloc_lookup_MB,speedup,alloc_ratio,per_callback_alloc_bytes,pass
+common_frechet,20,80000,50,anchored,calib,0,0,6.522560269672795e-16,1.0241,0.7552,65.073,67.632,1.356,1.0393,3376,PASS
+common_frechet,20,80000,50,anchored,near_delta1_perturbed,0,0,4.107825191113079e-15,0.9114,0.7210,65.073,67.632,1.264,1.0393,3376,PASS
+common_frechet,20,80000,50,anchored,hard_point_x1.01,0,0,2.753353101070388e-13,0.9073,0.7252,65.073,67.632,1.251,1.0393,3376,PASS
+common_frechet,20,80000,50,orthonormal,calib,0,0,3.469446951953614e-18,0.9232,0.7435,65.073,67.632,1.242,1.0393,3376,PASS
+common_frechet,20,80000,50,orthonormal,near_delta1_perturbed,0,0,8.604228440844963e-15,0.9959,0.8226,65.073,67.632,1.211,1.0393,3376,PASS
+common_frechet,20,80000,50,orthonormal,hard_point_x1.01,0,0,3.277378368693462e-13,0.9486,0.7639,65.073,67.632,1.242,1.0393,3376,PASS
+flexible_cm,20,100000,50,anchored,real_solved_xstar,0,0,0.0,21.005126,6.200335,NA,NA,3.387,NA,0,PASS
