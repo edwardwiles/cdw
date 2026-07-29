@@ -38,16 +38,21 @@ isdefined(Main, :NO_DENSE_G_COUNTERS) || include(joinpath(@__DIR__, "no_dense_g_
 """
     ZC_CENTERED_CACHE_ACROSS_CALLBACKS
 
-Zc-caching release (2026-07-28, Section 10 / lifecycle-audit `HIGHEST_PRIORITY_REMAINING_GAP`):
-opt-in flag gating `refresh_zc_centered!`'s new "skip the `Zc` rebuild when the outer point hasn't
-changed since it was last built" behavior. **Defaults to `false`** -- today's unchanged
-always-rebuild-every-Hessian-callback behavior -- per this codebase's universal convention that new
-backends/optimizations are opt-in with the OLD behavior as the default. Flip to `true` in a gate
-script or (once independently validated at real D=20 scale by a future session) production wiring
-to eliminate the redundant per-callback `Zc` rebuild the lifecycle audit flagged. See
-`docs/ZC_CENTERING_LIFECYCLE_RELEASE_2026-07-28.md` for the D=4 bit-exact validation evidence.
+Selective-merge release (2026-07-28): flipped `true` on explicit user sign-off. Gates
+`refresh_zc_centered!`'s "skip the `Zc` rebuild when the outer point hasn't changed since it was
+last built" behavior. Real D=20/W=100,000 gate (`docs/ZC_CENTERING_D20_GATE_2026-07-28.csv`,
+both origin_zc and cm_meanzc, run in isolation): rebuild/cache-hit counters behave exactly as
+designed in every row (cache off: rebuilds per callback, hits=0; cache on: ~1 rebuild per outer
+point), 5/6 points faster wall time (the one exception is the shortest budget, consistent with
+fixed per-call context-build overhead dominating a single-rep measurement), KNITRO status/n_eval/
+n_grad unaffected in 5/6 point pairs. D=20 bit-exactness could not be directly confirmed -- the
+post-hoc recompute check hits a pre-existing, cache-unrelated bug in the `:operator` backend's
+low-level callback-builder re-entrancy (identical failure for both families/cache settings, fires
+before the cache flag's own code path) -- correctness backing instead comes from the D=4 gate
+(`test_zc_centered_cache_d4.jl`, 28/28, same algebra/code paths, re-verified on this merged HEAD).
+See `docs/ZC_CENTERING_D20_GATE_2026-07-28.md` for full detail.
 """
-const ZC_CENTERED_CACHE_ACROSS_CALLBACKS = Ref{Bool}(false)
+const ZC_CENTERED_CACHE_ACROSS_CALLBACKS = Ref{Bool}(true)
 
 """
     ZCRestrictionOperator
