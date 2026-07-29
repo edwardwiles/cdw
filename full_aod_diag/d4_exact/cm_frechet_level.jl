@@ -334,15 +334,24 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
                                               # pass) | :winner_bin (winner_pair_cross_hessian.jl). Deliberately reads
                                               # a SEPARATE Ref from flexible-CM's own CM_CROSS_HESSIAN_BACKEND_DEFAULT
                                               # -- see that Ref's own docstring (core_exact_hessian.jl).
-                                              moment_representation::Symbol = :dense_reference)   # true no-H operator
-                                              # bundle (2026-07-28 continuation): kept :dense_reference DEFAULT for
-                                              # THIS family specifically (unlike flexible-CM's :operator default) --
-                                              # this family's own documented history (archC_frechet_base_state's
-                                              # HISTORY comment) records TWO real, reproduced nStatus=-400 failures
-                                              # from skipping the dense CM/level fill under the FG-lookup backend, at
-                                              # real D=20/W=80,000, root cause not yet identified. :operator is
-                                              # available as an explicit opt-in for gating/investigation, not yet the
-                                              # default -- see FIVE_FAMILY_NO_H_BUNDLE_GATE_2026-07-28.md.
+                                              moment_representation::Symbol = :operator)   # true no-H operator
+                                              # bundle -- flipped to match flexible-CM's own default (2026-07-29,
+                                              # docs/FRECHET_OPERATOR_DEFAULT_INVESTIGATION_2026-07-29.md). The prior
+                                              # :dense_reference default here cited TWO real, reproduced nStatus=-400
+                                              # failures (archC_frechet_base_state's HISTORY comment) as grounds for
+                                              # caution -- but that history is about `skip_cm_fill_ref`, a DIFFERENT
+                                              # mechanism (leaving a still-DENSE bundle's CM/level columns stale while
+                                              # claiming nothing reads them; that skip remains permanently reverted,
+                                              # unrelated to this flag). `:operator` (OperatorPsiBundle) has no dense
+                                              # H field at all -- any real remaining dependency would hard-crash, not
+                                              # silently corrupt. Investigated 2026-07-29: real D=20/W=80,000, both
+                                              # contrasts, at the EXACT non-calibration outer points that reproduced
+                                              # the original failure (near_delta1_perturbed, hard_point_x1.01) --
+                                              # BOTH the full inner solve (archC_frechet_base_state) and the full
+                                              # outer gradient (cm_frechet_production_gradient_cplus) agree with
+                                              # :dense_reference to 0.000e+00 in all 12 tested cells. See that doc for
+                                              # the full investigation; :dense_reference remains available as an
+                                              # explicit opt-in reference/debug mode.
     cm_hessian_backend in (:dense_reference, :structured) ||
         error("build_cm_frechet_production_context: cm_hessian_backend must be :dense_reference or :structured, got $cm_hessian_backend")
     inner_fg_backend in (:dense_reference, :cm_frechet_lookup) ||
