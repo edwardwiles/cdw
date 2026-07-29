@@ -1,0 +1,9 @@
+label,gradient_backend,delta,direction,nStatus,wall_s,inner_solve_count,inner_infeas_count,inner_eval_failures,g_best,kappa_best_pct,delta_best,within_budget,incumbent_source
+production_(A,f),auto,0.1,upper,-410,19.373615980148315,82,0,70,-0.1018858482536028,89.84102737853775,0.09239216502224216,true,cold_verified
+experimental_(A,q),B_direct_argument_aq_experimental,0.1,upper,-410,3.9050989151000977,85,0,71,-0.08729550274783368,90.71916565529267,0.05113469427754156,true,cold_verified
+production_(A,f),auto,0.1,lower,-410,2.9454050064086914,107,0,69,0.004833267865442944,96.46573074151168,0.09940544818169578,true,cold_verified
+experimental_(A,q),B_direct_argument_aq_experimental,0.1,lower,-410,3.051500082015991,77,0,52,-0.009435666347995423,95.55243941589147,0.06676548807543914,true,cold_verified
+production_(A,f),auto,0.5,upper,-410,3.1453659534454346,97,0,68,-0.18263232814204244,85.13266116484301,0.4928896976552007,true,cold_verified
+experimental_(A,q),B_direct_argument_aq_experimental,0.5,upper,-410,1.938918113708496,78,0,68,-0.15094648051927317,86.9501232112389,0.39127213338966443,true,cold_verified
+production_(A,f),auto,0.5,lower,-410,2.4457640647888184,96,0,81,0.01395915933885893,97.05441019375421,0.4614820178558934,true,cold_verified
+experimental_(A,q),B_direct_argument_aq_experimental,0.5,lower,-410,3.6504688262939453,103,0,70,0.012620658411570665,96.96784387716882,0.49941207027022594,true,cold_verified

@@ -405,9 +405,12 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
     # path as the pre-existing two, requiring ctx.sorted_tail_ctx (built via
     # build_melitz_psi_bundle*'s own moment_backend kwarg) to be present; that check happens
     # inside the gradient closure itself (a clear ArgumentError there), not here.
+    # q-bandwidth convergence campaign (2026-07-29), Phase 11: ADDITIVE registration of the
+    # experimental (A,q) backend -- appended to the existing tuple, zero change to any
+    # existing symbol's membership or behavior.
     is_direct = gradient_backend in (:B_direct_argument_serial, :B_direct_argument_parallel,
                                       :B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel,
-                                      :B_direct_argument_touched_row_serial)
+                                      :B_direct_argument_touched_row_serial, :B_direct_argument_aq_experimental)
     mj! = gradient_backend == :B ? make_melitz_moments_jacobian_b(h) :
           gradient_backend == :B_localized ? make_melitz_moments_jacobian_b_localized(h) :
           gradient_backend == :B_localized_parallel ? make_melitz_moments_jacobian_b_localized_parallel(h) :
@@ -419,7 +422,7 @@ function build_melitz_implicit_bundle(ctx, z_draws::AbstractMatrix, theta_free_i
                 ":B_argument_localized_serial, :B_argument_localized_parallel, " *
                 ":B_direct_argument_serial, :B_direct_argument_parallel, " *
                 ":B_direct_argument_sorted_serial, :B_direct_argument_sorted_parallel, " *
-                ":B_direct_argument_touched_row_serial, or :D for " *
+                ":B_direct_argument_touched_row_serial, :B_direct_argument_aq_experimental, or :D for " *
                 "the KNITRO-native Implicit path (Backend R does not fit the moments_jacobian! hook -- see file header)")
 
     if backend == :matrix_free
@@ -939,6 +942,16 @@ function melitz_build_finite_delta_callbacks(session, ctx, delta::Float64, find_
                          resolved_gradient_backend == :B_direct_argument_sorted_serial ? make_melitz_gradient_delta_direct_sorted_serial(h) :
                          resolved_gradient_backend == :B_direct_argument_sorted_parallel ? make_melitz_gradient_delta_direct_sorted_parallel(h) :
                          resolved_gradient_backend == :B_direct_argument_touched_row_serial ? make_melitz_gradient_delta_direct_touched_row_serial(h) :
+                         # q-bandwidth convergence campaign (2026-07-29), Phase 11: ADDITIVE
+                         # experimental (A,q) backend -- exact A (exact_a_gradient.jl) + the
+                         # Phase 6 shortlisted q-bandwidth policy (PowerScaled alpha=1/2,
+                         # anchor h_ref=1e-3 at W_ref=80,000 -- a generic, coordinate-agnostic
+                         # default since this dispatch site has no per-coordinate calibration
+                         # step; a caller wanting a different policy should call
+                         # `make_melitz_gradient_delta_direct_aq_experimental` directly rather
+                         # than through this named dispatch symbol).
+                         resolved_gradient_backend == :B_direct_argument_aq_experimental ?
+                             make_melitz_gradient_delta_direct_aq_experimental(PowerScaledQBandwidth(1e-3, 80_000, 0.5)) :
                          nothing
     signed_objective(theta) = find_smallest ? theta[1] : -theta[1]
     # 2026-07-28 outer-search gamma-profile session (governing prompt Phase 1): `objective_scale`

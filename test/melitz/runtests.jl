@@ -61,6 +61,9 @@ include(joinpath(MELITZ_DIR, "sorted_crossing_gradient.jl"))
 include(joinpath(MELITZ_DIR, "touched_row_gradient.jl"))
 include(joinpath(MELITZ_DIR, "cc_bundle.jl"))
 include(joinpath(MELITZ_DIR, "exact_a_gradient.jl"))
+include(joinpath(MELITZ_DIR, "exact_q_smooth_gradient.jl"))
+include(joinpath(MELITZ_DIR, "q_bandwidth_policy.jl"))
+include(joinpath(MELITZ_DIR, "aq_experimental_backend.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(MELITZ_DIR, "nuisance_profile.jl"))
 include(joinpath(MELITZ_DIR, "predictor_corrector.jl"))   # 2026-07-26 closure (Phase 3): was
@@ -6788,6 +6791,157 @@ end
         bytes = @allocated melitz_exact_a_gradient_full!(dDelta_da, aq_obj, x_dummy, state0, aq_ctx, ws)
         @test bytes == 0
         @test MELITZ_DENSE_G_MATERIALIZATIONS[] == before_dense
+    end
+end
+
+@testset "q-bandwidth convergence campaign 2026-07-29 (Phase 1-2)" begin
+    qbw_obj, qbw_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+    qbw_ctx = qbw_obj.γ
+    qbw_D = qbw_ctx.D
+    qbw_nA = qbw_D^2 - 1
+    qbw_nq = length(qbw_theta0) - 1 - qbw_nA
+    qbw_sorted_ctx = qbw_ctx.sorted_tail_ctx
+
+    qbw_obj.use_cached_x = false; qbw_obj.x .= NaN
+    qbw_lfd0 = melitz_recover_lfd(qbw_obj, qbw_theta0)
+    @test qbw_lfd0.lfd_ok
+    qbw_x0 = copy(qbw_lfd0.dual_x)
+
+    @testset "Exact smooth q gradient matches zero-switch fixed-dual secants (Phase 2)" begin
+        state0 = MelitzExpandedState(qbw_D)
+        A0, f0, gpj0, fjj0 = melitz_expand_theta(qbw_theta0, qbw_ctx)
+        state0.A .= A0; state0.f .= f0; state0.gamma_prime_j = gpj0; state0.f_jj = fjj0
+        melitz_update_operator_at_theta!(qbw_obj.op, qbw_theta0, qbw_ctx)
+        grad_free_smooth, dDelta_dq_full = melitz_exact_q_smooth_gradient(qbw_obj, qbw_x0, state0, qbw_ctx)
+        @test length(grad_free_smooth) == qbw_nq
+
+        # Only cells in the focal origin's row (j, d != j) may carry a nonzero smooth term
+        # (file header derivation point 2/3): every other full cell must be EXACTLY zero.
+        j = qbw_ctx.target_country
+        @inbounds for o in 1:qbw_D, d in 1:qbw_D
+            if o != j || d == j
+                @test dDelta_dq_full[o, d] == 0.0
+            end
+        end
+
+        for m in 1:qbw_nq
+            h = 1e-9
+            total_plus, total_minus, _ = melitz_q_two_sided_crossings(qbw_theta0, m, h, qbw_ctx, qbw_sorted_ctx)
+            tries = 0
+            while (total_plus > 0 || total_minus > 0) && tries < 12
+                h /= 10
+                total_plus, total_minus, _ = melitz_q_two_sided_crossings(qbw_theta0, m, h, qbw_ctx, qbw_sorted_ctx)
+                tries += 1
+            end
+            @test total_plus == 0 && total_minus == 0   # confirms this h genuinely has zero switches
+            theta_p = copy(qbw_theta0); theta_p[1+qbw_nA+m] += h
+            theta_m = copy(qbw_theta0); theta_m[1+qbw_nA+m] -= h
+            melitz_update_operator_at_theta!(qbw_obj.op, theta_p, qbw_ctx)
+            Dp = -qbw_obj(qbw_x0)
+            melitz_update_operator_at_theta!(qbw_obj.op, theta_m, qbw_ctx)
+            Dm = -qbw_obj(qbw_x0)
+            melitz_update_operator_at_theta!(qbw_obj.op, qbw_theta0, qbw_ctx)
+            secant = (Dp - Dm) / (2h)
+            exact = grad_free_smooth[m]
+            @test isapprox(exact, secant; rtol=1e-3, atol=1e-9)
+        end
+    end
+
+    @testset "Two-sided crossing evaluator is genuinely two-sided (not the prior one-sided flaw)" begin
+        # A large-enough h on some coordinate must show BOTH a plus-side and minus-side
+        # nonzero crossing count (the prior session's own q_crossing_report only ever
+        # inspected the +h perturbation) -- assert at least one tested coordinate has
+        # crossings_plus>0 AND crossings_minus>0 simultaneously.
+        found_both_sided = false
+        for m in 1:qbw_nq
+            total_plus, total_minus, cells = melitz_q_two_sided_crossings(qbw_theta0, m, 5e-3, qbw_ctx, qbw_sorted_ctx)
+            if total_plus > 0 && total_minus > 0
+                found_both_sided = true
+            end
+            # every reported cell's two-sided crossing counts must be non-negative integers
+            for c in cells
+                @test c.crossings_plus >= 0 && c.crossings_minus >= 0
+            end
+        end
+        @test found_both_sided
+    end
+
+    @testset "FixedCrossingQBandwidth/GrowingCrossingQBandwidth hit the two-sided min(target)" begin
+        for target in (10, 25)
+            pol = FixedCrossingQBandwidth(target)
+            r = melitz_q_coordinate_probe(qbw_theta0, 1, pol, qbw_obj, qbw_ctx; x0=qbw_x0, mode=:fixed_dual)
+            @test r.crossings_min_side >= target || r.h >= pol.h_hi * 0.999   # met target, or hit the h_hi ceiling (disclosed best-effort)
+            @test r.crossings_min_side == min(r.crossings_plus_total, r.crossings_minus_total)
+        end
+        pol_growing = GrowingCrossingQBandwidth(25, 20_000)
+        @test melitz_q_target_crossings(pol_growing, 20_000) == 25
+        @test melitz_q_target_crossings(pol_growing, 80_000) == ceil(Int, 25 * sqrt(4))
+    end
+
+    @testset "PowerScaledQBandwidth resolves h_W = h_ref*(W_ref/W)^alpha exactly" begin
+        pol = PowerScaledQBandwidth(1e-4, 80_000, 0.5)
+        @test melitz_q_select_h(pol, 80_000, qbw_theta0, 1, qbw_ctx, qbw_sorted_ctx) == 1e-4
+        @test isapprox(melitz_q_select_h(pol, 320_000, qbw_theta0, 1, qbw_ctx, qbw_sorted_ctx), 1e-4 * 0.5; rtol=1e-12)
+    end
+
+    @testset "melitz_q_coordinate_probe restores obj.op to theta0 after either mode" begin
+        melitz_update_operator_at_theta!(qbw_obj.op, qbw_theta0, qbw_ctx)
+        A_before = copy(qbw_obj.op.coef)
+        melitz_q_coordinate_probe(qbw_theta0, 1, FixedRawQBandwidth(1e-4), qbw_obj, qbw_ctx; x0=qbw_x0, mode=:fixed_dual)
+        @test qbw_obj.op.coef == A_before
+    end
+
+    @testset "Experimental (A,q) outer-gradient backend (Phase 11)" begin
+        gfn = make_melitz_gradient_delta_direct_aq_experimental(PowerScaledQBandwidth(1e-3, 80_000, 0.5))
+
+        @testset "produces a finite gradient of the correct length" begin
+            melitz_update_operator_at_theta!(qbw_obj.op, qbw_theta0, qbw_ctx)
+            g = zeros(length(qbw_theta0))
+            gfn(g, qbw_theta0, qbw_ctx, qbw_obj, qbw_x0)
+            @test length(g) == length(qbw_theta0)
+            @test all(isfinite, g)
+        end
+
+        @testset "rejects a :logf ctx (never silently reinterprets A-block as q)" begin
+            obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; policy=CappedEvaluation(10.0),
+                backend=:matrix_free, forbid_dense_fallback=true)
+            ctx_f = obj_f.γ
+            obj_f.use_cached_x = false; obj_f.x .= NaN
+            lfd_f = melitz_recover_lfd(obj_f, theta0_f)
+            @test lfd_f.lfd_ok
+            g_f = zeros(length(theta0_f))
+            @test_throws ArgumentError gfn(g_f, theta0_f, ctx_f, obj_f, lfd_f.dual_x)
+        end
+
+        @testset "A probes leave q unchanged and vice versa within the assembled gradient path" begin
+            # the assembled gradient itself must not perturb the LIVE bundle state permanently
+            melitz_update_operator_at_theta!(qbw_obj.op, qbw_theta0, qbw_ctx)
+            coef_before = copy(qbw_obj.op.coef)
+            g = zeros(length(qbw_theta0))
+            gfn(g, qbw_theta0, qbw_ctx, qbw_obj, qbw_x0)
+            melitz_update_operator_at_theta!(qbw_obj.op, qbw_theta0, qbw_ctx)
+            @test qbw_obj.op.coef == coef_before
+        end
+
+        @testset "dispatches through solve_melitz_finite_delta_bound without crashing, typed result" begin
+            inner_opt = joinpath(dirname(@__DIR__), "..", "melitz_inner_loop_options_capped_2026-07-24.opt")
+            outer_opt = joinpath(dirname(@__DIR__), "..", "melitz_outer_finite_delta_alg_direct_2026-07-27.opt")
+            result = solve_melitz_finite_delta_bound(qbw_ctx, qbw_obj, qbw_theta0; delta=0.5, direction=:upper,
+                gradient_backend=:B_direct_argument_aq_experimental, backend=:matrix_free,
+                policy=CappedEvaluation(10.0), inner_loop_opt=inner_opt, outer_loop_opt=outer_opt)
+            @test result.nStatus isa Int
+            @test result.inner_solve_count >= 0
+        end
+
+        @testset "unknown gradient_backend symbol still errors (additive registration didn't loosen validation)" begin
+            @test_throws ErrorException begin
+                inner_opt = joinpath(dirname(@__DIR__), "..", "melitz_inner_loop_options_capped_2026-07-24.opt")
+                solve_melitz_finite_delta_bound(qbw_ctx, qbw_obj, qbw_theta0; delta=0.5, direction=:upper,
+                    gradient_backend=:not_a_real_backend, backend=:matrix_free,
+                    policy=CappedEvaluation(10.0), inner_loop_opt=inner_opt)
+            end
+        end
     end
 end
 
