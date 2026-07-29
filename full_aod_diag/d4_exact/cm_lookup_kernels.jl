@@ -307,6 +307,123 @@ function cumulative_backward_gradient_from_prefix!(g::AbstractMatrix{Float64}, H
 end
 
 # ================================================================================================
+# Shared (E)+(C) forward/backward core (flexCM/Fréchet FG-callback harmonization, 2026-07-29):
+# extracted VERBATIM (no math changed) from what were, until this commit, two independently
+# maintained near-duplicate copies of this exact code -- one inlined in `CMLookupState`'s own
+# `dual_index!`/FG functor (this file), one inlined in `CMFrechetLookupState`'s (
+# cm_frechet_lookup_kernels.jl). Both structs already share every field name these functions touch
+# (obj/ncore/core_cf_ref/econ_ws/econ_ws_for/econ_buf/xsub/arg0/nO/L/λmat_block/R/λmat_ext/bins/
+# refIndex1/origins/cm_contrib/arg1/hist_h/hist_partials/Hpre/g_block/g_stored), so these functions
+# are written duck-typed on `st` (no abstract supertype needed) -- the same pattern
+# `hessian_cm_structured!`/`_verify_inner_solution_operator_cm_core` already use one file over to
+# share the Hessian/verification cores across both families. Common Fréchet's `dual_index!`/FG
+# functor (cm_frechet_lookup_kernels.jl) calls these same functions for its own (E)/(C) blocks, then
+# adds only its (F) level-block extension on top -- see that file for the `[E|C|F]` composition.
+# ================================================================================================
+
+"""
+    economic_forward_into_arg0!(st, x) -> cf
+
+Shared (E)-block forward step: writes `st.arg0 = -ζ - E*λ_core` (operator-based via
+`economic_forward!` when `st.core_cf_ref[]` holds a `CompressedFactual`; dense `BLAS.gemv!`
+fallback against `st.obj.H` otherwise). Returns `cf` so the caller's backward pass can select the
+same branch without re-reading the `Ref`.
+"""
+function economic_forward_into_arg0!(st, x::AbstractVector{Float64})
+    obj = st.obj
+    ncore1 = st.ncore - 1
+    ζ = x[1]
+    λ_core = @view x[2:1+ncore1]
+
+    cf = st.core_cf_ref[]
+    if cf isa CompressedFactual
+        if st.econ_ws === nothing || st.econ_ws_for !== cf
+            st.econ_ws = economic_operator_workspace(cf)
+            st.econ_ws_for = cf
+        end
+        economic_forward!(st.econ_buf, λ_core, cf, st.econ_ws)
+        st.arg0 .= (-ζ) .- st.econ_buf
+    else
+        st.n_dense_econ_fallback += 1
+        record_dense_economic_G!()
+        st.xsub[1] = ζ
+        st.xsub[2:end] .= λ_core
+        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
+    end
+    return cf
+end
+
+"""
+    cm_forward_contribution!(st, λ_cm, method::Symbol) -> st.arg0
+
+Shared (C)-block forward step: `st.arg0 .-= cm_contribution`. `method in (:interval, :suffix)`;
+common Fréchet always passes `:suffix` (its CM block is always stored in the cumulative basis, see
+cm_frechet_lookup_kernels.jl's module docstring).
+"""
+function cm_forward_contribution!(st, λ_cm::AbstractVector{Float64}, method::Symbol)
+    λmat_stored = reshape(λ_cm, st.nO, st.L)
+    apply_contrast!(st.λmat_block, λmat_stored, st.R)
+    if method == :interval
+        st.λmat_ext[:, 1:st.L] .= st.λmat_block
+        st.λmat_ext[:, st.L+1] .= 0.0
+        interval_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
+    else # :suffix (cumulative basis)
+        suffix_sums!(st.λmat_ext, st.λmat_block)
+        cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
+    end
+    st.arg0 .-= st.cm_contrib
+    return st.arg0
+end
+
+"""
+    economic_transpose_into_g1_and_gE!(g, st, cf) -> sum_dPsi
+
+Shared (E)-block backward/transpose step: computes `dPsi(arg0)` into `st.arg1` (overwriting the
+`Psi(arg0)` value the forward pass left there -- same aliasing the original inlined code relied on),
+fills `g[1]` and the economic gradient slice `g[2:1+ncore-1]`. Returns `sum(st.arg1)` (the Fréchet
+level block's free `sum_dPsi` byproduct; an unused, harmless return for flexible CM).
+"""
+function economic_transpose_into_g1_and_gE!(g::AbstractVector{Float64}, st, cf)
+    obj = st.obj
+    M = size(obj.U, 1)
+    ncore1 = st.ncore - 1
+    obj.dPsi!(st.arg1, st.arg0)
+    sum_dPsi = sum(st.arg1)
+    g[1] = 1.0 - sum_dPsi / M
+    if cf isa CompressedFactual
+        g_E = @view g[2:1+ncore1]
+        economic_transpose!(g_E, st.arg1, cf, st.econ_ws)
+        g_E .*= -(1.0 / M)   # economic_transpose! returns the raw scatter, caller applies -(1/M)
+    else
+        @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
+    end
+    return sum_dPsi
+end
+
+"""
+    cm_transpose_into_g!(g, st, method::Symbol, D::Int, ncore1::Int, ncm::Int, M::Int)
+
+Shared (C)-block backward/transpose step: builds the weighted histogram from `st.arg1`
+(`dPsi(arg0)`, left by `economic_transpose_into_g1_and_gE!`), the CM backward gradient, applies the
+contrast, and writes into `g`'s CM slice. `method in (:interval, :suffix)`; when `:suffix`, this
+ALSO leaves `st.Hpre` populated with the prefix-sum-of-histogram (common Fréchet's own level
+backward pass reuses this same buffer for its `sum_{o} Hpre[o,l]` term -- see
+`frechet_level_backward_gradient!`, cm_frechet_lookup_kernels.jl).
+"""
+function cm_transpose_into_g!(g::AbstractVector{Float64}, st, method::Symbol, D::Int, ncore1::Int, ncm::Int, M::Int)
+    build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, D, st.nbins)
+    if method == :interval
+        interval_backward_gradient!(st.g_block, st.hist_h, st.refIndex1, st.origins, st.L, M)
+    else
+        prefix_sums!(st.Hpre, st.hist_h, st.L)
+        cumulative_backward_gradient_from_prefix!(st.g_block, st.Hpre, st.refIndex1, st.origins, st.L, M)
+    end
+    apply_contrast!(st.g_stored, st.g_block, st.R)
+    @views g[2+ncore1:1+ncore1+ncm] .= vec(st.g_stored)
+    return st.g_block
+end
+
+# ================================================================================================
 # Unified FG evaluator state + callable: replicates PsiObjectiveBundleImplicit's (ζ,λ)-gradient
 # branch EXACTLY (core columns via the SAME BLAS calls the production callable uses, on the SAME
 # dense obj.H buffer; CM columns via the lookup kernels above), for a fixed θ (one inner solve).
@@ -399,40 +516,11 @@ mathematics changed) from this state's own FG functor, so the FG callback and th
 prep (`operator_hessian_weights.jl::operator_prep_for_hessian!`) call the exact same code path.
 """
 function dual_index!(st::CMLookupState, x::AbstractVector{Float64})
-    obj = st.obj
     ncore1 = st.ncore - 1
-
-    ζ = x[1]
-    λ_core = @view x[2:1+ncore1]
     λ_cm = @view x[2+ncore1:1+ncore1+st.ncm]
 
-    cf = st.core_cf_ref[]
-    if cf isa CompressedFactual
-        if st.econ_ws === nothing || st.econ_ws_for !== cf
-            st.econ_ws = economic_operator_workspace(cf)
-            st.econ_ws_for = cf
-        end
-        economic_forward!(st.econ_buf, λ_core, cf, st.econ_ws)
-        st.arg0 .= (-ζ) .- st.econ_buf
-    else
-        st.n_dense_econ_fallback += 1
-        record_dense_economic_G!()
-        st.xsub[1] = ζ
-        st.xsub[2:end] .= λ_core
-        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
-    end
-
-    λmat_stored = reshape(λ_cm, st.nO, st.L)
-    apply_contrast!(st.λmat_block, λmat_stored, st.R)
-    if st.method == :interval
-        st.λmat_ext[:, 1:st.L] .= st.λmat_block
-        st.λmat_ext[:, st.L+1] .= 0.0
-        interval_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
-    else # :suffix (cumulative basis diagnostic)
-        suffix_sums!(st.λmat_ext, st.λmat_block)
-        cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
-    end
-    st.arg0 .-= st.cm_contrib
+    economic_forward_into_arg0!(st, x)
+    cm_forward_contribution!(st, λ_cm, st.method)
     return st.arg0
 end
 
@@ -462,24 +550,9 @@ function (st::CMLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float
     f = sum(st.arg1) / M + ζ
 
     if length(g) > 0
-        obj.dPsi!(st.arg1, st.arg0)
-        g[1] = 1.0 - sum(st.arg1) / M
-        if cf isa CompressedFactual
-            g_E = @view g[2:1+ncore1]
-            economic_transpose!(g_E, st.arg1, cf, st.econ_ws)
-            g_E .*= -(1.0 / M)   # economic_transpose! returns the raw scatter, caller applies -(1/M) per its own docstring
-        else
-            @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
-        end
-
-        build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, size(st.bins, 2), st.nbins)
-        if st.method == :interval
-            interval_backward_gradient!(st.g_block, st.hist_h, st.refIndex1, st.origins, st.L, M)
-        else
-            cumulative_backward_gradient!(st.g_block, st.Hpre, st.hist_h, st.refIndex1, st.origins, st.L, M)
-        end
-        apply_contrast!(st.g_stored, st.g_block, st.R)
-        @views g[2+ncore1:1+ncore1+st.ncm] .= vec(st.g_stored)
+        economic_transpose_into_g1_and_gE!(g, st, cf)
+        D = size(st.bins, 2)
+        cm_transpose_into_g!(g, st, st.method, D, ncore1, st.ncm, M)
     end
 
     obj.arg0 .= st.arg0   # keep obj in sync for a subsequent dense Hessian callback, same trick as compressed_live.jl
