@@ -103,12 +103,21 @@ end
 `:origin_owned` (existing `bin_zc_cross_hessian_fill!`/`_threaded!`, unchanged) |
 `:draw_chunk_thread_local` (this file's candidate, 12-14x faster at real D=20/W=100,000 per
 `docs/PART_C_HCZ_CANDIDATE_RESULTS_2026-07-29.md`, tolerance-level correct -- NOT bit-identical,
-see `HCZ_CANDIDATE_TOL`). Left at `:origin_owned` pending a complete-inner-solve gate through the
-real KNITRO driver (this task's own "select defaults using complete inner solves through real
-public production contexts" requirement) -- the isolated-kernel benchmark alone is not sufficient
-to flip a production default.
+see `HCZ_CANDIDATE_TOL`).
+
+Flipped to `:draw_chunk_thread_local` 2026-07-29 after a complete-inner-solve gate through the
+real `run_cm_upper_checkpointed` driver (`hcz_complete_inner_solve_smoke_2026-07-29.jl`, real
+D=20/W=100,000, `draw_seed=20260719`): both backends complete real KNITRO inner solves with
+feasible status (`nStatus=-401`), no failure signature of any kind (contrast with the H_ZZ
+backend bake-off, `docs/HZZ_BACKEND_BAKEOFF_VERDICT_2026-07-29.md`, where 4/4 non-reference
+backends failed identically) -- `:draw_chunk_thread_local` completed MORE outer evaluations in
+LESS wall time (99.0s/4 evals vs 166.6s/3 evals for `:origin_owned`), consistent with its
+isolated-kernel speedup. Also gated bit-identical (max|Δ|=0.0, 3 random states) through the
+complete packed Hessian callback (`hcz_wired_complete_hessian_gate_2026-07-29.jl`) and 56/56
+correctness rows at D=4 (rectangular/square, K variants) and real D=20
+(`docs/PART_C_HCZ_CANDIDATE_RESULTS_2026-07-29.md`).
 """
-const HCZ_PREP_BACKEND_DEFAULT = Ref{Symbol}(:origin_owned)
+const HCZ_PREP_BACKEND_DEFAULT = Ref{Symbol}(:draw_chunk_thread_local)
 const HCZ_PREP_DRAWCHUNK_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
 
 """
