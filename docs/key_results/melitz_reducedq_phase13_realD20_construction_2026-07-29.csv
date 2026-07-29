@@ -1,0 +1,2 @@
+D,W,Delta0,stage_build_s,constraint_maxdiff,grad_time_s,dense_G_delta,live_heap_delta_MB,h_s,one_sided,secant_fixed_dual,secant_reopt,relerr,reopt_time_s
+20.0,80000.0,0.4832764950468883,105.3767728805542,4.0245584642661925e-16,1.6378281116485596,0.0,-5.728256,0.4958068241684656,0.0,-0.0060052953548026125,NaN,NaN,0.6036970615386963

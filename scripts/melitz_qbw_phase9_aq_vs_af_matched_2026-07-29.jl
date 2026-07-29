@@ -122,7 +122,31 @@ function run_target(target::Float64; W::Int=20_000, seed::Int=29)
             # direct (A,q)-space reoptimized secant
             obj_q.use_cached_x = false; obj_q.x .= NaN; lp_q = melitz_recover_lfd(obj_q, theta_q_p)
             obj_q.use_cached_x = false; obj_q.x .= NaN; lm_q = melitz_recover_lfd(obj_q, theta_q_m)
-            actual_dDelta = (lp_q.lfd_ok && lm_q.lfd_ok) ? (lp_q.Delta - lm_q.Delta) : NaN
+            # CORRECTED 2026-07-29 (continuation session, governing-prompt "Important
+            # corrections" #1): the ORIGINAL version of this script compared `pred_aq`
+            # (`exact_A_free[1]*t_A + rq.secant*t_q`, a ONE-SIDED linear extrapolation from
+            # theta_q0 to theta_q0+t) directly against `lp_q.Delta - lm_q.Delta`, the FULL
+            # TWO-SIDED change `Delta*(theta0+t) - Delta*(theta0-t)` (spanning 2t, not t).
+            # Under local linearity `Delta*(theta0+t)-Delta*(theta0-t) ~= 2*(g.t) = 2*pred_aq`,
+            # so the original comparison was structurally biased toward "predicted is ~half of
+            # actual" REGARDLESS of estimator quality -- exactly the "roughly half its
+            # magnitude ... a systematic, repeatable underprediction" finding the prior version
+            # of this session's own doc reported (Section "Phase 9", e.g. pure_intensive/
+            # target=0.1/scale=1.0: predicted -3.555e-4 vs actual -7.110e-4, ratio ~0.5). That
+            # finding was a units/normalization artifact of the comparison itself, not
+            # (necessarily) a genuine 2x underprediction bias in the (A,q) estimator.
+            #
+            # Fix: report BOTH the original two-sided actual change (kept, relabeled
+            # unambiguously) AND a genuinely matched ONE-SIDED actual change
+            # (`lp_q.Delta - lfd0_q.Delta`, base -> +t, the SAME half-interval `pred_aq` itself
+            # spans) as the PRIMARY comparison partner for `pred_aq`. `pred_aq_twosided =
+            # 2*pred_aq` is also reported for a reader who prefers to compare against the
+            # two-sided actual instead -- both pairings are now internally consistent (same
+            # interval length on both sides), not conflated.
+            actual_dDelta_twosided = (lp_q.lfd_ok && lm_q.lfd_ok) ? (lp_q.Delta - lm_q.Delta) : NaN
+            actual_dDelta_onesided = lp_q.lfd_ok ? (lp_q.Delta - lfd0_q.Delta) : NaN
+            pred_aq_twosided = 2 * pred_aq
+            actual_dDelta = actual_dDelta_twosided   # kept for any downstream reader of the old column name
 
             # matched (A,f) endpoint + production-style FD secant at the SAME step
             theta_f_p = reduce_to_free_theta(MelitzPrimitives(D, ctx_f.sigma, ctx_f.theta_star, ctx_f.target_country,
@@ -135,13 +159,17 @@ function run_target(target::Float64; W::Int=20_000, seed::Int=29)
 
             @printf("  path=%-14s scale=%.1f  t_A=%.2e t_q=%.2e  a_moved=%s q_moved=%s switch=%s\n",
                     pathname, scale, t_A, t_q, a_moved, q_moved, has_switch)
-            @printf("    pred_aq=%.6e  actual_dDelta(q-space)=%.6e  actual_dDelta(f-space)=%.6e  |cross-space mismatch|=%.3e\n",
-                    pred_aq, actual_dDelta, pred_af_actual_path, abs(actual_dDelta - pred_af_actual_path))
+            @printf("    pred_aq(one-sided)=%.6e  actual_dDelta(one-sided,q-space)=%.6e  ratio=%.4f  [MATCHED comparison]\n",
+                    pred_aq, actual_dDelta_onesided, pred_aq / max(abs(actual_dDelta_onesided), 1e-300) * sign(actual_dDelta_onesided))
+            @printf("    pred_aq(x2, two-sided)=%.6e  actual_dDelta(two-sided,q-space)=%.6e  actual_dDelta(f-space,two-sided)=%.6e  |cross-space mismatch|=%.3e\n",
+                    pred_aq_twosided, actual_dDelta_twosided, pred_af_actual_path, abs(actual_dDelta_twosided - pred_af_actual_path))
             flush(stdout)
 
             push!(results, (target=target, path=pathname, scale=scale, m=chosen_m, t_A=t_A, t_q=t_q,
                              a_moved=a_moved, q_moved=q_moved, has_switch=has_switch,
-                             pred_aq=pred_aq, actual_dDelta_qspace=actual_dDelta, actual_dDelta_fspace=pred_af_actual_path,
+                             pred_aq_onesided=pred_aq, actual_dDelta_onesided=actual_dDelta_onesided,
+                             pred_aq_twosided=pred_aq_twosided, actual_dDelta_twosided=actual_dDelta_twosided,
+                             actual_dDelta_fspace_twosided=pred_af_actual_path,
                              lfd_ok_p_q=lp_q.lfd_ok, lfd_ok_m_q=lm_q.lfd_ok, lfd_ok_p_f=lp_f.lfd_ok, lfd_ok_m_f=lm_f.lfd_ok))
         end
     end
@@ -151,11 +179,17 @@ for target in (0.1, 0.5)
     run_target(target; W=20_000, seed=29)
 end
 
+# CORRECTED 2026-07-29 (continuation session): CSV columns renamed/added to make the
+# one-sided-vs-two-sided pairing explicit and unambiguous (see the in-loop comment above) --
+# `pred_aq_onesided` must be compared to `actual_dDelta_onesided`, `pred_aq_twosided` to
+# `actual_dDelta_twosided`; never `pred_aq_onesided` to `actual_dDelta_twosided` (the original
+# bug).
 open(joinpath(OUTDIR, "melitz_qbw_phase9_aq_vs_af_matched_2026-07-29.csv"), "w") do io
-    println(io, "target,path,scale,m,t_A,t_q,a_moved,q_moved,has_switch,pred_aq,actual_dDelta_qspace,actual_dDelta_fspace,lfd_ok_p_q,lfd_ok_m_q,lfd_ok_p_f,lfd_ok_m_f")
+    println(io, "target,path,scale,m,t_A,t_q,a_moved,q_moved,has_switch,pred_aq_onesided,actual_dDelta_onesided,pred_aq_twosided,actual_dDelta_twosided,actual_dDelta_fspace_twosided,lfd_ok_p_q,lfd_ok_m_q,lfd_ok_p_f,lfd_ok_m_f")
     for r in results
         println(io, join([r.target, r.path, r.scale, r.m, r.t_A, r.t_q, r.a_moved, r.q_moved, r.has_switch,
-                           r.pred_aq, r.actual_dDelta_qspace, r.actual_dDelta_fspace,
+                           r.pred_aq_onesided, r.actual_dDelta_onesided, r.pred_aq_twosided, r.actual_dDelta_twosided,
+                           r.actual_dDelta_fspace_twosided,
                            r.lfd_ok_p_q, r.lfd_ok_m_q, r.lfd_ok_p_f, r.lfd_ok_m_f], ","))
     end
 end

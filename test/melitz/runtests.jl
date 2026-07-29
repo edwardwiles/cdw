@@ -65,6 +65,8 @@ include(joinpath(MELITZ_DIR, "exact_q_smooth_gradient.jl"))
 include(joinpath(MELITZ_DIR, "q_bandwidth_policy.jl"))
 include(joinpath(MELITZ_DIR, "aq_experimental_backend.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
+include(joinpath(MELITZ_DIR, "reduced_q_subspace.jl"))
+include(joinpath(MELITZ_DIR, "reduced_q_controller.jl"))
 include(joinpath(MELITZ_DIR, "nuisance_profile.jl"))
 include(joinpath(MELITZ_DIR, "predictor_corrector.jl"))   # 2026-07-26 closure (Phase 3): was
     # not previously included in this test file at all (zero test coverage) -- now included
@@ -6942,6 +6944,242 @@ end
                     policy=CappedEvaluation(10.0), inner_loop_opt=inner_opt)
             end
         end
+    end
+end
+
+@testset "Reduced-q-subspace outer-search backend (2026-07-29 continuation)" begin
+    rq_obj, rq_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+    rq_ctx = rq_obj.γ
+    rq_D = rq_ctx.D
+    rq_nA = rq_D^2 - 1
+    rq_nq = rq_D^2 - 2
+    rq_obj.use_cached_x = false; rq_obj.x .= NaN
+    rq_lfd0 = melitz_recover_lfd(rq_obj, rq_theta0)
+    @test rq_lfd0.lfd_ok
+    rq_x0 = copy(rq_lfd0.dual_x)
+    melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+
+    rq_stage = melitz_build_reduced_q_stage(collect(rq_theta0), rq_x0, rq_ctx, rq_obj, 1;
+        bandwidth_policy=PowerScaledQBandwidth(1e-3, 80_000, 0.5), target_switches=100)
+    @test rq_stage !== nothing
+    rq_x_reduced0 = vcat(rq_theta0[1], rq_theta0[2:1+rq_nA], 0.0)
+
+    @testset "1. s=0 reproduces the anchor state bit-for-bit" begin
+        theta_full = melitz_reduced_full_theta(rq_x_reduced0, rq_stage, rq_ctx)
+        @test theta_full == collect(rq_theta0)
+    end
+
+    @testset "2. s changes no A values" begin
+        x_pert = copy(rq_x_reduced0); x_pert[end] = 0.37 * rq_stage.s_hi
+        theta_full = melitz_reduced_full_theta(x_pert, rq_stage, rq_ctx)
+        theta_base = melitz_reduced_full_theta(rq_x_reduced0, rq_stage, rq_ctx)
+        @test theta_full[2:1+rq_nA] == theta_base[2:1+rq_nA]
+        @test theta_full[1+rq_nA+1:end] != theta_base[1+rq_nA+1:end]   # q DOES move
+    end
+
+    @testset "3. A changes no q values" begin
+        x_pert = copy(rq_x_reduced0); x_pert[2] += 0.02
+        theta_full = melitz_reduced_full_theta(x_pert, rq_stage, rq_ctx)
+        theta_base = melitz_reduced_full_theta(rq_x_reduced0, rq_stage, rq_ctx)
+        @test theta_full[1+rq_nA+1:end] == theta_base[1+rq_nA+1:end]
+        @test theta_full[2] != theta_base[2]   # A DOES move
+    end
+
+    @testset "4. reduced-state reconstruction matches production full (A,q) state at s!=0" begin
+        rng = MersenneTwister(11)
+        for _ in 1:5
+            x_r = rq_x_reduced0 .+ 0.05 .* randn(rng, length(rq_x_reduced0))
+            x_r[end] = clamp(x_r[end], rq_stage.s_lo, rq_stage.s_hi)
+            theta_full = melitz_reduced_full_theta(x_r, rq_stage, rq_ctx)
+            # production reconstruction of the SAME free-q vector, applied directly
+            A1, f1, gpj1, fjj1, q1 = expand_free_theta_logcutoff(melitz_unpower_theta_free(theta_full, rq_ctx), rq_ctx)
+            q_free_free_expected = rq_stage.q_anchor_free .+ x_r[end] .* rq_stage.q_basis_free
+            @test theta_full[1+rq_nA+1:end] == q_free_free_expected
+            @test all(isfinite, vec(A1)) && all(isfinite, vec(f1))
+        end
+    end
+
+    @testset "5. transformed linear constraints equal production full-state constraints" begin
+        C_r, b_r, sys = melitz_reduced_affine_cutoff_system(rq_stage, rq_ctx)
+        rng = MersenneTwister(12)
+        maxdiff = 0.0
+        for _ in 1:25
+            x_r = rq_x_reduced0 .+ 0.05 .* randn(rng, length(rq_x_reduced0))
+            lhs = C_r * x_r .+ b_r
+            theta_full = melitz_reduced_full_theta(x_r, rq_stage, rq_ctx)
+            rhs = sys.C * theta_full .+ sys.b
+            maxdiff = max(maxdiff, maximum(abs.(lhs .- rhs)))
+        end
+        @test maxdiff < 1e-9
+    end
+
+    @testset "6/7. scalar-s derivative is a genuine direct block secant, not a coordinatewise dot product" begin
+        g_reduced = zeros(2 + rq_nA)
+        info = melitz_reduced_q_gradient!(g_reduced, rq_x_reduced0, rq_stage, rq_ctx, rq_obj, rq_x0)
+        # (6) equals a DIRECT dense full-q fixed-dual secant computed independently at the SAME h_s:
+        secant_direct, _, _ = melitz_q_direct_block_secant(collect(rq_theta0), rq_stage.q_basis_free,
+            info[2].h_s, rq_obj, rq_ctx, rq_x0; mode=:fixed_dual)
+        @test isapprox(g_reduced[end], secant_direct; rtol=1e-8, atol=1e-14)
+        # (7) is NOT (in general) the dot product of coordinatewise secants with the basis:
+        d_new, g_q = melitz_reduced_q_propose_direction(collect(rq_theta0), rq_x0, rq_ctx, rq_obj)
+        coordwise_assembled = dot(g_q, rq_stage.q_basis_free)
+        @test abs(g_reduced[end] - coordwise_assembled) > 1e-10 * max(1.0, abs(g_reduced[end]))
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+    end
+
+    @testset "8. exact A derivative remains correct at nonzero s" begin
+        x_s = copy(rq_x_reduced0); x_s[end] = 0.3 * rq_stage.s_hi
+        theta_full_s = melitz_reduced_full_theta(x_s, rq_stage, rq_ctx)
+        melitz_update_operator_at_theta!(rq_obj.op, theta_full_s, rq_ctx)
+        lfd_s = melitz_recover_lfd(rq_obj, theta_full_s)
+        @test lfd_s.lfd_ok
+        x_dual_s = copy(lfd_s.dual_x)
+        g_reduced_s = zeros(2 + rq_nA)
+        melitz_reduced_q_gradient!(g_reduced_s, x_s, rq_stage, rq_ctx, rq_obj, x_dual_s)
+        hA = 1e-6
+        theta_p = copy(theta_full_s); theta_p[2] += hA
+        theta_m = copy(theta_full_s); theta_m[2] -= hA
+        melitz_update_operator_at_theta!(rq_obj.op, theta_p, rq_ctx); Dp = -rq_obj(x_dual_s)
+        melitz_update_operator_at_theta!(rq_obj.op, theta_m, rq_ctx); Dm = -rq_obj(x_dual_s)
+        melitz_update_operator_at_theta!(rq_obj.op, theta_full_s, rq_ctx)
+        secant_A_at_s = (Dp - Dm) / (2hA)
+        @test isapprox(g_reduced_s[2], secant_A_at_s; rtol=1e-3, atol=1e-10)
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+    end
+
+    @testset "9. stage fingerprint changes with anchor/basis/normalization/bandwidth-policy/W/QMC-seed" begin
+        fp0 = melitz_reduced_q_stage_fingerprint(1, rq_stage.q_anchor_free, rq_stage.q_basis_free,
+            rq_stage.bandwidth_policy, rq_ctx, 20_000, nothing)
+        anchor2 = copy(rq_stage.q_anchor_free); anchor2[1] += 1e-6
+        @test melitz_reduced_q_stage_fingerprint(1, anchor2, rq_stage.q_basis_free, rq_stage.bandwidth_policy, rq_ctx, 20_000, nothing) != fp0
+        basis2 = copy(rq_stage.q_basis_free); basis2[1] += 1e-6
+        @test melitz_reduced_q_stage_fingerprint(1, rq_stage.q_anchor_free, basis2, rq_stage.bandwidth_policy, rq_ctx, 20_000, nothing) != fp0
+        basis3 = rq_stage.q_basis_free .* 2.0   # normalization change
+        @test melitz_reduced_q_stage_fingerprint(1, rq_stage.q_anchor_free, basis3, rq_stage.bandwidth_policy, rq_ctx, 20_000, nothing) != fp0
+        @test melitz_reduced_q_stage_fingerprint(1, rq_stage.q_anchor_free, rq_stage.q_basis_free,
+            FixedCrossingQBandwidth(25), rq_ctx, 20_000, nothing) != fp0
+        @test melitz_reduced_q_stage_fingerprint(1, rq_stage.q_anchor_free, rq_stage.q_basis_free,
+            rq_stage.bandwidth_policy, rq_ctx, 80_000, nothing) != fp0
+        @test melitz_reduced_q_stage_fingerprint(1, rq_stage.q_anchor_free, rq_stage.q_basis_free,
+            rq_stage.bandwidth_policy, rq_ctx, 20_000, 41) != fp0
+        @test melitz_reduced_q_stage_fingerprint(2, rq_stage.q_anchor_free, rq_stage.q_basis_free,
+            rq_stage.bandwidth_policy, rq_ctx, 20_000, nothing) != fp0
+    end
+
+    @testset "10. upper/lower-bound incumbent comparator uses the correct objective direction" begin
+        # upper GT% bound: MINIMIZES kappa -- smaller kappa is more extreme/better.
+        @test melitz_reduced_q_more_extreme_kappa(:upper, 0.80, 0.90) == true
+        @test melitz_reduced_q_more_extreme_kappa(:upper, 0.90, 0.80) == false
+        # lower GT% bound: MAXIMIZES kappa -- larger kappa is more extreme/better.
+        @test melitz_reduced_q_more_extreme_kappa(:lower, 0.90, 0.80) == true
+        @test melitz_reduced_q_more_extreme_kappa(:lower, 0.80, 0.90) == false
+        # GT%-based comparator must agree with the kappa-based one at every point tested.
+        rng = MersenneTwister(13)
+        for _ in 1:20
+            ka, kb = rand(rng), rand(rng)
+            gta, gtb = 100 * (1 - ka), 100 * (1 - kb)
+            for dir in (:upper, :lower)
+                @test melitz_reduced_q_more_extreme_kappa(dir, ka, kb) == melitz_reduced_q_more_extreme_gt(dir, gta, gtb)
+            end
+        end
+        @test_throws ArgumentError melitz_reduced_q_more_extreme_kappa(:sideways, 0.1, 0.2)
+    end
+
+    @testset "11. corrected Phase 9 one-sided/two-sided pairing does not produce an artificial factor of two" begin
+        # A direct, self-contained regression of the exact bug pattern the governing prompt's
+        # correction #1 flagged: comparing a ONE-SIDED linear prediction `t*g` against the
+        # FULL TWO-SIDED reoptimized change `Delta*(x+t)-Delta*(x-t)` induces an artificial
+        # ~2x gap purely from the mismatched interval length, independent of estimator
+        # quality. Uses the exact-A block (a case with a KNOWN-exact envelope-theorem
+        # derivative, so any residual gap is attributable to the interval mismatch alone, not
+        # estimator noise).
+        state0 = MelitzExpandedState(rq_D)
+        A0, f0, gpj0, fjj0 = melitz_expand_theta(rq_theta0, rq_ctx)
+        state0.A .= A0; state0.f .= f0; state0.gamma_prime_j = gpj0; state0.f_jj = fjj0
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+        ws_a = MelitzExactAGradientWorkspace(rq_obj.op)
+        dDelta_da_full = zeros(rq_D, rq_D)
+        melitz_exact_a_gradient_full!(dDelta_da_full, rq_obj, rq_x0, state0, rq_ctx, ws_a)
+        exact_A_free = melitz_exact_a_gradient_free(dDelta_da_full, rq_ctx)
+
+        h = 1e-6
+        theta_p = copy(rq_theta0); theta_p[2] += h
+        theta_m = copy(rq_theta0); theta_m[2] -= h
+        rq_obj.use_cached_x = false; rq_obj.x .= NaN; lp = melitz_recover_lfd(rq_obj, theta_p)
+        rq_obj.use_cached_x = false; rq_obj.x .= NaN; lm = melitz_recover_lfd(rq_obj, theta_m)
+        @test lp.lfd_ok && lm.lfd_ok
+
+        pred_onesided = exact_A_free[1] * h                        # base -> +h
+        actual_onesided = lp.Delta - rq_lfd0.Delta                 # MATCHED: base -> +h
+        actual_twosided = lp.Delta - lm.Delta                      # base-h -> base+h (spans 2h)
+
+        # The CORRECTED (matched) comparison must be close (small relative error, genuine
+        # local-linear agreement) -- no artificial factor of two.
+        @test isapprox(pred_onesided, actual_onesided; rtol=0.05, atol=1e-12)
+        # The MISMATCHED comparison (the original bug) is approximately HALF the two-sided
+        # change purely by construction -- demonstrated here, not merely asserted, so the
+        # regression fails loudly if a future edit reintroduces the mismatch silently.
+        @test isapprox(pred_onesided, actual_twosided / 2; rtol=0.05, atol=1e-12)
+        @test !isapprox(pred_onesided, actual_twosided; rtol=0.2)   # the ORIGINAL bug's comparison is NOT close
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+    end
+
+    @testset "12. fixed-dual cap screen is one-sided safe and returns only a certificate or nothing" begin
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+        lb_high_cap = melitz_reduced_q_cap_screen(rq_x_reduced0, rq_stage, rq_ctx, rq_obj, rq_x0, 10.0)
+        @test lb_high_cap === nothing   # Delta0 << cap=10 -- screen must not fire
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+        lb_tiny_cap = melitz_reduced_q_cap_screen(rq_x_reduced0, rq_stage, rq_ctx, rq_obj, rq_x0, 1e-8)
+        @test lb_tiny_cap !== nothing
+        @test lb_tiny_cap isa Float64 && isfinite(lb_tiny_cap)
+        # weak-duality validity: the returned lower bound must never EXCEED the true
+        # reoptimized DeltaStar at several random nearby trial points (the algebraic property
+        # this screen relies on, verified numerically here, not merely cited).
+        rng = MersenneTwister(14)
+        for _ in 1:8
+            x_r = rq_x_reduced0 .+ 0.02 .* randn(rng, length(rq_x_reduced0))
+            x_r[end] = clamp(x_r[end], rq_stage.s_lo, rq_stage.s_hi)
+            theta_trial = melitz_reduced_full_theta(x_r, rq_stage, rq_ctx)
+            melitz_update_operator_at_theta!(rq_obj.op, theta_trial, rq_ctx)
+            lb = -rq_obj(rq_x0)
+            melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+            rq_obj.use_cached_x = false; rq_obj.x .= NaN
+            lfd_trial = melitz_recover_lfd(rq_obj, theta_trial)
+            if lfd_trial.lfd_ok
+                @test lb <= lfd_trial.Delta + 1e-9
+            end
+        end
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+    end
+
+    @testset "13. no dense G is materialized by any reduced-q-subspace function" begin
+        before = MELITZ_DENSE_G_MATERIALIZATIONS[]
+        g_reduced = zeros(2 + rq_nA)
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+        melitz_reduced_q_gradient!(g_reduced, rq_x_reduced0, rq_stage, rq_ctx, rq_obj, rq_x0)
+        melitz_reduced_q_cap_screen(rq_x_reduced0, rq_stage, rq_ctx, rq_obj, rq_x0, 10.0)
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+        @test MELITZ_DENSE_G_MATERIALIZATIONS[] == before
+    end
+
+    @testset "state map / dimension helpers reject a :logf ctx" begin
+        obj_f, theta0_f = build_melitz_psi_bundle(FIXTURE; policy=CappedEvaluation(10.0),
+            backend=:matrix_free, forbid_dense_fallback=true)
+        ctx_f = obj_f.γ
+        @test_throws ArgumentError melitz_reduced_q_check_ctx(ctx_f)
+        @test_throws ArgumentError melitz_reduced_affine_cutoff_system(rq_stage, ctx_f)
+    end
+
+    @testset "sequential controller: small bounded run produces typed classifications and a genuine incumbent" begin
+        result = melitz_run_reduced_q_sequential_search(rq_ctx, rq_obj, rq_theta0; delta=0.5, direction=:upper,
+            policy=CappedEvaluation(10.0), n_stages_max=1, max_iterations_per_stage=8, max_seconds_per_stage=30.0)
+        @test result.incumbent.Delta <= 0.5 + 1e-6
+        @test result.incumbent.objective <= rq_theta0[1] + 1e-9   # never worse than the starting incumbent (Rule 12)
+        @test !isempty(result.stages)
+        sr = result.stages[1]
+        @test sr.n_finite_solved + sr.n_above_cap + sr.n_infinite_delta + sr.n_numerical_failure + sr.n_cap_screened == length(sr.trials)
+        melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
     end
 end
 

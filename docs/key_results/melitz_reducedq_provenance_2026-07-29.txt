@@ -1,0 +1,100 @@
+Melitz sequential reduced-q-subspace outer-search backend -- provenance (2026-07-29 continuation session)
+
+Repository: trade_robustness_modular
+Branch (before and after): melitz/fullD-delta-star
+HEAD before this session's edits: be31490200620c85c990dc56ed22d14836ec828c
+  ("Melitz q-bandwidth convergence campaign: centralized policy infra, exact smooth q term,
+  decisive dense-direction diagnostics (2026-07-29)")
+HEAD after this session's commit: see `git log -1` after the commit made at the end of this
+  session (committed locally, NOT pushed, per governing prompt instruction).
+Remote status before/after: 37 commits ahead of cdw/melitz/fullD-delta-star before this
+  session's commit; +1 after. Not pushed.
+
+Julia: 1.12.6 (juliaup, ~/.juliaup/bin)
+KNITRO: 13.0.1 (AMPL/Knitro 13.0.1, driver 20211201, ASL2 20211029), pinned per .knitro_env.sh
+  (ZIENA_LICENSE=/etc/sharedsw_licenses/ziena.txt, KNITRODIR=/opt/shared_sw/knitro/13.0.1)
+Julia threads / BLAS threads:
+  - Test suite and D4 scripts (Phase 9/11/12): -t 1, OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1
+    (matches this repo's own established convention for diagnostic/campaign scripts with no
+    Threads.@threads-eligible kernel -- see melitz_aq_q_bandwidth_convergence_2026-07-29.md's
+    own provenance section, same convention, not a deviation).
+  - Phase 13 (real D=20 construction shakedown): -t 20, OPENBLAS_NUM_THREADS=1,
+    OMP_NUM_THREADS=1 (src/melitz/CLAUDE.md's 20-thread-by-default policy for D20
+    performance/production-adjacent work); melitz_thread_startup_report() confirmed
+    "Julia threads available = 20 (require >= 20), BLAS threads selected = 1" at run start.
+
+Host: 208 logical CPUs, ~3.0TiB RAM, shared.
+
+Base economies:
+  - D4: sigma=2.5, theta_star=6.8, target_country=1, seed=29 (generate_fake_melitz_data).
+  - real D20: noah_D20 (real_data/noah_D20/{pi,L,tau,countries}.csv), sigma=2.5,
+    theta_star=:estimate, focal_country="fra", seed=1 (calibrate_melitz_pareto).
+
+QMC seeds / W used per phase:
+  - Phase 9 (corrected): D4 seed=29, W=20,000 (matching the ORIGINAL script's own fixture,
+    unchanged by the correction -- only the comparison normalization was fixed).
+  - Phase 11: D4 seed=29 (base primitives/equilibrium), z_draws re-drawn via
+    pareto_draws(W, D, theta_star; seed=29, mode=:halton) at W in {320_000, 1_280_000}
+    (nested-QMC design, verified exact-prefix property in the prior session -- not re-verified
+    this session, cited).
+  - Phase 12: D4 seed=29, W=20,000 (matching the prior session's own Phase 12 fixture exactly,
+    for direct comparability).
+  - Phase 13: real D20, seed=1, W=80,000 (matching the prior session's own Phase 10 fixture).
+
+Starting-state fingerprints / theta_free sources:
+  - D4 target=0.1/0.5/pareto and realD20 target=0.5 theta_free_q rows: read directly from
+    docs/key_results/melitz_qbw_phase3_theta_q_2026-07-29.csv (prior session's own verified
+    :logcutoff fixed-A/f gamma-profile points), not re-derived this session.
+
+Stage basis fingerprints: melitz_reduced_q_stage_fingerprint (reduced_q_subspace.jl) hashes
+  ctx content fingerprint + stage_id + q_anchor_free + q_basis_free + string(bandwidth_policy)
+  + W + qmc_seed; regression test confirms all six components independently change the hash.
+
+Inner evaluation policies: CappedEvaluation(10.0) throughout every script and every test this
+  session added -- no FullValueEvaluation use anywhere in this session's own new code.
+
+Exact commands run this session (representative, see scripts/ for full argument lists):
+  export PATH="$HOME/.juliaup/bin:$PATH"; source .knitro_env.sh
+  export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+  julia --project=. -t 1 test/melitz/runtests.jl                                    # baseline + final
+  julia --project=. -t 1 scripts/melitz_qbw_phase9_aq_vs_af_matched_2026-07-29.jl    # corrected rerun
+  julia --project=. -t 1 scripts/melitz_reducedq_phase11_d4_shakedown_2026-07-29.jl
+  julia --project=. -t 1 scripts/melitz_reducedq_phase12_d4_comparison_2026-07-29.jl
+  julia --project=. -t 20 scripts/melitz_reducedq_phase13_realD20_construction_2026-07-29.jl
+
+git diff --stat (source/test/docs, this session's own edits; see `git show --stat HEAD` after
+  the commit for the authoritative list):
+  new file:   src/melitz/reduced_q_subspace.jl
+  new file:   src/melitz/reduced_q_controller.jl
+  new file:   docs/melitz_reduced_q_subspace_search_2026-07-29.md
+  new file:   scripts/melitz_reducedq_phase11_d4_shakedown_2026-07-29.jl
+  new file:   scripts/melitz_reducedq_phase12_d4_comparison_2026-07-29.jl
+  new file:   scripts/melitz_reducedq_phase13_realD20_construction_2026-07-29.jl
+  new file:   docs/key_results/melitz_reducedq_phase11_d4_shakedown_2026-07-29.csv
+  new file:   docs/key_results/melitz_reducedq_phase12_d4_comparison_2026-07-29.csv
+  new file:   docs/key_results/melitz_reducedq_phase13_realD20_construction_2026-07-29.csv
+  new file:   docs/key_results/melitz_reducedq_provenance_2026-07-29.txt (this file)
+  modified:   src/melitz/include_melitz.jl            (2 new include lines, additive)
+  modified:   test/melitz/runtests.jl                 (2 new include lines + 1 new testset, additive)
+  modified:   scripts/melitz_qbw_phase9_aq_vs_af_matched_2026-07-29.jl  (Correction 1, surgical)
+
+Zero lines of src/melitz/finite_delta_outer.jl, src/melitz/aq_experimental_backend.jl, or any
+other production-path file were modified this session (confirmed via git diff --name-only,
+not merely asserted) -- Rule 11 ("keep the current production (A,f) backend unchanged")
+satisfied structurally, not just by convention.
+
+Test suite: `julia --project=. -t 1 test/melitz/runtests.jl` run three times this session --
+  (1) baseline, BEFORE any edit: confirmed clean (exit 0, every testset Pass==Total);
+  (2) AFTER this session's own first-pass source/test edits: ONE genuine failure caught
+      (new testset "Reduced-q-subspace outer-search backend (2026-07-29 continuation)",
+      sub-test "sequential controller: small bounded run...", 90 passed/1 failed/91 total --
+      `n_finite_solved+n_above_cap+n_infinite_delta+n_numerical_failure+n_cap_screened == 34`
+      vs. `length(trials) == 25`, a genuine double-counting bug in
+      `melitz_solve_reduced_q_stage!`'s `inner_eval` helper being called from both `cb_F!`
+      and `cb_G!` -- fixed by moving all counter increments into `cb_F!` alone);
+  (3) FINAL, after the fix: exit 0, new testset 91/91 Pass, every pre-existing testset
+      unaffected.
+
+Work committed locally at the end of this session (see `git log -1` for the exact hash) --
+NOT pushed to any remote, per governing prompt Section "Required outputs" #5 and this repo's
+own standing "confirm before pushing to a real remote" policy.
