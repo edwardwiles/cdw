@@ -11,6 +11,7 @@
 const _D4E = @__DIR__
 include(joinpath(_D4E, "c10_d20_production_driver.jl"))
 include(joinpath(_D4E, "json_lite.jl"))
+include(joinpath(_D4E, "campaign_cell_io.jl"))
 using Printf, Dates
 
 lp(xs...) = (println(xs...); flush(stdout))
@@ -67,14 +68,51 @@ lp("-"^90)
 rows_outer = NamedTuple[]
 rows_inner = NamedTuple[]
 
+const OUTER_CSV = joinpath(OUTROOT, "unrestricted_$(DIRECTION)_outer_log.csv")
+const INNER_CSV = joinpath(OUTROOT, "unrestricted_$(DIRECTION)_inner_log.csv")
+const OUTER_HEADER = "family,direction,delta,start,checksum_w,elapsed_s,outer_status,outer_evals,n_inner_solves," *
+                     "n_feasible_proxy,n_infeasible_or_dashed_proxy,best_verified_Delta,budget_residual,error"
+const INNER_HEADER = "family,direction,delta,start,eval_idx,t_s,Delta_star,inner_status,delta_feasible,classification_proxy,final_incumbent"
+outer_row_line(r) = string(r.family, ",", r.direction, ",", r.delta, ",", r.start, ",", r.checksum_w, ",",
+    r.elapsed_s, ",", r.outer_status, ",", r.outer_evals, ",", r.n_inner_solves, ",",
+    r.n_feasible_proxy, ",", r.n_infeasible_or_dashed_proxy, ",",
+    r.best_verified_Delta, ",", r.budget_residual, ",",
+    "\"", replace(string(r.error), "\"" => "'"), "\"")
+inner_row_line(r) = string(r.family, ",", r.direction, ",", r.delta, ",", r.start, ",", r.eval_idx, ",", r.t_s, ",",
+    r.Delta_star, ",", r.inner_status, ",", r.delta_feasible, ",", r.classification_proxy, ",", r.final_incumbent)
+
+const MAX_CELL_ATTEMPTS = 3  # section 11: max 2 automatic retries (3 attempts total) before a cell is left FAILED
+
 for delta in DELTAS, st in starts
     global rows_outer, rows_inner
     start_idx = Int(st["index"])
     gp0 = Float64(st["gp"])
     zfree0 = jf64(st["zfree_pivot_reduced_log"])
     ckdir = joinpath(OUTROOT, FAMILY, DIRECTION, "delta_$(delta)", "start_$(start_idx)")
-    rm(ckdir; force = true, recursive = true); mkpath(ckdir)
     label = "$(FAMILY)_$(DIRECTION)_d$(delta)_s$(start_idx)"
+
+    if cell_already_done(ckdir)
+        lp("[", label, "] SKIP -- already DONE (resume: not re-solved, not overwritten): ", ckdir)
+        prior = read_cell_outer_status(ckdir)
+        if prior !== nothing
+            push!(rows_outer, (family = FAMILY, direction = DIRECTION, delta = delta, start = start_idx,
+                checksum_w = st["checksum_w_hash"], elapsed_s = get(prior, "elapsed_s", missing),
+                outer_status = get(prior, "outer_status", "RESUMED"), outer_evals = get(prior, "outer_evals", missing),
+                n_inner_solves = get(prior, "n_inner_solves", missing), n_feasible_proxy = get(prior, "n_feasible_proxy", missing),
+                n_infeasible_or_dashed_proxy = get(prior, "n_infeasible_or_dashed_proxy", missing),
+                best_verified_Delta = get(prior, "best_verified_Delta", missing),
+                budget_residual = get(prior, "budget_residual", missing), error = ""))
+        end
+        continue
+    end
+    prior_attempts = cell_attempt_count(ckdir)
+    if prior_attempts >= MAX_CELL_ATTEMPTS
+        lp("[", label, "] SKIP -- exceeded max attempts (", prior_attempts, "/", MAX_CELL_ATTEMPTS,
+           "); left FAILED, not retried further")
+        continue
+    end
+    rm(ckdir; force = true, recursive = true); mkpath(ckdir)
+    open(cell_attempt_file(ckdir), "w") do io; print(io, prior_attempts + 1); end
     lp("="^100)
     lp("[", label, "] family=unrestricted direction=", DIRECTION, " delta=", delta, " start=", start_idx,
        " checksum_w=", st["checksum_w_hash"], " ckdir=", ckdir)
@@ -101,13 +139,22 @@ for delta in DELTAS, st in starts
         lp("[", label, "] *** EXCEPTION *** ", typeof(e), ": ", errmsg[1:min(end, 800)])
     end
     wall = time() - t0
+    cfg = Dict{String,Any}("family" => FAMILY, "direction" => DIRECTION, "delta" => delta, "start_id" => start_idx,
+        "W" => W, "draw_design" => string(DRAW_DESIGN), "draw_seed" => DRAW_SEED,
+        "maxtime_real" => MAXTIME, "checksum_w_hash" => st["checksum_w_hash"], "run_id" => label,
+        "attempt" => prior_attempts + 1, "outer_initialized_from_prior_solution" => false,
+        "outer_initialized_from_prior_delta_solution" => false, "outer_initialized_from_prior_direction_solution" => false,
+        "outer_initialized_from_other_start_solution" => false)
 
     if errored
-        push!(rows_outer, (family = FAMILY, direction = DIRECTION, delta = delta, start = start_idx,
+        orow = (family = FAMILY, direction = DIRECTION, delta = delta, start = start_idx,
             checksum_w = st["checksum_w_hash"], elapsed_s = round(wall, digits = 2), outer_status = "EXCEPTION",
             outer_evals = missing, n_inner_solves = missing, n_feasible_proxy = missing,
             n_infeasible_or_dashed_proxy = missing, best_verified_Delta = missing,
-            budget_residual = missing, error = errmsg[1:min(end, 300)]))
+            budget_residual = missing, error = errmsg[1:min(end, 300)])
+        push!(rows_outer, orow)
+        write_cell_status!(ckdir, orow, NamedTuple[], nothing, cfg; failed = true)
+        append_csv_row!(OUTER_CSV, OUTER_HEADER, outer_row_line(orow))
         continue
     end
 
@@ -115,20 +162,31 @@ for delta in DELTAS, st in starts
     n_feas = count(r -> r.delta_feasible, trace)
     n_infeas = length(trace) - n_feas
     best = result.best
-    push!(rows_outer, (family = FAMILY, direction = DIRECTION, delta = delta, start = start_idx,
+    orow = (family = FAMILY, direction = DIRECTION, delta = delta, start = start_idx,
         checksum_w = st["checksum_w_hash"], elapsed_s = round(wall, digits = 2),
         outer_status = string(result.knitro_status), outer_evals = result.n_eval,
         n_inner_solves = result.n_eval, n_feasible_proxy = n_feas, n_infeasible_or_dashed_proxy = n_infeas,
         best_verified_Delta = best === nothing ? missing : best.Delta_dual,
         budget_residual = best === nothing ? missing : (delta - best.Delta_dual),
-        error = ""))
+        error = "")
+    push!(rows_outer, orow)
 
+    cell_inner_rows = NamedTuple[]
     for r in trace
-        push!(rows_inner, (family = FAMILY, direction = DIRECTION, delta = delta, start = start_idx,
+        irow = (family = FAMILY, direction = DIRECTION, delta = delta, start = start_idx,
             eval_idx = r.idx, t_s = round(r.t_elapsed, digits = 3), Delta_star = r.Delta_dual,
             inner_status = r.inner_status, delta_feasible = r.delta_feasible,
             classification_proxy = r.delta_feasible ? "feasible_proxy" : "infeasible_or_dashed_proxy",
-            final_incumbent = (best !== nothing && r.idx == best.n_eval)))
+            final_incumbent = (best !== nothing && r.idx == best.n_eval))
+        push!(rows_inner, irow)
+        push!(cell_inner_rows, irow)
+    end
+
+    best_nt = best === nothing ? nothing : (Delta_dual = best.Delta_dual, n_eval = best.n_eval)
+    write_cell_status!(ckdir, orow, cell_inner_rows, best_nt, cfg; failed = false)
+    append_csv_row!(OUTER_CSV, OUTER_HEADER, outer_row_line(orow))
+    for irow in cell_inner_rows
+        append_csv_row!(INNER_CSV, INNER_HEADER, inner_row_line(irow))
     end
 
     lp("[", label, "] DONE  wall=", round(wall, digits = 1), "s  knitro_status=", result.knitro_status,
@@ -136,30 +194,9 @@ for delta in DELTAS, st in starts
        "  best_Delta=", best === nothing ? "none" : @sprintf("%.6e", best.Delta_dual))
 end
 
-mkpath(OUTROOT)
-outer_csv = joinpath(OUTROOT, "unrestricted_$(DIRECTION)_outer_log.csv")
-open(outer_csv, "w") do io
-    println(io, "family,direction,delta,start,checksum_w,elapsed_s,outer_status,outer_evals,n_inner_solves,",
-                "n_feasible_proxy,n_infeasible_or_dashed_proxy,best_verified_Delta,budget_residual,error")
-    for r in rows_outer
-        println(io, r.family, ",", r.direction, ",", r.delta, ",", r.start, ",", r.checksum_w, ",",
-                r.elapsed_s, ",", r.outer_status, ",", r.outer_evals, ",", r.n_inner_solves, ",",
-                r.n_feasible_proxy, ",", r.n_infeasible_or_dashed_proxy, ",",
-                r.best_verified_Delta, ",", r.budget_residual, ",",
-                "\"", replace(r.error, "\"" => "'"), "\"")
-    end
-end
-inner_csv = joinpath(OUTROOT, "unrestricted_$(DIRECTION)_inner_log.csv")
-open(inner_csv, "w") do io
-    println(io, "family,direction,delta,start,eval_idx,t_s,Delta_star,inner_status,delta_feasible,classification_proxy,final_incumbent")
-    for r in rows_inner
-        println(io, r.family, ",", r.direction, ",", r.delta, ",", r.start, ",", r.eval_idx, ",", r.t_s, ",",
-                r.Delta_star, ",", r.inner_status, ",", r.delta_feasible, ",", r.classification_proxy, ",",
-                r.final_incumbent)
-    end
-end
-lp(">> wrote ", outer_csv)
-lp(">> wrote ", inner_csv)
+lp(">> outer/inner CSVs already written incrementally, per cell, throughout this run: ", OUTER_CSV, " / ", INNER_CSV)
+lp(">> (no end-of-run rewrite here -- a resumed/restarted process only holds resumed cells' outer rows in memory,")
+lp(">>  not their inner rows, so rewriting from the in-memory arrays at this point would truncate the inner CSV)")
 lp("="^100)
 lp("STATE-REUSE ACCOUNTING (unrestricted/", DIRECTION, ", ", length(rows_outer), " cells):")
 lp("  OUTER_CONTINUATION_CALLS = 0   (every cell calls run_profile_checkpointed with a fresh w0/zfree0 from the manifest and no resume_from; no code path in this runner can set it otherwise)")
