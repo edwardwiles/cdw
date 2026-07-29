@@ -71,9 +71,22 @@ for st in starts
 end
 lp(">> all start checksums re-verified against manifest.")
 lp("-"^90)
-lp("NO-H BUNDLE FACTS: unrestricted -- bundle_type=OperatorPsiBundle (production default);")
-lp("  has_H_field=false, has_H_copy_field=false, has_moments!_field=false, has_K_field=false (renamed payoff)")
-lp("  -- structural absence proven in TRUE_OPERATOR_NO_H_PREMERGE_GATE_2026-07-28.md, same production HEAD.")
+# Wire-unrestricted-operator-bundle task (2026-07-29): this block used to unconditionally assert
+# "bundle_type=OperatorPsiBundle" here -- FALSE at the time it was written: neither production
+# driver ever actually replaced ctx.obj, so every real campaign run before this fix used the dense
+# PsiObjectiveBundleImplicit despite this claim (confirmed live 2026-07-29, see
+# build_unrestricted_operator_ctx's docstring in compressed_live.jl). Report only the CONFIGURED
+# default here (not yet applied to any ctx at this point in the script -- ctx is built fresh inside
+# each run_polish_checkpointed_unified call below); the REAL, per-call bundle_type is now derived
+# from the live ctx.obj and printed genuinely in that call's own [backend-manifest] banner
+# (resolve_unrestricted_manifest's bundle_type field, production_backend_manifest.jl).
+lp("NO-H BUNDLE CONFIG: unrestricted -- moment_representation default = ", MOMENT_REPRESENTATION[])
+lp("  :operator (production default) -> build_unrestricted_operator_ctx replaces ctx.obj with a true")
+lp("  no-H OperatorPsiBundle (no H/H_copy/moments!/K field) before any inner solve; :dense_reference")
+lp("  is the explicit opt-out, unchanged PsiObjectiveBundleImplicit.")
+lp("  Equivalence validated D=4 + real D=20/W=100,000, exact agreement:")
+lp("  test_operator_no_H_bundle_equivalence_unrestricted.jl / _d20.jl.")
+lp("  See each run's own [backend-manifest] bundle_type= line below for the ACTUAL type used.")
 lp("-"^90)
 
 rows_outer = NamedTuple[]

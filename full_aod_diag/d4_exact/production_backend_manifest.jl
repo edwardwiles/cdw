@@ -56,9 +56,17 @@ function resolve_unrestricted_manifest(; hessian_backend::Symbol = UNRESTRICTED_
         trade_elasticity_mode::Symbol = :fixed, A_coordinate_mode::Symbol = :legacy_z,
         gp_coordinate_mode::Symbol = :raw,
         theta_bounds::Union{Nothing,Tuple{Float64,Float64}} = nothing,
-        outer_dimension::Union{Nothing,Int} = nothing)
+        outer_dimension::Union{Nothing,Int} = nothing,
+        bundle_type::Symbol = :PsiObjectiveBundleImplicit)   # unrestricted operator-bundle wiring
+        # task (2026-07-29): the calling driver's ACTUAL `typeof(ctx.obj)`, not an asserted literal
+        # (that mismatch -- campaign_unrestricted_runner.jl hardcoding "bundle_type=OperatorPsiBundle"
+        # while ctx.obj was never actually converted -- is exactly the bug this field closes). Only
+        # `run_polish_checkpointed_unified` passes this explicitly (post-`build_unrestricted_
+        # operator_ctx`); pre-port callers (`run_profile_checkpointed`/`run_polish_checkpointed`)
+        # never pass it and keep reporting the true pre-port value unchanged.
     return (
         family = :unrestricted,
+        bundle_type = bundle_type,
         core_top1_engine = :canonical_log_additive,           # print_active_layout_banner's own literal
         outer_gradient_top3_engine = :cplus,                   # print_active_layout_banner's own literal
         core_moment_representation = :compressed_winner_form,   # port/shared-winner-pair-core-hessian-production-2026-07-25

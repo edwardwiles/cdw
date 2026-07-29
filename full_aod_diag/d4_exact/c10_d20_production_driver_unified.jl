@@ -148,9 +148,14 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         blas_threads::Union{Nothing,Int} = nothing,   # reconciliation (task §1/Phase 1): same
         # kwarg/semantics as run_polish_checkpointed's -- process-scoped BLAS thread count, set
         # once right after ctx build, nothing (default) leaves the ambient count untouched.
-        pin_outer_algorithm::Bool = false)   # reconciliation: same kwarg/semantics as
+        pin_outer_algorithm::Bool = false,   # reconciliation: same kwarg/semantics as
         # run_polish_checkpointed's -- opt-in explicit algorithm=2(Interior/CG)+hessopt=6(L-BFGS)
         # via knitro_outer_algorithm.jl, for matched benchmark A/Bs only.
+        moment_representation::Symbol = MOMENT_REPRESENTATION[])   # unrestricted operator-bundle
+        # wiring task (2026-07-29): :operator (production default) replaces ctx.obj with the true
+        # no-H OperatorPsiBundle via build_unrestricted_operator_ctx (compressed_live.jl), mirroring
+        # every restricted family's own build_*_production_context moment_representation kwarg.
+        # :dense_reference is the explicit, byte-identical-to-pre-port opt-out.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
     destination_sample in (:exclude_row, :all_legacy) ||
         error("run_polish_checkpointed_unified($label): destination_sample must be :exclude_row or :all_legacy.")
@@ -158,6 +163,8 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         error("run_polish_checkpointed_unified($label): :flexible requires theta_lo/theta_hi")
     layout.gp_coordinate_mode == :scaled_log && gp_scale === nothing &&
         error("run_polish_checkpointed_unified($label): :scaled_log requires gp_scale")
+    moment_representation in (:operator, :dense_reference) ||
+        error("run_polish_checkpointed_unified($label): moment_representation must be :operator or :dense_reference, got :$moment_representation")
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint_unified(resume_from)
@@ -200,6 +207,9 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)
     ctx = build_unified_ctx(layout, ctx_base; theta_lo = layout.trade_elasticity_mode == :flexible ? theta_lo : nothing,
                              theta_hi = layout.trade_elasticity_mode == :flexible ? theta_hi : nothing)
+    # Unrestricted operator-bundle wiring task (2026-07-29): true no-H OperatorPsiBundle,
+    # production default -- see build_unrestricted_operator_ctx (compressed_live.jl) docstring.
+    ctx = build_unrestricted_operator_ctx(ctx; moment_representation = moment_representation)
     xy = precompute_aspace_XY(ctx)
     D = ctx.D; Ddest = _flex_ddest(ctx)
     n_outer = outer_dim(layout, D, Ddest)
@@ -226,6 +236,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     theta_ws = layout.trade_elasticity_mode == :flexible ? build_theta_cplus_workspace(D, Ddest, W; h_theta = h_theta) : nothing
 
     print_production_backend_manifest(resolve_unrestricted_manifest(; blas_threads = blas_threads,   # 2026-07-25 continuation: read the LIVE UNRESTRICTED_CORE_HESSIAN_BACKEND[] default (matching run_profile_checkpointed/run_polish_checkpointed's own fix, both of which stopped hardcoding :dense_exact for the same reason: it was silently misreporting the shared winner-pair backend)
+        bundle_type = Symbol(nameof(typeof(ctx.obj))),   # unrestricted operator-bundle wiring task (2026-07-29): the REAL type, read off ctx AFTER build_unrestricted_operator_ctx above -- never an asserted literal
         trade_elasticity_mode = layout.trade_elasticity_mode, A_coordinate_mode = layout.A_coordinate_mode,
         gp_coordinate_mode = layout.gp_coordinate_mode,
         theta_bounds = layout.trade_elasticity_mode == :flexible ? (theta_lo, theta_hi) : nothing,
@@ -340,7 +351,15 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         n_eval[] += 1
         t_el = time() - t_start
         feasible = Δ <= ctx_base.δ + 1e-6
-        base = r.cache_hit ? solve_base_state(d.xf, ctx) :
+        # Unrestricted operator-bundle wiring task (2026-07-29): solve_base_state (three_way_
+        # derivatives.jl) unconditionally uses the fully-dense CS.inner_loop_internal + obj(...)
+        # functor -- a genuine crash site for OperatorPsiBundle on any cache hit (confirmed live via
+        # the real driver run this task added, test_unrestricted_operator_ctx_driver_wiring_2026-07-29.jl).
+        # compressed_base_state (compressed_live.jl) is the already-existing, already-dispatch-aware
+        # equivalent (goes through inner_loop_internal_compressed, which already handles both bundle
+        # types) -- used ONLY for OperatorPsiBundle here so :dense_reference's cache-hit path stays
+        # byte-identical to pre-port production (unchanged function, unchanged numerics).
+        base = r.cache_hit ? (ctx.obj isa OperatorPsiBundle ? compressed_base_state(d.xf, ctx) : solve_base_state(d.xf, ctx)) :
             BaseDualState(collect(d.xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base, r = r, d = d)
         is_new_best = feasible && is_verified_success(r) &&
@@ -377,7 +396,8 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
                 r_g, _ = screened_eval(d.xf, ctx, rsc, sc, n_eval; warm = false, exact_cache = exact_cache)
             end
             r_g.inner_status in FEASIBLE_CODES || reject_point(w[1], "run_polish_checkpointed_unified($label): cb_G! could not recompute a feasible base state")
-            base = r_g.cache_hit ? solve_base_state(d.xf, ctx) :
+            # See cb_F!'s identical fix above (unrestricted operator-bundle wiring task, 2026-07-29).
+            base = r_g.cache_hit ? (ctx.obj isa OperatorPsiBundle ? compressed_base_state(d.xf, ctx) : solve_base_state(d.xf, ctx)) :
                 BaseDualState(collect(d.xf), r_g.θ_full, r_g.zeta, r_g.lambda, copy(ctx.obj.arg1), r_g.inner_status)
         end
 

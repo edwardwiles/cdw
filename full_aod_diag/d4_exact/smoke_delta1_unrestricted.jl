@@ -15,13 +15,17 @@ pe_probe = build_pivot_elimination(ctx_probe)
 D = ctx_probe.D; D2 = D^2
 lp("D=", D, " Ddest=", ctx_probe.D_dest)
 lp("-"^90)
-lp("NO-H BUNDLE FACTS: unrestricted  (bundle_type = OperatorPsiBundle, production default;")
-lp("  has_H_field = false, has_H_copy_field = false, has_moments!_field = false, has_K_field = false (renamed payoff)")
-lp("  -- structural absence proven fresh this session in TRUE_OPERATOR_NO_H_PREMERGE_GATE_2026-07-28.md, same commit.")
-lp("  Unrestricted's own inline priming analog is family-specific -- no_dense_g_counters.jl's runtime")
-lp("  Refs are not wired for this family's separate code path (c10_d20_production_driver.jl); its own")
-lp("  print_production_backend_manifest(resolve_unrestricted_manifest(...)) call below is this family's")
-lp("  live backend-selection record.)")
+# Wire-unrestricted-operator-bundle task (2026-07-29) correction: this block used to unconditionally
+# claim "bundle_type = OperatorPsiBundle" -- FALSE for THIS script specifically, which calls the
+# LEGACY run_profile_checkpointed (c10_d20_production_driver.jl), not run_polish_checkpointed_unified
+# (c10_d20_production_driver_unified.jl) -- only the latter was wired with build_unrestricted_
+# operator_ctx this task (see compressed_live.jl). run_profile_checkpointed still builds ctx_probe as
+# the dense PsiObjectiveBundleImplicit, unchanged; that's what this smoke run actually exercises.
+lp("NO-H BUNDLE FACTS: unrestricted (this script, run_profile_checkpointed -- LEGACY driver)")
+lp("  bundle_type = PsiObjectiveBundleImplicit (dense; NOT wired to OperatorPsiBundle -- only")
+lp("  run_polish_checkpointed_unified was, see compressed_live.jl::build_unrestricted_operator_ctx).")
+lp("  has_H_field = true (allocated; production Hessian backend :exact_winner_pair_parallel never")
+lp("  reads/writes it, but it is NOT structurally absent the way OperatorPsiBundle's is).")
 lp("-"^90)
 Aod_theta_natural = ctx_probe.θ0_up[ctx_probe.Aod_offset+1:ctx_probe.Aod_offset+ctx_probe.D*ctx_probe.D_dest]
 z0 = log.(Aod_theta_natural)

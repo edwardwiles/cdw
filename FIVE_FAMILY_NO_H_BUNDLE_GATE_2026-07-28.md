@@ -1,5 +1,20 @@
 # Five-family no-H bundle gate (2026-07-28) — FINAL: ALL FIVE FAMILIES PASS
 
+> **CORRECTION (2026-07-29):** the `unrestricted: WIRED_AND_GATED` line below is misleading and was
+> found FALSE live on 2026-07-29. What this document's own equivalence-gate scripts
+> (`test_operator_no_H_bundle_equivalence_unrestricted[_d20].jl`) validated is real: a companion
+> `OperatorPsiBundle` built from `ctx.obj`'s scalar fields agrees with the dense reference to machine
+> precision, both at D=4 and real D=20/W=100,000. What did NOT happen, despite the "WIRED_AND_GATED"
+> label: neither production driver (`c10_d20_production_driver.jl` /
+> `c10_d20_production_driver_unified.jl`) ever actually called any such conversion -- `ctx.obj`
+> stayed the dense `PsiObjectiveBundleImplicit` in every real solve for this family, unlike the other
+> four, which genuinely do construct `OperatorPsiBundle` inside their own
+> `build_*_production_context`. "The equivalence gate passes" and "the production driver uses the
+> gated type" are different claims; this doc conflated them for unrestricted only. Fixed 2026-07-29
+> (see `full_aod_diag/d4_exact/compressed_live.jl::build_unrestricted_operator_ctx`, wired into
+> `run_polish_checkpointed_unified`) -- unrestricted's production driver now genuinely defaults to
+> `OperatorPsiBundle`, matching what this document always claimed.
+
 ## Status
 
 ```

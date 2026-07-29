@@ -579,9 +579,22 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
 
     W = size(obj.U, 1)
     SW = ctx.γ.SamplingWeights[1:W]
-    obj.H[:, 1] .= θ_full[3 + ctx.D] .* SW
-    obj.H[:, 2] .= 1.0
-    obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    # Unrestricted operator-bundle wiring task (2026-07-29): this function (the REAL production
+    # screened-eval path -- "used by every cb_F!/cb_G!/cb_newpt! callback" per fast_range_screen.jl's
+    # own include-site comment) unconditionally read/wrote `obj.H` and called the dense `obj(...)`
+    # functor, neither of which OperatorPsiBundle has -- confirmed live 2026-07-29 via a real driver
+    # run: `build_unrestricted_operator_ctx` alone made `run_polish_checkpointed_unified` crash with
+    # a FieldError the first time this function ran, because it (unlike compressed_live.jl's already
+    # dispatch-aware `inner_loop_internal_compressed`) had never been touched by the 2026-07-28 no-H
+    # bundle task. Mirrors compressed_live.jl's own `obj isa OperatorPsiBundle` priming dispatch.
+    if obj isa OperatorPsiBundle
+        obj.payoff .= θ_full[3 + ctx.D] .* SW
+        obj.H_save = obj.payoff[1] * (-1.0)^obj.find_smallest
+    else
+        obj.H[:, 1] .= θ_full[3 + ctx.D] .* SW
+        obj.H[:, 2] .= 1.0
+        obj.H_save = obj.H[1, 1] * (-1.0)^obj.find_smallest
+    end
     grav_raw = compressed_gravity_raw(θ_full, ctx)
 
     st = CompressedCBState(obj, cf, grav_raw, false)
@@ -627,43 +640,72 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
         return result, prof_meta
     end
 
-    if !st.dense_materialized
-        ncolI = st.cf.oci - 1
-        materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
-        fill_gravity_column!(obj, st.grav_raw)
-        st.dense_materialized = true
-    end
-
-    # Allocation/Hessian port task §3.2: this was `copy(@view(obj.H[:,1])), copy(CS.select_G_
-    # from_H(obj, obj.H))` -- the single largest hot-path allocation site found in the audit's
-    # own Profile.Allocs by-site trace (980 MB / 8 events at real D=20/W=80,000). Both copies were
-    # unnecessary: `K` (the first) is never read again in this function -- removed outright.
-    # `G` is read-only downstream (kkt_residual_blas/moment_resid_blas each call BLAS `mul!` on a
-    # view of it, which accepts any StridedMatrix including this contiguous column-slice
-    # SubArray) and never escapes this function (not part of the returned `result`), and nothing
-    # between this line and G's last use mutates `obj.H` (confirmed: the `obj(inner_x,
-    # constr=...)` functor call below only READS `H`, per PsiObjectiveBundle.jl's callable
-    # method) -- so a view is lifetime-safe here, not just cheaper.
-    G = CS.select_G_from_H(obj, obj.H)
-
-    ncon = obj.d - obj.outer_constr_index + 2
-    cbuf = zeros(ncon)
-    fval = obj(inner_x, constr = @view(cbuf[1:ncon]))
-    Delta_dual = cbuf[1] / 1e10
-    m_weights = copy(obj.arg1)
-    # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
-    # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
-    # the bit-identity verification (sum(x -> x/s, m_weights) === sum(m_weights ./ s), checked
-    # directly at multiple W scales).
-    s_m_weights = sum(m_weights)
-    Delta_primal = primal_divergence(m_weights)
-
-    mean_m_resid = abs(sum(m_weights) / W - 1.0)
     ζstar = inner_x[1]; λstar = inner_x[2:end]
-    nkkt = min(length(λstar), size(G, 2))
-    max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
+    local Delta_dual, Delta_primal, mean_m_resid, max_abs_moment_kkt_resid, weight_norm_resid_val
+    local m_weights, gravity_raw, benchmark_unweighted_moment_mean, max_abs_moment_resid
+    # Unrestricted operator-bundle wiring task (2026-07-29): OperatorPsiBundle has no `.H`/functor
+    # -- reuse the ALREADY-VALIDATED operator verification path (`verify_inner_solution_operator_
+    # unrestricted!`/`verify_namedtuple_from_operator`, operator_verification.jl) that
+    # `evaluate_fullA_fast_compressed` (compressed_live.jl) already uses under
+    # `verification_backend=:operator`, instead of the dense materialize+functor tail below.
+    # `benchmark_unweighted_moment_mean`/`max_abs_moment_resid` are dense-G-only reporting fields
+    # (not consumed by classify_inner_result/is_cacheable_result/is_verified_success -- same
+    # disclosed scope limit compressed_live.jl's own `dense_reference_diagnostics=false` default
+    # already documents) -- NaN/empty here, exactly that convention. `gravity_raw` reuses `st.
+    # grav_raw` (already computed via `compressed_gravity_raw` above, unconditionally, regardless
+    # of bundle type) instead of re-deriving it from the dense functor's `cbuf[2]`.
+    if obj isa OperatorPsiBundle
+        ov = verify_inner_solution_operator_unrestricted!(ζstar, λstar, cf, obj, W)
+        m_weights, verify_op = verify_namedtuple_from_operator(ov, obj, W, nStatus)
+        Delta_dual = verify_op.Delta_dual
+        Delta_primal = verify_op.Delta_primal
+        mean_m_resid = verify_op.mean_m_resid
+        max_abs_moment_kkt_resid = verify_op.max_abs_moment_kkt_resid
+        weight_norm_resid_val = verify_op.weight_norm_resid
+        gravity_raw = st.grav_raw
+        benchmark_unweighted_moment_mean = Float64[]
+        max_abs_moment_resid = NaN
+    else
+        if !st.dense_materialized
+            ncolI = st.cf.oci - 1
+            materialize_dense_factual_structured!(@view(obj.H[:, 3:2+ncolI]), st.cf)
+            fill_gravity_column!(obj, st.grav_raw)
+            st.dense_materialized = true
+        end
 
-    gravity_raw = obj.outer_constr_index <= obj.d ? cbuf[2] : NaN
+        # Allocation/Hessian port task §3.2: this was `copy(@view(obj.H[:,1])), copy(CS.select_G_
+        # from_H(obj, obj.H))` -- the single largest hot-path allocation site found in the audit's
+        # own Profile.Allocs by-site trace (980 MB / 8 events at real D=20/W=80,000). Both copies were
+        # unnecessary: `K` (the first) is never read again in this function -- removed outright.
+        # `G` is read-only downstream (kkt_residual_blas/moment_resid_blas each call BLAS `mul!` on a
+        # view of it, which accepts any StridedMatrix including this contiguous column-slice
+        # SubArray) and never escapes this function (not part of the returned `result`), and nothing
+        # between this line and G's last use mutates `obj.H` (confirmed: the `obj(inner_x,
+        # constr=...)` functor call below only READS `H`, per PsiObjectiveBundle.jl's callable
+        # method) -- so a view is lifetime-safe here, not just cheaper.
+        G = CS.select_G_from_H(obj, obj.H)
+
+        ncon = obj.d - obj.outer_constr_index + 2
+        cbuf = zeros(ncon)
+        fval = obj(inner_x, constr = @view(cbuf[1:ncon]))
+        Delta_dual = cbuf[1] / 1e10
+        m_weights = copy(obj.arg1)
+        # Allocation fix (shared outer-A-gradient task, 2026-07-27, task §10): non-allocating
+        # weight_norm_resid -- see cm_production_bundle.jl's identical fix for the full rationale and
+        # the bit-identity verification (sum(x -> x/s, m_weights) === sum(m_weights ./ s), checked
+        # directly at multiple W scales).
+        s_m_weights = sum(m_weights)
+        Delta_primal = primal_divergence(m_weights)
+
+        mean_m_resid = abs(sum(m_weights) / W - 1.0)
+        nkkt = min(length(λstar), size(G, 2))
+        max_abs_moment_kkt_resid = kkt_residual_blas(G, m_weights, nkkt, W)
+        weight_norm_resid_val = abs(sum(x -> x / s_m_weights, m_weights) - 1.0)
+
+        gravity_raw = obj.outer_constr_index <= obj.d ? cbuf[2] : NaN
+        benchmark_unweighted_moment_mean = moment_resid_blas(G, obj.d, W)
+        max_abs_moment_resid = isempty(benchmark_unweighted_moment_mean) ? NaN : maximum(abs.(benchmark_unweighted_moment_mean))
+    end
     D_dest_g = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     Aod_θ = reshape(θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*D_dest_g], ctx.D, D_dest_g)
     μ_here = θ_full[1]
@@ -675,9 +717,6 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
     R_sum = sum(ctx.q_tilde .* logA)
     R_mean = R_sum / (ctx.D * D_dest_g)
     R_beta = R_sum / sum(ctx.q_tilde .^ 2)
-
-    benchmark_unweighted_moment_mean = moment_resid_blas(G, obj.d, W)
-    max_abs_moment_resid = isempty(benchmark_unweighted_moment_mean) ? NaN : maximum(abs.(benchmark_unweighted_moment_mean))
 
     winner_hash = hash(cf.winner)
 
@@ -693,7 +732,7 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
               benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
-              weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
+              weight_norm_resid = weight_norm_resid_val,
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               winner_hash = winner_hash, inner_status = nStatus, inner_iters = inner_iters,
               primal_dual_gap = abs(Delta_dual - Delta_primal),
