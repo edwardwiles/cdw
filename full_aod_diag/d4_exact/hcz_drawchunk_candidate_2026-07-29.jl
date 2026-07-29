@@ -96,3 +96,41 @@ function bin_zc_cross_hessian_fill_drawchunk!(ws::BinZCrossScratch, dc::BinZCros
     end
     return ws
 end
+
+"""
+    HCZ_PREP_BACKEND_DEFAULT
+
+`:origin_owned` (existing `bin_zc_cross_hessian_fill!`/`_threaded!`, unchanged) |
+`:draw_chunk_thread_local` (this file's candidate, 12-14x faster at real D=20/W=100,000 per
+`docs/PART_C_HCZ_CANDIDATE_RESULTS_2026-07-29.md`, tolerance-level correct -- NOT bit-identical,
+see `HCZ_CANDIDATE_TOL`). Left at `:origin_owned` pending a complete-inner-solve gate through the
+real KNITRO driver (this task's own "select defaults using complete inner solves through real
+public production contexts" requirement) -- the isolated-kernel benchmark alone is not sufficient
+to flip a production default.
+"""
+const HCZ_PREP_BACKEND_DEFAULT = Ref{Symbol}(:origin_owned)
+const HCZ_PREP_DRAWCHUNK_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
+
+"""
+    hcz_prep_dispatch!(bin_zc_ws, backend, Bidx, ZcS, cctx; workers) -> ws
+
+ONE dispatcher for H_CZ prep, shared by the serial and threaded call sites. `cctx` supplies/owns
+the `BinZCrossDrawChunkScratch` (`cctx.bin_zc_drawchunk`, lazily built/resized here) for
+`:draw_chunk_thread_local`; `:origin_owned` ignores it entirely.
+"""
+function hcz_prep_dispatch!(bin_zc_ws::BinZCrossScratch, backend::Symbol,
+        Bidx::AbstractMatrix{<:Integer}, ZcS::AbstractMatrix{Float64}, cctx; workers::Int, threaded::Bool)
+    if backend === :origin_owned
+        if threaded
+            bin_zc_cross_hessian_fill_threaded!(bin_zc_ws, Bidx, ZcS; workers = workers)
+        else
+            bin_zc_cross_hessian_fill!(bin_zc_ws, Bidx, ZcS)
+        end
+    elseif backend === :draw_chunk_thread_local
+        cctx.bin_zc_drawchunk = ensure_bin_zc_drawchunk_scratch!(cctx.bin_zc_drawchunk, bin_zc_ws.D, bin_zc_ws.L, bin_zc_ws.nz, workers)
+        bin_zc_cross_hessian_fill_drawchunk!(bin_zc_ws, cctx.bin_zc_drawchunk, Bidx, ZcS; workers = workers)
+    else
+        error("hcz_prep_dispatch!: unknown backend :$backend (must be :origin_owned|:draw_chunk_thread_local)")
+    end
+    return bin_zc_ws
+end

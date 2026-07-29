@@ -610,6 +610,19 @@ mutable struct CMBinHessCtx
     # (many, historical) callers as a new required argument -- this field is the substitute for
     # widening that public call chain.
     frechet_ext_cache::Any
+    # diagnose-optimize/HZZ-BLAS-and-HCZ-prep-2026-07-29 Part C: H_CZ prep backend selector +
+    # persistent scratch, same "global-Ref default, opt-in per-cctx override" pattern as
+    # `zc_gram_backend` above. `:origin_owned` (existing bin_zc_cross_hessian_fill!/_threaded!,
+    # unchanged) | `:draw_chunk_thread_local` (hcz_drawchunk_candidate_2026-07-29.jl, 12-14x
+    # faster at real D=20/W=100k per docs/PART_C_HCZ_CANDIDATE_RESULTS_2026-07-29.md, tolerance-
+    # level correct -- not yet the default pending a complete-inner-solve gate).
+    hcz_prep_backend::Symbol
+    bin_zc_drawchunk::Any
+end
+
+"Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change."
+function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAULT[], bin_zc_drawchunk = nothing)
+    return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk)
 end
 
 """
