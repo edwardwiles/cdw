@@ -1,0 +1,13 @@
+point,combo,wall_s,knitro_status,n_eval,n_grad,kappa,hessian_check_maxdiff_vs_serial,notes
+calibration,serial_serial,105.86613202095032,-401,1,1,0.020293896607184836,0.0,"H_EC_maxdiff=0.000e+00 H_EZ_maxdiff=0.000e+00 Hfull_norm=5.860313e+03"
+calibration,threaded_ec_serial_ez,NaN,SKIPPED,-1,-1,n/a,NaN,"not independently controllable: CROSS_HESSIAN_THREADED_DEFAULT[]/WORKERS_DEFAULT[] is a single Ref pair driving BOTH H_EC (cm_hessian_threaded.jl:236-237) and H_EZ (cm_hessian_architectures.jl:831-832) -- no separate H_EC-only Ref exists in this codebase."
+calibration,serial_ec_threaded_ez,NaN,SKIPPED,-1,-1,n/a,NaN,"not independently controllable: same coupled-Ref reason as combo 2 (H_EZ-only Ref does not exist)."
+calibration,threaded_threaded,114.5399420261383,-401,3,2,0.031733210086347774,0.0,"H_EC_maxdiff=0.000e+00 H_EZ_maxdiff=0.000e+00 Hfull_norm=4.637144e+03"
+non_calibration,serial_serial,74.38913202285767,-411,1,1,NaN,0.0,"H_EC_maxdiff=0.000e+00 H_EZ_maxdiff=0.000e+00 Hfull_norm=1.830349e+03"
+non_calibration,threaded_ec_serial_ez,NaN,SKIPPED,-1,-1,n/a,NaN,"not independently controllable: CROSS_HESSIAN_THREADED_DEFAULT[]/WORKERS_DEFAULT[] is a single Ref pair driving BOTH H_EC (cm_hessian_threaded.jl:236-237) and H_EZ (cm_hessian_architectures.jl:831-832) -- no separate H_EC-only Ref exists in this codebase."
+non_calibration,serial_ec_threaded_ez,NaN,SKIPPED,-1,-1,n/a,NaN,"not independently controllable: same coupled-Ref reason as combo 2 (H_EZ-only Ref does not exist)."
+non_calibration,threaded_threaded,58.99885296821594,-411,1,1,NaN,0.0,"H_EC_maxdiff=0.000e+00 H_EZ_maxdiff=0.000e+00 Hfull_norm=1.830349e+03"
+solver_trajectory,serial_serial,169.94798016548157,-401,3,2,0.031733210086347774,0.0,"H_EC_maxdiff=0.000e+00 H_EZ_maxdiff=0.000e+00 Hfull_norm=4.637144e+03"
+solver_trajectory,threaded_ec_serial_ez,NaN,SKIPPED,-1,-1,n/a,NaN,"not independently controllable: CROSS_HESSIAN_THREADED_DEFAULT[]/WORKERS_DEFAULT[] is a single Ref pair driving BOTH H_EC (cm_hessian_threaded.jl:236-237) and H_EZ (cm_hessian_architectures.jl:831-832) -- no separate H_EC-only Ref exists in this codebase."
+solver_trajectory,serial_ec_threaded_ez,NaN,SKIPPED,-1,-1,n/a,NaN,"not independently controllable: same coupled-Ref reason as combo 2 (H_EZ-only Ref does not exist)."
+solver_trajectory,threaded_threaded,130.88661003112793,-401,4,3,0.04264286747359547,0.0,"H_EC_maxdiff=0.000e+00 H_EZ_maxdiff=0.000e+00 Hfull_norm=3.760782e+03"
