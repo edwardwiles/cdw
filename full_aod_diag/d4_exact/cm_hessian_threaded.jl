@@ -246,11 +246,8 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
             nz = n_restriction(cctx.hzz_zc_op)
             bin_zc_ws = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz)
             cctx.bin_zc_cross = bin_zc_ws
-            @cmhess_prof "H_CZ_prep" if cctx.cross_hessian_threaded
-                bin_zc_cross_hessian_fill_threaded!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS; workers = cctx.cross_hessian_workers)
-            else
-                bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
-            end
+            @cmhess_prof "H_CZ_prep" hcz_prep_dispatch!(bin_zc_ws, cctx.hcz_prep_backend, cctx.Bidx, cctx.hzz_centered.ZcS, cctx;
+                workers = cctx.cross_hessian_workers, threaded = cctx.cross_hessian_threaded)
         end
     else
         record_dense_cross_hessian_call!()
