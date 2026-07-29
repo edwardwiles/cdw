@@ -52,14 +52,17 @@ end
 Level-aware analog of `lfix_cm_aware.jl::cm_fixed_contribution`: computes the FULL fixed
 (theta-independent) contribution `lambda_tail*'M_s` per draw `s`, where the tail
 `lambda_tail = base.λstar[aug.ncore : aug.ncore-1+aug.ncm]` (length `aug.ncm = D*L`) splits into
-`lambda_cm` (first `ncm_cm=(D-1)*L`) and `lambda_level` (last `ncm_level=L`). The CM part is computed
-by the IDENTICAL logic `cm_fixed_contribution` uses (same `apply_contrast`/`suffix_sums`/
-`cumulative_forward_contribution!` calls -- inlined here, not calling that function directly,
-because it hardcodes `aug.ncm` as its own tail length); the level part is new (see
-`frechet_level_forward_sum!` above), including the constant target-correction term
-`sum(lambda_level .* aug.level_targets)` -- structurally the gradient-side analog of Part III's
-Hessian target-correction terms (an additive constant in the level feature contributes an
-additive-constant term to `lambda_level'*level_s`, unlike CM's own always-zero-target columns).
+`lambda_cm` (first `ncm_cm=(D-1)*L`) and `lambda_level` (last `ncm_level=L`). Harmonization
+(2026-07-29): the CM part now calls the SAME shared `cm_fixed_value_contribution`
+(lfix_cm_aware.jl) `cm_fixed_contribution` itself calls, rather than an inlined verbatim copy of
+that computation -- `cm_fixed_contribution` couldn't be called directly because it hardcoded
+`aug.ncm` as its own tail-slicing bound (this file's `aug.ncm = ncm_cm+ncm_level != ncm_cm`);
+slicing `λ_cm` here first and passing it to the shared value kernel removes that obstacle. The
+level part is genuinely new (see `frechet_level_forward_sum!` above), including the constant
+target-correction term `sum(lambda_level .* aug.level_targets)` -- structurally the gradient-side
+analog of Part III's Hessian target-correction terms (an additive constant in the level feature
+contributes an additive-constant term to `lambda_level'*level_s`, unlike CM's own always-zero-target
+columns).
 """
 function frechet_cm_level_fixed_contribution(base::BaseDualState, ctx, aug, bins::AbstractMatrix{<:Unsigned})
     ncore = aug.ncore; ncm_cm = aug.ncm_cm; ncm_level = aug.ncm_level; L = aug.L
@@ -68,12 +71,8 @@ function frechet_cm_level_fixed_contribution(base::BaseDualState, ctx, aug, bins
     @assert length(base.λstar) >= ncore - 1 + ncm_cm + ncm_level "base.λstar too short for aug's (ncore,ncm_cm,ncm_level) -- was base solved against aug.obj_cm?"
 
     λ_cm = base.λstar[ncore : ncore - 1 + ncm_cm]
-    λmat_stored = reshape(λ_cm, nO, L)
     R = aug.contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
-    λmat_block = apply_contrast(λmat_stored, R)
-    P_cm = suffix_sums(λmat_block)
-    cm_out = Vector{Float64}(undef, size(bins, 1))
-    cumulative_forward_contribution!(cm_out, bins, aug.refIndex1, aug.origins, P_cm)
+    cm_out = cm_fixed_value_contribution(λ_cm, nO, L, aug.refIndex1, aug.origins, bins, R)
 
     λ_level = base.λstar[ncore + ncm_cm : ncore - 1 + ncm_cm + ncm_level]
     P_level_mat = suffix_sums(reshape(λ_level, 1, L))   # 1 x (L+1), column L+1 == 0

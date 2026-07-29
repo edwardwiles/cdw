@@ -67,6 +67,32 @@ within the CM block, never the thresholds themselves).
 cm_bin_indices_for(ctx, aug) = compute_bin_indices(ctx.U, aug.z)
 
 """
+    cm_fixed_value_contribution(λ_cm, nO, L, refIndex1, origins, bins, R) -> Vector{Float64}
+
+Shared (C)-block fixed-λ VALUE contribution: `out[s] = λ_cm' C_s`, via the same
+`apply_contrast`/`suffix_sums`/`cumulative_forward_contribution!` chain `CMLookupState`'s `:suffix`
+method (cm_lookup_kernels.jl) uses for the live inner-solve FG callback, here evaluated ONCE at a
+fixed `λ_cm` rather than per-callback. Harmonization (2026-07-29): both `cm_fixed_contribution`
+(below, flexible CM) and `frechet_cm_level_fixed_contribution`
+(cm_frechet_cplus.jl, common Fréchet's CM sub-block) call this exact function -- previously the
+Fréchet side inlined a verbatim copy of this computation because `cm_fixed_contribution` hardcoded
+`aug.ncm` as its own tail-slicing bound (wrong for Fréchet, whose `aug.ncm = ncm_cm+ncm_level`).
+Taking the already-sliced `λ_cm` (rather than `aug`) as an argument removes that obstacle: each
+caller slices its own tail according to its own layout, then shares this one value-contribution
+kernel.
+"""
+function cm_fixed_value_contribution(λ_cm::AbstractVector{Float64}, nO::Int, L::Int, refIndex1::Int,
+                                      origins::Vector{Int}, bins::AbstractMatrix{<:Unsigned},
+                                      R::Union{Nothing,AbstractMatrix{Float64}})
+    λmat_stored = reshape(λ_cm, nO, L)
+    λmat_block = apply_contrast(λmat_stored, R)
+    P = suffix_sums(λmat_block)
+    out = Vector{Float64}(undef, size(bins, 1))
+    cumulative_forward_contribution!(out, bins, refIndex1, origins, P)
+    return out
+end
+
+"""
     cm_fixed_contribution(base::BaseDualState, aug, bins) -> Vector{Float64}
 
 `out[s] = λ_C*' C_s` for every draw `s`, O(W*(D-1)) total (no loop over L),
@@ -85,13 +111,8 @@ function cm_fixed_contribution(base::BaseDualState, ctx, aug, bins::AbstractMatr
     nO = length(aug.origins)
     @assert length(base.λstar) >= ncore - 1 + ncm "base.λstar too short for aug's (ncore,ncm) -- was base solved against aug.obj_cm?"
     λ_cm = base.λstar[ncore:ncore-1+ncm]
-    λmat_stored = reshape(λ_cm, nO, L)
     R = aug.contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
-    λmat_block = apply_contrast(λmat_stored, R)
-    P = suffix_sums(λmat_block)
-    out = Vector{Float64}(undef, size(bins, 1))
-    cumulative_forward_contribution!(out, bins, aug.refIndex1, aug.origins, P)
-    return out
+    return cm_fixed_value_contribution(λ_cm, nO, L, aug.refIndex1, aug.origins, bins, R)
 end
 
 """
