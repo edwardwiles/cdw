@@ -1,0 +1,9 @@
+branch,target,refine_step,g,classification,delta_star,wall_s
+A_toward_min_gamma,0.1000,1,-0.45318972,FiniteSolved,0.10020118482134706,0.5917
+A_toward_min_gamma,0.5000,1,-0.48605907,FiniteSolved,0.4988921744955163,0.6479
+A_toward_min_gamma,1.0000,1,-0.49780465,FiniteSolved,0.9950808596217706,0.7887
+A_toward_min_gamma,2.0000,1,-0.50710215,FiniteSolved,1.9790234708969647,0.7202
+B_toward_max_gamma,0.1000,1,-0.39999512,FiniteSolved,0.09990265065183541,0.7937
+B_toward_max_gamma,0.5000,1,-0.39496480,FiniteSolved,0.44391415597196876,0.8050
+B_toward_max_gamma,1.0000,1,-0.39443988,FiniteSolved,0.7580545834177199,0.8818
+B_toward_max_gamma,2.0000,1,-0.39391497,FiniteSolved,1.837447686245311,0.9068

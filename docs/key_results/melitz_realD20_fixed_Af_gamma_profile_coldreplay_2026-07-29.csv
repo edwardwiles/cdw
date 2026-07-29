@@ -1,0 +1,25 @@
+label,branch,g,status,match
+calibration,A_toward_min_gamma,-0.418770712787832,"cold=4.07206993e-04 warm=4.07206993e-04 absdiff=6.389e-14 reldiff=1.569e-10 wall=0.57s",true
+every5th_idx5,A_toward_min_gamma,-0.4201874737475401,"cold=6.33647724e-04 warm=6.33647724e-04 absdiff=2.219e-13 reldiff=3.501e-10 wall=0.54s",true
+every5th_idx10,A_toward_min_gamma,-0.4259568651824231,"cold=5.60194222e-03 warm=5.60194222e-03 absdiff=4.296e-12 reldiff=7.669e-10 wall=0.55s",true
+every5th_idx15,A_toward_min_gamma,-0.43621892875473717,"cold=2.77263019e-02 warm=2.77263019e-02 absdiff=4.981e-11 reldiff=1.797e-09 wall=0.52s",true
+every5th_idx20,A_toward_min_gamma,-0.4510664811938405,"cold=8.84512357e-02 warm=8.84512357e-02 absdiff=4.224e-11 reldiff=4.775e-10 wall=0.54s",true
+every5th_idx25,A_toward_min_gamma,-0.4706364676640351,"cold=2.37714883e-01 warm=2.37714883e-01 absdiff=3.671e-10 reldiff=1.544e-09 wall=0.93s",true
+every5th_idx30,A_toward_min_gamma,-0.495114289770891,"cold=8.39604342e-01 warm=8.39604342e-01 absdiff=3.744e-10 reldiff=4.459e-10 wall=0.78s",true
+every5th_idx5,B_toward_max_gamma,-0.418459891640645,"cold=4.20165352e-04 warm=4.20165352e-04 absdiff=2.681e-13 reldiff=6.380e-10 wall=0.62s",true
+every5th_idx10,B_toward_max_gamma,-0.4171978426184224,"cold=7.29263020e-04 warm=7.29263020e-04 absdiff=3.273e-13 reldiff=4.488e-10 wall=0.54s",true
+every5th_idx15,B_toward_max_gamma,-0.4149675845562552,"cold=2.40667953e-03 warm=2.40667953e-03 absdiff=1.824e-12 reldiff=7.581e-10 wall=0.56s",true
+every5th_idx20,B_toward_max_gamma,-0.41177343008068834,"cold=7.96479673e-03 warm=7.96479673e-03 absdiff=4.061e-12 reldiff=5.099e-10 wall=0.51s",true
+every5th_idx25,B_toward_max_gamma,-0.40762152970240156,"cold=2.30705360e-02 warm=2.30705360e-02 absdiff=1.790e-11 reldiff=7.761e-10 wall=0.65s",true
+every5th_idx30,B_toward_max_gamma,-0.40251983257474383,"cold=6.28611857e-02 warm=6.28611857e-02 absdiff=4.147e-11 reldiff=6.598e-10 wall=0.62s",true
+every5th_idx35,B_toward_max_gamma,-0.3964780362316934,"cold=2.19136452e-01 warm=2.19136452e-01 absdiff=3.187e-10 reldiff=1.454e-09 wall=0.79s",true
+closest_to_Delta0.1,A_toward_min_gamma,-0.4545974816311067,"cold=1.08476799e-01 warm=1.08476799e-01 absdiff=2.145e-10 reldiff=1.977e-09 wall=0.64s",true
+closest_to_Delta0.1,B_toward_max_gamma,-0.40021532546070987,"cold=9.58694661e-02 warm=9.58694661e-02 absdiff=8.136e-12 reldiff=8.486e-11 wall=0.66s",true
+closest_to_Delta0.5,A_toward_min_gamma,-0.48472017046072413,"cold=4.64749902e-01 warm=4.64749902e-01 absdiff=2.262e-10 reldiff=4.867e-10 wall=0.62s",true
+closest_to_Delta0.5,B_toward_max_gamma,-0.3951578380185248,"cold=3.87492856e-01 warm=3.87492856e-01 absdiff=1.756e-11 reldiff=4.532e-11 wall=0.79s",true
+closest_to_Delta1.0,A_toward_min_gamma,-0.495114289770891,"cold=8.39604342e-01 warm=8.39604342e-01 absdiff=3.744e-10 reldiff=4.459e-10 wall=0.77s",true
+closest_to_Delta1.0,B_toward_max_gamma,-0.393800585059858,"cold=2.32610370e+00 warm=2.32610370e+00 absdiff=3.655e-10 reldiff=1.571e-10 wall=0.93s",true
+closest_to_Delta2.0,A_toward_min_gamma,-0.5063313568661436,"cold=1.85182004e+00 warm=1.85182004e+00 absdiff=1.080e-10 reldiff=5.833e-11 wall=0.75s",true
+closest_to_Delta2.0,B_toward_max_gamma,-0.393800585059858,"cold=2.32610370e+00 warm=2.32610370e+00 absdiff=3.655e-10 reldiff=1.571e-10 wall=0.99s",true
+last_finite_branchA,A_toward_min_gamma,-0.5122540684973896,"cold=3.34564999e+00 warm=3.34564999e+00 absdiff=3.262e-09 reldiff=9.751e-10 wall=0.92s",true
+last_finite_branchB,B_toward_max_gamma,-0.393800585059858,"cold=2.32610370e+00 warm=2.32610370e+00 absdiff=3.655e-10 reldiff=1.571e-10 wall=0.88s",true
