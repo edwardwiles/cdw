@@ -60,8 +60,12 @@ IFS=',' read -ra STARTS <<< "$STARTS_CSV"
 echo "=== FAMILY CHAIN START family=$FAMILY direction=$DIRECTION hard_cap_s=$HARDCAP maxtime_real=$MAXTIME threads=$THREADS $(date) ==="
 
 N_DONE=0; N_FAILED=0; N_RUN=0
-for delta in "${DELTAS[@]}"; do
-  for start in "${STARTS[@]}"; do
+# start-major (2026-07-29, user request): run all deltas for one start before moving to the next
+# start, so a single start's full delta profile is interpretable without waiting on every other
+# start. Originally delta-major (all starts per delta first) per the task spec's literal wording;
+# changed on explicit request -- cell independence/checkpointing is unaffected either way.
+for start in "${STARTS[@]}"; do
+  for delta in "${DELTAS[@]}"; do
     ckdir="$OUTROOT/$FAMILY/$DIRECTION/delta_${delta}/start_${start}"
     if [ -f "$ckdir/DONE" ]; then
       echo "[$FAMILY/$DIRECTION delta=$delta start=$start] SKIP -- already DONE"
