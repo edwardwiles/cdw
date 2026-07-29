@@ -232,21 +232,18 @@ materializes centered Zc/ZcS, single-thread BLAS gemm -- unmodified, the pre-add
 path and this task's dense-reference correctness anchor) | `:blas_syrk` | `:blas_gemm` |
 `:threaded_packed`.
 
-Selective-merge release (2026-07-28): flipped to `:blas_gemm` on explicit user sign-off. Prior
-session's isolated real-D20 evidence at production width (nx=210): `:blas_gemm` at BLAS
-threads>=8 is ~2.77x faster than `:reference` (0.084s vs 0.233s). **Operational requirement**:
-this backend only reaches that speed with enough BLAS threads -- callers running CM+ZC or ZC-only
-in production should launch with `OPENBLAS_NUM_THREADS=10 OMP_NUM_THREADS=10` (the other three
-families, which never touch H_ZZ, are unaffected and should stay at 1 per this project's usual
-convention). **Not yet independently re-confirmed under realistic concurrent host load** this
-release -- a scoped 2-process concurrency check (this release's own
-`docs/HZZ_REALISTIC_RESOURCE_GATE_2026-07-28.md`) was interrupted after a `BLAS_THREADS=8`/
-`-t 4` solo run took roughly 12 minutes wall time vs the 60-185s every BLAS=1 run in this same
-release took -- plausibly BLAS/Julia/KNITRO thread oversubscription, not confirmed as a real
-regression or ruled out as one. Flipped anyway on explicit user instruction; flagged as the
-top follow-up item for a future session, see that doc.
+Left at `:reference` (no behavior change) this release. Prior session's isolated real-D20 evidence
+at production width (nx=210) found `:blas_gemm` at BLAS threads>=8 ~2.77x faster than `:reference`
+(0.084s vs 0.233s) -- a real, promising candidate -- but this session's own attempt to confirm it
+under realistic conditions was cut short after a `cm_meanzc` solo run at `BLAS_THREADS=8` ran ~12
+minutes (vs 60-185s for every `BLAS_THREADS=1` run this same release), a plausible but unconfirmed
+thread-oversubscription signal (Julia `-t 4` x `OPENBLAS_NUM_THREADS=8` x KNITRO's own internal
+threading). Kept at the safe default rather than ship an unresolved slowdown risk -- see
+`docs/HZZ_REALISTIC_RESOURCE_GATE_2026-07-28.md` for the full writeup and the concrete follow-up
+items (diagnose the slowdown, re-test per-family BLAS-thread recommendations, complete the
+concurrent-process gate) for whoever revisits this.
 """
-const ZC_GRAM_BACKEND_DEFAULT = Ref{Symbol}(:blas_gemm)
+const ZC_GRAM_BACKEND_DEFAULT = Ref{Symbol}(:reference)
 const ZC_GRAM_THREADED_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
 
 """

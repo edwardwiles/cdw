@@ -1,0 +1,2 @@
+family,run_tag,blas_threads,wall_s,knitro_status,n_eval,n_grad,kappa
+origin_zc,solo,8,157.67283701896667,-401,1,1,0.020293896607184836
