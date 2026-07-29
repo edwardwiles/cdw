@@ -1,0 +1,5 @@
+family,wall_s,knitro_status,n_eval,n_grad,kappa,full_G_materializations,dense_economic_G,dense_CM_G,dense_ZC_G,dense_Frechet_G,zc_centered_rebuilds,zc_centered_cache_hits,notes
+flexible_cm,76.74159383773804,-401,1,1,0.020293896607184836,0,0,0,0,0,0,0,"ok"
+common_frechet,75.88771677017212,-401,1,1,0.020293896607184836,0,0,0,0,2,0,0,"ok"
+origin_zc,66.03663897514343,-401,1,1,0.020293896607184836,0,0,0,0,0,1,9,"ok"
+cm_meanzc,92.89482092857361,-401,1,1,0.020293896607184836,0,0,0,0,0,1,6,"ok"
