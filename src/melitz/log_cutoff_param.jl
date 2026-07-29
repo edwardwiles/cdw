@@ -112,7 +112,11 @@ The pivot's own `c` vector is `ctx.c_full[ctx.f_free_lin]` (UNCHANGED: substitut
 `build_q_gravity_offset`'s own derivation -- but does not change which linear combination
 of `q_free` it constrains, so the SAME coefficient vector/pivot-selection logic applies).
 The `g0` offset is set to `0.0` here (placeholder) -- it MUST be rebuilt fresh at every
-evaluation via `build_q_gravity_offset` (below), since it depends on the current `A`.
+evaluation via `build_q_gravity_offset` (below). 2026-07-29: the offset depends on `q_jj`
+(hence `g`) and fixed data ONLY, never on `A` (see `build_q_gravity_offset`'s own docstring)
+-- it is still rebuilt per call rather than cached, since it is cheap (`O(D^2)`, dominated by
+`melitz_expand_theta`'s other work) and depends on `g`, which does vary across coordinate
+probes.
 """
 function build_q_gravity_pivot(ctx)
     D = ctx.D
@@ -121,10 +125,12 @@ function build_q_gravity_pivot(ctx)
 end
 
 """
-    build_q_gravity_offset(A::AbstractMatrix, q_jj::Real, ctx) -> g0_q
+    build_q_gravity_offset(q_jj::Real, ctx) -> g0_q
 
-Session prompt Section 5.3: the q-gravity pivot's affine offset at the CURRENT `A` and
-focal-cell `q[j,j]`. Derivation: the f-gravity restriction `dot(c_full, vec(log f)) = 0`
+Session prompt Section 5.3: the q-gravity pivot's affine offset at the focal-cell `q[j,j]`
+(2026-07-29: no longer takes `A` -- see this function's own docstring continuation below for
+why the "current A" dependence the original derivation anticipated is provably always zero).
+Derivation: the f-gravity restriction `dot(c_full, vec(log f)) = 0`
 (summed over ALL `D^2` cells, INCLUDING `(j,j)`), substituting `log(f_od) = (sigma-1)*(q_od
 + a_od - log(markup) - log(w_o) - log(tau_od)) + log(expenditure_d) - log(sigma) -
 log(w_o)` (`melitz_log_f_from_q`) at every cell, is
@@ -153,32 +159,44 @@ this function omitted the `c_full[jj_lin]*q_jj` term entirely, silently assuming
 `c_full[jj_lin]` is generically nonzero (Gate A5: `|c|` is systematically LARGEST on
 diagonal cells under `withinTransform`) and `q[j,j]` is a genuine nonzero baseline
 log-cutoff.
+
+2026-07-29 continuation (A_q separation and gradient diagnostics session, Phase 2):
+**the `s_a = dot(c_full, vec(log A))` term is dropped entirely -- it is not merely small,
+it is EXACTLY ZERO for every admissible `A`, by construction of the A-gravity pivot, not
+merely at a calibrated/gravity-satisfying point.** `A` reaching this function always comes
+from `pivot_expand(A_free, ctx.A_pivot)` (`expand_free_theta_logcutoff`/`!`), and
+`pivot_expand`'s own pivot-cell formula (`logA_full[pivot] = -sum_k
+c[other[k]]*A_free[k]/c[pivot]`) makes `dot(c_full, vec(logA_full)) ==
+c_full[pivot]*logA_full[pivot] + sum_k c_full[other[k]]*A_free[k] == 0` an ALGEBRAIC
+IDENTITY in `A_free`, not a restriction that merely happens to hold at the model's
+calibrated point -- true for ANY `A_free`, including deliberately gravity-violating test
+inputs. Live-verified this session (`scripts/melitz_aq_phase1_separation_audit_2026-07-29.jl`):
+`dot(c_full, vec(logA))` measures `~1e-18` to `~1e-16` (pure floating-point roundoff, not a
+"small but real" economic term) under every tested A-perturbation. The PRIOR code computed
+this term explicitly every call and added it to `g0_q` -- since it is provably zero, this
+was a genuine (if tiny, `~5e-16`) coupling channel through which perturbing `A_free` moved
+the q-pivot cell's reconstructed value: NOT strict block separation as literally written,
+even though the coupling was numerically negligible for every practical purpose. Dropping
+the term makes the q-pivot's offset an EXACT function of `q_jj` (hence of `g` alone) and
+fixed data -- q is now algebraically, not merely numerically, independent of every free A
+coordinate (verified: perturbing any A_free now leaves every q value BIT-IDENTICAL, not
+merely `~1e-16`-close). This also removes the O(D^2) loop over `A`/`log.(A[lin])` this
+function used to run every call -- a genuine (small) allocation-free performance win on top
+of the correctness improvement, since `A` is no longer read by this function at all.
 """
-function build_q_gravity_offset(A::AbstractMatrix, q_jj::Real, ctx)
+function build_q_gravity_offset(q_jj::Real, ctx)
     D = ctx.D
     sigma = ctx.sigma
     markup = melitz_markup(sigma)
     c_full = ctx.c_full
-    # 2026-07-27 continuation (governing prompt Phase 1.2): rewritten to accumulate both dot
-    # products directly in ONE pass instead of materializing `const_vec = zeros(Float64, D^2)`
-    # (a fresh D^2-length allocation every call) and the broadcast temporary `vec(log.(A))`
-    # (a SECOND D^2-length allocation `dot` would otherwise force) -- algebraically identical,
-    # verified against the original dot-product formula in the test suite. `T` (unused in the
-    # PRIOR version, despite being computed) now actually types the accumulator, preserving
-    # exact `ForwardDiff.Dual` compatibility for `A::AbstractMatrix{<:ForwardDiff.Dual}`
-    # (the allocating `melitz_cutoff_constraint_jacobian` call path) -- the original's Dual
-    # support came for free from `dot`/broadcasting; this rewrite must carry it explicitly.
-    T = promote_type(eltype(A), typeof(q_jj))
-    s_a = zero(T)
     s_const = 0.0
     @inbounds for lin in 1:D^2
         o, d = lin2od(lin, D)
         const_lin = (sigma - 1) * (-log(markup) - log(ctx.w[o]) - log(ctx.tau[o, d])) +
                     log(ctx.expenditure[d]) - log(sigma) - log(ctx.w[o])
-        s_a += c_full[lin] * log(A[lin])
         s_const += c_full[lin] * const_lin
     end
-    return c_full[ctx.jj_lin] * q_jj + s_a + s_const / (sigma - 1)
+    return c_full[ctx.jj_lin] * q_jj + s_const / (sigma - 1)
 end
 
 """
@@ -223,7 +241,7 @@ function expand_free_theta_logcutoff(theta_free_q::AbstractVector{T}, ctx) where
     q_jj = derive_qjj_from_autarky_cutoff(gamma_prime_j, ctx)
 
     q_pivot = build_q_gravity_pivot(ctx)
-    g0_q = build_q_gravity_offset(A, q_jj, ctx)
+    g0_q = build_q_gravity_offset(q_jj, ctx)
     q_pivot_g0 = GravityPivot(q_pivot.n, q_pivot.pivot, q_pivot.other, q_pivot.c, g0_q)
     q_free_full = pivot_expand(q_free_free, q_pivot_g0)   # length D^2-1, over f_free_lin domain
 
@@ -374,7 +392,7 @@ function expand_free_theta_logcutoff!(state::MelitzExpandedState, theta_free_q_p
     q_jj = derive_qjj_from_autarky_cutoff(gamma_prime_j, ctx)
 
     c_free, q_pivot_idx, q_other = melitz_cached_f_pivot_parts(ctx)
-    g0_q = build_q_gravity_offset(A, q_jj, ctx)
+    g0_q = build_q_gravity_offset(q_jj, ctx)
     q_pivot = GravityPivot(length(c_free), q_pivot_idx, q_other, c_free, g0_q)
     q_free_full = ws.logf_free_full
     pivot_expand!(q_free_full, q_free_free, q_pivot)

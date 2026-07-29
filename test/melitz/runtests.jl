@@ -60,6 +60,7 @@ include(joinpath(MELITZ_DIR, "direct_gradient.jl"))
 include(joinpath(MELITZ_DIR, "sorted_crossing_gradient.jl"))
 include(joinpath(MELITZ_DIR, "touched_row_gradient.jl"))
 include(joinpath(MELITZ_DIR, "cc_bundle.jl"))
+include(joinpath(MELITZ_DIR, "exact_a_gradient.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(MELITZ_DIR, "nuisance_profile.jl"))
 include(joinpath(MELITZ_DIR, "predictor_corrector.jl"))   # 2026-07-26 closure (Phase 3): was
@@ -6630,6 +6631,163 @@ end
         @test !isdefined(@__MODULE__, :melitz_classified_inner_solve)
         @test isdefined(@__MODULE__, :solve_melitz_delta!)
         @test isdefined(@__MODULE__, Symbol("_melitz_classified_inner_solve!"))
+    end
+end
+
+@testset "Governing prompt 2026-07-29 (A_q separation and gradient diagnostics)" begin
+    aq_obj, aq_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+    aq_ctx = aq_obj.γ
+    aq_D = aq_ctx.D
+    aq_nA = aq_D^2 - 1
+    aq_nq = length(aq_theta0) - 1 - aq_nA
+    aq_rng = MersenneTwister(4141)
+
+    @testset "Strict A/q block separation (Phase 1-2)" begin
+        A0, f0, gpj0, fjj0, q0 = expand_free_theta_logcutoff(aq_theta0, aq_ctx)
+        @testset "A-coordinate changes leave all q values EXACTLY (bit-for-bit) unchanged" begin
+            for k in 1:aq_nA
+                tp = copy(aq_theta0); tp[1+k] += 1e-2 * (0.2 + rand(aq_rng))
+                _, _, _, _, qp = expand_free_theta_logcutoff(tp, aq_ctx)
+                @test qp == q0
+            end
+        end
+        @testset "q-coordinate changes leave all A values EXACTLY unchanged" begin
+            for k in 1:aq_nq
+                tp = copy(aq_theta0); tp[1+aq_nA+k] += 1e-2 * (0.2 + rand(aq_rng))
+                Ap, _, _, _, _ = expand_free_theta_logcutoff(tp, aq_ctx)
+                @test Ap == A0
+            end
+        end
+        @testset "both original gravity restrictions hold under the decoupled reconstruction" begin
+            for _ in 1:5
+                tp = copy(aq_theta0)
+                tp[2:end] .+= 1e-2 .* randn(aq_rng, length(aq_theta0) - 1)
+                Ap, fp, _, _, _ = expand_free_theta_logcutoff(tp, aq_ctx)
+                @test abs(dot(aq_ctx.c_full, vec(log.(Ap)))) < 1e-8
+                @test abs(dot(aq_ctx.c_full, vec(log.(fp)))) < 1e-6
+            end
+        end
+        @testset "reconstructed f satisfies the general cutoff identity q_od=log(zhat_od)" begin
+            tp = copy(aq_theta0)
+            tp[2:end] .+= 1e-2 .* randn(aq_rng, length(aq_theta0) - 1)
+            Ap, fp, gpjp, fjjp, qp = expand_free_theta_logcutoff(tp, aq_ctx)
+            zhat = melitz_baseline_cutoff(Ap, fp, aq_ctx.w, aq_ctx.tau, aq_ctx.expenditure, aq_ctx.sigma)
+            @test maximum(abs, log.(zhat) .- qp) < 1e-8
+        end
+    end
+
+    @testset "Exact A moment derivative: dR/da = (sigma-1)*R (Phase 3)" begin
+        sigma = aq_ctx.sigma
+        j = aq_ctx.target_country
+        A0, f0, gpj0, fjj0 = melitz_expand_theta(aq_theta0, aq_ctx)
+        for (o, d) in [(1, 1), (2, 1), (1, 2), (j, 2)]
+            C0 = melitz_C(aq_ctx.w[o], aq_ctx.tau[o, d], A0[o, d], sigma, aq_ctx.expenditure[d])
+            h = 1e-6
+            a0 = log(A0[o, d])
+            Cp = melitz_C(aq_ctx.w[o], aq_ctx.tau[o, d], exp(a0 + h), sigma, aq_ctx.expenditure[d])
+            Cm = melitz_C(aq_ctx.w[o], aq_ctx.tau[o, d], exp(a0 - h), sigma, aq_ctx.expenditure[d])
+            fd = (Cp - Cm) / (2h)
+            @test isapprox(fd, (sigma - 1) * C0; rtol=1e-5)
+        end
+    end
+
+    @testset "Exact A link derivative matches direct FD of the moment operator's own ell column (Phase 3)" begin
+        # No KNITRO needed: differentiate op.ell (moment_operator.jl) directly, at fixed q,
+        # against melitz_exact_a_gradient_full!'s own per-cell formula pieces.
+        j = aq_ctx.target_country
+        A0, f0, gpj0, fjj0 = melitz_expand_theta(aq_theta0, aq_ctx)
+        sorted_ctx = aq_ctx.sorted_tail_ctx
+        op = build_melitz_moment_operator(sorted_ctx, aq_ctx.moment_layout)
+        primitives0 = MelitzPrimitives(aq_D, aq_ctx.sigma, aq_ctx.theta_star, j, aq_ctx.tau, aq_ctx.w, A0, f0, gpj0)
+        cutoff0 = melitz_baseline_cutoff(A0, f0, aq_ctx.w, aq_ctx.tau, aq_ctx.expenditure, aq_ctx.sigma)
+        eq0 = MelitzEquilibrium(aq_ctx.expenditure, ones(Float64, aq_D), cutoff0, aq_ctx.X_data)
+        expenditure_prime = aq_ctx.w_prime * aq_ctx.L[j]
+        cf0 = MelitzCounterfactual(j, aq_ctx.w_prime, expenditure_prime, 1.0, expenditure_prime)
+        melitz_update_moment_operator!(op, primitives0, eq0, cf0; X_data=aq_ctx.X_data)
+        ell0 = copy(op.ell)
+
+        # perturb a_{j,d} at fixed q (via the free A coordinate touching cell (j,d)) and
+        # rebuild ell at the displaced point.
+        d_test = j == 1 ? 2 : 1
+        k = findfirst(i -> lin2od(i, aq_D) == (j, d_test), aq_ctx.A_pivot.other)
+        @test k !== nothing
+        h = 1e-6
+        tp = copy(aq_theta0); tp[1+k] += h
+        tm = copy(aq_theta0); tm[1+k] -= h
+        Ap, fp, gpjp, fjjp = melitz_expand_theta(tp, aq_ctx)
+        Am, fm, gpjm, fjjm = melitz_expand_theta(tm, aq_ctx)
+        cutoffp = melitz_baseline_cutoff(Ap, fp, aq_ctx.w, aq_ctx.tau, aq_ctx.expenditure, aq_ctx.sigma)
+        cutoffm = melitz_baseline_cutoff(Am, fm, aq_ctx.w, aq_ctx.tau, aq_ctx.expenditure, aq_ctx.sigma)
+        eqp = MelitzEquilibrium(aq_ctx.expenditure, ones(Float64, aq_D), cutoffp, aq_ctx.X_data)
+        eqm = MelitzEquilibrium(aq_ctx.expenditure, ones(Float64, aq_D), cutoffm, aq_ctx.X_data)
+        cfp = MelitzCounterfactual(j, aq_ctx.w_prime, expenditure_prime, 1.0, expenditure_prime)
+        primitivesp = MelitzPrimitives(aq_D, aq_ctx.sigma, aq_ctx.theta_star, j, aq_ctx.tau, aq_ctx.w, Ap, fp, gpjp)
+        primitivesm = MelitzPrimitives(aq_D, aq_ctx.sigma, aq_ctx.theta_star, j, aq_ctx.tau, aq_ctx.w, Am, fm, gpjm)
+        melitz_update_moment_operator!(op, primitivesp, eqp, cfp; X_data=aq_ctx.X_data)
+        ellp = copy(op.ell)
+        melitz_update_moment_operator!(op, primitivesm, eqm, cfp; X_data=aq_ctx.X_data)
+        ellm = copy(op.ell)
+        fd_dell_da = (ellp .- ellm) ./ (2h)
+
+        # exact formula piece: d(ell[s])/da_{j,d_test} = (sigma-1)/w_j * profit_current_{j,d_test}(s)
+        sigma = aq_ctx.sigma
+        w_j = aq_ctx.w[j]
+        exact_dell = zeros(sorted_ctx.W)
+        z_orig_j = @view sorted_ctx.z_original[:, j]
+        z_power_j = @view sorted_ctx.z_power_original[:, j]
+        for s in 1:sorted_ctx.W
+            price = melitz_price(aq_ctx.w[j], aq_ctx.tau[j, d_test], A0[j, d_test], sigma, z_orig_j[s])
+            rev = unconstrained_revenue(price, sigma, aq_ctx.expenditure[d_test], 1.0)
+            profit = rev / sigma - w_j * f0[j, d_test]
+            exact_dell[s] = profit > 0 ? (sigma - 1) / w_j * profit : 0.0
+        end
+        @test isapprox(fd_dell_da, exact_dell; rtol=1e-3, atol=1e-8)
+    end
+
+    if KNITRO_AVAILABLE
+        @testset "Exact A outer DeltaStar gradient matches zero-switch reoptimized secants (Phase 5)" begin
+            aq_obj.use_cached_x = false; aq_obj.x .= NaN
+            lfd0 = melitz_recover_lfd(aq_obj, aq_theta0)
+            @test lfd0.lfd_ok
+            x0 = copy(lfd0.dual_x)
+            A0, f0, gpj0, fjj0 = melitz_expand_theta(aq_theta0, aq_ctx)
+            state0 = MelitzExpandedState(aq_D)
+            state0.A .= A0; state0.f .= f0; state0.gamma_prime_j = gpj0; state0.f_jj = fjj0
+            melitz_update_operator_at_theta!(aq_obj.op, aq_theta0, aq_ctx)
+            exact_free, exact_full = melitz_exact_a_gradient(aq_obj, x0, state0, aq_ctx)
+            bin0 = copy(aq_obj.op.bin); rank0 = copy(aq_obj.op.rank)
+
+            h = 1e-6
+            for k in [1, 2, aq_nA]
+                tp = copy(aq_theta0); tp[1+k] += h
+                tm = copy(aq_theta0); tm[1+k] -= h
+                aq_obj.use_cached_x = false; aq_obj.x .= NaN
+                lfd_p = melitz_recover_lfd(aq_obj, tp)
+                aq_obj.use_cached_x = false; aq_obj.x .= NaN
+                lfd_m = melitz_recover_lfd(aq_obj, tm)
+                @test aq_obj.op.bin == bin0   # zero switches: last update was at tm, still matches
+                @test lfd_p.lfd_ok && lfd_m.lfd_ok
+                secantC = (lfd_p.Delta - lfd_m.Delta) / (2h)
+                @test isapprox(exact_free[k], secantC; rtol=5e-3, atol=1e-9)
+                melitz_update_operator_at_theta!(aq_obj.op, aq_theta0, aq_ctx)
+            end
+        end
+    end
+
+    @testset "No dense G materialized, no hot-loop allocation scaling with W/D^2/outer dim (Phase 4/14/15)" begin
+        A0, f0, gpj0, fjj0 = melitz_expand_theta(aq_theta0, aq_ctx)
+        state0 = MelitzExpandedState(aq_D)
+        state0.A .= A0; state0.f .= f0; state0.gamma_prime_j = gpj0; state0.f_jj = fjj0
+        melitz_update_operator_at_theta!(aq_obj.op, aq_theta0, aq_ctx)
+        x_dummy = zeros(1 + aq_ctx.moment_layout.num_moments)
+        ws = MelitzExactAGradientWorkspace(aq_obj.op)
+        dDelta_da = zeros(aq_D, aq_D)
+        before_dense = MELITZ_DENSE_G_MATERIALIZATIONS[]
+        melitz_exact_a_gradient_full!(dDelta_da, aq_obj, x_dummy, state0, aq_ctx, ws)   # warmup
+        bytes = @allocated melitz_exact_a_gradient_full!(dDelta_da, aq_obj, x_dummy, state0, aq_ctx, ws)
+        @test bytes == 0
+        @test MELITZ_DENSE_G_MATERIALIZATIONS[] == before_dense
     end
 end
 

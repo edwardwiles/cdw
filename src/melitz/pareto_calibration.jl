@@ -1236,6 +1236,13 @@ since `MelitzParetoCalibration` does not itself carry a Monte-Carlo sample.
 """
 function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration;
         W::Int=20_000, seed::Int=calib.seed, draw_mode::Symbol=:halton,
+        # 2026-07-29 (A_q separation and gradient diagnostics session): this kwarg was
+        # missing entirely -- `outer_parameterization` was hardcoded `:logf` in the call to
+        # `melitz_calibration_outer_ctx` below despite that function already supporting
+        # `:logcutoff`, making it impossible to build a real-D20 `:logcutoff` fixture through
+        # the production calibration entry point (only the D=4 synthetic-fixture path,
+        # `build_melitz_psi_bundle`, exposed this axis). Threaded through, default unchanged.
+        outer_parameterization::Symbol=:logf,
         technology_coordinate::Symbol=:logA,
         inner_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
         outer_loop_opt::String=joinpath(dirname(dirname(@__DIR__)), "melitz_outer_finite_delta.opt"),
@@ -1275,7 +1282,7 @@ function build_melitz_psi_bundle_from_calibration(calib::MelitzParetoCalibration
     cfg = MelitzBackendConfig(inner_backend=backend, moment_backend=moment_backend, hessian_backend=hessian_backend)
     resolved_moment_backend = backend == :matrix_free ? :sorted_tail_parallel : melitz_resolve_moment_backend(cfg, D)
 
-    p, eq, cf, ctx = melitz_calibration_outer_ctx(calib; outer_parameterization=:logf,
+    p, eq, cf, ctx = melitz_calibration_outer_ctx(calib; outer_parameterization=outer_parameterization,
         technology_coordinate=technology_coordinate,
         inner_loop_opt=inner_loop_opt, outer_loop_opt=outer_loop_opt,
         moment_backend=resolved_moment_backend, z_draws=z_draws)
