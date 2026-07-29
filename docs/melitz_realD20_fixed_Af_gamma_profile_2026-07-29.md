@@ -1,5 +1,34 @@
 # Real-D20 fixed-A/f gamma_d_prime profile, calibration to both theoretical extremes (2026-07-29)
 
+## CORRECTION (same day, post-review)
+
+**The first version of this document/dataset reported `gamma_d_prime` under the wrong wage
+numeraire.** `build_realD20_fixture` calibrates via `calibrate_melitz_pareto(...;
+wage_numeraire=1)` (the default), which pins **country index 1's** baseline wage to 1, not
+France's (the focal country, index 2). The welfare formula's `wage_ratio = w_prime/w[target]`
+then divides `w_prime` (always 1, its own autarky-equilibrium numeraire) by `w[target]=0.7721`
+(France's wage *relative to country 1*) -- two quantities expressed in different numeraires,
+giving a nonsensical `wage_ratio=1.2952` instead of the correct `1.0`.
+
+**What was, and was not, affected**: `kappa_ratio` (hence `gains_from_trade`, hence
+`DeltaStar`, hence every KNITRO classification) is **numeraire-invariant** -- verified directly
+by recalibrating with `wage_numeraire=focal` and confirming `kappa_ratio` matches to 7
+significant figures. Every solve, classification, refinement, and cold replay in this campaign
+is therefore still correct. **Only the reported `gamma_d_prime` NUMBERS** (computed as
+`exp(g)` under the wrong-numeraire internal coordinate) were wrong, and with them the
+closed-form theoretical endpoints stated in `gamma_d_prime` terms (the original "g_floor=0"
+framing was a red herring inherited from a 2026-07-24 session's own non-binding search-box
+convenience value, not a genuine derivation).
+
+**The fix** (closed-form, no KNITRO reruns needed): under the correct normalization
+(`wage_ratio=1`), `gamma_d_prime = kappa_ratio^(sigma-1)` exactly. This gives clean, exact
+endpoints: `gamma_d_prime_min = lambda_dd` (the calibrated domestic trade share, exactly --
+the `sigma`-power round-trip cancels) and `gamma_d_prime_max = 1` (exactly). All CSVs,
+figures, and this document have been corrected in place; the numbers below are the corrected
+values throughout.
+
+---
+
 Branch `melitz/fullD-delta-star` (`trade_robustness_modular`), continuing directly from the
 Melitz inner-solver architecture consolidation
 (`docs/melitz_inner_solver_architecture_consolidation_2026-07-28.md`) and its post-
@@ -67,40 +96,55 @@ closed form directly (`kappa_of_g`/`g_of_kappa`), not a re-derivation.
 | sigma | 2.5 |
 | theta_star | 8.751773 |
 | QMC | W=80,000, seed=1 |
-| calibrated `gamma_d_prime` (Fréchet) | 0.6578550157 |
+| calibrated `gamma_d_prime` (Fréchet, **corrected**) | 0.9697008880 |
 | calibrated `w_prime` (autarky counterfactual wage, normalized) | 1.0 |
-| calibrated `w[target]` | 0.7720787473 |
-| wage_ratio = w_prime/w[target] | 1.2952046712 |
-| calibrated `kappa_ratio` | 0.9796971896 |
-| calibrated gains from trade | 2.030281% |
-| calibrated `DeltaStar` | 4.072070e-04 (`nStatus=0`, verified) |
+| calibrated `w[target]` under the correct (`wage_numeraire=focal`) normalization | 1.0 |
+| wage_ratio = w_prime/w[target] (correct normalization) | 1.0 exactly |
+| calibrated `kappa_ratio` (numeraire-invariant, unaffected by the correction) | 0.9796971896 |
+| calibrated gains from trade (numeraire-invariant, unaffected) | 2.030281% |
+| calibrated `DeltaStar` (unaffected) | 4.072070e-04 (`nStatus=0`, verified) |
+
+**On the correction**: the internal KNITRO coordinate `theta[1]=g` throughout this campaign
+was NEVER changed and needed no rerun -- it was parameterized consistently under the
+fixture's own internal (`wage_numeraire=1`) convention throughout, and `kappa_ratio =
+1.2952046712 * exp(g)^(1/(sigma-1))` computed under that SAME convention is the true,
+numeraire-invariant economic quantity (verified: matches an independent direct recalibration
+under `wage_numeraire=focal` to 7 significant figures). Only the display transform
+`gamma_d_prime = exp(g)` was wrong; the corrected display transform is
+`gamma_d_prime = kappa_ratio^(sigma-1)` (derived below), applied post-hoc to every already-
+computed `kappa_ratio` value -- no economic content changed, only how `gamma_d_prime` itself
+is read off.
 
 ### Theoretical minimum `gamma_d_prime` (branch A)
 
 Derived directly from the paper's own proven ceiling on gains from trade,
 `GT <= lambda_dd^(1/(sigma-1))` (`lambda_dd` = domestic trade share at the calibrated
-baseline), converted to `kappa_ratio >= lambda_dd^(1/(sigma-1))` and inverted through the exact
-live `kappa_ratio(g)` formula:
+baseline), converted to `kappa_ratio >= lambda_dd^(1/(sigma-1))`, and inverted under the
+correct `wage_ratio=1` normalization:
 
 ```
 lambda_jj (domestic trade share, France, at theta0) = 0.8356761300
 kappa_min = lambda_jj^(1/(sigma-1))                  = 0.8872077596
-g_ceiling = g_of_kappa(kappa_min)                    = -0.5675172401
-gamma_d_prime_min_theory = exp(g_ceiling)            = 0.5669312470
+gamma_d_prime_min_theory = kappa_min^(sigma-1)       = lambda_jj EXACTLY = 0.8356761300
 GT at this endpoint (= 1 - kappa_min)                = 11.279224%   <- the paper's proven GT UPPER bound
 ```
 
-**Cross-check 1** (direct formula): `g_ceiling` computed via `g_of_kappa(kappa_min, wratio,
-sigma)`. **Cross-check 2** (via the live kappa/gamma relationship, mapping the same GT value
-back through `kappa=1-GT` then `g_of_kappa`): identical to machine precision (`diff=0.000e+00`).
+The `sigma`-power round-trip (`kappa_min = lambda_jj^(1/(sigma-1))`, then
+`gamma_d_prime = kappa_min^(sigma-1)`) cancels exactly, so **the theoretical minimum
+`gamma_d_prime` equals the calibrated domestic trade share itself, exactly** -- a clean,
+closed-form result.
+
+**Cross-check 1** (direct formula, as above). **Cross-check 2** (via the live kappa/gamma
+relationship, mapping the same `GT` value back through `kappa=1-GT` then the same power):
+identical to machine precision.
 
 **This is an OPEN, Delta->infinity limit, not an ordinary evaluable point** -- confirmed both
 by the theory (`kappa_min` is only attained as trade frictions vanish entirely, an asymptotic
-result) and live, directly: `solve_melitz_delta!` at `g_ceiling` exactly, and at `t=0.995`/
-`t=0.999` approach points (extremely close to the endpoint), all three return
-`InfiniteDeltaCertified` (`col=2, kind=:origin_block`), never a finite value. The theoretical
-endpoint itself is therefore reported as a limit, never claimed as an ordinary `FiniteSolved`
-point (Phase 1 below).
+result) and live, directly: `solve_melitz_delta!` at the internal coordinate corresponding to
+this endpoint, and at `t=0.995`/`t=0.999` approach points (extremely close to it), all three
+return `InfiniteDeltaCertified` (`col=2, kind=:origin_block`), never a finite value. The
+theoretical endpoint itself is therefore reported as a limit, never claimed as an ordinary
+`FiniteSolved` point (Phase 1 below).
 
 ### Theoretical maximum `gamma_d_prime` (branch B)
 
@@ -109,21 +153,19 @@ cannot be negative), inverted the same way:
 
 ```
 kappa_max = 1.0                                       (GT cannot be negative)
-g_floor = g_of_kappa(kappa_max)                      = -0.3880030949
-gamma_d_prime_max_theory = exp(g_floor)              = 0.6784102437
+gamma_d_prime_max_theory = kappa_max^(sigma-1)       = 1.0 EXACTLY
 GT at this endpoint (= 1 - kappa_max)                = 0.000000%   <- zero gains from trade
 ```
 
-**Note on a prior session's `g_floor=0` convention.** A 2026-07-24 session
-(`docs/melitz_real_d20_evaluation_cap_correction_2026-07-24.md` Section 10.1) used
-`gamma_prime_target=1` (`g=0`) as a convenient symmetric outer-search **box edge** for a search
-that only ever needed the lower bound (`:upper`-direction, g-decreasing) -- non-binding by
-their own construction, and labeled "GT=0%" loosely in that context. At this exact fixture,
-`wage_ratio=1.2952 != 1`, so `kappa_of_g(0) = wage_ratio = 1.2952 > 1` -- literal `g=0` is
-**past** the true `kappa_ratio<=1` boundary (which sits at `g_floor=-0.3880`, not `g=0`). This
-session derives and cross-checks `g_floor=-0.3880` freshly from the live `kappa`/`gamma`
-relationship at the current calibration, per this session's own mandate, rather than reusing
-the 2026-07-24 session's non-binding convenience value.
+**This confirms, exactly, a 2026-07-24 session's own `gamma_prime_target=1` convention**
+(`docs/melitz_real_d20_evaluation_cap_correction_2026-07-24.md` Section 10.1) -- that session
+used it as a convenient symmetric outer-search box edge (non-binding for the direction it
+actually searched, so it never needed to verify the value was the TRUE boundary), but it was,
+in fact, exactly right: under the correct wage normalization, `gamma_d_prime=1` is precisely
+the theoretical maximum, matching `kappa_ratio<=1` with equality. The first version of this
+document's own "`g_floor` doesn't coincide with `g=0`" claim was itself the error (caused by
+computing `gamma_d_prime` under the wrong internal wage numeraire, see the CORRECTION note
+above) -- retracted.
 
 **Unlike branch A, this endpoint is an ORDINARY finite theoretical point by theory** (complete
 autarky is a well-defined finite economic corner, not an asymptote the way costless full
@@ -131,7 +173,7 @@ integration is). Live probing nonetheless found it -- and its immediate neighbor
 (`t=0.995`, `t=0.999`) -- **also** `InfiniteDeltaCertified` at this fixture. This is reported
 honestly as a genuine, model-specific numerical/economic finding (an exact certificate, not a
 timeout or ambiguous failure), **not** used to justify moving the theoretical endpoint inward --
-`g_floor=-0.3880` is still the value reported and gridded as the branch-B theoretical target;
+`gamma_d_prime=1` is still the value reported and gridded as the branch-B theoretical target;
 the certified-infeasible region simply turns out to start well before it is reached (Phase 6).
 
 ## 4. Grid construction (Phase 1)
@@ -192,10 +234,10 @@ its own `build_realD20_fixture(...)` call (own `obj`, `ctx`, KNITRO instance, `M
 notably clean result. Every point classified either `FiniteSolved` (70 of 84) or
 `InfiniteDeltaCertified` (14 of 84, all `column=2, kind=:origin_block`).
 
-| branch | FiniteSolved points | Delta range (FiniteSolved) | GT range (FiniteSolved) | first InfiniteDeltaCertified |
-|---|---:|---:|---:|---|
-| A (-> min gamma) | 33 (`frac` 0 to 0.64) | 4.0721e-04 to 3.3456 | 2.030% to 7.950% | `frac=0.68`, `GT=8.325%` |
-| B (-> max gamma) | 37 (`frac` 0 to 0.81) | 4.0721e-04 to 2.3261 | 2.030% down to 0.386% | `frac=0.856`, `GT=0.293%` |
+| branch | FiniteSolved points | gamma_d_prime range | Delta range (FiniteSolved) | GT range (FiniteSolved) | first InfiniteDeltaCertified |
+|---|---:|---:|---:|---:|---|
+| A (-> min gamma) | 33 (`frac` 0 to 0.64) | [0.883158, 0.969701] | 4.0721e-04 to 3.3456 | 2.030% to 7.950% | `gamma=0.877756`, `GT=8.325%` |
+| B (-> max gamma) | 37 (`frac` 0 to 0.81) | [0.969701, 0.994219] | 4.0721e-04 to 2.3261 | 2.030% down to 0.386% | `gamma=0.995606`, `GT=0.293%` |
 
 **Branch B is genuinely new territory**: no prior session in this repo profiled the
 "calibration toward maximum gamma" direction at all. It shows a real, substantial, monotone
@@ -212,16 +254,16 @@ predetermined grid; one direct log-linear-in-Delta refinement solve per (branch,
 sufficed in every case (no second refinement needed -- each landed within a few percent of the
 target on the first attempt), so only 8 of the allowed 16 solves were used.
 
-| branch | target | refined `g` | refined `DeltaStar` | GT at refined point |
+| branch | target | refined `gamma_d_prime` | refined `DeltaStar` | GT at refined point |
 |---|---:|---:|---:|---:|
-| A | 0.1 | -0.453190 | 0.10020 | 4.2527% |
-| A | 0.5 | -0.486059 | 0.49889 | 6.3280% |
-| A | 1.0 | -0.497805 | 0.99508 | 7.0586% |
-| A | 2.0 | -0.507102 | 1.97902 | 7.6329% |
-| B | 0.1 | -0.399995 | 0.09990 | 0.7963% |
-| B | 0.5 | -0.394965 | 0.44391 | 0.4630% |
-| B | 1.0 | -0.394440 | 0.75805 | 0.4282% |
-| B | 2.0 | -0.393915 | 1.83745 | 0.3933% |
+| A | 0.1 | 0.936893 | 0.10020 | 4.2527% |
+| A | 0.5 | 0.906598 | 0.49889 | 6.3280% |
+| A | 1.0 | 0.896012 | 0.99508 | 7.0586% |
+| A | 2.0 | 0.887720 | 1.97902 | 7.6329% |
+| B | 0.1 | 0.988080 | 0.09990 | 0.7963% |
+| B | 0.5 | 0.993062 | 0.44391 | 0.4630% |
+| B | 1.0 | 0.993584 | 0.75805 | 0.4282% |
+| B | 2.0 | 0.994106 | 1.83745 | 0.3933% |
 
 The refinement points also fill a genuine gap visible in branch B's own raw grid: the
 predetermined `t_i` grid jumps from `Delta=0.387` (`frac=0.766`) directly to `Delta=2.326`
@@ -339,10 +381,10 @@ validation session).
 
 ## Final report
 
-1. **Theoretical endpoints**: minimum `gamma_d_prime = 0.5669312470` (`g_ceiling=-0.5675172401`,
-   an open Delta->infinity limit), calibration `gamma_d_prime = 0.6578550157`, maximum
-   `gamma_d_prime = 0.6784102437` (`g_floor=-0.3880030949`, an ordinary finite theoretical
-   point by theory).
+1. **Theoretical endpoints**: minimum `gamma_d_prime = lambda_dd = 0.8356761300` exactly (an
+   open Delta->infinity limit), calibration `gamma_d_prime = 0.9697008880`, maximum
+   `gamma_d_prime = 1.0` exactly (an ordinary finite theoretical point by theory, and the
+   ordinary "no shock" reference point).
 2. **Gains from trade**: 11.279% (theoretical max, branch A limit) / 2.030% (calibration) /
    0.000% (theoretical min, branch B, `kappa_ratio<=1` boundary).
 3. **DeltaStar evolution**: smooth, monotone, roughly-symmetric-in-log-Delta rise on BOTH sides

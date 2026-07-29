@@ -30,14 +30,9 @@ finite = finite.sort_values(["branch", "fraction_to_theoretical_endpoint"])
 refine = pd.read_csv(REFINE_CSV) if os.path.exists(REFINE_CSV) else pd.DataFrame()
 if len(refine):
     refine = refine[refine["classification"] == "FiniteSolved"].copy()
-    # gains_from_trade_pct not stored in the refinement CSV; recompute is out of scope here --
-    # instead reuse the main CSV's own kappa_of_g relationship via a light recomputation from g
-    import numpy as np
-    WRATIO = 1.2952046712
-    SIGMA = 2.5
-    refine["gamma_d_prime"] = np.exp(refine["g"])
-    refine["kappa_ratio"] = WRATIO * refine["gamma_d_prime"] ** (1 / (SIGMA - 1))
-    refine["gains_from_trade_pct"] = 100 * (1 - refine["kappa_ratio"])
+    # kappa_ratio/gamma_d_prime/gains_from_trade_pct are now precomputed correctly (numeraire-
+    # invariant kappa_ratio, gamma_d_prime = kappa_ratio^(sigma-1) under the natural wage
+    # normalization) directly in the refinement CSV -- see 2026-07-29 correction.
 
 branch_style = {
     "A_toward_min_gamma": dict(color="#2E6F9E", label="Branch A: calibration → theoretical min γ′"),
@@ -55,10 +50,11 @@ def nearest_rows_for_targets(sub):
         rows.append(sub.loc[idx])
     return rows
 
-# theoretical endpoints (from Phase 0, printed in the campaign log; hardcoded here for the
-# annotation only -- the actual grid data is what's plotted)
-GT_ceiling_pct = 11.279224  # branch A open Delta->inf limit
-GT_floor_pct = 0.0          # branch B ordinary finite theoretical point
+# theoretical endpoints (2026-07-29 correction: gamma_d_prime = kappa_ratio^(sigma-1) under the
+# natural wage_ratio=1 normalization -- gamma_d_prime_min = lambda_dd EXACTLY, gamma_d_prime_max
+# = 1 EXACTLY; GT values themselves were always numeraire-invariant and unaffected)
+GT_ceiling_pct = 11.279224  # branch A open Delta->inf limit (gamma_d_prime -> lambda_dd = 0.835676)
+GT_floor_pct = 0.0          # branch B ordinary finite theoretical point (gamma_d_prime -> 1)
 
 # ============================================================================
 # Figure 1: main economically relevant figure (Delta in [0, ~2.25])
