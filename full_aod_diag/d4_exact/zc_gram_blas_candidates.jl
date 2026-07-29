@@ -230,10 +230,23 @@ Explicit backend choices for H_ZZ, shared by CM+ZC and origin-ZC (never a separa
 per family, per the addendum's own Section 12): `:reference` (existing `zc_restriction_gram!`,
 materializes centered Zc/ZcS, single-thread BLAS gemm -- unmodified, the pre-addendum production
 path and this task's dense-reference correctness anchor) | `:blas_syrk` | `:blas_gemm` |
-`:threaded_packed`. Left at `:reference` (no behavior change) until this task's own correctness/
-performance gates justify flipping it -- see `ZC_GRAM_BLAS_VS_THREADED_BENCHMARK_2026-07-28.csv`.
+`:threaded_packed`.
+
+Selective-merge release (2026-07-28): flipped to `:blas_gemm` on explicit user sign-off. Prior
+session's isolated real-D20 evidence at production width (nx=210): `:blas_gemm` at BLAS
+threads>=8 is ~2.77x faster than `:reference` (0.084s vs 0.233s). **Operational requirement**:
+this backend only reaches that speed with enough BLAS threads -- callers running CM+ZC or ZC-only
+in production should launch with `OPENBLAS_NUM_THREADS=10 OMP_NUM_THREADS=10` (the other three
+families, which never touch H_ZZ, are unaffected and should stay at 1 per this project's usual
+convention). **Not yet independently re-confirmed under realistic concurrent host load** this
+release -- a scoped 2-process concurrency check (this release's own
+`docs/HZZ_REALISTIC_RESOURCE_GATE_2026-07-28.md`) was interrupted after a `BLAS_THREADS=8`/
+`-t 4` solo run took roughly 12 minutes wall time vs the 60-185s every BLAS=1 run in this same
+release took -- plausibly BLAS/Julia/KNITRO thread oversubscription, not confirmed as a real
+regression or ruled out as one. Flipped anyway on explicit user instruction; flagged as the
+top follow-up item for a future session, see that doc.
 """
-const ZC_GRAM_BACKEND_DEFAULT = Ref{Symbol}(:reference)
+const ZC_GRAM_BACKEND_DEFAULT = Ref{Symbol}(:blas_gemm)
 const ZC_GRAM_THREADED_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
 
 """
