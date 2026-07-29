@@ -19,7 +19,8 @@ const D4X = @__DIR__
 for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl",
           "common_marginals_interval.jl", "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
           "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
-          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_production_bundle.jl",
+          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "hcz_drawchunk_candidate_2026-07-29.jl",
+          "cm_production_bundle.jl",
           "cm_screen_bridge.jl", "gradient_workspace.jl", "lfix_factorized.jl", "lfix_factorized_workspace.jl", "lfix_cm_cplus.jl",
           "nested_quantile_grids.jl", "draw_design.jl", "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_cplus.jl",
           "cm_frechet_lookup_kernels.jl", "cm_frechet_lookup_production.jl", "cm_checkpoint.jl"]
@@ -97,7 +98,7 @@ end
 println("="^90); println("common_frechet"); println("="^90); flush(stdout)
 for L in (10, 20, 50), contrasts in (:anchored, :orthonormal)
     pcx_dense = build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts,
-        cm_hessian_backend = :structured, inner_fg_backend = :dense_reference)
+        cm_hessian_backend = :structured, inner_fg_backend = :dense_reference, moment_representation = :dense_reference)
     obj_dense = pcx_dense.ctx_cm.obj
     θ_full0 = CS.reconstruct_full(x_free_calib, pcx_dense.ctx_cm.m)
     obj_dense.moments!(@view(obj_dense.H[:, 1]), CS.select_G_from_H(obj_dense, obj_dense.H), θ_full0, obj_dense.U, obj_dense)

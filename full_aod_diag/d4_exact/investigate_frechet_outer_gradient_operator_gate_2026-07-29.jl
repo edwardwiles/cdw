@@ -12,7 +12,7 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
           "core_exact_hessian.jl",
           "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
-          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_hessian_threaded.jl",
+          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_hessian_threaded.jl", "hcz_drawchunk_candidate_2026-07-29.jl",
           "cm_production_bundle.jl", "cm_outer_driver.jl", "context_real_d20.jl",
           "gradient_workspace.jl", "lfix_factorized_workspace.jl", "lfix_factorized.jl", "cm_screen_bridge.jl",
           "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_aspace_coordinate.jl",
