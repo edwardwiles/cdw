@@ -134,12 +134,19 @@ PRODUCTION_MERGE = port_ready_waiting_for_campaign
     running throughout this task and was never touched; per task instructions this branch is left
     port-ready and NOT merged to production/fullA-exact while that campaign is active)
 
-HIGHEST_PRIORITY_REMAINING_GAP =
-    common_frechet's moment_representation is hardcoded to :dense_reference (cannot adopt the true
-    no-H OperatorPsiBundle path flexible_cm already defaults to) because of a previously-reproduced,
-    never-root-caused nStatus=-400 failure when it was tried -- this is a genuine asymmetry, not
-    duplication, and is out of scope for this task, but is the most consequential remaining gap
-    between the two families' inner-solve architectures.
+HIGHEST_PRIORITY_REMAINING_GAP = none
+    (RESOLVED 2026-07-29, see FRECHET_OPERATOR_DEFAULT_INVESTIGATION_2026-07-29.md: the
+    :dense_reference-only default was traced to a stale caution inherited from a DIFFERENT,
+    already-reverted mechanism (skip_cm_fill_ref) rather than a real property of
+    moment_representation=:operator. Real D=20/W=80,000 testing at the exact non-calibration outer
+    points that broke the old mechanism -- both the full inner solve AND the full outer gradient --
+    showed exact (0.000e+00) agreement in all 12 tested cells. Default flipped to :operator,
+    matching flexible_cm, and confirmed end-to-end via the real production driver's own call site.
+    A genuine but UNRELATED pre-existing gotcha was found and root-caused along the way: the shared
+    winner-pair Hessian backend only accepts thread counts in a precomputed set
+    ([1,2,4,8,10,19,20] by default) -- any other thread count throws inside the KNITRO callback
+    (nStatus=-500), for BOTH moment_representation values equally. Not a defect introduced by this
+    task; recorded as an operational note.)
 ```
 
 ## Post-campaign follow-up (not yet performed)
