@@ -1,0 +1,13 @@
+family,point,cache,wall_s,knitro_status,n_eval,n_grad,kappa,zc_centered_rebuilds,zc_centered_cache_hits,hessian_maxdiff_vs_cache_off,notes
+origin_zc,calibration,false,73.31517481803894,-401,1,1,0.020293896607184836,10,0,0.0,"reference (cache off) -- see cache=true row for the recompute-based correctness check"
+origin_zc,calibration,true,57.485883951187134,-401,2,2,0.043123383657632464,4,50,NaN,"correctness recompute FAILED: BoundsError: attempt to access 592-element Vector{Float64} at index [1:100000]"
+origin_zc,non_calibration,false,60.85184979438782,-401,3,2,0.035941767490908605,60,0,0.0,"reference (cache off) -- see cache=true row for the recompute-based correctness check"
+origin_zc,non_calibration,true,58.378342151641846,-401,3,2,0.035941767490908605,4,56,NaN,"correctness recompute FAILED: BoundsError: attempt to access 592-element Vector{Float64} at index [1:100000]"
+origin_zc,solver_trajectory,false,163.69418692588806,-411,8,8,0.058383879263851024,264,0,0.0,"reference (cache off) -- see cache=true row for the recompute-based correctness check"
+origin_zc,solver_trajectory,true,155.03475689888,-411,8,8,0.058383879263851024,12,252,NaN,"correctness recompute FAILED: BoundsError: attempt to access 592-element Vector{Float64} at index [1:100000]"
+cm_meanzc,calibration,false,81.6716079711914,-401,1,1,0.020293896607184836,6,0,0.0,"reference (cache off) -- see cache=true row for the recompute-based correctness check"
+cm_meanzc,calibration,true,61.86708903312683,-401,1,1,0.020293896607184836,1,5,NaN,"correctness recompute FAILED: BoundsError: attempt to access 1542-element Vector{Float64} at index [1:100000]"
+cm_meanzc,non_calibration,false,74.21884799003601,-411,1,1,NaN,10,0,0.0,"reference (cache off) -- see cache=true row for the recompute-based correctness check"
+cm_meanzc,non_calibration,true,80.57404899597168,-411,1,1,NaN,1,9,NaN,"correctness recompute FAILED: BoundsError: attempt to access 1542-element Vector{Float64} at index [1:100000]"
+cm_meanzc,solver_trajectory,false,184.87691593170166,-401,3,2,0.031733210086347774,34,0,0.0,"reference (cache off) -- see cache=true row for the recompute-based correctness check"
+cm_meanzc,solver_trajectory,true,170.1731538772583,-401,3,2,0.031733210086347774,5,29,NaN,"correctness recompute FAILED: BoundsError: attempt to access 1542-element Vector{Float64} at index [1:100000]"
