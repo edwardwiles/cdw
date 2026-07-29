@@ -55,11 +55,14 @@ KNITRO status/n_eval/n_grad/kappa, 1.42x complete-callback for flexible_cm/commo
 H_EZ for origin_zc -- see `docs/COMPLETE_INNER_SOLVE_BEFORE_AFTER_2026-07-28.csv` and
 `docs/SELECTIVE_STRUCTURED_HESSIAN_RELEASE_MASTER_2026-07-28.md`).
 
-**Does NOT affect CM+ZC (`cm_meanzc`)**: `build_cm_meanzc_bin_ctx` (`cm_meanzc_production.jl`)
-intentionally hardcodes its own `cross_hessian_threaded::Bool = false` default rather than reading
-this Ref, because H_EC/H_EZ/H_CZ share this ONE toggle for that family (no independent per-block
-switch exists) and H_CZ's own threaded gain is weak/experimental-only -- CM+ZC stays off by
-default pending its own narrower gate, see that function's docstring.
+**Also now affects CM+ZC (`cm_meanzc`)**, as of `docs/CM_MEANZC_HEC_HEZ_ISOLATED_GATE_2026-07-28.csv`
+passing (bit-exact packed Hessian in isolation, no KNITRO-concurrency errors, 1.26x wall time at
+the cleanly-matched point). `build_cm_meanzc_bin_ctx` (`cm_meanzc_production.jl`) reads this same
+Ref like the other three families. Caveat unique to this family: H_EC/H_EZ/H_CZ share this ONE
+toggle (no independent per-block switch exists) -- H_CZ's own PERFORMANCE evidence is still the
+prior session's weaker number (wins only at t=20, loses to serial at t=4/t=8; its CORRECTNESS was
+covered by the bit-exact full-packed-Hessian check). Flipped anyway on explicit user sign-off
+(2026-07-28) to accept that as a tradeoff rather than hold back the validated H_EC/H_EZ win.
 """
 const CROSS_HESSIAN_THREADED_DEFAULT = Ref{Bool}(true)
 const CROSS_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())

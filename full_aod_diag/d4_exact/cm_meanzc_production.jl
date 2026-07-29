@@ -62,15 +62,18 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         # phase (2026-07-27), task Section 4: which backend fills H_EM (core x mean/pair cross),
         # cm_hessian_architectures.jl's _fill_cm_HEE! ncore<NCORE branch. :dense_reference (default
         # until this section's own gates pass) | :winner_bin (winner_pair_cross_hessian_zc_block!).
-        # Selective-merge release (2026-07-28): intentionally does NOT read
-        # CROSS_HESSIAN_THREADED_DEFAULT[] (now `true` for flexible_cm/common_frechet/origin_zc --
-        # see that Ref's own docstring). CM+ZC shares ONE threaded-toggle across H_EC/H_EZ/H_CZ (no
-        # independent per-block switch), and H_CZ's own threaded gain is weak/unreliable
-        # (loses to serial at t=4/t=8) -- CM+ZC is a "candidate, not yet enabled" tier pending its
-        # own isolated (no-concurrent-KNITRO) complete-inner-solve gate
-        # (`docs/CM_MEANZC_HEC_HEZ_ISOLATED_GATE_2026-07-28.csv`). Hardcoded `false` here so this
-        # family stays off even after the shared global flips for the other three.
-        cross_hessian_threaded::Bool = false,
+        # Selective-merge release (2026-07-28): reads CROSS_HESSIAN_THREADED_DEFAULT[] (now `true`)
+        # like the other three families, as of the isolated gate below passing cleanly --
+        # `docs/CM_MEANZC_HEC_HEZ_ISOLATED_GATE_2026-07-28.csv`: bit-exact packed Hessian (H_EC/H_EZ
+        # maxdiff=0.0, including H_CZ as part of that same full packed-Hessian check), zero KNITRO-
+        # concurrency errors run in isolation, 1.26x wall time at the one cleanly-matched point,
+        # more real solver work completed in less wall time at the longer-budget point. CM+ZC
+        # shares ONE threaded-toggle across H_EC/H_EZ/H_CZ (no independent per-block switch) --
+        # H_CZ's own PERFORMANCE evidence is still the prior session's weaker number (wins only at
+        # t=20, loses to serial at t=4/t=8; H_CZ's CORRECTNESS was covered by the bit-exact
+        # full-packed-Hessian check above). Explicit user sign-off to accept H_CZ threaded-by-
+        # default as a tradeoff rather than block the validated H_EC/H_EZ win, 2026-07-28.
+        cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
         cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
         zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
         zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
