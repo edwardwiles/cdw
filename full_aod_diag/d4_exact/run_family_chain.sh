@@ -83,6 +83,13 @@ for start in "${STARTS[@]}"; do
       rc=$?
       if [ -f "$ckdir/DONE" ]; then
         echo "[$FAMILY/$DIRECTION delta=$delta start=$start] DONE (attempt $attempt, rc=$rc)"
+        # Diagnostic-only, zero behavior change (2026-07-29, user request): KNITRO's own solve
+        # banner already reports which outer algorithm "auto" resolved to (e.g. "Knitro using the
+        # Interior-Point/Barrier Direct algorithm.") -- this was already being captured in the raw
+        # per-cell log, just not surfaced per-cell. Pull it into its own small file so it's easy to
+        # query without grepping a multi-thousand-line KNITRO dump. Does not touch pin_outer_algorithm
+        # or any solve behavior -- read-only extraction from stdout already produced.
+        grep -m1 "Knitro using the" "$celllog" > "$ckdir/knitro_algorithm.txt" 2>/dev/null || true
         ok=1
         break
       fi
