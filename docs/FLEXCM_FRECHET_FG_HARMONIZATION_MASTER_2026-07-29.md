@@ -129,10 +129,15 @@ FLEXIBLE_CM_INNER_RUNTIME_CHANGE = ~0% (within run-to-run noise; pure code-motio
 COMMON_FRECHET_INNER_RUNTIME_CHANGE = ~0% (same; D=20 speedup ranges overlap before/after)
 PEAK_MEMORY_CHANGE = +16 bytes/callback (3360->3376, noise-level; no W-scale allocation added)
 
-PRODUCTION_MERGE = port_ready_waiting_for_campaign
-    (the five-family overnight campaign, worktrees/five-family-overnight-2026-07-28, was confirmed
-    running throughout this task and was never touched; per task instructions this branch is left
-    port-ready and NOT merged to production/fullA-exact while that campaign is active)
+PRODUCTION_MERGE = merged_tagged_smoked
+    (2026-07-29: overnight campaign paused by user; rebased cleanly onto latest
+    production/fullA-exact (4d7b5b5, H_CZ Part C work -- confirmed zero file/semantic overlap with
+    this branch's edits); re-ran D=4 (96/96 PASS) and D=20 (flexible_cm + common_frechet, both ALL
+    PASS/exact) gates post-rebase; fast-forward-pushed to cdw/production/fullA-exact @ 7fa1fad;
+    tagged flexCM-frechet-FG-harmonization-release-2026-07-29; ran real post-merge public-driver
+    smokes for both families via campaign_cm_family_runner.jl (production entry point, W=100,000,
+    real KNITRO) -- both COMPLETE, errors=0, all dense-fallback counters=0 confirming the
+    moment_representation=:operator default is live and clean in production for both families.)
 
 HIGHEST_PRIORITY_REMAINING_GAP = none
     (RESOLVED 2026-07-29, see FRECHET_OPERATOR_DEFAULT_INVESTIGATION_2026-07-29.md: the
