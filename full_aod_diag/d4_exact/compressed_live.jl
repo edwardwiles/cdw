@@ -424,6 +424,42 @@ function inner_loop_internal_compressed(obj, θ_full, ctx)
 end
 
 """
+    build_unrestricted_operator_ctx(ctx; moment_representation=MOMENT_REPRESENTATION[]) -> ctx
+
+Wire unrestricted-family production port task (2026-07-29): unrestricted has no separate
+`build_*_production_context` wrapper the way the 4 restricted families do -- `ctx.obj` IS the
+production bundle directly (`d20_real_setup`/`d20_real_setup_design` always build a dense
+`PsiObjectiveBundleImplicit`). This is the "standalone wrapper" `FIVE_FAMILY_NO_H_BUNDLE_GATE_
+2026-07-28.md` describes -- it never actually got called from either production driver
+(`c10_d20_production_driver.jl`/`c10_d20_production_driver_unified.jl`), so `ctx.obj` stayed the
+dense bundle in every real solve despite the doc's own "WIRED_AND_GATED" claim (confirmed false
+live 2026-07-29 -- see `campaign_unrestricted_runner.jl`'s pre-fix hardcoded
+`bundle_type=OperatorPsiBundle` print, which was never actually true).
+
+`moment_representation=:operator` (production default, mirrors `build_cm_production_context`'s own
+default) constructs a companion `OperatorPsiBundle` from `ctx.obj`'s own scalar fields -- identical
+construction to what `test_operator_no_H_bundle_equivalence_unrestricted[_d20].jl` already validate
+(D=4 and real D=20/W=100,000, exact agreement, both gates unchanged by this addition) -- and
+replaces `ctx.obj` with it. `:dense_reference` (explicit opt-in) returns `ctx` unchanged. Idempotent:
+a `ctx` whose `obj` is already an `OperatorPsiBundle` (e.g. a second call on a resumed/merged ctx)
+is returned as-is rather than re-wrapped.
+"""
+function build_unrestricted_operator_ctx(ctx; moment_representation::Symbol = MOMENT_REPRESENTATION[])
+    moment_representation in (:operator, :dense_reference) ||
+        error("build_unrestricted_operator_ctx: moment_representation must be :operator or :dense_reference, got :$moment_representation")
+    moment_representation === :dense_reference && return ctx
+    obj_d = ctx.obj
+    obj_d isa OperatorPsiBundle && return ctx
+    obj_o = OperatorPsiBundle(δ = obj_d.δ, find_smallest = obj_d.find_smallest,
+        γ = obj_d.γ, l = obj_d.l, outer_constr_index = obj_d.outer_constr_index,
+        inequality_index = obj_d.inequality_index, complement_index = obj_d.complement_index,
+        U = obj_d.U, N = obj_d.N, lower_limit = obj_d.lower_limit,
+        use_cached_x = obj_d.use_cached_x, threshold_state = obj_d.threshold_state,
+        inner_loop_opt = obj_d.inner_loop_opt)
+    return merge(ctx, (obj = obj_o,))
+end
+
+"""
     evaluate_fullA_fast_compressed(x_free, ctx; kwargs...) -> (result, prof_meta)
 
 Compressed-mode implementation dispatched to by
