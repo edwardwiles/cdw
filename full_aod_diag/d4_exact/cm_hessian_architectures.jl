@@ -829,11 +829,20 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 op = cctx.hzz_zc_op
                 refresh_zc_targets!(cctx.hzz_zc_ws, op, cctx.hzz_zc_layout, cctx.nu_ref[])
                 cctx.hzz_centered = ensure_zc_centered_scratch!(cctx.hzz_centered, op, size(w, 1))
-                # ADDENDUM (2026-07-28): ZcS (the S-weighted centered copy) is only needed by the
-                # :reference H_ZZ backend below -- elided for the new raw-Phi candidates (see
-                # refresh_zc_centered!'s own updated docstring). Zc itself (needed by H_EZ/HEM's `Z`
-                # argument regardless of backend) is always built.
-                refresh_zc_centered!(cctx.hzz_centered, op, cctx.hzz_zc_ws, w; fill_S = cctx.zc_gram_backend === :reference)
+                # ROOT-CAUSE FIX (diagnose-optimize/HZZ-BLAS-and-HCZ-prep-2026-07-29, Part B):
+                # the ADDENDUM (2026-07-28) comment this replaces claimed "ZcS is only needed by
+                # the :reference H_ZZ backend" -- FALSE. bin_zc_cross_hessian_fill! (H_CZ, below,
+                # cm_meanzc-only) ALSO reads cctx.hzz_centered.ZcS UNCONDITIONALLY, regardless of
+                # zc_gram_backend. Gating fill_S on backend==:reference left ZcS at its initial
+                # all-zeros (or stale, from whichever point last had backend==:reference) value for
+                # every non-:reference backend, silently corrupting H_CZ into a near-zero/stale
+                # block -- confirmed live: this is the actual, full explanation for the
+                # reproducible :blas_gemm/:centered_syrk/:blas_syrk/:threaded_packed inner-solve
+                # failures (docs/HZZ_BACKEND_BAKEOFF_VERDICT_2026-07-29.md's "genuine_solver_
+                # sensitivity" verdict was WRONG -- superseded by
+                # docs/HZZ_HCZ_SHARED_ZCS_BUG_ROOT_CAUSE_2026-07-29.md). ZcS fill is a cheap
+                # O(W*nx) elementwise multiply -- not worth a backend-conditional skip regardless.
+                refresh_zc_centered!(cctx.hzz_centered, op, cctx.hzz_zc_ws, w; fill_S = true)
                 record_winner_cross_hessian_call!()
                 wctx = serial_ctx(cctx.core_ws)
                 n_restr = NCORE - ncore
