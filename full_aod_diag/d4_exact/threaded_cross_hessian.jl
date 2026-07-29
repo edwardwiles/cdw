@@ -47,13 +47,21 @@ end
 """
     CROSS_HESSIAN_THREADED_DEFAULT / CROSS_HESSIAN_WORKERS_DEFAULT
 
-Opt-in switch (default `false`) for the threaded H_EC/H_EZ/H_CZ/H_ZZ raw-table-fill kernels in
-this file. Mirrors `CM_CORE_HESSIAN_BACKEND_DEFAULT`'s own "global Ref, per-context override"
-discipline. Left `false` until this task's own D=4 correctness gates and D=20 performance gates
-(`CROSS_HESSIAN_COMPLETE_INNER_SOLVE_AB_2026-07-28.csv`) justify flipping it -- see
-`STRUCTURED_CROSS_HESSIAN_MASTER_REPORT_2026-07-28.md` for the final verdict this task reports.
+Selective-merge release (2026-07-28): flipped `true`. Governs `build_cm_bin_ctx` (flexible_cm,
+`cm_production_bundle.jl`; common_frechet, `cm_frechet_level.jl`) and origin_zc's
+`OriginZCCoreHessCtx` constructor (`cm_hessian_architectures.jl` ~L1437) -- all three validated by
+real D=20/W=100,000 matched-driver complete-inner-solve A/Bs (bit-exact packed Hessian, identical
+KNITRO status/n_eval/n_grad/kappa, 1.42x complete-callback for flexible_cm/common_frechet, 4.5x
+H_EZ for origin_zc -- see `docs/COMPLETE_INNER_SOLVE_BEFORE_AFTER_2026-07-28.csv` and
+`docs/SELECTIVE_STRUCTURED_HESSIAN_RELEASE_MASTER_2026-07-28.md`).
+
+**Does NOT affect CM+ZC (`cm_meanzc`)**: `build_cm_meanzc_bin_ctx` (`cm_meanzc_production.jl`)
+intentionally hardcodes its own `cross_hessian_threaded::Bool = false` default rather than reading
+this Ref, because H_EC/H_EZ/H_CZ share this ONE toggle for that family (no independent per-block
+switch exists) and H_CZ's own threaded gain is weak/experimental-only -- CM+ZC stays off by
+default pending its own narrower gate, see that function's docstring.
 """
-const CROSS_HESSIAN_THREADED_DEFAULT = Ref{Bool}(false)
+const CROSS_HESSIAN_THREADED_DEFAULT = Ref{Bool}(true)
 const CROSS_HESSIAN_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
 
 """
