@@ -181,39 +181,19 @@ end
 """
     dual_index!(st::CMFrechetLookupState, x) -> st.arg0
 
-Computes `st.arg0 = r = -ζ·1 - E·λ_core - cm_contribution - level_contribution` in place --
-extracted VERBATIM from this state's own FG functor (no mathematics changed).
+Computes `st.arg0 = r = -ζ·1 - E·λ_core - cm_contribution - level_contribution` in place. The
+`[E|C]` prefix calls the EXACT SAME shared functions `CMLookupState`'s own `dual_index!` calls
+(`economic_forward_into_arg0!`/`cm_forward_contribution!`, cm_lookup_kernels.jl -- see that file's
+harmonization-header comment); only the trailing `[F]` level-block extension below is
+Fréchet-specific.
 """
 function dual_index!(st::CMFrechetLookupState, x::AbstractVector{Float64})
-    obj = st.obj
     ncore1 = st.ncore - 1
-
-    ζ = x[1]
-    λ_core = @view x[2:1+ncore1]
     λ_cm = @view x[2+ncore1:1+ncore1+st.ncm_cm]
     λ_level = @view x[2+ncore1+st.ncm_cm:1+ncore1+st.ncm_cm+st.ncm_level]
 
-    cf = st.core_cf_ref[]
-    if cf isa CompressedFactual
-        if st.econ_ws === nothing || st.econ_ws_for !== cf
-            st.econ_ws = economic_operator_workspace(cf)
-            st.econ_ws_for = cf
-        end
-        economic_forward!(st.econ_buf, λ_core, cf, st.econ_ws)
-        st.arg0 .= (-ζ) .- st.econ_buf
-    else
-        st.n_dense_econ_fallback += 1
-        record_dense_economic_G!()
-        st.xsub[1] = ζ
-        st.xsub[2:end] .= λ_core
-        @views BLAS.gemv!('N', -1.0, obj.H[:, 2:2+ncore1], st.xsub, 0.0, st.arg0)
-    end
-
-    λmat_stored = reshape(λ_cm, st.nO, st.L)
-    apply_contrast!(st.λmat_block, λmat_stored, st.R)
-    suffix_sums!(st.λmat_ext, st.λmat_block)
-    cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
-    st.arg0 .-= st.cm_contrib
+    economic_forward_into_arg0!(st, x)
+    cm_forward_contribution!(st, λ_cm, :suffix)
 
     frechet_level_suffix_sums!(st.P_level, λ_level)
     frechet_level_forward_sum!(st.level_contrib, st.bins, st.D, st.P_level)
@@ -230,7 +210,11 @@ end
 """
     (st::CMFrechetLookupState)(x, g=Float64[]) -> f
 
-FG evaluator, same signature/semantics as `obj(x, g)`. `x = [ζ; λ_core; λ_cm; λ_level]`.
+FG evaluator, same signature/semantics as `obj(x, g)`. `x = [ζ; λ_core; λ_cm; λ_level]`. The
+`[E|C]` prefix (forward AND backward) calls the EXACT SAME shared functions `CMLookupState`'s own
+FG functor calls (`economic_transpose_into_g1_and_gE!`/`cm_transpose_into_g!`,
+cm_lookup_kernels.jl); only the trailing `[F]` level-block extension is Fréchet-specific,
+implementing the composition `frechet_cm_fg = economic_fg + cm_fg + frechet_extension_fg`.
 """
 function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVector{Float64} = Float64[])
     obj = st.obj
@@ -239,9 +223,6 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
 
     ζ = x[1]
 
-    # No-moments/no-composite-G task (2026-07-28): forward computation extracted into the shared
-    # `dual_index!(st, x)` (this file, above) -- see CMLookupState's own functor (cm_lookup_kernels.jl)
-    # for the identical rationale.
     cf = st.core_cf_ref[]
     dual_index!(st, x)
 
@@ -249,23 +230,8 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
     f = sum(st.arg1) / M + ζ
 
     if length(g) > 0
-        obj.dPsi!(st.arg1, st.arg0)
-        sum_dPsi = sum(st.arg1)
-        g[1] = 1.0 - sum_dPsi / M
-        if cf isa CompressedFactual
-            g_E = @view g[2:1+ncore1]
-            economic_transpose!(g_E, st.arg1, cf, st.econ_ws)
-            g_E .*= -(1.0 / M)
-        else
-            @views BLAS.gemv!('T', -1.0 / M, obj.H[:, 3:2+ncore1], st.arg1, 0.0, g[2:1+ncore1])
-        end
-
-        build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, st.D, st.nbins)
-        prefix_sums!(st.Hpre, st.hist_h, st.L)   # SHARED: CM and level backward both read this
-
-        cumulative_backward_gradient_from_prefix!(st.g_block, st.Hpre, st.refIndex1, st.origins, st.L, M)
-        apply_contrast!(st.g_stored, st.g_block, st.R)
-        @views g[2+ncore1:1+ncore1+st.ncm_cm] .= vec(st.g_stored)
+        sum_dPsi = economic_transpose_into_g1_and_gE!(g, st, cf)
+        cm_transpose_into_g!(g, st, :suffix, st.D, ncore1, st.ncm_cm, M)   # leaves st.Hpre populated, reused below
 
         frechet_level_backward_gradient!(st.g_level, st.Hpre, st.D, st.L, M, st.invsqrtD, st.level_targets, sum_dPsi)
         @views g[2+ncore1+st.ncm_cm:1+ncore1+st.ncm_cm+st.ncm_level] .= st.g_level
