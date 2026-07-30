@@ -1,0 +1,44 @@
+-rw-r--r--. 1 edav domain-users 4710 Jul 30 13:38 docs/key_results/melitz_aq_phase2_d20_cliff_2026-07-30.csv
+11 docs/key_results/melitz_aq_phase2_d20_cliff_2026-07-30.csv
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+Julia threads: 20  BLAS threads: 1
+anchor: Delta0=0.4832764950
+anchor welfare: g=-0.485461 GT=6.290641% (theoretical, closed-form)
+
+====================================================================================================
+Continuation direction: upper_GT
+====================================================================================================
+[upper_GT step=1 shrink=1] step_pp=0.0500% -> INFEASIBLE witness (max|trade_res|=7.55e-15 focal=-1.34e-02 gravA=4.02e-05 gravF=6.04e-05); shrinking
+[upper_GT step=1 shrink=2] step_pp=0.0250% -> INFEASIBLE witness (max|trade_res|=7.44e-15 focal=-6.59e-03 gravA=3.94e-05 gravF=5.92e-05); shrinking
+[upper_GT step=1 shrink=3] step_pp=0.0125% -> INFEASIBLE witness (max|trade_res|=7.77e-15 focal=-3.15e-03 gravA=3.90e-05 gravF=5.86e-05); shrinking
+[upper_GT step=1] could not accept after 3 shrinks -- stopping continuation
+
+====================================================================================================
+Continuation direction: lower_GT
+====================================================================================================
+[lower_GT step=1 shrink=1] step_pp=0.0500% -> INFEASIBLE witness (max|trade_res|=7.33e-15 focal=9.20e-03 gravA=4.65e-06 gravF=6.98e-06); shrinking
+[lower_GT step=1 shrink=2] step_pp=0.0250% -> INFEASIBLE witness (max|trade_res|=7.66e-15 focal=4.47e-03 gravA=4.74e-06 gravF=7.10e-06); shrinking
+[lower_GT step=1 shrink=3] step_pp=0.0125% -> INFEASIBLE witness (max|trade_res|=8.33e-15 focal=2.10e-03 gravA=4.78e-06 gravF=7.17e-06); shrinking
+[lower_GT step=1] could not accept after 3 shrinks -- stopping continuation
+
+====================================================================================================
+Gamma-only comparison: upper_GT
+====================================================================================================
+[gamma-only upper_GT step=1] GT_target=6.3406%  kind=FiniteSolved  Delta/cert=0.504369
+[gamma-only upper_GT step=2] GT_target=6.3906%  kind=FiniteSolved  Delta/cert=0.526631
+[gamma-only upper_GT step=3] GT_target=6.4406%  kind=FiniteSolved  Delta/cert=0.550331
+[gamma-only upper_GT step=4] GT_target=6.4906%  kind=FiniteSolved  Delta/cert=0.575416
+[gamma-only upper_GT step=5] GT_target=6.5406%  kind=FiniteSolved  Delta/cert=0.60189
+
+====================================================================================================
+Gamma-only comparison: lower_GT
+====================================================================================================
+[gamma-only lower_GT step=1] GT_target=6.2406%  kind=FiniteSolved  Delta/cert=0.463357
+[gamma-only lower_GT step=2] GT_target=6.1906%  kind=FiniteSolved  Delta/cert=0.444427
+[gamma-only lower_GT step=3] GT_target=6.1406%  kind=FiniteSolved  Delta/cert=0.426622
+[gamma-only lower_GT step=4] GT_target=6.0906%  kind=FiniteSolved  Delta/cert=0.409645
+[gamma-only lower_GT step=5] GT_target=6.0406%  kind=FiniteSolved  Delta/cert=0.393655
+
+DONE PHASE 6

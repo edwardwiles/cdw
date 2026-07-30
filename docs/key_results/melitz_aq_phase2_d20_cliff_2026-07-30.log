@@ -1,0 +1,58 @@
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+Julia threads: 20  BLAS threads: 1
+focal country index = 2
+D=20  nA=399  nq=398
+anchor solve: 6.11s  Delta0=0.4832764950  lfd_ok=true
+|b_q|=0.0003568347380732389
+first minus switch: o=14 d=19 t=0.008412617691546586 dir=on
+first plus switch: o=18 d=12 t=0.014773001744443036 dir=on
+minus distinct t (first 6): [0.008412617691546586, 0.010530457181724682, 0.014665291628666413, 0.031171519312824827, 0.05922542266674491, 0.06622306710852663]
+plus distinct t (first 6): [0.014773001744443036, 0.022965722477456072, 0.03277748871263066, 0.04326730784331752, 0.05289220183828663, 0.05763485636701641]
+
+====================================================================================================
+MINUS side (first 5 switches)
+====================================================================================================
+[minus k=1] Endpoint A (pure q): AboveEvaluationCap  Delta/cert=107281
+[minus k=1] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=-8.231e-08 gravA=-5.096e-08 gravF=-7.644e-08 feasible=true reopt=FiniteSolved Delta/cert=0.483264
+[minus k=1] Endpoint C (corrected, 0.28s): max|trade_res|=8.216e-15 focal_res=-8.231e-08 gravA=-5.096e-08 gravF=-7.644e-08 feasible=true reopt=FiniteSolved Delta/cert=0.483264  n_switches_A_recovered=0
+[minus k=2] Endpoint A (pure q): AboveEvaluationCap  Delta/cert=2.9168e+06
+[minus k=2] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=-1.023e-07 gravA=-9.162e-11 gravF=-1.374e-10 feasible=true reopt=FiniteSolved Delta/cert=0.483277
+[minus k=2] Endpoint C (corrected, 0.23s): max|trade_res|=8.216e-15 focal_res=-1.023e-07 gravA=-9.162e-11 gravF=-1.374e-10 feasible=true reopt=FiniteSolved Delta/cert=0.483277  n_switches_A_recovered=0
+[minus k=3] Endpoint A (pure q): AboveEvaluationCap  Delta/cert=292834
+[minus k=3] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=-1.943e-06 gravA=3.002e-06 gravF=4.504e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483278
+[minus k=3] Endpoint C (corrected, 86.83s): max|trade_res|=8.216e-15 focal_res=3.931e-08 gravA=6.920e-06 gravF=1.038e-05 feasible=false reopt=FiniteSolved Delta/cert=0.483273  n_switches_A_recovered=1312
+[minus k=4] Endpoint A (pure q): AboveEvaluationCap  Delta/cert=177212
+[minus k=4] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=-2.116e-06 gravA=2.641e-06 gravF=3.962e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483274
+[minus k=4] Endpoint C (corrected, 92.63s): max|trade_res|=8.216e-15 focal_res=-1.343e-07 gravA=6.559e-06 gravF=9.838e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483269  n_switches_A_recovered=1312
+[minus k=5] Endpoint A (pure q): AboveEvaluationCap  Delta/cert=170474
+[minus k=5] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=-2.367e-06 gravA=2.684e-06 gravF=4.026e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483264
+[minus k=5] Endpoint C (corrected, 87.25s): max|trade_res|=8.216e-15 focal_res=3.345e-07 gravA=7.949e-06 gravF=1.192e-05 feasible=false reopt=FiniteSolved Delta/cert=0.483257  n_switches_A_recovered=1312
+
+====================================================================================================
+PLUS side (first 5 switches)
+====================================================================================================
+[plus k=1] Endpoint A (pure q): FiniteSolved  Delta/cert=0.48325
+[plus k=1] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=1.509e-07 gravA=1.311e-07 gravF=1.967e-07 feasible=true reopt=FiniteSolved Delta/cert=0.483255
+[plus k=1] Endpoint C (corrected, 0.28s): max|trade_res|=8.216e-15 focal_res=1.509e-07 gravA=1.311e-07 gravF=1.967e-07 feasible=true reopt=FiniteSolved Delta/cert=0.483255  n_switches_A_recovered=0
+[plus k=2] Endpoint A (pure q): FiniteSolved  Delta/cert=0.483249
+[plus k=2] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=2.281e-07 gravA=8.798e-07 gravF=1.320e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483255
+[plus k=2] Endpoint C (corrected, 0.29s): max|trade_res|=8.216e-15 focal_res=2.281e-07 gravA=8.798e-07 gravF=1.320e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483255  n_switches_A_recovered=0
+[plus k=3] Endpoint A (pure q): FiniteSolved  Delta/cert=0.483248
+[plus k=3] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=3.229e-07 gravA=1.080e-06 gravF=1.620e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483254
+[plus k=3] Endpoint C (corrected, 94.11s): max|trade_res|=8.216e-15 focal_res=3.229e-07 gravA=1.080e-06 gravF=1.620e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483254  n_switches_A_recovered=1312
+[plus k=4] Endpoint A (pure q): FiniteSolved  Delta/cert=0.483236
+[plus k=4] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=4.216e-07 gravA=1.123e-06 gravF=1.684e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483244
+[plus k=4] Endpoint C (corrected, 94.46s): max|trade_res|=8.216e-15 focal_res=4.216e-07 gravA=1.123e-06 gravF=1.684e-06 feasible=false reopt=FiniteSolved Delta/cert=0.483244  n_switches_A_recovered=1312
+[plus k=5] Endpoint A (pure q): FiniteSolved  Delta/cert=0.48323
+[plus k=5] Endpoint B (cellwise, uncorrected): max|trade_res|=8.216e-15 focal_res=5.054e-07 gravA=-8.802e-08 gravF=-1.320e-07 feasible=true reopt=FiniteSolved Delta/cert=0.483242
+[plus k=5] Endpoint C (corrected, 0.28s): max|trade_res|=8.216e-15 focal_res=5.054e-07 gravA=-8.802e-08 gravF=-1.320e-07 feasible=true reopt=FiniteSolved Delta/cert=0.483242  n_switches_A_recovered=0
+
+====================================================================================================
+Destination-16/19 detail at first minus switch
+====================================================================================================
+label=below  q[14,16]=0.265346 q[14,19]=0.265347  T16(p*)=0.1761868986 (anchor H16=0.1761868986)  T19(p*)=0.1761817316
+label=above  q[14,16]=0.265347 q[14,19]=0.265347  T16(p*)=0.1761868986 (anchor H16=0.1761868986)  T19(p*)=0.1761868986
+
+DONE PHASE 2/3/4 (D20 cliff)

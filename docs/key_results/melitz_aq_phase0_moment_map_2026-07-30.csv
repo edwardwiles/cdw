@@ -1,0 +1,15 @@
+test,quantity,value
+1,max_reldiff_A_at_s0,0.0
+2,max_trade_residual_anchor,3.1086244689504383e-15
+2,focal_residual_anchor,-3.049318610115481e-19
+3,T_jump,0.0001173431077085979
+3,p_weight_x_zpower,0.00011734310770859216
+4,max_trade_residual_stepB,3.3306690738754696e-15
+4,focal_residual_stepB,4.076292059225754e-6
+4,gravity_A_residual_stepB,-2.2592733858899962e-5
+5,max_trade_residual_stepC,3.3306690738754696e-15
+5,focal_residual_stepC,-4.787007508004374e-8
+5,gravity_A_residual_stepC,-1.3067550624999008e-7
+5,gravity_f_residual_stepC,-1.9601325941011327e-7
+5,feasible_stepC,true
+5,corrector_trace_length,492

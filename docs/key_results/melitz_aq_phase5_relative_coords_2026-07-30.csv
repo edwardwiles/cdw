@@ -1,0 +1,7 @@
+test,quantity,value
+5A,max_q_reconstruct_err,0.00024890330671800687
+5A,min_u_gap,0.003149999999999986
+5A,max_u_gap,0.51645
+5A,max_relerr_A_roundtrip,0.0
+5B,max_relerr_A_roundtrip,1.3946794339570682e-16
+5C,n_empty_intervals_D4,0

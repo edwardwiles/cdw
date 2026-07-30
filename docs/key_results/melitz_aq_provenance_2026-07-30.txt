@@ -1,0 +1,56 @@
+Melitz joint (A,q) LFD-preserving feasibility search -- provenance (2026-07-30 continuation session)
+
+Repo: /bbkinghome/edav/gravity_robustness/trade_robustness_modular
+Branch: melitz/fullD-delta-star
+HEAD at session start: 412a407 (Melitz negswitch audit follow-up: correct NaN mechanism, identify origin 14 (Korea))
+Parent audit commits this session builds on: 5038401 (D20 negative-switch geometry audit), 2c5c30a (reduced-q NumericalFailure forensic audit)
+
+Julia: 1.12.6 (juliaup, ~/.juliaup/bin)
+KNITRO: 13.0.1 (.knitro_env.sh pinned, /opt/shared_sw/knitro/13.0.1)
+Threads: Julia -t 20 for all D20 diagnostic/smoke scripts (src/melitz/CLAUDE.md default); -t 4 for D4 scripts (sandbox core count; production default is still 20, noted per script's own thread-startup warning). OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1 throughout.
+
+Anchor (D20): real noah_D20 data, focal country "fra" (index 2), sigma=2.5, theta_star=:estimate,
+seed=1, W=80,000, theta0 loaded from docs/key_results/melitz_qbw_phase3_theta_q_2026-07-29.csv,
+row ("realD20_seed1_W80000", 0.5) -- the SAME fixture the negswitch geometry audit used.
+Delta0 = 0.4832764950468883 (bit-identical to every prior session's own documented value).
+Direction/basis: melitz_build_reduced_q_stage(theta0,x0,ctx,obj,1; bandwidth_policy=PowerScaledQBandwidth(1e-3,80000,0.5), target_switches=100) -- the Gate 3B/negswitch-audit recipe, |b_q|=0.000357.
+First minus switch: o=14 (Korea), d=19, t=0.0084126177, dir=on -- EXACT match to the negswitch audit's own documented first switch.
+Policy: CappedEvaluation(10.0) throughout.
+
+D4 fixture (Phase 0/1/5 unit validation): generate_fake_melitz_data(D=4, sigma=2.5, theta_star=6.8, target_country=1, seed=29, W=20_000) -- this repo's own standard FIXTURE (test/melitz/runtests.jl).
+
+New source: src/melitz/lfd_preserving_state.jl (EXPERIMENTAL, additive-only; wired into
+src/melitz/include_melitz.jl after predictor_corrector.jl). Does not modify any existing
+file's economic logic; production (A,f) path (finite_delta_outer.jl, default
+outer_parameterization=:logf) is untouched.
+
+New tests: test/melitz/runtests.jl, testset "LFD-preserving joint (A,q) feasibility-preserving
+state constructor (2026-07-30)" (D4 FIXTURE) -- 15/15 assertions pass, verified both inline
+(full suite append) and via an isolated standalone extraction (this repo's own established
+practice given the pre-existing, unrelated mul_G!/moment_operator.jl:281 SIGSEGV in the full
+suite, documented by the immediately-prior two sessions).
+
+Scripts (all reproduce the numbers in the companion report; run via
+`source .knitro_env.sh; export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1; julia --project=. -t <N> <script>.jl`):
+  - scripts/melitz_aq_phase0_moment_map_2026-07-30.jl        (D4, -t 4)  -- Phase 0/1 formula verification
+  - scripts/melitz_aq_phase2_d20_cliff_2026-07-30.jl         (D20, -t 20) -- Phase 2/3/4 cliff endpoints
+  - scripts/melitz_aq_phase5_relative_coords_2026-07-30.jl   (D4, -t 4)  -- Phase 5 relative-coordinate prototypes
+  - scripts/melitz_aq_phase6_predictor_corrector_2026-07-30.jl (D20, -t 20) -- Phase 6 welfare continuation smoke test
+
+Key result files (docs/key_results/):
+  - melitz_aq_phase0_moment_map_2026-07-30.csv
+  - melitz_aq_phase2_d20_cliff_2026-07-30.csv
+  - melitz_aq_phase5_relative_coords_2026-07-30.csv
+  - melitz_aq_phase6_predictor_corrector_2026-07-30.csv
+  - melitz_aq_phase6_gamma_only_comparison_2026-07-30.csv
+  - melitz_aq_provenance_2026-07-30.txt (this file)
+
+Fingerprints: sorted_ctx.fingerprint / op.fingerprint (content hash of D,W,sigma,z_draws) are
+asserted consistent by every existing `melitz_update_operator_at_theta!`/
+`melitz_update_moment_operator!` call this session reuses unmodified; the new
+`melitz_update_operator_at_Afg!` (lfd_preserving_state.jl) performs the SAME
+MelitzEquilibrium/MelitzCounterfactual/melitz_update_moment_operator! construction, so op's
+own fingerprint tracking is unchanged and unaffected by this session's additions.
+
+Committed locally at the end of this session (see companion report's "Files changed" section).
+NOT pushed (per this repo's own standing "confirm before pushing to production" policy).

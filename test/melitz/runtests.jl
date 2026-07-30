@@ -7665,6 +7665,86 @@ end
     end
 end
 
+@testset "LFD-preserving joint (A,q) feasibility-preserving state constructor (2026-07-30)" begin
+    # Governing prompt: melitz_joint_Aq_feasibility_preserving_search_2026-07-30.
+    lp_policy = CappedEvaluation(10.0)
+    lp_inner_opt = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+    lp_obj, lp_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=lp_policy, inner_loop_opt=lp_inner_opt, forbid_dense_fallback=true)
+    lp_ctx = lp_obj.γ
+    lp_D = lp_ctx.D
+    lp_sorted_ctx = lp_ctx.sorted_tail_ctx
+    lp_obj.use_cached_x = false; lp_obj.x .= NaN
+    lp_lfd0 = melitz_recover_lfd(lp_obj, lp_theta0)
+    @test lp_lfd0.lfd_ok
+    lp_pstar = lp_lfd0.weights
+
+    lp_A0, lp_f0, lp_gpj0, _, lp_q0 = expand_free_theta_logcutoff(
+        melitz_unpower_theta_free(lp_theta0, lp_ctx), lp_ctx)
+
+    @testset "Item 1: cellwise recovery at q_new==q_anchor is an exact identity" begin
+        A_id, status_id = melitz_cellwise_A_from_moments(lp_A0, lp_q0, lp_q0, lp_pstar, lp_sorted_ctx, lp_ctx.sigma)
+        @test all(==(:ok), status_id)
+        @test maximum(abs.(A_id .- lp_A0) ./ lp_A0) < 1e-9
+    end
+
+    @testset "Item 2: mul_Gt! under p_star reproduces ~0 anchor moment residuals" begin
+        melitz_update_operator_at_Afg!(lp_obj.op, lp_A0, lp_f0, lp_gpj0, lp_ctx)
+        trade_res0, focal_res0 = melitz_moment_residuals_under_p(lp_obj.op, lp_pstar)
+        @test maximum(abs.(trade_res0)) < 1e-6
+        @test abs(focal_res0) < 1e-6
+    end
+
+    @testset "Item 3: T_od is an exact step function -- flat below, jumps exactly at a positive-weight draw" begin
+        o_t, d_t = 1, 2
+        suffix_1 = melitz_origin_suffix_tail(lp_sorted_ctx, o_t, lp_pstar)
+        col = lp_sorted_ctx.sorted_log_z[:, o_t]
+        perm_o = lp_sorted_ctx.permutation[:, o_t]
+        k0 = melitz_active_tail_start(col, lp_q0[o_t, d_t])
+        pos_next = k0
+        while pos_next <= length(col) && lp_pstar[perm_o[pos_next]] <= 0
+            pos_next += 1
+        end
+        @test pos_next <= length(col)
+        q_just_below = col[pos_next] - 1e-9 * abs(col[pos_next])
+        q_just_above = col[pos_next] + 1e-9 * abs(col[pos_next])
+        T_below = melitz_T_od(q_just_below, o_t, lp_sorted_ctx, suffix_1)
+        T_above = melitz_T_od(q_just_above, o_t, lp_sorted_ctx, suffix_1)
+        @test isapprox(T_below - T_above,
+            lp_pstar[perm_o[pos_next]] * lp_sorted_ctx.sorted_z_power[pos_next, o_t]; rtol=1e-9)
+    end
+
+    @testset "Item 4/5: Step 1B preserves trade moments exactly; Step 1C corrector restores both gravity restrictions" begin
+        rng_lp = MersenneTwister(2026)
+        nq_lp = lp_D^2 - 2
+        q_pivot_lp, _ = melitz_q_free_cell_map(lp_ctx)
+        q_free_free_anchor = pivot_reduce(vec(lp_q0)[lp_ctx.f_free_lin], q_pivot_lp)
+        delta_lp = 1e-3 .* randn(rng_lp, nq_lp)
+        q_free_free_trial = q_free_free_anchor .+ delta_lp
+        g_anchor_lp = lp_theta0[1]
+
+        st_B = melitz_construct_lfd_preserving_state(lp_theta0, lp_pstar, lp_ctx, lp_obj,
+            g_anchor_lp, q_free_free_trial; correct=false)
+        @test maximum(abs.(st_B.trade_residuals)) < 1e-6
+
+        melitz_update_operator_at_Afg!(lp_obj.op, lp_A0, lp_f0, lp_gpj0, lp_ctx)
+        st_C = melitz_construct_lfd_preserving_state(lp_theta0, lp_pstar, lp_ctx, lp_obj,
+            g_anchor_lp, q_free_free_trial; correct=true, max_corrector_rounds=8)
+        @test maximum(abs.(st_C.trade_residuals)) < 1e-6
+        @test abs(st_C.focal_residual) < 1e-5
+        @test abs(st_C.gravity_A_residual) < 1e-5
+        @test abs(st_C.gravity_f_residual) < 1e-5
+        @test st_C.feasible
+
+        A_rt, f_rt, gpj_rt, _, _ = expand_free_theta_logcutoff(st_C.theta_free, lp_ctx)
+        rt_tol_lp = max(1e-5, 100 * max(abs(st_C.gravity_A_residual), abs(st_C.gravity_f_residual)))
+        @test maximum(abs.(A_rt .- st_C.A)) < rt_tol_lp
+        @test maximum(abs.(f_rt .- st_C.f)) < rt_tol_lp
+    end
+
+    melitz_update_operator_at_theta!(lp_obj.op, lp_theta0, lp_ctx)
+end
+
 println("\n" * "="^70)
 println("Melitz Delta-star test suite (active minimal-moment closure) complete.")
 println("="^70)
