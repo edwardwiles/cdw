@@ -547,6 +547,11 @@ further investment based on this session's own evidence.
   `scripts/melitz_gate1_d4_w_replay_2026-07-29.jl`,
   `scripts/melitz_gate2_d4_matched_effort_2026-07-29.jl`,
   `scripts/melitz_gate3_d20_readiness_2026-07-29.jl`.
+- Scripts (2026-07-30 addendum, `lower_limit` investigation):
+  `scripts/melitz_diag_lower_limit_investigation_2026-07-30.jl`,
+  `scripts/melitz_diag_lower_limit_timing_2026-07-30.jl`,
+  `scripts/melitz_diag_verbose_traces_2026-07-30.jl`,
+  `scripts/melitz_diag_lower_limit_ablation_2026-07-30.jl`.
 - Source (new): `src/melitz/typed_eval_counters.jl`, `src/melitz/matched_effort_controller.jl`,
   `src/melitz/reduced_q_threaded_direction.jl`.
 - Source (additive edits): `src/melitz/include_melitz.jl`, `test/melitz/runtests.jl`.
@@ -636,3 +641,119 @@ numerous smaller isolation runs to diagnose the issue described below.
    quieter host (or the ability to run the test suite in two separate processes -- pre-existing
    testsets, then this session's new ones -- rather than one monolithic invocation) should
    re-attempt a single clean end-to-end run.
+
+## Addendum (2026-07-30): NumericalFailure / `lower_limit` investigation, prompted by user review
+
+The user flagged, from extensive prior direct experience with this codebase, that
+`NumericalFailure` should essentially never occur at the rate observed in Method B's results
+(91-157 per cell), and that in their experience this has **repeatedly, almost exclusively**
+traced back to a session forgetting to switch on the inner solve's `lower_limit` guard -- a
+real, documented, RECURRING bug class in this exact codebase (`inner_screening.jl`'s own
+header comments describe a prior live incident: a genuinely `InfiniteDeltaCertified` real-D20
+point produced a bogus `FiniteSolved(Delta=1.51e14)` because "the requested cap never
+propagated into `obj.lower_limit` at bundle-construction time"). This is exactly the class of
+mistake CLAUDE.md's own standing guidance calls out as a project-wide recurring failure mode,
+and it deserved a full, skeptical, evidence-based investigation rather than a quick reassurance.
+What follows is the complete record of that investigation, including what was NOT
+satisfactorily resolved -- the user found the interpretation offered live unconvincing, and
+asked for this written record instead of continued back-and-forth. **This addendum does not
+claim the question is closed.**
+
+### What was checked and confirmed
+
+- `obj.lower_limit` was verified numerically equal to `-cap = -10.0` (matching
+  `melitz_policy_lower_limit(CappedEvaluation(10.0))` exactly) at every checkpoint tested: bundle
+  construction, `MelitzInnerSession` construction (which itself asserts this invariant and would
+  throw if violated), immediately before, and immediately after, real re-solves of actual
+  `NumericalFailure` trial points pulled from a live Method B run. No assertion anywhere in this
+  codebase's own extensive existing hardening for exactly this bug class fired.
+- The typed-classification asymmetry is real: in the SAME Gate 2 matched-effort run, Method C
+  (production `(A,f)`) shows **zero** `NumericalFailure` across every single stage, while
+  Method B (reduced-q) shows substantial counts in every stage. Both use the identical,
+  structurally-guaranteed `policy`-to-`lower_limit` wiring (`solve_melitz_finite_delta_bound`
+  rebuilds its own bundle fresh from `policy` on every call, per `finite_delta_outer.jl`'s own
+  explicit design comment; `MelitzInnerSession`'s constructor asserts consistency either way).
+
+### Direct verbose KNITRO traces of 8 real `NumericalFailure` points
+
+Re-solving 8 actual failing `theta_full` vectors from a live Method B run
+(`delta=0.5/upper`, 550 total trials, 157 `NumericalFailure`), with KNITRO verbosity raised
+(`outlev=4`) so every iterate is visible: **all 8, without exception**, exit via KNITRO's own
+native `"EXIT: Problem appears to be unbounded. Iterate is feasible and objective magnitude >
+objrange."` (`nStatus=-300`), within **2-12 iterations** and **under 25 milliseconds**. The
+objective descends smoothly for the first few iterations (e.g. `0 -> -0.45 -> -1.24 -> -2.12 ->
+-3.91 -> -9.61`, trial 1), then the solver takes one very large Newton step (`||Step||` jumping
+from double digits to the thousands or trillions) and the reported terminal "Objective" becomes
+a fixed value, `-1.797693e+308`, at every one of the 8 traces.
+
+### An unresolved discrepancy, disclosed rather than argued away
+
+`KNITRO.KN_INFINITY` was independently checked and found to equal `floatmax(Float64) =
+1.7976931348623157e308` **exactly** -- the same value printed as the terminal objective in
+every one of the 8 traces above. This is the SAME sentinel this codebase's own callback
+(`cc_algo/PsiObjectiveBundle.jl`) returns when its `if f <= lower_limit ... return
+-KNITRO.KN_INFINITY` branch fires -- which also sets `Q.threshold_crossed[] = true`. But
+`obj.threshold_crossed[]`, read immediately after each of these solves, was `false` in every
+case. **This tension was not resolved.** A live hypothesis was offered (KNITRO's own internal
+`objrange`-based unboundedness heuristic detects a diverging iterate from step-size alone and
+reports its own `floatmax`-valued placeholder WITHOUT ever calling the Julia objective callback
+at that specific trial point, so `f <= lower_limit` genuinely never gets evaluated there) but
+this was **not verified directly** (e.g. by instrumenting a counter inside the callback itself
+that increments on literally every invocation, which would settle definitively whether the
+callback was ever called at the terminal iterate) and the user did not find it convincing.
+**This should be treated as an open question**, not a settled explanation.
+
+### Direct three-way ablation on the same 8 real points
+
+Per the user's explicit instruction ("pull out the points... and simply re-run the program
+yourself... tweak the settings to see what happens when you change lower_limit"), the SAME 8
+points were re-solved three times each, varying ONLY `obj.lower_limit`, everything else held
+fixed:
+
+| `lower_limit` | nStatus | elapsed (s) | notes |
+|---|---|---:|---|
+| **-10** (current production default) | -300 (all 8) | 0.005 - 0.024 | fast, uniform, "-1e10" rejection sentinel returned every time |
+| **-1** (tighter control) | -300 (all 8) | 0.005 - 0.024 | effectively identical to -10 -- no difference |
+| **-Inf** (disabled -- simulating the historical bug) | -102 (6/8), **-103 (2/8)** | **0.25 - 1.68** (**30-300x slower**) | qualitatively different: for the 2 `nStatus=-103` cases, `melitz_bundle_inner_solve!`'s own "accepted" branch (`nStatus in (0,-100,-101,-103)`) is taken, and the function returns an EXTREME value (`~-1.2e14`, `~-8.5e10`) instead of the uniform "-1e10 rejected" sentinel every other combination in this table produced |
+
+This is a genuine, reproducible, live demonstration of the mechanism the user described from
+past experience: disabling `lower_limit` on these exact real points makes them dramatically
+slower (30-300x, in this small D4/W=20,000 example -- plausibly far worse at D20 scale or
+across a longer search), and at least twice out of 8 produces a qualitatively different,
+extreme return value via a code path that a caller could mistake for a genuine near-converged
+solve. It reproduces, on demand, the same FAILURE SHAPE (fast/clean vs. slow/corrupted) as the
+historical incident this codebase's own comments already document.
+
+### What is, and is not, established
+
+- **Established**: `obj.lower_limit` is numerically `-10.0` (= `-cap`) throughout the actual
+  Method B / Gate 2 runs this report's own numbers came from -- not silently omitted, not
+  defaulted to `-Inf`/uncapped. This was checked directly, repeatedly, not merely asserted from
+  reading source.
+- **Established**: disabling `lower_limit` on these same real points produces a measurable,
+  large slowdown and, in a real fraction of cases, a qualitatively different and concerning
+  return value -- the underlying mechanism the user is worried about is real, present in this
+  codebase, and was reproduced directly, not merely argued to exist.
+- **NOT established**: a fully coherent, verified account of exactly why these 157
+  `NumericalFailure` points fail as fast as they do (2-12 iterations) even with `lower_limit`
+  correctly configured, or why `threshold_crossed` reads `false` despite the printed terminal
+  objective exactly matching the `lower_limit`-branch sentinel value. The explanation offered
+  during the live investigation was not verified against a direct in-callback instrumentation
+  check and was not found convincing.
+
+### Recommendation for a future session
+
+Do **not** treat Method B's `NumericalFailure` counts (or, by extension, the evaluation-budget
+accounting feeding into Gate 2's own matched-effort comparison) as fully understood or fully
+trustworthy at face value. Before relying further on this backend's own reported evaluation
+counts, a future session should: (1) instrument the actual `Q(x,g,θ)` callback itself (not just
+read `obj.threshold_crossed[]` after the fact) to log every invocation's `(x, f)` pair for a
+handful of real failing trajectories, settling definitively whether `f <= lower_limit` is ever
+actually evaluated true and not acted on, versus genuinely never reached; (2) check whether
+KNITRO's own `objrange` parameter (not currently touched by this codebase, left at its default)
+is set so permissively that it allows KNITRO's cruder unboundedness heuristic to systematically
+outrace the finer-grained `lower_limit` mechanism this codebase was specifically built to rely
+on instead; (3) re-run this exact ablation at D20 scale, where a 30-300x slowdown factor (if it
+holds or worsens) would be far more consequential than it is at cheap D4/W=20,000 scale. Until
+that is done, this report's own Gate 2 comparison should be read as informative but NOT as a
+fully audited measurement of Method B's true computational cost.
