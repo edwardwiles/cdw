@@ -42,9 +42,16 @@ const THETA_CALIBRATION_VERSION = 2    # 1 = theta_star estimated once on the fu
                                         # own gravity regression.
 
 "Build (so, pp, params_used) for the REAL D=20 economy at a given W, independent of AD_PARAMS."
-function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing, exclude_diagonal_gravity::Bool = false)
+function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing, exclude_diagonal_gravity::Bool = false,
+        # σHat override (2026-07-30, sigma=3 campaign prep): AD_PARAMS.σHat=2.5 is this repo's
+        # single source of truth for sigma on the real D20 path (audited -- no CES/gravity formula
+        # anywhere hardcodes 2.5 directly; every consumer reads ctx.σ/σHat as a variable). `nothing`
+        # (default) reproduces AD_PARAMS's own σHat unchanged, bit-exact with every pre-existing
+        # caller -- this is opt-in, not a change to the historical default.
+        σHat::Union{Nothing,Float64} = nothing)
+    σ_override = σHat === nothing ? NamedTuple() : (σHat = σHat,)
     params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx,
-        exclude_diagonal_gravity = exclude_diagonal_gravity))
+        exclude_diagonal_gravity = exclude_diagonal_gravity), σ_override)
     so = master_setup(params)
     @assert so.D == D20_REAL "master_setup returned D=$(so.D), expected $(D20_REAL) -- real_data/noah_D20 CSVs may be malformed"
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
@@ -80,7 +87,10 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         # coefficient vector, matching the Stata side's `sum_{o!=d,d!=ROW}` restriction. `false`
         # is the default and reproduces every pre-existing caller's behavior bit-exactly -- this
         # is opt-in, not a change to d20_real_setup's historical default.
-        exclude_diagonal_gravity::Bool = false)
+        exclude_diagonal_gravity::Bool = false,
+        # σHat passthrough to build_ad_context_real_d20's own kwarg of the same name (2026-07-30).
+        # `nothing` default reproduces AD_PARAMS.σHat=2.5 unchanged.
+        σHat::Union{Nothing,Float64} = nothing)
     destination_sample in (:exclude_row, :all_legacy) ||
         error("d20_real_setup: destination_sample must be :exclude_row or :all_legacy, got :$destination_sample")
     row_idx = destination_sample == :exclude_row ? D20_REAL : nothing
@@ -96,7 +106,7 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     # killed after climbing to ~780GB and still rising, headed past 1TB).
     # See docs/fullA_D20_production_path_audit.md and the continuation-9
     # W80k/W800k microbenchmark docs for the full incident writeup.
-    so, pp, params_used = build_ad_context_real_d20(W = W, row_idx = row_idx, exclude_diagonal_gravity = exclude_diagonal_gravity)
+    so, pp, params_used = build_ad_context_real_d20(W = W, row_idx = row_idx, exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
     # exclude-ROW-destination production release (2026-07-24): reject focal_country==ROW. `bi`
     # (baseIndex, AD_PARAMS's own default is 2=France, see this file's header comment) is the

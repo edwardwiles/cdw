@@ -138,7 +138,11 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         # exclude_diagonal_gravity (2026-07-30, user-directed fix): passthrough to d20_real_setup's/
         # d20_real_setup_qmc's own kwarg of the same name. `false` default reproduces every
         # pre-existing caller's behavior bit-exactly.
-        exclude_diagonal_gravity::Bool = false)
+        exclude_diagonal_gravity::Bool = false,
+        # σHat passthrough (2026-07-30, sigma=3 campaign prep) to d20_real_setup's/
+        # d20_real_setup_qmc's own kwarg of the same name. `nothing` default reproduces
+        # AD_PARAMS.σHat=2.5 unchanged for every pre-existing caller.
+        σHat::Union{Nothing,Float64} = nothing)
     draw_design in VALID_DRAW_DESIGNS ||
         error("d20_real_setup_design: draw_design must be one of $(VALID_DRAW_DESIGNS), got :$(draw_design)")
 
@@ -152,7 +156,7 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         t_ctx = @elapsed ctx0 = d20_real_setup(W = W, δ = δ, find_smallest = find_smallest,
             outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
             needs_outer_moment_jacobian = needs_outer_moment_jacobian, build_screen = build_screen,
-            destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity)
+            destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
         timing = (uniform_and_transform = NaN, ctx_build = t_ctx,
                   pairwise = ctx0.screen_setup_wall.pairwise, witness = ctx0.screen_setup_wall.witness)
     else
@@ -166,7 +170,7 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         t_ctx = @elapsed ctx_qmc = d20_real_setup_qmc(W = W, U_injected = Uexp, δ = δ, find_smallest = find_smallest,
             outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
             needs_outer_moment_jacobian = needs_outer_moment_jacobian, destination_sample = destination_sample,
-            exclude_diagonal_gravity = exclude_diagonal_gravity)
+            exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
 
         # ---- screen parity: d20_real_setup_qmc does not build these (it mirrors
         # d20_real_setup exactly except at the U-injection point, and predates the
