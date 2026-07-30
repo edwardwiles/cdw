@@ -1,0 +1,17 @@
+label,coordinate,start,nStatus,Delta_final_verified,final_classification,n_fc_calls,n_ga_calls,wall_s
+D4_ordinary,logA,C_perturbed_H,0,7.006489917143263e-8,FiniteSolved,31,25,1.111572027206421
+D4_ordinary,logA,D_perturbed_dense2,0,2.3944378154010673e-7,FiniteSolved,33,22,1.0518839359283447
+D4_ordinary,logA,B_perturbed_dense,0,2.1943877141454968e-7,FiniteSolved,31,25,1.0578930377960205
+D4_ordinary,logA,A_anchor,0,1.4120426657174452e-7,FiniteSolved,26,17,0.6804699897766113
+D4_ordinary,logH,C_perturbed_H,0,1.002169378943436e-7,FiniteSolved,34,30,1.0919010639190674
+D4_ordinary,logH,D_perturbed_dense2,0,6.20978707477371e-7,FiniteSolved,27,24,0.9093151092529297
+D4_ordinary,logH,B_perturbed_dense,0,1.5274003874458366e-7,FiniteSolved,32,29,1.0391950607299805
+D4_ordinary,logH,A_anchor,0,1.9857956978999965e-7,FiniteSolved,22,17,0.621035099029541
+D4_chamber_transition,logA,D_perturbed2,0,7.60168285214805e-8,FiniteSolved,41,35,1.500143051147461
+D4_chamber_transition,logA,C_perturbed_H,0,4.305928503763153e-8,FiniteSolved,41,32,1.3419559001922607
+D4_chamber_transition,logA,A_anchor_projected,0,1.3290881653899738e-7,FiniteSolved,26,17,0.7077479362487793
+D4_chamber_transition,logA,B_perturbed,0,2.6235004962504264e-7,FiniteSolved,34,24,1.066744089126587
+D4_chamber_transition,logH,D_perturbed2,-502,4.219199932607115e-8,FiniteSolved,52,49,2.0118801593780518
+D4_chamber_transition,logH,C_perturbed_H,0,3.231690831411054e-7,FiniteSolved,39,37,1.5258221626281738
+D4_chamber_transition,logH,A_anchor_projected,0,2.1668494617762268e-7,FiniteSolved,21,16,0.6433589458465576
+D4_chamber_transition,logH,B_perturbed,0,2.0383629935053966e-7,FiniteSolved,36,29,1.1602458953857422

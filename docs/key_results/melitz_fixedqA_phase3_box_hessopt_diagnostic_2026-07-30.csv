@@ -1,0 +1,7 @@
+box,opt,max_evals,nStatus,Delta_final_verified,n_classified,n_finite_solved,n_above_cap,n_infinite_certified,wall_s
+1.0,melitz_outer_finite_delta_alg_direct_2026-07-27.opt,60,-102,1.9994985054030536,60,49,11,0,35.16884899139404
+0.3,melitz_outer_finite_delta_alg_direct_2026-07-27.opt,60,-102,0.329434266987339,60,53,7,0,29.550508975982666
+0.15,melitz_outer_finite_delta_alg_direct_2026-07-27.opt,60,-202,18.156046248071824,60,6,54,0,11.624598979949951
+0.05,melitz_outer_finite_delta_alg_direct_2026-07-27.opt,150,-100,0.3192996181423279,150,139,11,0,69.46556496620178
+0.05,melitz_middle_loop_opt_2026-07-30.opt,150,-102,0.320686417182204,150,100,50,0,73.00612497329712
+0.1,melitz_middle_loop_opt_2026-07-30.opt,150,-502,0.2898060525987176,150,125,25,0,71.60507488250732
