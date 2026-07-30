@@ -37,8 +37,11 @@ if r(N) > 0 {
 isid year
 sort year
 levelsof year, local(years)
+tempfile roster
+save `roster'
 
 foreach y of local years {
+    use `roster', clear
     levelsof ffull if year == `y', local(file)
     local f : word 1 of `file'
 
