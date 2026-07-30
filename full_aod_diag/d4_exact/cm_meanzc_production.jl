@@ -152,11 +152,26 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair
                                              contrasts::Symbol = :orthonormal, meanzc_basis::Symbol = :direct,
                                              probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                              inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
-                                             moment_representation::Symbol = :dense_reference)   # true no-H
-                                             # operator bundle (2026-07-28 continuation): pass-through to
-                                             # build_cm_meanzc_augmented_obj -- :dense_reference (default,
-                                             # unchanged) | :operator (explicit opt-in, requires
-                                             # inner_fg_backend=:operator).
+                                             moment_representation::Symbol = :operator)   # true no-H
+                                             # operator bundle (2026-07-28 continuation, flipped
+                                             # 2026-07-29 moment_representation threading task):
+                                             # pass-through to build_cm_meanzc_augmented_obj --
+                                             # :operator (PRODUCTION DEFAULT since 2026-07-29;
+                                             # CM_MEANZC_INNER_FG_BACKEND_DEFAULT[] is already
+                                             # :operator, so no other default needs to change --
+                                             # validated D=4 (test_operator_no_H_bundle_equivalence_
+                                             # cmzc.jl) + real D=20/W=100,000 through the REAL
+                                             # production driver end-to-end (run_cm_upper_
+                                             # checkpointed, test_meanzc_originzc_driver_wiring_
+                                             # 2026-07-29.jl) -- this builder previously defaulted
+                                             # :dense_reference and was NEVER actually flipped in
+                                             # production despite the :operator branch existing and
+                                             # being gate-tested standalone since 2026-07-28; the
+                                             # real driver never passed this kwarg, so ctx.obj
+                                             # stayed dense in every real solve until this fix) |
+                                             # :dense_reference (explicit opt-out, unchanged
+                                             # PsiObjectiveBundleImplicit, requires
+                                             # inner_fg_backend=:operator when :operator is chosen).
     moment_representation === :operator && inner_fg_backend !== :operator &&
         error("build_cm_meanzc_production_context: moment_representation=:operator requires inner_fg_backend=:operator")
     println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")

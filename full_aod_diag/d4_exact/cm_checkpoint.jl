@@ -690,7 +690,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # cm_frechet_level.jl/cm_frechet_hessian.jl/cm_frechet_cplus.jl; opt-in, currently requires
         # cm_extension=:cm_only, i.e. not yet combined with the meanzc extension -- see the guard
         # just below).
-        A_coordinate_mode::Symbol = :powered_aspace)   # transformed-A restricted-family port
+        A_coordinate_mode::Symbol = :powered_aspace,   # transformed-A restricted-family port
         # (2026-07-26 five-family finish task §8): :powered_aspace (NEW PRODUCTION DEFAULT, fixed-
         # theta only -- promoted after test_cm_aspace_coordinate_gates.jl's real D=20/W=80,000
         # equivalence gate: a<->z round-trip to <1e-9, a-space decode reconstructs the IDENTICAL
@@ -704,6 +704,21 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # cplus/cm_frechet_production_gradient_cplus, ALL unchanged) -- only the outer decode/
         # encode/gradient-rescale boundary changes. w0/resume must be constructed in the SAME
         # coordinate this kwarg selects (see cm_w0_from_calibration).
+        moment_representation::Union{Nothing,Symbol} = nothing)   # true no-H operator bundle wiring
+        # task (2026-07-29): threads through to build_cm_meanzc_production_context (is_meanzc) and
+        # build_cm_frechet_production_context (is_frechet) ONLY -- the plain flexible_cm branch
+        # (build_cm_production_context) is deliberately left alone, it already resolves its own
+        # default independently via the shared MOMENT_REPRESENTATION[] global (no_dense_g_
+        # counters.jl, already :operator). `nothing` (default) means "don't pass this kwarg at
+        # all" -- each branch's own builder default is used UNCHANGED: cm_meanzc's builder default
+        # is :dense_reference (this driver never passed the kwarg at all before -- the :operator
+        # branch existed and was gate-tested standalone, but was unreachable from real production
+        # runs); common_frechet's builder default is already :operator (flipped and validated
+        # end-to-end in a separate task, see FRECHET_OPERATOR_DEFAULT_INVESTIGATION_2026-07-29.md)
+        # -- passing `nothing` here is load-bearing, NOT cosmetic: it is what preserves that
+        # already-validated default rather than silently reverting it to whatever THIS kwarg's own
+        # default would otherwise be. Pass :operator/:dense_reference explicitly to override either
+        # branch for testing/opt-out.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -899,12 +914,18 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
     is_frechet = marginal_restriction === :common_frechet   # guarded mutually exclusive with is_meanzc above
     mode_label = is_meanzc ? "cm_plus_meanzc" : (is_frechet ? "cm_common_frechet" : "cm_flexible")
+    # moment_representation threading task (2026-07-29): nothing => omit the kwarg entirely (each
+    # branch's own builder default applies, unchanged) -- see the kwarg's own docstring above for
+    # why this matters (must NOT silently override common_frechet's already-flipped :operator
+    # default). Only threaded into the is_meanzc/is_frechet branches; flexible_cm's own call below
+    # is deliberately untouched.
+    mr_kwargs = moment_representation === nothing ? NamedTuple() : (moment_representation = moment_representation,)
     pcx = is_meanzc ?
         build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
-            contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs) :
+            contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, mr_kwargs...) :
         is_frechet ?
         build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs,
-            cm_hessian_backend = cm_hessian_backend) :
+            cm_hessian_backend = cm_hessian_backend, mr_kwargs...) :
         build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins,
             inner_fg_backend = inner_fg_backend)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
@@ -926,13 +947,20 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             " requested_delta=", delta, " resolved_active_threshold=", th.threshold,
             " stored_in_objective_bundle=", pcx.ctx_cm.obj.threshold_state.threshold)
     flush(stdout)
+    # moment_representation threading task (2026-07-29): the REAL bundle_type, read off pcx AFTER
+    # the builder call above -- never an asserted literal (this is exactly the class of bug this
+    # task exists to fix: a static print claiming OperatorPsiBundle while ctx.obj was actually
+    # still PsiObjectiveBundleImplicit). Printed for both branches below.
+    real_bundle_type = Symbol(nameof(typeof(pcx.ctx_cm.obj)))
     if is_frechet
         print_frechet_startup_manifest((marginal_restriction = marginal_restriction, contrasts = contrasts,
             cm_hessian_backend = cm_hessian_backend), ctx.D, L)
         lp("[", label, "] core_hessian_backend=", pcx.cctx === nothing ? "dense_reference" : "exact_winner_pair_parallel (Architecture C)")
+        lp("[backend-manifest]   bundle_type=", real_bundle_type)
     else
         print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = blas_threads,
-            cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair))   # allocation/Hessian port task §2
+            cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair,
+            bundle_type = real_bundle_type))   # allocation/Hessian port task §2
     end
 
     # D2_econ = length of the (gp, zfree) economic block only -- length(w0) itself is

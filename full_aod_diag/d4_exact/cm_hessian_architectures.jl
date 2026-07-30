@@ -1630,6 +1630,13 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         end
                     else
                         record_dense_cross_hessian_call!()
+                        # moment_representation threading task (2026-07-29): matches _fill_cm_HEE!'s
+                        # identical guards (lines ~873/887 above) -- this dense H_ER fallback is
+                        # provably unreachable in production (winner_bin_ok && zc_ready should always
+                        # hold at defaults), but was previously an unguarded `H_copy[...] .= H[...]`
+                        # that would throw a confusing `MethodError: view(::Nothing, ...)` rather than
+                        # a clear error for an operator-mode bundle (H/H_copy both nothing).
+                        H === nothing && error("archA_partitioned_hess_cb_builder: reached the dense H_ER cross-Hessian fallback for an operator-mode bundle with no H field -- this should be provably unreachable in production (winner_bin_ok && zc_ready should always hold); indicates a real configuration bug, not expected behavior.")
                         @views H_copy[:, 2+NCORE:1+n] .= H[:, 2+NCORE:1+n]
                         @views H_copy[:, 2+NCORE:1+n] .*= .√arg2
                         HC_eta = @view H_copy[:, 2+NCORE:1+n]
@@ -1678,10 +1685,16 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         end
                     else
                         record_dense_cross_hessian_call!()
+                        # moment_representation threading task (2026-07-29): same guard rationale as
+                        # the H_ER fallback above -- provably unreachable in production, but was
+                        # unguarded (would throw a confusing UndefVarError on HC_eta, or MethodError
+                        # on H_copy, for an operator-mode bundle).
+                        H_copy === nothing && error("archA_partitioned_hess_cb_builder: reached the dense H_ZZ (HRR) cross-Hessian fallback for an operator-mode bundle with no H_copy field -- this should be provably unreachable in production; indicates a real configuration bug, not expected behavior.")
                         BLAS.gemm!('T', 'N', 1 / M, HC_eta, HC_eta, 0.0, HRR)
                     end
                 end
             else
+                H === nothing && error("archA_partitioned_hess_cb_builder: reached the fully-dense combined Hessian fallback for an operator-mode bundle with no H field -- this should be provably unreachable in production (cf should always be a valid CompressedFactual and core_hessian_backend should never be :dense_reference on this construction path); indicates a real configuration bug, not expected behavior.")
                 @views H_copy[:, 2:1+n] .= H[:, 2:1+n]
                 @views H_copy[:, 2:1+n] .*= .√arg2
                 BLAS.gemm!('T', 'N', 1 / M, @view(H_copy[:, 2:1+n]), @view(H_copy[:, 2:1+n]), 0.0, ∂∂f_∂∂x)

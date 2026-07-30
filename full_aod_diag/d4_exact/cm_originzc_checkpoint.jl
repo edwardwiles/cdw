@@ -493,7 +493,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count untouched, zero behavior change. Added for section 7's bounded
         # origin-ZC BLAS benchmark; origin-ZC retains Architecture A (dense) regardless of this.
-        A_coordinate_mode::Symbol = :powered_aspace)   # transformed-A restricted-family port
+        A_coordinate_mode::Symbol = :powered_aspace,   # transformed-A restricted-family port
         # (2026-07-26 five-family finish task §8): same option/semantics/NEW production default as
         # run_cm_upper_checkpointed's own A_coordinate_mode kwarg -- the shared decode/encode/
         # gradient-rescale boundary (cm_aspace_coordinate.jl, pe::PivotGravityElim/pivot_expand/
@@ -502,6 +502,19 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # block is entirely orthogonal to this choice (same as CM's own eta_nu), untouched either
         # way. :powered_aspace (fixed-theta only) | :legacy_z (byte-identical to every pre-existing
         # origin-ZC production run, explicit replication mode).
+        moment_representation::Union{Nothing,Symbol} = nothing)   # true no-H operator bundle wiring
+        # task (2026-07-29): threads through to build_originzc_production_context, which previously
+        # ALWAYS hardcoded :dense_reference regardless of caller (this driver never passed the
+        # kwarg at all -- the :operator branch existed and was gate-tested standalone, but was
+        # unreachable from real production runs). `nothing` (default) means "don't pass this kwarg
+        # at all" -- build_originzc_production_context's own default applies UNCHANGED. That
+        # builder default is now :operator (flipped and validated -- D=4 +
+        # real D=20/W=100,000 through THIS driver end-to-end,
+        # test_meanzc_originzc_driver_wiring_2026-07-29.jl). `nothing` here is load-bearing, NOT
+        # cosmetic -- a literal :dense_reference default at THIS level would silently override the
+        # builder's own :operator default on every call, exactly the regression this sentinel
+        # pattern (mirroring run_cm_upper_checkpointed's identical kwarg) avoids. Pass
+        # :operator/:dense_reference explicitly to override.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, section 4.1): resolve ckpt_dir to an absolute path
     # BEFORE any real-data/model setup runs. A relative ckpt_dir silently
@@ -624,7 +637,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
               "vcat(gp, zfree, eta) with length(eta)==$(n_eta(layout))")
     end
 
-    pcx = build_originzc_production_context(ctx, CS, layout)
+    # moment_representation threading task (2026-07-29): nothing => omit the kwarg entirely (the
+    # builder's own default applies, unchanged) -- see the kwarg's own docstring above for why
+    # this matters (must NOT silently override build_originzc_production_context's own default).
+    mr_kwargs = moment_representation === nothing ? NamedTuple() : (moment_representation = moment_representation,)
+    pcx = build_originzc_production_context(ctx, CS, layout; mr_kwargs...)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
     dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)
@@ -635,7 +652,8 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     println("[threshold-config] mode=origin_zc requested_delta=", delta,
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
-    print_production_backend_manifest(resolve_origin_zc_manifest(; octx = pcx.octx, blas_threads = blas_threads))   # 2026-07-25 continuation: pass the REAL octx this driver just built via build_originzc_production_context -- was previously called with no octx at all, so it always fell back to reporting the pre-port dense_architecture_a path regardless of what actually ran
+    print_production_backend_manifest(resolve_origin_zc_manifest(; octx = pcx.octx, blas_threads = blas_threads,
+        bundle_type = Symbol(nameof(typeof(pcx.ctx_cm.obj)))))   # 2026-07-25 continuation: pass the REAL octx this driver just built via build_originzc_production_context -- was previously called with no octx at all, so it always fell back to reporting the pre-port dense_architecture_a path regardless of what actually ran. moment_representation threading task (2026-07-29): bundle_type is now also the REAL type, read off pcx AFTER build_originzc_production_context above.
     D2_econ = length(w0) - n_eta(layout)
 
     bounds = cfg.nu_bounds === nothing ? originzc_default_nu_bounds(ctx, layout) : cfg.nu_bounds
