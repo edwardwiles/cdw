@@ -33,6 +33,7 @@ isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26): exact-point cache for this driver's real pcx shape
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))   # D=20 profiling task (2026-07-28): opt-in live-pcx stash this function writes below, default off
+isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 
 const CM_CHECKPOINT_SCHEMA = 9
 # Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
@@ -704,21 +705,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # cplus/cm_frechet_production_gradient_cplus, ALL unchanged) -- only the outer decode/
         # encode/gradient-rescale boundary changes. w0/resume must be constructed in the SAME
         # coordinate this kwarg selects (see cm_w0_from_calibration).
-        moment_representation::Union{Nothing,Symbol} = nothing)   # true no-H operator bundle wiring
-        # task (2026-07-29): threads through to build_cm_meanzc_production_context (is_meanzc) and
-        # build_cm_frechet_production_context (is_frechet) ONLY -- the plain flexible_cm branch
-        # (build_cm_production_context) is deliberately left alone, it already resolves its own
-        # default independently via the shared MOMENT_REPRESENTATION[] global (no_dense_g_
-        # counters.jl, already :operator). `nothing` (default) means "don't pass this kwarg at
-        # all" -- each branch's own builder default is used UNCHANGED: cm_meanzc's builder default
-        # is :dense_reference (this driver never passed the kwarg at all before -- the :operator
-        # branch existed and was gate-tested standalone, but was unreachable from real production
-        # runs); common_frechet's builder default is already :operator (flipped and validated
-        # end-to-end in a separate task, see FRECHET_OPERATOR_DEFAULT_INVESTIGATION_2026-07-29.md)
-        # -- passing `nothing` here is load-bearing, NOT cosmetic: it is what preserves that
-        # already-validated default rather than silently reverting it to whatever THIS kwarg's own
-        # default would otherwise be. Pass :operator/:dense_reference explicitly to override either
-        # branch for testing/opt-out.
+        )   # architecture/production-operator-bundle-hardening-2026-07-30: the moment_representation
+        # kwarg that previously lived here is REMOVED, not defaulted -- production runners must not
+        # accept a representation choice at all (task §2). All three branches below (flexible_cm,
+        # common_frechet, cm_meanzc) now always construct OperatorPsiBundle via
+        # prepare_production_run. A dense reference bundle is available only through
+        # DenseReferenceDiagnostics.prepare_context, never from this driver.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -914,20 +906,22 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
     is_frechet = marginal_restriction === :common_frechet   # guarded mutually exclusive with is_meanzc above
     mode_label = is_meanzc ? "cm_plus_meanzc" : (is_frechet ? "cm_common_frechet" : "cm_flexible")
-    # moment_representation threading task (2026-07-29): nothing => omit the kwarg entirely (each
-    # branch's own builder default applies, unchanged) -- see the kwarg's own docstring above for
-    # why this matters (must NOT silently override common_frechet's already-flipped :operator
-    # default). Only threaded into the is_meanzc/is_frechet branches; flexible_cm's own call below
-    # is deliberately untouched.
-    mr_kwargs = moment_representation === nothing ? NamedTuple() : (moment_representation = moment_representation,)
-    pcx = is_meanzc ?
-        build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
-            contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, mr_kwargs...) :
-        is_frechet ?
-        build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs,
-            cm_hessian_backend = cm_hessian_backend, mr_kwargs...) :
-        build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins,
-            inner_fg_backend = inner_fg_backend)
+    # architecture/production-operator-bundle-hardening-2026-07-30 (task §4): the ONLY call in this
+    # function that decides bundle representation -- hardcoded :operator in every branch, not a
+    # passthrough kwarg. prepare_production_run wraps the result in a type-safe ProductionContext,
+    # derives the live backend manifest, and fatally asserts the OperatorPsiBundle invariant before
+    # this driver does anything else with pcx.
+    family_tag_pre = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
+    prepared = prepare_production_run(family_tag_pre, "run_cm_upper_checkpointed",
+        () -> is_meanzc ?
+            build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
+                contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = :operator) :
+            is_frechet ?
+            build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs,
+                cm_hessian_backend = cm_hessian_backend, moment_representation = :operator) :
+            build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins,
+                inner_fg_backend = inner_fg_backend, moment_representation = :operator))
+    pcx = prepared.ctx.inner
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     # D=20 profiling task (flexible_cm/common_frechet, 2026-07-28): stash a live handle to this
     # run's own (cctx, obj) the instant it is built -- ONLY while
@@ -962,6 +956,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair,
             bundle_type = real_bundle_type))   # allocation/Hessian port task §2
     end
+    write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))   # architecture/production-operator-bundle-hardening-2026-07-30 (task §7): live manifest, replaces the static prints above as the source of truth
 
     # D2_econ = length of the (gp, zfree) economic block only -- length(w0) itself is
     # D2_econ + meanzc_K_mean when is_meanzc, matching cm_meanzc_production.jl's own convention

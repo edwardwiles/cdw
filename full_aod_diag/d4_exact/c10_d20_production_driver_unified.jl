@@ -24,6 +24,7 @@ isdefined(Main, :theta_fixed_dual_delta_pivot_A) || error("c10_d20_production_dr
 isdefined(Main, :print_production_backend_manifest) || error("c10_d20_production_driver_unified.jl requires production_backend_manifest.jl to already be included.")
 isdefined(Main, :set_production_outer_algorithm!) || error("c10_d20_production_driver_unified.jl requires knitro_outer_algorithm.jl to already be included.")
 isdefined(Main, :theta_cplus_secant) || include(joinpath(@__DIR__, "theta_cplus.jl"))
+isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 
 const CHECKPOINT_SCHEMA_UNIFIED = 1
 
@@ -151,11 +152,11 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         pin_outer_algorithm::Bool = false,   # reconciliation: same kwarg/semantics as
         # run_polish_checkpointed's -- opt-in explicit algorithm=2(Interior/CG)+hessopt=6(L-BFGS)
         # via knitro_outer_algorithm.jl, for matched benchmark A/Bs only.
-        moment_representation::Symbol = MOMENT_REPRESENTATION[])   # unrestricted operator-bundle
-        # wiring task (2026-07-29): :operator (production default) replaces ctx.obj with the true
-        # no-H OperatorPsiBundle via build_unrestricted_operator_ctx (compressed_live.jl), mirroring
-        # every restricted family's own build_*_production_context moment_representation kwarg.
-        # :dense_reference is the explicit, byte-identical-to-pre-port opt-out.
+        )   # architecture/production-operator-bundle-hardening-2026-07-30: the moment_representation
+        # kwarg that previously lived here is REMOVED, not defaulted -- production runners must not
+        # accept a representation choice at all (task §2). This function now always constructs
+        # OperatorPsiBundle via prepare_production_run below. A dense reference bundle is available
+        # only through DenseReferenceDiagnostics.prepare_context, never from this driver.
     lp(xs...) = (println(xs...); logio !== nothing && (println(logio, xs...); flush(logio)); flush(stdout))
     destination_sample in (:exclude_row, :all_legacy) ||
         error("run_polish_checkpointed_unified($label): destination_sample must be :exclude_row or :all_legacy.")
@@ -163,8 +164,6 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         error("run_polish_checkpointed_unified($label): :flexible requires theta_lo/theta_hi")
     layout.gp_coordinate_mode == :scaled_log && gp_scale === nothing &&
         error("run_polish_checkpointed_unified($label): :scaled_log requires gp_scale")
-    moment_representation in (:operator, :dense_reference) ||
-        error("run_polish_checkpointed_unified($label): moment_representation must be :operator or :dense_reference, got :$moment_representation")
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint_unified(resume_from)
@@ -207,9 +206,14 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     blas_threads !== nothing && BLAS.set_num_threads(blas_threads)
     ctx = build_unified_ctx(layout, ctx_base; theta_lo = layout.trade_elasticity_mode == :flexible ? theta_lo : nothing,
                              theta_hi = layout.trade_elasticity_mode == :flexible ? theta_hi : nothing)
-    # Unrestricted operator-bundle wiring task (2026-07-29): true no-H OperatorPsiBundle,
-    # production default -- see build_unrestricted_operator_ctx (compressed_live.jl) docstring.
-    ctx = build_unrestricted_operator_ctx(ctx; moment_representation = moment_representation)
+    # architecture/production-operator-bundle-hardening-2026-07-30 (task §4): the ONLY call in this
+    # function that decides bundle representation -- hardcoded :operator, not a passthrough kwarg.
+    # prepare_production_run wraps the result in a type-safe ProductionContext, derives the live
+    # backend manifest, and fatally asserts the OperatorPsiBundle invariant before this driver does
+    # anything else with ctx.
+    prepared = prepare_production_run(:unrestricted, "run_polish_checkpointed_unified",
+        () -> build_unrestricted_operator_ctx(ctx; moment_representation = :operator))
+    ctx = prepared.ctx.inner
     xy = precompute_aspace_XY(ctx)
     D = ctx.D; Ddest = _flex_ddest(ctx)
     n_outer = outer_dim(layout, D, Ddest)
@@ -241,6 +245,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         gp_coordinate_mode = layout.gp_coordinate_mode,
         theta_bounds = layout.trade_elasticity_mode == :flexible ? (theta_lo, theta_hi) : nothing,
         outer_dimension = n_outer))
+    write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))   # architecture/production-operator-bundle-hardening-2026-07-30 (task §7): live manifest, replaces the static print above as the source of truth
     print_active_layout_banner(ctx, "unified_$(layout.trade_elasticity_mode)_$(layout.A_coordinate_mode)")
     flush(stdout)
 
