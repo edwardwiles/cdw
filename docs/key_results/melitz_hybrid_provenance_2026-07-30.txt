@@ -1,0 +1,51 @@
+Melitz hybrid chamber-aware LFD-preserving corrector session (2026-07-30)
+Governing prompt: melitz_hybrid_chamber_lfd_corrector_2026-07-30
+
+Branch: melitz/fullD-delta-star (trade_robustness_modular)
+HEAD at session start: 523c4af (Melitz joint (A,q) LFD-preserving feasibility-preserving search)
+
+Julia 1.12.6 (juliaup), KNITRO 13.0.1 (.knitro_env.sh), OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+throughout. D4 regression/unit tests: -t 4. Real-D20 scripts: -t 20 (src/melitz/CLAUDE.md
+20-thread policy).
+
+Base economies:
+  D4: sigma=2.5, theta_star=6.8, target_country=1, seed=29, W=20,000 (generate_fake_melitz_data)
+  Real D20: noah_D20 real_data fixture, sigma=2.5, theta_star estimated, focal="fra" (index 2),
+    seed=1, W=80,000, calibrated via calibrate_melitz_pareto.
+
+Concurrent environment note: partway through this session a DIFFERENT process added
+src/melitz/fixed_q_a_middle_loop.jl (+ its include_melitz.jl line) to this SAME working
+directory (not a worktree) -- confirmed via `git status`/file timestamps, unrelated to this
+session's own work. This session's own commit stages ONLY the files listed below.
+
+Files this session's commit touches:
+  New:
+    src/melitz/hybrid_chamber_corrector.jl
+    docs/melitz_hybrid_chamber_lfd_corrector_2026-07-30.md
+    scripts/melitz_hybrid_phase0_roundtrip_audit_2026-07-30.jl
+    scripts/melitz_hybrid_phase5_d20_cliff_retest_2026-07-30.jl
+    scripts/melitz_hybrid_phase6_welfare_retest_2026-07-30.jl
+    docs/key_results/melitz_hybrid_phase0_roundtrip_audit_2026-07-30.{csv,log}
+    docs/key_results/melitz_hybrid_phase5_d20_cliff_retest_2026-07-30.{csv,log}
+    docs/key_results/melitz_hybrid_phase6_predictor_corrector_2026-07-30.{csv,log}
+    docs/key_results/melitz_hybrid_phase6_gamma_only_comparison_2026-07-30.csv
+    docs/key_results/melitz_hybrid_provenance_2026-07-30.txt (this file)
+  Modified:
+    src/melitz/include_melitz.jl   (+1 include line)
+    test/melitz/runtests.jl        (+1 pre-existing-gap fix: lfd_preserving_state.jl include;
+                                     +1 new include for hybrid_chamber_corrector.jl;
+                                     +new testset "Hybrid chamber-aware LFD-preserving
+                                     corrector (2026-07-30)", 37/37 assertions pass, isolated
+                                     standalone run -- see body for why isolated, not full-suite)
+
+Test results: D4 regression testset run standalone (isolated from the full
+test/melitz/runtests.jl suite, given the pre-existing, unrelated mul_G!/moment_operator.jl:281
+SIGSEGV documented by prior sessions, reproduced unmodified here): 37/37 assertions pass.
+
+Real-D20 script run times (background, -t 20):
+  Phase 0 (melitz_hybrid_phase0_roundtrip_audit_2026-07-30.jl): ~9 min (5+5 brackets)
+  Phase 5 (melitz_hybrid_phase5_d20_cliff_retest_2026-07-30.jl): ~44 min (10+10 brackets)
+  Phase 6 (melitz_hybrid_phase6_welfare_retest_2026-07-30.jl): ~12 min
+
+Commit: made locally immediately after this document; NOT pushed (per repo policy -- always
+confirm before pushing to the real remote).

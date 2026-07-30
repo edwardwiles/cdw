@@ -1,0 +1,100 @@
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+Julia threads: 20  BLAS threads: 1
+focal country index = 2
+D=20  nA=399  nq=398
+anchor solve: 4.21s  Delta0=0.4832764950  lfd_ok=true
+|b_q|=0.0003568347380732389
+minus distinct t (first 10): [0.008412617691546586, 0.010530457181724682, 0.014665291628666413, 0.031171519312824827, 0.05922542266674491, 0.06622306710852663, 0.06709969887385875, 0.06943353378251055, 0.08075640709916607, 0.08197268409680111]
+plus distinct t (first 10): [0.014773001744443036, 0.022965722477456072, 0.03277748871263066, 0.04326730784331752, 0.05289220183828663, 0.05763485636701641, 0.06091036435782297, 0.06808460449530582, 0.07185355798267111, 0.07272314855656384]
+
+====================================================================================================
+MINUS side (first 10 switches)
+====================================================================================================
+[minus k=1] switch=(o=14,d=19,on)  A(pure-q)=AboveEvaluationCap
+[minus k=1] B(uncorrected): feasible=true gravA=-5.096e-08 gravF=-7.644e-08 focal=-8.231e-08 kind=FiniteSolved
+[minus k=1] C(2-lever,0.27s): feasible=true gravA=-5.096e-08 gravF=-7.644e-08 focal=-8.231e-08 kind=FiniteSolved Delta/cert=0.483264
+[minus k=1] D(hybrid,23.54s): feasible=false gravA=1.162e-08 gravF=1.744e-08 focal=-6.367e-15 kind=FiniteSolved Delta/cert=0.483264  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[minus k=2] switch=(o=14,d=16,off)  A(pure-q)=AboveEvaluationCap
+[minus k=2] B(uncorrected): feasible=true gravA=-9.162e-11 gravF=-1.374e-10 focal=-1.023e-07 kind=FiniteSolved
+[minus k=2] C(2-lever,0.26s): feasible=true gravA=-9.162e-11 gravF=-1.374e-10 focal=-1.023e-07 kind=FiniteSolved Delta/cert=0.483277
+[minus k=2] D(hybrid,0.29s): feasible=false gravA=-9.162e-11 gravF=-1.374e-10 focal=-1.023e-14 kind=FiniteSolved Delta/cert=0.483276  disc_cand=0 cont_it=1 cont_status=converged macro=1 rt_exact=true
+[minus k=3] switch=(o=2,d=14,on)  A(pure-q)=AboveEvaluationCap
+[minus k=3] B(uncorrected): feasible=false gravA=3.002e-06 gravF=4.504e-06 focal=-1.943e-06 kind=FiniteSolved
+[minus k=3] C(2-lever,81.48s): feasible=false gravA=6.920e-06 gravF=1.038e-05 focal=3.931e-08 kind=FiniteSolved Delta/cert=0.483273
+[minus k=3] D(hybrid,116.66s): feasible=false gravA=-1.630e-08 gravF=-2.446e-08 focal=-7.562e-07 kind=FiniteSolved Delta/cert=0.483273  disc_cand=10000 cont_it=10 cont_status=returned_to_discrete macro=5 rt_exact=false
+[minus k=4] switch=(o=18,d=7,off)  A(pure-q)=AboveEvaluationCap
+[minus k=4] B(uncorrected): feasible=false gravA=2.641e-06 gravF=3.962e-06 focal=-2.116e-06 kind=FiniteSolved
+[minus k=4] C(2-lever,90.46s): feasible=false gravA=6.559e-06 gravF=9.838e-06 focal=-1.343e-07 kind=FiniteSolved Delta/cert=0.483269
+[minus k=4] D(hybrid,110.14s): feasible=false gravA=9.448e-10 gravF=1.417e-09 focal=-6.817e-07 kind=FiniteSolved Delta/cert=0.483271  disc_cand=10000 cont_it=11 cont_status=returned_to_discrete macro=5 rt_exact=false
+[minus k=5] switch=(o=14,d=16,off)  A(pure-q)=AboveEvaluationCap
+[minus k=5] B(uncorrected): feasible=false gravA=2.684e-06 gravF=4.026e-06 focal=-2.367e-06 kind=FiniteSolved
+[minus k=5] C(2-lever,74.95s): feasible=false gravA=7.949e-06 gravF=1.192e-05 focal=3.345e-07 kind=FiniteSolved Delta/cert=0.483257
+[minus k=5] D(hybrid,118.14s): feasible=false gravA=3.475e-09 gravF=5.212e-09 focal=-5.737e-07 kind=FiniteSolved Delta/cert=0.483261  disc_cand=10000 cont_it=15 cont_status=returned_to_discrete macro=5 rt_exact=false
+[minus k=6] switch=(o=15,d=16,on)  A(pure-q)=AboveEvaluationCap
+[minus k=6] B(uncorrected): feasible=false gravA=1.014e-06 gravF=1.522e-06 focal=-2.424e-06 kind=FiniteSolved
+[minus k=6] C(2-lever,91.23s): feasible=false gravA=6.280e-06 gravF=9.420e-06 focal=2.770e-07 kind=FiniteSolved Delta/cert=0.483257
+[minus k=6] D(hybrid,116.42s): feasible=false gravA=1.875e-09 gravF=2.813e-09 focal=-5.491e-07 kind=FiniteSolved Delta/cert=0.483258  disc_cand=10000 cont_it=8 cont_status=returned_to_discrete macro=5 rt_exact=false
+[minus k=7] switch=(o=12,d=13,off)  A(pure-q)=AboveEvaluationCap
+[minus k=7] B(uncorrected): feasible=false gravA=4.278e-06 gravF=6.417e-06 focal=-2.433e-06 kind=FiniteSolved
+[minus k=7] C(2-lever,92.43s): feasible=false gravA=9.543e-06 gravF=1.431e-05 focal=2.687e-07 kind=FiniteSolved Delta/cert=0.483257
+[minus k=7] D(hybrid,118.16s): feasible=false gravA=3.051e-08 gravF=4.577e-08 focal=-5.455e-07 kind=FiniteSolved Delta/cert=0.483258  disc_cand=10000 cont_it=11 cont_status=returned_to_discrete macro=5 rt_exact=false
+[minus k=8] switch=(o=8,d=18,on)  A(pure-q)=AboveEvaluationCap
+[minus k=8] B(uncorrected): feasible=false gravA=7.101e-06 gravF=1.065e-05 focal=-2.457e-06 kind=FiniteSolved
+[minus k=8] C(2-lever,83.32s): feasible=false gravA=1.237e-05 gravF=1.855e-05 focal=2.446e-07 kind=FiniteSolved Delta/cert=0.483256
+[minus k=8] D(hybrid,115.89s): feasible=false gravA=-5.203e-10 gravF=-7.805e-10 focal=-5.352e-07 kind=FiniteSolved Delta/cert=0.483259  disc_cand=10000 cont_it=10 cont_status=returned_to_discrete macro=5 rt_exact=false
+[minus k=9] switch=(o=14,d=19,on)  A(pure-q)=AboveEvaluationCap
+[minus k=9] B(uncorrected): feasible=false gravA=6.817e-06 gravF=1.023e-05 focal=-2.562e-06 kind=FiniteSolved
+[minus k=9] C(2-lever,82.92s): feasible=false gravA=1.208e-05 gravF=1.812e-05 focal=1.391e-07 kind=FiniteSolved Delta/cert=0.483255
+[minus k=9] D(hybrid,110.30s): feasible=false gravA=-4.084e-08 gravF=-6.127e-08 focal=-4.899e-07 kind=FiniteSolved Delta/cert=0.483258  disc_cand=10000 cont_it=11 cont_status=returned_to_discrete macro=5 rt_exact=false
+[minus k=10] switch=(o=5,d=8,on)  A(pure-q)=AboveEvaluationCap
+[minus k=10] B(uncorrected): feasible=false gravA=6.817e-06 gravF=1.023e-05 focal=-2.573e-06 kind=FiniteSolved
+[minus k=10] C(2-lever,79.52s): feasible=false gravA=1.208e-05 gravF=1.812e-05 focal=1.276e-07 kind=FiniteSolved Delta/cert=0.483255
+[minus k=10] D(hybrid,117.06s): feasible=false gravA=-4.085e-08 gravF=-6.127e-08 focal=-4.850e-07 kind=FiniteSolved Delta/cert=0.483258  disc_cand=10000 cont_it=14 cont_status=returned_to_discrete macro=5 rt_exact=false
+
+====================================================================================================
+PLUS side (first 10 switches)
+====================================================================================================
+[plus k=1] switch=(o=18,d=12,on)  A(pure-q)=FiniteSolved
+[plus k=1] B(uncorrected): feasible=true gravA=1.311e-07 gravF=1.967e-07 focal=1.509e-07 kind=FiniteSolved
+[plus k=1] C(2-lever,0.22s): feasible=true gravA=1.311e-07 gravF=1.967e-07 focal=1.509e-07 kind=FiniteSolved Delta/cert=0.483255
+[plus k=1] D(hybrid,22.19s): feasible=false gravA=2.274e-08 gravF=3.411e-08 focal=-2.183e-14 kind=FiniteSolved Delta/cert=0.483255  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=2] switch=(o=10,d=13,on)  A(pure-q)=FiniteSolved
+[plus k=2] B(uncorrected): feasible=false gravA=8.798e-07 gravF=1.320e-06 focal=2.281e-07 kind=FiniteSolved
+[plus k=2] C(2-lever,0.30s): feasible=false gravA=8.798e-07 gravF=1.320e-06 focal=2.281e-07 kind=FiniteSolved Delta/cert=0.483255
+[plus k=2] D(hybrid,23.75s): feasible=false gravA=-6.287e-08 gravF=-9.430e-08 focal=-5.088e-14 kind=FiniteSolved Delta/cert=0.483255  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=3] switch=(o=8,d=16,on)  A(pure-q)=FiniteSolved
+[plus k=3] B(uncorrected): feasible=false gravA=1.080e-06 gravF=1.620e-06 focal=3.229e-07 kind=FiniteSolved
+[plus k=3] C(2-lever,79.32s): feasible=false gravA=1.080e-06 gravF=1.620e-06 focal=3.229e-07 kind=FiniteSolved Delta/cert=0.483254
+[plus k=3] D(hybrid,22.51s): feasible=false gravA=1.996e-08 gravF=2.994e-08 focal=-1.011e-13 kind=FiniteSolved Delta/cert=0.483255  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=4] switch=(o=14,d=19,off)  A(pure-q)=FiniteSolved
+[plus k=4] B(uncorrected): feasible=false gravA=1.123e-06 gravF=1.684e-06 focal=4.216e-07 kind=FiniteSolved
+[plus k=4] C(2-lever,78.27s): feasible=false gravA=1.123e-06 gravF=1.684e-06 focal=4.216e-07 kind=FiniteSolved Delta/cert=0.483244
+[plus k=4] D(hybrid,20.89s): feasible=false gravA=5.070e-09 gravF=7.604e-09 focal=-1.729e-13 kind=FiniteSolved Delta/cert=0.483244  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=5] switch=(o=4,d=10,off)  A(pure-q)=FiniteSolved
+[plus k=5] B(uncorrected): feasible=true gravA=-8.802e-08 gravF=-1.320e-07 focal=5.054e-07 kind=FiniteSolved
+[plus k=5] C(2-lever,0.20s): feasible=true gravA=-8.802e-08 gravF=-1.320e-07 focal=5.054e-07 kind=FiniteSolved Delta/cert=0.483242
+[plus k=5] D(hybrid,20.85s): feasible=false gravA=2.027e-08 gravF=3.040e-08 focal=-2.477e-13 kind=FiniteSolved Delta/cert=0.48324  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=6] switch=(o=14,d=16,on)  A(pure-q)=FiniteSolved
+[plus k=6] B(uncorrected): feasible=true gravA=-3.715e-07 gravF=-5.573e-07 focal=5.481e-07 kind=FiniteSolved
+[plus k=6] C(2-lever,0.20s): feasible=true gravA=-3.715e-07 gravF=-5.573e-07 focal=5.481e-07 kind=FiniteSolved Delta/cert=0.483241
+[plus k=6] D(hybrid,20.90s): feasible=false gravA=1.653e-07 gravF=2.479e-07 focal=-2.929e-13 kind=FiniteSolved Delta/cert=0.483239  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=7] switch=(o=20,d=5,off)  A(pure-q)=FiniteSolved
+[plus k=7] B(uncorrected): feasible=true gravA=-3.439e-07 gravF=-5.159e-07 focal=5.789e-07 kind=FiniteSolved
+[plus k=7] C(2-lever,0.22s): feasible=true gravA=-3.439e-07 gravF=-5.159e-07 focal=5.789e-07 kind=FiniteSolved Delta/cert=0.483235
+[plus k=7] D(hybrid,22.07s): feasible=false gravA=-1.522e-07 gravF=-2.283e-07 focal=-3.258e-13 kind=FiniteSolved Delta/cert=0.483236  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=8] switch=(o=6,d=13,on)  A(pure-q)=FiniteSolved
+[plus k=8] B(uncorrected): feasible=true gravA=-4.456e-08 gravF=-6.684e-08 focal=6.473e-07 kind=FiniteSolved
+[plus k=8] C(2-lever,0.21s): feasible=true gravA=-4.456e-08 gravF=-6.684e-08 focal=6.473e-07 kind=FiniteSolved Delta/cert=0.483235
+[plus k=8] D(hybrid,20.58s): feasible=false gravA=1.803e-08 gravF=2.704e-08 focal=-4.068e-13 kind=FiniteSolved Delta/cert=0.483236  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=9] switch=(o=16,d=3,off)  A(pure-q)=FiniteSolved
+[plus k=9] B(uncorrected): feasible=true gravA=3.182e-08 gravF=4.773e-08 focal=6.787e-07 kind=FiniteSolved
+[plus k=9] C(2-lever,0.19s): feasible=true gravA=3.182e-08 gravF=4.773e-08 focal=6.787e-07 kind=FiniteSolved Delta/cert=0.483234
+[plus k=9] D(hybrid,20.86s): feasible=false gravA=3.182e-08 gravF=4.772e-08 focal=-4.475e-13 kind=FiniteSolved Delta/cert=0.483236  disc_cand=2000 cont_it=1 cont_status=converged macro=1 rt_exact=false
+[plus k=10] switch=(o=2,d=8,on)  A(pure-q)=FiniteSolved
+[plus k=10] B(uncorrected): feasible=false gravA=1.139e-07 gravF=1.708e-07 focal=-6.563e-06 kind=FiniteSolved
+[plus k=10] C(2-lever,77.04s): feasible=false gravA=-2.554e-05 gravF=-3.831e-05 focal=5.095e-08 kind=FiniteSolved Delta/cert=0.483231
+[plus k=10] D(hybrid,112.20s): feasible=false gravA=5.452e-09 gravF=8.177e-09 focal=-6.158e-06 kind=FiniteSolved Delta/cert=0.483247  disc_cand=10000 cont_it=5 cont_status=returned_to_discrete macro=5 rt_exact=false
+
+DONE PHASE 5 (D20 cliff retest, A/B/C/D comparison)

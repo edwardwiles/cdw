@@ -75,6 +75,14 @@ include(joinpath(MELITZ_DIR, "predictor_corrector.jl"))   # 2026-07-26 closure (
     # not previously included in this test file at all (zero test coverage) -- now included
     # so the kappa_of_g -> kappa_ratio_of_g / kappa -> kappa_ratio rename in this file is
     # actually compiled and exercisable, not merely assumed correct.
+include(joinpath(MELITZ_DIR, "lfd_preserving_state.jl"))   # 2026-07-30 hybrid chamber corrector
+    # session: this file was ADDED to include_melitz.jl on 2026-07-30 (joint-Aq session) but
+    # never added to THIS file's own explicit include list -- a genuine pre-existing gap (the
+    # "LFD-preserving joint (A,q)..." testset below silently depended on it, only ever
+    # exercised via an isolated standalone run, never the full suite). Fixed here rather than
+    # left in place, since the new hybrid-corrector testset below needs it too.
+include(joinpath(MELITZ_DIR, "hybrid_chamber_corrector.jl"))
+include(joinpath(MELITZ_DIR, "fixed_q_a_middle_loop.jl"))   # 2026-07-30 fixed-q A middle loop
 
 # ============================================================================
 # 1. Pareto draws
@@ -7743,6 +7751,269 @@ end
     end
 
     melitz_update_operator_at_theta!(lp_obj.op, lp_theta0, lp_ctx)
+end
+
+@testset "Hybrid chamber-aware LFD-preserving corrector (2026-07-30)" begin
+    # Governing prompt: melitz_hybrid_chamber_lfd_corrector_2026-07-30.
+    hc_policy = CappedEvaluation(10.0)
+    hc_obj, hc_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=hc_policy, inner_loop_opt=joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt"),
+        forbid_dense_fallback=true)
+    hc_ctx = hc_obj.γ
+    hc_D = hc_ctx.D
+    hc_sorted_ctx = hc_ctx.sorted_tail_ctx
+    hc_j = hc_ctx.target_country
+    hc_obj.use_cached_x = false; hc_obj.x .= NaN
+    hc_lfd0 = melitz_recover_lfd(hc_obj, hc_theta0)
+    @test hc_lfd0.lfd_ok
+    hc_pstar = hc_lfd0.weights
+    hc_A0, hc_f0, hc_gpj0, _, hc_q0 = expand_free_theta_logcutoff(
+        melitz_unpower_theta_free(hc_theta0, hc_ctx), hc_ctx)
+    hc_q_pivot, hc_cell_of_k = melitz_q_free_cell_map(hc_ctx)
+    hc_q_free_free_anchor = pivot_reduce(vec(hc_q0)[hc_ctx.f_free_lin], hc_q_pivot)
+    hc_g_anchor = hc_theta0[1]
+
+    function hc_build_state(qff_trial)
+        theta_t = vcat(hc_g_anchor, melitz_unpower_theta_free(hc_theta0, hc_ctx)[2:1+hc_D^2-1], qff_trial)
+        _, _, gpj_t, _, q_t = expand_free_theta_logcutoff(theta_t, hc_ctx)
+        A_t, st = melitz_cellwise_A_from_moments(hc_A0, hc_q0, q_t, hc_pstar, hc_sorted_ctx, hc_ctx.sigma)
+        f_t = melitz_f_from_Aq(A_t, q_t, gpj_t, hc_ctx)
+        return A_t, f_t, gpj_t, q_t, st
+    end
+    function hc_focal_eval(A_e, f_e, gpj_e)
+        melitz_update_operator_at_Afg!(hc_obj.op, A_e, f_e, gpj_e, hc_ctx)
+        return melitz_moment_residuals_under_p(hc_obj.op, hc_pstar)
+    end
+
+    @testset "Chamber signature: identical q -> identical signature; a crossing changes exactly one cell" begin
+        sig_a = melitz_chamber_signature(hc_q0, hc_sorted_ctx)
+        sig_b = melitz_chamber_signature(hc_q0, hc_sorted_ctx)
+        @test sig_a == sig_b
+        q_shift = copy(hc_q0)
+        o_t = hc_cell_of_k[1] |> k -> lin2od(k, hc_D)[1]
+        col = hc_sorted_ctx.sorted_log_z[:, o_t]
+        d_t = findfirst(k -> lin2od(hc_cell_of_k[k], hc_D)[1] == o_t, eachindex(hc_cell_of_k))
+        _, d_target = lin2od(hc_cell_of_k[d_t], hc_D)
+        k0 = melitz_active_tail_start(col, q_shift[o_t, d_target])
+        q_shift[o_t, d_target] = col[k0] + 1e-9 * abs(col[k0])   # cross exactly one draw
+        sig_c = melitz_chamber_signature(q_shift, hc_sorted_ctx)
+        @test melitz_chamber_signature_diff_count(sig_a, sig_c) == 1
+    end
+
+    @testset "Focal-link closed form is exact (matches operator evaluation and its own FD Jacobian)" begin
+        melitz_update_operator_at_Afg!(hc_obj.op, hc_A0, hc_f0, hc_gpj0, hc_ctx)
+        _, focal0 = melitz_moment_residuals_under_p(hc_obj.op, hc_pstar)
+        model0 = melitz_build_focal_link_chamber_model(hc_A0, hc_f0, hc_q0, focal0, hc_pstar, hc_ctx, hc_sorted_ctx)
+        q_row_j0 = [hc_q0[hc_j, d] for d in 1:hc_D]
+        @test isapprox(melitz_focal_link_value(model0, q_row_j0), focal0; atol=1e-12)
+
+        # a small within-chamber move on a row-j free cell: closed form must match the exact
+        # re-evaluated operator residual (not merely a first-order approximation).
+        k_rowj = findfirst(k -> lin2od(hc_cell_of_k[k], hc_D)[1] == hc_j, eachindex(hc_cell_of_k))
+        @test k_rowj !== nothing
+        qff_p = copy(hc_q_free_free_anchor); qff_p[k_rowj] += 1e-6
+        A_p, f_p, gpj_p, q_p, st_p = hc_build_state(qff_p)
+        @test all(==(:ok), st_p)
+        @test melitz_chamber_signature_diff_count(melitz_chamber_signature(hc_q0, hc_sorted_ctx),
+                                                   melitz_chamber_signature(q_p, hc_sorted_ctx)) == 0
+        _, focal_p_exact = hc_focal_eval(A_p, f_p, gpj_p)
+        q_row_j_p = [q_p[hc_j, d] for d in 1:hc_D]
+        focal_p_closed = melitz_focal_link_value(model0, q_row_j_p)
+        @test isapprox(focal_p_exact, focal_p_closed; atol=1e-9)
+
+        # exact Jacobian vs. central FD of the exact operator evaluation
+        d_test = lin2od(hc_cell_of_k[k_rowj], hc_D)[2]
+        jac = melitz_focal_link_jacobian_entry(model0, d_test, hc_q0[hc_j, d_test])
+        h = 1e-6
+        qff_pp = copy(hc_q_free_free_anchor); qff_pp[k_rowj] += h
+        qff_mm = copy(hc_q_free_free_anchor); qff_mm[k_rowj] -= h
+        A_pp, f_pp, gpj_pp, _, _ = hc_build_state(qff_pp)
+        A_mm, f_mm, gpj_mm, _, _ = hc_build_state(qff_mm)
+        _, foc_pp = hc_focal_eval(A_pp, f_pp, gpj_pp)
+        _, foc_mm = hc_focal_eval(A_mm, f_mm, gpj_mm)
+        fd = (foc_pp - foc_mm) / (2h)
+        @test isapprox(jac, fd; rtol=1e-6)
+    end
+
+    @testset "Discrete chamber selector materially reduces |A-gravity| via exact full reconstruction" begin
+        rng_hc = MersenneTwister(2026)
+        nq_hc = hc_D^2 - 2
+        qff_pert = hc_q_free_free_anchor .+ 3e-3 .* randn(rng_hc, nq_hc)
+        A_pert, _, _, _, st_pert = hc_build_state(qff_pert)
+        @test all(==(:ok), st_pert)
+        gA_pert = melitz_gravity_A_residual(A_pert, hc_ctx)
+
+        qff_disc, n_cand, best_node, _ = melitz_discrete_chamber_selector(hc_build_state, qff_pert, hc_ctx, hc_sorted_ctx;
+            gravity_tol=1e-10, max_depth=3, beam_width=50, lever_pool_size=40, half_window=40, max_candidates=500)
+        @test n_cand <= 500
+        @test abs(best_node.gravA) < abs(gA_pert)                      # search must not make things worse
+        @test abs(best_node.gravA) < 1e-6                              # material, quantified improvement
+        A_disc, _, _, _, st_disc = hc_build_state(qff_disc)
+        @test all(==(:ok), st_disc)
+        @test isapprox(melitz_gravity_A_residual(A_disc, hc_ctx), best_node.gravA; atol=1e-14)
+    end
+
+    @testset "Continuous focal corrector: converges, or correctly detects a chamber-boundary and returns control" begin
+        rng_hc2 = MersenneTwister(7)
+        k_rowj_all = [k for k in eachindex(hc_cell_of_k) if lin2od(hc_cell_of_k[k], hc_D)[1] == hc_j]
+        @test !isempty(k_rowj_all)
+        qff_pert2 = copy(hc_q_free_free_anchor)
+        for k in k_rowj_all
+            qff_pert2[k] += 2e-4 * randn(rng_hc2)
+        end
+        A0t, f0t, gpj0t, q0t, st0t = hc_build_state(qff_pert2)
+        @test all(==(:ok), st0t)
+        gA_pre = melitz_gravity_A_residual(A0t, hc_ctx)
+        _, focal_pre = hc_focal_eval(A0t, f0t, gpj0t)
+
+        qff_cont, status_cont, n_it, trace_cont = melitz_continuous_focal_corrector(hc_build_state, hc_focal_eval,
+            qff_pert2, hc_ctx, hc_sorted_ctx, hc_pstar; focal_tol=1e-9, max_iters=50)
+        @test status_cont in (:converged, :returned_to_discrete, :max_iters)
+        Ac, fc, gpjc, qc, stc = hc_build_state(qff_cont)
+        @test all(==(:ok), stc)
+        gA_post = melitz_gravity_A_residual(Ac, hc_ctx)
+        @test isapprox(gA_post, gA_pre; atol=1e-13)     # A-gravity untouched by the continuous layer
+        _, focal_post = hc_focal_eval(Ac, fc, gpjc)
+        @test abs(focal_post) <= abs(focal_pre)         # never makes the focal link worse
+        status_cont == :converged && @test abs(focal_post) < 1e-9
+    end
+
+    @testset "Full hybrid constructor: no NumericalFailure, no dense G, and a strict round-trip invariant" begin
+        rng_hc3 = MersenneTwister(11)
+        nq_hc = hc_D^2 - 2
+        before_dense = MELITZ_DENSE_G_MATERIALIZATIONS[]
+        for trial in 1:3
+            qff_pert3 = hc_q_free_free_anchor .+ 2e-3 .* randn(rng_hc3, nq_hc)
+            melitz_update_operator_at_theta!(hc_obj.op, hc_theta0, hc_ctx)
+            hyb = melitz_construct_hybrid_chamber_state(hc_theta0, hc_pstar, hc_ctx, hc_obj, hc_g_anchor, qff_pert3;
+                discrete_max_candidates=500)
+            @test all(==(:ok), hyb.A_status)
+            @test maximum(abs.(hyb.trade_residuals)) < 1e-6
+            @test isfinite(hyb.gravity_A_residual) && isfinite(hyb.gravity_f_residual) && isfinite(hyb.focal_residual)
+
+            session_hc = MelitzInnerSession(hc_obj, hc_ctx, hc_policy)
+            r_hyb = solve_melitz_delta!(session_hc, hyb.theta_free, hc_policy)
+            @test !(r_hyb isa NumericalFailure)
+            if hyb.feasible
+                @test r_hyb isa FiniteSolved
+            end
+
+            # Phase 4 round-trip invariant, strict: expand(reduce(explicit)) == explicit
+            @test hyb.roundtrip_max_abs_q < 1e-8
+            (abs(hyb.gravity_A_residual) < 1e-9 && abs(hyb.gravity_f_residual) < 1e-9) &&
+                @test hyb.roundtrip_exact
+        end
+        @test MELITZ_DENSE_G_MATERIALIZATIONS[] == before_dense
+    end
+
+    melitz_update_operator_at_theta!(hc_obj.op, hc_theta0, hc_ctx)
+end
+
+@testset "Governing prompt 2026-07-30 (fixed-q A middle loop, three-level architecture)" begin
+    mid_obj, mid_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+    mid_ctx = mid_obj.γ
+    mid_D = mid_ctx.D
+    mid_nA = mid_D^2 - 1
+    mid_policy = CappedEvaluation(10.0)
+    mid_theta_plain0 = melitz_unpower_theta_free(mid_theta0, mid_ctx)
+    mid_A0, mid_f0, mid_gpj0, mid_fjj0, mid_q0 = expand_free_theta_logcutoff(mid_theta_plain0, mid_ctx)
+    mid_A_free0 = mid_theta_plain0[2:1+mid_nA]
+    mid_session = MelitzInnerSession(mid_obj, mid_ctx, mid_policy)
+    mid_r0 = solve_melitz_delta!(mid_session, mid_theta0, mid_policy)
+    @test mid_r0 isa FiniteSolved
+
+    mid_sys = melitz_fixed_q_middle_constraint_system(mid_theta_plain0, mid_ctx, mid_obj)
+
+    @testset "Constraint system: correct row count, cross-checked vs melitz_origin_block_monotonicity_check" begin
+        @test length(mid_sys.rhs_A) == mid_D * (mid_D - 1)
+        for o in 1:mid_D
+            @test melitz_origin_block_monotonicity_check(o, mid_theta_plain0, mid_ctx, mid_obj)
+        end
+        resid = melitz_middle_constraint_residuals(mid_sys, mid_A_free0; coordinate=:logA)
+        @test all(resid[mid_sys.sense .== :ge] .>= -1e-6)
+        @test all(abs.(resid[mid_sys.kind .== :same_bin]) .< 1e-6)
+    end
+
+    @testset "A-gravity holds identically for ANY A_free (algebraic identity of the pivot)" begin
+        rng = MersenneTwister(101)
+        for _ in 1:10
+            A_free_pert = mid_A_free0 .+ 0.1 .* randn(rng, mid_nA)
+            logA_full = pivot_expand(A_free_pert, mid_ctx.A_pivot)
+            @test abs(dot(mid_ctx.c_full, logA_full)) < 1e-8
+        end
+    end
+
+    @testset "f-gravity is exactly redundant given fixed q + A-gravity (Phase 0 decisive claim)" begin
+        rng = MersenneTwister(102)
+        for _ in 1:15
+            A_free_pert = mid_A_free0 .+ 0.05 .* randn(rng, mid_nA)
+            theta_mid = melitz_fixed_q_state_theta(A_free_pert, mid_q0, mid_gpj0, mid_ctx)
+            Ap, fp, gpjp, fjjp = melitz_expand_theta(theta_mid, mid_ctx)
+            @test abs(dot(mid_ctx.c_full, vec(log.(Ap)))) < 1e-8
+            @test abs(dot(mid_ctx.c_full, vec(log.(fp)))) < 1e-6
+        end
+    end
+
+    @testset "No cutoff movement under A: zero participation switches by construction" begin
+        rng = MersenneTwister(103)
+        for _ in 1:15
+            A_free_pert = mid_A_free0 .+ 0.05 .* randn(rng, mid_nA)
+            theta_mid = melitz_fixed_q_state_theta(A_free_pert, mid_q0, mid_gpj0, mid_ctx)
+            Ap, fp, gpjp, fjjp = melitz_expand_theta(theta_mid, mid_ctx)
+            zhatp = melitz_baseline_cutoff(Ap, fp, mid_ctx.w, mid_ctx.tau, mid_ctx.expenditure, mid_ctx.sigma)
+            @test maximum(abs.(log.(zhatp) .- mid_q0)) < 1e-8
+        end
+    end
+
+    @testset "Exact log-A <-> log-H gradient transform" begin
+        h_free0 = melitz_h_free_from_A_free(mid_A_free0, mid_ctx)
+        @test maximum(abs.(melitz_A_free_from_h_free(h_free0, mid_ctx) .- mid_A_free0)) < 1e-10
+        grad_A = randn(MersenneTwister(104), mid_nA)
+        grad_H = melitz_gradient_A_free_to_h_free(grad_A, mid_ctx)
+        @test all(isapprox.(grad_H, .-grad_A ./ (mid_ctx.sigma - 1)))
+        # both coordinate systems must certify the SAME feasibility verdict
+        residA = melitz_middle_constraint_residuals(mid_sys, mid_A_free0; coordinate=:logA)
+        residH = melitz_middle_constraint_residuals(mid_sys, h_free0; coordinate=:logH)
+        @test all((residA .>= -1e-6) .== (residH .>= -1e-6))
+    end
+
+    @testset "Typed classification: middle eval wrapper never leaks NumericalFailure as a value" begin
+        res = melitz_middle_objective_and_gradient!(mid_session, mid_A_free0, mid_q0, mid_gpj0, mid_ctx; coordinate=:logA)
+        @test res.classification isa FiniteSolved
+        @test isapprox(res.Delta, mid_r0.Delta; atol=1e-6)
+        @test length(res.grad_free) == mid_nA
+    end
+
+    if KNITRO_AVAILABLE
+        @testset "solve_melitz_fixed_q_A_profile: no dense G, zero cutoff movement, gravity holds, no worse than anchor" begin
+            before_dense = MELITZ_DENSE_G_MATERIALIZATIONS[]
+            outer_opt = joinpath(@__DIR__, "..", "..", "melitz_outer_finite_delta_alg_direct_2026-07-27.opt")
+            mid_session.obj.use_cached_x = false; mid_session.obj.x .= NaN
+            res = solve_melitz_fixed_q_A_profile(mid_session, mid_q0, mid_gpj0, mid_A_free0, mid_ctx;
+                coordinate=:logA, max_evals=60, box=1.0, outer_loop_opt=outer_opt, sys=mid_sys)
+            @test res.r_final isa FiniteSolved
+            @test res.Delta_final_verified <= mid_r0.Delta + 1e-4
+            Af, ff, gpjf, fjjf = melitz_expand_theta(res.theta_free_final, mid_ctx)
+            zhatf = melitz_baseline_cutoff(Af, ff, mid_ctx.w, mid_ctx.tau, mid_ctx.expenditure, mid_ctx.sigma)
+            @test maximum(abs.(log.(zhatf) .- mid_q0)) < 1e-6
+            @test abs(dot(mid_ctx.c_full, vec(log.(Af)))) < 1e-6
+            @test abs(dot(mid_ctx.c_full, vec(log.(ff)))) < 1e-6
+            resid_final = melitz_middle_constraint_residuals(mid_sys, res.A_free_final; coordinate=:logA)
+            @test all(resid_final[mid_sys.sense .== :ge] .>= -1e-5)
+            @test MELITZ_DENSE_G_MATERIALIZATIONS[] == before_dense
+
+            # log-H parameterization finds a comparable solution
+            h_free0 = melitz_h_free_from_A_free(mid_A_free0, mid_ctx)
+            mid_session.obj.use_cached_x = false; mid_session.obj.x .= NaN
+            resH = solve_melitz_fixed_q_A_profile(mid_session, mid_q0, mid_gpj0, h_free0, mid_ctx;
+                coordinate=:logH, max_evals=60, box=2.0, outer_loop_opt=outer_opt, sys=mid_sys)
+            @test resH.r_final isa FiniteSolved
+            @test abs(res.Delta_final_verified - resH.Delta_final_verified) < 1e-3
+        end
+    end
+
+    melitz_update_operator_at_theta!(mid_obj.op, mid_theta0, mid_ctx)
 end
 
 println("\n" * "="^70)

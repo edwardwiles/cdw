@@ -1,0 +1,1 @@
+label,step,GT_from,GT_to,step_pp_used,Delta_before,Delta_after,kind,corrector_time_s,inner_time_s,dA_norm,dq_norm,df_norm,divergence_pstar,disc_cand,cont_iters,cont_status,macro_rounds,rt_exact,gravA_witness,gravF_witness,focal_witness

@@ -1,0 +1,50 @@
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+Julia threads: 20  BLAS threads: 1
+focal country index = 2
+D=20  nA=399  nq=398
+anchor solve: 3.35s  Delta0=0.4832764950  lfd_ok=true
+|b_q|=0.0003568347380732389
+minus distinct t (first 6): [0.008412617691546586, 0.010530457181724682, 0.014665291628666413, 0.031171519312824827, 0.05922542266674491, 0.06622306710852663]
+plus distinct t (first 6): [0.014773001744443036, 0.022965722477456072, 0.03277748871263066, 0.04326730784331752, 0.05289220183828663, 0.05763485636701641]
+
+====================================================================================================
+MINUS side (first 5 switches)
+====================================================================================================
+[minus k=1] A(pure-q)=AboveEvaluationCap B: feasible=true gravA=-5.096e-08 gravF=-7.644e-08 kind=FiniteSolved | ROUNDTRIP B: dlogA=1.043e-07 dlogf=1.564e-07 dq=1.443e-15
+[minus k=1] C(corrected,0.3s): feasible=true gravA=-5.096e-08 gravF=-7.644e-08 kind=FiniteSolved Delta/cert=0.483264 | ROUNDTRIP C: dlogA=1.043e-07 (@(3, 14)) dlogf=1.564e-07 (@(3, 14)) dq=1.443e-15
+[minus k=1] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[minus k=2] A(pure-q)=AboveEvaluationCap B: feasible=true gravA=-9.162e-11 gravF=-1.374e-10 kind=FiniteSolved | ROUNDTRIP B: dlogA=1.874e-10 dlogf=2.812e-10 dq=1.804e-15
+[minus k=2] C(corrected,0.2s): feasible=true gravA=-9.162e-11 gravF=-1.374e-10 kind=FiniteSolved Delta/cert=0.483277 | ROUNDTRIP C: dlogA=1.874e-10 (@(3, 14)) dlogf=2.812e-10 (@(3, 14)) dq=1.804e-15
+[minus k=2] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[minus k=3] A(pure-q)=AboveEvaluationCap B: feasible=false gravA=3.002e-06 gravF=4.504e-06 kind=FiniteSolved | ROUNDTRIP B: dlogA=6.143e-06 dlogf=9.214e-06 dq=1.554e-15
+[minus k=3] C(corrected,75.4s): feasible=false gravA=6.920e-06 gravF=1.038e-05 kind=FiniteSolved Delta/cert=0.483273 | ROUNDTRIP C: dlogA=1.416e-05 (@(3, 14)) dlogf=2.124e-05 (@(3, 14)) dq=1.554e-15
+[minus k=3] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[minus k=4] A(pure-q)=AboveEvaluationCap B: feasible=false gravA=2.641e-06 gravF=3.962e-06 kind=FiniteSolved | ROUNDTRIP B: dlogA=5.404e-06 dlogf=8.106e-06 dq=1.610e-15
+[minus k=4] C(corrected,86.7s): feasible=false gravA=6.559e-06 gravF=9.838e-06 kind=FiniteSolved Delta/cert=0.483269 | ROUNDTRIP C: dlogA=1.342e-05 (@(3, 14)) dlogf=2.013e-05 (@(3, 14)) dq=1.610e-15
+[minus k=4] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[minus k=5] A(pure-q)=AboveEvaluationCap B: feasible=false gravA=2.684e-06 gravF=4.026e-06 kind=FiniteSolved | ROUNDTRIP B: dlogA=5.491e-06 dlogf=8.237e-06 dq=2.054e-15
+[minus k=5] C(corrected,83.2s): feasible=false gravA=7.949e-06 gravF=1.192e-05 kind=FiniteSolved Delta/cert=0.483257 | ROUNDTRIP C: dlogA=1.626e-05 (@(3, 14)) dlogf=2.440e-05 (@(3, 14)) dq=2.054e-15
+[minus k=5] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+
+====================================================================================================
+PLUS side (first 5 switches)
+====================================================================================================
+[plus k=1] A(pure-q)=FiniteSolved B: feasible=true gravA=1.311e-07 gravF=1.967e-07 kind=FiniteSolved | ROUNDTRIP B: dlogA=2.683e-07 dlogf=4.025e-07 dq=1.166e-15
+[plus k=1] C(corrected,0.3s): feasible=true gravA=1.311e-07 gravF=1.967e-07 kind=FiniteSolved Delta/cert=0.483255 | ROUNDTRIP C: dlogA=2.683e-07 (@(3, 14)) dlogf=4.025e-07 (@(3, 14)) dq=1.166e-15
+[plus k=1] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[plus k=2] A(pure-q)=FiniteSolved B: feasible=false gravA=8.798e-07 gravF=1.320e-06 kind=FiniteSolved | ROUNDTRIP B: dlogA=1.800e-06 dlogf=2.700e-06 dq=1.693e-15
+[plus k=2] C(corrected,0.3s): feasible=false gravA=8.798e-07 gravF=1.320e-06 kind=FiniteSolved Delta/cert=0.483255 | ROUNDTRIP C: dlogA=1.800e-06 (@(3, 14)) dlogf=2.700e-06 (@(3, 14)) dq=1.693e-15
+[plus k=2] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[plus k=3] A(pure-q)=FiniteSolved B: feasible=false gravA=1.080e-06 gravF=1.620e-06 kind=FiniteSolved | ROUNDTRIP B: dlogA=2.210e-06 dlogf=3.315e-06 dq=2.054e-15
+[plus k=3] C(corrected,80.7s): feasible=false gravA=1.080e-06 gravF=1.620e-06 kind=FiniteSolved Delta/cert=0.483254 | ROUNDTRIP C: dlogA=2.210e-06 (@(3, 14)) dlogf=3.315e-06 (@(3, 14)) dq=2.054e-15
+[plus k=3] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[plus k=4] A(pure-q)=FiniteSolved B: feasible=false gravA=1.123e-06 gravF=1.684e-06 kind=FiniteSolved | ROUNDTRIP B: dlogA=2.297e-06 dlogf=3.446e-06 dq=1.554e-15
+[plus k=4] C(corrected,88.1s): feasible=false gravA=1.123e-06 gravF=1.684e-06 kind=FiniteSolved Delta/cert=0.483244 | ROUNDTRIP C: dlogA=2.297e-06 (@(3, 14)) dlogf=3.446e-06 (@(3, 14)) dq=1.554e-15
+[plus k=4] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+[plus k=5] A(pure-q)=FiniteSolved B: feasible=true gravA=-8.802e-08 gravF=-1.320e-07 kind=FiniteSolved | ROUNDTRIP B: dlogA=1.801e-07 dlogf=2.701e-07 dq=1.277e-15
+[plus k=5] C(corrected,0.3s): feasible=true gravA=-8.802e-08 gravF=-1.320e-07 kind=FiniteSolved Delta/cert=0.483242 | ROUNDTRIP C: dlogA=1.801e-07 (@(3, 14)) dlogf=2.701e-07 (@(3, 14)) dq=1.277e-15
+[plus k=5] discrepancy/residual ratio: A=2.046  F=2.046  (order-1 expected if pivot-driven)
+
+DONE PHASE 0 (roundtrip audit of the prior session's two-lever corrector)
