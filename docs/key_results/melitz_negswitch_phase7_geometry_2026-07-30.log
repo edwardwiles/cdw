@@ -1,0 +1,91 @@
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+
+====================================================================================================
+origin=14  label=below  t=0.0071507250378
+====================================================================================================
+breakpoints (sorted unique cutoffs, K=20): [1.0971620931618526, 1.2440486375559472, 1.2831286203925139, 1.2889574660522976, 1.2967601330089054, 1.2982068372085713, 1.3000075761824688, 1.303355551909687, 1.3038824988355264, 1.3038838041045335, 1.30441077903309, 1.3047892586171983, 1.305974881069396, 1.306910078209927, 1.307945575288937, 1.3089385436015666, 1.3197026885412573, 1.3233012590719333, 1.325174150082678, 1.350128973115052]
+rank (destination -> breakpoint index): [6, 16, 20, 12, 5, 8, 15, 14, 13, 3, 2, 11, 7, 1, 19, 9, 18, 4, 10, 17]
+H[d] (required tail y-moment per destination):
+  d= 1  rank= 6  H=0.18184760  interval[rank]: ndraw=99 ymin=1.47919 ymax=1.48218  achievable-tail-max=n/a
+  d= 2  rank=16  H=0.17130888  interval[rank]: ndraw=531 ymin=1.49757 ymax=1.51604  achievable-tail-max=n/a
+  d= 3  rank=20  H=0.13683589  interval[rank]: ndraw=5785 ymin=1.56884 ymax=5.96818  achievable-tail-max=n/a
+  d= 4  rank=12  H=0.17529892  interval[rank]: ndraw=61 ymin=1.49052 ymax=1.49245  achievable-tail-max=n/a
+  d= 5  rank= 5  H=0.18332397  interval[rank]: ndraw=76 ymin=1.47677 ymax=1.47906  achievable-tail-max=n/a
+  d= 6  rank= 8  H=0.17670210  interval[rank]: ndraw=30 ymin=1.48798 ymax=1.48884  achievable-tail-max=n/a
+  d= 7  rank=15  H=0.17225425  interval[rank]: ndraw=50 ymin=1.49586 ymax=1.49743  achievable-tail-max=n/a
+  d= 8  rank=14  H=0.17324646  interval[rank]: ndraw=52 ymin=1.4941 ymax=1.49572  achievable-tail-max=n/a
+  d= 9  rank=13  H=0.17414810  interval[rank]: ndraw=47 ymin=1.49249 ymax=1.494  achievable-tail-max=n/a
+  d=10  rank= 3  H=0.19792513  interval[rank]: ndraw=351 ymin=1.45352 ymax=1.46337  achievable-tail-max=n/a
+  d=11  rank= 2  H=0.24769248  interval[rank]: ndraw=2803 ymin=1.38765 ymax=1.45345  achievable-tail-max=n/a
+  d=12  rank=11  H=0.17566813  interval[rank]: ndraw=18 ymin=1.48979 ymax=1.49042  achievable-tail-max=n/a
+  d=13  rank= 7  H=0.18002886  interval[rank]: ndraw=178 ymin=1.48226 ymax=1.48796  achievable-tail-max=n/a
+  d=14  rank= 1  H=0.61605170  interval[rank]: ndraw=23705 ymin=1.14923 ymax=1.38756  achievable-tail-max=n/a
+  d=15  rank=19  H=0.15665926  interval[rank]: ndraw=1029 ymin=1.5255 ymax=1.56874  achievable-tail-max=n/a
+  d=16  rank= 9  H=0.17618690  interval[rank]: ndraw=1 ymin=1.48887 ymax=1.48887  achievable-tail-max=n/a
+  d=17  rank=18  H=0.15827428  interval[rank]: ndraw=83 ymin=1.52228 ymax=1.52546  achievable-tail-max=n/a
+  d=18  rank= 4  H=0.19152550  interval[rank]: ndraw=446 ymin=1.46341 ymax=1.47668  achievable-tail-max=n/a
+  d=19  rank=10  H=0.17618173  interval[rank]: ndraw=30 ymin=1.4889 ymax=1.48977  achievable-tail-max=n/a
+  d=20  rank=17  H=0.16143083  interval[rank]: ndraw=162 ymin=1.51605 ymax=1.52218  achievable-tail-max=n/a
+
+Focus: destination d=19 (the switching cell) -- rank=10, H=0.17618173158922587
+Tail intervals [rank..K] for d=19:
+  interval k=10  ndraw=30  ymin=1.4889  ymax=1.48977
+  interval k=11  ndraw=18  ymin=1.48979  ymax=1.49042
+  interval k=12  ndraw=61  ymin=1.49052  ymax=1.49245
+  interval k=13  ndraw=47  ymin=1.49249  ymax=1.494
+  interval k=14  ndraw=52  ymin=1.4941  ymax=1.49572
+  interval k=15  ndraw=50  ymin=1.49586  ymax=1.49743
+  interval k=16  ndraw=531  ymin=1.49757  ymax=1.51604
+  interval k=17  ndraw=162  ymin=1.51605  ymax=1.52218
+  interval k=18  ndraw=83  ymin=1.52228  ymax=1.52546
+  interval k=19  ndraw=1029  ymin=1.5255  ymax=1.56874
+  interval k=20  ndraw=5785  ymin=1.56884  ymax=5.96818
+loose upper bound on achievable tail moment (all unit mass, best interval per position) is NOT simply summed -- reporting per-interval box only, full answer is the LP result already computed.
+compressed LP feasible = true
+
+====================================================================================================
+origin=14  label=above  t=0.0087302936151
+====================================================================================================
+breakpoints (sorted unique cutoffs, K=20): [1.097162092630202, 1.2440486387432648, 1.2831286201820917, 1.2889574674032285, 1.2967601353998115, 1.298206833354564, 1.3000075761468215, 1.303355551652897, 1.3038829501112386, 1.3038833788935924, 1.3044107830672351, 1.3047892576552071, 1.3059748783017244, 1.3069100817143748, 1.307945574323399, 1.3089385414985923, 1.319702689863932, 1.323301260112842, 1.3251741494632967, 1.3501289719079643]
+rank (destination -> breakpoint index): [6, 16, 20, 12, 5, 8, 15, 14, 13, 3, 2, 11, 7, 1, 19, 9, 18, 4, 10, 17]
+H[d] (required tail y-moment per destination):
+  d= 1  rank= 6  H=0.18184760  interval[rank]: ndraw=99 ymin=1.47919 ymax=1.48218  achievable-tail-max=n/a
+  d= 2  rank=16  H=0.17130888  interval[rank]: ndraw=531 ymin=1.49757 ymax=1.51604  achievable-tail-max=n/a
+  d= 3  rank=20  H=0.13683589  interval[rank]: ndraw=5785 ymin=1.56884 ymax=5.96818  achievable-tail-max=n/a
+  d= 4  rank=12  H=0.17529892  interval[rank]: ndraw=61 ymin=1.49052 ymax=1.49245  achievable-tail-max=n/a
+  d= 5  rank= 5  H=0.18332397  interval[rank]: ndraw=76 ymin=1.47677 ymax=1.47906  achievable-tail-max=n/a
+  d= 6  rank= 8  H=0.17670210  interval[rank]: ndraw=30 ymin=1.48798 ymax=1.48884  achievable-tail-max=n/a
+  d= 7  rank=15  H=0.17225425  interval[rank]: ndraw=50 ymin=1.49586 ymax=1.49743  achievable-tail-max=n/a
+  d= 8  rank=14  H=0.17324646  interval[rank]: ndraw=52 ymin=1.4941 ymax=1.49572  achievable-tail-max=n/a
+  d= 9  rank=13  H=0.17414810  interval[rank]: ndraw=47 ymin=1.49249 ymax=1.494  achievable-tail-max=n/a
+  d=10  rank= 3  H=0.19792513  interval[rank]: ndraw=351 ymin=1.45352 ymax=1.46337  achievable-tail-max=n/a
+  d=11  rank= 2  H=0.24769248  interval[rank]: ndraw=2803 ymin=1.38765 ymax=1.45345  achievable-tail-max=n/a
+  d=12  rank=11  H=0.17566813  interval[rank]: ndraw=18 ymin=1.48979 ymax=1.49042  achievable-tail-max=n/a
+  d=13  rank= 7  H=0.18002886  interval[rank]: ndraw=178 ymin=1.48226 ymax=1.48796  achievable-tail-max=n/a
+  d=14  rank= 1  H=0.61605170  interval[rank]: ndraw=23705 ymin=1.14923 ymax=1.38756  achievable-tail-max=n/a
+  d=15  rank=19  H=0.15665926  interval[rank]: ndraw=1029 ymin=1.5255 ymax=1.56874  achievable-tail-max=n/a
+  d=16  rank= 9  H=0.17618690  interval[rank]: ndraw=0 ymin=Inf ymax=-Inf  achievable-tail-max=n/a
+  d=17  rank=18  H=0.15827428  interval[rank]: ndraw=83 ymin=1.52228 ymax=1.52546  achievable-tail-max=n/a
+  d=18  rank= 4  H=0.19152550  interval[rank]: ndraw=446 ymin=1.46341 ymax=1.47668  achievable-tail-max=n/a
+  d=19  rank=10  H=0.17618173  interval[rank]: ndraw=31 ymin=1.48887 ymax=1.48977  achievable-tail-max=n/a
+  d=20  rank=17  H=0.16143083  interval[rank]: ndraw=162 ymin=1.51605 ymax=1.52218  achievable-tail-max=n/a
+
+Focus: destination d=19 (the switching cell) -- rank=10, H=0.17618173158922587
+Tail intervals [rank..K] for d=19:
+  interval k=10  ndraw=31  ymin=1.48887  ymax=1.48977
+  interval k=11  ndraw=18  ymin=1.48979  ymax=1.49042
+  interval k=12  ndraw=61  ymin=1.49052  ymax=1.49245
+  interval k=13  ndraw=47  ymin=1.49249  ymax=1.494
+  interval k=14  ndraw=52  ymin=1.4941  ymax=1.49572
+  interval k=15  ndraw=50  ymin=1.49586  ymax=1.49743
+  interval k=16  ndraw=531  ymin=1.49757  ymax=1.51604
+  interval k=17  ndraw=162  ymin=1.51605  ymax=1.52218
+  interval k=18  ndraw=83  ymin=1.52228  ymax=1.52546
+  interval k=19  ndraw=1029  ymin=1.5255  ymax=1.56874
+  interval k=20  ndraw=5785  ymin=1.56884  ymax=5.96818
+loose upper bound on achievable tail moment (all unit mass, best interval per position) is NOT simply summed -- reporting per-interval box only, full answer is the LP result already computed.
+compressed LP feasible = false
+
+DONE PHASE 7

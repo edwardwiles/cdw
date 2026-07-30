@@ -1,0 +1,16 @@
+k,label,t,reduced_kind,reduced_Delta,reduced_cert,reduced_src,prod_kind,prod_Delta,prod_cert,prod_src,match,fingerprint,switch_o,switch_d,switch_dir,switch_row_s
+1,below,0.008094941768019871,FiniteSolved,0.48327663890560635,NaN,,FiniteSolved,0.48327663890560635,NaN,,true,13457575247977251400,14,19,on,13761
+1,at,0.008412617691546586,AboveEvaluationCap,NaN,367266.68590432307,live_dual_threshold,AboveEvaluationCap,NaN,367266.68590432307,live_dual_threshold,true,98949660289214409,14,19,on,13761
+1,above,0.008730293615073301,AboveEvaluationCap,NaN,107281.44543094223,live_dual_threshold,AboveEvaluationCap,NaN,107281.44543094223,live_dual_threshold,true,16552460572834971466,14,19,on,13761
+2,below,0.010212781258197967,AboveEvaluationCap,NaN,80209.992725002,live_dual_threshold,AboveEvaluationCap,NaN,80209.992725002,live_dual_threshold,true,1264311408677396738,14,16,off,13761
+2,at,0.010530457181724682,AboveEvaluationCap,NaN,618310.434642717,live_dual_threshold,AboveEvaluationCap,NaN,618310.434642717,live_dual_threshold,true,8978163896962000647,14,16,off,13761
+2,above,0.010848133105251397,AboveEvaluationCap,NaN,2.916803067207014e6,live_dual_threshold,AboveEvaluationCap,NaN,2.916803067207014e6,live_dual_threshold,true,7316552771659572314,14,16,off,13761
+3,below,0.014045066461625153,AboveEvaluationCap,NaN,212611.52727330526,live_dual_threshold,AboveEvaluationCap,NaN,212611.52727330526,live_dual_threshold,true,12499317179176655549,2,14,on,30241
+3,at,0.014665291628666413,AboveEvaluationCap,NaN,466767.6129034356,live_dual_threshold,AboveEvaluationCap,NaN,466767.6129034356,live_dual_threshold,true,2716606961934431284,2,14,on,30241
+3,above,0.015285516795707672,AboveEvaluationCap,NaN,292833.85985378607,live_dual_threshold,AboveEvaluationCap,NaN,292833.85985378607,live_dual_threshold,true,9108358512873306220,2,14,on,30241
+4,below,0.028695585160201063,AboveEvaluationCap,NaN,258141.25006216383,live_dual_threshold,AboveEvaluationCap,NaN,258141.25006216383,live_dual_threshold,true,8393241504998038826,18,7,off,65179
+4,at,0.031171519312824827,AboveEvaluationCap,NaN,568315.5953645968,live_dual_threshold,AboveEvaluationCap,NaN,568315.5953645968,live_dual_threshold,true,10387233178384173844,18,7,off,65179
+4,above,0.03364745346544859,AboveEvaluationCap,NaN,177212.41858440495,live_dual_threshold,AboveEvaluationCap,NaN,177212.41858440495,live_dual_threshold,true,4608370142614978792,18,7,off,65179
+5,below,0.05817577600047765,AboveEvaluationCap,NaN,227384.2131393641,live_dual_threshold,AboveEvaluationCap,NaN,227384.2131393641,live_dual_threshold,true,10545615803616568308,14,16,off,26324
+5,at,0.05922542266674491,AboveEvaluationCap,NaN,3.0778066825137017e6,live_dual_threshold,AboveEvaluationCap,NaN,3.0778066825137017e6,live_dual_threshold,true,2026380260662895698,14,16,off,26324
+5,above,0.06027506933301217,AboveEvaluationCap,NaN,170473.833983061,live_dual_threshold,AboveEvaluationCap,NaN,170473.833983061,live_dual_threshold,true,9849736121239724945,14,16,off,26324

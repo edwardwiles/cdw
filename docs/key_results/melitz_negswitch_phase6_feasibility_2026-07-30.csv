@@ -1,0 +1,3 @@
+label,t,origin,compressed_feasible,reference_feasible,monotonicity_ok,full_screen_infeasible_origin
+below,0.007150725037814599,14,true,true,true,-1
+above,0.008730293615073301,14,false,false,true,14

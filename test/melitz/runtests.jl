@@ -7495,6 +7495,176 @@ end
     end
 end
 
+@testset "D20 negative-switch geometry audit (2026-07-30)" begin
+    # docs/melitz_d20_negative_switch_geometry_audit_2026-07-30.md. D4 (FIXTURE) fixture --
+    # the real-D20 findings themselves are validated by one-off scripts (this repo's own
+    # established convention for D20-scale work, matching every prior Melitz session's own
+    # test-suite/script split), not replayed here at D20 cost.
+    sw_obj, sw_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+    sw_ctx = sw_obj.γ
+    sw_D = sw_ctx.D; sw_nA = sw_D^2 - 1; sw_nq = sw_D^2 - 2
+    sw_obj.use_cached_x = false; sw_obj.x .= NaN
+    sw_lfd0 = melitz_recover_lfd(sw_obj, sw_theta0)
+    @test sw_lfd0.lfd_ok
+    sw_x0 = copy(sw_lfd0.dual_x)
+    sw_sorted_ctx = sw_ctx.sorted_tail_ctx
+
+    sw_stage = melitz_build_reduced_q_stage(sw_theta0, sw_x0, sw_ctx, sw_obj, 1;
+        bandwidth_policy=PowerScaledQBandwidth(1e-3, 20_000, 0.5), target_switches=40)
+    @test sw_stage !== nothing
+    sw_bq = sw_stage.q_basis_free
+
+    @testset "Item 2: exact first-switch locations match melitz_q_direction_two_sided_crossings" begin
+        for sign in (1, -1)
+            events = melitz_q_direction_exact_switches(sw_theta0, sw_bq, sw_ctx, sw_sorted_ctx;
+                sign=sign, n_switches=6, t_max=1.0)
+            @test !isempty(events)
+            # events must be sorted ascending in t.
+            @test issorted([e.t for e in events])
+            for (kidx, ev) in enumerate(events)
+                eps = max(1e-12, ev.t * 1e-9)
+                tp_below, tm_below = melitz_q_direction_two_sided_crossings(sw_theta0, sw_bq, ev.t - eps, sw_ctx, sw_sorted_ctx)
+                tp_above, tm_above = melitz_q_direction_two_sided_crossings(sw_theta0, sw_bq, ev.t + eps, sw_ctx, sw_sorted_ctx)
+                n_below = sign == 1 ? tp_below : tm_below
+                n_above = sign == 1 ? tp_above : tm_above
+                @test n_below == kidx - 1
+                @test n_above == kidx
+            end
+        end
+    end
+
+    @testset "Item 1: reduced-q state map / production (:logf) / direct evaluator agree at s=0 and at a displaced point" begin
+        events_m = melitz_q_direction_exact_switches(sw_theta0, sw_bq, sw_ctx, sw_sorted_ctx;
+            sign=-1, n_switches=3, t_max=1.0)
+        @test !isempty(events_m)
+        t1 = events_m[1].t
+        for tt in (0.0, 0.5 * t1)
+            th_lc = copy(melitz_unpower_theta_free(sw_theta0, sw_ctx))
+            th_lc[1+sw_nA+1:end] .-= tt .* sw_bq
+            A_, f_, gpj_, fjj_ = melitz_expand_theta(th_lc, sw_ctx)
+            ctx_logf = merge(sw_ctx, (outer_parameterization=:logf,))
+            p_ = MelitzPrimitives(sw_D, sw_ctx.sigma, sw_ctx.theta_star, sw_ctx.target_country,
+                sw_ctx.tau, sw_ctx.w, A_, f_, gpj_)
+            th_logf = melitz_reduce_theta(p_, ctx_logf)
+            A2_, f2_, gpj2_, _ = melitz_expand_theta(th_logf, ctx_logf)
+            @test isapprox(A_, A2_; atol=1e-12)
+            @test isapprox(f_, f2_; atol=1e-10)
+            @test isapprox(gpj_, gpj2_; atol=1e-12)
+
+            sw_obj.use_cached_x = false; sw_obj.x .= NaN
+            lfd_lc = melitz_recover_lfd(sw_obj, th_lc)
+            obj_logf, _ = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logf,
+                policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+            obj_logf.use_cached_x = false; obj_logf.x .= NaN
+            lfd_logf = melitz_recover_lfd(obj_logf, th_logf)
+            if lfd_lc.lfd_ok && lfd_logf.lfd_ok
+                @test isapprox(lfd_lc.Delta, lfd_logf.Delta; rtol=1e-6)
+            end
+        end
+    end
+
+    @testset "Item 7: identical displaced state classifies identically through reduced-q and production-equivalent (:logf) wrappers, across a FiniteSolved and a non-FiniteSolved bracket" begin
+        events_m = melitz_q_direction_exact_switches(sw_theta0, sw_bq, sw_ctx, sw_sorted_ctx;
+            sign=-1, n_switches=3, t_max=1.0)
+        t1 = events_m[1].t
+        eps = 0.3 * t1
+        ctx_logf2 = merge(sw_ctx, (outer_parameterization=:logf,))
+        obj_logf2, _ = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logf,
+            policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+        for tt in (t1 - eps, t1 + eps)
+            th_lc = copy(melitz_unpower_theta_free(sw_theta0, sw_ctx))
+            th_lc[1+sw_nA+1:end] .-= tt .* sw_bq
+            session_lc = MelitzInnerSession(sw_obj, sw_ctx, CappedEvaluation(10.0))
+            r_lc = solve_melitz_delta!(session_lc, th_lc, CappedEvaluation(10.0))
+
+            A_, f_, gpj_, _ = melitz_expand_theta(th_lc, sw_ctx)
+            p_ = MelitzPrimitives(sw_D, sw_ctx.sigma, sw_ctx.theta_star, sw_ctx.target_country,
+                sw_ctx.tau, sw_ctx.w, A_, f_, gpj_)
+            th_logf = melitz_reduce_theta(p_, ctx_logf2)
+            session_logf = MelitzInnerSession(obj_logf2, ctx_logf2, CappedEvaluation(10.0))
+            r_logf = solve_melitz_delta!(session_logf, th_logf, CappedEvaluation(10.0))
+
+            @test nameof(typeof(r_lc)) == nameof(typeof(r_logf))
+            if r_lc isa FiniteSolved && r_logf isa FiniteSolved
+                @test isapprox(r_lc.Delta, r_logf.Delta; rtol=1e-4)
+            end
+        end
+    end
+
+    @testset "Item 8: independent feasibility certificate (compressed origin-block LP vs. full-W reference LP) agree" begin
+        events_m = melitz_q_direction_exact_switches(sw_theta0, sw_bq, sw_ctx, sw_sorted_ctx;
+            sign=-1, n_switches=1, t_max=1.0)
+        @test !isempty(events_m)
+        ev1 = events_m[1]
+        eps = ev1.t * 0.3
+        for tt in (ev1.t - eps, ev1.t + eps)
+            th_lc = copy(melitz_unpower_theta_free(sw_theta0, sw_ctx))
+            th_lc[1+sw_nA+1:end] .-= tt .* sw_bq
+            feas_c = melitz_origin_block_lp(ev1.o, th_lc, sw_ctx, sw_obj)
+            feas_r = melitz_origin_block_lp_reference(ev1.o, th_lc, sw_ctx, sw_obj)
+            @test feas_c == feas_r
+        end
+    end
+
+    @testset "Item 5/9: AboveEvaluationCap certificates are always finite (no sentinel/overflow contamination) across a batch of bracket points, plus/minus asymmetry sanity" begin
+        n_above_cap = 0; n_finite = 0; n_infinite = 0; n_fail = 0
+        for sign in (1, -1)
+            events = melitz_q_direction_exact_switches(sw_theta0, sw_bq, sw_ctx, sw_sorted_ctx;
+                sign=sign, n_switches=5, t_max=1.0)
+            for (kidx, ev) in enumerate(events)
+                eps = max(1e-10, ev.t * 0.1)
+                for tt in (ev.t - eps, ev.t + eps)
+                    th_lc = copy(melitz_unpower_theta_free(sw_theta0, sw_ctx))
+                    th_lc[1+sw_nA+1:end] .+= sign .* tt .* sw_bq
+                    session_lc = MelitzInnerSession(sw_obj, sw_ctx, CappedEvaluation(10.0))
+                    r = solve_melitz_delta!(session_lc, th_lc, CappedEvaluation(10.0))
+                    if r isa AboveEvaluationCap
+                        n_above_cap += 1
+                        @test isfinite(r.certified_lower_bound)
+                        @test !isnan(r.certified_lower_bound)
+                    elseif r isa FiniteSolved
+                        n_finite += 1
+                    elseif r isa InfiniteDeltaCertified
+                        n_infinite += 1
+                    else
+                        n_fail += 1
+                    end
+                end
+            end
+        end
+        @test n_above_cap + n_finite + n_infinite > 0
+        # Item 10: no NumericalFailure across this batch of bracket points.
+        @test n_fail == 0
+    end
+
+    @testset "Item 5 (functor-level): a raw non-finite objective evaluation is never returned to KNITRO and never recorded as a certificate" begin
+        # Directly exercise the NEW `!isfinite(f)` guard (cc_bundle.jl, 2026-07-30 fix) by
+        # forcing a NaN raw objective via a NaN dual coordinate -- deterministic, no need to
+        # reproduce the live astronomical-Newton-step overflow that originally surfaced this.
+        melitz_update_operator_at_theta!(sw_obj.op, melitz_unpower_theta_free(sw_theta0, sw_ctx), sw_ctx)
+        n_moments = sw_ctx.moment_layout.num_moments
+        x_nan = zeros(1 + n_moments)
+        x_nan[2] = NaN
+        sw_obj.threshold_crossed[] = false
+        sw_obj.threshold_crossing_bound[] = NaN
+        ret = sw_obj(x_nan)
+        @test ret == -KNITRO.KN_INFINITY
+        @test isnan(ret) == false
+        # The non-finite evaluation must NOT be recorded as a weak-duality certificate.
+        @test sw_obj.threshold_crossed[] == false
+        melitz_update_operator_at_theta!(sw_obj.op, melitz_unpower_theta_free(sw_theta0, sw_ctx), sw_ctx)
+    end
+
+    @testset "Item 11: no dense G materialized by the exact switch-geometry enumeration or the origin-block LP" begin
+        before = MELITZ_DENSE_G_MATERIALIZATIONS[]
+        events_m = melitz_q_direction_exact_switches(sw_theta0, sw_bq, sw_ctx, sw_sorted_ctx;
+            sign=-1, n_switches=3, t_max=1.0)
+        melitz_origin_block_lp(events_m[1].o, melitz_unpower_theta_free(sw_theta0, sw_ctx), sw_ctx, sw_obj)
+        @test MELITZ_DENSE_G_MATERIALIZATIONS[] == before
+    end
+end
+
 println("\n" * "="^70)
 println("Melitz Delta-star test suite (active minimal-moment closure) complete.")
 println("="^70)

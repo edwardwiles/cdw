@@ -337,6 +337,21 @@ const MELITZ_PRODUCTION_DENSE_SCREEN_CALLS = Ref(0)
 const MELITZ_DIAGNOSTIC_DENSE_SCREEN_CALLS = Ref(0)
 const MELITZ_MATRIX_FREE_RANGE_SCREEN_CALLS = Ref(0)   # 2026-07-26 closure (Phase 7)
 
+# 2026-07-30 (negative-switch geometry audit): opt-in, disabled-by-default raw objective-value
+# trace for MelitzCCBundle's functor (cc_bundle.jl). When MELITZ_OBJECTIVE_TRACE_ENABLED[] is
+# true, every functor call appends (f, threshold_crossed_now) to MELITZ_OBJECTIVE_TRACE[] --
+# used ONLY by diagnostic scripts auditing exactly what raw objective values KNITRO's inner
+# solve evaluated before a -300/"unbounded" exit (Phase 1 of
+# docs/melitz_d20_negative_switch_geometry_audit_2026-07-30.md), never read by production code.
+# Zero cost when disabled beyond one Bool check; `melitz_objective_trace_reset!()` clears the
+# buffer and must be called before each traced solve to avoid mixing trajectories.
+const MELITZ_OBJECTIVE_TRACE_ENABLED = Ref(false)
+const MELITZ_OBJECTIVE_TRACE = Vector{Tuple{Float64,Bool}}()
+function melitz_objective_trace_reset!()
+    empty!(MELITZ_OBJECTIVE_TRACE)
+    return nothing
+end
+
 const MELITZ_ALL_COUNTER_REFS = (
     sorted_moment_calls=MELITZ_SORTED_MOMENT_CALLS, dense_moment_calls=MELITZ_DENSE_MOMENT_CALLS,
     sorted_outer_gradient_calls=MELITZ_SORTED_OUTER_GRADIENT_CALLS,

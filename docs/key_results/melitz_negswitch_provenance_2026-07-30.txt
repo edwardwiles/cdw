@@ -1,0 +1,108 @@
+Melitz D20 negative-switch geometry audit -- provenance
+========================================================
+
+Session date: 2026-07-30
+Repo: trade_robustness_modular (/bbkinghome/edav/gravity_robustness/trade_robustness_modular)
+Branch: melitz/fullD-delta-star
+HEAD at session start: 2c5c30ab5db2e95675040736694bb968adf4e5e6
+  ("Melitz reduced-q NumericalFailure forensic audit: root-cause and fix (2026-07-30)")
+  Confirmed via `git log`/`git status` before any edit; working tree clean except pre-existing
+  untracked scratch directories inherited from other, unrelated sessions (unaffected).
+
+Files modified this session (git diff --stat vs HEAD):
+  src/melitz/backend_config.jl |  15 ++
+  src/melitz/cc_bundle.jl      |  32 +++-
+  src/melitz/include_melitz.jl |   1 +
+  test/melitz/runtests.jl      | 170 +++++++++++
+  4 files changed, 217 insertions(+), 1 deletion(-)
+No Ricardian (cc_algo/) file touched. No file outside src/melitz/, test/melitz/, docs/,
+scripts/ touched.
+
+New files:
+  src/melitz/reduced_q_switch_geometry.jl
+  docs/melitz_d20_negative_switch_geometry_audit_2026-07-30.md
+  docs/key_results/melitz_negswitch_*_2026-07-30.{csv,log,txt}
+  scripts/melitz_negswitch_*_2026-07-30.jl
+
+Toolchain:
+  Julia:  1.12.6 (juliaup)
+  KNITRO: 13.0.1, pinned via .knitro_env.sh (KNITRODIR=/opt/shared_sw/knitro/13.0.1),
+          ZIENA_LICENSE=/etc/sharedsw_licenses/ziena.txt
+  Julia threads: 20 (D20 diagnostic scripts, per src/melitz/CLAUDE.md's own standing
+          instruction; melitz_thread_startup_report() confirmed 20 available, BLAS=1 at every
+          script's own start) / 1 (test suite, per this repo's own convention)
+  BLAS threads: 1 (OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1) throughout, per this repo's own
+          hard-cap convention.
+
+Fixture / anchor / direction (real D20):
+  Data: real_data/noah_D20/{pi,L,tau,countries}.csv
+  Focal country: "fra" (index 2)
+  Calibration: calibrate_melitz_pareto(sigma=2.5, theta_star=:estimate, focal_country=2,
+    p_min=0.001, wage_tol=1e-8, gravity_tol=1e-6)
+  W = 80,000, QMC seed = 1
+  theta0: loaded from docs/key_results/melitz_qbw_phase3_theta_q_2026-07-29.csv, row
+    ("realD20_seed1_W80000", 0.5) -- the exact Gate 3B / forensic-session fixture.
+  Delta0 = 0.4832764950468883 (bit-matches every prior session's own documented value)
+  Policy: CappedEvaluation(10.0) throughout.
+  Direction: melitz_build_reduced_q_stage(theta0, x0, ctx, obj, 1;
+    bandwidth_policy=PowerScaledQBandwidth(1e-3, 80_000, 0.5), target_switches=100)
+    r_basis = |b_q| = 0.000357 (matches Gate 3B's own documented value exactly)
+    crossings at s=+-1: (+117,-100) (matches Gate 3B's own documented value exactly)
+
+Key live-evidence numbers (see accompanying CSVs/logs for full detail):
+  - Tri-backend anchor reproduction: reduced-q state map / direct evaluator / production
+    (:logf)-equivalent all agree exactly (max diff 0.0 to ~1e-14).
+  - Phase 1 (4.9823e8 provenance): 14 raw callback evaluations at the h=0.5 minus-side capped
+    solve; first crossing at call 3 (f=-7.85e7); 5 literal NaN evaluations at calls 5-9 (never
+    recorded, but returned raw to KNITRO pre-fix -- the newly-fixed robustness gap); LAST call
+    (14) f=-4.9823190135746557e8, matching the reported certified_lower_bound exactly, both
+    pre- and post-fix (identical trajectory, fix did not alter this specific reproduction).
+  - Phase 2/3 (exact switch thresholds): first minus-side switch at t=8.4126176915e-03, cell
+    (o=14,d=19), QMC row s=13761 (z=1.3038834644...), turning on. Cross-checked against
+    melitz_q_direction_two_sided_crossings: exact match at 9 of first 10 thresholds (one
+    single-count discrepancy at k=7, disclosed, not resolved).
+  - Phase 3/4 (bracketing + cross-backend): FiniteSolved (Delta=0.483277) just below the first
+    switch -> AboveEvaluationCap (bit-identical certified_lower_bound between reduced-q and
+    production-equivalent pathways) at and above it; all of switches 2-5 stay
+    AboveEvaluationCap on both sides.
+  - Phase 5 (affected-row check): raw melitz_firm-based active/inactive determination at the
+    switching row matches the matrix-free operator's own op.bin[]/rank[] lookup exactly, both
+    sides.
+  - Phase 6 (feasibility LP): origin 14's compressed origin-block LP and an independent
+    full-W-row reference LP agree exactly: feasible just below the first switch, INFEASIBLE
+    just above it. Full 20-origin screen: PASS below, INFEASIBLE(origin=14) above.
+  - Phase 7 (geometry): destination d=16's own rank-9 interval has exactly 1 of 80,000 draws
+    below the switch, 0 above -- the concrete mechanism.
+  - Phase 8 (plus-side): first 5 positive-direction switches all remain FiniteSolved,
+    Delta drifting only 0.483277 -> 0.483230.
+  - New regression testset ("D20 negative-switch geometry audit (2026-07-30)"), isolated run:
+    52/52 assertions passed.
+  - Adjacent pre-existing testsets ("Section 11", "NumericalFailure/lower_limit forensic
+    audit"), isolated run: 6/6 + 46/47 (the one error is a disclosed extraction artifact --
+    KNITRO_AVAILABLE undefined outside the copied line range -- not a real failure).
+  - Full 7500-line test suite: reproduced the SAME pre-existing SIGSEGV (mul_G!,
+    moment_operator.jl:281) both immediately-prior sessions already documented, in the
+    pre-existing "Gate 2/3 matched-effort... Method A" testset -- confirmed unrelated to this
+    session's own changes (occurs before this session's own testset is ever reached; neither
+    modified file is anywhere near mul_G!/moment_operator.jl).
+
+Commands run (representative; every number above is reproducible via the scripts listed in
+this document's own "Required output files" section):
+
+  export PATH="$HOME/.juliaup/bin:$PATH"
+  source .knitro_env.sh
+  export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+  julia --project=. -t 20 scripts/melitz_negswitch_phase0_recover_anchor_2026-07-30.jl
+  julia --project=. -t 20 scripts/melitz_negswitch_phase1_objective_trace_2026-07-30.jl
+  julia --project=. -t 20 scripts/melitz_negswitch_phase2_switch_thresholds_2026-07-30.jl
+  julia --project=. -t 20 scripts/melitz_negswitch_phase34568_bracket_checks_2026-07-30.jl
+  julia --project=. -t 20 scripts/melitz_negswitch_phase7_geometry_2026-07-30.jl
+  julia --project=. -t 1 test/melitz/runtests.jl   # full suite (known pre-existing segfault)
+
+Note: phase0/phase2/phase34568/phase7 scripts read/write small .jls state files
+(phase0_state.jls, phase2_events.jls) in their own directory to chain Phase 0 -> Phase 2/3 ->
+Phase 3/4/5/6/8 -> Phase 7 -- run in that order from a writable working directory.
+
+Commit: made locally on branch melitz/fullD-delta-star immediately after this push was
+prepared; NOT pushed to any remote (per this repo's own standing "confirm before pushing"
+rule).

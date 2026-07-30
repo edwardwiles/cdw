@@ -292,6 +292,11 @@ function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float
     end
     f = sum(Q.arg1) / Q.M + zeta
     MELITZ_MATRIX_FREE_OBJECTIVE_CALLS[] += 1
+    # 2026-07-30 (negative-switch geometry audit, Phase 1): opt-in raw-value trace, disabled by
+    # default (backend_config.jl). Records the SAME `f` computed above, before the lower_limit
+    # branch below can substitute any sentinel -- this is the genuine floating-point functor
+    # output at this call's (zeta,mu), never a placeholder.
+    MELITZ_OBJECTIVE_TRACE_ENABLED[] && push!(MELITZ_OBJECTIVE_TRACE, (f, f <= Q.lower_limit))
 
     if length(g) > 0 || length(h) > 0 || length(constr) > 0
         @melitz_profile :fc_inner_dpsi_eval melitz_cc_dPsi!(Q.arg1, Q.arg0)
@@ -339,7 +344,32 @@ function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float
         MELITZ_MATRIX_FREE_HESSIAN_CALLS[] += 1
     end
 
-    if f <= Q.lower_limit
+    if !isfinite(f)
+        # 2026-07-30 (negative-switch geometry audit, Phase 1/9,
+        # docs/melitz_d20_negative_switch_geometry_audit_2026-07-30.md): live-observed at the
+        # real-D20 anchor's minus-side h=0.5 capped solve -- 5 of 14 raw callback evaluations
+        # during a single KNITRO inner attempt were literal NaN (floating-point cancellation of
+        # two overflowing terms inside mul_G!'s `u[s] += const_o; u[s] -= z_power*cum[...]` at
+        # an astronomically large (zeta,mu) iterate KNITRO's own line search briefly visited --
+        # NOT a sentinel, NOT a meaningful economic value, confirmed by the raw objective trace,
+        # `docs/key_results/melitz_negswitch_phase1_objective_trace_2026-07-30.csv`). Before this
+        # fix, such a call fell through to the `else` branch below and handed KNITRO a raw NaN
+        # objective -- undefined input to any NLP solver -- AND, unlike a genuine
+        # `f<=lower_limit` crossing, was never recorded anywhere, so `threshold_crossed`
+        # provided no signal it had happened. This branch treats a non-finite raw evaluation as
+        # AT LEAST as bad as a genuine crossing (tells KNITRO to back off via the SAME
+        # `-KN_INFINITY` sentinel) but deliberately does NOT touch `threshold_crossed`/
+        # `threshold_crossing_bound`/`threshold_crossing_x` -- a non-finite `f` can never become
+        # a reported weak-duality certificate (`-NaN`/`-Inf` would corrupt
+        # `AboveEvaluationCap.certified_lower_bound`); only a genuinely FINITE `f` from the
+        # ordinary crossing branch below is ever recorded as one. In the live D20 case that
+        # exposed this gap, the LAST callback before KNITRO's own `nStatus=-300` termination
+        # happened to be finite (`-4.9823e8`), so the previously-reported certificate was not
+        # itself contaminated -- but relying on that being true by chance, rather than by
+        # construction, is exactly the gap this branch closes.
+        MELITZ_EVALUATION_CAP_EXITS[] += 1
+        return -KNITRO.KN_INFINITY
+    elseif f <= Q.lower_limit
         # 2026-07-30 forensic audit (docs/melitz_reduced_q_numericalfailure_forensic_audit_2026-07-30.md):
         # this bookkeeping used to be gated `if Q.mode == :implicit`, even though `f` itself
         # (computed identically above, `sum(Q.arg1)/Q.M + zeta`) and the `-KNITRO.KN_INFINITY`

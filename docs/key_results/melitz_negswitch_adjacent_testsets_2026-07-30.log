@@ -1,0 +1,27 @@
+ERROR: LoadError: Some tests did not pass: 46 passed, 0 failed, 1 errored, 0 broken.
+in expression starting at /tmp/claude-181517/-bbkinghome-edav-gravity-robustness/e3e14fed-9b91-4bc0-b6be-efac5de68df5/scratchpad/melitz_negswitch/adjacent_testsets_check.jl:72
+Test Summary:                                                                                   | Pass  Total  Time
+Section 11 (architecture consolidation): static scan for unsafe defaults/direct low-level calls |    6      6  0.8s
+Governing prompt 2026-07-29 (A_q separation and gradient diagnostics): Error During Test at /tmp/claude-181517/-bbkinghome-edav-gravity-robustness/e3e14fed-9b91-4bc0-b6be-efac5de68df5/scratchpad/melitz_negswitch/adjacent_testsets_check.jl:72
+  Got exception outside of a @test
+  UndefVarError: `KNITRO_AVAILABLE` not defined in `Main`
+  Suggestion: check for spelling errors or missing imports.
+  Stacktrace:
+   [1] macro expansion
+     @ /tmp/claude-181517/-bbkinghome-edav-gravity-robustness/e3e14fed-9b91-4bc0-b6be-efac5de68df5/scratchpad/melitz_negswitch/adjacent_testsets_check.jl:183 [inlined]
+   [2] macro expansion
+     @ ~/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/share/julia/stdlib/v1.12/Test/src/Test.jl:1777 [inlined]
+   [3] top-level scope
+     @ /tmp/claude-181517/-bbkinghome-edav-gravity-robustness/e3e14fed-9b91-4bc0-b6be-efac5de68df5/scratchpad/melitz_negswitch/adjacent_testsets_check.jl:73
+   [4] include(mod::Module, _path::String)
+     @ Base ./Base.jl:306
+   [5] exec_options(opts::Base.JLOptions)
+     @ Base ./client.jl:317
+   [6] _start()
+     @ Base ./client.jl:550
+Test Summary:                                                                                 | Pass  Error  Total  Time
+Governing prompt 2026-07-29 (A_q separation and gradient diagnostics)                         |   46      1     47  5.6s
+  Strict A/q block separation (Phase 1-2)                                                     |   40            40  0.6s
+  Exact A moment derivative: dR/da = (sigma-1)*R (Phase 3)                                    |    4             4  0.2s
+  Exact A link derivative matches direct FD of the moment operator's own ell column (Phase 3) |    2             2  0.8s
+RNG of the outermost testset: Xoshiro(0x4594aad01006099a, 0x33ea9d9a179008db, 0xe9876908b9e33403, 0x11e38f97bc7df93a, 0xee327df01f97f8d0)
