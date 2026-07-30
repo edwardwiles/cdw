@@ -47,9 +47,18 @@ precompute for it). `ctx_cm.obj` is `aug.obj_cm`.
 """
 function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; fg_backend::Symbol = ORIGINZC_FG_BACKEND_DEFAULT[],
         zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[],
-        moment_representation::Symbol = :dense_reference)   # true no-H operator bundle (2026-07-28
-        # continuation): :dense_reference (default, unchanged) | :operator (explicit opt-in,
-        # requires fg_backend=:operator).
+        moment_representation::Symbol = :operator)   # true no-H operator bundle (2026-07-28
+        # continuation, flipped 2026-07-29 moment_representation threading task): :operator
+        # (PRODUCTION DEFAULT since 2026-07-29; ORIGINZC_FG_BACKEND_DEFAULT[] is already :operator,
+        # so no other default needs to change -- validated D=4
+        # (test_operator_no_H_bundle_equivalence_originzc.jl) + real D=20/W=100,000 through the
+        # REAL production driver end-to-end (run_originzc_upper_checkpointed,
+        # test_meanzc_originzc_driver_wiring_2026-07-29.jl) -- this builder previously defaulted
+        # :dense_reference and was NEVER actually flipped in production despite the :operator
+        # branch existing and being gate-tested standalone since 2026-07-28; the real driver never
+        # passed this kwarg, so ctx.obj stayed dense in every real solve until this fix) |
+        # :dense_reference (explicit opt-out, unchanged PsiObjectiveBundleImplicit, requires
+        # fg_backend=:operator when :operator is chosen).
     moment_representation === :operator && fg_backend !== :operator &&
         error("build_originzc_production_context: moment_representation=:operator requires fg_backend=:operator")
     println(stdout, "cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)")

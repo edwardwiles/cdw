@@ -105,7 +105,12 @@ manifest. `cctx` is the real `CMBinHessCtx` the driver just built (`pcx.cctx`) -
 and `hessian_backend` are read directly off it, not asserted.
 """
 function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
-        cm_extension::Symbol = :cm_only, meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0)
+        cm_extension::Symbol = :cm_only, meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,
+        bundle_type::Symbol = :PsiObjectiveBundleImplicit)   # moment_representation threading task
+        # (2026-07-29): the calling driver's ACTUAL `typeof(pcx.ctx_cm.obj)` -- see
+        # resolve_unrestricted_manifest's identical field for the full rationale. Only
+        # run_cm_upper_checkpointed passes this explicitly; other/older callers keep reporting the
+        # pre-port default unchanged.
     is_meanzc = cm_extension !== :cm_only
     family = is_meanzc ? :cm_meanzc : :flexible_cm
     # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §5), CORRECTED 2026-07-25
@@ -121,6 +126,7 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
     threaded_label = cctx.use_threaded_bins ? :threaded_architecture_c_with_winner_pair_core : :architecture_c_with_winner_pair_core
     nt = (
         family = family,
+        bundle_type = bundle_type,
         core_top1_engine = :canonical_log_additive,
         outer_gradient_top3_engine = :cplus,
         core_moment_representation = :compressed_winner_form,   # allocation/Hessian port task §5
@@ -218,10 +224,16 @@ this manifest prints at driver STARTUP, before any inner solve, so
 `octx.core_cf_ref[]` is always still unset at print time regardless of what
 backend will actually run. See `resolve_flexible_cm_manifest`'s identical fix.
 """
-function resolve_origin_zc_manifest(; octx = nothing, blas_threads::Union{Nothing,Int})
+function resolve_origin_zc_manifest(; octx = nothing, blas_threads::Union{Nothing,Int},
+        bundle_type::Symbol = :PsiObjectiveBundleImplicit)   # moment_representation threading task
+        # (2026-07-29): the calling driver's ACTUAL `typeof(pcx.ctx_cm.obj)`, not asserted -- mirrors
+        # resolve_unrestricted_manifest's identical fix. Only run_originzc_upper_checkpointed passes
+        # this explicitly; the one other caller (a standalone benchmark script) never did and keeps
+        # reporting the true pre-port value unchanged.
     core_configured = octx !== nothing && octx.core_hessian_backend !== :dense_reference
     return (
         family = :origin_zc,
+        bundle_type = bundle_type,
         core_representation = core_configured ? :compressed_winner_form : :compressed,
         restriction_representation = :pairwise_zero_covariance,
         hessian_backend = core_configured ? :partitioned_winner_pair_core_dense_restriction : :dense_architecture_a,

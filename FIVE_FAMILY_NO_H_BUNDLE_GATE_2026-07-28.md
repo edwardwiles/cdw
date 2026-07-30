@@ -14,6 +14,28 @@
 > (see `full_aod_diag/d4_exact/compressed_live.jl::build_unrestricted_operator_ctx`, wired into
 > `run_polish_checkpointed_unified`) -- unrestricted's production driver now genuinely defaults to
 > `OperatorPsiBundle`, matching what this document always claimed.
+>
+> **SECOND CORRECTION (2026-07-29):** the same conflation applies to `cm_plus_zc` (cm_meanzc) and
+> `zc_only` (origin_zc) below, found while investigating a report that origin_zc's production runs
+> still used the dense bundle. Confirmed live: `build_cm_meanzc_production_context`
+> (`cm_meanzc_production.jl`) and `build_originzc_production_context`
+> (`cm_originzc_production.jl`) both hardcoded `moment_representation::Symbol = :dense_reference`
+> as their DEFAULT, and their real production drivers (`run_cm_upper_checkpointed`'s `is_meanzc`
+> branch, `run_originzc_upper_checkpointed`) never passed the kwarg at all -- so, exactly like
+> unrestricted, `ctx.obj` stayed dense in every real solve for these two families despite this
+> doc's "WIRED_AND_GATED" label and despite both families' own standalone equivalence gates
+> genuinely passing (they call the builder with the kwarg passed EXPLICITLY, which the real driver
+> never did). `common_frechet` is the one exception among the four `run_cm_upper_checkpointed`
+> families that was NOT false: its own default was independently flipped and validated end-to-end
+> through the real driver in a separate 2026-07-29 task (`FRECHET_OPERATOR_DEFAULT_INVESTIGATION_
+> 2026-07-29.md`) before this one started. `flexible_cm` was also never false (resolves via the
+> shared `MOMENT_REPRESENTATION[]` global, independently confirmed `:operator` and never mutated in
+> any production code path). Fixed 2026-07-29 for cm_meanzc and origin_zc (kwarg threaded through
+> both drivers with a `nothing`-sentinel default so it never silently overrides either builder's own
+> resolved default; `moment_representation` defaults flipped to `:operator` in both builders,
+> validated D=4 + real D=20/W=100,000 through both real drivers end-to-end,
+> `test_meanzc_originzc_driver_wiring_2026-07-29.jl`) -- all five families now genuinely default to
+> `OperatorPsiBundle` in production, matching what this document always claimed.
 
 ## Status
 

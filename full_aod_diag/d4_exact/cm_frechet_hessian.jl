@@ -135,6 +135,12 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
     else
         # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
         record_dense_frechet_g!()
+        # moment_representation threading task (2026-07-29): matches _fill_cm_HEE!'s identical
+        # guards (cm_hessian_architectures.jl) -- this dense H_E,level fallback is provably
+        # unreachable in production (use_winner_bin should always hold at defaults), but was
+        # previously unguarded, so it would throw a confusing `MethodError: view(::Nothing, ...)`
+        # rather than a clear error for an operator-mode bundle (H is nothing).
+        H === nothing && error("cm_frechet_hessian.jl H_E,level fill: reached the dense E=@view(H[...]) fallback for an operator-mode bundle with no H field -- this should be provably unreachable in production (use_winner_bin should always hold); indicates a real configuration bug, not expected behavior.")
         E = @view H[:, 2:1+NCORE]
         Esum = ext.Esum_wb
         mul!(Esum, E', w)
