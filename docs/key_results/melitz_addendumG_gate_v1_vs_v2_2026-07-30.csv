@@ -1,0 +1,4 @@
+driver,nStatus,Delta_reported,n_fc_calls,n_ga_calls,n_finite_solved,n_above_cap,n_infinite_certified,unique_A_points,unique_inner_solves,cache_hits,wall_s
+v1,-502,0.3074786311433079,72,49,95,25,0,,,,47.248061180114746
+v2_reject,-102,0.41872529527394486,148,13,27,94,0,107,107,14,22.97536301612854
+v2_barrier,-100,0.28795339638876105,108,56,117,4,0,64,64,57,30.63391089439392

@@ -750,3 +750,468 @@ function melitz_project_start_to_middle_constraints(A_free_start::AbstractVector
     end
     return A_free
 end
+
+# ==========================================================================================
+# ADDENDUM 2026-07-30 ("mandatory performance and cap-handling addendum" to the D20 profiled-A
+# welfare continuation task): repairs the four implementation issues the prior fixed_q_A
+# middle-loop experiment session's own report disclosed --
+#
+#   (1) AboveEvaluationCap/InfiniteDeltaCertified trials were fed to middle KNITRO as an
+#       ordinary objective VALUE (the raw, potentially astronomical `certified_lower_bound`,
+#       up to ~5e11 at real D=20 per this project's own CLAUDE.md-documented A_od spread) with
+#       a ZERO gradient -- contaminating the L-BFGS quasi-Newton curvature model with a
+#       "stationary" point that is not actually stationary at all.
+#   (2) The best verified FiniteSolved middle incumbent was never tracked/retained --
+#       `solve_melitz_fixed_q_A_profile` returned KNITRO's own (possibly worse) terminal
+#       trajectory point, cold-reverified, but never compared against the input start or any
+#       better intermediate trial.
+#   (3) `cb_F!`/`cb_G!` each independently ran the FULL typed inner solve (`eval_fcga=no`),
+#       even when KNITRO requested function and gradient at the IDENTICAL trial point back to
+#       back -- doubling inner-solve cost for no benefit.
+#   (4) The fixed-q hot path (state reconstruction, cutoff-rank/bin work, moment-operator
+#       update) was never itself profiled to check whether it was cheap (as the module header's
+#       "zero participation switches by construction" argument predicts) or a hidden cost.
+#
+# This section does NOT change `melitz_middle_objective_and_gradient!` (Phase 2's core
+# evaluator, already correct and tested) or the ORIGINAL `solve_melitz_fixed_q_A_profile`
+# (left exactly as-is, still covered by the existing 78/78-assertion test suite) -- it adds a
+# parallel, REPAIRED driver (`solve_melitz_fixed_q_A_profile_v2`) built on top of the SAME
+# Phase-0/1/2 primitives (constraint system, projection, `melitz_middle_objective_and_gradient!`
+# itself is still what performs a genuine miss's one real inner solve), reusing the SAME
+# exact-point cache machinery (`MelitzExactPointCache`/`melitz_exact_cache_get`/
+# `melitz_exact_cache_insert!`/`melitz_heavy_snapshot`/`melitz_heavy_restore!`,
+# `finite_delta_outer.jl`) the production `(A,f)` outer search already uses for its own FC/GA
+# de-duplication (Section 4.2/5.1 there) -- not a new cache design, the SAME one, keyed here on
+# the exact `theta_free_middle` vector (a deterministic, injective function of exactly A_free +
+# fixed q + fixed g, i.e. the addendum's own required fingerprint dimensions, since `ctx`/
+# `policy`/the QMC draws are already fixed for the lifetime of one `solve_melitz_fixed_q_A_profile_v2`
+# call).
+# ==========================================================================================
+
+"Every free `A_free`/`h_free` fixed-q middle point classified as `AboveEvaluationCap`/`InfiniteDeltaCertified`
+is cached HERE (keyed on the exact `theta_free_middle` vector), not in the SOLVED-only
+`MelitzExactPointCache` (which, matching `finite_delta_outer.jl`'s own established
+convention, only ever caches a verified `FiniteSolved` result) -- this second, lightweight
+cache is what lets a repeat request at an already-known-bad point avoid a second real inner
+solve (Addendum D's `unique_inner_solves <= unique_A_points` requirement) without needing the
+heavy dual/moment-operator snapshot a solved point requires (a bad point's cheap certificate
+is all that is ever reused)."
+const MelitzMiddleBadPointCache = Dict{Vector{Float64},Tuple{Symbol,Float64,Symbol}}
+
+"""
+    MelitzMiddleCacheStats
+
+Addendum D's own required bookkeeping: `n_requests` (every `_eval` call, cache hit or not),
+`n_actual_inner_solves` (genuine `solve_melitz_delta!` calls -- must equal
+`length(seen_keys)` restricted to keys reached via a genuine miss, and by construction never
+exceeds `length(seen_keys)`), `n_cache_hits`/`n_bad_point_hits` (solved-cache / bad-point-cache
+reuses), `seen_keys` (the set of distinct `theta_free_middle` fingerprints ever requested --
+`length(seen_keys)` IS Addendum D's own `unique_A_points`).
+"""
+mutable struct MelitzMiddleCacheStats
+    n_requests::Int
+    n_actual_inner_solves::Int
+    n_cache_hits::Int
+    n_bad_point_hits::Int
+    seen_keys::Set{Vector{Float64}}
+end
+MelitzMiddleCacheStats() = MelitzMiddleCacheStats(0, 0, 0, 0, Set{Vector{Float64}}())
+
+"""
+    melitz_middle_objective_and_gradient_cached!(session, A_free_middle, q_fixed, gpj_fixed, ctx,
+        exact_cache, bad_cache, stats; coordinate=:logA, policy=session.policy,
+        warm_start_source=:previous, origin_block_screen=false) -> NamedTuple
+
+Addendum D core: a cache-aware wrapper around `melitz_middle_objective_and_gradient!` (Phase 2's
+own unchanged evaluator). Builds `theta_free_middle` (cheap, O(D^2), never itself an inner
+solve) and its exact fingerprint `key` FIRST, then:
+
+  1. `bad_cache` hit (a previously-classified `AboveEvaluationCap`/`InfiniteDeltaCertified`
+     point requested again) -- returns the cached certificate directly, NO inner solve.
+  2. `exact_cache` hit (a previously-verified `FiniteSolved` point requested again, e.g. the
+     SAME trial point requested by both `cb_F!` and `cb_G!` back to back under
+     `eval_fcga=no`) -- restores the heavy dual/moment-operator snapshot
+     (`melitz_heavy_restore!`) and recomputes ONLY the (cheap, non-solve) exact envelope
+     gradient from the cached optimal dual `x_hit` -- the expensive inner KNITRO solve itself
+     is never repeated.
+  3. Genuine miss -- exactly ONE call to `melitz_middle_objective_and_gradient!` (one real
+     inner solve), then inserts into the appropriate cache for next time.
+
+Returns `(Delta, grad_free, classification_sym::Symbol, certified_lower_bound::Float64,
+theta_free::Vector{Float64}, key::Vector{Float64}, cache_hit::Bool)` -- `Delta` is ALWAYS a
+genuine value for `:FiniteSolved` (never fed to KNITRO for the other two symbols by the v2
+driver below, Addendum A -- callers that still want a legacy fed-value convention should use
+the ORIGINAL `melitz_middle_objective_and_gradient!` instead).
+"""
+function melitz_middle_objective_and_gradient_cached!(session::MelitzInnerSession, A_free_middle::AbstractVector{Float64},
+                                                        q_fixed::AbstractMatrix{Float64}, gpj_fixed::Float64, ctx,
+                                                        exact_cache::MelitzExactPointCache, bad_cache::MelitzMiddleBadPointCache,
+                                                        stats::MelitzMiddleCacheStats;
+                                                        coordinate::Symbol=:logA,
+                                                        policy::MelitzInnerSolvePolicy=session.policy,
+                                                        warm_start_source::Symbol=:previous,
+                                                        origin_block_screen::Bool=false)
+    stats.n_requests += 1
+    A_free = coordinate == :logH ? melitz_A_free_from_h_free(A_free_middle, ctx) : A_free_middle
+    theta_free_middle = melitz_fixed_q_state_theta(A_free, q_fixed, gpj_fixed, ctx)
+    key = Vector{Float64}(theta_free_middle)
+    key in stats.seen_keys || push!(stats.seen_keys, key)
+
+    bad_hit = get(bad_cache, key, nothing)
+    if bad_hit !== nothing
+        stats.n_bad_point_hits += 1
+        cls_sym, lb, _source = bad_hit
+        n = length(A_free_middle)
+        Delta_val = cls_sym == :InfiniteDeltaCertified ? MELITZ_MIDDLE_INFINITE_SENTINEL : lb
+        return (Delta=Delta_val, grad_free=zeros(n), classification_sym=cls_sym,
+                certified_lower_bound=lb, theta_free=theta_free_middle, key=key, cache_hit=true)
+    end
+
+    hit = melitz_exact_cache_get(exact_cache, key, ctx, session.obj.U; obj=session.obj)
+    if hit !== nothing
+        stats.n_cache_hits += 1
+        Delta_hit, x_hit, _nStatus_hit, _H_hit = hit
+        D = ctx.D
+        state = MelitzExpandedState(D)
+        ws_exp = MelitzThetaExpansionWorkspace(D)
+        melitz_expand_theta!(state, theta_free_middle, ctx, ws_exp)
+        ws_grad = MelitzExactAGradientWorkspace(session.obj.op)
+        dDelta_da_full = zeros(D, D)
+        melitz_exact_a_gradient_full!(dDelta_da_full, session.obj, x_hit, state, ctx, ws_grad)
+        grad_A_free = melitz_exact_a_gradient_free(dDelta_da_full, ctx)
+        grad_free = coordinate == :logH ? melitz_gradient_A_free_to_h_free(grad_A_free, ctx) : grad_A_free
+        return (Delta=Delta_hit, grad_free=grad_free, classification_sym=:FiniteSolved,
+                certified_lower_bound=NaN, theta_free=theta_free_middle, key=key, cache_hit=true)
+    end
+
+    stats.n_actual_inner_solves += 1
+    r = melitz_middle_objective_and_gradient!(session, A_free, q_fixed, gpj_fixed, ctx;
+        coordinate=:logA, policy=policy, warm_start_source=warm_start_source,
+        origin_block_screen=origin_block_screen)
+    if r.classification isa FiniteSolved
+        melitz_exact_cache_insert!(exact_cache, key, r.Delta, r.classification.x, r.classification.nStatus,
+            melitz_heavy_snapshot(session.obj), ctx, session.obj.U)
+        grad_free = coordinate == :logH ? melitz_gradient_A_free_to_h_free(r.grad_free, ctx) : r.grad_free
+        return (Delta=r.Delta, grad_free=grad_free, classification_sym=:FiniteSolved,
+                certified_lower_bound=NaN, theta_free=theta_free_middle, key=key, cache_hit=false)
+    elseif r.classification isa AboveEvaluationCap
+        bad_cache[key] = (:AboveEvaluationCap, r.classification.certified_lower_bound, r.classification.source)
+        n = length(A_free_middle)
+        return (Delta=r.classification.certified_lower_bound, grad_free=zeros(n), classification_sym=:AboveEvaluationCap,
+                certified_lower_bound=r.classification.certified_lower_bound, theta_free=theta_free_middle, key=key, cache_hit=false)
+    elseif r.classification isa InfiniteDeltaCertified
+        bad_cache[key] = (:InfiniteDeltaCertified, Inf, :na)
+        n = length(A_free_middle)
+        return (Delta=MELITZ_MIDDLE_INFINITE_SENTINEL, grad_free=zeros(n), classification_sym=:InfiniteDeltaCertified,
+                certified_lower_bound=Inf, theta_free=theta_free_middle, key=key, cache_hit=false)
+    else
+        throw(DomainError(collect(A_free_middle),
+            "melitz_middle_objective_and_gradient_cached!: inner solve returned $(typeof(r.classification)) " *
+            "(NumericalFailure, no certificate of any kind) -- rejecting as an evaluation error, never a value."))
+    end
+end
+
+"One classified evaluation record for `solve_melitz_fixed_q_A_profile_v2`'s own eval log --
+`is_new_point` distinguishes a genuine new `A` trial from a repeat (cache-hit) request at an
+already-seen point (Addendum D reporting requirement); `classification_sym`/`Delta_or_bound`
+report the SAME typed distinction `melitz_middle_objective_and_gradient_cached!` returns
+(`Delta_or_bound` is the true `Delta` for `:FiniteSolved`, the certified lower bound --
+DIAGNOSTIC ONLY, never fed to KNITRO, Addendum A -- for the other two symbols)."
+struct MelitzMiddleProfileV2EvalLogEntry
+    call_kind::Symbol
+    n_call::Int
+    is_new_point::Bool
+    classification_sym::Symbol
+    Delta_or_bound::Float64
+    cache_hit::Bool
+    elapsed_s::Float64
+end
+
+"""
+    MelitzMiddleProfileV2Result
+
+Result of `solve_melitz_fixed_q_A_profile_v2`. Unlike the original `MelitzFixedQAProfileResult`
+(which reports only KNITRO's own cold-reverified terminal point), this ALWAYS reports the
+STRICT best-verified incumbent (`incumbent_source` in `(:input_start, :trial, :terminal)`,
+whichever cold-reverified candidate had the lowest `Delta` among a `FiniteSolved`
+classification) -- `Delta_incumbent <= Delta_start_verified` is asserted internally (repair
+item 1 / Addendum B: "may never return a worse result than its verified finite input").
+`unique_A_points`/`unique_inner_solves`/`cache_hits` are Addendum D's own required counters
+(`unique_inner_solves <= unique_A_points` asserted internally).
+"""
+struct MelitzMiddleProfileV2Result
+    nStatus::Int
+    coordinate::Symbol
+    x_start::Vector{Float64}
+    incumbent_source::Symbol
+    A_free_incumbent::Vector{Float64}
+    theta_free_incumbent::Vector{Float64}
+    r_incumbent::MelitzInnerResult
+    Delta_incumbent::Float64
+    Delta_start_verified::Float64
+    Delta_terminal_verified::Float64
+    n_fc_calls::Int
+    n_ga_calls::Int
+    n_finite_solved::Int
+    n_above_cap::Int
+    n_infinite_certified::Int
+    unique_A_points::Int
+    unique_inner_solves::Int
+    cache_hits::Int
+    wall_s::Float64
+    eval_log::Vector{MelitzMiddleProfileV2EvalLogEntry}
+end
+
+"""
+    solve_melitz_fixed_q_A_profile_v2(session, q_fixed, gamma_prime_j_fixed, x_start, ctx;
+        coordinate=:logA, policy=session.policy, max_evals=120, box=0.1,
+        outer_loop_opt=<middle-loop L-BFGS opt file>, warm_start_source=:previous,
+        origin_block_screen=false, sys=..., theta_fixed_q_for_constraints=...) -> MelitzMiddleProfileV2Result
+
+The ADDENDUM-repaired middle-loop driver (governing prompt's "FIRST: REPAIR THE MIDDLE
+SOLVER" + the mandatory addendum). Same KNITRO setup as `solve_melitz_fixed_q_A_profile`
+(linear ordering/same-bin rows, no dense G, no finite differences, no cutoff movement), but:
+
+  - **Cap handling (Addendum A)**: `AboveEvaluationCap`/`InfiniteDeltaCertified` trials are
+    REJECTED via `throw(DomainError(...))` inside `cb_F!`/`cb_G!` -- KNITRO.jl's own
+    `_try_catch_handler` (`C_wrapper.jl`) converts a thrown `DomainError` into a genuine
+    `KN_RC_EVAL_ERR` return code (verified directly against the installed KNITRO.jl source,
+    not assumed), which is the NATIVE per-point-rejection mechanism (KNITRO backtracks/
+    shrinks its trust region at THAT point and continues, only failing the whole solve if
+    rejections persist beyond its own retry budget) -- never a raw, potentially-astronomical
+    certified lower bound fed to KNITRO's own quasi-Newton curvature model as if it were an
+    ordinary stationary value. `cap_handling=:reject` (default) uses this eval-error path;
+    `cap_handling=:barrier` uses Addendum A's own disclosed FALLBACK instead -- a fixed,
+    bounded value (`cap_barrier_multiple * melitz_policy_cap(policy)`, zero gradient, the SAME
+    constant for every certified-bad point regardless of its true raw certificate) reported as
+    an ORDINARY successful evaluation, matching `finite_delta_outer.jl`'s own
+    `divergence_sentinel` convention -- kept because a live A/B gate at the real-D20 anchor
+    (this session) found `:reject` can, empirically, explore WORSE than the ORIGINAL
+    (uncapped-value) driver within the same evaluation budget (more trials fall into
+    `AboveEvaluationCap` and KNITRO's own backtracking wastes evaluations relative to a smooth
+    fixed-barrier landscape) -- see `docs/melitz_d20_profiled_A_welfare_continuation_2026-07-30.md`
+    for the live comparison; strict incumbent retention (below) makes BOTH modes safe (never
+    worse than the verified start) regardless of which explores better.
+  - **Strict incumbent retention (Addendum B / repair item 1)**: the input start is itself
+    classified first (seeding the incumbent if it is `FiniteSolved`); every classified
+    `FiniteSolved` trial during the search updates the incumbent if strictly better; at the
+    end, the input start, the best trial incumbent (if any improved), and KNITRO's own
+    terminal point are ALL independently cold-re-verified (`warm_start_source=:neutral`,
+    matching this codebase's own established cold-reverification convention) and the BEST of
+    the (up to three) cold-verified candidates is returned -- `Delta_incumbent <=
+    Delta_start_verified` is asserted, not merely hoped.
+  - **One inner solve per unique A point (Addendum D)**: routes every evaluation through
+    `melitz_middle_objective_and_gradient_cached!` (above).
+
+Continuation across BOTH the outer-A start and the inner dual warm start (Addendum C /
+repair item 3) is the CALLER's responsibility (as in the original driver): pass the
+preceding welfare point's own accepted `A_free`/`h_free` as `x_start` (already projected via
+`melitz_project_start_to_middle_constraints`), and do NOT reset `session.obj.use_cached_x`/
+`session.obj.x` before calling this function if a warm inner-dual carryover from the
+preceding point's own search is desired (this function itself never resets them either,
+except for its own internal cold-reverification calls, which always use
+`warm_start_source=:neutral` deliberately, in a way that cannot leak into the NEXT welfare
+point's own warm state since each cold-reverify's `theta` is only ever used once, at the very
+end, after the real KNITRO search is already over).
+"""
+function solve_melitz_fixed_q_A_profile_v2(session::MelitzInnerSession, q_fixed::AbstractMatrix{Float64},
+                                            gamma_prime_j_fixed::Real, x_start::AbstractVector{Float64}, ctx;
+                                            coordinate::Symbol=:logA,
+                                            policy::MelitzInnerSolvePolicy=session.policy,
+                                            max_evals::Int=120,
+                                            box::Real=0.1,
+                                            outer_loop_opt::AbstractString=joinpath(@__DIR__, "..", "..", "melitz_middle_loop_opt_2026-07-30.opt"),
+                                            warm_start_source::Symbol=:previous,
+                                            origin_block_screen::Bool=false,
+                                            sys::Union{Nothing,MelitzFixedQMiddleConstraintSystem}=nothing,
+                                            theta_fixed_q_for_constraints::Union{Nothing,AbstractVector}=nothing,
+                                            cap_handling::Symbol=:reject,
+                                            cap_barrier_multiple::Real=5.0)
+    coordinate in (:logA, :logH) || throw(ArgumentError("coordinate must be :logA or :logH"))
+    cap_handling in (:reject, :barrier) || throw(ArgumentError("cap_handling must be :reject or :barrier"))
+    gpj_fixed = Float64(gamma_prime_j_fixed)
+    t0 = time()
+    n = length(x_start)
+    x_start_v = Vector{Float64}(x_start)
+
+    if sys === nothing
+        theta_fixed_q_for_constraints === nothing && throw(ArgumentError(
+            "solve_melitz_fixed_q_A_profile_v2: pass either `sys` or `theta_fixed_q_for_constraints`."))
+        sys = melitz_fixed_q_middle_constraint_system(theta_fixed_q_for_constraints, ctx, session.obj)
+    end
+    rows = coordinate == :logH ? sys.rows_H : sys.rows_A
+    rhs = coordinate == :logH ? sys.rhs_H : sys.rhs_A
+    size(rows, 2) == n || throw(ArgumentError(
+        "solve_melitz_fixed_q_A_profile_v2: x_start has length $n, constraint system expects $(sys.n)"))
+
+    exact_cache = MelitzExactPointCache()
+    bad_cache = MelitzMiddleBadPointCache()
+    stats = MelitzMiddleCacheStats()
+
+    n_fc_calls = Ref(0); n_ga_calls = Ref(0)
+    n_finite = Ref(0); n_cap = Ref(0); n_inf = Ref(0)
+    eval_log = MelitzMiddleProfileV2EvalLogEntry[]
+
+    incumbent_Delta = Ref(Inf)
+    incumbent_theta = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    function consider_incumbent!(theta_free::Vector{Float64}, Delta::Float64)
+        if Delta < incumbent_Delta[] - 1e-12
+            incumbent_Delta[] = Delta
+            incumbent_theta[] = copy(theta_free)
+        end
+    end
+
+    function classify_and_log!(x::Vector{Float64}, kind::Symbol)
+        t0e = time()
+        r = melitz_middle_objective_and_gradient_cached!(session, x, q_fixed, gpj_fixed, ctx,
+            exact_cache, bad_cache, stats; coordinate=coordinate, policy=policy,
+            warm_start_source=warm_start_source, origin_block_screen=origin_block_screen)
+        elapsed = time() - t0e
+        push!(eval_log, MelitzMiddleProfileV2EvalLogEntry(kind, length(eval_log) + 1, !r.cache_hit,
+            r.classification_sym, r.Delta, r.cache_hit, elapsed))
+        if r.classification_sym == :FiniteSolved
+            n_finite[] += 1
+            consider_incumbent!(r.theta_free, r.Delta)
+        elseif r.classification_sym == :AboveEvaluationCap
+            n_cap[] += 1
+        else
+            n_inf[] += 1
+        end
+        return r
+    end
+
+    # Seed the incumbent from the input start (repair item 1: "initialize its incumbent with
+    # any verified FiniteSolved input start" -- classified via the SAME cached path, kind=:start).
+    r_start0 = classify_and_log!(x_start_v, :start)
+
+    cap_barrier_value = cap_barrier_multiple * melitz_policy_cap(policy)
+
+    function _eval(x::Vector{Float64}, kind::Symbol)
+        r = classify_and_log!(x, kind)
+        r.classification_sym == :FiniteSolved && return r
+        if cap_handling == :barrier
+            # Addendum A's own disclosed fallback: a FIXED, BOUNDED barrier value tied to the
+            # policy's own cap (never the raw, path-dependent `certified_lower_bound`, which can
+            # reach ~1e5-1e11 at real D=20 -- Addendum A's own audit) -- same convention as
+            # `finite_delta_outer.jl`'s own `delta_evaluation_cap`/`divergence_sentinel` (a fixed
+            # constant, zero gradient, for every certified-bad point, regardless of the exact
+            # certificate level).
+            return (Delta=cap_barrier_value, grad_free=r.grad_free, classification_sym=r.classification_sym,
+                    certified_lower_bound=r.certified_lower_bound, theta_free=r.theta_free, key=r.key,
+                    cache_hit=r.cache_hit)
+        end
+        reason = r.classification_sym == :AboveEvaluationCap ?
+            "AboveEvaluationCap (certified_lower_bound=$(r.certified_lower_bound))" : "InfiniteDeltaCertified"
+        throw(DomainError(x, "solve_melitz_fixed_q_A_profile_v2: $reason trial rejected as an evaluation " *
+            "error (Addendum A) -- not fed to KNITRO as an ordinary stationary value."))
+    end
+
+    function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
+        x = collect(evalRequest.x)
+        n_fc_calls[] += 1
+        n_fc_calls[] + n_ga_calls[] > max_evals && throw(DomainError(x,
+            "solve_melitz_fixed_q_A_profile_v2: max_evals=$max_evals exceeded (bounded-evaluations requirement)."))
+        r = _eval(x, :fc)
+        evalResult.obj[1] = r.Delta
+        return 0
+    end
+    function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
+        x = collect(evalRequest.x)
+        n_ga_calls[] += 1
+        n_fc_calls[] + n_ga_calls[] > max_evals && throw(DomainError(x,
+            "solve_melitz_fixed_q_A_profile_v2: max_evals=$max_evals exceeded (bounded-evaluations requirement)."))
+        r = _eval(x, :ga)
+        evalResult.objGrad .= r.grad_free
+        return 0
+    end
+
+    kc = KNITRO.KN_new()
+    KNITRO.KN_load_param_file(kc, outer_loop_opt)
+    xIndices = melitz_kn_add_vars!(kc, n)
+    KNITRO.KN_set_var_lobnds_all(kc, x_start_v .- box)
+    KNITRO.KN_set_var_upbnds_all(kc, x_start_v .+ box)
+    KNITRO.KN_set_var_primal_init_values_all(kc, x_start_v)
+
+    m = length(rhs)
+    if m > 0
+        cIndices = melitz_kn_add_cons!(kc, m)
+        for i in 1:m
+            if sys.sense[i] == :eq
+                KNITRO.KN_set_con_eqbnd(kc, cIndices[i], rhs[i])
+            else
+                KNITRO.KN_set_con_lobnd(kc, cIndices[i], rhs[i])
+            end
+        end
+        nnz = m * n
+        indexCons_lin = repeat(cIndices, inner=n)
+        indexVars_lin = repeat(xIndices, outer=m)
+        coefs_lin = vec(permutedims(rows))
+        KNITRO.KN_add_con_linear_struct(kc, nnz, indexCons_lin, indexVars_lin, coefs_lin)
+    end
+
+    cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], cb_F!)
+    KNITRO.KN_set_cb_grad(kc, cb, cb_G!; nnzJ=0)
+    melitz_apply_policy_to_knitro!(kc, policy)
+
+    nStatus = -999
+    x_final = copy(x_start_v)
+    try
+        KNITRO.KN_solve(kc)
+        nStatus_ref, objSol, xSol, _ = KNITRO.KN_get_solution(kc)
+        nStatus = Int(nStatus_ref)
+        x_final = collect(Float64.(xSol))
+    catch e
+        @warn "solve_melitz_fixed_q_A_profile_v2: KN_solve terminated via exception (evaluation cap/rejection or genuine failure)" exception=(e, catch_backtrace())
+    finally
+        KNITRO.KN_free(kc)
+    end
+
+    # Strict incumbent retention (Addendum B): cold-reverify EVERY candidate (start; best
+    # trial, if it improved; KNITRO's own terminal point) and retain the best FiniteSolved one.
+    function theta_of(x::Vector{Float64})
+        Af = coordinate == :logH ? melitz_A_free_from_h_free(x, ctx) : x
+        return melitz_fixed_q_state_theta(Af, q_fixed, gpj_fixed, ctx)
+    end
+    function cold_reverify(theta_free::Vector{Float64})
+        return solve_melitz_delta!(session, theta_free, policy; warm_start_source=:neutral,
+                                    origin_block_screen=origin_block_screen)
+    end
+
+    theta_start = theta_of(x_start_v)
+    r_start_cold = cold_reverify(theta_start)
+    Delta_start_cold = r_start_cold isa FiniteSolved ? r_start_cold.Delta : Inf
+
+    candidates = Tuple{Symbol,Vector{Float64},Float64,MelitzInnerResult}[]
+    push!(candidates, (:input_start, theta_start, Delta_start_cold, r_start_cold))
+    if incumbent_theta[] !== nothing
+        r_trial_cold = cold_reverify(incumbent_theta[])
+        Delta_trial_cold = r_trial_cold isa FiniteSolved ? r_trial_cold.Delta : Inf
+        push!(candidates, (:trial, incumbent_theta[], Delta_trial_cold, r_trial_cold))
+    end
+    theta_terminal = theta_of(x_final)
+    r_terminal_cold = cold_reverify(theta_terminal)
+    Delta_terminal_cold = r_terminal_cold isa FiniteSolved ? r_terminal_cold.Delta : Inf
+    push!(candidates, (:terminal, theta_terminal, Delta_terminal_cold, r_terminal_cold))
+
+    deltas = [c[3] for c in candidates]
+    best_i = argmin(deltas)
+    best_source, best_theta, best_Delta, best_r = candidates[best_i]
+
+    if isfinite(Delta_start_cold)
+        @assert best_Delta <= Delta_start_cold + 1e-6 (
+            "solve_melitz_fixed_q_A_profile_v2: strict incumbent retention violated -- " *
+            "returned Delta=$best_Delta > verified start Delta=$Delta_start_cold")
+    end
+    @assert stats.n_actual_inner_solves <= length(stats.seen_keys) (
+        "solve_melitz_fixed_q_A_profile_v2: unique_inner_solves ($(stats.n_actual_inner_solves)) " *
+        "exceeded unique_A_points ($(length(stats.seen_keys))) -- Addendum D invariant violated")
+
+    nA = length(ctx.A_pivot.other)
+    A_free_incumbent = best_theta[2:1+nA]
+
+    return MelitzMiddleProfileV2Result(nStatus, coordinate, x_start_v, best_source,
+        A_free_incumbent, best_theta, best_r, best_Delta, Delta_start_cold, Delta_terminal_cold,
+        n_fc_calls[], n_ga_calls[], n_finite[], n_cap[], n_inf[],
+        length(stats.seen_keys), stats.n_actual_inner_solves, stats.n_cache_hits + stats.n_bad_point_hits,
+        time() - t0, eval_log)
+end
