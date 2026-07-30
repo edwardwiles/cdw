@@ -1,5 +1,11 @@
 # Production operator-bundle hardening -- final task report (2026-07-30)
 
+**UPDATE (same day, after user go-ahead): D=20/W=100,000 extended release gate run for real
+(43/43 PASS) and MERGED, PUSHED, TAGGED into `production/fullA-exact`.** See the new section at
+the bottom of this document; the body below is left as originally written (D=4-only) for an
+accurate record of what was true at each point, with the update appended rather than silently
+edited in.
+
 Branch: `architecture/production-operator-bundle-hardening-2026-07-30`
 Base: `production/fullA-exact @ 79b941c`
 This branch HEAD: see `git log --oneline production/fullA-exact..HEAD` (8 commits, one per
@@ -108,9 +114,104 @@ PRODUCTION_MERGE =
                  which was not checked this session)
 ```
 
-## Recommended next step
+## Recommended next step (as of the original, D=4-only report)
 
 Run the D=20/W=100,000 extended release gate (adapt
 `test_all_family_real_production_entrypoints_operator_bundle.jl`'s per-family closures to real
 D=20 setup, or exercise the 3 real drivers end-to-end with short checkpoint budgets), then revisit
 `PRODUCTION_MERGE` with the user.
+
+---
+
+## UPDATE (2026-07-30, same day): D=20 gate run, merged, pushed, tagged
+
+User instruction: "Please proceed with the D=20 gate. If that goes well, then yes you can merge
+and push."
+
+### D=20/W=100,000 extended release gate
+
+`test_d20_extended_release_gate_2026-07-30.jl` (new commit `e71ab63`, task §16). Real KNITRO,
+`W=100,000`, `delta=1.0`, 60s budget per fresh run (20s+20s for the interrupt/resume leg), all 3
+real driver functions, all 5 families, plus a genuine checkpoint-interrupt-then-resume leg for
+flexible_cm. Total wall clock: ~11 minutes (6 real KNITRO driver invocations plus D=20/W=100,000
+real-data setup).
+
+Note found while writing this gate: all 3 real drivers hardcode `d20_real_setup_design`
+internally and cannot be called at D=4 at all -- this was already documented in the D=4 gate's own
+header; the D=20 gate closes exactly that gap by calling the real drivers themselves, not a
+substitute.
+
+**Result: 43/43 PASS.** Per family: `n_eval>0`/`n_grad>0` (real FG/Hessian callbacks fired,
+KNITRO status -401 = time-limit-reached-but-feasible, matching the pre-existing convention for a
+60s smoke budget), `backend_manifest.json` written with `bundle_type=OperatorPsiBundle{...}`,
+`bundle_invariant_pass=true`, `dense_reference_construction_count=0`,
+`any_legacy_field_present=false`, `select_G_from_H_applicable=false`. Checkpoint/resume leg:
+checkpoint file written by the interrupted run, resumed run's `n_eval` continued (not reset), and
+the manifest was genuinely rewritten on resume (not left stale from the interrupted run).
+Cross-family: `DENSE_REFERENCE_BUNDLE_CONSTRUCTIONS[]==0` and every dense-materialization counter
+(`full_G`, `dense_economic_G`, `dense_CM_G`, `dense_ZC_G`, `dense_Frechet_G`,
+`generic_dense_FG_calls`) `==0` across all 6 real driver calls combined.
+
+Compact manifest summaries (family/runner/bundle_type/counts, with the huge full Julia type
+signatures stripped out) are in this session's Dropbox push,
+`key_results/d20_manifests_compact/`.
+
+### Merge, push, tag
+
+Checked for an active production campaign first (best-effort): the one other local worktree
+checked out on `production/fullA-exact`
+(`worktrees/audit-production-5x7-2026-07-26`) had a clean `git status`, HEAD exactly matching
+`origin/production/fullA-exact`, and no running process referencing its path -- no live campaign
+found.
+
+- Merged `architecture/production-operator-bundle-hardening-2026-07-30` into
+  `production/fullA-exact` (merge commit `aac0320`), pushed: `79b941c..aac0320`.
+- Tagged `production-operator-bundle-hardening-release-2026-07-30` (on `aac0320`), pushed.
+- Merged the D=20 gate script itself in a follow-up merge commit (`8a3b21e`), pushed:
+  `aac0320..8a3b21e`. (The tag stays on `aac0320` -- the functional/behavioral content is
+  identical between the two; the second merge only adds the test file that validated the first.)
+- Post-merge smoke: re-ran `test_all_family_real_production_entrypoints_operator_bundle.jl`
+  against a **fresh checkout of the actual merged `production/fullA-exact` branch** (not the
+  feature branch) -- **28/28 PASS**, ~72s wall clock.
+
+### Updated status block
+
+```
+PRODUCTION_API =
+    operator_only
+
+PRODUCTION_CONTEXT_TYPE_SAFETY =
+    enforced
+
+DENSE_REFERENCE_API =
+    explicit_diagnostic_only
+
+LIVE_FAIL_FAST_ASSERTION =
+    all_entrypoints
+
+STATIC_BUNDLE_CLAIMS_REMAINING = 0
+
+ALL_FAMILY_DEFAULT_PATH_GATE =
+    D4:pass
+    D20:pass   (real KNITRO, 43/43 PASS, 2026-07-30)
+
+CHECKPOINT_PROTECTION =
+    partial_manifest_written_and_correctly_rewritten_on_every_run_including_resume_but_resume_does_not_yet_diff_or_reject_a_mismatched_manifest
+
+DENSE_WARNING_AND_PERMIT =
+    pass
+
+PRODUCTION_MERGE =
+    merged_tagged_smoked
+    -- production/fullA-exact @ 8a3b21e (origin, pushed)
+    -- tag production-operator-bundle-hardening-release-2026-07-30 @ aac0320 (origin, pushed)
+    -- post-merge smoke: 28/28 PASS against the actual merged branch
+```
+
+### What remains genuinely open (unchanged from the original report)
+
+`CHECKPOINT_PROTECTION` is still only partial -- resume does not yet diff the old/new manifest and
+hard-reject a mismatch, only write a fresh correct one. The 5 low-level builders and ~30
+pre-existing `select_G_from_H` call sites remain (audited, allowlisted, not a live risk -- see
+`DENSE_REFERENCE_REACHABILITY_AUDIT_2026-07-30.md`). Both are reasonable follow-up work, not
+blockers for this release.
