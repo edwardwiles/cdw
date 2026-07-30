@@ -1,0 +1,13 @@
+metric,value
+serial_wall_s,101.759446144104
+bundle_pool_build_s,18.85581612586975
+threaded_wall_s,6.159265041351318
+threaded_warm_repeat_s,5.897763013839722
+speedup_cold,16.52136179575386
+speedup_warm,17.25390557492981
+live_bytes_delta_serial,9.807528e6
+live_bytes_delta_threaded,1.88855824e8
+max_abs_diff_g_q,0.0
+max_abs_diff_d,0.0
+n_threads,20.0
+nq,398.0

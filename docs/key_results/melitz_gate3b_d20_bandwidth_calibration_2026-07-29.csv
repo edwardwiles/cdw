@@ -1,0 +1,10 @@
+h,plus_switches,minus_switches,total_switches,class_plus,class_minus,plus_affine_feasible,minus_affine_feasible,fixed_dual_secant,reoptimized_secant,relative_error,sign_agreement,meets_criteria
+1.0,117,100,217,NumericalFailure_or_unverified,NumericalFailure_or_unverified,true,true,-0.006462933099857737,NaN,NaN,false,false
+0.5,50,52,102,FiniteSolved,NumericalFailure_or_unverified,true,true,-0.00595863711668132,NaN,NaN,false,false
+0.25,28,25,53,FiniteSolved,NumericalFailure_or_unverified,true,true,-0.0053866475806885195,NaN,NaN,false,false
+0.125,18,15,33,FiniteSolved,NumericalFailure_or_unverified,true,true,-0.00517089331810916,NaN,NaN,false,false
+0.0625,7,5,12,FiniteSolved,NumericalFailure_or_unverified,true,true,-0.0052559457860001935,NaN,NaN,false,false
+0.03125,2,4,6,FiniteSolved,NumericalFailure_or_unverified,true,true,-0.0009305703968021106,NaN,NaN,false,false
+0.015625,1,3,4,FiniteSolved,NumericalFailure_or_unverified,true,true,-0.0016418563785371987,NaN,NaN,false,false
+0.0078125,0,0,0,FiniteSolved,FiniteSolved,true,true,-1.777142834669121e-5,-1.7771428371560205e-5,1.3993808056195196e-9,true,false
+0.00390625,0,0,0,FiniteSolved,FiniteSolved,true,true,-1.7771428360902064e-5,-1.7771428382218346e-5,1.199469261240225e-9,true,false

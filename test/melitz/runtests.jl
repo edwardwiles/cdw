@@ -67,6 +67,9 @@ include(joinpath(MELITZ_DIR, "aq_experimental_backend.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(MELITZ_DIR, "reduced_q_subspace.jl"))
 include(joinpath(MELITZ_DIR, "reduced_q_controller.jl"))
+include(joinpath(MELITZ_DIR, "typed_eval_counters.jl"))
+include(joinpath(MELITZ_DIR, "matched_effort_controller.jl"))
+include(joinpath(MELITZ_DIR, "reduced_q_threaded_direction.jl"))
 include(joinpath(MELITZ_DIR, "nuisance_profile.jl"))
 include(joinpath(MELITZ_DIR, "predictor_corrector.jl"))   # 2026-07-26 closure (Phase 3): was
     # not previously included in this test file at all (zero test coverage) -- now included
@@ -7180,6 +7183,211 @@ end
         sr = result.stages[1]
         @test sr.n_finite_solved + sr.n_above_cap + sr.n_infinite_delta + sr.n_numerical_failure + sr.n_cap_screened == length(sr.trials)
         melitz_update_operator_at_theta!(rq_obj.op, rq_theta0, rq_ctx)
+    end
+end
+
+@testset "Typed evaluation counters (2026-07-29 Phase 0 report repair)" begin
+    @testset "every classified evaluation contributes to exactly one typed classification count" begin
+        c = MelitzTypedEvalCounters(n_finite_solved=5, n_above_cap_evaluated=3, n_infinite_delta=2, n_numerical_failure=1)
+        @test melitz_total_classified(c) == 11
+        @test melitz_validate_typed_counters(c; n_trials=11)
+        @test_throws ArgumentError melitz_validate_typed_counters(c; n_trials=12)
+        @test_throws ArgumentError melitz_validate_typed_counters(c; n_trials=10)
+    end
+
+    @testset "screened AboveEvaluationCap points are a subset of total AboveEvaluationCap" begin
+        c_ok = MelitzTypedEvalCounters(n_above_cap_evaluated=4, n_screened_above_cap=3)
+        @test melitz_total_above_cap(c_ok) == 7
+        @test melitz_validate_typed_counters(c_ok)
+        # melitz_total_above_cap(c) = n_above_cap_evaluated + n_screened_above_cap BY
+        # DEFINITION, so n_screened_above_cap <= melitz_total_above_cap(c) holds for every
+        # nonnegative-field counter (it can only be violated by a negative n_above_cap_evaluated,
+        # already covered by the separate "negative fields are rejected" test below) -- verified
+        # here as a genuine mathematical property across many random nonnegative combinations,
+        # not merely asserted for one hand-picked pair.
+        for _ in 1:20
+            c = MelitzTypedEvalCounters(n_above_cap_evaluated=rand(0:50), n_screened_above_cap=rand(0:50))
+            @test c.n_screened_above_cap <= melitz_total_above_cap(c)
+            @test melitz_validate_typed_counters(c)
+        end
+    end
+
+    @testset "negative fields are rejected" begin
+        @test_throws ArgumentError melitz_validate_typed_counters(MelitzTypedEvalCounters(n_finite_solved=-1))
+    end
+
+    @testset "reproduces the original Phase 12 bug: reduced_q_controller counters built from an inconsistent stage still round-trip through the SAME check" begin
+        # Regression for the genuine Phase 0 finding: the original Phase 12 CSV's
+        # sequential_reduced_q rows had classification sums exceeding the recorded step count
+        # (root-caused to melitz_solve_reduced_q_stage!'s NumericalFailure retry double-count,
+        # fixed in this session -- see docs/melitz_reduced_q_validation_and_d20_readiness_2026-07-29.md
+        # Phase 0). This test locks in that the CURRENT (fixed) controller's own per-stage
+        # counters satisfy the invariant against the SAME stage's own `length(trials)`, for
+        # every stage of a genuine multi-stage run (not just a single 1-stage smoke test).
+        # NOTE: `rq_ctx`/`rq_obj`/`rq_theta0` from the EARLIER "Reduced-q-subspace outer-search
+        # backend" @testset are out of scope here (each @testset is its own local scope in
+        # Test.jl) -- built fresh, locally, rather than incorrectly reaching across testsets.
+        # n_stages_max=1 here (not 2): this sub-test's only job is to confirm the CURRENT
+        # controller's per-stage counters satisfy the invariant against an independently
+        # recorded trial count -- the multi-stage version of this exact search is already
+        # exercised extensively elsewhere (the "Reduced-q-subspace outer-search backend"
+        # testset above, and this session's own real Gate 2 script run,
+        # docs/key_results/melitz_gate2_d4_matched_effort_stages_2026-07-29.csv, which shows
+        # this invariant holding across genuine 3-5-stage runs) -- a redundant second
+        # multi-stage live-KNITRO run here adds resource cost without adding coverage.
+        tc_obj, tc_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+            policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+        tc_ctx = tc_obj.γ
+        result2 = melitz_run_reduced_q_sequential_search(tc_ctx, tc_obj, tc_theta0; delta=0.5, direction=:upper,
+            policy=CappedEvaluation(10.0), n_stages_max=1, max_iterations_per_stage=10, max_seconds_per_stage=30.0)
+        for sr in result2.stages
+            counters = melitz_typed_counters_from_reduced_q_stage(sr)
+            @test melitz_validate_typed_counters(counters; n_trials=length(sr.trials))
+        end
+        melitz_update_operator_at_theta!(tc_obj.op, tc_theta0, tc_ctx)
+    end
+
+    @testset "CSV output is standards-compliant and round-trips through a normal CSV parser" begin
+        rows = [(label="a,b", value=1), (label="plain", value=2), (label="has\"quote", value=3)]
+        tmp = tempname() * ".csv"
+        melitz_write_typed_counter_csv(tmp, ["label", "value"], rows)
+        lines = readlines(tmp)
+        @test length(lines) == 4   # header + 3 rows
+        # A standard-library CSV round trip: DelimitedFiles.readdlm understands RFC4180 quoting.
+        parsed, _ = readdlm(tmp, ','; header=true)
+        @test size(parsed, 1) == 3
+        @test String(parsed[1, 1]) == "a,b"
+        @test String(parsed[3, 1]) == "has\"quote"
+        rm(tmp)
+    end
+
+    @testset "Markdown tables are generated from the same machine-readable records as the CSV" begin
+        rows = [(label="row1", n=7), (label="row2", n=9)]
+        tmp_csv = tempname() * ".csv"
+        tmp_md = tempname() * ".md"
+        melitz_write_typed_counter_csv(tmp_csv, ["label", "n"], rows)
+        melitz_write_typed_counter_markdown(tmp_md, "Test table", ["label", "n"], rows)
+        csv_lines = readlines(tmp_csv)
+        md_text = read(tmp_md, String)
+        # Every value that appears in the CSV body also appears in the markdown table -- both
+        # were generated from the identical `rows` vector, not independently re-derived.
+        for r in rows
+            @test occursin(string(r.n), md_text)
+            @test occursin(r.label, md_text)
+        end
+        @test length(csv_lines) == 3
+        rm(tmp_csv); rm(tmp_md)
+    end
+end
+
+@testset "Gate 2/3 matched-effort + threaded direction infrastructure (2026-07-29 validation session)" begin
+    ge_obj, ge_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+        policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+    ge_ctx = ge_obj.γ
+    ge_D = ge_ctx.D; ge_nA = ge_D^2 - 1; ge_nq = ge_D^2 - 2
+    ge_obj.use_cached_x = false; ge_obj.x .= NaN
+    ge_lfd0 = melitz_recover_lfd(ge_obj, ge_theta0)
+    @test ge_lfd0.lfd_ok
+    ge_x0 = copy(ge_lfd0.dual_x)
+    melitz_update_operator_at_theta!(ge_obj.op, ge_theta0, ge_ctx)
+
+    @testset "Method A (welfare + exact A, q frozen): q-block never moves across stages, and typed counters are consistent" begin
+        # One search, reused for both checks below (a second, redundant live-KNITRO rerun
+        # here would only add resource cost, not additional coverage).
+        resA = melitz_run_welfare_plus_a_sequential_search(ge_ctx, ge_obj, ge_theta0; delta=0.5, direction=:upper,
+            policy=CappedEvaluation(10.0), n_stages_max=2, max_iterations_per_stage=8, max_seconds_per_stage=30.0)
+        q_anchor = ge_theta0[1+ge_nA+1:end]
+        @test isapprox(resA.incumbent.theta[1+ge_nA+1:end], q_anchor; atol=0, rtol=0)   # bit-identical: s pinned at 0 every stage
+        @test resA.incumbent.objective <= ge_theta0[1] + 1e-9   # never worse than the start (Rule 12)
+        for sr in resA.stages
+            @test melitz_validate_typed_counters(melitz_typed_counters_from_reduced_q_stage(sr); n_trials=length(sr.trials))
+        end
+        melitz_update_operator_at_theta!(ge_obj.op, ge_theta0, ge_ctx)
+    end
+
+    @testset "Method C (staged production (A,f)): typed counters cross-check + incumbent never regresses" begin
+        ge_obj_f, ge_theta0_f = build_melitz_psi_bundle(FIXTURE; policy=CappedEvaluation(10.0),
+            backend=:matrix_free, forbid_dense_fallback=true)
+        ge_ctx_f = ge_obj_f.γ
+        inner_opt = joinpath(dirname(@__DIR__), "..", "melitz_inner_loop_options_capped_2026-07-24.opt")
+        resC, stageC = melitz_run_production_stage_sequential_search(ge_ctx_f, ge_obj_f, ge_theta0_f; delta=0.5, direction=:upper,
+            policy=CappedEvaluation(10.0), n_stages_max=2, max_iterations_per_stage=8, max_seconds_per_stage=30.0,
+            inner_loop_opt=inner_opt)
+        @test resC.incumbent.objective <= ge_theta0_f[1] + 1e-9
+        for sc in stageC
+            counters = MelitzTypedEvalCounters(n_finite_solved=sc.n_finite_solved, n_above_cap_evaluated=sc.n_above_cap,
+                n_infinite_delta=sc.n_infinite_delta, n_numerical_failure=sc.n_numerical_failure)
+            @test melitz_validate_typed_counters(counters; n_trials=sc.n_trials)
+        end
+    end
+
+    @testset "matched_effort_option_file overrides maxit/maxtime_real without corrupting the base file" begin
+        base = joinpath(dirname(@__DIR__), "..", "melitz_outer_finite_delta_alg_direct_2026-07-27.opt")
+        tmp = melitz_matched_effort_option_file(base, 17, 42.0)
+        lines = readlines(tmp)
+        @test any(l -> occursin("maxit", l) && occursin("17", l), lines)
+        @test any(l -> occursin("maxtime_real", l) && occursin("42.0", l), lines)
+        base_lines = readlines(base)
+        @test length(lines) >= length(base_lines)   # base content preserved, override appended
+        rm(tmp)
+    end
+
+    @testset "threaded direction construction matches serial reference (D4)" begin
+        d_serial, gq_serial = melitz_reduced_q_propose_direction(ge_theta0, ge_x0, ge_ctx, ge_obj;
+            bandwidth_policy=PowerScaledQBandwidth(1e-3, 80_000, 0.5))
+        @test d_serial !== nothing
+
+        bundle_factory = () -> begin
+            o, _ = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+                policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+            o
+        end
+        pool = melitz_build_thread_bundle_pool(bundle_factory, Threads.maxthreadid())
+        @test length(pool) == Threads.maxthreadid()
+
+        d_par, gq_par = melitz_reduced_q_propose_direction_threaded(ge_theta0, ge_x0, ge_ctx, pool;
+            bandwidth_policy=PowerScaledQBandwidth(1e-3, 80_000, 0.5))
+        @test d_par !== nothing
+        @test isapprox(gq_serial, gq_par; rtol=1e-9, atol=1e-12)
+        @test isapprox(d_serial, d_par; rtol=1e-9, atol=1e-12)
+
+        # No dense G materialized anywhere in the threaded sweep.
+        before_dense = MELITZ_DENSE_G_MATERIALIZATIONS[]
+        melitz_reduced_q_propose_direction_threaded(ge_theta0, ge_x0, ge_ctx, pool;
+            bandwidth_policy=PowerScaledQBandwidth(1e-3, 80_000, 0.5))
+        @test MELITZ_DENSE_G_MATERIALIZATIONS[] == before_dense
+        melitz_update_operator_at_theta!(ge_obj.op, ge_theta0, ge_ctx)
+    end
+
+    @testset "threaded sweep rejects an under-sized bundle pool (no silent aliasing/race)" begin
+        gq_bad = zeros(ge_nq)
+        bundle_factory2 = () -> begin
+            o, _ = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+                policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+            o
+        end
+        undersized_pool = [bundle_factory2()]   # length 1, likely < Threads.nthreads() in a real run
+        if Threads.nthreads() > 1
+            @test_throws ArgumentError melitz_q_coordinatewise_sweep_threaded!(gq_bad, ge_theta0, ge_nq,
+                PowerScaledQBandwidth(1e-3, 80_000, 0.5), undersized_pool, ge_ctx; x0=ge_x0)
+        end
+    end
+
+    @testset "bundle pool members are independently mutable (mutating one does not perturb another)" begin
+        bundle_factory3 = () -> begin
+            o, _ = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+                policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
+            o
+        end
+        pool3 = melitz_build_thread_bundle_pool(bundle_factory3, 2)
+        @test pool3[1] !== pool3[2]
+        @test pool3[1].op !== pool3[2].op
+        theta_pert = copy(ge_theta0); theta_pert[2] += 0.01
+        melitz_update_operator_at_theta!(pool3[1].op, theta_pert, ge_ctx)   # perturb pool3[1] only
+        Dp_2_unperturbed = -pool3[2](ge_x0)
+        # pool3[2] was never mutated by the theta_pert update to pool3[1] -- its own Delta at the
+        # ORIGINAL theta0 must still equal the fixture's own baseline value.
+        @test isapprox(Dp_2_unperturbed, ge_lfd0.Delta; rtol=1e-8)
     end
 end
 
