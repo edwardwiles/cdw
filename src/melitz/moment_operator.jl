@@ -81,6 +81,10 @@ mutable struct MelitzMomentOperator
     bin::Matrix{UInt8}         # W x D, bin[s,o] = #{d : cutoff_od < z_original[s,o]}, 0..D
     ell::Vector{Float64}       # W, dense focal-link column at the current outer point
 
+    prefixC::Vector{Float64}   # D+1 scratch (melitz_update_moment_operator!'s focal-link build,
+                                # ascending-cutoff-rank prefix sum of C_{j,d} at the focal origin j)
+    prefixF::Vector{Float64}   # D+1 scratch, same rank order, prefix sum of f_{j,d}
+
     cum::Vector{Float64}       # D+1 scratch (mul_G!)
     binsum::Vector{Float64}    # D+1 scratch (mul_Gt!, and REPURPOSED by melitz_same_origin_weighted_block!)
     tail::Vector{Float64}      # D+1 scratch (mul_Gt!, and REPURPOSED by melitz_same_origin_weighted_block!)
@@ -138,6 +142,7 @@ function build_melitz_moment_operator(sorted_ctx::MelitzSortedTailContext, layou
     return MelitzMomentOperator(D, W, sorted_ctx, layout, UInt(0),
         zeros(D, D), zeros(D, D), zeros(Int, D, D), zeros(Int, D, D),
         zeros(UInt8, W, D), zeros(W),
+        zeros(D + 1), zeros(D + 1),
         zeros(D + 1), zeros(D + 1), zeros(D + 1), zeros(D),
         zeros(D + 1, D + 1), zeros(D + 1, D + 1), zeros(K), zeros(K), zeros(W),
         zeros(D, D), zeros(D, D),
@@ -217,22 +222,42 @@ function melitz_update_moment_operator!(op::MelitzMomentOperator, p::MelitzPrimi
 
     j = p.target_country
     z_orig = sorted_ctx.z_original
-    fill!(op.ell, 0.0)
+    w_j = p.w[j]
     @melitz_profile :moment_operator_link_update begin
-        @inbounds for d in 1:D
-            for w in 1:W
-                z = z_orig[w, j]
-                firm = melitz_firm(p.w[j], p.tau[j, d], p.A[j, d], p.f[j, d], sigma,
-                                    eq.expenditure[d], 1.0, z)
-                op.ell[w] += firm.realized_operating_profit
-            end
+        # 2026-07-30 O(W*D) -> O(W+D) reformation (docs
+        # melitz_profiledA_parallel_speed_and_cutoff_portfolio_2026-07-30.md Phase 4). For
+        # FIXED q (participation invariant throughout a middle-loop A-search -- this
+        # module's own `bin`/`order`/`rank` above are exactly the authoritative
+        # participation source, already relied on by mul_G!/mul_Gt!), destination d is
+        # active for draw w at origin j iff `rank[d,j] <= bin[w,j]` -- a PREFIX in
+        # ascending-cutoff order (same fact `mul_G!`'s own header derivation already uses).
+        # `realized_operating_profit_d(z) = C_{j,d}*z^(sigma-1)/sigma - w_j*f_{j,d}` when
+        # active (melitz_firm/firm_quantities.jl, `price_power_d=1.0` here), so the sum over
+        # active d collapses to two length-(D+1) prefix sums (built ONCE, O(D)) plus one O(1)
+        # lookup per draw -- not a fresh melitz_firm call at every (w,d) pair.
+        order_j = @view op.order[:, j]
+        prefixC = op.prefixC
+        prefixF = op.prefixF
+        prefixC[1] = 0.0
+        prefixF[1] = 0.0
+        @inbounds for rank in 1:D
+            d = order_j[rank]
+            C_jd = melitz_C(w_j, p.tau[j, d], p.A[j, d], sigma, eq.expenditure[d])
+            prefixC[rank+1] = prefixC[rank] + C_jd
+            prefixF[rank+1] = prefixF[rank] + p.f[j, d]
+        end
+        bin_j = @view op.bin[:, j]
+        @inbounds for w in 1:W
+            z = z_orig[w, j]
+            b = Int(bin_j[w]) + 1
+            op.ell[w] = (z^(sigma - 1) * prefixC[b] / sigma - w_j * prefixF[b]) / w_j
         end
         price_power_autarky = p.gamma_prime_target
-        for w in 1:W
+        @inbounds for w in 1:W
             z_j = z_orig[w, j]
             firm_autarky = melitz_firm(cf.w_prime, 1.0, p.A[j, j], p.f[j, j], sigma,
                                         cf.expenditure_prime, price_power_autarky, z_j)
-            op.ell[w] = op.ell[w] / p.w[j] - firm_autarky.realized_operating_profit / cf.w_prime
+            op.ell[w] -= firm_autarky.realized_operating_profit / cf.w_prime
         end
     end
 

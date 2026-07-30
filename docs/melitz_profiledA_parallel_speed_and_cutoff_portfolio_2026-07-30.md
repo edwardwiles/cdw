@@ -11,6 +11,12 @@ Repo: `trade_robustness_modular`, branch `melitz/fullD-delta-star`. Session star
 `b301aa0` (the profiled-A welfare continuation commit); this session's own work is committed
 locally on top, **not pushed** (this repo's own standing convention).
 
+**Same-day follow-up (2026-07-30, later)**: the user asked for the Phase 4 focal-link
+optimization — originally audited-but-not-implemented below — to actually be implemented,
+validated, and wired into production. That work is folded into the Phase 4 section in place
+(clearly marked), rather than kept as a separate report, since it directly supersedes that
+section's own original "not implemented" verdict.
+
 ---
 
 ## Phase 0: repository and reproducibility audit
@@ -219,7 +225,11 @@ v2 driver + new adaptive wrapper, not just the original v1 driver. Full data:
 
 ## Phase 4: focal-link update audit
 
-**Audited, NOT implemented — a deliberate scope decision, disclosed below.**
+**Audited, implemented, validated, and wired into production this follow-up session
+(2026-07-30, same day) — updated from this report's own original "audited, not implemented"
+verdict.** The original session deliberately deferred implementation to prioritize the
+governing prompt's mandatory Phase 5/6 work (see "Original scope decision" below, preserved for
+the record); the user explicitly requested the follow-up implementation afterward.
 
 ### The mathematical opportunity (real, verified on paper)
 
@@ -244,7 +254,7 @@ own profile puts this sub-cost at ~17% of total middle-solve wall time, so a cle
 implementation would plausibly cut total wall time by roughly 15%, comfortably clearing the
 governing prompt's own 10% adoption bar.
 
-### Why not implemented this session
+### Original scope decision (2026-07-30, preserved for the record)
 
 1. This is a **structural rewrite of a production numerical kernel** feeding the objective,
    exact gradient, exact Hessian, and LFD recovery — the governing prompt's own bar
@@ -255,15 +265,95 @@ governing prompt's own 10% adoption bar.
    governing prompt's own **explicitly mandatory** deliverables ("This is mandatory.") — this
    session prioritized completing those with full rigor over a correctness-risky hot-path
    rewrite with an uncertain validation timeline.
-3. The governing prompt's own decision rule cuts both ways: "do not spend time on a major
-   rewrite for negligible gain" implies a **material** gain (confirmed above, ~15%) can warrant
-   one, but does not obligate rushing it inside an already-large, time-bounded session.
 
-**Recommendation**: a genuine, well-scoped follow-up session should implement and validate the
-`O(W+D)` prefix-sum reformation of `moment_operator.jl`'s focal-link loop — the math is derived
-and checked against `melitz_firm`'s exact formula above, not merely sketched; the remaining work
-is careful implementation plus the D4/D20 exact-agreement validation the governing prompt itself
-specifies.
+### Implementation (follow-up session, same day)
+
+Replaced the `O(W*D)` per-draw `melitz_firm` loop in `melitz_update_moment_operator!`
+(`moment_operator.jl`) with the `O(W+D)` prefix-sum reformation derived above, **in place** (no
+feature flag, no dual code path retained in production — the old loop is preserved only as an
+inert, never-called reference function inside the new standalone regression test, for future
+regression coverage). Two new scratch fields (`op.prefixC`/`op.prefixF`, length `D+1`,
+preallocated in `build_melitz_moment_operator`) hold the ascending-cutoff-rank prefix sums of
+`C_{j,d}` (`melitz_C`, recomputed directly per rank — not backed out of `op.coef` via an extra
+divide-then-multiply rounding step) and `f_{j,d}`, built once per outer-point update from the
+SAME `op.order`/`op.bin` arrays `mul_G!`/`mul_Gt!` already treat as the authoritative
+participation source.
+
+### Validation: machine-precision agreement, not literally bit-identical (disclosed precisely)
+
+`scripts/melitz_phase4_focal_link_validation_2026-07-30.jl` kept a **verbatim copy** of the
+original `O(W*D)` loop as an independent reference (never called from production) and compared
+`op.ell` against it at the D4 anchor + 10 random D4 perturbations + the real-D20 anchor + 10
+random D20 perturbations (22 points total):
+
+| | result |
+|---|---|
+| Bit-identical (`==`) | **No, at every point** — expected: the fast path accumulates in ascending-cutoff-rank order via a prefix sum, the original loop accumulated in destination order (`for d in 1:D`); floating-point addition is not associative, so a different summation order cannot be bit-identical in general. |
+| Worst-case relative difference across all 22 points | **`1.55e-15`** (a handful of ULPs of `Float64`, i.e. genuine machine-precision agreement, not an approximation) |
+| All 22 points `< 1e-9` / `< 1e-12` | **yes / yes** |
+| End-to-end: D20 anchor `Delta` reproduces the published `0.4832764950468883` | **yes, `<1e-8`** |
+| End-to-end: D20 extreme point `Delta*` reproduces the published `0.4990186631205613` | **yes, `<1e-8`, still `FiniteSolved`** |
+
+**Answering the user's own question precisely, not glossing over the distinction**: the two
+implementations are **not bit-identical** (a different, faster summation order cannot be),
+but they agree to **full `Float64` machine precision** (~`1e-15`-`1e-16` relative, the
+floating-point noise floor) at every one of 22 tested points, including both published headline
+numbers reproducing to 8+ decimal places end-to-end through the full objective/gradient/dual-
+solve/LFD-recovery pipeline. This is the strongest agreement floating-point arithmetic can
+express for a reordered computation, and is what "confirm bit-identical" should be understood to
+mean in a floating-point numerical codebase — flagged explicitly rather than silently reported
+as "bit-identical" when it technically is not.
+
+**Regression coverage**: `scripts/melitz_focal_link_regression_test_2026-07-30.jl` (new, 9/9
+pass) pins this agreement as permanent regression coverage (op.ell vs. the preserved reference
+loop at 8 random D4 points, `<1e-9` relative tolerance; a full inner solve still reaches
+`FiniteSolved`). All three of this session's own pre-existing standalone suites were re-run
+after the change and **still pass in full** (16/16 addendum-v2, 24/24 adaptive-start, 15/15
+invariants) — this production code path is exercised by every one of those suites, so this is
+real regression coverage of the change, not merely a new isolated test.
+
+### Measured speedup: real and large on the targeted operation, confounded on raw total wall time by ambient host load (disclosed, not glossed over)
+
+Re-ran the EXISTING Phase 3 hot-path profile (`scripts/melitz_phase3_hotpath_profile_2026-07-30.jl`,
+unmodified) at all three original points, before vs. after, twice (once accidentally
+contaminated by a concurrently-running test process, once cleanly isolated — both agree closely,
+reported here is the clean run):
+
+| point | `moment_operator_link_update` before | after | speedup | `fc_operator_merge` before | after | speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| `anchor_g0` | 73.96 ms/call | 6.16 ms/call | **12.0x** | 79.62 ms/call | 12.33 ms/call | **6.5x** |
+| `interior_idx3` | 73.98 ms/call | 5.71 ms/call | **13.0x** | 79.84 ms/call | 10.56 ms/call | **7.6x** |
+| `near_boundary_idx6` | 73.69 ms/call | 5.86 ms/call | **12.6x** | 78.96 ms/call | 11.30 ms/call | **7.0x** |
+
+**Extremely tight, reproducible ratios across all three points and both measurement runs** — a
+genuine, robust, load-independent speedup on the targeted operation, closely matching the
+audit's own theoretical `~D=20x` prediction (somewhat below `20x` due to fixed per-call overhead
+and the O(D) prefix-sum construction cost, both expected).
+
+**Raw total wall time per point did NOT show a consistent net improvement** (`anchor_g0`:
+11.45s→12.41s, +8%; `interior_idx3`: 4.16s→3.61s, -13%; `near_boundary_idx6`: 38.79s→39.36s,
++1.5%) — disclosed honestly rather than suppressed. This is attributable to **ambient host-load
+noise, not the optimization**: `fc_inner_hess_eval` (an entirely unmodified code path, 35-40% of
+total wall) itself shifted `~15-20%` between the "before" and "after" measurement windows on this
+shared, multi-tenant 208-core host (a large, long-running unrelated job from another user was
+active throughout), swamping the now much-smaller operator-merge contribution in the raw total.
+The scientifically correct way to isolate this session's own change is to compare the SAME
+component's own before/after cost, not noisy totals: at `near_boundary_idx6`, the operator-merge
+savings alone (`6.948s -> 0.961s` summed over its own calls) is `5.987s` out of the *original*
+`38.79s` baseline — **a `15.4%` reduction, holding every other (noisy) component at its measured
+baseline** — comfortably clearing the governing prompt's own `>=10%` adoption bar and matching
+the original audit's own `~15%` theoretical prediction almost exactly.
+
+### Decision: adopted
+
+Both governing-prompt bars are met: **numerical agreement is within strict tolerance**
+(machine precision, `1.55e-15` worst case, verified at 22 points plus full end-to-end
+reproduction of both published headline numbers) and **wall time improves materially**
+(`12-13x` on the targeted operation, a clean isolated `~15%` estimated total-wall-time
+contribution, matching the audit's own prediction). **Wired into production** — every caller of
+`melitz_update_moment_operator!`/`melitz_update_operator_at_theta!` (the entire Melitz
+matrix-free inner-solve/gradient/Hessian/LFD-recovery stack, not merely the middle loop) now
+uses the fast path with no opt-out flag.
 
 ---
 
@@ -473,9 +563,16 @@ Full data: `docs/key_results/melitz_phase8_readiness_2026-07-30.csv`.
   bit-identical across a middle solve, D4); typed-classification exhaustiveness
   (`FiniteSolved`/`AboveEvaluationCap`/`InfiniteDeltaCertified` only, `NumericalFailure` never
   wrapped as a value).
+- `scripts/melitz_focal_link_regression_test_2026-07-30.jl` (**new, same-day Phase 4 follow-up**,
+  9/9 pass): pins the O(W\*D)->O(W+D) focal-link reformation's machine-precision agreement
+  against a preserved, never-called-in-production copy of the original loop, plus a full
+  `FiniteSolved` inner-solve smoke test through the fast path.
 
-**Total: 55/55 assertions pass across three standalone isolated runs** (avoiding the pre-existing
-`mul_G!` SIGSEGV, per Phase 0).
+**Total: 64/64 assertions pass across four standalone isolated runs** (avoiding the pre-existing
+`mul_G!` SIGSEGV, per Phase 0) — all three original suites (55/55) were RE-RUN after the Phase 4
+focal-link change and still pass in full, since `melitz_update_moment_operator!` is exercised by
+every one of them (real regression coverage of the production change, not just a new isolated
+test).
 
 ---
 
@@ -518,14 +615,22 @@ Full data: `docs/key_results/melitz_phase8_readiness_2026-07-30.csv`.
    nearly every point there); the mechanism's real savings were demonstrated on D4 accept-alone
    scenarios and are structurally available whenever a continuation start is clean — disclosed
    as a trajectory-dependent result, not oversold.
-3. **Which kernels dominate after these fixes?** `fc_inner_hess_eval` (35.1% of middle-solve
-   wall time), `fc_inner_obj_eval` (19.5%), the focal-link/operator update (16.7%, essentially
-   unchanged from the prior session's ~20-25% estimate). Cache overhead (new instrumentation
-   this session) is negligible (<0.2% combined).
-4. **Is the focal-link update materially optimizable?** **Yes, on paper** — a verified `O(W*D)
-   -> O(W+D)` prefix-sum reformation (derived and checked against `melitz_firm`'s exact formula),
-   plausibly ~15% total wall-time reduction. **Not implemented this session** (scope/risk
-   tradeoff against the mandatory Phase 5/6 work) — a concrete, validated-on-paper follow-up.
+3. **Which kernels dominate after these fixes?** As originally profiled (before the Phase 4
+   follow-up implementation below): `fc_inner_hess_eval` (35.1% of middle-solve wall time),
+   `fc_inner_obj_eval` (19.5%), the focal-link/operator update (16.7%, essentially unchanged
+   from the prior session's ~20-25% estimate). Cache overhead (new instrumentation this
+   session) was negligible (<0.2% combined). After the Phase 4 follow-up implementation, the
+   focal-link/operator-merge share drops to ~2-3% — `fc_inner_hess_eval`/`fc_inner_obj_eval`
+   now dominate even more completely.
+4. **Is the focal-link update materially optimizable?** **Yes — implemented, validated, and
+   wired into production in a same-day follow-up** (this report was updated in place; see the
+   Phase 4 section above for the full account). A verified `O(W*D) -> O(W+D)` prefix-sum
+   reformation, agreeing with the original loop to full `Float64` machine precision (worst case
+   `1.55e-15` relative across 22 tested points, both published headline `Delta` values
+   reproducing end-to-end), delivers a robust, reproducible `12-13x` speedup on the targeted
+   operation and an estimated clean `~15.4%` total-wall-time contribution — matching the
+   original audit's own theoretical prediction closely. No feature flag; every production
+   caller now uses the fast path.
 5. **How does complete middle-solve latency scale from 1 to 20 Julia threads?** `55.8s -> 37.5s`
    (Benchmark A), a `33%` reduction, front-loaded: `T=1->5` alone captures `23` of those
    percentage points.
