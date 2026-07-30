@@ -53,21 +53,45 @@
 #   -- a fully closed-form scalar per entry, NO ForwardDiff, NO draws loop.
 # ============================================================================
 
+"Off-diagonal (own-trade-excluded) inclusion mask, D x Ddest. Valid without threading row_idx/
+named_dest through here because every context builder in this repo keeps the invariant that the
+omitted ROW destination, when present, is always the LAST index (row_idx==D) -- see
+context_real_d20.jl/context_scaled.jl/qmc_context_real_d20.jl -- so destination column d always
+corresponds to origin row d for d in 1:Ddest, making a pure shape-based `o != d` mask exactly the
+own-trade exclusion."
+_offdiag_mask(D::Int, Ddest::Int) = [o != d for o in 1:D, d in 1:Ddest]
+
 """
-    precompute_q_tilde(τ) -> (q_tilde, N_obs)
+    precompute_q_tilde(τ; exclude_diagonal=false) -> (q_tilde, N_obs)
 
 Precompute ONCE per economy (data-only): the FE-residualized log-cost
-regressor and the observation count for the FULL D×D grid.
+regressor and the observation count for the FULL D×D (or D×Ddest, row_idx-restricted) grid.
+
+`exclude_diagonal=false` (default) reproduces the original behavior bit-exactly (complete-panel
+`within_transform_rect`, `N_obs=D*Ddest`) -- every pre-existing caller (D4 exact, D10, scaled
+synthetic contexts) is unaffected. `exclude_diagonal=true` (2026-07-30, user-directed fix: the
+production gravity/theta identification restriction was `sum_{o,d!=ROW}`, which includes domestic/
+own-trade cells and does not match the Stata regression's `sum_{o!=d,d!=ROW}` sample) ALSO drops
+`o==d` cells from the FE fit via the exact unbalanced-panel `within_transform_masked`
+(misc/doubleDiff.jl): those cells get `q_tilde[o,d]=0.0` (never entered the fit, and therefore never
+selected as the gravity pivot nor contribute to the gravity constraint downstream -- see
+gravity_elimination.jl), and `N_obs` becomes the true off-diagonal observation count.
 """
-function precompute_q_tilde(τ::AbstractMatrix)
+function precompute_q_tilde(τ::AbstractMatrix; exclude_diagonal::Bool = false)
     D, Ddest = size(τ)   # Ddest==D unless τ is already destination-restricted (row_idx, Part A 2026-07-23)
-    q_tilde = within_transform_rect(τ)    # = within(log(τ)); τ stands in for (1+tariff) in this dataset
-    N_obs = D * Ddest
+    if exclude_diagonal
+        mask = _offdiag_mask(D, Ddest)
+        q_tilde = within_transform_masked(τ, mask)
+        N_obs = count(mask)
+    else
+        q_tilde = within_transform_rect(τ)    # = within(log(τ)); τ stands in for (1+tariff) in this dataset
+        N_obs = D * Ddest
+    end
     return q_tilde, N_obs
 end
 
 """
-    gravity_value(Aod_θ, μ, q_tilde, N_obs) -> Float64
+    gravity_value(Aod_θ, μ, q_tilde, N_obs; exclude_diagonal=false) -> Float64
 
 g_gravity(θ) = (1/N_obs) Σ q_tilde[o,d]·log(A_od[o,d]), A_od = 1/AodPow.
 Computed via the FWL identity as -sumGrav_current/N_obs (see module docstring)
@@ -76,12 +100,27 @@ to avoid re-deriving the Aod_θ->Aod->AodPow chain here; matches
 documented sign flip + N_obs normalization. `Aod_θ`, `μ` enter only through
 the caller-supplied `AodPow` (kept as an explicit argument for clarity /
 testability against the existing formula).
+
+`exclude_diagonal=false` (default): unchanged, recomputes `within_transform_rect(τ)` internally
+(bit-identical to before this kwarg existed). `exclude_diagonal=true`: MUST be passed whenever the
+caller's `q_tilde`/`N_obs` came from `precompute_q_tilde(...; exclude_diagonal=true)`, so the
+τ-side and AodPow-side within-transforms stay consistent with the SAME restricted (own-trade
+-excluded) sample -- reuses the caller-supplied `q_tilde` directly for the τ-side (it IS already
+`within_transform_masked(τ, mask)`, recomputing it again would be redundant) and applies the same
+mask to `AodPow` (which, unlike τ, is a live quantity that can be a ForwardDiff `Dual` under an
+outer-loop derivative, hence `within_transform_masked`'s eltype-generic design).
 """
-function gravity_value(τ::AbstractMatrix, AodPow::AbstractMatrix, q_tilde::AbstractMatrix, N_obs::Int)
-    Wτ = within_transform_rect(τ)
-    WAodPow = within_transform_rect(AodPow)
-    sumGrav = zero(eltype(WAodPow))
+function gravity_value(τ::AbstractMatrix, AodPow::AbstractMatrix, q_tilde::AbstractMatrix, N_obs::Int; exclude_diagonal::Bool = false)
     D, Ddest = size(τ)
+    if exclude_diagonal
+        mask = _offdiag_mask(D, Ddest)
+        Wτ = q_tilde
+        WAodPow = within_transform_masked(AodPow, mask)
+    else
+        Wτ = within_transform_rect(τ)
+        WAodPow = within_transform_rect(AodPow)
+    end
+    sumGrav = zero(eltype(WAodPow))
     @inbounds for o in 1:D, d in 1:Ddest
         sumGrav += Wτ[o, d] * WAodPow[o, d]
     end

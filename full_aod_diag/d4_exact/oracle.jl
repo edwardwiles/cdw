@@ -430,7 +430,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
     lambda_g = reshape(ctx.γ.P, (D_dest, ctx.D))'
     Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
     AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
-    gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)   # -(1/N_obs) sum q_tilde*log(A_od); see gravity_tariff.jl
+    gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false))   # -(1/N_obs) sum q_tilde*log(A_od); see gravity_tariff.jl
     logA = -log.(AodPow)   # log(A_od) = -log(AodPow), per gravity_tariff.jl's module docstring
     # R_sum = sum(q_tilde .* logA_tilde) where logA_tilde is the two-way-demeaned logA; by the FWL
     # identity gravity_tariff.jl's own docstring proves (q_tilde already one-sided-residualized),

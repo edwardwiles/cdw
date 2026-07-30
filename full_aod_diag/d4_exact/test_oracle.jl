@@ -24,7 +24,7 @@ Aod_θ = reshape(r1.θ_full[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D^2], ctx.D, ctx
 lambda_g = reshape(ctx.γ.P, (ctx.D, ctx.D))'
 Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μh)) .* (lambda_g ./ lambda_g[1,:]')
 AodPow_check = (Aod_lvl ./ ctx.γ.cHat) .^ (-μh)
-g_direct = gravity_value(ctx.τ, AodPow_check, ctx.q_tilde, ctx.N_obs)
+g_direct = gravity_value(ctx.τ, AodPow_check, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false))
 println("oracle gravity_value = ", r1.gravity_value, "   direct recompute = ", g_direct, "   diff = ", abs(r1.gravity_value - g_direct))
 @assert r1.gravity_value == g_direct
 

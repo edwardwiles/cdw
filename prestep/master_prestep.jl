@@ -25,15 +25,38 @@ function master_prestep(data, counters, globalParams)
 	named_dest = row_idx === nothing ? (1:D) : filter(!=(row_idx), 1:D)
 	Ddest = length(named_dest)
 
+	# exclude_diagonal_gravity: also drop domestic/own-trade (o==d) cells from the theta
+	# identification sample (2026-07-30, user-directed fix: the production gravity restriction was
+	# sum_{o,d!=ROW}, which includes the diagonal and estimates theta far from the Stata regression's
+	# sum_{o!=d,d!=ROW} once that sample also drops own-trade -- confirmed live: 2018 goods-adjusted
+	# data gives theta~=15.55 under the old (diagonal-included) sample vs ~=4.73 once own-trade is
+	# excluded, matching the Stata side). Defaults to `false` (absent from globalParams for every
+	# pre-existing caller), reproducing today's behavior bit-exactly -- this is opt-in, not a global
+	# behavior change, so D4/D10/scaled synthetic contexts and their existing tests are unaffected.
+	exclude_diagonal_gravity = get(globalParams, :exclude_diagonal_gravity, false)
+
 	# Step 1: Estimate thetaHat via gravity or prespecified.
 	# Gravity = OLS of ln λ on ln τ with origin + destination fixed effects; by FWL this is the
 	# two-way "within" transform (matches the gravity-moment constraint used in the outer loop).
 	# (The previous version used a cell-referenced double-difference, which does NOT equal the
 	#  two-way-FE coefficient — see gravity_check.jl.) Restricted to named_dest columns so that
-	# excluding ROW as a destination re-estimates theta on the correct rectangular sample.
+	# excluding ROW as a destination re-estimates theta on the correct rectangular sample. When
+	# exclude_diagonal_gravity, ALSO drops o==d (own-trade) cells via the exact unbalanced-panel
+	# within-transform (within_transform_masked, misc/doubleDiff.jl) -- named_dest is always either
+	# 1:D or missing exactly the LAST index (row_idx==D, the codebase-wide convention -- see
+	# context_real_d20.jl), so destination column d always corresponds to origin row d, making a
+	# pure shape-based `o != d` mask the correct own-trade exclusion here.
 	if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
-		Wlambda = within_transform_rect(lambda[:, named_dest])
-		Wtau = within_transform_rect(tau[:, named_dest])
+		lambda_dest = lambda[:, named_dest]
+		tau_dest = tau[:, named_dest]
+		if exclude_diagonal_gravity
+			diag_mask = [o != d for o in 1:D, d in 1:Ddest]
+			Wlambda = within_transform_masked(lambda_dest, diag_mask)
+			Wtau = within_transform_masked(tau_dest, diag_mask)
+		else
+			Wlambda = within_transform_rect(lambda_dest)
+			Wtau = within_transform_rect(tau_dest)
+		end
 		thetaHat = -sum(Wlambda .* Wtau) / sum(Wtau .* Wtau)
 	elseif thetaIn > 0
 		thetaHat = thetaIn

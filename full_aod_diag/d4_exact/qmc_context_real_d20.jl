@@ -354,8 +354,9 @@ function master_prepare_cc_qmc(data, counters, prestep_output, globalParams, U_i
 end
 
 "Mirrors context_real_d20.jl::build_ad_context_real_d20 but injects U_injected (W x D, already Exp(1)) via master_prepare_cc_qmc instead of drawing it internally."
-function build_ad_context_real_d20_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, row_idx::Union{Nothing,Int} = nothing)
-    params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx))
+function build_ad_context_real_d20_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, row_idx::Union{Nothing,Int} = nothing, exclude_diagonal_gravity::Bool = false)
+    params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx,
+        exclude_diagonal_gravity = exclude_diagonal_gravity))
     so = master_setup(params)
     @assert so.D == D20_REAL "master_setup returned D=$(so.D), expected $(D20_REAL)"
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
@@ -384,11 +385,14 @@ function d20_real_setup_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, δ::F
         # mirrors d20_real_setup's own destination_sample kwarg exactly (context_real_d20.jl) --
         # :exclude_row is the production default (true dimension shrink, ROW dropped as a
         # destination); :all_legacy is the pre-Part-A square D x D opt-out.
-        destination_sample::Symbol = :exclude_row)
+        destination_sample::Symbol = :exclude_row,
+        # mirrors d20_real_setup's own exclude_diagonal_gravity kwarg exactly (context_real_d20.jl,
+        # 2026-07-30 user-directed fix). `false` default reproduces prior behavior bit-exactly.
+        exclude_diagonal_gravity::Bool = false)
     destination_sample in (:exclude_row, :all_legacy) ||
         error("d20_real_setup_qmc: destination_sample must be :exclude_row or :all_legacy, got :$destination_sample")
     row_idx = destination_sample == :exclude_row ? D20_REAL : nothing
-    so, pp, params_used = build_ad_context_real_d20_qmc(W = W, U_injected = U_injected, row_idx = row_idx)
+    so, pp, params_used = build_ad_context_real_d20_qmc(W = W, U_injected = U_injected, row_idx = row_idx, exclude_diagonal_gravity = exclude_diagonal_gravity)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
     # mirrors d20_real_setup's own bi/row_idx collision guard exactly (context_real_d20.jl) -- a
     # focal country that is not itself a valid destination in the resolved sample makes GT undefined.
@@ -421,7 +425,7 @@ function d20_real_setup_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, δ::F
 
     Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Ddest]
     τ = γ.τ
-    q_tilde, N_obs = precompute_q_tilde(τ)
+    q_tilde, N_obs = precompute_q_tilde(τ; exclude_diagonal = exclude_diagonal_gravity)
 
     obj = CS.PsiObjectiveBundleImplicit(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = EK_moments_gammanorm_directgp!, moments_jacobian! = error, d = nTotalMoments,
@@ -444,7 +448,7 @@ function d20_real_setup_qmc(; W::Int, U_injected::AbstractMatrix{Float64}, δ::F
             θ0_up = θ0_up, θ_lo = θ_lo, θ_hi = θ_hi, l_full = l_full,
             free_idx = free_idx, fixed_idx = fixed_idx, fixed_vals = fixed_vals, m = m,
             Aod_offset = Aod_offset, Aod_free_pos = Aod_free_pos,
-            τ = τ, q_tilde = q_tilde, N_obs = N_obs, obj = obj,
+            τ = τ, q_tilde = q_tilde, N_obs = N_obs, exclude_diagonal_gravity = exclude_diagonal_gravity, obj = obj,
             nTotalMoments = nTotalMoments, outer_constr_index = outer_constr_index,
             bounds = bounds, δ = δ, find_smallest = find_smallest)
 end
