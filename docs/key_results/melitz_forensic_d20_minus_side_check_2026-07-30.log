@@ -1,0 +1,28 @@
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+Julia threads: 20  BLAS threads: 1
+obj.mode = delta
+D=20  nA=399  nq=398
+base-point solve: 3.33s  Delta0=0.483276  lfd_ok=true
+basis r_basis=0.000357
+
+====================================================================================================
+PLUS side (h=0.5)
+====================================================================================================
+melitz_recover_lfd: nStatus=0  lfd_ok=true  Delta=0.483230  norm_resid=4.441e-16  moment_resid=1.810e-14  gap=3.136e-14
+
+====================================================================================================
+MINUS side (h=0.5)
+====================================================================================================
+melitz_recover_lfd: nStatus=-300  lfd_ok=false  Delta=10000000000.000000  norm_resid=NaN  moment_resid=NaN  gap=NaN  primal_div=NaN  dual_div=1.000000e+10
+
+====================================================================================================
+Now run the SAME minus-side theta through the typed classifier (fixed cc_bundle.jl)
+====================================================================================================
+classifier result for MINUS side: AboveEvaluationCap
+  certified_lower_bound=4.9823190135746557e8  source=live_dual_threshold
+classifier result for PLUS side: FiniteSolved
+  Delta=0.48323024523332664  nStatus=0
+
+Done.

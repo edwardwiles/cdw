@@ -1,0 +1,75 @@
+Melitz reduced-q NumericalFailure forensic audit -- provenance
+================================================================
+
+Session date: 2026-07-30
+Repo: trade_robustness_modular (/bbkinghome/edav/gravity_robustness/trade_robustness_modular)
+Branch: melitz/fullD-delta-star
+HEAD at session start: 5910ed145a995e86ab673d82a84ce307e9378539
+  ("Addendum: NumericalFailure/lower_limit investigation (2026-07-30, user-prompted)")
+  one commit ahead of 6f59889215dbeb9511e6e51e0e4d84defeff9f52, confirmed via `git log`.
+
+Files modified this session (git diff --stat):
+  src/melitz/cc_bundle.jl   | 38 +++++++++++++++----
+  src/melitz/delta_star.jl  |  9 ++++-
+  test/melitz/runtests.jl   | 99 ++++++++++++++++++++++++++++++++++++++++++++++++
+  3 files changed, 138 insertions(+), 8 deletions(-)
+No Ricardian (cc_algo/) file touched. No file outside src/melitz/, test/melitz/, docs/ touched.
+
+Toolchain:
+  Julia:  1.12.6 (juliaup)
+  KNITRO: 13.0.1, pinned via .knitro_env.sh (KNITRODIR=/opt/shared_sw/knitro/13.0.1),
+          ZIENA_LICENSE=/etc/sharedsw_licenses/ziena.txt
+  Julia threads: 1 (test suite / D4 work, per this repo's own test-suite convention) or 20
+          (D20 work, per src/melitz/CLAUDE.md's own standing instruction)
+  BLAS threads: 1 (OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1) throughout, per this repo's own
+          hard-cap convention.
+
+Fixtures used:
+  D4: generate_fake_melitz_data(D=4, sigma=2.5, theta_star=6.8, target_country=1, seed=29,
+      W=20_000) -- the exact fixture the 2026-07-30 addendum and the 2026-07-29 Phase 12/Gate 2
+      sessions used.
+  D20: noah_D20 real data (real_data/noah_D20/{pi,L,tau,countries}.csv), focal country "fra",
+      calibrate_melitz_pareto(sigma=2.5, theta_star=:estimate, ...), seed=1, W=80,000 -- the
+      exact Gate 3 fixture (docs/melitz_reduced_q_validation_and_d20_readiness_2026-07-29.md).
+  Policy: CappedEvaluation(10.0) throughout (delta_evaluation_cap=10.0).
+
+Commands run (representative; full scripts under this package's scratch/ subfolder are NOT
+included in this Dropbox push per CLAUDE.md's size guidance -- only compact logs/CSVs are):
+
+  export PATH="$HOME/.juliaup/bin:$PATH"
+  source .knitro_env.sh
+  export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+  julia --project=. -t 1 <script>.jl        # D4 diagnostics/reruns
+  julia --project=. -t 20 <script>.jl       # D20 diagnostics
+  julia --project=. -t 1 test/melitz/runtests.jl   # full test suite
+
+Key live-evidence numbers (see accompanying CSVs/logs for full detail):
+  - Single-point mode-flip trace: nStatus=-300 identical under mode=:delta and mode=:implicit;
+    threshold_crossed[]=false (delta) vs true (implicit), crossing_bound=14.259432 (> cap=10).
+  - D4 batch reclassification, delta=0.5/upper, same fixture: pre-fix 157/550
+    NumericalFailure (reproduced twice); post-fix 0/500 NumericalFailure.
+  - D4 four-cell post-fix rerun (delta in {0.1,0.5}, direction in {upper,lower}): 0/1648
+    NumericalFailure total.
+  - D20 minus-side (Gate 3B anchor, h=0.5): raw nStatus=-300 (same pattern as D4);
+    melitz_recover_lfd lfd_ok=false (correct, nStatus!=0); FIXED typed classifier:
+    AboveEvaluationCap, certified_lower_bound=4.9823190135746557e8.
+  - Segfault: reproduced twice (full suite retry + isolated single-testset rerun), identical
+    location (mul_G!, moment_operator.jl:281, inside an @inbounds block), identical KNITRO
+    objective trajectory both times; a minimal Method-A-alone reproduction did NOT crash (ran a
+    different, also-legitimate KNITRO trajectory instead) -- disclosed as a real, pre-existing,
+    NOT-fixed-this-session issue, unrelated to and unaffected by this session's own two fixes.
+
+Files in this Dropbox push:
+  melitz_reduced_q_numericalfailure_forensic_audit_2026-07-30.md   -- main deliverable
+  melitz_forensic_single_point_trace_2026-07-30.log                -- Phase 2 single-point proof
+  melitz_forensic_d20_minus_side_check_2026-07-30.log              -- Phase 7 D20 evidence
+  melitz_forensic_d4_postfix_comparison_2026-07-30.csv             -- Phase 10 rerun (0/1648)
+  melitz_forensic_methodA_isolation_2026-07-30.log                 -- segfault narrowing evidence
+  melitz_forensic_segfault_trace_2026-07-30.log                    -- extracted crash traces (x2)
+  melitz_forensic_provenance_2026-07-30.txt                        -- this file
+  melitz_forensic_cc_bundle_2026-07-30.diff                        -- root-cause fix 1
+  melitz_forensic_delta_star_2026-07-30.diff                       -- root-cause fix 2
+  melitz_forensic_runtests_2026-07-30.diff                         -- new regression tests
+
+Commit: made locally on branch melitz/fullD-delta-star immediately after this push was prepared;
+NOT pushed to any remote (per this repo's own standing "confirm before pushing" rule).

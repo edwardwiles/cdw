@@ -1,0 +1,22 @@
+diff --git a/src/melitz/delta_star.jl b/src/melitz/delta_star.jl
+index d5cc3a3..f855318 100644
+--- a/src/melitz/delta_star.jl
++++ b/src/melitz/delta_star.jl
+@@ -874,9 +874,16 @@ function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus:
+     # these weights disagrees with the dual objective `val` -- all checked explicitly here
+     # rather than inferred from finiteness alone (the previous, looser definition let
+     # exactly this class of untrustworthy LFD through, docs Section 12).
++    #
++    # 2026-07-30 forensic audit (docs/melitz_reduced_q_numericalfailure_forensic_audit_2026-07-30.md,
++    # Phase 8): `primal_dual_gap <= gap_tol` alone is not safe -- `melitz_primal_divergence`
++    # returns `Inf` on a degenerate weight, which drives `gap_tol` itself to `Inf` too (it is
++    # computed FROM `abs(primal_divergence)`), so `Inf <= Inf` vacuously passes in IEEE754.
++    # `isfinite(primal_dual_gap)` closes this -- see cc_bundle.jl's identical fix for the
++    # live-confirmed anomaly this duplicate implementation shares.
+     lfd_ok = abs(normalization_residual) < normalization_tol &&
+              max_moment_residual < moment_tol &&
+-             primal_dual_gap <= gap_tol
++             isfinite(primal_dual_gap) && primal_dual_gap <= gap_tol
+ 
+     return MelitzLFDResult(val, x, nStatus, weights, lfd_ok, moment_residuals, normalization_residual,
+                             minimum(weights), maximum(weights), maximum(abs.(W .* weights .- 1)),

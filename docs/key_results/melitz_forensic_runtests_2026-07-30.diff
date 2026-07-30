@@ -1,0 +1,115 @@
+diff --git a/test/melitz/runtests.jl b/test/melitz/runtests.jl
+index 33185f9..2115c29 100644
+--- a/test/melitz/runtests.jl
++++ b/test/melitz/runtests.jl
+@@ -7280,6 +7280,110 @@ end
+     end
+ end
+ 
++@testset "NumericalFailure/lower_limit forensic audit (2026-07-30): threshold_crossed is mode-independent" begin
++    # Root cause (docs/melitz_reduced_q_numericalfailure_forensic_audit_2026-07-30.md): the
++    # MelitzCCBundle functor used to record threshold_crossed ONLY when mode==:implicit, even
++    # though the underlying `f<=lower_limit` branch and its `-KNITRO.KN_INFINITY` return fire
++    # identically regardless of mode -- so every reduced-q inner solve (mode=:delta, via
++    # build_melitz_psi_bundle) silently lost its own weak-duality AboveEvaluationCap certificate
++    # and fell through to NumericalFailure, while production (mode=:implicit, via
++    # build_melitz_implicit_bundle) never did. Fixed by making the bookkeeping unconditional.
++    fq_obj, fq_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
++        policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)
++    @test fq_obj.mode == :delta   # build_melitz_psi_bundle's own documented, unchanged contract
++    fq_ctx = fq_obj.γ
++
++    @testset "Item 1: CappedEvaluation(cap) implies raw lower_limit=-cap at construction and immediately before solve" begin
++        @test fq_obj.lower_limit == -10.0 == melitz_policy_lower_limit(CappedEvaluation(10.0))
++        fq_session = MelitzInnerSession(fq_obj, fq_ctx, CappedEvaluation(10.0))
++        @test fq_session.obj.lower_limit == -10.0   # re-checked, not merely constructed once
++    end
++
++    @testset "Item 4/5: a genuine capped-unbounded (nStatus=-300-shaped) exit sets threshold_crossed and classifies AboveEvaluationCap, never bare NumericalFailure, regardless of bundle mode" begin
++        # A synthetic, deliberately extreme perturbation of theta0 -- large enough that at least
++        # one real point in this fixture's own neighborhood reliably drives the inner dual solve
++        # into the lower_limit-crossing branch (mirrors this session's own live D4 batch
++        # evidence: 157/550 trials at this exact fixture hit this branch under mode=:delta).
++        # Harvest real candidate points from an actual short reduced-q search at this fixture
++        # (live evidence this session: this exact fixture/policy/delta/direction combination
++        # reliably produces both AboveEvaluationCap and NumericalFailure-shaped trial points in
++        # real proportions -- ad hoc Gaussian perturbation of theta0 alone is not a reliable way
++        # to hit the crossing branch, since most small perturbations remain ordinary FiniteSolved
++        # points; a real search explores the region where it actually matters).
++        harvest_outer_opt = joinpath(dirname(@__DIR__), "..", "melitz_outer_finite_delta_alg_direct_2026-07-27.opt")
++        harvest_result = melitz_run_reduced_q_sequential_search(fq_ctx, fq_obj, fq_theta0; delta=0.5,
++            direction=:upper, policy=CappedEvaluation(10.0), n_stages_max=2,
++            max_iterations_per_stage=40, max_seconds_per_stage=60.0, outer_loop_opt=harvest_outer_opt)
++        harvest_trials = vcat([s.trials for s in harvest_result.stages]...)
++        candidate_thetas = [t.theta_full for t in harvest_trials]
++        @test length(candidate_thetas) > 0
++
++        found_crossing = false
++        n_crossed_delta = 0
++        for theta_pert in candidate_thetas
++            fq_obj.mode = :delta
++            fq_obj.threshold_crossed[] = false
++            melitz_bundle_prepare_at_theta!(fq_obj, theta_pert)
++            _, _, nStatus_delta = melitz_bundle_inner_solve!(fq_obj, theta_pert)
++            crossed_delta = fq_obj.threshold_crossed[]
++            bound_delta = fq_obj.threshold_crossing_bound[]
++
++            fq_obj.mode = :implicit
++            fq_obj.threshold_crossed[] = false
++            melitz_bundle_prepare_at_theta!(fq_obj, theta_pert)
++            _, _, nStatus_implicit = melitz_bundle_inner_solve!(fq_obj, theta_pert)
++            crossed_implicit = fq_obj.threshold_crossed[]
++            fq_obj.mode = :delta   # restore
++
++            # Mode never affects the raw KNITRO solve -- only whether the certificate is recorded.
++            @test nStatus_delta == nStatus_implicit
++            @test crossed_delta == crossed_implicit   # after the fix: bookkeeping is mode-independent
++            if crossed_delta
++                found_crossing = true
++                n_crossed_delta += 1
++                @test isfinite(bound_delta)
++                @test bound_delta > 10.0   # a genuine cap-exceeding weak-duality certificate
++            end
++        end
++        @test found_crossing   # the crossing branch must actually be exercised by this check, not vacuous
++        @test n_crossed_delta > 0
++    end
++
++    @testset "Item 6: FiniteSolved-adjacent lfd_ok requires isfinite(primal_dual_gap), never a vacuous Inf<=Inf pass" begin
++        # Root cause 2: gap_tol was computed FROM abs(primal_divergence), so an Inf primal
++        # divergence drove gap_tol to Inf too, and Inf<=Inf vacuously passed in IEEE754.
++        fq_obj.use_cached_x = false; fq_obj.x .= NaN
++        lfd_base = melitz_recover_lfd(fq_obj, fq_theta0)
++        @test lfd_base.lfd_ok
++        @test isfinite(lfd_base.primal_dual_gap)
++
++        # Directly exercise the fixed guard: a synthetic MelitzLFDResult-shaped check confirming
++        # the invariant holds for the LIVE function, not merely by construction -- any result
++        # with lfd_ok==true must have a finite primal_dual_gap.
++        rng3 = MersenneTwister(7)
++        n_checked = 0
++        for _ in 1:15
++            theta_pert = fq_theta0 .+ 0.3 .* randn(rng3, length(fq_theta0))
++            lfd_p = melitz_recover_lfd(fq_obj, theta_pert)
++            n_checked += 1
++            if lfd_p.lfd_ok
++                @test isfinite(lfd_p.primal_dual_gap)   # the invariant the governing prompt requires
++                @test isfinite(lfd_p.primal_divergence)
++            end
++        end
++        @test n_checked == 15
++    end
++
++    @testset "Item 7: no combined NumericalFailure/unverified-style label from the typed classifier" begin
++        fq_session3 = MelitzInnerSession(fq_obj, fq_ctx, CappedEvaluation(10.0))
++        r = solve_melitz_delta!(fq_session3, fq_theta0, CappedEvaluation(10.0))
++        # Every typed MelitzInnerResult concrete subtype name is one of exactly these four --
++        # never a compound/ambiguous label.
++        @test nameof(typeof(r)) in (:FiniteSolved, :AboveEvaluationCap, :InfiniteDeltaCertified, :NumericalFailure)
++        @test !occursin("/", string(nameof(typeof(r))))
++    end
++end
++
+ @testset "Gate 2/3 matched-effort + threaded direction infrastructure (2026-07-29 validation session)" begin
+     ge_obj, ge_theta0 = build_melitz_psi_bundle(FIXTURE; outer_parameterization=:logcutoff,
+         policy=CappedEvaluation(10.0), backend=:matrix_free, forbid_dense_fallback=true)

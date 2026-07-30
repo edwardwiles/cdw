@@ -1,0 +1,58 @@
+diff --git a/src/melitz/cc_bundle.jl b/src/melitz/cc_bundle.jl
+index 035b4b1..ccfae66 100644
+--- a/src/melitz/cc_bundle.jl
++++ b/src/melitz/cc_bundle.jl
+@@ -340,12 +340,26 @@ function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float
+     end
+ 
+     if f <= Q.lower_limit
+-        if Q.mode == :implicit
+-            Q.threshold_crossed[] = true
+-            Q.threshold_crossing_bound[] = -f
+-            Q.threshold_crossing_x[] = copy(x)
+-            Q.threshold_crossing_time_ns[] = time_ns()
+-        end
++        # 2026-07-30 forensic audit (docs/melitz_reduced_q_numericalfailure_forensic_audit_2026-07-30.md):
++        # this bookkeeping used to be gated `if Q.mode == :implicit`, even though `f` itself
++        # (computed identically above, `sum(Q.arg1)/Q.M + zeta`) and the `-KNITRO.KN_INFINITY`
++        # sentinel return two lines below are both mode-INDEPENDENT -- `-f` is a valid
++        # `Delta(theta)` lower bound by the SAME unconditional weak-duality argument regardless
++        # of `Q.mode` (this file's own header; `inner_screening.jl`'s file header states the
++        # identical argument). The old mode gate meant every `mode=:delta` bundle (every
++        # reduced-q-subspace inner solve, `build_melitz_psi_bundle`) silently discarded this
++        # certificate, so `_melitz_classified_inner_solve!` (`inner_screening.jl`) could never
++        # see `obj.threshold_crossed[]=true` and fell through to `NumericalFailure` on every
++        # genuine capped-unbounded KNITRO exit (`nStatus=-300`) -- live-confirmed root cause of
++        # the reduced-q backend's hundreds of `NumericalFailure` outcomes vs. production's zero
++        # (production's `mode=:implicit` bundle, freshly built inside
++        # `solve_melitz_finite_delta_bound`, was never affected). Recording this bookkeeping
++        # unconditionally is correct for both modes and was verified live against real
++        # NumericalFailure trial points before this fix (see the audit doc's Phase 2/4).
++        Q.threshold_crossed[] = true
++        Q.threshold_crossing_bound[] = -f
++        Q.threshold_crossing_x[] = copy(x)
++        Q.threshold_crossing_time_ns[] = time_ns()
+         MELITZ_EVALUATION_CAP_EXITS[] += 1
+         return -KNITRO.KN_INFINITY
+     else
+@@ -798,9 +812,19 @@ function melitz_recover_lfd_from_solution(val::Real, x::AbstractVector, nStatus:
+     primal_dual_gap = abs(primal_divergence - dual_divergence)
+     gap_tol = max(gap_atol, gap_rtol * max(1.0, abs(primal_divergence), abs(dual_divergence)))
+ 
++    # 2026-07-30 forensic audit (docs/melitz_reduced_q_numericalfailure_forensic_audit_2026-07-30.md,
++    # Phase 8): `primal_dual_gap <= gap_tol` alone is not a safe finite-agreement check --
++    # `melitz_primal_divergence` returns literal `Inf` whenever any recovered weight collapses to
++    # <=0 (a degenerate/near-boundary LFD support), which makes `gap_tol` ITSELF blow up to `Inf`
++    # (it is computed FROM `abs(primal_divergence)`), so `Inf <= Inf` vacuously evaluates `true` in
++    # IEEE754/Julia -- confirmed live as the mechanism behind a real Gate 1 export
++    # (`delta=0.5/lower`) reporting `lfd_ok=true` alongside `primal_dual_agreement=Inf`, which
++    # should never be treated as a verified agreement. `isfinite(primal_dual_gap)` closes this: a
++    # genuinely infinite primal divergence (or dual) can no longer pass the tolerance check merely
++    # by both sides diverging together.
+     lfd_ok = abs(normalization_residual) < normalization_tol &&
+              max_moment_residual < moment_tol &&
+-             primal_dual_gap <= gap_tol
++             isfinite(primal_dual_gap) && primal_dual_gap <= gap_tol
+ 
+     # fused (no `W .* weights .- 1` / `abs.(...)` W-length temporaries)
+     max_abs_W_weights_minus_1 = maximum(w -> abs(W * w - 1), weights)

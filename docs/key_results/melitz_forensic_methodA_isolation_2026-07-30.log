@@ -1,0 +1,96 @@
+base lfd_ok=true  Delta0=7.5545087570379e-6
+Calling melitz_run_welfare_plus_a_sequential_search (n_stages_max=1)...
+WARNING: Constraint c[3] is constant or undefined and will be ignored.
+WARNING: Constraint c[4] is constant or undefined and will be ignored.
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+ERROR: Infeasible variable bound deduced from presolve.
+       Variable: x[4]
+       deduced upper bound =     2.38969890624659e+00 is less than
+       deduced lower bound =     3.00000000000000e+00
+
+EXIT: Problem determined to be infeasible with respect to variable bounds.
+
+Final Statistics
+----------------
+Final objective value               =  -4.23873098733307e-02
+Final feasibility error (abs / rel) =   1.90e+01 / 1.00e+00
+Final optimality error  (abs / rel) =   1.80e+308 / 1.80e+308
+# of iterations                     =          0 
+# of CG iterations                  =          0 
+# of function evaluations           =          1
+# of gradient evaluations           =          1
+Total program time (secs)           =       1.80192 (     1.792 CPU time)
+Time spent in evaluations (secs)    =       1.80148
+
+===============================================================================
+
+SURVIVED n_stages_max=1. incumbent.objective=-0.042387309873330684
+Calling again with n_stages_max=2 (matches the crashing testset)...
+WARNING: Constraint c[3] is constant or undefined and will be ignored.
+WARNING: Constraint c[4] is constant or undefined and will be ignored.
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+ERROR: Infeasible variable bound deduced from presolve.
+       Variable: x[4]
+       deduced upper bound =     2.38969890624659e+00 is less than
+       deduced lower bound =     3.00000000000000e+00
+
+EXIT: Problem determined to be infeasible with respect to variable bounds.
+
+Final Statistics
+----------------
+Final objective value               =  -4.23873098733307e-02
+Final feasibility error (abs / rel) =   1.90e+01 / 1.00e+00
+Final optimality error  (abs / rel) =   1.80e+308 / 1.80e+308
+# of iterations                     =          0 
+# of CG iterations                  =          0 
+# of function evaluations           =          1
+# of gradient evaluations           =          1
+Total program time (secs)           =       0.01991 (     0.020 CPU time)
+Time spent in evaluations (secs)    =       0.01960
+
+===============================================================================
+
+WARNING: Constraint c[3] is constant or undefined and will be ignored.
+WARNING: Constraint c[4] is constant or undefined and will be ignored.
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+ERROR: Infeasible variable bound deduced from presolve.
+       Variable: x[4]
+       deduced upper bound =     2.38969890624659e+00 is less than
+       deduced lower bound =     3.00000000000000e+00
+
+EXIT: Problem determined to be infeasible with respect to variable bounds.
+
+Final Statistics
+----------------
+Final objective value               =  -4.23873098733307e-02
+Final feasibility error (abs / rel) =   1.90e+01 / 1.00e+00
+Final optimality error  (abs / rel) =   1.80e+308 / 1.80e+308
+# of iterations                     =          0 
+# of CG iterations                  =          0 
+# of function evaluations           =          1
+# of gradient evaluations           =          1
+Total program time (secs)           =       0.01976 (     0.020 CPU time)
+Time spent in evaluations (secs)    =       0.01947
+
+===============================================================================
+
+SURVIVED n_stages_max=2. incumbent.objective=-0.042387309873330684
+METHOD A ISOLATED CHECK COMPLETE -- no crash.
