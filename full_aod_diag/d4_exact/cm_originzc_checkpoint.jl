@@ -20,6 +20,7 @@ isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_p
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26)
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
+isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
 # Bumped 4 -> 5 (origin-specific-ZC integration, 2026-07-23): adds
@@ -502,19 +503,12 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # block is entirely orthogonal to this choice (same as CM's own eta_nu), untouched either
         # way. :powered_aspace (fixed-theta only) | :legacy_z (byte-identical to every pre-existing
         # origin-ZC production run, explicit replication mode).
-        moment_representation::Union{Nothing,Symbol} = nothing)   # true no-H operator bundle wiring
-        # task (2026-07-29): threads through to build_originzc_production_context, which previously
-        # ALWAYS hardcoded :dense_reference regardless of caller (this driver never passed the
-        # kwarg at all -- the :operator branch existed and was gate-tested standalone, but was
-        # unreachable from real production runs). `nothing` (default) means "don't pass this kwarg
-        # at all" -- build_originzc_production_context's own default applies UNCHANGED. That
-        # builder default is now :operator (flipped and validated -- D=4 +
-        # real D=20/W=100,000 through THIS driver end-to-end,
-        # test_meanzc_originzc_driver_wiring_2026-07-29.jl). `nothing` here is load-bearing, NOT
-        # cosmetic -- a literal :dense_reference default at THIS level would silently override the
-        # builder's own :operator default on every call, exactly the regression this sentinel
-        # pattern (mirroring run_cm_upper_checkpointed's identical kwarg) avoids. Pass
-        # :operator/:dense_reference explicitly to override.
+        )   # architecture/production-operator-bundle-hardening-2026-07-30: the
+        # moment_representation kwarg that previously lived here is REMOVED, not defaulted --
+        # production runners must not accept a representation choice at all (task §2). This
+        # function now always constructs OperatorPsiBundle via prepare_production_run below. A
+        # dense reference bundle is available only through DenseReferenceDiagnostics.prepare_context,
+        # never from this driver.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, section 4.1): resolve ckpt_dir to an absolute path
     # BEFORE any real-data/model setup runs. A relative ckpt_dir silently
@@ -637,11 +631,14 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
               "vcat(gp, zfree, eta) with length(eta)==$(n_eta(layout))")
     end
 
-    # moment_representation threading task (2026-07-29): nothing => omit the kwarg entirely (the
-    # builder's own default applies, unchanged) -- see the kwarg's own docstring above for why
-    # this matters (must NOT silently override build_originzc_production_context's own default).
-    mr_kwargs = moment_representation === nothing ? NamedTuple() : (moment_representation = moment_representation,)
-    pcx = build_originzc_production_context(ctx, CS, layout; mr_kwargs...)
+    # architecture/production-operator-bundle-hardening-2026-07-30 (task §4): the ONLY call in this
+    # function that decides bundle representation -- hardcoded :operator, not a passthrough kwarg.
+    # prepare_production_run wraps the result in a type-safe ProductionContext, derives the live
+    # backend manifest, and fatally asserts the OperatorPsiBundle invariant before this driver does
+    # anything else with pcx.
+    prepared = prepare_production_run(:origin_zc, "run_originzc_upper_checkpointed",
+        () -> build_originzc_production_context(ctx, CS, layout; moment_representation = :operator))
+    pcx = prepared.ctx.inner
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
     dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)
@@ -654,6 +651,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     flush(stdout)
     print_production_backend_manifest(resolve_origin_zc_manifest(; octx = pcx.octx, blas_threads = blas_threads,
         bundle_type = Symbol(nameof(typeof(pcx.ctx_cm.obj)))))   # 2026-07-25 continuation: pass the REAL octx this driver just built via build_originzc_production_context -- was previously called with no octx at all, so it always fell back to reporting the pre-port dense_architecture_a path regardless of what actually ran. moment_representation threading task (2026-07-29): bundle_type is now also the REAL type, read off pcx AFTER build_originzc_production_context above.
+    write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))   # architecture/production-operator-bundle-hardening-2026-07-30 (task §7): live manifest, replaces the static print above as the source of truth
     D2_econ = length(w0) - n_eta(layout)
 
     bounds = cfg.nu_bounds === nothing ? originzc_default_nu_bounds(ctx, layout) : cfg.nu_bounds
