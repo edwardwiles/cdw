@@ -1,0 +1,6 @@
+source,scenario,n_fc_calls,n_ga_calls,unique_A_points,unique_inner_solves,cache_hits,invariant_holds
+melitz_addendum_v2_standalone_test_2026-07-30.jl (D4),primary v2 test,unrecorded,unrecorded,39,39,21,true
+melitz_addendumG_gate_v1_vs_v2_2026-07-30.csv (D20 anchor, prior session),v2 cap_handling=:reject,107,unrecorded,107,107,14,true
+melitz_addendumG_gate_v1_vs_v2_2026-07-30.csv (D20 anchor, prior session),v2 cap_handling=:barrier (production default),64,unrecorded,64,64,57,true
+melitz_phase3_hotpath_profile_2026-07-30.jl (D20 near_boundary_idx6, this session),v2 barrier,113,52,85,85,66,true
+melitz_phase7_cutoff_portfolio_2026-07-30.jl (D20 current_calibration, this session),v2 barrier,unrecorded,unrecorded,81,81,unrecorded,true

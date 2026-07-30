@@ -1,0 +1,7 @@
+label,rejected,reason,Delta,classification,unique_A_points,unique_inner_solves,wall_s
+current_calibration,false,,0.2875782029866415,FiniteSolved,81,81,47.1150598526001
+rank_spaced,true,not_finite,Inf,AboveEvaluationCap,1,1,0.43134093284606934
+origin_block_korea,true,not_finite,Inf,AboveEvaluationCap,1,1,0.9077870845794678
+destination_block_focal,true,not_finite,Inf,AboveEvaluationCap,1,1,2.219404935836792
+reduced_q_pre_switch,false,,0.2876774568519923,FiniteSolved,80,80,39.58849000930786
+reduced_q_post_switch,false,,0.483264681823827,FiniteSolved,5,5,3.5867021083831787

@@ -1,0 +1,3 @@
+config_label,nthreads,job_id,direction,idx,start_kind,GT,Delta,finite,wall_s,unique_A_points,unique_inner_solves,fc_calls,ga_calls,cache_hits,fixture_load_s,worker_batch_wall_s,peak_rss_mb,cpu_seconds
+20x1,1,23,upper,12,continuation,7.103147048630487,0.5013611914663243,true,15.055310010910034,5,5,5,5,6,31.53038001060486,20.047661066055298,1221.50390625,80.4
+20x1,1,24,upper,12,cellwise_compensated,7.103147048630487,0.5015353057944824,true,3.39973783493042,5,5,5,5,6,31.53038001060486,20.047661066055298,1221.50390625,80.4

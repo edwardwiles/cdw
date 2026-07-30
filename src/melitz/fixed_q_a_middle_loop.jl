@@ -853,11 +853,13 @@ function melitz_middle_objective_and_gradient_cached!(session::MelitzInnerSessio
                                                         origin_block_screen::Bool=false)
     stats.n_requests += 1
     A_free = coordinate == :logH ? melitz_A_free_from_h_free(A_free_middle, ctx) : A_free_middle
-    theta_free_middle = melitz_fixed_q_state_theta(A_free, q_fixed, gpj_fixed, ctx)
+    theta_free_middle = @melitz_profile :middle_theta_reconstruction melitz_fixed_q_state_theta(A_free, q_fixed, gpj_fixed, ctx)
     key = Vector{Float64}(theta_free_middle)
-    key in stats.seen_keys || push!(stats.seen_keys, key)
+    @melitz_profile :middle_cache_lookup begin
+        key in stats.seen_keys || push!(stats.seen_keys, key)
+    end
 
-    bad_hit = get(bad_cache, key, nothing)
+    bad_hit = @melitz_profile :middle_cache_lookup get(bad_cache, key, nothing)
     if bad_hit !== nothing
         stats.n_bad_point_hits += 1
         cls_sym, lb, _source = bad_hit
@@ -1214,4 +1216,195 @@ function solve_melitz_fixed_q_A_profile_v2(session::MelitzInnerSession, q_fixed:
         n_fc_calls[], n_ga_calls[], n_finite[], n_cap[], n_inf[],
         length(stats.seen_keys), stats.n_actual_inner_solves, stats.n_cache_hits + stats.n_bad_point_hits,
         time() - t0, eval_log)
+end
+
+# ==========================================================================================
+# ADDENDUM 2026-07-30 PART 2 ("profiledA parallel speed and cutoff portfolio" governing prompt,
+# Phase 2): adaptive second-start policy. The welfare continuation
+# (`scripts/melitz_d20_profiled_A_welfare_continuation_2026-07-30.jl`, `profile_phi_at_g`)
+# unconditionally runs BOTH the continuation start and the cellwise p*-compensated start at
+# EVERY welfare point via `solve_melitz_fixed_q_A_profile_v2` -- always correct (strict
+# incumbent retention already guarantees the better of the two is kept) but roughly 2x the
+# middle-solve cost of a policy that only falls back to the compensated start when the
+# continuation start alone is not trustworthy. This section adds that decision layer as a
+# thin wrapper AROUND two `solve_melitz_fixed_q_A_profile_v2` calls -- it does not change the
+# v2 driver itself (already correct/tested, Addendum Part 1 above), nor `melitz_middle_objective_and_gradient!`/
+# `_cached!` (Phase 2 core, unchanged).
+#
+# Available signals (deliberately restricted to what solve_melitz_fixed_q_A_profile_v2 already
+# returns/typed-classifies -- no new instrumentation threaded into the hot KNITRO callback):
+#   - `r.r_incumbent isa FiniteSolved` / `Delta_incumbent` / `Delta_start_verified` (Addendum B).
+#   - `r.nStatus` (KNITRO's own terminal status on the continuation-start trajectory; accepted
+#     iff `nStatus in (0,-100,-101,-103)` -- the SAME successful/locally-optimal-equivalent set
+#     this codebase already uses elsewhere (`inner_screening.jl:859`, `cc_bundle.jl:506` et al.
+#     -- `-100`/`-101`/`-103` are KNITRO's own "converged within a looser relative/absolute
+#     tolerance" codes, not failures), not an invented stricter rule -- used here as the middle
+#     first-order/KKT proxy.
+#   - `r.n_finite_solved`/`r.n_above_cap`/`r.n_infinite_certified` (a cheap proxy for "a
+#     suspicious cap-dominated trajectory": if most of this start's own classified evaluations
+#     landed in AboveEvaluationCap/InfiniteDeltaCertified rather than FiniteSolved, the
+#     continuation start spent most of its budget wandering in infeasible territory even if it
+#     eventually recovered).
+#   - an optional `sys`/`prev_sys` pair (the exact fixed-q ordering/same-bin constraint system
+#     built at the current vs. preceding welfare point) -- comparing `sense` vectors is an exact,
+#     zero-cost test for "did a same-bin/ordering row flip kind" (module header: `sense[i]` is
+#     `:eq` in the SAME finite-QMC active-set bin, `:ge` otherwise) i.e. a genuine chamber/pivot
+#     change at the welfare-coordinate movement just taken, not a heuristic guess.
+# ==========================================================================================
+
+"""
+    MelitzAdaptiveStartPolicy
+
+Thresholds governing `melitz_middle_two_start_adaptive!`'s accept-continuation-alone decision
+(module header, Addendum Part 2). All fields have the governing prompt's own suggested
+defaults.
+
+  - `material_improvement_frac`: continuation alone is considered to have made "material
+    improvement" if `Delta_incumbent <= (1-frac)*Delta_start_verified`.
+  - `near_budget_frac`: OR, continuation alone is "already sufficiently close to the budget
+    frontier" if `Delta_incumbent >= (1-frac)*delta_budget` (i.e. within `frac` of fully using
+    the divergence budget -- either condition alone is enough to accept, matching the governing
+    prompt's own "OR" wording).
+  - `cap_dominated_frac`: continuation is flagged "cap-dominated" if the FRACTION of its own
+    classified evaluations landing in `AboveEvaluationCap`/`InfiniteDeltaCertified` (rather than
+    `FiniteSolved`) exceeds this.
+  - `periodic_K`: run the compensated fallback unconditionally at least every `K`-th CALL to
+    this function as a periodic safeguard (governing prompt: "every K accepted welfare points...
+    such as 4") -- driven by the CALLER's own `periodic_safeguard_due` flag (this function does
+    not itself track a call counter, since only the caller knows which points were "accepted" in
+    the outer continuation's own sense).
+"""
+struct MelitzAdaptiveStartPolicy
+    material_improvement_frac::Float64
+    near_budget_frac::Float64
+    cap_dominated_frac::Float64
+    periodic_K::Int
+end
+MelitzAdaptiveStartPolicy(; material_improvement_frac::Real=0.05, near_budget_frac::Real=0.05,
+                           cap_dominated_frac::Real=0.5, periodic_K::Int=4) =
+    MelitzAdaptiveStartPolicy(Float64(material_improvement_frac), Float64(near_budget_frac),
+                               Float64(cap_dominated_frac), periodic_K)
+
+"""
+    MelitzAdaptiveTwoStartResult
+
+Result of `melitz_middle_two_start_adaptive!`. `ran_compensated` records whether the fallback
+start was actually run; `trigger_reason` records WHY (`:accepted_continuation_alone` if the
+compensated start was skipped; otherwise one of `:not_finite`, `:poor_kkt`, `:cap_dominated`,
+`:negligible_improvement`, `:pivot_changed`, `:periodic_safeguard` -- the first of the governing
+prompt's own listed trigger conditions that applied, checked in that order). `r_continuation`/
+`r_compensated` are the raw `MelitzMiddleProfileV2Result`s (`r_compensated=nothing` if skipped)
+-- both individually already satisfy strict incumbent retention on their OWN start; the winner
+returned here (`Delta`/`A_free`/`theta_free`/`r_incumbent`/`best_source`) is the better of the
+(up to two) verified `FiniteSolved` results, matching the governing prompt's "if both are run,
+retain the better verified finite result."
+"""
+struct MelitzAdaptiveTwoStartResult
+    best_source::Symbol
+    ran_compensated::Bool
+    trigger_reason::Symbol
+    r_continuation::MelitzMiddleProfileV2Result
+    r_compensated::Union{Nothing,MelitzMiddleProfileV2Result}
+    Delta::Float64
+    A_free::Vector{Float64}
+    theta_free::Vector{Float64}
+    r_incumbent::MelitzInnerResult
+end
+
+"""
+    melitz_middle_two_start_adaptive!(session, q_target, gpj_target, A_cont_start, A_comp_start, ctx;
+        delta_budget, policy=MelitzAdaptiveStartPolicy(), periodic_safeguard_due=false,
+        sys=nothing, prev_sys=nothing, v2_kwargs...) -> MelitzAdaptiveTwoStartResult
+
+Phase 2 core: always runs the continuation start first
+(`solve_melitz_fixed_q_A_profile_v2(...,A_cont_start,...)`); runs the cellwise-compensated
+fallback (`...,A_comp_start,...`) only when triggered. Accepts continuation alone iff ALL of:
+
+  1. `r_continuation.r_incumbent isa FiniteSolved`;
+  2. `r_continuation.Delta_incumbent <= r_continuation.Delta_start_verified + tol` (ALWAYS true
+     by `solve_melitz_fixed_q_A_profile_v2`'s own internal assertion -- re-checked here anyway,
+     not merely trusted, since this wrapper's whole job is deciding whether to trust a single
+     start's own result);
+  3. `r_continuation.nStatus in (0,-100,-101,-103)` (clean KKT/first-order proxy, module header);
+  4. material improvement OR already close to the budget frontier (`policy` thresholds);
+  5. NOT cap-dominated (`policy.cap_dominated_frac`);
+  6. NOT a pivot/chamber change (`sys`/`prev_sys` sense-vector comparison, if both provided --
+     skipped, i.e. never itself a blocking condition, if either is `nothing`).
+
+The compensated fallback ALSO runs (regardless of the above) if `periodic_safeguard_due` is
+`true` (caller-tracked "every Kth accepted point," governing prompt). `v2_kwargs` are forwarded
+verbatim to BOTH `solve_melitz_fixed_q_A_profile_v2` calls (`coordinate`, `max_evals`, `box`,
+`outer_loop_opt`, `cap_handling`, `cap_barrier_multiple`, `theta_fixed_q_for_constraints`, ...).
+"""
+function melitz_middle_two_start_adaptive!(session::MelitzInnerSession, q_target::AbstractMatrix{Float64},
+                                            gpj_target::Real, A_cont_start::AbstractVector{Float64},
+                                            A_comp_start::AbstractVector{Float64}, ctx;
+                                            delta_budget::Real,
+                                            policy::MelitzAdaptiveStartPolicy=MelitzAdaptiveStartPolicy(),
+                                            periodic_safeguard_due::Bool=false,
+                                            sys::Union{Nothing,MelitzFixedQMiddleConstraintSystem}=nothing,
+                                            prev_sys::Union{Nothing,MelitzFixedQMiddleConstraintSystem}=nothing,
+                                            v2_kwargs...)
+    session.obj.use_cached_x = false; session.obj.x .= NaN
+    r_cont = solve_melitz_fixed_q_A_profile_v2(session, q_target, gpj_target, A_cont_start, ctx;
+                                                sys=sys, v2_kwargs...)
+
+    finite = r_cont.r_incumbent isa FiniteSolved
+    no_worse_than_input = !finite ? false : (r_cont.Delta_incumbent <= r_cont.Delta_start_verified + 1e-6)
+    kkt_ok = r_cont.nStatus in (0, -100, -101, -103)
+    n_classified = r_cont.n_finite_solved + r_cont.n_above_cap + r_cont.n_infinite_certified
+    n_bad = r_cont.n_above_cap + r_cont.n_infinite_certified
+    cap_dominated = n_classified > 0 && (n_bad / n_classified) > policy.cap_dominated_frac
+    material_improvement = finite && r_cont.Delta_incumbent <= (1 - policy.material_improvement_frac) * r_cont.Delta_start_verified
+    near_budget = finite && r_cont.Delta_incumbent >= (1 - policy.near_budget_frac) * delta_budget
+    pivot_changed = sys !== nothing && prev_sys !== nothing && sys.sense != prev_sys.sense
+
+    trigger = !finite ? :not_finite :
+              !no_worse_than_input ? :worse_than_input :
+              !kkt_ok ? :poor_kkt :
+              cap_dominated ? :cap_dominated :
+              pivot_changed ? :pivot_changed :
+              !(material_improvement || near_budget) ? :negligible_improvement :
+              periodic_safeguard_due ? :periodic_safeguard :
+              :accepted_continuation_alone
+
+    accept_alone = trigger == :accepted_continuation_alone
+    run_compensated = !accept_alone
+
+    if !run_compensated
+        return MelitzAdaptiveTwoStartResult(:continuation, false, trigger, r_cont, nothing,
+            r_cont.Delta_incumbent, r_cont.A_free_incumbent, r_cont.theta_free_incumbent, r_cont.r_incumbent)
+    end
+
+    session.obj.use_cached_x = false; session.obj.x .= NaN
+    r_comp = solve_melitz_fixed_q_A_profile_v2(session, q_target, gpj_target, A_comp_start, ctx;
+                                                sys=sys, v2_kwargs...)
+    comp_finite = r_comp.r_incumbent isa FiniteSolved
+
+    if finite && comp_finite
+        if r_cont.Delta_incumbent <= r_comp.Delta_incumbent
+            return MelitzAdaptiveTwoStartResult(:continuation, true, trigger, r_cont, r_comp,
+                r_cont.Delta_incumbent, r_cont.A_free_incumbent, r_cont.theta_free_incumbent, r_cont.r_incumbent)
+        else
+            return MelitzAdaptiveTwoStartResult(:cellwise_compensated, true, trigger, r_cont, r_comp,
+                r_comp.Delta_incumbent, r_comp.A_free_incumbent, r_comp.theta_free_incumbent, r_comp.r_incumbent)
+        end
+    elseif finite
+        return MelitzAdaptiveTwoStartResult(:continuation, true, trigger, r_cont, r_comp,
+            r_cont.Delta_incumbent, r_cont.A_free_incumbent, r_cont.theta_free_incumbent, r_cont.r_incumbent)
+    elseif comp_finite
+        return MelitzAdaptiveTwoStartResult(:cellwise_compensated, true, trigger, r_cont, r_comp,
+            r_comp.Delta_incumbent, r_comp.A_free_incumbent, r_comp.theta_free_incumbent, r_comp.r_incumbent)
+    else
+        # neither start reached FiniteSolved -- report the least-bad classification for
+        # diagnostics, matching profile_phi_at_g's own established convention (never silently
+        # treated as an ordinary FiniteSolved value).
+        cls_rank(r) = r.r_incumbent isa AboveEvaluationCap ? 1 : r.r_incumbent isa InfiniteDeltaCertified ? 2 : 3
+        winner_is_cont = cls_rank(r_cont) <= cls_rank(r_comp)
+        r_win = winner_is_cont ? r_cont : r_comp
+        Delta_report = r_win.r_incumbent isa AboveEvaluationCap ? r_win.r_incumbent.certified_lower_bound :
+                       r_win.r_incumbent isa InfiniteDeltaCertified ? Inf : NaN
+        return MelitzAdaptiveTwoStartResult(winner_is_cont ? :continuation : :cellwise_compensated, true, trigger,
+            r_cont, r_comp, Delta_report, r_win.A_free_incumbent, r_win.theta_free_incumbent, r_win.r_incumbent)
+    end
 end
