@@ -1,0 +1,70 @@
+┌ Warning: Assignment to `u2` in soft scope is ambiguous because a global variable by the same name exists: `u2` will be treated as a new local. Disambiguate by using `local u2` to suppress this warning or `global u2` to assign to the existing global variable.
+└ @ /tmp/claude-181517/-bbkinghome-edav-gravity-robustness/e3e14fed-9b91-4bc0-b6be-efac5de68df5/scratchpad/melitz_negswitch/followup1_nan_mechanism.jl:120
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+n_calls=14
+call  1: f=0.0  crossed=false  |x|_max=0.000000e+00  zeta=0.000000e+00
+call  2: f=0.0  crossed=false  |x|_max=0.000000e+00  zeta=0.000000e+00
+call  3: f=-7.852868605099958e7  crossed=true  |x|_max=1.911727e+14  zeta=-7.852869e+07
+call  4: f=-3.926434320478109e7  crossed=true  |x|_max=9.558633e+13  zeta=-3.926434e+07
+call  5: f=NaN  crossed=false  |x|_max=NaN  zeta=NaN
+call  6: f=NaN  crossed=false  |x|_max=NaN  zeta=NaN
+call  7: f=NaN  crossed=false  |x|_max=NaN  zeta=NaN
+call  8: f=NaN  crossed=false  |x|_max=NaN  zeta=NaN
+call  9: f=NaN  crossed=false  |x|_max=NaN  zeta=NaN
+call 10: f=-0.16014561446511666  crossed=false  |x|_max=5.301776e+00  zeta=-7.597582e-01
+call 11: f=-0.16014561446511666  crossed=false  |x|_max=5.301776e+00  zeta=-7.597582e-01
+call 12: f=-0.3436940286792953  crossed=false  |x|_max=1.141398e+01  zeta=-4.843573e-01
+call 13: f=-0.3436940286792953  crossed=false  |x|_max=1.141398e+01  zeta=-4.843573e-01
+call 14: f=-4.9823190135746557e8  crossed=true  |x|_max=1.212911e+15  zeta=-4.982319e+08
+
+First NaN call = 5
+zeta = NaN
+max|mu| = NaN   argmax = 1
+mu[argmax] = NaN
+origin  1: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  1: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  2: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  2: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  3: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  3: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  4: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  4: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  5: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  5: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  6: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  6: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  7: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  7: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  8: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  8: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin  9: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin  9: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 10: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 10: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 11: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 11: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 12: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 12: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 13: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 13: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 14: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 14: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 15: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 15: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 16: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 16: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 17: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 17: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 18: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 18: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 19: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 19: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+origin 20: const_o=NaN   cum (range) = [NaN, NaN]   max|mu_od*coef|=NaN
+   after origin 20: n_NaN_rows=80000  n_Inf_rows=0  max|u| (finite)=NaN
+
+Total NaN rows at end (before focal link term) = 80000
+Total Inf rows at end = 0
+
+DONE follow-up 1

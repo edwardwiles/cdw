@@ -1,0 +1,70 @@
+Melitz thread startup report:
+  Julia threads available = 20 (require >= 20)
+  BLAS threads selected   = 1
+
+====================================================================================================
+Origin 14 -- raw trade-share table at the pre-switch anchor (W=80,000)
+====================================================================================================
+origin 14 = kor
+d    ctry         X_data  lambda_od       C_od       H[d]    zhat_od
+1    aus          0.0485   0.003806     0.2667   0.181848   1.298207
+2    fra         0.02806   0.001200     0.1638   0.171309   1.308939
+3    bra         0.04176   0.002760     0.3052   0.136836   1.350129
+4    can         0.03774   0.003040     0.2153   0.175299   1.304789
+5    che        0.008972   0.000913    0.04894   0.183324   1.296760
+6    chn           1.132   0.007321      6.409   0.176702   1.303356
+7    deu         0.06659   0.001597     0.3866   0.172254   1.307946
+8    esp         0.01653   0.001258    0.09543   0.173246   1.306910
+9    gbr         0.04546   0.001999      0.261   0.174148   1.305975
+10   idn         0.05257   0.005560     0.2656   0.197925   1.283129
+11   ind         0.09519   0.005037     0.3843   0.247692   1.244049
+12   ita         0.02258   0.001084     0.1285   0.175668   1.304411
+13   jpn          0.1918   0.004669      1.065   0.180029   1.300008
+14   kor           17.18   0.836308      27.89   0.616052   1.097162
+15   mex         0.06815   0.008733      0.435   0.156659   1.325174
+16   nld         0.01198   0.001169    0.06802   0.176187   1.303882
+17   rus         0.04776   0.003299     0.3017   0.158274   1.323301
+18   tur         0.03726   0.004951     0.1945   0.191526   1.288957
+19   usa          0.3668   0.002772      2.082   0.176182   1.303884
+20   row           1.043   0.006201      6.461   0.161431   1.319703
+
+total export value X_data[14,:] sum = 20.54   share of destination 14->19 (the switching cell) = 0.017854
+share of destination 14->16 (the fragile interval's own destination) = 0.000583
+
+All 20 intervals for origin 14 at W=80,000 -- draw counts (looking for other thin ones):
+  interval  1: ndraw= 23705  breakpoint_hi=1.097162
+  interval  2: ndraw=  2803  breakpoint_hi=1.244049
+  interval  3: ndraw=   351  breakpoint_hi=1.283129
+  interval  4: ndraw=   446  breakpoint_hi=1.288957
+  interval  5: ndraw=    76  breakpoint_hi=1.296760
+  interval  6: ndraw=    99  breakpoint_hi=1.298207
+  interval  7: ndraw=   178  breakpoint_hi=1.300008
+  interval  8: ndraw=    30  breakpoint_hi=1.303356
+  interval  9: ndraw=     1  breakpoint_hi=1.303882  <<< THIN
+  interval 10: ndraw=    30  breakpoint_hi=1.303884
+  interval 11: ndraw=    18  breakpoint_hi=1.304411
+  interval 12: ndraw=    61  breakpoint_hi=1.304789
+  interval 13: ndraw=    47  breakpoint_hi=1.305975
+  interval 14: ndraw=    52  breakpoint_hi=1.306910
+  interval 15: ndraw=    50  breakpoint_hi=1.307946
+  interval 16: ndraw=   531  breakpoint_hi=1.308939
+  interval 17: ndraw=   162  breakpoint_hi=1.319703
+  interval 18: ndraw=    83  breakpoint_hi=1.323301
+  interval 19: ndraw=  1029  breakpoint_hi=1.325174
+  interval 20: ndraw=  5785  breakpoint_hi=1.350129
+
+intervals with <=3 draws (out of 20): 1
+
+====================================================================================================
+Interval-9 (destination d=16's own rank position) draw count vs W
+====================================================================================================
+W=    80000  destination-16 rank position=9  ndraw in that interval=1  (naive linear-in-W scaling from W=80k would predict NaN)
+   feasibility at this W: below=true  above=false
+W=   320000  destination-16 rank position=9  ndraw in that interval=1  (naive linear-in-W scaling from W=80k would predict 1.00)
+   actual/naive-linear-prediction ratio = 0.250
+   feasibility at this W: below=true  above=false
+W=  1280000  destination-16 rank position=9  ndraw in that interval=1  (naive linear-in-W scaling from W=80k would predict 1.00)
+   actual/naive-linear-prediction ratio = 0.062
+   feasibility at this W: below=true  above=false
+
+DONE follow-up 2

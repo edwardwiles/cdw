@@ -175,18 +175,41 @@ Instrumented **every** raw `MelitzCCBundle` functor objective evaluation
   calculation.**
 
 **A genuinely new, disclosed finding**: **5 of the 14 raw callback evaluations (calls 5-9) were
-literal `NaN`**, not merely large -- confirmed directly via the trace, not inferred. This is a
-qualitatively different divergence direction than calls 3/4/14 (which cleanly saturate via
-`Psi`'s bounded-below `exp()` branch): here, KNITRO's own line search evaluated a trial point
-extreme enough that `mul_G!`'s internal arithmetic overflowed and two infinite terms of
-opposite sign cancelled to `NaN` (`u[s] += const_o; u[s] -= z_power*cum[...]`, both terms
-individually overflowing). Since `NaN <= Q.lower_limit` evaluates **false** in IEEE754/Julia,
-these calls fell to the functor's `else` branch and were returned to KNITRO **raw, as literal
-`NaN`, completely unrecorded** -- a genuine robustness gap, independent of (and not the cause
-of) the reported `4.9823e8` value, since KNITRO's own subsequent behavior (backing off to the
-small, well-behaved values at calls 10-13) happened, in this specific trajectory, not to depend
-on what was returned during the `NaN` episode. Relying on that being true by chance rather than
-by construction is exactly the gap Phase 9 closes (below).
+literal `NaN`**, not merely large -- confirmed directly via the trace, not inferred. Since
+`NaN <= Q.lower_limit` evaluates **false** in IEEE754/Julia, these calls fell to the functor's
+`else` branch and were returned to KNITRO **raw, as literal `NaN`, completely unrecorded** -- a
+genuine robustness gap, independent of (and not the cause of) the reported `4.9823e8` value,
+since KNITRO's own subsequent behavior (backing off to the small, well-behaved values at calls
+10-13) happened, in this specific trajectory, not to depend on what was returned during the
+`NaN` episode. Relying on that being true by chance rather than by construction is exactly the
+gap Phase 9 closes (below).
+
+**Root cause, corrected same-day (user follow-up question, "how can the callback -- just
+multiplying dual multipliers by positive CES kernels -- produce NaN?")**: the ORIGINAL version
+of this document speculated the NaN arose from floating-point overflow-then-cancellation
+inside `mul_G!`'s own arithmetic. **This was wrong, and directly disproved by a follow-up
+instrumented trace of the raw dual iterate `x` itself** (`MELITZ_OBJECTIVE_TRACE_X`, a second
+opt-in trace added the same session): at every one of the 5 NaN calls, `x` (`zeta` and multiple
+`mu` components) was **already `NaN` on arrival at the Julia functor** -- `mul_G!`'s own
+arithmetic never had a chance to overflow; it faithfully computed `NaN` outputs from `NaN`
+inputs, exactly as ordinary IEEE arithmetic must. The user's original intuition was right: the
+"positive kernel times dual multiplier" computation itself cannot manufacture `NaN` from finite
+inputs. **The actual origin is upstream, inside KNITRO's own closed-source internal
+Newton-step/trust-region linear algebra** -- calls 3-4 already show `|x|~1e14` (a very large
+but still finite iterate, safely evaluated via `Psi`'s bounded-below `exp()` branch, Phase 1
+above); from that state, KNITRO's own internal step computation (not observable from the Julia
+side -- `libknitro.so` is closed-source) proposed a manifestly non-finite trial point for call
+5. A plausible contributing factor (not independently verified beyond this point): `Psi`'s
+second derivative SATURATES to a constant (`exp(1)`) once `arg0>1`, so the CC dual objective's
+own curvature stops growing even as the gradient continues growing linearly in the (already
+huge) iterate -- a structurally flat/ill-conditioned Hessian in exactly the region KNITRO's own
+line search was probing, a plausible (but not directly inspectable) trigger for degenerate
+internal linear algebra. **This does not change any finding in this document** -- the fix
+(Phase 9's `!isfinite(f)` guard) is unaffected, since it treats a non-finite raw evaluation
+identically regardless of whether Julia-side or KNITRO-side arithmetic produced it -- but the
+MECHANISM as originally written was incorrect and is corrected here rather than left standing.
+See `docs/key_results/melitz_negswitch_followup1_nan_mechanism_2026-07-30.log` for the full
+instrumented trace.
 
 ## Phase 2/3: exact negative-side switch-threshold enumeration and bracketing
 
@@ -583,3 +606,97 @@ New:
     guard (Phase 9). No new exact screen was built -- the pre-existing
     `melitz_origin_block_screen` is demonstrated to already be exactly the right tool,
     recommended (not unilaterally defaulted-on) for a future session's benchmarked rollout.
+
+## Addendum (2026-07-30, same session): NaN-origin correction, origin 14 identified, W-scaling
+
+Two direct user follow-up questions, both answered with new live evidence (script:
+`scripts/melitz_negswitch_followup1_nan_mechanism_2026-07-30.jl` (question 1) and
+`scripts/melitz_negswitch_followup2_origin14_shares_and_W_2026-07-30.jl` (questions 2-3); logs:
+`docs/key_results/melitz_negswitch_followup1_nan_mechanism_2026-07-30.log` and
+`docs/key_results/melitz_negswitch_followup2_origin14_shares_and_W_2026-07-30.log`).
+
+### 1. Corrected NaN mechanism (see the Phase 1 correction above for the full writeup)
+
+The original NaN mechanism claim (floating-point overflow-cancellation inside `mul_G!`'s own
+arithmetic) was **wrong** and is corrected in place above (Phase 1 section) rather than left
+standing. A second opt-in trace (`MELITZ_OBJECTIVE_TRACE_X`, `backend_config.jl`/`cc_bundle.jl`,
+same disabled-by-default convention) capturing the raw dual iterate `x` at every functor call
+proves `zeta`/`mu` were **already `NaN` on arrival** at every one of the 5 non-finite calls --
+`mul_G!` never overflows; it correctly propagates `NaN` from `NaN` inputs. The true origin is
+inside KNITRO's own closed-source internal step computation, upstream of anything the Julia
+callback can inspect or control.
+
+### 2. Origin 14 identified: South Korea (`kor`); the extreme dependence is on Netherlands vs. USA
+
+Origin 14 in the `noah_D20` fixture is **`kor`** (South Korea). Its full destination-level
+trade-share table at the pre-switch bracket:
+
+| `d` | country | `X_data` | `H[d]` | bilateral cutoff `zhat` |
+|---:|---|---:|---:|---:|
+| 14 | kor (domestic) | 17.18 | 0.616052 | 1.097162 |
+| 11 | ind | 0.09519 | 0.247692 | 1.244049 |
+| 10 | idn | 0.05257 | 0.197925 | 1.283129 |
+| 18 | tur | 0.03726 | 0.191526 | 1.288957 |
+| 5 | che | 0.008972 | 0.183324 | 1.296760 |
+| 1 | aus | 0.0485 | 0.181848 | 1.298207 |
+| 13 | jpn | 0.1918 | 0.180029 | 1.300008 |
+| 9 | gbr | 0.04546 | 0.174148 | 1.305975 |
+| 6 | chn | 1.132 | 0.176702 | 1.303356 |
+| 12 | ita | 0.02258 | 0.175668 | 1.304411 |
+| 4 | can | 0.03774 | 0.175299 | 1.304789 |
+| 8 | esp | 0.01653 | 0.173246 | 1.306910 |
+| 7 | deu | 0.06659 | 0.172254 | 1.307946 |
+| 2 | fra | 0.02806 | 0.171309 | 1.308939 |
+| **16** | **nld** | **0.01198** | **0.176187** | **1.303882** |
+| **19** | **usa** | **0.3668** | **0.176182** | **1.303884** |
+| 20 | row | 1.043 | 0.161431 | 1.319703 |
+| 17 | rus | 0.04776 | 0.158274 | 1.323301 |
+| 3 | bra | 0.04176 | 0.136836 | 1.350129 |
+| 15 | mex | 0.06815 | 0.156659 | 1.325174 |
+
+**The extreme dependence is between destinations 16 (Netherlands) and 19 (USA)**: their own
+bilateral productivity cutoffs, `1.303882` and `1.303884`, agree to **6 significant figures** --
+a raw difference of about `2e-6`, i.e. roughly two parts in a million. This is a coincidence of
+the CURRENT calibration/displaced point, not a design feature -- Korea's exports to the
+Netherlands are a tiny `0.058%` of its total exports (`X_data[14,16]=0.012` vs. total `20.54`),
+while its exports to the USA are `1.8%` (`X_data[14,19]=0.367`) -- two economically unrelated,
+very differently-sized destinations that simply happen to require almost identical minimum
+exporter productivity under this calibration. The fragile interval identified in Phase 7 is
+**exactly** `[zhat_nld, zhat_usa) = [1.303882, 1.303884)` -- a productivity band about `2e-6`
+wide, supported by essentially no draws at any practical `W` (below). Every one of origin 14's
+other 17 destination cutoffs sits comfortably apart from its neighbors (gaps of `1e-3` to
+`1e-2`); this is the **only** razor-thin pair. Scanning all 20 intervals confirms it is the
+unique thin one (`1` of `20` intervals has `<=3` draws at `W=80,000`).
+
+**Mechanism restated precisely**: as the outer coordinate `t` moves in the minus direction, the
+USA cutoff (`d=19`, the officially-registered "switching" cell in Phase 2's own exact-crossing
+sense) decreases, moving DOWN through the one draw sitting in the `[nld,usa)` band -- removing
+it from that band (either by making it USA-active too, or by pushing the interval's own upper
+edge below it). The Netherlands' own required trade-share equation is pinned to the exact
+contents of that vanishingly narrow band; with its sole occupant gone, no nonnegative
+probability distribution over any number of draws can satisfy it.
+
+### 3. Does more `W` help? No -- the interval remains supported by exactly 1 draw at 16x more draws
+
+Rebuilt the identical fixture at `W in {80,000, 320,000, 1,280,000}` (same seed=1 QMC sequence,
+a verified nested prefix -- `docs/melitz_reduced_q_validation_and_d20_readiness_2026-07-29.md`'s
+own re-verified property) and recomputed the `[nld,usa)` interval's own draw count and the
+origin-block LP feasibility verdict at the identical bracket, both sides:
+
+| `W` | draws in `[nld,usa)` interval | naive-linear-scaling prediction | feasible below | feasible above |
+|---:|---:|---:|---|---|
+| 80,000 | 1 | -- (baseline) | true | **false** |
+| 320,000 (4x) | **1** | 4.00 | true | **false** |
+| 1,280,000 (16x) | **1** | 16.00 | true | **false** |
+
+**The interval's draw count does NOT scale with `W` at all** over this range (actual/naive-
+linear ratio falls from 1.0 to 0.25 to 0.06) -- consistent with the interval's true probability
+mass under the reference Pareto density being far smaller than `1/W` even at `W=1.28M` (a QMC
+low-discrepancy sequence fills a fixed, vanishingly narrow gap far more slowly than uniform
+random sampling would suggest, since it is not adding points uniformly-at-random into every
+gap). **The feasibility verdict is identical at all three `W` values**: feasible immediately
+below the switch, exactly infeasible immediately above it, at `W=80k`, `320k`, and `1.28M`
+alike. This directly answers the natural follow-up: **this is not a finite-sample artifact
+that more Monte Carlo draws would resolve** -- it is a structural fact about how close Korea's
+Netherlands and USA cutoffs are under this specific calibration, and no practically-reachable
+increase in `W` changes the qualitative picture.

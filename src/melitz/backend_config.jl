@@ -347,8 +347,17 @@ const MELITZ_MATRIX_FREE_RANGE_SCREEN_CALLS = Ref(0)   # 2026-07-26 closure (Pha
 # buffer and must be called before each traced solve to avoid mixing trajectories.
 const MELITZ_OBJECTIVE_TRACE_ENABLED = Ref(false)
 const MELITZ_OBJECTIVE_TRACE = Vector{Tuple{Float64,Bool}}()
+# 2026-07-30 follow-up (user question: how can a raw callback evaluation be NaN?): a second,
+# independently-gated opt-in trace that additionally stores a COPY of the raw dual iterate `x`
+# at every functor call -- needed to reconstruct, post-hoc, exactly which origin's own
+# mul_G! contribution overflows to +-Inf and which later term cancels it to NaN. Separate Ref
+# (not folded into MELITZ_OBJECTIVE_TRACE_ENABLED) so ordinary Phase-1-style f-only tracing
+# never pays the O(W)-vector-copy cost.
+const MELITZ_OBJECTIVE_TRACE_X_ENABLED = Ref(false)
+const MELITZ_OBJECTIVE_TRACE_X = Vector{Vector{Float64}}()
 function melitz_objective_trace_reset!()
     empty!(MELITZ_OBJECTIVE_TRACE)
+    empty!(MELITZ_OBJECTIVE_TRACE_X)
     return nothing
 end
 

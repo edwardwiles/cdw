@@ -297,6 +297,7 @@ function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float
     # branch below can substitute any sentinel -- this is the genuine floating-point functor
     # output at this call's (zeta,mu), never a placeholder.
     MELITZ_OBJECTIVE_TRACE_ENABLED[] && push!(MELITZ_OBJECTIVE_TRACE, (f, f <= Q.lower_limit))
+    MELITZ_OBJECTIVE_TRACE_X_ENABLED[] && push!(MELITZ_OBJECTIVE_TRACE_X, copy(x))
 
     if length(g) > 0 || length(h) > 0 || length(constr) > 0
         @melitz_profile :fc_inner_dpsi_eval melitz_cc_dPsi!(Q.arg1, Q.arg0)
@@ -348,11 +349,18 @@ function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float
         # 2026-07-30 (negative-switch geometry audit, Phase 1/9,
         # docs/melitz_d20_negative_switch_geometry_audit_2026-07-30.md): live-observed at the
         # real-D20 anchor's minus-side h=0.5 capped solve -- 5 of 14 raw callback evaluations
-        # during a single KNITRO inner attempt were literal NaN (floating-point cancellation of
-        # two overflowing terms inside mul_G!'s `u[s] += const_o; u[s] -= z_power*cum[...]` at
-        # an astronomically large (zeta,mu) iterate KNITRO's own line search briefly visited --
-        # NOT a sentinel, NOT a meaningful economic value, confirmed by the raw objective trace,
-        # `docs/key_results/melitz_negswitch_phase1_objective_trace_2026-07-30.csv`). Before this
+        # during a single KNITRO inner attempt were literal NaN. CORRECTED root cause (2026-07-30
+        # user follow-up, `MELITZ_OBJECTIVE_TRACE_X`): this is NOT floating-point cancellation
+        # inside this file's own arithmetic -- a direct trace of the raw `x` KNITRO handed to
+        # this functor at each of those 5 calls shows `zeta`/`mu` were ALREADY `NaN` on arrival
+        # (`isnan(x[1])==true` etc.), so `mul_G!`'s every downstream term is trivially NaN
+        # (NaN propagating through ordinary finite arithmetic, not an overflow born inside it).
+        # The NaN's actual origin is upstream, inside KNITRO's own closed-source internal
+        # Newton-step/trust-region linear algebra, proposing a non-finite trial point after the
+        # preceding calls' astronomically large iterate (`|x|~1e14`, calls 3-4) -- not something
+        # this file's own code computes or can inspect further. NOT a sentinel, NOT a meaningful
+        # economic value either way, confirmed by the raw objective trace,
+        # `docs/key_results/melitz_negswitch_phase1_objective_trace_2026-07-30.csv`. Before this
         # fix, such a call fell through to the `else` branch below and handed KNITRO a raw NaN
         # objective -- undefined input to any NLP solver -- AND, unlike a genuine
         # `f<=lower_limit` crossing, was never recorded anywhere, so `threshold_crossed`
