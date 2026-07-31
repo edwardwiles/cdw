@@ -35,24 +35,30 @@ function master_prestep(data, counters, globalParams)
 	# behavior change, so D4/D10/scaled synthetic contexts and their existing tests are unaffected.
 	exclude_diagonal_gravity = get(globalParams, :exclude_diagonal_gravity, false)
 
+	# gravity_exclude_cells (2026-07-31, Brazil-Korea gravity-exclusion task): additional
+	# (origin, dest-slot) cells dropped from the SAME sample the pivot uses. Empty (default)
+	# reproduces every pre-existing caller bit-exactly.
+	gravity_exclude_cells = get(globalParams, :gravity_exclude_cells, Tuple{Int,Int}[])
+
 	# Step 1: Estimate thetaHat via gravity or prespecified.
 	# Gravity = OLS of ln λ on ln τ with origin + destination fixed effects; by FWL this is the
 	# two-way "within" transform (matches the gravity-moment constraint used in the outer loop).
 	# (The previous version used a cell-referenced double-difference, which does NOT equal the
 	#  two-way-FE coefficient — see gravity_check.jl.) Restricted to named_dest columns so that
-	# excluding ROW as a destination re-estimates theta on the correct rectangular sample. When
-	# exclude_diagonal_gravity, ALSO drops o==d (own-trade) cells via the exact unbalanced-panel
-	# within-transform (within_transform_masked, misc/doubleDiff.jl) -- named_dest is always either
-	# 1:D or missing exactly the LAST index (row_idx==D, the codebase-wide convention -- see
-	# context_real_d20.jl), so destination column d always corresponds to origin row d, making a
-	# pure shape-based `o != d` mask the correct own-trade exclusion here.
+	# excluding ROW as a destination re-estimates theta on the correct rectangular sample.
+	# 2026-07-31: the eligibility mask (diagonal exclusion + any explicit exclude_cells) is now
+	# built via the ONE shared `gravity_sample_mask` (full_aod_diag/gravity_tariff.jl) instead of
+	# an independently re-derived `[o!=d for o,d]` literal here -- same function the pivot
+	# (precompute_q_tilde/gravity_value) consumes, so a cell exclusion is visible to both
+	# identically, with no duplicated conditional.
 	if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
 		lambda_dest = lambda[:, named_dest]
 		tau_dest = tau[:, named_dest]
-		if exclude_diagonal_gravity
-			diag_mask = [o != d for o in 1:D, d in 1:Ddest]
-			Wlambda = within_transform_masked(lambda_dest, diag_mask)
-			Wtau = within_transform_masked(tau_dest, diag_mask)
+		if exclude_diagonal_gravity || !isempty(gravity_exclude_cells)
+			mask = gravity_sample_mask(D, Ddest; exclude_diagonal = exclude_diagonal_gravity,
+			                            exclude_cells = gravity_exclude_cells)
+			Wlambda = within_transform_masked(lambda_dest, mask)
+			Wtau = within_transform_masked(tau_dest, mask)
 		else
 			Wlambda = within_transform_rect(lambda_dest)
 			Wtau = within_transform_rect(tau_dest)
