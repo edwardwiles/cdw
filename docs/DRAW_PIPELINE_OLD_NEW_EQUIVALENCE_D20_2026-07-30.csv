@@ -1,0 +1,19 @@
+design,W,check,result,notes
+pseudorandom,80000,ctx.U bit-identical to pre-refactor d20_real_setup,pass,"old d20_real_setup(...) [same function, U=nothing path never changed by this refactor] vs new d20_real_setup_design(draw_design=:pseudorandom) -- verified live, test_draw_design.jl section 1"
+pseudorandom,80000,Delta_dual bit-identical at real value eval,pass,"=== identity check (not approximate), both NaN at this particular point -- verified live"
+pseudorandom,80000,checksum reproducible across fresh contexts,pass,verified live
+sobol_randomized,20000,U_input matrix identical (same generator+seed),pass,"reconstructed pre-deletion master_prepare_cc_qmc/build_ad_context_real_d20_qmc/d20_real_setup_qmc from git history (origin/production/fullA-exact, pre-deletion), ran old vs new side by side this session"
+sobol_randomized,20000,ctx.U identical old vs new,pass,see above
+sobol_randomized,20000,theta0_up identical old vs new,pass,see above
+sobol_randomized,20000,"D, D_dest identical old vs new",pass,see above
+sobol_randomized,20000,bounds identical old vs new,pass,see above
+sobol_randomized,20000,threshold_state.threshold,DIFFERS_BY_DESIGN,"OLD=Inf (the bug), NEW=10.0 (fixed) -- this is the intended fix, not a regression"
+sobol_randomized,20000,ctx.pairwise/witness built,DIFFERS_BY_DESIGN,"OLD=false (the bug, patched around in draw_design.jl), NEW=true (built inline, fixed) -- intended fix"
+sobol_randomized,20000,complete inner solve callback equality,pass,"OLD inner_status=0 Delta_dual=0.004369231118385748; NEW inner_status=0 Delta_dual=0.004369231118385748 -- bit-identical (==), verified live"
+halton_scrambled,20000,complete inner solve callback equality,pass,"OLD inner_status=-300 Delta_dual=NaN; NEW inner_status=-300 Delta_dual=NaN -- identical, verified live (threshold/screen fix does not change the converged KNITRO answer at this point, exactly as the original audit predicted: threshold only affects early-abort timing, not correctness)"
+sobol_randomized+halton_scrambled+precomputed,80000,"threshold_state finite and == resolve_threshold_for_delta(delta) at delta=1<9",pass,"test_draw_design.jl section 5, verified live at W=80000 -- historical-drift regression, all 4 designs now pass (previously only :pseudorandom did)"
+sobol_randomized+halton_scrambled+precomputed,80000,"ctx.pairwise/witness/screen_setup_wall built",pass,"test_draw_design.jl section 5, verified live at W=80000, all 4 designs"
+sobol_randomized+halton_scrambled+precomputed,80000,"destination_sample routed identically",pass,"test_draw_design.jl section 5, verified live at W=80000, all 4 designs"
+sobol_randomized+halton_scrambled+precomputed,80000,"returned context field SET identical to :pseudorandom's",pass,"test_draw_design.jl section 5, verified live at W=80000, all 4 designs"
+sobol_randomized+halton_scrambled+precomputed,80000,"threshold self-disables (==Inf) at delta=10>=9",pass,"test_draw_design.jl section 5, verified live at W=80000, all 4 designs"
+ALL (full test_draw_design.jl run),80000,total checks,49/49 PASS,"docs/key_results/test_draw_design_W80000_2026-07-30_full_run.log, this session"
