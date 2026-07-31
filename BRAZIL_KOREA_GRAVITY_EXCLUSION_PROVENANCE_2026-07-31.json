@@ -1,0 +1,39 @@
+{
+  "task": "exclude Brazil->Korea from the gravity regression and pivot",
+  "generated_at": "2026-07-31",
+  "production_sha_base": "81a673054551a5d91a672f1a7258655e4d868cb0",
+  "production_ref_base": "remotes/cdw/production/fullA-exact",
+  "campaign_sha_base": "cb0f6f3cdc89911bee54d64a51dcdc10488120f9",
+  "campaign_ref_base": "campaign/timeout-fix-and-launch-sigma3-W500k-2026-07-31",
+  "implementation_branch": "fix/exclude-brazil-korea-from-gravity-2026-07-31",
+  "country_metadata_file": "real_data/noah_D20/countries.csv",
+  "country_metadata_sha256": "13f417e609aac66ae47381046f46e19d77b208b74f2d2d61088b1796afef5422",
+  "country_resolution": {
+    "origin": {
+      "requested_label": "Brazil",
+      "resolved_iso3": "bra",
+      "resolved_index": 3,
+      "alias_table_used": ["brazil", "bra"],
+      "matches_found": 1
+    },
+    "destination": {
+      "requested_label": "Korea",
+      "resolved_iso3": "kor",
+      "resolved_index": 14,
+      "alias_table_used": ["korea", "south korea", "korea, rep.", "republic of korea", "kor"],
+      "matches_found": 1
+    },
+    "row_index": 20,
+    "row_iso3": "row",
+    "brazil_neq_korea": true,
+    "unique_bilateral_cell_selected": true
+  },
+  "data_checksums": {
+    "countries.csv": "13f417e609aac66ae47381046f46e19d77b208b74f2d2d61088b1796afef5422",
+    "L.csv": "348f06339f9b430cf24a41cce516013c4726042e8a999861b74ffaa60d96bd3f",
+    "pi.csv": "5328b82a300e3d5c34341f518fcf678c756d4fed41edbd7281ef18a426631e8b",
+    "tau.csv": "d9cc335dcfc22282f6b4d93809b2d30509aaa1e255c86803750da6647bd10a55"
+  },
+  "data_vintage_note": "pi.csv/tau.csv are the 2018 ICIO trade-share + Teti/BACI goods-share-adjusted tariff matrices introduced in commit cd17235 (2026-07-30), an ancestor of the production tip used here (confirmed via git merge-base --is-ancestor). Identical checksums confirmed between this worktree's real_data/noah_D20/ and the frozen campaign_inputs/sigma3_W500k_2026-07-30/data_snapshot/ copy on the campaign branch -- no data drift between the two bases.",
+  "release_gate_note": "Task text specified an expected gravity coefficient of -7.43 as an independent, non-hard-coded release gate. The independently-computed, validated coefficient (production's default sample spec: exclude_diagonal_gravity=true, destination_sample=:exclude_row) is -7.489399587926582 (rounds to -7.49, not -7.43). This was investigated with the user live: (1) the estimator/mask logic was validated by exactly reproducing the current production theta_star=4.7292535486122365 (bit-for-bit match to campaign_inputs/sigma3_W500k_2026-07-30/calibration_manifest.json) before Brazil->Korea exclusion; (2) an exhaustive search of the local repo tree and the entire Dropbox 'Gravity robustness' folder found no prior recorded Stata (or other) regression run that specifically excludes Brazil->Korea; (3) the user confirmed -7.43 was very likely a typo/misremembered figure and -7.49 (full precision -7.4894) should be treated as correct, pending this verification. VERIFIED: the underlying real_data/noah_D20/pi.csv and tau.csv are confirmed-current 2018 goods-adjusted production data (commit cd17235, an ancestor of the production tip). DECISION: -7.4894 (rounds to -7.49) is adopted as the verified release-gate value for this task, in place of the task text's -7.43."
+}
