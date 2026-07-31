@@ -65,3 +65,4 @@ include("hybrid_chamber_corrector.jl")
 include("fixed_q_a_middle_loop.jl")
 include("production_structural_gate.jl")   # 2026-07-31 legacy-H removal audit, Phase 14
 include("production_launcher.jl")   # 2026-07-31 production-consolidation Phase 8: git/toolchain/fingerprint preflight
+include("checkpoint_versioning.jl")   # 2026-07-31 production-consolidation Phase 9: checkpoint code-version enforcement
