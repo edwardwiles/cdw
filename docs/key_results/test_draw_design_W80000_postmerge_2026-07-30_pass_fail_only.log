@@ -1,0 +1,50 @@
+  PASS: :pseudorandom ctx.U bit-identical to old d20_real_setup path
+  PASS: draw_design field == :pseudorandom
+  PASS: :pseudorandom Delta_dual bit-identical at a real value eval
+  PASS: :pseudorandom checksum_uniform reproducible
+  PASS: :pseudorandom checksum_transformed reproducible
+  PASS: sobol_randomized: ctx builds, draw_design field correct
+  PASS: sobol_randomized: checksum differs from :pseudorandom
+  PASS: sobol_randomized: no non-finite transformed draws
+  PASS: sobol_randomized: no exact-boundary uniforms (0 or 1)
+  PASS: sobol_randomized: value eval runs, inner_status in FEASIBLE_CODES or a real screen/solver code
+  PASS: sobol_randomized: Delta_dual finite or NaN (never crashes/errors)
+  PASS: sobol_randomized: reproducible checksum across two fresh contexts
+  PASS: halton_scrambled: ctx builds, draw_design field correct
+  PASS: halton_scrambled: checksum differs from :pseudorandom
+  PASS: halton_scrambled: no non-finite transformed draws
+  PASS: halton_scrambled: no exact-boundary uniforms (0 or 1)
+  PASS: halton_scrambled: value eval runs, inner_status in FEASIBLE_CODES or a real screen/solver code
+  PASS: halton_scrambled: Delta_dual finite or NaN (never crashes/errors)
+  PASS: halton_scrambled: reproducible checksum across two fresh contexts
+  PASS: sobol_randomized and halton_scrambled have DIFFERENT checksums from each other
+  PASS: log_draw_meta=false skips meta (draw_meta === nothing)
+  PASS: logging overhead is small relative to ctx build (<20% of total)
+  PASS: pseudorandom (δ=1.0<9): threshold_state.threshold is finite and == resolve_threshold_for_delta(δ)
+  PASS: pseudorandom: ctx.pairwise built (not nothing)
+  PASS: pseudorandom: ctx.witness built (not nothing)
+  PASS: pseudorandom: ctx.screen_setup_wall present with finite timings
+  PASS: pseudorandom: destination_sample routed (default :exclude_row, D_dest=D-1)
+  PASS: sobol_randomized (δ=1.0<9): threshold_state.threshold is finite and == resolve_threshold_for_delta(δ)
+  PASS: sobol_randomized: ctx.pairwise built (not nothing)
+  PASS: sobol_randomized: ctx.witness built (not nothing)
+  PASS: sobol_randomized: ctx.screen_setup_wall present with finite timings
+  PASS: sobol_randomized: destination_sample routed (default :exclude_row, D_dest=D-1)
+  PASS: halton_scrambled (δ=1.0<9): threshold_state.threshold is finite and == resolve_threshold_for_delta(δ)
+  PASS: halton_scrambled: ctx.pairwise built (not nothing)
+  PASS: halton_scrambled: ctx.witness built (not nothing)
+  PASS: halton_scrambled: ctx.screen_setup_wall present with finite timings
+  PASS: halton_scrambled: destination_sample routed (default :exclude_row, D_dest=D-1)
+  PASS: precomputed (δ=1.0<9): threshold_state.threshold is finite and == resolve_threshold_for_delta(δ)
+  PASS: precomputed: ctx.pairwise built (not nothing)
+  PASS: precomputed: ctx.witness built (not nothing)
+  PASS: precomputed: ctx.screen_setup_wall present with finite timings
+  PASS: precomputed: destination_sample routed (default :exclude_row, D_dest=D-1)
+  PASS: sobol_randomized: returned context field SET identical to :pseudorandom's
+  PASS: halton_scrambled: returned context field SET identical to :pseudorandom's
+  PASS: precomputed: returned context field SET identical to :pseudorandom's
+  PASS: pseudorandom (δ=10.0>=9): threshold_state.threshold == Inf (self-disabled, matches resolve_threshold_for_delta)
+  PASS: sobol_randomized (δ=10.0>=9): threshold_state.threshold == Inf (self-disabled, matches resolve_threshold_for_delta)
+  PASS: halton_scrambled (δ=10.0>=9): threshold_state.threshold == Inf (self-disabled, matches resolve_threshold_for_delta)
+  PASS: precomputed (δ=10.0>=9): threshold_state.threshold == Inf (self-disabled, matches resolve_threshold_for_delta)
+TOTAL: 49 passed, 0 failed
