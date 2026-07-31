@@ -58,6 +58,71 @@ function set_production_outer_algorithm!(kc)
     return nothing
 end
 
+# ============================================================================
+# sigma3/W500k campaign addendum (2026-07-30): the campaign brief requires the OFFICIAL KNITRO
+# Direct interior-point algorithm with SR1 as the primary outer strategy, with an optional
+# Direct+BFGS polish stage -- explicitly NOT the CG+L-BFGS combination pinned above (that is a
+# different, opt-in-only experimental config from a single controlled 2026-07-23 comparison, not
+# what this campaign asked for). Neither existed as a *forceable* choice before this addendum:
+# every pre-existing `.opt` file leaves `algorithm auto`, and this file's own module docstring
+# documents that `auto` resolves INCONSISTENTLY by family (Direct for the CM-family constrained
+# formulations, but Active-Set/CG for the unrestricted family's unconstrained profile
+# formulation) -- so "leave it at auto" does not reliably give Direct at all, let alone
+# Direct+SR1 specifically. These two constants/functions mirror the existing CG+L-BFGS pattern
+# exactly (same KN_set_param_by_name calls, same explicit-readback assertion pattern below),
+# just with the KNITRO codes this campaign actually needs: algorithm=1 (Direct interior/barrier),
+# hessopt=3 (SR1) or hessopt=6 (BFGS).
+# ============================================================================
+
+"Direct interior-point/barrier algorithm (KNITRO code 1)."
+const KNITRO_ALGORITHM_DIRECT = 1
+
+"SR1 Hessian approximation (KNITRO code 3) -- this campaign's primary outer strategy."
+const KNITRO_HESSOPT_SR1 = 3
+
+"BFGS Hessian approximation (KNITRO code 6) -- this campaign's optional polish stage."
+const KNITRO_HESSOPT_BFGS = 6
+
+"""
+    set_outer_algorithm_direct!(kc, hessopt::Int)
+
+Explicitly sets the outer KNITRO context's `algorithm` to Direct (1) and `hessopt` to the given
+code (KNITRO_HESSOPT_SR1 or KNITRO_HESSOPT_BFGS). Mirrors set_production_outer_algorithm!'s
+mechanism exactly; a distinct function (not a generalization of that one) so the CG+L-BFGS
+experimental config above is never silently touched by this campaign's own wiring.
+"""
+function set_outer_algorithm_direct!(kc, hessopt::Int)
+    hessopt in (KNITRO_HESSOPT_SR1, KNITRO_HESSOPT_BFGS) ||
+        error("set_outer_algorithm_direct!: hessopt must be KNITRO_HESSOPT_SR1 (3) or KNITRO_HESSOPT_BFGS (6), got $hessopt")
+    KNITRO.KN_set_param_by_name(kc, "algorithm", KNITRO_ALGORITHM_DIRECT)
+    KNITRO.KN_set_param_by_name(kc, "hessopt", hessopt)
+    return nothing
+end
+
+"""
+    assert_outer_algorithm_direct!(kc, hessopt::Int; context::String = "")
+
+Reads back BOTH `algorithm` and `hessopt` and throws unless algorithm==Direct(1) and hessopt
+matches exactly. Stricter than assert_outer_algorithm_explicit! below (which only checks
+algorithm!=auto) because this campaign's requirement is not merely "explicit", it is
+specifically Direct+SR1 or Direct+BFGS -- a caller must not silently end up at, say,
+Active-Set+SR1 and have this pass.
+"""
+function assert_outer_algorithm_direct!(kc, hessopt::Int; context::String = "")
+    algo_ref = Ref{Cint}(KNITRO_AUTO)
+    status_a = KNITRO.KN_get_int_param_by_name(kc, "algorithm", algo_ref)
+    status_a == 0 || error("assert_outer_algorithm_direct!($context): KN_get_int_param_by_name(\"algorithm\") returned nonzero status $status_a")
+    algo_ref[] == KNITRO_ALGORITHM_DIRECT || error(
+        "$context: expected outer algorithm=Direct($KNITRO_ALGORITHM_DIRECT), got $(algo_ref[]) -- " *
+        "set_outer_algorithm_direct! should have run right after KN_load_param_file. This is a bug in the calling driver.")
+    hess_ref = Ref{Cint}(KNITRO_AUTO)
+    status_h = KNITRO.KN_get_int_param_by_name(kc, "hessopt", hess_ref)
+    status_h == 0 || error("assert_outer_algorithm_direct!($context): KN_get_int_param_by_name(\"hessopt\") returned nonzero status $status_h")
+    hess_ref[] == hessopt || error(
+        "$context: expected outer hessopt=$hessopt, got $(hess_ref[]) -- set_outer_algorithm_direct! should have set this exactly.")
+    return nothing
+end
+
 """
     assert_outer_algorithm_explicit!(kc; context::String = "")
 

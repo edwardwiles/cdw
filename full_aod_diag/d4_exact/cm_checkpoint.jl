@@ -613,6 +613,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # algorithm=2(Interior/CG)+hessopt=6(L-BFGS) via knitro_outer_algorithm.jl, for matched
         # benchmark A/Bs only. false (default): unchanged existing behavior (.opt file's
         # algorithm=auto, as before this kwarg existed).
+        # sigma3 campaign prep (2026-07-30): DIFFERENT, separate opt-in from pin_outer_algorithm
+        # above -- forces algorithm=Direct+hessopt=SR1(3)/BFGS(6) via knitro_outer_algorithm.jl's
+        # set_outer_algorithm_direct!, not the CG+L-BFGS config `pin_outer_algorithm` pins to.
+        # `nothing` (default): zero behavior change. Takes priority over pin_outer_algorithm if
+        # both are somehow set (errors instead -- see the call site below).
+        outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
@@ -1016,6 +1022,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", 1_000_000)
+    if outer_direct_hessopt !== nothing
+        pin_outer_algorithm && error("run_cm_upper_checkpointed($label): outer_direct_hessopt and pin_outer_algorithm are mutually exclusive (different, incompatible pinned outer configs) -- set at most one.")
+        outer_direct_hessopt in (:sr1, :bfgs) || error("run_cm_upper_checkpointed($label): outer_direct_hessopt must be :sr1 or :bfgs, got :$outer_direct_hessopt")
+        set_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS)
+    end
     pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves opt_file's algorithm=auto in effect
     xIndices = KNITRO.KN_add_vars(kc, D2)
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
@@ -1199,6 +1210,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
 
+    if outer_direct_hessopt !== nothing
+        assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_cm_upper_checkpointed($label)")
+    end
     pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_cm_upper_checkpointed($label)")
     try
         KNITRO.KN_solve(kc)

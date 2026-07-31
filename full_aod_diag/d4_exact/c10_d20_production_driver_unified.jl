@@ -157,6 +157,15 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         pin_outer_algorithm::Bool = false,   # reconciliation: same kwarg/semantics as
         # run_polish_checkpointed's -- opt-in explicit algorithm=2(Interior/CG)+hessopt=6(L-BFGS)
         # via knitro_outer_algorithm.jl, for matched benchmark A/Bs only.
+        # sigma3 campaign prep (2026-07-30): hessopt_tag above only selects WHICH .opt file loads
+        # (csw_outer_wallclock_sr1/lbfgs.opt), and BOTH leave algorithm=auto -- this module's own
+        # documented 2026-07-25 audit found auto resolves to Active-Set/CG specifically for THIS
+        # family's unconstrained profile formulation, not Direct. So hessopt_tag="sr1" alone does
+        # NOT give "Direct interior-point with SR1" for the unrestricted family. outer_direct_hessopt
+        # (separate, mutually exclusive with pin_outer_algorithm) forces algorithm=Direct+the given
+        # hessopt via knitro_outer_algorithm.jl's set_outer_algorithm_direct!. `nothing` (default):
+        # zero behavior change.
+        outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
         )   # architecture/production-operator-bundle-hardening-2026-07-30: the moment_representation
         # kwarg that previously lived here is REMOVED, not defaulted -- production runners must not
         # accept a representation choice at all (task §2). This function now always constructs
@@ -296,6 +305,11 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
+    if outer_direct_hessopt !== nothing
+        pin_outer_algorithm && error("run_polish_checkpointed_unified($label): outer_direct_hessopt and pin_outer_algorithm are mutually exclusive -- set at most one.")
+        outer_direct_hessopt in (:sr1, :bfgs) || error("run_polish_checkpointed_unified($label): outer_direct_hessopt must be :sr1 or :bfgs, got :$outer_direct_hessopt")
+        set_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS)
+    end
     pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves the .opt file's algorithm=auto in effect
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
@@ -473,6 +487,9 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], n_outer), jacIndexVars = xIndices)
     KNITRO.KN_set_newpt_callback(kc, cb_newpt!)
 
+    if outer_direct_hessopt !== nothing
+        assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_polish_checkpointed_unified($label)")
+    end
     pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_polish_checkpointed_unified($label)")
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
