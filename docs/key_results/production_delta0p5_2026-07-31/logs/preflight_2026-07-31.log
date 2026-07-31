@@ -1,0 +1,115 @@
+Melitz thread startup report:
+  Julia threads available = 10 (require >= 20)
+  BLAS threads selected   = 1
+  WARNING: melitz_thread_startup_report: Threads.nthreads()=10 < required 20 -- using all 10 available Julia threads instead of the 20-thread production default. Outer-gradient/structured-Hessian/moment-construction kernels will run with less parallelism than the documented Melitz production default (src/melitz/CLAUDE.md).
+Julia threads: 10  BLAS threads: 1
+
+====================================================================================================
+STEP 0: build real-D20 fixture fresh
+====================================================================================================
+focal country index = 2
+fixture build: 4.33s
+D=20  nA=399  forbid_dense_fallback=true (no dense G)
+
+====================================================================================================
+STEP 1: cold-reverify anchor Delta0 = 0.483276
+====================================================================================================
+anchor solve: 3.19s  Delta0=0.4832764950  lfd_ok=true  nStatus=0
+PASS: anchor Delta0 reproduces 0.483276 fresh.
+
+====================================================================================================
+STEP 2: cold-reverify the STORED headline point (GT~7.0969%, Delta*~0.499019)
+====================================================================================================
+stored extreme point: GT=7.0968905222%  Delta_stored=0.4990186631  classification=FiniteSolved
+LIVE cold re-verification: 5.05s  Delta=0.4990186631  nStatus=0  (stored=0.4990186631)
+GT at headline point (recomputed): 7.096891%
+PASS: stored headline point reproduces GT~7.0969%%, Delta*~0.499019 fresh, FiniteSolved.
+
+====================================================================================================
+STEP 3: full primal/dual/LFD verification residuals at the headline point
+====================================================================================================
+lfd_ok=true  Delta(lfd)=0.4990186631  nStatus=0
+PASS: LFD recovery agrees with the cold-reverified Delta.
+
+====================================================================================================
+STEP 4: one ordinary profiled point from current_calibration (anchor g0)
+====================================================================================================
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Primal feasible solution estimate cannot be improved. It appears to be
+      optimal, but desired accuracy in dual feasibility could not be achieved.
+
+Final Statistics
+----------------
+Final objective value               =   2.87953395540715e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   3.54e-03 / 3.54e-03
+# of iterations                     =         57 
+# of CG iterations                  =          6 
+# of function evaluations           =        108
+# of gradient evaluations           =         56
+Total program time (secs)           =      25.57641 (    47.279 CPU time)
+Time spent in evaluations (secs)    =      25.20400
+
+===============================================================================
+
+profiled point: 29.49s  incumbent_source=trial  Delta_incumbent=0.287953  Delta_start_verified=0.483276
+  unique_A_points=64  unique_inner_solves=64  cache_hits=57  n_fc=108  n_ga=56
+PASS: profiled anchor point -- incumbent no worse than verified start, dedup invariant holds, FiniteSolved throughout.
+
+====================================================================================================
+PREFLIGHT SUMMARY
+====================================================================================================
+  BLAS threads = 1 (must be 1)
+  forbid_dense_fallback = true (no dense G)
+  cap_handling = :barrier, cap_barrier_multiple = 5.0 (repaired v2 driver, callback cache active)
+  focal-link fast path: wired into production unconditionally as of commit 169f77d (no opt-out flag)
+  anchor Delta0 = 0.4832764950 (target 0.483276)
+  headline point: GT=7.096891%  Delta*=0.4990186631 (target GT~7.0969%, Delta*~0.499019)
+  ordinary profiled point at anchor: Delta_incumbent=0.287953 FiniteSolved, dedup OK
+
+ALL PREFLIGHT CHECKS PASSED -- cleared to launch the production campaign.

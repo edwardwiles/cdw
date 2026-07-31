@@ -1,0 +1,14 @@
+Melitz thread startup report:
+  Julia threads available = 5 (require >= 20)
+  BLAS threads selected   = 1
+  WARNING: melitz_thread_startup_report: Threads.nthreads()=5 < required 20 -- using all 5 available Julia threads instead of the 20-thread production default. Outer-gradient/structured-Hessian/moment-construction kernels will run with less parallelism than the documented Melitz production default (src/melitz/CLAUDE.md).
+Julia threads: 5  BLAS threads: 1
+[current_calibration_upper] focal country index = 2
+[current_calibration_upper] fingerprint = (D = 20, W = 80000, seed = 1, sigma = 2.5, focal = 2, anchor_label = "current_calibration", direction = "upper", q_free_hash = 0xd5153bfdf1cc9d36, theta0_hash = 0x9e47adfdd15d2915, git_commit = "169f77d4a9eedb908a078095629a0be77d9c61ca")
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
