@@ -514,3 +514,588 @@ Time spent in evaluations (secs)    =       0.76475
 
 ===============================================================================
 
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.55e-07 / 1.55e-07
+# of iterations                     =          4 
+# of CG iterations                  =          0 
+# of function evaluations           =          5
+# of gradient evaluations           =          5
+Total program time (secs)           =       0.86916 (     1.186 CPU time)
+Time spent in evaluations (secs)    =       0.84024
+
+===============================================================================
+
+[reduced_q_post_switch_lower] [expand] result: classification=FiniteSolved Delta=0.0014190578787679892 within_budget=true best_start=continuation trigger=cap_dominated wall=6.5s improved_extreme=true
+
+[reduced_q_post_switch_lower] [expand] attempt #6  GT_target=0.228141%  step_gt=2.00000
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+WARNING: The initial point is a stationary point and only the first order
+         optimality conditions have been verified.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   0.00e+00 / 0.00e+00
+# of iterations                     =          0 
+# of CG iterations                  =          0 
+# of function evaluations           =          1
+# of gradient evaluations           =          1
+Total program time (secs)           =       0.00369 (     0.003 CPU time)
+Time spent in evaluations (secs)    =       0.00000
+
+===============================================================================
+
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+WARNING: The initial point is a stationary point and only the first order
+         optimality conditions have been verified.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   0.00e+00 / 0.00e+00
+# of iterations                     =          0 
+# of CG iterations                  =          0 
+# of function evaluations           =          1
+# of gradient evaluations           =          1
+Total program time (secs)           =       0.00342 (     0.003 CPU time)
+Time spent in evaluations (secs)    =       0.00000
+
+===============================================================================
+
+[reduced_q_post_switch_lower] [expand] result: classification=AboveEvaluationCap Delta=33.047630479119704 within_budget=false best_start=continuation trigger=not_finite wall=0.6s improved_extreme=false
+[reduced_q_post_switch_lower] BRACKET FOUND: feasible GT=2.2281405222019823 Delta=0.0014190578787679892 | infeasible GT=0.22814052220198056 Delta=33.047630479119704
+
+[reduced_q_post_switch_lower] [polish] attempt #7  GT_target=1.828141%  step_gt=2.00000
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.62e-07 / 1.62e-07
+# of iterations                     =          4 
+# of CG iterations                  =          0 
+# of function evaluations           =          5
+# of gradient evaluations           =          5
+Total program time (secs)           =       0.63889 (     0.840 CPU time)
+Time spent in evaluations (secs)    =       0.60720
+
+===============================================================================
+
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.59e-07 / 1.59e-07
+# of iterations                     =          4 
+# of CG iterations                  =          0 
+# of function evaluations           =          5
+# of gradient evaluations           =          5
+Total program time (secs)           =       0.91401 (     1.256 CPU time)
+Time spent in evaluations (secs)    =       0.88566
+
+===============================================================================
+
+[reduced_q_post_switch_lower] [polish] result: classification=FiniteSolved Delta=0.0017052633736026768 within_budget=true best_start=continuation trigger=cap_dominated wall=6.1s improved_extreme=true
+
+[reduced_q_post_switch_lower] [polish] attempt #8  GT_target=1.508141%  step_gt=2.00000
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.34e-07 / 1.34e-07
+# of iterations                     =          4 
+# of CG iterations                  =          0 
+# of function evaluations           =          5
+# of gradient evaluations           =          5
+Total program time (secs)           =       0.75941 (     1.021 CPU time)
+Time spent in evaluations (secs)    =       0.72882
+
+===============================================================================
+
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.43e-07 / 1.43e-07
+# of iterations                     =          4 
+# of CG iterations                  =          0 
+# of function evaluations           =          5
+# of gradient evaluations           =          5
+Total program time (secs)           =       0.96292 (     1.298 CPU time)
+Time spent in evaluations (secs)    =       0.93413
+
+===============================================================================
+
+[reduced_q_post_switch_lower] [polish] result: classification=FiniteSolved Delta=0.007271285377063488 within_budget=true best_start=cellwise_compensated trigger=cap_dominated wall=6.4s improved_extreme=true
+
+[reduced_q_post_switch_lower] [polish] attempt #9  GT_target=1.252141%  step_gt=2.00000
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.08e-07 / 1.08e-07
+# of iterations                     =          4 
+# of CG iterations                  =          0 
+# of function evaluations           =          5
+# of gradient evaluations           =          5
+Total program time (secs)           =       0.95895 (     1.340 CPU time)
+Time spent in evaluations (secs)    =       0.93094
+
+===============================================================================
+
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Locally optimal solution found.
+
+Final Statistics
+----------------
+Final objective value               =   5.00000000000000e+01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.14e-07 / 1.14e-07
+# of iterations                     =          4 
+# of CG iterations                  =          0 
+# of function evaluations           =          5
+# of gradient evaluations           =          5
+Total program time (secs)           =       1.12087 (     1.565 CPU time)
+Time spent in evaluations (secs)    =       1.09113
+
+===============================================================================
+
+[reduced_q_post_switch_lower] [polish] result: classification=FiniteSolved Delta=0.018314727940282067 within_budget=true best_start=cellwise_compensated trigger=cap_dominated wall=6.5s improved_extreme=true
+
+====================================================================================================
+[reduced_q_post_switch_lower] CHAIN COMPLETE: status=max_points  n_evaluated=9  n_polish=3  elapsed_wall_s=69.7
+[reduced_q_post_switch_lower] BEST VERIFIED INCUMBENT: GT=1.252141%  Delta*=0.0183147  classification=FiniteSolved
+====================================================================================================
+
+DONE reduced_q_post_switch_lower

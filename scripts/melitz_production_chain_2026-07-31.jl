@@ -378,9 +378,17 @@ else
     r0 = solve_melitz_fixed_q_A_profile_v2(session_d20, q0_anchor, exp(g0), A_start0, ctx_d20;
         coordinate=:logA, max_evals=MAX_MIDDLE_EVALS, box=D20_MIDDLE_BOX, outer_loop_opt=MIDDLE_OPT_D20, sys=sys0,
         cap_handling=CAP_HANDLING, cap_barrier_multiple=CAP_BARRIER_MULTIPLE)
-    clear_pending()
+    # NOTE (disclosed limitation caught live, 2026-07-31): clear_pending() is deliberately
+    # deferred past BOTH assertions below -- an earlier version cleared it immediately after
+    # solve_melitz_fixed_q_A_profile_v2 returned (i.e. before checking its result), so a
+    # deterministic post-solve assertion failure (the reduced_q_post_switch anchor-construction
+    # bug caught this session) always logged "pending target: none_pending" to the wrapper,
+    # defeating the "same target crashed twice" dedup (every attempt looked like a fresh/
+    # different failure). Keeping the pending marker live through the assertions means a
+    # deterministic anchor-establishment failure is now correctly detected as a repeat.
     @assert r0.r_incumbent isa FiniteSolved "[$CHAINID] anchor profiled point did not reach FiniteSolved"
     @assert r0.Delta_incumbent <= r0.Delta_start_verified + 1e-6
+    clear_pending()
     lfd_r0 = melitz_recover_lfd(obj_d20, r0.theta_free_incumbent)
     _, f_full0, _, _, q_full0 = expand_free_theta_logcutoff(r0.theta_free_incumbent, ctx_d20)
     pt0 = ChainPoint(1, :anchor, g0, GT0, :FiniteSolved, r0.Delta_incumbent, r0.Delta_incumbent <= DELTA_BUDGET,

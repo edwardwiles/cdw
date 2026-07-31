@@ -92,7 +92,7 @@ end
 state = deserialize(CKPT_PATH)
 best = state.points[state.most_extreme_idx]
 println("[$CHAINID] loaded checkpoint: status=$(state.status)  n_points=$(length(state.points))  best_idx=$(state.most_extreme_idx)")
-@printf("[$CHAINID] BEST INCUMBENT (as checkpointed): GT=%.6f%%  Delta=%.6g  classification=%s\n", best.GT, best.Delta, best.classification)
+@printf("[%s] BEST INCUMBENT (as checkpointed): GT=%.6f%%  Delta=%.6g  classification=%s\n", CHAINID, best.GT, best.Delta, best.classification)
 @assert best.classification == :FiniteSolved "checkpointed incumbent is not FiniteSolved -- nothing to verify"
 flush(stdout)
 
@@ -159,8 +159,8 @@ state_exp = MelitzExpandedState(D20)
 ws_exp = MelitzThetaExpansionWorkspace(D20)
 melitz_expand_theta!(state_exp, best.theta_free, ctx_d20, ws_exp)
 A_full = exp.(reshape(pivot_expand(best.A_free, ctx_d20.A_pivot), D20, D20))
-A_gravity_resid = dot(ctx_d20.A_pivot.c_full, vec(log.(A_full)))
-@printf("A-gravity residual (dot(c_full, vec(logA))): %.3e  (expect ~0, algebraic identity)\n", A_gravity_resid)
+A_gravity_resid = dot(ctx_d20.A_pivot.c, vec(log.(A_full))) + ctx_d20.A_pivot.g0
+@printf("A-gravity residual (dot(c, vec(logA)) + g0): %.3e  (expect ~0, algebraic identity)\n", A_gravity_resid)
 @assert abs(A_gravity_resid) < 1e-8
 
 _, f_full_v, _, _, q_full_v = expand_free_theta_logcutoff(best.theta_free, ctx_d20)

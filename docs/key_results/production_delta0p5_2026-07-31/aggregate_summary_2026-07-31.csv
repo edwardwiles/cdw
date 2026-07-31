@@ -1,0 +1,7 @@
+chain,anchor,direction,n_points,n_wide,n_polish,unique_inner_solves,wall_s,best_GT,Delta_star,fixedAf_Delta,fixedAf_classification,improvement,winner
+current_calibration_upper,current_calibration,upper,6,2,3,594,329.696376,7.467412300019383,0.4415692876687138,1.5851402234821586,FiniteSolved,1.1435709358134447,no
+current_calibration_lower,current_calibration,lower,9,5,3,850,318.761628,1.2521405222019721,0.013967375560033607,0.026902246761563255,FiniteSolved,0.012934871201529648,yes_tiebreak
+reduced_q_pre_switch_upper,reduced_q_pre_switch,upper,6,2,3,592,325.444603,7.496041880780946,0.45169797882218266,1.6441550493324617,FiniteSolved,1.192457070510279,yes
+reduced_q_pre_switch_lower,reduced_q_pre_switch,lower,9,5,3,886,434.843421,1.2521405222019721,0.015238729401704695,0.026902210288327677,FiniteSolved,0.011663480886622982,no
+reduced_q_post_switch_upper,reduced_q_post_switch,upper,6,2,3,537,317.308930,7.345401100408965,0.45983727706357125,240249.09340117915,AboveEvaluationCap,240248.63356390208,no
+reduced_q_post_switch_lower,reduced_q_post_switch,lower,9,5,3,77,69.654853,1.2521405222019721,0.018314727940282067,955156.7556352133,AboveEvaluationCap,955156.7373204854,no
