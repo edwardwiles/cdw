@@ -145,8 +145,13 @@ function prime_operator!(obj::OperatorPsiBundle, θ_econ::AbstractVector, ctx, c
                           restriction_state = nothing)
     cf = cf_build(θ_econ, ctx; check_ties = false)
     fill_K_directgp!(obj.payoff, θ_econ, ctx)
-    grav_raw = compressed_gravity_raw(θ_econ, ctx)
-    fill_gravity_column_into!(obj.grav_col, grav_raw, ctx, 1)
+    # compressed_gravity_raw/fill_gravity_column_into! into obj.grav_col REMOVED (2026-07-31,
+    # Brazil-Korea gravity-exclusion task): confirmed dead -- obj.grav_col has no read-site
+    # anywhere in the codebase; the real production objective (obj.H_save) is built from
+    # obj.payoff alone. The actual gravity restriction is enforced exactly by pivot_expand
+    # upstream of every real outer iterate (GRAVITY_MOMENT_FINAL_DECISION_2026-07-28.md); this
+    # was pure wasted per-eval computation with no consumer. obj.grav_col field itself is left in
+    # place (cheap, avoids a struct-layout change) but is no longer written here.
     core_cf_ref[] = cf
     obj.economic_state = core_cf_ref
     restriction_state !== nothing && (obj.restriction_state = restriction_state)
