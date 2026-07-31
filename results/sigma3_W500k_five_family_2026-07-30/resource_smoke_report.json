@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "summary": "5 families x both directions, delta=0.1, start=1, 20 threads each (100 total), real 2026-07-30/31 run. Peak RSS per family: unrestricted=12.4GB flexible_cm=32.9GB common_frechet=37.9GB origin_zc=17.2GB cm_meanzc=21.2GB (worst-case concurrent sum ~122GB vs 3.0TiB available). Zero crashes/OOM/resource errors across ~90 min sustained 100-thread concurrent execution. Convergence within the artificially short 1800s smoke budget: unrestricted/flexible_cm/common_frechet reached verified DONE on both cells; origin_zc on 1 of 2; cm_meanzc on 0 of 2 within 1800s x 3 attempts (deterministic stall after eval 3 across all 3 independent attempts, but still genuinely computing inside KN_solve when killed -- not a crash or hang). Follow-up isolated diagnostic (no contention, 2400s internal budget) confirmed cm_meanzc is NOT stuck: it reached a genuine verified DONE at wall=2663.9s (44 min), n_eval=21, best_Delta=0.0946 vs target 0.1 -- well within the real 10,800s/cell production budget (~4x headroom even under contention-free timing). Conclusion: resource consumption is not a blocker (ample RAM headroom, no crashes); the artificial 1800s smoke budget under 5-way contention understates real per-cell convergence time for the two heavier CM-restriction families (cm_meanzc, and to a lesser extent origin_zc), but the real 10,800s/cell budget is corroborated as sufficient by the isolated follow-up test.",
+  "peak_rss_gb_by_family": {
+    "unrestricted": 12.4,
+    "flexible_cm": 32.9,
+    "common_frechet": 37.9,
+    "origin_zc": 17.2,
+    "cm_meanzc": 21.2
+  },
+  "worst_case_concurrent_total_gb": 121.9,
+  "host_available_ram_tib": 3.0,
+  "done_within_1800s_smoke_budget": {
+    "unrestricted": "2/2",
+    "flexible_cm": "2/2",
+    "common_frechet": "2/2",
+    "origin_zc": "1/2",
+    "cm_meanzc": "0/2"
+  },
+  "cm_meanzc_isolated_followup": {
+    "no_contention_wall_s": 2663.9,
+    "n_eval": 21,
+    "n_verified": 19,
+    "best_delta": 0.09456891,
+    "target_delta": 0.1,
+    "real_production_budget_s": 10800,
+    "headroom_factor": "~4.05x"
+  },
+  "generated": "2026-07-31T03:20:00-04:00"
+}
