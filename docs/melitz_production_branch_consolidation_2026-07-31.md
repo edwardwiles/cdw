@@ -1,14 +1,61 @@
 # Melitz production-branch consolidation (2026-07-31)
 
 Integration branch: `integration/melitz-production-consolidation-2026-07-31`
-Worktree: `/bbkinghome/edav/gravity_robustness/worktrees/integration-melitz-production-consolidation-2026-07-31`
+Canonical worktree (as of this document's finalization): `/bbkinghome/edav/cdw/melitz/integration-production-consolidation-2026-07-31`
+(built by the background agent at `/bbkinghome/edav/gravity_robustness/worktrees/integration-melitz-production-consolidation-2026-07-31`,
+then relocated — see "Repository migration" below — this file's own path history reflects
+the same journey.)
 Canonical base: `6e803d43875e73deb3cf8acf3c04e8febd808e53` (`6e803d4`)
-Proposed production HEAD (tip of this branch as of this writeup): see "Exact commits" below.
+**Proposed production HEAD: `00c1435f1af6f11147d4f3ce0f4fc07498678738` (`00c1435`)** — the
+current tip of this branch, pushed to `origin` (`git@github.com:edwardwiles/cdw.git`).
 
-This document covers Phases 1-9 of the consolidation task. Phases 1-2 (branch/worktree
-inventory, outstanding-commit classification) were established by a parallel investigation
-before this session started; they are restated concisely here with this session's own
-verification, not re-derived from scratch.
+This document covers Phases 1-9 of the consolidation task, plus this session's own Phase 10
+decision. Phases 1-2 (branch/worktree inventory, outstanding-commit classification) were
+established by a parallel investigation before the background agent's session started; they
+are restated concisely with verification, not re-derived from scratch. Everything below the
+"Repository migration" and "Phase 10" headings was added by the orchestrating session after
+the background agent's own work (which stopped at commit `99f4cf2`) completed.
+
+## Repository migration (orchestrating session, after the agent's own work)
+
+Per an explicit user decision made mid-session, `cdw` (not `trade_robustness_modular`) is now
+the sole go-forward home for Melitz work, under a new `cdw/melitz/` worktree directory. This
+branch, along with `melitz/fullD-delta-star` and `audit/melitz-legacy-H-removal-2026-07-31`,
+was pushed from `trade_robustness_modular` to the shared GitHub remote
+(`git@github.com:edwardwiles/cdw.git`, already configured as a second remote in
+`trade_robustness_modular` under the name `cdw` — both directories were always independent
+local clones of the same remote, just badly out of sync: `cdw`'s own local copy of
+`melitz/fullD-delta-star` was a stale ref more than 50 commits behind), then fetched into
+`cdw` and checked out as a new worktree at `cdw/melitz/integration-production-consolidation-2026-07-31`.
+File layout inside the repo is unchanged (same commit graph, same `src/melitz/` tree) — only
+the working-copy location changed. `melitz/fullD-delta-star` itself was NOT re-checked-out in
+`cdw` yet: it is still live-checked-out in `trade_robustness_modular`'s main worktree (git
+does not allow the same branch checked out in two worktrees at once), which also still has a
+5+ day old orphaned diagnostic process running in it (unrelated to this consolidation,
+deliberately left untouched all session — see Phase 0). The `cdw`-side local branch ref for
+`melitz/fullD-delta-star` has been fast-forwarded to match (`64a0e2a`) so it is at least
+readable/diffable from `cdw` even though not checked out there.
+
+Two bugs were found and fixed by the orchestrating session as a direct result of this
+relocation, both now committed on this branch (`da7ae7f`, `00c1435`):
+1. `scripts/melitz_test_production_launcher_2026-07-31.jl`'s wrong-ancestry test cases
+   hardcoded commit `91f5ec2`, a real commit from an unrelated old branch in
+   `trade_robustness_modular`'s history. That object was never reachable from any pushed
+   branch tip, so it doesn't exist in the `cdw` clone — both sub-tests referencing it broke
+   immediately (`fatal: Not a valid object name 91f5ec2`) the moment this branch was relocated.
+   Fixed by fabricating a guaranteed-non-ancestor commit locally (`git commit-tree` on the
+   empty tree, no parent) instead of depending on repo-specific history. Re-verified live,
+   standalone: all 5 test groups / 17 assertions PASS.
+2. The full test-group matrix committed by the background agent
+   (`docs/key_results/melitz_test_group_matrix_2026-07-31.txt`, generated `06:25:31`) was
+   stale: it was generated **one minute before** the agent's own missing-include fix
+   (`99f4cf2`, `06:27:03`) landed, and still reflected the resulting single failure. The
+   orchestrating session found the agent's own leftover rerun process (`group_runner_full5.log`,
+   started `06:27` under a background PID that outlived the agent's own conversational turn —
+   see `feedback-compaction-can-leave-orphaned-duplicate-background-jobs` memory for this
+   exact pattern) still running, let it complete rather than duplicate the work (an
+   accidentally-launched duplicate rerun was found and killed within a minute of starting it),
+   and committed the clean result: **53/53 groups pass, 0 fail, 0 error.**
 
 ## Ancestry proof
 
@@ -16,6 +63,9 @@ verification, not re-derived from scratch.
 $ git merge-base --is-ancestor 6e803d4 HEAD && echo OK
 OK
 $ git log --oneline 6e803d4..HEAD
+00c1435 Record clean full-suite test-group matrix (post include-fix): 53/53 pass
+da7ae7f Fix repo-portability bug in production_launcher regression test
+99f4cf2 Fix pre-existing missing include in runtests.jl (reduced_q_switch_geometry.jl)
 53f98fa Fix pre-existing segfault in "bundle pool members are independently mutable" test
 9ce8a18 Phase 9: checkpoint code-version enforcement (resume gate + migration)
 417fbde Phase 8: regression tests for production_launcher.jl refusal/pass-through behavior
@@ -29,7 +79,10 @@ fc1e930 Melitz legacy-H removal audit: fix one dormant dense-fallback gap, add s
 ```
 
 Every commit on this branch descends from `6e803d4`; `6e803d4` is a genuine ancestor (not
-merely "close to" or "equal to" it in some looser sense).
+merely "close to" or "equal to" it in some looser sense). Separately: `merge-base(HEAD,
+melitz/fullD-delta-star) == 6e803d4` exactly — this branch and the live campaign branch have
+each added their own commits on top of the same shared point, a clean two-way divergence with
+no rebase needed to reunite them (see Phase 10's proposed merge command).
 
 ## Phase 1-2 restated (established before this session, re-verified here)
 
@@ -227,13 +280,21 @@ underlying failure mode, found independently twice):
   "Draft Phase 10 input" below), since fixing a pre-existing test bug was not explicitly
   requested by the governing prompt but was necessary to produce a complete group matrix.
 
-**Group-by-group matrix**: see "Test-group matrix results" in the final report (this
-document is being finalized while the 4th full-suite background run is still in flight;
-the orchestrating session should re-run
-`julia -t 20 --project=. scripts/melitz_test_group_runner_2026-07-31.jl` if a completed run
-is not yet available in `docs/key_results/melitz_test_group_matrix_2026-07-31.txt` --
-partial results through 3 of 4 attempts show 100% pass rate on every group reached, the two
-segfaults above being the only failures found, both now fixed).
+**Group-by-group matrix — FINAL, clean**: `docs/key_results/melitz_test_group_matrix_2026-07-31.txt`,
+regenerated by the orchestrating session after the missing-include fix (`99f4cf2`) landed
+(the version originally committed here was generated one minute *before* that fix and still
+showed its resulting failure — see "Repository migration" above for the full story):
+
+```
+SUMMARY	pass=53	fail=0	error=0
+```
+
+**53 of 53 testset-bearing top-level forms pass. Zero failures, zero errors.** Every group
+reached across the full 8,000+-line suite, including the long real-KNITRO groups (a 313s
+real-D20 CC inner-loop test, a 136s matrix-free nuisance-profile port test, etc.), completed
+cleanly. The two segfaults documented above (own new test, and the pre-existing
+"bundle pool members are independently mutable" test) were the only failures found across
+this and prior attempts, and both are fixed and included in this clean run.
 
 **Flaky/solver-trajectory-sensitive tests**: no test comparing exact optimizer path/iteration
 count was found beyond what already existed pre-session (this consolidation did not add
@@ -428,9 +489,12 @@ difference) -- 6 test groups, all **PASS** live:
 Plus `melitz_tracked_diff_hash` determinism (stable on a clean tree, changes when tracked
 content changes).
 
-## Exact commits made this session
+## Exact commits on this branch (6e803d4..HEAD)
 
 ```
+00c1435 Record clean full-suite test-group matrix (post include-fix): 53/53 pass
+da7ae7f Fix repo-portability bug in production_launcher regression test
+99f4cf2 Fix pre-existing missing include in runtests.jl (reduced_q_switch_geometry.jl)
 53f98fa Fix pre-existing segfault in "bundle pool members are independently mutable" test
 9ce8a18 Phase 9: checkpoint code-version enforcement (resume gate + migration)
 417fbde Phase 8: regression tests for production_launcher.jl refusal/pass-through behavior
@@ -443,78 +507,179 @@ d1b1215 Phase 4.2/4.3 regression tests + Phase 5 allocation-ceiling fix and grou
 fc1e930 Melitz legacy-H removal audit: fix one dormant dense-fallback gap, add structural gates
 ```
 
-Proposed production HEAD = tip of `integration/melitz-production-consolidation-2026-07-31` at
-the time this document is finalized (see the orchestrating session's own final commit list
-for the exact SHA, since this document itself is committed as part of the branch and its own
-commit is the true tip).
+**Proposed production HEAD: `00c1435f1af6f11147d4f3ce0f4fc07498678738`**, on branch
+`integration/melitz-production-consolidation-2026-07-31`, pushed to `origin`
+(`git@github.com:edwardwiles/cdw.git`), worktree `/bbkinghome/edav/cdw/melitz/integration-production-consolidation-2026-07-31`.
 
 ---
 
-# Draft Phase 10 input (raw findings only -- not a decision)
+# Phase 10: Consolidation decision
 
-This section is deliberately NOT a go/no-go recommendation. It lists blockers hit, surprises,
-and anything not fully verified, for the orchestrating session to weigh.
+## Verdict: A. Safe integration complete
 
-**Go-supporting evidence:**
-- Every Phase 6 correctness gate that completed shows bit-identical or ULP-level-identical
-  results between the canonical base and this integration branch, at both D=4 and real
-  D=20/W=80,000, including the campaign's own two final production incumbents
-  (GT=8.849341%/0.272266%).
-- Both ported commits' own regression tests pass live, and this session's own additional
-  tests (mul_G! fusion equivalence, sentinel mutation guard) pass live.
-- Phase 8/9 (new capabilities, not present on base) both have real, passing regression test
-  suites exercising actual git plumbing, not mocks.
+All selected fixes (`358d3d1`, `6b65b1d` — both audit-branch source commits) are integrated
+cleanly with zero textual conflicts, all correctness gates pass at bit-identical or
+ULP-level-identical precision including the campaign's own two final delta=0.5 incumbents, the
+full test suite passes 53/53 groups with zero failures after fixing two pre-existing bugs
+(both confirmed present on the canonical base itself, unrelated to anything ported), and the
+new Phase 8/9 capabilities (launcher, checkpoint versioning) both have real, independently
+re-verified, passing regression suites. **The integration branch is suitable to become the
+canonical production branch.**
 
-**Surprises / things that were NOT expected going in:**
-- Two independent real segfaults (not mere test failures) were found while shaking out the
-  Phase 5 group-test runner -- both the exact same failure mode (calling a `MelitzCCBundle`
-  functor against an un-equilibrated `MelitzMomentOperator`, whose zero-initialized `order`
-  field causes `mul_G!`'s `@inbounds` indexing to read `trade_index[o, 0]`, an out-of-bounds
-  index that corrupts memory instead of throwing `BoundsError`). One was in this session's
-  own new test (fixed). **The other was in PRE-EXISTING test code, unrelated to any ported
-  commit, present on the canonical base commit `6e803d4` itself** -- this is a genuine latent
-  memory-safety landmine in the existing test suite (not the production code path itself,
-  since production code always equilibrates before calling the functor as far as this session
-  found) that this session fixed as a byproduct of needing the suite to complete, but did not
-  go looking for and has not exhaustively searched for other instances of. **The orchestrating
-  session should treat "are there other un-equilibrated-functor-call landmines elsewhere in
-  the test suite or in any campaign script" as an open question**, not resolved by this
-  session's two fixes.
-- The previously-documented `mul_G!` isolated-kernel 1.41x speedup did not cleanly reproduce
-  under this session's own repeated-process wall-clock re-measurement (see Phase 7) -- traced
-  to probable host-level noise on a shared machine rather than a real regression (the
-  correctness-focused reassociation-diff measurement, which does not depend on wall-clock
-  precision, still stands and was not re-litigated), but this is a genuine discrepancy
-  between two independent measurement sessions that the orchestrating session should be aware
-  of rather than assume resolved.
-- `test/melitz/runtests.jl` duplicates `include_melitz.jl`'s own include list by hand rather
-  than calling it — a pre-existing structural fragility (confirmed to have already caused at
-  least one prior silent test-coverage gap) that this session worked around (added new files
-  to both lists) rather than fixed structurally. A future session collapsing this into a
-  single include call would remove an entire class of "forgot to add it to the test file"
-  bugs, but was out of scope for this consolidation.
+This verdict was reached only after independent verification, not by accepting the background
+agent's self-report: I re-ran the Phase 8/9 regression scripts myself and found (and fixed) a
+real bug the agent's own testing had not caught — a hardcoded foreign commit SHA in the
+launcher test that broke the instant the branch was relocated to a different clone (see
+"Repository migration" above) — and I re-ran the full test-group matrix myself after
+discovering the committed one was generated one minute before its own fix landed.
 
-**What could NOT be fully completed/verified by this session:**
-- **The Phase 5 full-suite group-by-group matrix was still running in the background
-  (4th attempt, after fixing both segfaults) at the time this document was drafted.** Three
-  prior attempts each got substantially further than the last before hitting one of the two
-  segfaults (now both fixed); the 4th attempt's live progress at time of writing had passed
-  every group reached with a 100% pass rate and no further crashes, but had not yet reached
-  the end of the (8,374-line) test file. The orchestrating session should check
-  `docs/key_results/melitz_test_group_matrix_2026-07-31.txt` for the completed matrix (written
-  automatically when the runner finishes) and re-run
-  `julia -t 20 --project=. scripts/melitz_test_group_runner_2026-07-31.jl` from this worktree
-  if that file is stale/absent.
-- Phase 7's middle-solve performance comparison is based on only 3 repetitions per branch
-  (deliberately small, since each middle solve costs several seconds and one repetition per
-  branch hit a benign KNITRO "grad_callback returned -502" evaluation-error retry that adds
-  substantial, non-representative variance) -- treated as inconclusive rather than a claimed
-  result, not padded out with more repetitions given this session's time budget.
-- This session did not attempt to search src/melitz for OTHER `@inbounds`-guarded indexing
-  sites that could exhibit the same "reads zero-initialized state as a valid index" failure
-  mode as `mul_G!`'s `order[m,o]` -- the two instances found were both in test code
-  (un-equilibrated operator misuse), not in the indexing logic itself, and fixing the
-  underlying `@inbounds` lack of bounds-checking in production code was judged out of scope
-  (would be a production hot-path change, not requested by the governing prompt, and the
-  ACTUAL production code paths always equilibrate before calling, as far as this session's
-  audit found).
+## Known open items (carried forward, not blockers to this verdict)
+
+1. **Un-equilibrated-functor memory-safety landmine, not exhaustively searched.** Calling a
+   `MelitzCCBundle` functor against a `MelitzMomentOperator` that was never equilibrated at any
+   theta causes `mul_G!`'s `@inbounds` loop to read a zero-initialized `order` entry and index
+   `trade_index[o, 0]` — an out-of-bounds index `@inbounds` does not catch, corrupting memory /
+   segfaulting instead of throwing. Two instances were found and fixed (one in a new test added
+   this session, one pre-existing in the test suite, present on `6e803d4` itself, unrelated to
+   any ported commit). No production code path was found to have this issue (production always
+   equilibrates before calling), but neither this session nor the background agent
+   exhaustively searched for other un-equilibrated-call sites in campaign scripts. **Treat as
+   an open question for a future audit, not resolved.**
+2. **`mul_G!` isolated-kernel wall-clock speedup did not cleanly reproduce.** The audit
+   branch's own correctness-focused measurement (reassociation-diff, not wall-clock) still
+   stands; a repeated-process wall-clock re-measurement this session came out ~10% slower with
+   wide overlapping dispersion, attributed to host-level noise on a shared 208-core machine
+   rather than a real regression, but not proven either way to the same confidence as the
+   correctness result. The whole-solve (~6%) and callback-level (13-26%) speedups are measured
+   independently and are more confidently attributable to the sentinel-allocation fix.
+3. **Middle-solve performance comparison is inconclusive** (n=3 reps/branch, one rep per branch
+   hit a benign KNITRO evaluation-error retry) — not padded out further given session scope.
+4. **`test/melitz/runtests.jl` still hand-duplicates `include_melitz.jl`'s include list** rather
+   than calling it directly — the root cause of both the `lfd_preserving_state.jl` gap
+   (2026-07-30) and this session's `reduced_q_switch_geometry.jl` gap. Worked around (both new
+   files added to both lists) but not fixed structurally; a future session collapsing this to
+   a single include call would remove an entire class of "forgot to add it" bugs.
+5. **`melitz/fullD-delta-star` has advanced past this integration's base** (`20e9f2c` then
+   `64a0e2a` — an independent adversarial economic audit and its own self-correction,
+   concluding the full maintained equilibrium holds at both incumbents under a corrected
+   closure). Neither commit is part of this integration by explicit decision (the audit
+   finding was live and unresolved when this task began; it resolved itself via a concurrent
+   session's correction commit partway through this one). They are compatible with this
+   integration (no file overlap) and should be picked up in the merge below or a follow-up.
+6. **The other, currently-live `sigma3_W500k` five-family campaign** (10 real KNITRO
+   processes, branch `campaign/resource-layout-test-sigma3-W500k-2026-07-30`, a completely
+   different worktree) is unrelated to and unaffected by this consolidation, noted here only
+   so a future reader doesn't mistake its concurrent existence for something this task touched.
+
+## Proposed merge (not performed — informational only, per task instruction not to modify other branches)
+
+`melitz/fullD-delta-star` (tip `64a0e2a`) and this integration branch share `6e803d4` as their
+exact merge-base — a clean two-way divergence, no rebase required to reunite them. Once the
+live campaign no longer needs its current checkout (`trade_robustness_modular`'s main
+worktree, currently occupied by both the checked-out branch and an unrelated orphaned
+diagnostic process), the exact commands to adopt this integration as `melitz/fullD-delta-star`'s
+own new tip are:
+
+```
+git worktree add /path/to/a/fresh/worktree melitz/fullD-delta-star
+cd /path/to/a/fresh/worktree
+git merge --no-ff integration/melitz-production-consolidation-2026-07-31 \
+  -m "Merge legacy-H-removal + perf-audit fixes, repaired test harness, production launcher, and checkpoint-version enforcement (production-consolidation-2026-07-31)"
+```
+
+This does not touch `melitz/fullD-delta-star`'s existing worktree/checkout and can be done in
+a disposable worktree first to confirm no surprises, then fast-forwarded/pushed once reviewed.
+
+---
+
+# Final questions (answered explicitly)
+
+**1. Is there one Git repository or more than one?**
+More than one. `/bbkinghome/edav/cdw` and `/bbkinghome/edav/gravity_robustness/trade_robustness_modular`
+were two independent local clones of the same GitHub remote (`edwardwiles/cdw`), each with
+their own large (~50+) worktree trees, badly out of sync (`cdw`'s local `melitz/fullD-delta-star`
+ref was 50+ commits stale). Per an explicit user decision this session, `cdw` (specifically a
+new `cdw/melitz/` subdirectory) is now established as the sole go-forward home for Melitz
+work; `trade_robustness_modular` remains in use only because its main worktree still holds the
+live checkout of `melitz/fullD-delta-star` (git disallows checking out the same branch twice)
+plus an orphaned 5+ day old diagnostic process, both left untouched.
+
+**2. Which worktree and branch should be canonical production?**
+`/bbkinghome/edav/cdw/melitz/integration-production-consolidation-2026-07-31`, branch
+`integration/melitz-production-consolidation-2026-07-31`, tip `00c1435`.
+
+**3. Which current campaigns used which commits?**
+The D20 delta=0.5 overnight campaign (`melitz/fullD-delta-star`) used through `d0904c7`
+originally; the branch has since advanced to `6e803d4` (overnight continuation), then
+`20e9f2c`/`64a0e2a` (a self-audit and its correction, done by a separate concurrent session,
+not part of this integration's base). The audit branch's work (`358d3d1`/`68aa6be`/`6b65b1d`)
+was a standalone audit exercise, never checked out by any live campaign. A completely separate,
+currently-live `sigma3_W500k` five-family campaign runs from an unrelated worktree/branch
+(`campaign/resource-layout-test-sigma3-W500k-2026-07-30`, tip `2e02c18`).
+
+**4. Did any campaign use `6b65b1d`?**
+No. It only ever existed as the audit branch's tip; no worktree had it checked out as a live
+campaign; this session's background agent cherry-picked (not merged) its source changes onto
+the integration branch.
+
+**5. Which audit/performance commits should be integrated?**
+Both `358d3d1` (source fix + structural gates) and `6b65b1d` (perf: empty-sentinel + `mul_G!`
+fusion) — both cherry-picked cleanly with zero textual conflicts, both correctness-verified.
+`68aa6be` (docs/logs only) was correctly NOT merged (no source dependency).
+
+**6. Are the empty-sentinel and `mul_G!` changes safe under complete solver replay?**
+Yes. Phase 6 gates show bit-identical or ULP-level-identical results at D=4 and real D=20
+(objective, gradient, Hessian, complete inner solve, middle solve, and both cold-verified
+production incumbents), and a dedicated mutation-regression test (200×2 real call-pattern
+exercises, checked object identity via `objectid`) confirms the shared sentinels are never
+mutated, resized, or reassigned by any real call path.
+
+**7. Why did the old test suite fail?**
+Two independent bugs, both pre-existing on the canonical base itself, unrelated to any ported
+commit: (a) `runtests.jl` hand-duplicates `include_melitz.jl`'s include list and was missing
+`reduced_q_switch_geometry.jl`, causing an `UndefVarError` cascade in one testset under any
+full run; (b) a segfault in a pre-existing test that called a `MelitzCCBundle` functor against
+an un-equilibrated operator (see "Known open items" #1). Separately, the originally-reported
+blocker — `Threads.@threads` allocation tests asserting exact-zero bytes — is explained by
+Julia 1.12.6's own scheduler-object allocation (`Task`/`SpinLock`/`Condition`, confirmed via
+`Profile.Allocs`), which scales with `nthreads`, not problem size.
+
+**8. Does the repaired complete test matrix pass?**
+Yes: **53/53 groups pass, 0 fail, 0 error**, confirmed by an independent full rerun after the
+include fix landed (the matrix originally committed in this branch's history was stale by one
+minute and has been superseded — see "Repository migration").
+
+**9. Are there duplicate or shadowed Melitz source definitions?**
+No unsafe shadowing found. `include_melitz.jl` is the single 65-file aggregator;
+`runtests.jl`'s hand-duplicated copy of that list is a confirmed structural fragility (caused
+at least two silent test-coverage gaps now, `lfd_preserving_state.jl` and
+`reduced_q_switch_geometry.jl`) but is not itself a shadowing bug. Every duplicate top-level
+name found (`melitz_recover_lfd` etc.) is legitimate Julia multiple dispatch on different
+concrete argument types, verified via the real runtime method table.
+
+**10. Can a campaign accidentally launch from the wrong worktree today?**
+Yes, easily, for any script not yet updated to call the new launcher — with 2 independent
+repos and roughly 140 total worktrees between them (many stale, some detached HEAD, ahead/behind
+states scattered), nothing previously stopped a script from running against a stale or wrong
+checkout.
+
+**11. Does the new launcher prevent that?**
+Yes, for any campaign script that adopts it: `melitz_production_preflight!` refuses to proceed
+unless the tracked tree is clean (or an explicit override is passed) AND the current commit
+provably descends from the approved base (`melitz_production_approved_base.txt`), verified
+live via real git plumbing — including surviving this session's own independent portability
+fix after finding the original test hardcoded a foreign commit SHA that broke on relocation.
+
+**12. Does checkpoint resume enforce code-version consistency?**
+Yes, for any campaign adopting `melitz_save_checkpoint!`/`melitz_resume_checkpoint`:
+same-commit resume is silent; different-commit resume without `migrate=true` refuses;
+migration requires a `cold_reverify` callback whose failure/exception/non-`Bool` return all
+refuse rather than silently trusting a stale checkpoint. 6 regression-test groups pass live
+against a real second commit in a disposable scratch worktree.
+
+**13. What exact commit should future Melitz campaigns use?**
+**`00c1435f1af6f11147d4f3ce0f4fc07498678738`**, branch
+`integration/melitz-production-consolidation-2026-07-31`, worktree
+`/bbkinghome/edav/cdw/melitz/integration-production-consolidation-2026-07-31` — pending the
+documented (not yet executed) merge into `melitz/fullD-delta-star` to become that branch's own
+tip.
