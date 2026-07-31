@@ -13,6 +13,58 @@ function within_transform_rect(z::AbstractMatrix)
     return lz .- (sum(lz, dims = 2) ./ Dd) .- (sum(lz, dims = 1) ./ Do) .+ (sum(lz) / (Do * Dd))
 end
 
+using LinearAlgebra: qr
+
+"""
+    within_transform_masked(z::AbstractMatrix, mask::AbstractMatrix{Bool}) -> Matrix
+
+Exact two-way (origin, destination) fixed-effects OLS residual of log(z), restricted to the cells
+where `mask` is `true` (an INCOMPLETE/unbalanced panel -- e.g. excluding the domestic diagonal
+`o==d`). `within_transform_rect`'s closed-form row/col/grand-mean formula is only valid for a
+COMPLETE panel; it has no notion of dropping individual cells. This computes the exact OLS
+estimator via an explicit origin+destination dummy-variable regression (QR-solved once, D=20 is
+tiny), which is the same estimator a two-way-FE regression package (e.g. Stata's reghdfe) converges
+to on an unbalanced panel, by construction -- NOT an approximation or an iterative-tolerance result.
+
+Masked-out cells get a residual of exactly `0.0` (excluded from the fit AND from any downstream
+moment/constraint that sums `mask_z .* other`, since `false` mask entries never entered the
+regression). Reduces to `within_transform_rect(z)` on every unmasked cell when `mask` is all-`true`
+(same OLS problem, restated via dummies instead of the closed-form projector).
+
+eltype-generic in `z` (works for `Float64` data or `ForwardDiff.Dual` -- the design matrix is a
+plain `Float64` QR factorization of the fixed dummy structure; solving `F \\ y` for a `Dual` `y` is
+ordinary linear algebra, so this stays differentiable for live (non-data) matrices like `AodPow`).
+"""
+function within_transform_masked(z::AbstractMatrix, mask::AbstractMatrix{Bool})
+    Do, Dd = size(z)
+    size(mask) == (Do, Dd) || throw(DimensionMismatch("within_transform_masked: mask size $(size(mask)) != z size $(size(z))"))
+    lz = log.(z)
+    T = eltype(lz)
+    idx = findall(mask)
+    N = length(idx)
+    N > 0 || throw(ArgumentError("within_transform_masked: mask excludes every cell"))
+    # design: intercept + (Do-1) origin dummies + (Dd-1) destination dummies (drop first level of
+    # each for identification, standard dummy-variable-regression two-way-FE convention)
+    X = zeros(Float64, N, 1 + (Do - 1) + (Dd - 1))
+    y = Vector{T}(undef, N)
+    @inbounds for (i, ci) in enumerate(idx)
+        o, d = ci[1], ci[2]
+        y[i] = lz[o, d]
+        X[i, 1] = 1.0
+        o > 1 && (X[i, 1 + (o - 1)] = 1.0)
+        d > 1 && (X[i, 1 + (Do - 1) + (d - 1)] = 1.0)
+    end
+    F = qr(X)
+    beta = F \ y
+    fitted = X * beta
+    resid = y .- fitted
+    out = zeros(T, Do, Dd)
+    @inbounds for (i, ci) in enumerate(idx)
+        out[ci] = resid[i]
+    end
+    return out
+end
+
 "Square-panel alias, kept for callers that predate the rectangular generalization; bit-identical to within_transform_rect when size(z,1)==size(z,2)."
 withinTransform(z) = within_transform_rect(z)
 

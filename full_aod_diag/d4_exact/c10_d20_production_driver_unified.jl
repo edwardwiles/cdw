@@ -145,6 +145,11 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         h_theta::Float64 = 1e-3, a_halfwidth::Float64 = 30.0,
         skip_cold_retry::Bool = true,
         use_neg_cache::Bool = false, neg_cache_code_version::String = "unified_v1",
+        # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
+        # the same name. `false`/`nothing` defaults reproduce every pre-existing caller's behavior
+        # bit-exactly -- opt-in, not a change to this driver's historical default.
+        exclude_diagonal_gravity::Bool = false,
+        σHat::Union{Nothing,Float64} = nothing,
         destination_sample::Symbol = :exclude_row,
         blas_threads::Union{Nothing,Int} = nothing,   # reconciliation (task §1/Phase 1): same
         # kwarg/semantics as run_polish_checkpointed's -- process-scoped BLAS thread count, set
@@ -195,7 +200,8 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     end
 
     ctx_base = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
-                                      draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
+                                      draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample,
+                                      exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
     # Reconciliation (task §1/Phase 1): the same three campaign-lifetime workspace attaches and
     # BLAS-thread pin that run_polish_checkpointed itself carries -- attached to ctx_base BEFORE
     # build_unified_ctx so a flexible-mode `merge(ctx, (...))` (flexible_theta.jl:make_flexible_

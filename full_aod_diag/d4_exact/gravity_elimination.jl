@@ -44,7 +44,7 @@ function gravity_from_logz(z::AbstractMatrix, ctx; μ::Union{Nothing,Float64} = 
     lambda_g = reshape(ctx.γ.P, (Ddest, ctx.D))'
     Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_use)) .* (lambda_g ./ lambda_g[1,:]')
     AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_use)
-    return gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)
+    return gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false))
 end
 
 "g0 = g_gravity at Aod_theta==1 (z==0) -- the affine offset. `μ` explicit in flexible-theta mode (see gravity_from_logz)."
