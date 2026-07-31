@@ -1,0 +1,14 @@
+direction,phase5_source,m,outcome,classification,Delta,lfd_ok,wall_s,timestamp
+upper,upper_m4,-4,FiniteSolvedVerified,FiniteSolved,0.33125783180765433,true,86.27795886993408,2026-07-31T03:17:56.925
+direction,phase5_source,m,outcome,classification,Delta,lfd_ok,wall_s,timestamp
+lower,lower_m4,-4,FiniteSolvedVerified,FiniteSolved,0.12677942860223262,true,131.4083399772644,2026-07-31T03:18:42.781
+upper,upper_m4,-2,FiniteSolvedVerified,FiniteSolved,0.3495990830792794,true,138.0087161064148,2026-07-31T03:20:15.617
+lower,lower_m4,-2,FiniteSolvedVerified,FiniteSolved,0.12636642864285313,true,120.37537503242493,2026-07-31T03:20:43.892
+lower,lower_m4,-1,FiniteSolvedVerified,FiniteSolved,0.12387107417401742,true,61.42987108230591,2026-07-31T03:21:45.325
+upper,upper_m4,-1,FiniteSolvedVerified,FiniteSolved,0.349801660447276,true,132.8684709072113,2026-07-31T03:22:28.489
+lower,lower_m4,1,FiniteSolvedVerified,FiniteSolved,0.13438350069960836,true,118.56096911430359,2026-07-31T03:23:43.889
+upper,upper_m4,1,FiniteSolvedVerified,FiniteSolved,0.33072127517462424,true,150.632954120636,2026-07-31T03:24:59.125
+lower,lower_m4,2,FiniteSolvedVerified,FiniteSolved,0.1338754950648246,true,113.00095295906067,2026-07-31T03:25:36.893
+upper,upper_m4,2,FiniteSolvedVerified,FiniteSolved,0.3332809006981188,true,71.8247938156128,2026-07-31T03:26:10.952
+lower,lower_m4,4,FiniteSolvedVerified,FiniteSolved,0.1340329575620385,true,115.61595702171326,2026-07-31T03:27:32.511
+upper,upper_m4,4,FiniteSolvedVerified,FiniteSolved,0.3311939451512582,true,152.8878309726715,2026-07-31T03:28:43.843

@@ -1,0 +1,2 @@
+chain,direction,status,n_points,elapsed_wall_s,best_GT,Delta_fresh,nStatus,lfd_ok,A_gravity_resid,q_drift,f_drift,fixed_calib_Delta,fixed_calib_class,nearest_anchor_label,nearest_anchor_Delta,nearest_anchor_class
+phase6_upper_m1,upper,converged,16,1400.6940760612488,8.84934137951131,0.49812250980571005,0,true,1.3322676295501878e-15,0.0,0.0,10.882048996197465,AboveEvaluationCap,reduced_q_pre_switch,1.4343900157756537,FiniteSolved

@@ -1,2 +1,2 @@
 chain,status,n_points,elapsed_wall_s,best_GT,Delta_fresh,nStatus,lfd_ok,A_gravity_resid,q_drift,f_drift,fixedAf_Delta,fixedAf_classification,improvement
-reduced_q_post_switch_lower,max_points,9,69.65485286712646,1.2521405222019721,0.018314727940282067,0,true,-1.1102230246251565e-16,0.0,0.0,955156.7556352133,AboveEvaluationCap,955156.7373204854
+reduced_q_post_switch_lower,bracket_width_converged,21,280.7178409099579,0.40414052220195673,0.20311072753167486,0,true,-7.771561172376096e-16,0.0,0.0,365596.34673568077,AboveEvaluationCap,365596.1436249532
