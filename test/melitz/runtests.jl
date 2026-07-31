@@ -86,6 +86,46 @@ include(joinpath(MELITZ_DIR, "fixed_q_a_middle_loop.jl"))   # 2026-07-30 fixed-q
 include(joinpath(MELITZ_DIR, "production_structural_gate.jl"))   # 2026-07-31 legacy-H removal audit, Phase 14
 
 # ============================================================================
+# Production-consolidation Phase 5 (2026-07-31): bounded allocation ceiling for
+# Threads.@threads-based parallel routines, replacing the old exact-zero assertions.
+#
+# On Julia 1.12.6, `Threads.@threads :static` itself allocates real, per-call scheduler
+# machinery (Profile.Allocs-confirmed: `Base.Threads.SpinLock`, `Base.GenericCondition`, the
+# per-region closure object, `Task`, and `Base.IntrusiveLinkedList{Task}`, exactly
+# `Threads.nthreads()` of each, for ONE `Threads.@threads` region) -- this is true even
+# against the unmodified base commit (`6e803d4`/`d0904c7`), before any change this
+# consolidation branch made (see docs/melitz_perf_audit_2026-07-31.md's own before/after
+# comparison, and this branch's own re-measurement below). It is NOT a per-D/per-W/
+# per-moment-sized allocation: measured live (this consolidation session, `nproc`-backed
+# host, `-t 4/8/20`) via @allocated, post-warmup, repeated calls:
+#
+#   make_melitz_gradient_delta_direct_parallel        D=4 (n=30):  5296 (t=4) / 8912 (t=8) / 19760 (t=20)
+#                                                      D=20(n=798): 8912 (t=8) -- IDENTICAL to D=4 at the same nthreads
+#   make_melitz_gradient_delta_direct_sorted_parallel D=20(n=798): 9968 (t=8)
+#                                                      D=4 (n=30):  9968 (t=8) -- IDENTICAL to D=20 at the same nthreads
+#
+# i.e. for a FIXED kernel, bytes/call is exactly constant across a >25x change in problem
+# size (D 4->20, W 20,000->80,000, n 30->798) and instead scales LINEARLY in
+# `Threads.nthreads()` (slope ~900-1000 bytes/thread, intercept ~1700-2000 bytes,
+# consistent with one `Threads.@threads` region's fixed per-thread task-spawn cost). This is
+# exactly the `Threads.@threads` scheduler overhead documented in
+# docs/melitz_perf_audit_2026-07-31.md finding #4, not a regression from anything ported onto
+# this branch, and not something a source change on this branch could plausibly eliminate
+# (would require replacing `Threads.@threads` codebase-wide with a lower-overhead primitive
+# -- out of scope for this consolidation).
+#
+# `melitz_threads_alloc_ceiling(nthreads)` below is a single conservative formula used by
+# every parallel-routine allocation test in this file: `1200*nthreads + 4000` bytes. Checked
+# against every measured point above, this keeps >=2,800 bytes of headroom at every
+# measured (kernel, size, nthreads) combination while still being tight enough to catch a
+# genuinely reintroduced O(nthreads^2) or O(D)/O(W)-scaling regression. The serial kernels
+# (`make_melitz_gradient_delta_direct_serial`, `make_melitz_gradient_delta_direct_sorted_serial`,
+# and every other non-threaded hot-path routine in this file) are UNCHANGED and remain held to
+# strict, exact bytes==0 -- only `Threads.@threads`-based routines use this ceiling.
+# ============================================================================
+melitz_threads_alloc_ceiling(nthreads::Integer) = 1200 * nthreads + 4000
+
+# ============================================================================
 # 1. Pareto draws
 # ============================================================================
 @testset "Pareto draws" begin
@@ -1090,6 +1130,94 @@ end
         bytes_Gt = @allocated mul_Gt!(g, op, v)
         @test bytes_G == 0
         @test bytes_Gt == 0
+    end
+
+    @testset "mul_G! loop-fusion direct-kernel equivalence (2026-07-31 perf-audit port)" begin
+        # Production-consolidation Phase 4.3/6.1: `mul_G!` (moment_operator.jl) was changed
+        # (audit/melitz-legacy-H-removal-2026-07-31@6b65b1d) from two separate `for s in 1:W`
+        # passes over `u` per origin (one unconditional `u[s] += const_o`, one conditional
+        # `u[s] -= z_power[s,o]*cum[b+1]`) into one fused pass
+        # `u[s] += const_o - (b==0 ? 0.0 : z_power[s,o]*cum[b+1])`. That commit's own
+        # `scripts/perf_audit_mulG_fusion_verify_2026-07-31.jl` verified this at real
+        # D=20/W=80,000 (max abs diff 1.4e-14, max relative 4.9e-16, ~2 ULP) but only as a
+        # standalone script, never wired into the actual regression suite -- this testset
+        # closes that gap with a literal reimplementation of the ORIGINAL two-pass algorithm,
+        # run against the fast D=4 fixture on every test run.
+        #
+        # Expected discrepancy: NOT bit-identical. Floating-point addition is not associative,
+        # so `(a + c) + (b + d)` (fused, one running accumulation into `u[s]`) and
+        # `(a + c)` then separately `+= b` `-= d`... i.e. the original's `u[s] += const_o`
+        # immediately followed by a LATER, separate `u[s] -= z_power[s,o]*cum[b+1]` pass over
+        # the same index -- reassociate the same three terms in a different grouping/order.
+        # This is expected to differ from the fused single-pass sum at the ~1-2 ULP level,
+        # negligible against this codebase's 1e-6-1e-8 KNITRO/LFD tolerances.
+        function mul_G_original_twopass!(u::AbstractVector{Float64}, op::MelitzMomentOperator,
+                                          zeta::Real, mu::AbstractVector{Float64})
+            D = op.D; W = op.W
+            zeta_f = Float64(zeta)
+            @inbounds for s in 1:W
+                u[s] = -zeta_f
+            end
+            trade_index = op.layout.trade_index
+            coef = op.coef; lambda = op.lambda; order = op.order; bin = op.bin
+            cum = zeros(D + 1)
+            z_power = op.sorted_ctx.z_power_original
+            @inbounds for o in 1:D
+                const_o = 0.0
+                cum[1] = 0.0
+                for m in 1:D
+                    d = order[m, o]
+                    mu_od = mu[trade_index[o, d]]
+                    cum[m+1] = cum[m] + mu_od * coef[o, d]
+                    const_o += mu_od * lambda[o, d]
+                end
+                for s in 1:W
+                    u[s] += const_o
+                end
+                for s in 1:W
+                    b = bin[s, o]
+                    b == 0 && continue
+                    u[s] -= z_power[s, o] * cum[b+1]
+                end
+            end
+            mu_link = mu[op.layout.focal_link_index]
+            if mu_link != 0.0
+                ell = op.ell
+                @inbounds for s in 1:W
+                    u[s] -= mu_link * ell[s]
+                end
+            end
+            return u
+        end
+
+        p, eq, cf = FIXTURE.primitives, FIXTURE.equilibrium, FIXTURE.counterfactual
+        z = FIXTURE.z_draws[1:3000, :]
+        Wt = size(z, 1)
+        sctx = build_melitz_sorted_tail_context(z, p.sigma)
+        op = build_melitz_moment_operator(sctx, LAYOUT)
+        melitz_update_moment_operator!(op, p, eq, cf)
+
+        rng = MersenneTwister(2026)
+        u_new = zeros(Wt); u_old = zeros(Wt)
+        worst_abs = 0.0; worst_rel = 0.0
+        for t in 1:20
+            x = randn(rng, LAYOUT.num_moments) .* (t == 1 ? 0.0 : 1.0)   # trial 1: all-zero mu edge case
+            zeta = t == 1 ? 0.0 : randn(rng) * 10
+            mul_G!(u_new, op, zeta, x)
+            mul_G_original_twopass!(u_old, op, zeta, x)
+            d = maximum(abs, u_new .- u_old)
+            rel = d / max(1e-300, maximum(abs, u_old))
+            worst_abs = max(worst_abs, d)
+            worst_rel = max(worst_rel, rel)
+            # per-trial: must be close at ~ULP scale, never grossly different
+            @test isapprox(u_new, u_old; atol=1e-9, rtol=1e-9)
+        end
+        # trial 1 (all-zero mu) is degenerate (both sides reduce to constant -zeta); real
+        # discrepancy only appears once mu != 0, so bound the worst case across all trials
+        # against the ~1e-14-scale reassociation difference documented in the ported commit,
+        # with generous headroom (this fixture's magnitudes differ from the real-D20 case).
+        @test worst_abs < 1e-8
+        @test worst_rel < 1e-8
     end
 
     @testset "Phase 6/7 (scoped prototype): same-origin weighted-Gram block vs dense R'*S*R (D=4, D=10)" begin
@@ -5335,6 +5463,112 @@ end
 end
 
 # ============================================================================
+# Production-consolidation Phase 4.2 (2026-07-31): MelitzCCBundle functor shared
+# empty-sentinel mutation regression guard
+# ============================================================================
+@testset "MelitzCCBundle shared empty-sentinel (_MELITZ_CC_EMPTY_VEC/_MELITZ_CC_EMPTY_MAT) safety" begin
+    # Ported alongside audit/melitz-legacy-H-removal-2026-07-31@6b65b1d: the functor's
+    # default kwargs (g/theta/h/constr/jac) were changed from freshly-allocated-every-call
+    # literal `Float64[]`/`Array{Float64}(undef,0,0)` expressions to shared module-level
+    # `const` singletons. This is only safe because every read of these arguments inside the
+    # functor body is gated behind `length(...) > 0` before any write -- confirmed by
+    # grepping every call site of the functor across src/scripts/test during this
+    # consolidation (no caller passes the sentinel itself back in for a later mutation, and
+    # every write site inside the functor is unreachable when the argument is empty). This
+    # test is a REGRESSION GUARD against a future edit accidentally removing that gate, not
+    # just a restatement of the current (already-verified) logic.
+    if KNITRO_AVAILABLE
+        inner_opt_sentinel = joinpath(dirname(dirname(@__DIR__)), "melitz_inner_loop_options.opt")
+        obj_s, theta0_s = build_melitz_psi_bundle(policy=FullValueEvaluation(), FIXTURE;
+            inner_loop_opt=inner_opt_sentinel, forbid_dense_fallback=true)
+        @test obj_s isa MelitzCCBundle
+
+        @testset "sentinels start empty and are the actual shared const objects" begin
+            @test length(_MELITZ_CC_EMPTY_VEC) == 0
+            @test size(_MELITZ_CC_EMPTY_MAT) == (0, 0)
+        end
+
+        @testset "many real calls omitting every combination of kwargs never resize/alias the sentinels" begin
+            vec_id_before = objectid(_MELITZ_CC_EMPTY_VEC)
+            mat_id_before = objectid(_MELITZ_CC_EMPTY_MAT)
+            grad_calls_before = MELITZ_MATRIX_FREE_GRADIENT_CALLS[]
+            hess_calls_before = MELITZ_MATRIX_FREE_HESSIAN_CALLS[]
+
+            n = obj_s.outer_constr_index
+            rng = MersenneTwister(4242)
+            for _ in 1:200
+                x = randn(rng, n)
+                # objective only (all defaults)
+                obj_s(x)
+                # objective + explicit-empty g/h/constr (same length-0 arrays as default,
+                # but passed as fresh Float64[] literals -- must behave identically)
+                obj_s(x, Float64[]; h=Float64[], constr=Float64[])
+            end
+
+            # The const bindings themselves must still point at length-0 arrays: if any
+            # real call path had ever mutated (push!/resize!) a sentinel reachable via the
+            # default-argument slot, these would now be nonzero length.
+            @test length(_MELITZ_CC_EMPTY_VEC) == 0
+            @test size(_MELITZ_CC_EMPTY_MAT) == (0, 0)
+            # And still literally the same object (not silently reallocated/reassigned by
+            # some code path working around a resize failure).
+            @test objectid(_MELITZ_CC_EMPTY_VEC) == vec_id_before
+            @test objectid(_MELITZ_CC_EMPTY_MAT) == mat_id_before
+            # Objective-only calls must never have taken the gradient/Hessian branch (those
+            # branches are exactly the ones gated on length(g)>0 / length(h)>0 -- if the gate
+            # were ever accidentally inverted or removed, these counters would have moved).
+            @test MELITZ_MATRIX_FREE_GRADIENT_CALLS[] == grad_calls_before
+            @test MELITZ_MATRIX_FREE_HESSIAN_CALLS[] == hess_calls_before
+        end
+
+        @testset "real (nonempty, caller-owned) buffers are still written correctly and are untouched from the sentinels" begin
+            x = randn(MersenneTwister(7), obj_s.outer_constr_index)
+            g = zeros(obj_s.outer_constr_index)
+            nmom = (obj_s.outer_constr_index) * (obj_s.outer_constr_index + 1) ÷ 2
+            h = zeros(nmom)
+            f1 = obj_s(x, g; h=h)
+            @test isfinite(f1)
+            @test any(!=(0.0), g)   # gradient buffer genuinely written
+            @test any(!=(0.0), h)   # Hessian buffer genuinely written
+            # the caller's own buffers are NOT the shared sentinel objects
+            @test g !== _MELITZ_CC_EMPTY_VEC
+            @test h !== _MELITZ_CC_EMPTY_VEC
+            # and the sentinel itself remains untouched by this real, nonempty-buffer call
+            @test length(_MELITZ_CC_EMPTY_VEC) == 0
+        end
+
+        @testset "direct attempted in-place mutation of the sentinel fails loudly (BoundsError), never silently corrupts" begin
+            # Demonstrates defense-in-depth: even if some future code path forgot the
+            # length(...)>0 gate and tried to write into the default-argument slot it was
+            # handed via setindex! at some position, writing into a genuinely zero-length
+            # array raises BoundsError rather than silently succeeding -- neither of these
+            # assertions mutates the real shared singleton (BoundsError is raised before any
+            # write occurs), so it is safe to run inline with the rest of the suite.
+            @test_throws BoundsError (_MELITZ_CC_EMPTY_VEC[1] = 1.0)
+            @test_throws BoundsError (_MELITZ_CC_EMPTY_MAT[1, 1] = 1.0)
+            @test length(_MELITZ_CC_EMPTY_VEC) == 0   # confirm the failed attempts above left it untouched
+            @test size(_MELITZ_CC_EMPTY_MAT) == (0, 0)
+
+            # NOTE (important, do NOT "fix" this into a live test): `push!`/`resize!` on
+            # `_MELITZ_CC_EMPTY_VEC` would NOT throw -- Julia's `const` binds only the
+            # NAME, not the mutability of the referenced Vector's contents/length. Actually
+            # calling `push!(_MELITZ_CC_EMPTY_VEC, ...)` here would permanently corrupt the
+            # shared singleton for the remainder of this process (every other test and any
+            # production code sharing this Julia session afterward), so it is deliberately
+            # exercised on an independent COPY instead -- this documents the real invariant
+            # (behavioral: every functor use-site is gated by `length(...) > 0`, never a
+            # language-level guarantee) without risking corrupting global state.
+            vec_copy = copy(_MELITZ_CC_EMPTY_VEC)
+            push!(vec_copy, 1.0)
+            @test length(vec_copy) == 1          # push! on a copy is unremarkable...
+            @test length(_MELITZ_CC_EMPTY_VEC) == 0   # ...and leaves the real shared const provably untouched
+        end
+    else
+        @warn "Skipping MelitzCCBundle sentinel safety test: KNITRO not available"
+    end
+end
+
+# ============================================================================
 # 2026-07-28 outer-search step-control/robustness continuation (governing prompt Phase 0):
 # "make 20-thread behaviour the explicit Melitz default." `melitz_thread_startup_report`
 # (warn-or-throw below a required thread count) and `melitz_note_explicit_gradient_backend_choice`
@@ -6378,13 +6612,23 @@ end
 
         # parallel plain backend, if multiple threads are available
         if Threads.nthreads() > 1
+            # Production-consolidation Phase 5 (2026-07-31): this used to assert exact
+            # `bytes == 0`. On Julia 1.12.6, `Threads.@threads :static` (used internally by
+            # this backend) itself allocates real per-call scheduler machinery (Task/
+            # SpinLock/Condition/linked-list -- see the ceiling formula's own docstring
+            # above), confirmed present identically on the unmodified base commit, so exact
+            # zero is not an achievable (or meaningful) bound for this specific backend.
+            # Replaced with a bounded ceiling that scales with `Threads.nthreads()` but
+            # asserts NO D-/W-/moment-sized scaling (checked immediately below).
             g_plain_par = zeros(n_d4b)
             gfun_plain_par = make_melitz_gradient_delta_direct_parallel(1e-4)
             gfun_plain_par(g_plain_par, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)   # warmup
             b1 = @allocated gfun_plain_par(g_plain_par, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)
             b2 = @allocated gfun_plain_par(g_plain_par, theta0_d4b, ctx_d4b, obj_d4b, x_d4b)
-            @test b1 == 0
-            @test b2 == 0
+            ceiling = melitz_threads_alloc_ceiling(Threads.nthreads())
+            @test b1 <= ceiling
+            @test b2 <= ceiling
+            @test b1 == b2   # residual is a fixed per-call constant, not growing across repeated calls
             @test isapprox(g_plain_par, g_sorted; rtol=1e-8)
         end
     end
@@ -6438,13 +6682,23 @@ end
             @test b2_9 == 0
 
             if Threads.nthreads() > 1
+                # Production-consolidation Phase 5 (2026-07-31): same relaxation as the D=4
+                # plain-parallel test above -- see `melitz_threads_alloc_ceiling`'s own
+                # docstring. This real D=20/W=80,000 measurement is exactly the size-
+                # independence check that formula's justification relies on: this branch's
+                # own re-measurement found `make_melitz_gradient_delta_direct_sorted_parallel`
+                # allocates IDENTICAL bytes/call at D=4 and real D=20 for a fixed
+                # Threads.nthreads() (9968 bytes at nthreads=8 in both cases) -- confirming
+                # the residual is nthreads-scaling only, not D/W/moment-count-scaling.
                 gfun9p = make_melitz_gradient_delta_direct_sorted_parallel(1e-4)
                 gbuf9p = zeros(n9)
                 gfun9p(gbuf9p, theta09, ctx9, obj9, x9)   # warmup
                 b1_9p = @allocated gfun9p(gbuf9p, theta09, ctx9, obj9, x9)
                 b2_9p = @allocated gfun9p(gbuf9p, theta09, ctx9, obj9, x9)
-                @test b1_9p == 0
-                @test b2_9p == 0
+                ceiling9 = melitz_threads_alloc_ceiling(Threads.nthreads())
+                @test b1_9p <= ceiling9
+                @test b2_9p <= ceiling9
+                @test b1_9p == b2_9p   # fixed constant, not growing across repeated calls at this (much larger) problem size
                 @test isapprox(gbuf9, gbuf9p; rtol=1e-8)
             end
         end
