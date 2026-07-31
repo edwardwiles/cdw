@@ -4,13 +4,29 @@ Branch: `architecture/profile-all-destination-scales-2026-07-31`
 Base: `production/fullA-exact @ cd17235` (2018 ICIO pi/tau update; see master report for why this
 base was chosen over `origin/production/fullA-exact`'s current tip).
 
-**Status of this document: PARTIAL.** Every claim below is labeled `[VERIFIED]` (re-derived from
-and cross-checked against actual code, not assumed) or `[UNVERIFIED — needs code check]`. Sections
-2.1 core invariance and the homogeneity exponent are VERIFIED against three independent files.
-Sections 2.2 (full recovery), 2.3 (comparison theorem), and 2.4 (identification) are stated
-formally but their production-code cross-checks (H_EE kernel, screens, CompressedFactual target
-vector construction beyond the France column) are NOT yet complete — see
-`FULL_TO_PROFILED_PIPELINE_CALL_GRAPH_2026-07-31.md` for what remains.
+**Status of this document: PARTIAL, with §2.1 now NUMERICALLY VERIFIED.** Every claim below is
+labeled `[VERIFIED]` (re-derived from and cross-checked against actual code, not assumed),
+`[NUMERICALLY VERIFIED]` (executed against real production code at a real D=4 point, not just
+derived on paper — see `test_profiled_destination_scale_invariance_2026-07-31.jl`), or
+`[UNVERIFIED — needs code check]`.
+
+**D=4 numerical gate (§2.1a/b/c and the exact exponent) — ALL PASS, machine precision, real
+production code, run 2026-07-31**: `full_aod_diag/d4_exact/test_profiled_destination_scale_invariance_2026-07-31.jl`
+calls the actual live `ctx.obj.moments!` (`EK_moments_gammanorm_directgp!`) and
+`gravity_elimination.jl::gravity_from_logz` at the genuine calibration point `ctx.θ0_up`
+(D=4, W=8000, μ=1/6, σ=2.5, baseIndex=2), applies an explicit κ=1.7 rescale to one destination
+column's `Aod_theta`, and checks: winner identity (0/8000 mismatches), per-draw share-ratio
+invariance (max diff 4.1e-18), the exact `κ^{μ(σ-1)}` homogeneity of `M_d(ω)` (max diff 6.7e-16 —
+genuinely machine precision, not merely "close"), and gravity-residual invariance (diff ~1e-18,
+both residuals already ~0 at calibration as expected). Repeated for both an arbitrary destination
+and the baseIndex ("France-analog") destination, both pass identically. This is real numerical
+confirmation of the theory's load-bearing claims, not just a derivation — see full run output in
+`key_results/` when pushed to Dropbox.
+
+Sections 2.2 (full recovery) and 2.3 (comparison theorem) are stated formally with the exponent now
+numerically confirmed, but the *recovery construction itself* (an actual inner solve + comparison,
+requiring KNITRO) has not been executed — see status note at the end of this document. Section 2.4
+(identification) is a proof sketch only.
 
 ## 0. Notation, grounded in actual code
 
@@ -87,7 +103,7 @@ gravity-pivot convenience).
 
 ## 2. Formal proof
 
-### 2.1 Full → reduced: winner, share, and objective invariance under a destination-column gauge shift `[VERIFIED]`
+### 2.1 Full → reduced: winner, share, and objective invariance under a destination-column gauge shift `[VERIFIED + NUMERICALLY VERIFIED]`
 
 **Claim.** Fix destination `d` and multiply the entire column `A_{·,d}` (every origin `o`) by a
 common positive scalar `κ_d`, holding every other destination's column and every other model
@@ -176,7 +192,7 @@ is restricted to the *retained* (non-anchor) coordinates — i.e. `argmax` over 
 are `κ_d`-invariant by (b); nothing else the objective depends on (gravity, other destinations'
 moments, France's ratio moment structure — itself a ratio, same argument) references `κ_d`. ∎
 
-### 2.2 Reduced → full: exact recovery scalar `[VERIFIED exponent; recovery construction stated but not yet coded]`
+### 2.2 Reduced → full: exact recovery scalar `[exponent NUMERICALLY VERIFIED; recovery construction stated but not yet coded]`
 
 Given a feasible reduced pair `(Ã, F)` at gauge `Ã_{j_d,d} = A*_{j_d,d}` (anchor fixed to its
 calibration value, per the task's stated preference and this document's §2.1 derivation showing the
@@ -193,6 +209,19 @@ This is the code-grounded replacement for the task brief's speculative `γ_d^{-1
 (§1.2/§2.2): the correct exponent is `-1/(μ(σ-1))`, using the SAME `μ(σ-1)` established in §0/§2.1,
 not `σ-1` alone. `γ_d` itself (the working-gauge normalization factor before recovery,
 `γ̃_d := E_F[M_d(Ã)]`) relates to `c_d` by `c_d = γ̃_d^{-1/(μ(σ-1))}`.
+
+**The exponent `μ(σ-1)` itself is now numerically confirmed** (see the §2.1 gate above, Test C:
+`M1/M0` matches `κ^{μ(σ-1)}` to 6.7e-16 at a real D=4 point) — the only unverified piece of this
+formula is the *recovery construction* (applying `c_d` and checking the result is a genuine
+gamma-normalized point), not the exponent. The same gate's Test E is directly relevant here: at
+genuine calibration (`θ0_up`), `mean(M_d(ω))/denom[d] = 1.0018`, not exactly `1` — i.e. the
+production calibration point is only *approximately* gamma-normalized (plausibly finite-`W`
+Monte Carlo noise in how `θ0_up` was built, or a slightly different calibration criterion than
+literal `E_F[M_d]=1`), not exactly at the normalized point this theory's recovery formula targets.
+This does not invalidate the recovery construction (which is exact given the *actual* `E_F[M_d(Ã)]`
+value, whatever it is, not assumed to be exactly 1 beforehand) but means a numerical recovery test
+should check the recovered point lands at gamma-normalization to the *same* tolerance the
+calibration itself achieves, not literal machine-zero.
 
 **What remains unverified**: that every retained absolute share numerator equals `λ_od` after this
 rescale (should follow immediately from §2.1(b)'s ratio-invariance plus the `E_F[M_d]=1`
@@ -217,7 +246,7 @@ listed as not-yet-attempted work, not a passed gate.
 ### 2.4 Only one anchor per destination `[proof sketch, no code guard implemented yet]`
 
 Omitting two coordinates `(o_1,d)` and `(o_2,d)` from destination `d`'s free vector (instead of
-one) under-determines the system: by §2.1(b) only the six... only the *ratios* `λ_od` are pinned by
+one) under-determines the system: by §2.1(b) only the *ratios* `λ_od` are pinned by
 the retained factual-share moments, and `Σ_o λ_od = 1` gives exactly one linear relation among the
 omitted coordinates' implied shares — insufficient to separate two omitted origins' individual
 `λ_{o_1,d}` and `λ_{o_2,d}` (only their **sum** `λ_{o_1,d}+λ_{o_2,d}` is identified, matching the
@@ -229,20 +258,29 @@ implemented as a runtime assertion** — tracked as open work.
 
 ## 3. What Phase 1 established vs. what remains
 
-**Established, code-grounded:**
+**Established, code-grounded AND numerically verified (real D=4 run, machine precision):**
 - Fixed-theta scope matches current production default (no gating decision needed for §6's
   fixed-vs-flexible fork; production is already fixed-theta).
 - The destination-column gauge freedom is a genuine, exact invariance of winner identities and
   share ratios, with the exact homogeneity exponent `μ(σ-1)` pinned down from three independent
-  code sources.
-- `ρ_f = gp` (identity), correcting the task brief's unverified `gp^σ` aside.
+  code sources AND confirmed numerically to 6.7e-16 against real production code
+  (`test_profiled_destination_scale_invariance_2026-07-31.jl`), for both an arbitrary destination
+  and the baseIndex ("France-analog") destination.
+- The gravity zero-contribution identity (§2.1c) — confirmed both analytically and numerically
+  (diff ~1e-18).
+- `ρ_f = gp` (identity), correcting the task brief's unverified `gp^σ` aside. (Code-grounded, not
+  independently re-derived numerically this session — see master report follow-ups.)
 - The gravity pivot (single global constraint) and the destination-anchor reduction (19 per-column
   gauges) are mathematically independent operations that compose, not the same mechanism.
+- Empirical, informational finding (D=4 gate Test E): genuine calibration (`θ0_up`) sits only
+  *approximately* at gamma-normalization (`E_F[M_d]/denom[d] = 1.0018`, not exactly 1) — relevant
+  to how tightly any future recovery-check gate should be toleranced.
 
 **Not established — do not treat as passed gates:**
-- §2.2's full-recovery construction is derived on paper from verified primitives but not yet
-  implemented or numerically checked against a real `CompressedFactual`/target vector.
-- §2.3's comparison theorem is unexecuted (no D=4 numbers).
+- §2.2's full-recovery *construction* (applying `c_d` and rescaling — the exponent itself is now
+  confirmed, but the construction hasn't been coded or run) is not yet implemented or numerically
+  checked against a real `CompressedFactual`/target vector.
+- §2.3's comparison theorem requires an actual inner (KNITRO) solve and is unexecuted.
 - §2.4's structural guard is unimplemented.
 - The `:powered_aspace` (flexible-theta) z↔a interaction with the anchor gauge is out of scope per
   task §6's fixed-theta-first instruction and not analyzed here.
