@@ -1,0 +1,53 @@
+=== git ===
+melitz/fullD-delta-star
+6e803d43875e73deb3cf8acf3c04e8febd808e53
+6e803d4 Overnight continuation: exhaust Phase-1 welfare boundaries + finite cutoff-anchor poll, delta=0.5 (2026-07-31)
+d0904c7 Complete D20 profiled-A production campaign at delta=0.5 (2026-07-31)
+cddf3ca Fix reduced_q_post_switch anchor constraint-system bug in the production driver
+74f0d23 Launch D20 profiled-A production campaign at delta=0.5 (2026-07-31)
+169f77d Implement and wire in the focal-link O(W*D)->O(W+D) prefix-sum optimization (2026-07-30)
+=== git diff --stat (uncommitted) ===
+?? docs/key_results/final_qpoll_extension_2026-07-31/
+?? docs/key_results/melitz_final_incumbent_full_equilibrium_audit_2026-07-31/
+?? docs/key_results/melitz_negswitch_followup3_cutoff_gaps_2026-07-30.csv
+?? docs/key_results/tmp_opt_post_consolidation_2026-07-28/
+?? full_aod_diag/batch_out_v2/
+?? melitz_pathological_solve_archive/
+?? results/fullA_d4/thread_matrix/
+?? scripts/fixedqA_experiment_state_2026-07-30.jls
+?? scripts/melitz_audit_acr_quicklook_2026-07-31.jl
+?? scripts/melitz_d20_profiledA_continuation_state_2026-07-30.jls
+?? scripts/melitz_final_ext_branch_repair_2026-07-31.jl
+?? scripts/melitz_final_ext_extract_anchors_2026-07-31.jl
+?? scripts/melitz_final_ext_phase2_line_expand_2026-07-31.jl
+?? scripts/melitz_independent_full_equilibrium_audit_2026-07-31.jl
+?? scripts/melitz_phase2_row_states_2026-07-30.jls
+?? scripts/melitz_phase6_job_batch_2026-07-30.jls
+?? sequential_gravity/batch_out_d4x_continuation/
+?? sequential_gravity/batch_out_gravityseed/
+?? sequential_gravity/batch_out_phase5_multistart_20260718_065235/
+?? sequential_gravity/batch_out_v2/
+?? sequential_gravity/batch_out_w80000/
+?? sequential_gravity/delta_star_schedule_full_cm_W80000_out.jld2
+?? sequential_gravity/head_to_head/
+?? sequential_gravity/run_phase5_start0_20260718_065235.log
+?? sequential_gravity/run_phase5_start1_20260718_065235.log
+?? sequential_gravity/run_phase5_start2_20260718_065235.log
+?? sequential_gravity/run_phase5_start3_20260718_065235.log
+?? sequential_gravity/run_phase5_start4_20260718_065235.log
+?? sequential_gravity/run_profiled_production_phase5_multistart.jl
+?? sequential_gravity/verify_batch_solutions_v2.log
+=== julia ===
+julia version 1.12.6
+=== env ===
+OPENBLAS_NUM_THREADS= OMP_NUM_THREADS=
+=== checkpoints audited ===
+upper: docs/key_results/overnight_qpoll_delta0p5_2026-07-31/phase5/checkpoints/phase6_upper_m1.jls
+84906e26c7133181ca795c52702cf2a6f90895ba35a7102aabb06427278016c2  docs/key_results/overnight_qpoll_delta0p5_2026-07-31/phase5/checkpoints/phase6_upper_m1.jls
+lower: docs/key_results/overnight_qpoll_delta0p5_2026-07-31/phase5/checkpoints/phase6_lower_m-1.jls
+a451f386e78843cfbb892b8cffd4dc696f595fcad33d6346b0d3415b251e501d  docs/key_results/overnight_qpoll_delta0p5_2026-07-31/phase5/checkpoints/phase6_lower_m-1.jls
+=== real data fingerprint ===
+80d82390b6cf6f9a0208d59d14f4d0cfb16b64787cde4d2377087482c08e80c9  real_data/noah_D20/pi.csv
+348f06339f9b430cf24a41cce516013c4726042e8a999861b74ffaa60d96bd3f  real_data/noah_D20/L.csv
+54c3f74803c4e797386094f2a04376e6b886cd02d22224b251e470b7b6c0ffa5  real_data/noah_D20/tau.csv
+13f417e609aac66ae47381046f46e19d77b208b74f2d2d61088b1796afef5422  real_data/noah_D20/countries.csv

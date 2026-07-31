@@ -1,0 +1,33 @@
+incumbent,GT_reported_pct,Delta_star,check,category,result,value,tolerance
+upper,8.84934137951131,0.49812250980571,fresh_cold_solve_matches_checkpoint,imposed,PASS,0.0,1e-6
+upper,8.84934137951131,0.49812250980571,LFD_ok_nonneg_normalized,imposed,PASS,sum=1.0 min=3.5e-160 max=1.6e-3,gate
+upper,8.84934137951131,0.49812250980571,divergence_recompute_vs_reported,imposed,PASS,2.01e-14,1e-6
+upper,8.84934137951131,0.49812250980571,trade_share_D2_moments,imposed,PASS,8.44e-15,1e-6
+upper,8.84934137951131,0.49812250980571,trade_share_adding_up,implied,PASS,7.06e-8,1e-6
+upper,8.84934137951131,0.49812250980571,cutoff_zero_profit,algebraic,PASS,1.25e-15,1e-8
+upper,8.84934137951131,0.49812250980571,cutoff_support_feasibility,imposed,PASS,min_dom=0.0246 min_exp=0.0837,>=0
+upper,8.84934137951131,0.49812250980571,focal_link_moment,imposed,PASS,1.07e-14,1e-6
+upper,8.84934137951131,0.49812250980571,autarky_cutoff_normalization_bigfloat,algebraic,PASS,1.85e-16,1e-8
+upper,8.84934137951131,0.49812250980571,autarky_Nprime_crosscheck,near-tautological,PASS (caveat: near-tautological given zhat'=1 + Pareto(1,.) support),1.64e-14,1e-6
+upper,8.84934137951131,0.49812250980571,price_index_baseline_all_D,implied,PASS,7.06e-8,1e-6
+upper,8.84934137951131,0.49812250980571,income_expenditure_data,data-integrity,PASS,1.43e-5,loose
+upper,8.84934137951131,0.49812250980571,A_gravity,algebraic,PASS,2.24e-15,1e-8
+upper,8.84934137951131,0.49812250980571,f_gravity,algebraic,PASS,6.12e-16,1e-8
+upper,8.84934137951131,0.49812250980571,ACR_sufficient_statistic_crosscheck,REQUIRED-BUT-OMITTED,FAIL,6.819060 pp,~1e-14 (documented Gate A2 standard)
+upper,8.84934137951131,0.49812250980571,free_entry_baseline_nonfocal_plausibility,not-required-but-diagnostic,FLAG,f_entry range [0.33,85.1] (257x),n/a (no target exists)
+lower,0.272265522201953,0.113763831227061,fresh_cold_solve_matches_checkpoint,imposed,PASS,0.0,1e-6
+lower,0.272265522201953,0.113763831227061,LFD_ok_nonneg_normalized,imposed,PASS,sum=1.0 min=3.9e-271 max=7.6e-5,gate
+lower,0.272265522201953,0.113763831227061,divergence_recompute_vs_reported,imposed,PASS,5.08e-14,1e-6
+lower,0.272265522201953,0.113763831227061,trade_share_D2_moments,imposed,PASS,2.91e-14,1e-6
+lower,0.272265522201953,0.113763831227061,trade_share_adding_up,implied,PASS,7.06e-8,1e-6
+lower,0.272265522201953,0.113763831227061,cutoff_zero_profit,algebraic,PASS,1.39e-15,1e-8
+lower,0.272265522201953,0.113763831227061,cutoff_support_feasibility,imposed,PASS,min_dom=0.0027 min_exp=0.0837,>=0 (thin domestic margin)
+lower,0.272265522201953,0.113763831227061,focal_link_moment,imposed,PASS,1.10e-13,1e-6
+lower,0.272265522201953,0.113763831227061,autarky_cutoff_normalization_bigfloat,algebraic,PASS,2.84e-16,1e-8
+lower,0.272265522201953,0.113763831227061,autarky_Nprime_crosscheck,near-tautological,PASS (caveat: near-tautological given zhat'=1 + Pareto(1,.) support),1.62e-14,1e-6
+lower,0.272265522201953,0.113763831227061,price_index_baseline_all_D,implied,PASS,7.06e-8,1e-6
+lower,0.272265522201953,0.113763831227061,income_expenditure_data,data-integrity,PASS,1.43e-5,loose
+lower,0.272265522201953,0.113763831227061,A_gravity,algebraic,PASS,2.29e-15,1e-8
+lower,0.272265522201953,0.113763831227061,f_gravity,algebraic,PASS,1.11e-15,1e-8
+lower,0.272265522201953,0.113763831227061,ACR_sufficient_statistic_crosscheck,REQUIRED-BUT-OMITTED,FAIL,1.758016 pp,~1e-14 (documented Gate A2 standard)
+lower,0.272265522201953,0.113763831227061,free_entry_baseline_nonfocal_plausibility,not-required-but-diagnostic,FLAG,f_entry range [0.33,85.2] (257x),n/a (no target exists)

@@ -1,0 +1,35 @@
+equation,value,tolerance_or_note
+GT_model_reported,8.84934137951131,checkpointed
+GT_model_recomputed,8.84934137951131,independent
+GT_ACR_data_anchored,2.0302810386613745,independent; INVARIANT to gamma_prime search
+GT_ACR_predicted_share,2.0302810386613523,independent
+abs_GT_model_minus_GT_ACR_data,6.819060340849935,percentage points
+max_trade_share_residual,8.43769498715119e-15,independent D^2 loop
+max_cutoff_zero_profit_residual,1.2490009027033011e-15,independent forward formula
+focal_f_entry_baseline,2.645567540971803,recovered (definitional)
+f_entry_autarky,2.645567540971793,recovered (definitional)
+max_abs_baseline_price_index_residual,7.057999784620961e-8,independent D loop
+N_prime_market_clearing,0.7864449144595161,independent
+N_prime_price_index,0.7864449144595033,independent
+N_prime_diff_rel,1.6375701398619405e-14,independent -- KEY omitted cross-check
+autarky_cutoff_residual_bigfloat,1.850435664447981e-16,BigFloat; should be ~0 by construction
+gravity_residual_A_independent,-2.239528007486058e-15,own withinTransform
+gravity_residual_f_independent,-6.123573870198129e-16,own withinTransform
+max_abs_income_resource_residual_data,1.432476873119981e-5,data row-sum vs w*L
+max_abs_income_resource_residual_predicted,1.4324768796925014e-5,model-predicted row-sum vs w*L
+LFD_ESS,40188.60642263708,effective sample size
+LFD_min_weight,3.50898904221901e-160,
+LFD_max_weight,0.001607844928009383,
+LFD_my_primal_divergence,0.4981225098057301,independent recompute
+LFD_reported_Delta,0.49812250980571,
+min_domestic_log_cutoff,0.024552987732416858,feasible iff >=0
+min_export_minus_domestic_log_cutoff,0.08371854708277518,feasible iff >=0
+check_residual_gamma_baseline_max,7.057999784620961e-8,REFERENCE (existing code)
+check_residual_free_entry_baseline_max,2.220446049250313e-16,REFERENCE
+check_residual_free_entry_autarky,0.0,REFERENCE
+check_residual_market_clearing_autarky,-1.3855583347321954e-13,REFERENCE
+check_N_prime_diff_rel,1.5387512521116523e-14,REFERENCE
+check_residual_gamma_autarky,9.103828801926284e-15,REFERENCE
+check_residual_autarky_cutoff,1.7763568394002505e-15,REFERENCE
+check_gravity_residual_A,-2.583870617467454e-15,REFERENCE
+check_gravity_residual_f,-4.969982758673552e-16,REFERENCE
