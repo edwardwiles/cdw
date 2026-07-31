@@ -173,9 +173,18 @@ trusted path, then wire in" convention, touching zero existing production files:
   cells confirmed fixed under every composed point; a fully-composed point feeds the live
   `moments!` cleanly end-to-end.
 
-These two gates are the first real evidence (not just derivation) that the composed
-anchor-reduction + gravity-pivot reparameterization is internally consistent against production
-code. Recommended next steps §3 below (recovery scalar) is the next concrete step in progress.
+- **§16/theory §2.2 exact full-A recovery** (`recover_full_a_2026-07-31.jl`): `destination_M_d`
+  (reconstructs per-draw `M_d(ω)` from the live `moments!` output) and
+  `recover_gamma_normalized_full_A` (`c_d = γ̃_d^{-1/(μ(σ-1))}` rescale). D=4 gate
+  (`test_recover_full_a_2026-07-31.jl`, all pass): built a genuinely non-gamma-normalized working
+  point (`γ̃_d` scattered `0.976`–`1.029`), confirmed recovery drives `γ̃_d → 1` to **2.2e-16**
+  (exact) for every destination, while winner identities and per-draw share ratios are unchanged to
+  `~1e-16`–`1e-19`.
+
+These three gates are real evidence (not just derivation) that the composed anchor-reduction +
+gravity-pivot reparameterization, and the recovery map back to the full formulation, are internally
+consistent against production code at machine precision. This closes theory §2.2's previously
+open "recovery construction unexecuted" gap.
 
 ## 5. Recommended next steps (in dependency order)
 
@@ -184,11 +193,12 @@ code. Recommended next steps §3 below (recovery scalar) is the next concrete st
    consolidation question still applies to *other* sections (screens, `OperatorPsiBundle`
    construction, `outer_coordinate_layout.jl` generalization) that must read the FULL reconstructed
    `AodPow`, not just the anchor bookkeeping — still open for those.
-2. Resolve the `gravity_sample_mask` reuse-vs-reimplement question once the concurrent Brazil-Korea
+2. ~~Implement §16's exact full-A recovery scalar~~ — done, D=4 gate passing, see §4 above.
+3. Resolve the `gravity_sample_mask` reuse-vs-reimplement question once the concurrent Brazil-Korea
    task's branch is stable (own-cell + Brazil→Korea eligibility masking is needed by both efforts).
-3. Implement §16's exact full-A recovery scalar `c_d` (theory §2.2) with a D=4 gate — in progress.
-4. Execute theory §2.3 (comparison theorem) — requires an actual KNITRO inner solve, not yet
-   attempted; larger lift than (3).
+4. Execute theory §2.3 (comparison theorem) — requires an actual KNITRO inner solve (not just
+   direct `moments!` evaluation, which is all sections 6/7/16's gates needed), a materially larger
+   lift than anything done so far this session.
 5. Generalize `OuterCoordinateLayout`/`outer_dim`/`decode_outer_unified`/`reduce_to_w_unified`/
    `layout_fingerprint` (Topic 1) and `free_idx` construction in all 4 context builders (Topic 10)
    to actually wire the relative-A layer into a real KNITRO-facing outer vector — the pieces built
@@ -204,7 +214,7 @@ code. Recommended next steps §3 below (recovery scalar) is the next concrete st
 
 ```
 THEORY =
-    partial_verified | core_invariance_and_exponent_NUMERICALLY_confirmed_D4 | gravity_zero_contribution_confirmed_analytically_and_numerically | recovery_construction_and_comparison_theorem_unexecuted
+    partial_verified | core_invariance_exponent_gravity_zero_contribution_AND_recovery_construction_all_NUMERICALLY_confirmed_D4 | comparison_theorem_unexecuted_requires_KNITRO
 
 ANCHORS =
     France:France
@@ -247,16 +257,20 @@ OUTER_GRADIENT =
     gp:not_implemented
 
 FULL_RECOVERY =
-    gamma_one_all_destinations:not_run
-    all_full_shares:not_run
-    all_anchor_shares:not_run
+    gamma_one_all_destinations:pass_D4 (2.2e-16, non-focal destinations + baseIndex both tested;
+        real D=20/all-19-destinations not yet run)
+    all_full_shares:pass_D4 (share ratios unchanged by recovery, ~1e-16-1e-19; CompressedFactual
+        object itself not yet touched, see theory doc caveat)
+    all_anchor_shares:not_run (algebraically immediate from Sigma_o lambda_od=1 but not
+        numerically checked against a CompressedFactual target vector)
     France_autarky_ratio:not_run
-    gravity:not_run
-    objective:not_run
+    gravity:pass_D4 (via the gravity-pivot-composition gate, ~1e-18)
+    objective:not_run (requires an actual inner solve, not just moments! evaluation)
 
 EQUIVALENCE =
-    D4:partial (coordinate-layer and gravity-pivot-composition sub-gates pass; full inner-solve
-        equivalence, theory section 2.3, not yet attempted)
+    D4:partial (coordinate-layer, gravity-pivot-composition, AND recovery sub-gates all pass at
+        machine precision; full inner-solve equivalence, theory section 2.3, not yet attempted --
+        this is the one remaining piece needed to call D4 fully pass)
     D20_W100k:not_run
     D20_W500k:not_run
     all_families:not_run
@@ -268,5 +282,5 @@ PRODUCTION_DEFAULT =
     full_gamma_normalized_reference
 
 BRANCH_STATUS =
-    incomplete_theory_audit_and_coordinate_layer_done_moment_system_and_beyond_not_started
+    incomplete_theory_audit_coordinate_layer_and_recovery_done_moment_system_and_beyond_not_started
 ```

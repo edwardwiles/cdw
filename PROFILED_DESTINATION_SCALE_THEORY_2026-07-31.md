@@ -192,7 +192,7 @@ is restricted to the *retained* (non-anchor) coordinates — i.e. `argmax` over 
 are `κ_d`-invariant by (b); nothing else the objective depends on (gravity, other destinations'
 moments, France's ratio moment structure — itself a ratio, same argument) references `κ_d`. ∎
 
-### 2.2 Reduced → full: exact recovery scalar `[exponent NUMERICALLY VERIFIED; recovery construction stated but not yet coded]`
+### 2.2 Reduced → full: exact recovery scalar `[NUMERICALLY VERIFIED, construction and exponent both]`
 
 Given a feasible reduced pair `(Ã, F)` at gauge `Ã_{j_d,d} = A*_{j_d,d}` (anchor fixed to its
 calibration value, per the task's stated preference and this document's §2.1 derivation showing the
@@ -223,10 +223,20 @@ value, whatever it is, not assumed to be exactly 1 beforehand) but means a numer
 should check the recovered point lands at gamma-normalization to the *same* tolerance the
 calibration itself achieves, not literal machine-zero.
 
+**Recovery construction now executed and confirmed, D=4, real production code**
+(`recover_full_a_2026-07-31.jl` / `test_recover_full_a_2026-07-31.jl`, run 2026-07-31): built a
+genuinely non-gamma-normalized working point (`γ̃_d` scattered `0.976`–`1.029` across 4
+destinations, from a real random perturbation of the relative-A coordinates), applied the `c_d`
+formula above, and confirmed `γ̃_d → 1` to **2.2e-16** for every destination (exact, not
+approximate), while winner identities (0/W mismatches) and per-draw share ratios
+(`~1e-16`–`1e-19` diff) are completely unchanged — recovery touches only the destination-column
+scale, exactly as claimed. This is the strongest evidence so far that §2's whole approach is sound.
+
 **What remains unverified**: that every retained absolute share numerator equals `λ_od` after this
 rescale (should follow immediately from §2.1(b)'s ratio-invariance plus the `E_F[M_d]=1`
-normalization, but has not been checked against an actual `CompressedFactual`/target vector at a
-concrete D=4 point), that the omitted anchor share numerator equals `1 - Σ_{o≠j_d}λ_od` (follows
+normalization — strongly supported by the recovery gate above, which shows ratios survive
+recovery exactly, but not checked against an actual `CompressedFactual`/target vector object
+specifically), that the omitted anchor share numerator equals `1 - Σ_{o≠j_d}λ_od` (follows
 from `Σ_o Q_od = M_d` pointwise, task §1.2, algebraically immediate but not numerically checked),
 and the France-specific claim `γ_f^A/γ_f^T = ρ_f` (needs the France ratio-moment code, §1.3, cross-
 checked against the `denom_cf`/target relation found in §0 — plausible given `ρ_f=gp` and
