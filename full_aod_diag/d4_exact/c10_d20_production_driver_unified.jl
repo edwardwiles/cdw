@@ -149,6 +149,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         # the same name. `false`/`nothing` defaults reproduce every pre-existing caller's behavior
         # bit-exactly -- opt-in, not a change to this driver's historical default.
         exclude_diagonal_gravity::Bool = false,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
         σHat::Union{Nothing,Float64} = nothing,
         destination_sample::Symbol = :exclude_row,
         blas_threads::Union{Nothing,Int} = nothing,   # reconciliation (task §1/Phase 1): same
@@ -210,7 +211,8 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
     ctx_base = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
                                       draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample,
-                                      exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
+                                      exclude_diagonal_gravity = exclude_diagonal_gravity,
+                                      gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
     # Reconciliation (task §1/Phase 1): the same three campaign-lifetime workspace attaches and
     # BLAS-thread pin that run_polish_checkpointed itself carries -- attached to ctx_base BEFORE
     # build_unified_ctx so a flexible-mode `merge(ctx, (...))` (flexible_theta.jl:make_flexible_

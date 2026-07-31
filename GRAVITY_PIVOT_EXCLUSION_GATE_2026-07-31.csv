@@ -1,0 +1,10 @@
+label,residual,pass
+calibration,4.866712501744308e-18,true
+random_valid_1,4.744438590069554e-18,true
+random_valid_2,4.688270894189402e-18,true
+random_valid_3,4.693842488686897e-18,true
+random_valid_4,4.801208620489975e-18,true
+random_valid_5,5.1061404815015234e-18,true
+perturb_BK_delta_0.01,4.866712501744308e-18,true
+perturb_BK_delta_-0.03,4.866712501744308e-18,true
+perturb_BK_delta_0.5,4.866712501744308e-18,true

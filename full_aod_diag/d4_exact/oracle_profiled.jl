@@ -121,7 +121,7 @@ function evaluate_fullA_profiled(x_free::AbstractVector{Float64}, ctx;
     gravity_val, logA, R_sum, R_mean, R_beta = @prof "gravity_compute" begin
         Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
         AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
-        gv = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false))
+        gv = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false), exclude_cells=get(ctx, :gravity_exclude_cells, Tuple{Int,Int}[]))
         lA = -log.(AodPow)
         rs = sum(ctx.q_tilde .* lA)
         (gv, lA, rs, rs / ctx.D^2, rs / sum(ctx.q_tilde .^ 2))

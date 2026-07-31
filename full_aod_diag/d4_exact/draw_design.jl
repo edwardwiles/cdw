@@ -150,6 +150,10 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         # d20_real_setup_qmc's own kwarg of the same name. `false` default reproduces every
         # pre-existing caller's behavior bit-exactly.
         exclude_diagonal_gravity::Bool = false,
+        # gravity_exclude_cells (2026-07-31, Brazil-Korea gravity-exclusion task): passthrough to
+        # d20_real_setup's own kwarg of the same name. Empty default reproduces every pre-existing
+        # caller bit-exactly.
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
         # σHat passthrough (2026-07-30, sigma=3 campaign prep) to d20_real_setup's/
         # d20_real_setup_qmc's own kwarg of the same name. `nothing` default reproduces
         # AD_PARAMS.σHat=2.5 unchanged for every pre-existing caller.
@@ -172,7 +176,8 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         t_ctx = @elapsed ctx0 = d20_real_setup(W = W, δ = δ, find_smallest = find_smallest,
             outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
             needs_outer_moment_jacobian = needs_outer_moment_jacobian, build_screen = build_screen,
-            destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
+            destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity,
+            gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
         timing = (uniform_and_transform = NaN, ctx_build = t_ctx,
                   pairwise = ctx0.screen_setup_wall.pairwise, witness = ctx0.screen_setup_wall.witness)
     else
@@ -184,7 +189,8 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
             outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
             needs_outer_moment_jacobian = needs_outer_moment_jacobian, build_screen = build_screen,
             destination_sample = destination_sample, U = Uexp,
-            exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
+            exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells,
+            σHat = σHat)
         # Screens and threshold_state are now built ONCE, inside d20_real_setup itself, for
         # every design -- no compensating patch here (task §9: "It must not construct or patch
         # screens, threshold state, context fields").

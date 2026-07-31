@@ -689,6 +689,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # the same name. `false`/`nothing` defaults reproduce every pre-existing caller's behavior
         # bit-exactly -- opt-in, not a change to this driver's historical default.
         exclude_diagonal_gravity::Bool = false,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
         σHat::Union{Nothing,Float64} = nothing,
         destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): :exclude_row (PRODUCTION DEFAULT -- true D_origin/D_dest dimension shrink,
@@ -853,7 +854,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # Phase E remediation (2026-07-26): cf_build (moments! closures below) reuses this instead of allocating fresh every call
     pe = build_pivot_elimination(ctx)
     # Transformed-A restricted-family port: theta_cm/xy_cm are only actually used when

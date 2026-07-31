@@ -29,17 +29,26 @@ const D20_REAL = 20
 # (:exclude_row|:all_legacy is the RUNTIME choice; these version numbers are the CODE that
 # implements whichever choice was made, bumped whenever the underlying sample-construction or
 # theta-estimation logic changes).
-const GRAVITY_SAMPLE_VERSION = 2       # 1 = pre-release legacy full-sample construction (square
-                                        # D x D, single code path); 2 = this release -- gravity
-                                        # sample recomputed from raw observations for the resolved
-                                        # destination_sample (rectangular for :exclude_row, square
-                                        # for :all_legacy), not derived by deleting a column from a
-                                        # previously-residualized full-sample object.
-const THETA_CALIBRATION_VERSION = 2    # 1 = theta_star estimated once on the full square sample,
-                                        # reused for every destination_sample; 2 = this release --
-                                        # theta_star (hence mu=1/theta_star and the productivity-
-                                        # draw transform) is re-estimated on the resolved sample's
-                                        # own gravity regression.
+const GRAVITY_SAMPLE_VERSION = 3       # 1 = pre-release legacy full-sample construction (square
+                                        # D x D, single code path); 2 = gravity sample recomputed
+                                        # from raw observations for the resolved destination_sample
+                                        # (rectangular for :exclude_row, square for :all_legacy),
+                                        # not derived by deleting a column from a
+                                        # previously-residualized full-sample object; 3 (2026-07-31,
+                                        # Brazil-Korea gravity-exclusion task) -- the eligibility
+                                        # mask (`gravity_sample_mask`, full_aod_diag/gravity_tariff.jl)
+                                        # now also accepts an explicit `exclude_cells` list on top
+                                        # of the existing ROW/diagonal exclusions, threaded here as
+                                        # `gravity_exclude_cells`; empty by default (bit-identical
+                                        # to version 2 for every pre-existing caller).
+const THETA_CALIBRATION_VERSION = 3    # 1 = theta_star estimated once on the full square sample,
+                                        # reused for every destination_sample; 2 = theta_star (hence
+                                        # mu=1/theta_star and the productivity-draw transform) is
+                                        # re-estimated on the resolved sample's own gravity
+                                        # regression; 3 (2026-07-31) -- the regression sample now
+                                        # also honors `gravity_exclude_cells` via the same shared
+                                        # `gravity_sample_mask` the pivot uses (prestep/master_prestep.jl
+                                        # no longer independently re-derives its own mask).
 
 """
 Build (so, pp, params_used) for the REAL D=20 economy at a given W, independent of AD_PARAMS.
@@ -55,6 +64,12 @@ from production/fullA-exact) are unrelated to draw design -- unchanged, opt-in p
 function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing,
         U::Union{Nothing,AbstractMatrix{Float64}} = nothing,
         exclude_diagonal_gravity::Bool = false,
+        # gravity_exclude_cells (2026-07-31, Brazil-Korea gravity-exclusion task): additional
+        # (origin, dest-slot) cells dropped from the gravity-identification sample (regression AND
+        # pivot) on top of the existing ROW/diagonal exclusions -- see gravity_sample_mask,
+        # full_aod_diag/gravity_tariff.jl. Empty (default) reproduces every pre-existing caller
+        # bit-exactly.
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
         # σHat override (2026-07-30, sigma=3 campaign prep): AD_PARAMS.σHat=2.5 is this repo's
         # single source of truth for sigma on the real D20 path (audited -- no CES/gravity formula
         # anywhere hardcodes 2.5 directly; every consumer reads ctx.σ/σHat as a variable). `nothing`
@@ -63,7 +78,7 @@ function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothi
         σHat::Union{Nothing,Float64} = nothing)
     σ_override = σHat === nothing ? NamedTuple() : (σHat = σHat,)
     params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx,
-        exclude_diagonal_gravity = exclude_diagonal_gravity), σ_override)
+        exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells), σ_override)
     so = master_setup(params)
     @assert so.D == D20_REAL "master_setup returned D=$(so.D), expected $(D20_REAL) -- real_data/noah_D20 CSVs may be malformed"
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
@@ -112,6 +127,9 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         # is the default and reproduces every pre-existing caller's behavior bit-exactly -- this
         # is opt-in, not a change to d20_real_setup's historical default.
         exclude_diagonal_gravity::Bool = false,
+        # gravity_exclude_cells passthrough (2026-07-31) -- see build_ad_context_real_d20's kwarg
+        # of the same name. Dest-slot indexed (1:Ddest space), not global country index.
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
         # σHat passthrough to build_ad_context_real_d20's own kwarg of the same name (2026-07-30).
         # `nothing` default reproduces AD_PARAMS.σHat=2.5 unchanged.
         σHat::Union{Nothing,Float64} = nothing)
@@ -131,7 +149,8 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     # See docs/fullA_D20_production_path_audit.md and the continuation-9
     # W80k/W800k microbenchmark docs for the full incident writeup.
     so, pp, params_used = build_ad_context_real_d20(W = W, row_idx = row_idx, U = U,
-        exclude_diagonal_gravity = exclude_diagonal_gravity, σHat = σHat)
+        exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells,
+        σHat = σHat)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
     # exclude-ROW-destination production release (2026-07-24): reject focal_country==ROW. `bi`
     # (baseIndex, AD_PARAMS's own default is 2=France, see this file's header comment) is the
@@ -169,7 +188,8 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
 
     Aod_free_pos = [1 + (d - 1) * Dact + o for o in 1:Dact, d in 1:Ddest]
     τ = γ.τ
-    q_tilde, N_obs = precompute_q_tilde(τ; exclude_diagonal = exclude_diagonal_gravity)
+    q_tilde, N_obs = precompute_q_tilde(τ; exclude_diagonal = exclude_diagonal_gravity,
+                                         exclude_cells = gravity_exclude_cells)
 
     obj = CS.PsiObjectiveBundleImplicit(δ = δ, find_smallest = find_smallest, γ = γ,
         (moments!) = EK_moments_gammanorm_directgp!, moments_jacobian! = error, d = nTotalMoments,
@@ -222,7 +242,8 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
             θ0_up = θ0_up, θ_lo = θ_lo, θ_hi = θ_hi, l_full = l_full,
             free_idx = free_idx, fixed_idx = fixed_idx, fixed_vals = fixed_vals, m = m,
             Aod_offset = Aod_offset, Aod_free_pos = Aod_free_pos,
-            τ = τ, q_tilde = q_tilde, N_obs = N_obs, exclude_diagonal_gravity = exclude_diagonal_gravity, obj = obj,
+            τ = τ, q_tilde = q_tilde, N_obs = N_obs, exclude_diagonal_gravity = exclude_diagonal_gravity,
+            gravity_exclude_cells = gravity_exclude_cells, obj = obj,
             nTotalMoments = nTotalMoments, outer_constr_index = outer_constr_index,
             bounds = bounds, δ = δ, find_smallest = find_smallest,
             pairwise = screen_pairwise, witness = screen_witness,
