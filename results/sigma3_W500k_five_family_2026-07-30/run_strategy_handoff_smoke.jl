@@ -28,16 +28,28 @@ for f in ["draw_design.jl", "winners.jl", "oracle.jl", "gravity_elimination.jl",
           "cm_originzc_target_layout.jl", "cm_originzc_config.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl",
           "cm_frechet_level.jl", "cm_frechet_lookup_production.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
           "cm_exact_cache_production.jl", "cm_dual_bank_production.jl", "threaded_cross_hessian.jl", "zc_gram_blas_candidates.jl",
-          "hcz_drawchunk_candidate_2026-07-29.jl", "cross_delta_cache.jl",
-          "flexible_theta.jl", "flexible_theta_aspace_production.jl", "outer_coordinate_layout.jl",
+          "hcz_drawchunk_candidate_2026-07-29.jl", "cross_delta_cache.jl", "negative_cache.jl",
           "lfix_buffer_reuse.jl", "bandwidth_cache_policy.jl", "fast_range_screen.jl",
           "cm_checkpoint.jl", "cm_originzc_checkpoint.jl", "postmerge_smoke_diagnostics.jl", "cross_hessian_live_stash_2026-07-28.jl",
-          "c10_d20_production_driver.jl", "c10_d20_production_driver_unified.jl"]
+          # unrestricted family's own proven-correct order (campaign_unrestricted_runner_sigma3.jl):
+          # c10_d20_production_driver.jl (defines ScreenCounters/DualBank etc.) MUST precede
+          # flexible_theta.jl, which references those types in method signatures at include time.
+          "c10_d20_production_driver.jl", "flexible_theta.jl", "flexible_theta_aspace_production.jl",
+          "outer_coordinate_layout.jl", "c10_d20_production_driver_unified.jl"]
     include(joinpath(D4E, f))
 end
+include(joinpath(D4E, "json_lite.jl"))
 include(joinpath(D4E, "campaign_cell_io.jl"))
 
 lp(xs...) = (println(xs...); flush(stdout))
+
+# origin_zc's w0 MUST come from the frozen, checksum-verified start_manifest.json coordinates
+# (matching campaign_cm_family_runner_sigma3.jl's own construction exactly) -- NOT recomputed
+# fresh from ctx.θ0_up[ctx.free_idx]/ctx.U, which uses a different (and differently-dimensioned)
+# convention and produced a live 380-vs-379 DimensionMismatch when tried live 2026-07-30.
+const START_MANIFEST = json_load(joinpath(CAMPAIGN_ROOT, "start_manifest.json"))
+const W_A_START1 = jf64(START_MANIFEST["starts"][1]["w_transformed_a"])
+const NU_ORIGINZC = jf64(START_MANIFEST["shared_extra_coordinates"]["origin_zc_nu"])
 
 # Nonfatal statuses that would trigger a real polish handoff (matches this codebase's own
 # convention for "converged/stalled but not an outright failure" -- see cm_checkpoint.jl's own
@@ -100,22 +112,8 @@ function run_handoff(label, W)
 end
 
 function run_originzc_handoff(label, W)
-    ctx = d20_real_setup_design(W = W, δ = 0.1, find_smallest = true, draw_design = :sobol_randomized,
-        draw_seed = 20260719, destination_sample = :exclude_row, exclude_diagonal_gravity = true, σHat = 3.0)
-    pe = build_pivot_elimination(ctx)
-    w_calib = ctx.θ0_up[ctx.free_idx]
-    w_a = copy(w_calib)   # origin_zc uses w_a directly, same convention as campaign_cm_family_runner_sigma3.jl
-
     K = 2
-    layout = OriginByPowerLayout(ctx.D, K, K)
-    nu0 = Vector{Float64}(undef, n_eta(layout))
-    for k in 1:K
-        Uk = ctx.U .^ k
-        for o in 1:ctx.D
-            nu0[target_index(layout, o, k)] = Statistics.mean(@view Uk[:, o])
-        end
-    end
-    w0 = vcat(w_a, log.(nu0))
+    w0 = vcat(W_A_START1, log.(NU_ORIGINZC))
 
     ckdir_sr1 = mktempdir()
     lp("[$label] STAGE 1: Direct+SR1, budget=60s")

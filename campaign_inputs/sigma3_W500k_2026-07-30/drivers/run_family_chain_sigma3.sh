@@ -66,15 +66,39 @@ for start in "${STARTS[@]}"; do
       while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
         celllog="$LOGDIR/${FAMILY}_${direction}_d${delta}_s${start}_attempt${attempt}.log"
         echo "[$FAMILY/$direction delta=$delta start=$start] attempt $attempt/$MAX_ATTEMPTS (hard_cap=${HARDCAP}s) -> $celllog"
-        /usr/bin/time -v timeout --kill-after=60s "${HARDCAP}s" \
+        # /usr/bin/time (GNU time, standalone binary) is NOT installed on this host -- confirmed
+        # live 2026-07-30 (rc=127 "No such file or directory" on every single cell, which would
+        # have broken all 180 real launch cells identically since this script IS what --launch
+        # itself uses). Replaced with a background /proc/<pid>/status poller for peak RSS
+        # (VmHWM), written in the same "Maximum resident set size (kbytes): N" grep-compatible
+        # format the rollup script (rollup_summaries.jl) and run_preflight_smokes_6to10.sh's own
+        # `grep "Maximum resident set size"` already expect -- no downstream format change needed.
+        t_start=$(date +%s.%N)
+        timeout --kill-after=60s "${HARDCAP}s" \
           julia --project="$ROOT" -t "$THREADS" "$RUNNER" $(cell_args "$direction" "$delta" "$start") \
-          > "$celllog" 2> "$celllog.rusage"
+          > "$celllog" 2>&1 &
+        jpid=$!
+        peak_kb=0
+        while kill -0 "$jpid" 2>/dev/null; do
+          for cpid in $(pgrep -P "$jpid" 2>/dev/null) "$jpid"; do
+            [ -r "/proc/$cpid/status" ] || continue
+            kb=$(awk '/^VmHWM:/{print $2}' "/proc/$cpid/status" 2>/dev/null)
+            [ -n "$kb" ] && [ "$kb" -gt "$peak_kb" ] 2>/dev/null && peak_kb=$kb
+          done
+          sleep 2
+        done
+        wait "$jpid"
         rc=$?
+        t_end=$(date +%s.%N)
+        {
+          echo "	Maximum resident set size (kbytes): $peak_kb"
+          echo "	Elapsed (wall clock) time (h:mm:ss or m:ss): $(awk -v s="$t_start" -v e="$t_end" 'BEGIN{printf "%.2f sec", e-s}')"
+        } > "$celllog.rusage"
         if [ -f "$ckdir/DONE" ]; then
           echo "[$FAMILY/$direction delta=$delta start=$start] DONE (attempt $attempt, rc=$rc)"
           grep -m1 "Knitro using the" "$celllog" > "$ckdir/knitro_algorithm.txt" 2>/dev/null || true
-          # RESOURCE_USAGE.csv raw material: /usr/bin/time -v's "Maximum resident set size" and
-          # "Elapsed (wall clock) time" lines, kept per-cell for the rollup script to parse.
+          # RESOURCE_USAGE.csv raw material: the peak-RSS poller's "Maximum resident set size"
+          # line above, kept per-cell for the rollup script to parse.
           ok=1
           break
         fi

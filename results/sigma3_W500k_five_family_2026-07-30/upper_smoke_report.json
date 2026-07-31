@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "summary": "deltas=0.1 starts=1 directions=upper maxtime=500s pass_criterion=eval_line_in_log (re-derived from existing logs after fixing marker bug) -- see smoke/upper_smoke_report/logs/*.log",
+  "per_family": {"unrestricted":"pass","flexible_cm":"pass","common_frechet":"pass","origin_zc":"pass","cm_meanzc":"pass"},
+  "generated": "2026-07-30T22:13:17-04:00"
+}

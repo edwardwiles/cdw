@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "summary": "deltas=0.1 starts=1 directions=lower maxtime=500s pass_criterion=verified_eval_in_log -- see /bbkinghome/edav/gravity_robustness/worktrees/campaign-prepare-sigma3-W500k-five-family-2026-07-30/results/sigma3_W500k_five_family_2026-07-30/smoke/lower_smoke_report/logs/*.log",
+  "per_family": {"unrestricted":"pass","flexible_cm":"pass","common_frechet":"pass","origin_zc":"pass","cm_meanzc":"pass"},
+  "generated": "2026-07-30T22:23:46-04:00"
+}
