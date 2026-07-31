@@ -53,34 +53,61 @@
 #   -- a fully closed-form scalar per entry, NO ForwardDiff, NO draws loop.
 # ============================================================================
 
-"Off-diagonal (own-trade-excluded) inclusion mask, D x Ddest. Valid without threading row_idx/
-named_dest through here because every context builder in this repo keeps the invariant that the
-omitted ROW destination, when present, is always the LAST index (row_idx==D) -- see
-context_real_d20.jl/context_scaled.jl/qmc_context_real_d20.jl -- so destination column d always
-corresponds to origin row d for d in 1:Ddest, making a pure shape-based `o != d` mask exactly the
-own-trade exclusion."
-_offdiag_mask(D::Int, Ddest::Int) = [o != d for o in 1:D, d in 1:Ddest]
+"""
+    gravity_sample_mask(D, Ddest; exclude_diagonal=false, exclude_cells=Tuple{Int,Int}[]) -> BitMatrix
+
+THE single authoritative (o, d) eligibility mask for the gravity-identification sample (regression
++ pivot + every gravity_value consumer), D x Ddest, `true` = included. Combines two independent
+restrictions:
+
+  - `exclude_diagonal`: the existing own-trade (`o==d`) exclusion convention (2026-07-30). Valid
+    without threading row_idx/named_dest through here because every context builder in this repo
+    keeps the invariant that the omitted ROW destination, when present, is always the LAST index
+    (row_idx==D) -- see context_real_d20.jl/context_scaled.jl/qmc_context_real_d20.jl -- so
+    destination column d always corresponds to origin row d for d in 1:Ddest, making a pure
+    shape-based `o != d` test exactly the own-trade exclusion.
+  - `exclude_cells`: an explicit list of additional (origin, dest-SLOT) cells to drop (2026-07-31,
+    Brazil->Korea gravity-exclusion task) -- dest-space COLUMN index, i.e. the same indexing as
+    `Ddest` everywhere else in this module (see country_resolve.jl for how a caller maps a global
+    country index to this dest-space slot under `:exclude_row`).
+
+Replaces the old `_offdiag_mask(D,Ddest) = [o!=d for o,d]` helper (bit-identical to
+`gravity_sample_mask(D,Ddest; exclude_diagonal=true)` with no `exclude_cells`) -- this is now the
+ONE mask-building function every consumer (`precompute_q_tilde`, `gravity_value`, and
+`prestep/master_prestep.jl`'s θ* regression, which used to independently re-derive the same
+`o!=d` test) calls, so a cell exclusion added here is visible to the regression and the pivot
+identically, with no duplicated conditional anywhere else.
+"""
+function gravity_sample_mask(D::Int, Ddest::Int; exclude_diagonal::Bool = false,
+                              exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[])
+    excl = Set(exclude_cells)
+    return [(!exclude_diagonal || o != d) && !((o, d) in excl) for o in 1:D, d in 1:Ddest]
+end
 
 """
-    precompute_q_tilde(τ; exclude_diagonal=false) -> (q_tilde, N_obs)
+    precompute_q_tilde(τ; exclude_diagonal=false, exclude_cells=Tuple{Int,Int}[]) -> (q_tilde, N_obs)
 
 Precompute ONCE per economy (data-only): the FE-residualized log-cost
 regressor and the observation count for the FULL D×D (or D×Ddest, row_idx-restricted) grid.
 
-`exclude_diagonal=false` (default) reproduces the original behavior bit-exactly (complete-panel
-`within_transform_rect`, `N_obs=D*Ddest`) -- every pre-existing caller (D4 exact, D10, scaled
-synthetic contexts) is unaffected. `exclude_diagonal=true` (2026-07-30, user-directed fix: the
-production gravity/theta identification restriction was `sum_{o,d!=ROW}`, which includes domestic/
-own-trade cells and does not match the Stata regression's `sum_{o!=d,d!=ROW}` sample) ALSO drops
-`o==d` cells from the FE fit via the exact unbalanced-panel `within_transform_masked`
-(misc/doubleDiff.jl): those cells get `q_tilde[o,d]=0.0` (never entered the fit, and therefore never
-selected as the gravity pivot nor contribute to the gravity constraint downstream -- see
-gravity_elimination.jl), and `N_obs` becomes the true off-diagonal observation count.
+`exclude_diagonal=false, exclude_cells=[]` (default) reproduces the original behavior bit-exactly
+(complete-panel `within_transform_rect`, `N_obs=D*Ddest`) -- every pre-existing caller (D4 exact,
+D10, scaled synthetic contexts) is unaffected. `exclude_diagonal=true` (2026-07-30, user-directed
+fix: the production gravity/theta identification restriction was `sum_{o,d!=ROW}`, which includes
+domestic/own-trade cells and does not match the Stata regression's `sum_{o!=d,d!=ROW}` sample)
+ALSO drops `o==d` cells from the FE fit via the exact unbalanced-panel `within_transform_masked`
+(misc/doubleDiff.jl). `exclude_cells` (2026-07-31) drops arbitrary additional cells the same way
+(e.g. a single outlier bilateral pair). Masked-out cells get `q_tilde[o,d]=0.0` (never entered the
+fit, and therefore never selected as the gravity pivot nor contribute to the gravity constraint
+downstream -- see gravity_elimination.jl), and `N_obs` becomes the true eligible observation count.
+Any exclusion at all (diagonal or cells) routes through the masked estimator, since
+`within_transform_rect`'s closed-form only applies to a complete panel.
 """
-function precompute_q_tilde(τ::AbstractMatrix; exclude_diagonal::Bool = false)
+function precompute_q_tilde(τ::AbstractMatrix; exclude_diagonal::Bool = false,
+                             exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[])
     D, Ddest = size(τ)   # Ddest==D unless τ is already destination-restricted (row_idx, Part A 2026-07-23)
-    if exclude_diagonal
-        mask = _offdiag_mask(D, Ddest)
+    if exclude_diagonal || !isempty(exclude_cells)
+        mask = gravity_sample_mask(D, Ddest; exclude_diagonal, exclude_cells)
         q_tilde = within_transform_masked(τ, mask)
         N_obs = count(mask)
     else
@@ -101,19 +128,22 @@ documented sign flip + N_obs normalization. `Aod_θ`, `μ` enter only through
 the caller-supplied `AodPow` (kept as an explicit argument for clarity /
 testability against the existing formula).
 
-`exclude_diagonal=false` (default): unchanged, recomputes `within_transform_rect(τ)` internally
-(bit-identical to before this kwarg existed). `exclude_diagonal=true`: MUST be passed whenever the
-caller's `q_tilde`/`N_obs` came from `precompute_q_tilde(...; exclude_diagonal=true)`, so the
-τ-side and AodPow-side within-transforms stay consistent with the SAME restricted (own-trade
--excluded) sample -- reuses the caller-supplied `q_tilde` directly for the τ-side (it IS already
+`exclude_diagonal=false, exclude_cells=[]` (default): unchanged, recomputes `within_transform_rect(τ)`
+internally (bit-identical to before this kwarg existed). `exclude_diagonal=true` and/or nonempty
+`exclude_cells`: MUST match whatever `precompute_q_tilde` produced the caller's `q_tilde`/`N_obs`
+with, so the τ-side and AodPow-side within-transforms stay consistent with the SAME restricted
+sample -- reuses the caller-supplied `q_tilde` directly for the τ-side (it IS already
 `within_transform_masked(τ, mask)`, recomputing it again would be redundant) and applies the same
-mask to `AodPow` (which, unlike τ, is a live quantity that can be a ForwardDiff `Dual` under an
-outer-loop derivative, hence `within_transform_masked`'s eltype-generic design).
+mask (via `gravity_sample_mask`, the one shared eligibility function) to `AodPow` (which, unlike τ,
+is a live quantity that can be a ForwardDiff `Dual` under an outer-loop derivative, hence
+`within_transform_masked`'s eltype-generic design).
 """
-function gravity_value(τ::AbstractMatrix, AodPow::AbstractMatrix, q_tilde::AbstractMatrix, N_obs::Int; exclude_diagonal::Bool = false)
+function gravity_value(τ::AbstractMatrix, AodPow::AbstractMatrix, q_tilde::AbstractMatrix, N_obs::Int;
+                        exclude_diagonal::Bool = false,
+                        exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[])
     D, Ddest = size(τ)
-    if exclude_diagonal
-        mask = _offdiag_mask(D, Ddest)
+    if exclude_diagonal || !isempty(exclude_cells)
+        mask = gravity_sample_mask(D, Ddest; exclude_diagonal, exclude_cells)
         Wτ = q_tilde
         WAodPow = within_transform_masked(AodPow, mask)
     else
