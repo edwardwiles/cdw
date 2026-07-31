@@ -56,10 +56,14 @@ check(":pseudorandom ctx.U bit-identical to old d20_real_setup path", ctx_old.U 
 check("draw_design field == :pseudorandom", ctx_new.draw_design == :pseudorandom)
 
 pe = build_pivot_elimination(ctx_new)
-D = ctx_new.D; D2 = D^2
+# D_dest, not D: ctx's Aod free block is Dact x Ddest (rectangular under the current
+# destination_sample=:exclude_row default), not D^2 -- pre-existing bug in this test file
+# (predates the draw-design unification; written assuming the square :all_legacy layout), found
+# while running this gate for real at W=80000. Not part of the draw-design refactor itself.
+D = ctx_new.D; Ddest = ctx_new.D_dest; DxDdest = D * Ddest
 x_free_from_w2(w, pe) = vcat(w[1], vec(exp.(pivot_expand(w[2:end], pe))))
-Aod_theta_natural = ctx_new.θ0_up[ctx_new.Aod_offset+1:ctx_new.Aod_offset+D2]
-zfree0 = pivot_reduce(reshape(log.(Aod_theta_natural), D, D), pe)
+Aod_theta_natural = ctx_new.θ0_up[ctx_new.Aod_offset+1:ctx_new.Aod_offset+DxDdest]
+zfree0 = pivot_reduce(reshape(log.(Aod_theta_natural), D, Ddest), pe)
 gp0 = ctx_new.θ0_up[3+D]
 xf0 = x_free_from_w2(vcat(gp0*1.01, zfree0), pe)
 
