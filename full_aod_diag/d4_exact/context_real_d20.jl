@@ -41,15 +41,24 @@ const THETA_CALIBRATION_VERSION = 2    # 1 = theta_star estimated once on the fu
                                         # draw transform) is re-estimated on the resolved sample's
                                         # own gravity regression.
 
-"Build (so, pp, params_used) for the REAL D=20 economy at a given W, independent of AD_PARAMS."
-function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing)
+"""
+Build (so, pp, params_used) for the REAL D=20 economy at a given W, independent of AD_PARAMS.
+
+`U=nothing` (default): draw U internally (unchanged pseudorandom path). `U` given (`W x D`,
+already Exp(1)-transformed): use it directly -- the single injection point for every non-default
+draw design (randomized Sobol, scrambled Halton, precomputed), threaded straight to
+`master_prepare_cc`. See `draw_design.jl::d20_real_setup_design` for the resolver that decides
+which case applies.
+"""
+function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing,
+        U::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx))
     so = master_setup(params)
     @assert so.D == D20_REAL "master_setup returned D=$(so.D), expected $(D20_REAL) -- real_data/noah_D20 CSVs may be malformed"
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
     checkParams(up)
     ps = master_prestep(so.data, so.counters, up)
-    pp = master_prepare_cc(so.data, so.counters, ps, up)
+    pp = master_prepare_cc(so.data, so.counters, ps, up; U = U)
     return so, pp, params
 end
 
@@ -62,6 +71,14 @@ REAL D=20 dataset (France focal) instead of a synthetic economy at an arbitrary
 D. Returns the same field set so every existing D=4 diagnostic function
 (`evaluate_fullA`, `compute_winners`, `build_pivot_elimination`, etc.) works
 unchanged on the returned `ctx`.
+
+`U=nothing` (default) draws U internally (unchanged pseudorandom path, `Random.seed!(seedU)` via
+`master_prepare_cc`). `U` given (`W x D`, already Exp(1)-transformed) uses it directly instead --
+this is the ONE injection point every non-pseudorandom draw design (randomized Sobol, scrambled
+Halton, precomputed) goes through; screen construction, threshold-state construction, and every
+other field below are built identically regardless of which branch supplied `U` (task "unify
+random-draw production pipeline" 2026-07-30 §8 -- there is exactly one copy of this logic, not
+one per draw design).
 """
 function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
@@ -73,7 +90,11 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         # named countries, ROW=country 20 dropped as destination/kept as origin; theta
         # re-estimated on the rectangular sample). :all_legacy -- exact pre-Part-A square D x D
         # behavior, bit-for-bit (regression-safety opt-out). No third option, no silent fallback.
-        destination_sample::Symbol = :exclude_row)
+        destination_sample::Symbol = :exclude_row,
+        # Draw-design injection point (unify-random-draw-production-pipeline, 2026-07-30): nothing
+        # keeps today's internal pseudorandom draw; a caller-supplied W x D Exp(1) matrix routes
+        # every other draw design through this exact same setup function.
+        U::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     destination_sample in (:exclude_row, :all_legacy) ||
         error("d20_real_setup: destination_sample must be :exclude_row or :all_legacy, got :$destination_sample")
     row_idx = destination_sample == :exclude_row ? D20_REAL : nothing
@@ -89,7 +110,7 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
     # killed after climbing to ~780GB and still rising, headed past 1TB).
     # See docs/fullA_D20_production_path_audit.md and the continuation-9
     # W80k/W800k microbenchmark docs for the full incident writeup.
-    so, pp, params_used = build_ad_context_real_d20(W = W, row_idx = row_idx)
+    so, pp, params_used = build_ad_context_real_d20(W = W, row_idx = row_idx, U = U)
     Dact = so.D; bi = params_used.baseIndex; σ = params_used.σHat; μHat = pp.γ.μHat
     # exclude-ROW-destination production release (2026-07-24): reject focal_country==ROW. `bi`
     # (baseIndex, AD_PARAMS's own default is 2=France, see this file's header comment) is the
