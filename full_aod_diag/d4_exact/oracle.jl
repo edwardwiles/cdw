@@ -86,7 +86,10 @@ function primal_divergence(m_weights::AbstractVector)
     return sum(phi(W * mi / total) for mi in m_weights) / W
 end
 
-const CONTEXT_FINGERPRINT_SCHEMA = 2   # bumped for Part A (2026-07-23): digest content changed (destination_sample/row_idx/D_dest segment added)
+const CONTEXT_FINGERPRINT_SCHEMA = 3   # bumped 2026-07-30 (sigma3 campaign prep): digest content
+                                        # changed again (sigma segment added, see below) -- schema 2
+                                        # was bumped for Part A (2026-07-23): destination_sample/
+                                        # row_idx/D_dest segment added
 
 # AUD-08 fix: memoized per-ctx SHA-256 fingerprint, keyed by objectid(ctx.U) (uniquely identifies
 # one ctx's draw set/instance -- cheap identity lookup, avoids re-hashing large W x D draw
@@ -126,6 +129,16 @@ function context_fingerprint(ctx)::String
             row_idx_here = hasproperty(ctx, :row_idx) ? ctx.row_idx : nothing
             write(buf, row_idx_here === nothing ? "all_legacy" : "exclude_row_$(row_idx_here)")
             write(buf, row_idx_here === nothing ? "square_v1" : "rectangular_D_x_Dminus1_true_shrink_v1")
+            # sigma (2026-07-30, sigma3 campaign prep): CES elasticity of substitution enters the
+            # inner solve's own price-index/CES formulas directly, not merely as one entry of the
+            # outer theta vector that a fixed x_free would otherwise pin down -- two contexts built
+            # identically except for sigma can give DIFFERENT inner-solve answers at the same
+            # x_free. Previously unhashed here, so a sigma=2.5 and a sigma=3.0 context could alias
+            # to the same cache key/directory (exactly the risk the sigma3 campaign brief's "do not
+            # reuse caches built under sigma=2.5" requirement warns about). ctx.σ is present on
+            # every context builder in this file family (context.jl/context_scaled.jl/
+            # context_real_d20.jl/qmc_context_real_d20.jl all return σ=σ).
+            write(buf, htol(Float64(ctx.σ)))
             if hasproperty(ctx, :draw_meta)
                 write(buf, ctx.draw_meta.checksum_uniform)
                 write(buf, ctx.draw_meta.checksum_transformed)
