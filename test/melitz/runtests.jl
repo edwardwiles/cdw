@@ -7764,6 +7764,26 @@ end
         pool3 = melitz_build_thread_bundle_pool(bundle_factory3, 2)
         @test pool3[1] !== pool3[2]
         @test pool3[1].op !== pool3[2].op
+        # Production-consolidation Phase 5 finding (2026-07-31): found live -- this test
+        # segfaulted the whole Julia process under scripts/melitz_test_group_runner_2026-07-31.jl
+        # (signal 11 inside mul_G!, moment_operator.jl:306). Root cause: `melitz_build_thread_bundle_pool`
+        # only CONSTRUCTS fresh bundles (its own docstring: the caller must equilibrate each
+        # member "describing the IDENTICAL economic point", not the factory) -- `pool3[2].op`
+        # was NEVER equilibrated at any theta before `pool3[2](ge_x0)` was called below.
+        # `build_melitz_moment_operator` zero-initializes `order` (among other operator
+        # fields); `mul_G!`'s `@inbounds` loop then reads `order[m,o]==0` and indexes
+        # `trade_index[o, 0]` -- an out-of-bounds index 0 that `@inbounds` does not catch,
+        # corrupting memory / segfaulting instead of throwing a clean BoundsError (the exact
+        # same failure mode independently found and fixed in the NEW
+        # "MelitzCCBundle shared empty-sentinel ... safety" test earlier in this file).
+        # CONFIRMED PRE-EXISTING: this test (and this bug) predates this consolidation branch
+        # entirely -- unrelated to the ported audit-branch commits, present on the canonical
+        # base commit (6e803d4) too. Fixed here by equilibrating pool3[2] at the SAME anchor
+        # theta (ge_theta0) the rest of this testset already uses, before pool3[1] is
+        # perturbed away from it -- this is what the test's own subsequent assertion
+        # (`Dp_2_unperturbed ≈ ge_lfd0.Delta`, ge_lfd0 being the baseline Delta AT ge_theta0)
+        # was always implicitly assuming.
+        melitz_update_operator_at_theta!(pool3[2].op, ge_theta0, ge_ctx)
         theta_pert = copy(ge_theta0); theta_pert[2] += 0.01
         melitz_update_operator_at_theta!(pool3[1].op, theta_pert, ge_ctx)   # perturb pool3[1] only
         Dp_2_unperturbed = -pool3[2](ge_x0)
