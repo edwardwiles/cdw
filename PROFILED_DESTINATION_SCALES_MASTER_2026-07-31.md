@@ -148,37 +148,52 @@ earlier finding); and the concurrent Brazil-Korea task's `gravity_sample_mask` u
 **absent** from this worktree's base (`cd17235`) by a repo-wide search — consistent with this
 branch predating that work, as documented in §1 above.
 
-## 4. Explicitly NOT done this session (task §§6–24)
+## 4. Implementation progress this session (task §§6–7, continuation after initial Phase 1)
 
-No production code was modified. No new Julia files implementing the reduced parameterization
-(relative-A coordinate layer, shared economic moment state, FG forward/transpose, `H_EE`,
-cross-Hessian blocks, outer gradient, screens, calibration/recovery, checkpoints, campaign driver)
-were written. No D=4 or D=20 gates were run — there is nothing yet to gate. This is a conscious
-choice: writing untested implementations of Hessian/gradient kernels against a task whose own
-correctness bar is machine-precision equivalence, without the budget to actually build and verify
-them, would produce exactly the false-confidence failure mode this repo's memory system exists to
-prevent. The theory in §2 is real, load-bearing groundwork for that implementation, not a
-substitute for it.
+Following user direction to continue, this session went beyond audit/theory into real, additively
+implemented and D=4-gated code — all following this repo's established "new function, verify vs
+trusted path, then wire in" convention, touching zero existing production files:
+
+- **§6 relative-A coordinate layer** (`relative_a_coordinate_2026-07-31.jl`): `AnchorSpec` (type
+  itself enforces "exactly one anchor per destination," task §2.4, not just a runtime check),
+  `decode_relative_A`/`encode_relative_A`, `build_anchor_gauge`. Deliberately operates purely in
+  `z=log(Aod_theta)` space so it never touches or duplicates the >15-site gauge-reconstruction
+  formula §3a(ii) flagged as this reparameterization's main risk. D=4 gate
+  (`test_relative_a_coordinate_2026-07-31.jl`, all tests pass): round-trip exact to 1e-16;
+  gauge-from-genuine-calibration round-trip exact to **0.0**; end-to-end integration through a real
+  `θ` vector into the live `ctx.obj.moments!` reproduces genuine calibration **bit-for-bit**;
+  tested with a non-own anchor (D=4 analog of Korea→Brazil), not just the own-cell default.
+- **§7 gravity pivot composition** (`gravity_pivot_on_retained_2026-07-31.jl`): pivot selection
+  restricted to retained (non-anchor) cells, operating in the reduced `r`-space by composing two
+  exact affine maps (gravity-in-z, proven in `gravity_elimination.jl`; z-in-r, proven in the
+  relative-A layer above). D=4 gate (`test_gravity_pivot_on_retained_2026-07-31.jl`, all pass):
+  **dimension audit confirms `D·Ddest-Ddest-1=11` free coordinates at D=4, live-derived and matching
+  the general formula exactly**; composed pivot cell confirmed never an anchor cell; round-trip
+  exact; gravity residual at true machine precision (~1e-18) over 5 random composed points; anchor
+  cells confirmed fixed under every composed point; a fully-composed point feeds the live
+  `moments!` cleanly end-to-end.
+
+These two gates are the first real evidence (not just derivation) that the composed
+anchor-reduction + gravity-pivot reparameterization is internally consistent against production
+code. Recommended next steps §3 below (recovery scalar) is the next concrete step in progress.
 
 ## 5. Recommended next steps (in dependency order)
 
-1. **Decide on consolidation vs. per-site duplication** for the Topic-2 gauge-reconstruction
-   formula (§3a(ii)) before writing anchor logic — this decision shapes every subsequent step's
-   scope and should be made deliberately, not defaulted into by editing whichever file is opened
-   first.
+1. ~~Decide on consolidation vs. per-site duplication~~ — resolved: the relative-A layer above
+   avoids the question entirely by operating in z-space, independent of the Topic-2 formula. The
+   consolidation question still applies to *other* sections (screens, `OperatorPsiBundle`
+   construction, `outer_coordinate_layout.jl` generalization) that must read the FULL reconstructed
+   `AodPow`, not just the anchor bookkeeping — still open for those.
 2. Resolve the `gravity_sample_mask` reuse-vs-reimplement question once the concurrent Brazil-Korea
    task's branch is stable (own-cell + Brazil→Korea eligibility masking is needed by both efforts).
-3. Implement the relative-A coordinate encode/decode layer (task §6) with a round-trip test —
-   the one piece every other implementation section depends on. Includes restricting
-   `build_pivot_elimination`'s `argmax|c|` search to the 360 retained (non-anchor) coordinates
-   (theory doc §2.1(c)), generalizing `OuterCoordinateLayout`/`outer_dim`/`decode_outer_unified`/
-   `reduce_to_w_unified`/`layout_fingerprint` (Topic 1), and updating `free_idx` construction in
-   all 4 context builders (Topic 10) — care must be taken not to conflate the *existing* `λ[1,d]`
-   origin-1 reconstruction-formula device with the *new* anchor coordinate reduction (§3a(ii)).
-4. Numerically execute theory §2.2 (exact full-A recovery) and §2.3 (comparison theorem) at a
-   single D=4 point before writing any Hessian/gradient code — this is the cheapest possible
-   falsification test of the whole approach and should gate further investment.
-5. Only after (4) passes: proceed to §8 (moment state) and §9 (FG forward/transpose, mostly
+3. Implement §16's exact full-A recovery scalar `c_d` (theory §2.2) with a D=4 gate — in progress.
+4. Execute theory §2.3 (comparison theorem) — requires an actual KNITRO inner solve, not yet
+   attempted; larger lift than (3).
+5. Generalize `OuterCoordinateLayout`/`outer_dim`/`decode_outer_unified`/`reduce_to_w_unified`/
+   `layout_fingerprint` (Topic 1) and `free_idx` construction in all 4 context builders (Topic 10)
+   to actually wire the relative-A layer into a real KNITRO-facing outer vector — the pieces built
+   this session are correct and tested in isolation but not yet wired into a live driver.
+6. Only after the above: proceed to §8 (moment state) and §9 (FG forward/transpose, mostly
    `unchanged` per the audit — see §3a(i)), then re-scope §§11–12 (`H_EE`, cross-Hessian) in light
    of the audit's finding that those kernels are largely `unchanged` already, then §13 (outer
    gradient — the one genuinely new derivative-bookkeeping site, `composite_gradient_at_Cplus`) and
@@ -189,13 +204,13 @@ substitute for it.
 
 ```
 THEORY =
-    partial_verified | core_invariance_exponent_and_gravity_zero_contribution_confirmed_recovery_and_comparison_theorem_unexecuted
+    partial_verified | core_invariance_and_exponent_NUMERICALLY_confirmed_D4 | gravity_zero_contribution_confirmed_analytically_and_numerically | recovery_construction_and_comparison_theorem_unexecuted
 
 ANCHORS =
     France:France
     Korea:Brazil
     all_other_active_destinations:own
-    one_per_destination:pass (by construction; structural runtime guard not yet coded)
+    one_per_destination:pass (enforced at the TYPE level in AnchorSpec, not just a runtime check)
 
 MOMENT_SYSTEM =
     factual_homogeneous:not_implemented
@@ -204,19 +219,27 @@ MOMENT_SYSTEM =
     France_ratio_moment:not_implemented
 
 DIMENSIONS =
-    active_A:380->361 (live-derived, D=20/D_dest=19)
-    free_A_after_gravity:360 (one existing global gravity-pivot coordinate removed from 361)
+    active_A:380->361 (live-derived, D=20/D_dest=19; D=4 analog 16->12 numerically confirmed)
+    free_A_after_gravity:360 (D=4 analog 12->11 numerically confirmed via test_gravity_pivot_on_retained)
     economic_moments:380->361
+
+COORDINATE_LAYER (task section 6) =
+    relative_A_encode_decode:pass_D4 (round-trip exact 1e-16; calibration round-trip exact 0.0;
+        bit-exact end-to-end through live moments!)
+    gravity_pivot_composition (task section 7):pass_D4 (dimension audit exact; pivot never an
+        anchor cell; gravity residual ~1e-18 at 5 random points; not yet wired into a live
+        KNITRO-facing outer vector -- OuterCoordinateLayout/free_idx generalization still open)
 
 FG =
     forward:not_implemented
     transpose:not_implemented
 
 HESSIAN =
-    H_EE:not_implemented
-    H_E_CM:not_implemented
-    H_E_Frechet:not_implemented
-    H_E_ZC:not_implemented
+    H_EE:not_implemented (audit finding: likely unchanged/no-op once moment state is reduced --
+        see master report section 3a(i); not yet confirmed)
+    H_E_CM:not_implemented (same audit finding applies)
+    H_E_Frechet:not_implemented (same audit finding applies)
+    H_E_ZC:not_implemented (same audit finding applies)
 
 OUTER_GRADIENT =
     Cplus:not_implemented
@@ -232,7 +255,8 @@ FULL_RECOVERY =
     objective:not_run
 
 EQUIVALENCE =
-    D4:not_run
+    D4:partial (coordinate-layer and gravity-pivot-composition sub-gates pass; full inner-solve
+        equivalence, theory section 2.3, not yet attempted)
     D20_W100k:not_run
     D20_W500k:not_run
     all_families:not_run
@@ -244,5 +268,5 @@ PRODUCTION_DEFAULT =
     full_gamma_normalized_reference
 
 BRANCH_STATUS =
-    incomplete_phase1_theory_and_audit_only_no_implementation_yet
+    incomplete_theory_audit_and_coordinate_layer_done_moment_system_and_beyond_not_started
 ```
