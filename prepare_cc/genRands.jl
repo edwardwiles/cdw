@@ -1,10 +1,37 @@
 
+"""
+    transform_unit01_to_exp1!(U) -> U
+
+Canonical Exp(1) inverse-CDF transform (`U[i] = -log(1 - U[i])`), applied in place. This is the
+ONE shared implementation of the transform used by every draw design (pseudorandom, randomized
+Sobol, scrambled Halton, precomputed) -- see task "unify random-draw production pipeline"
+2026-07-30 §3. The defensive clamp to `prevfloat(1.0)` is a no-op for any value actually produced
+by `rand!` (which never returns exactly 1.0 for Float64), so this is bit-for-bit identical to the
+un-clamped `-log(1 - U[i])` form `genExpRands!` used before this function existed; it only guards
+externally-supplied (QMC/precomputed) draws that could in principle land exactly on the [0,1)
+boundary.
+"""
+function transform_unit01_to_exp1!(U::AbstractMatrix{Float64})
+    @inbounds for i in eachindex(U)
+        u = clamp(U[i], 0.0, prevfloat(1.0))
+        U[i] = -log(1 - u)
+    end
+    return U
+end
+
+"""
+    exp_from_uniform01(U01) -> Matrix{Float64}
+
+Allocating wrapper around `transform_unit01_to_exp1!`, for callers (QMC generators, diagnostics)
+that hold a uniform-[0,1) matrix they do not own and want the Exp(1)-transformed result returned
+as a new matrix rather than mutated in place.
+"""
+exp_from_uniform01(U01::AbstractMatrix{Float64}) = transform_unit01_to_exp1!(copy(U01))
+
 function genExpRands!(U)
     # draw from exp(1)
     rand!(U)
-    for i in 1:length(U)
-        U[i] = -log(1 - U[i])
-    end
+    transform_unit01_to_exp1!(U)
 end
 
 function genExpRandsStratified!(U, StratifiedSamplingWeight)
