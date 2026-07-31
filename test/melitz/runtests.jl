@@ -83,6 +83,7 @@ include(joinpath(MELITZ_DIR, "lfd_preserving_state.jl"))   # 2026-07-30 hybrid c
     # left in place, since the new hybrid-corrector testset below needs it too.
 include(joinpath(MELITZ_DIR, "hybrid_chamber_corrector.jl"))
 include(joinpath(MELITZ_DIR, "fixed_q_a_middle_loop.jl"))   # 2026-07-30 fixed-q A middle loop
+include(joinpath(MELITZ_DIR, "production_structural_gate.jl"))   # 2026-07-31 legacy-H removal audit, Phase 14
 
 # ============================================================================
 # 1. Pareto draws
