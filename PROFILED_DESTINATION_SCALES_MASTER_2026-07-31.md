@@ -100,9 +100,53 @@ depended upon.
 - `DESTINATION_SCALE_ANCHOR_MANIFEST_2026-07-31.json` — complete 19-entry anchor map
   (France→France, Korea→Brazil, all others own-cell), live-resolved indices, requirements
   checklist with honest per-item status (2 pass-by-construction, 3 pending/not-yet-implemented).
-- `FULL_TO_PROFILED_PIPELINE_CALL_GRAPH_2026-07-31.md` / `FULL_TO_PROFILED_CHANGE_MATRIX_2026-07-31.csv`
-  — see status note below (background audit agent).
+- `FULL_TO_PROFILED_PIPELINE_CALL_GRAPH_2026-07-31.md` (493 lines, 16 topics) /
+  `FULL_TO_PROFILED_CHANGE_MATRIX_2026-07-31.csv` (100 rows) — full call-graph audit, covering
+  every topic the task specified. Read in full and cross-checked, not taken on faith; see §3a below
+  for the two findings that materially change the implementation plan.
 - This master report.
+
+### 3a. Two audit findings that change the implementation plan
+
+**(i) Good news — the Hessian machinery needs no changes, or close to it.** Topics 6–8 (economic
+operator forward/transpose, `H_EE`/winner-pair, and every `H_EC`/`H_EZ`/`H_CZ` economic×restriction
+cross-block) all classify as **unchanged**: they already operate entirely on the compressed
+`CompressedFactual`/`WinnerPairHessCtx` abstraction, agnostic to how many outer A-coordinates are
+free or how they're laid out. This is a direct consequence of this repo's own prior "no dense
+G/H, operator-only" hardening (2026-07-25 through 2026-07-30, confirmed from file headers). **This
+means task §§11–12 (H_EE derivation, economic×restriction cross-Hessian rework) are very likely
+much smaller than the task brief assumes** — the brief's derivations there describe what the
+*moment values feeding into* these kernels look like, not new Hessian math, since the kernels
+themselves don't need to change. This should be re-confirmed once the moment-state builder (§8) is
+actually reduced, but it substantially de-risks what looked like the task's largest single
+implementation section.
+
+**(ii) Bad news — the real complexity is a pre-existing duplication problem, not a new derivation.**
+The "outer A-coordinate → gauge-normalized level A" reconstruction formula
+(`Aod = Aod_θ .* cHat .* ((wHat·τ)/(wHat[1,1]·τ[1,:]'))^(1/μ) .* (λ/λ[1,:]')`) is **copy-pasted
+independently in at least 15 files** (`moments_gammanorm.jl`, `moments_fast.jl`, `autarky_cf.jl`/
+`_v2.jl`, `gravity_elimination.jl`, `winners.jl`, `cm_aspace_coordinate.jl`, screen/oracle files),
+not centralized behind one function the way the gravity pivot is. It also already contains an
+**existing, different** per-destination gauge device — dividing every destination-`d` column by
+`λ[1,d]` (origin 1's factual share) — which must not be confused with the *new* per-destination
+anchor this task introduces (France→France, Korea→Brazil, else own-cell): they are different
+objects, and the existing one does not remove any free coordinate today (all `D·D_dest` A cells
+remain in `free_idx` currently; the `λ[1,d]` divide is purely a reconstruction-formula detail, not
+a coordinate-count reduction). Similarly, `free_idx` construction itself (`[gp; every A_od cell]`)
+is independently duplicated in exactly 4 context builders (`context.jl`, `context_scaled.jl`,
+`context_real_d20.jl`, `qmc_context_real_d20.jl`). **Practical implication**: before writing the
+relative-A coordinate layer (§6), there is a real choice between (a) implementing the new
+per-destination anchor logic independently in all ~15+4 sites (correctness risk: the same logic
+must be replicated correctly that many times), or (b) consolidating the gauge-reconstruction
+formula into one shared function first (mirroring what `gravity_elimination.jl`/
+`outer_coordinate_layout.jl` already did for the pivot), then building the anchor layer on top of
+that single site. (b) is recommended but is itself extra, not-yet-scoped work.
+
+Two smaller items from the audit: no `rho_from_gp`/`GT_from_gp` functions exist anywhere in this
+repo (task brief's assumed names were unfounded, independently confirming this session's own
+earlier finding); and the concurrent Brazil-Korea task's `gravity_sample_mask` utility is confirmed
+**absent** from this worktree's base (`cd17235`) by a repo-wide search — consistent with this
+branch predating that work, as documented in §1 above.
 
 ## 4. Explicitly NOT done this session (task §§6–24)
 
@@ -118,17 +162,28 @@ substitute for it.
 
 ## 5. Recommended next steps (in dependency order)
 
-1. Resolve the `gravity_sample_mask` reuse-vs-reimplement question once the concurrent Brazil-Korea
+1. **Decide on consolidation vs. per-site duplication** for the Topic-2 gauge-reconstruction
+   formula (§3a(ii)) before writing anchor logic — this decision shapes every subsequent step's
+   scope and should be made deliberately, not defaulted into by editing whichever file is opened
+   first.
+2. Resolve the `gravity_sample_mask` reuse-vs-reimplement question once the concurrent Brazil-Korea
    task's branch is stable (own-cell + Brazil→Korea eligibility masking is needed by both efforts).
-2. Implement the relative-A coordinate encode/decode layer (task §6) with a round-trip test —
-   this is the one piece every other implementation section depends on. Includes restricting
-   `build_pivot_elimination`'s `argmax|c|` search to the 360 retained (non-anchor) coordinates,
-   per theory doc §2.1(c)'s closing note.
-3. Numerically execute theory §2.2 (exact full-A recovery) and §2.3 (comparison theorem) at a
+3. Implement the relative-A coordinate encode/decode layer (task §6) with a round-trip test —
+   the one piece every other implementation section depends on. Includes restricting
+   `build_pivot_elimination`'s `argmax|c|` search to the 360 retained (non-anchor) coordinates
+   (theory doc §2.1(c)), generalizing `OuterCoordinateLayout`/`outer_dim`/`decode_outer_unified`/
+   `reduce_to_w_unified`/`layout_fingerprint` (Topic 1), and updating `free_idx` construction in
+   all 4 context builders (Topic 10) — care must be taken not to conflate the *existing* `λ[1,d]`
+   origin-1 reconstruction-formula device with the *new* anchor coordinate reduction (§3a(ii)).
+4. Numerically execute theory §2.2 (exact full-A recovery) and §2.3 (comparison theorem) at a
    single D=4 point before writing any Hessian/gradient code — this is the cheapest possible
    falsification test of the whole approach and should gate further investment.
-4. Only after (3) passes: proceed to §§8–14 (moment state, FG, `H_EE`, cross-Hessian, outer
-   gradient, screens) in the order the task specifies, each with its own D=4 gate before moving on.
+5. Only after (4) passes: proceed to §8 (moment state) and §9 (FG forward/transpose, mostly
+   `unchanged` per the audit — see §3a(i)), then re-scope §§11–12 (`H_EE`, cross-Hessian) in light
+   of the audit's finding that those kernels are largely `unchanged` already, then §13 (outer
+   gradient — the one genuinely new derivative-bookkeeping site, `composite_gradient_at_Cplus`) and
+   §14 (screens, contained per the audit — they inherit the Topic-2 dependency but don't need
+   anchor-aware logic of their own).
 
 ## 6. Final verdict block
 
