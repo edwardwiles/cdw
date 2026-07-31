@@ -62,7 +62,7 @@ descends from (or equals) `approved_base_sha`. Exit code 0 -> true, 1 -> false, 
 (e.g. unknown commit) -> throws (a config error, not a normal refusal).
 """
 function melitz_check_ancestry(repo_dir::AbstractString, current_sha::AbstractString, approved_base_sha::AbstractString)
-    cmd = Cmd(String["git", "-C", repo_dir, "merge-base", "--is-ancestor", approved_base_sha, current_sha]; ignorestatus=true)
+    cmd = Cmd(Cmd(String["git", "-C", repo_dir, "merge-base", "--is-ancestor", approved_base_sha, current_sha]); ignorestatus=true)
     proc = run(cmd)
     code = proc.exitcode
     code in (0, 1) || error("melitz_check_ancestry: git merge-base returned unexpected exit code $code " *
