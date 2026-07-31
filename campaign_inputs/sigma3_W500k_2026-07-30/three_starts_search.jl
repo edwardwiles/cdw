@@ -606,12 +606,22 @@ open(LOG_PATH, "w") do io
         println(io, "| `", k, "` | `", v, "` |")
     end
     println(io, "\n## Outcome\n")
-    println(io, "**", length(accepted), " of ", N_STARTS_POOL, " common starts accepted** from ",
-            n_cand, " candidate evaluations.\n")
-    if length(accepted) < N_STARTS_POOL
-        println(io, "> **INCOMPLETE**: fewer than ", N_STARTS_POOL, " starts were found within the budget ",
+    println(io, "**Pool search: ", length(POOL), " of ", N_STARTS_POOL, " candidates accepted** from ",
+            n_cand, " candidate evaluations. **Final selection: ", length(accepted), " of ", N_STARTS_FINAL,
+            " starts** (calibration + the ", N_STARTS_FINAL - 1, " best-separated perturbations by ",
+            "max-min pairwise distance, see SELECT_BY_DISTANCE in the run log).\n")
+    if length(POOL) < N_STARTS_POOL
+        println(io, "> **POOL INCOMPLETE**: fewer than ", N_STARTS_POOL, " pool candidates were found within the budget ",
                 "(max_candidates=", MAX_CANDIDATES, ", max_per_radius=", MAX_PER_RADIUS,
-                ", final radius=", radius, "). No substitute starts were fabricated.\n")
+                ", final radius=", radius, "). No substitute candidates were fabricated. ",
+                "This does NOT by itself mean the final selection failed -- check whether ",
+                "length(accepted)==", N_STARTS_FINAL, " below.\n")
+    end
+    if length(accepted) < N_STARTS_FINAL
+        println(io, "> **FINAL SELECTION INCOMPLETE**: fewer than ", N_STARTS_FINAL,
+                " starts were selected -- see select_by_distance's own WARNING output in the run log.\n")
+    else
+        println(io, "> Final selection complete: ", N_STARTS_FINAL, "/", N_STARTS_FINAL, " starts.\n")
     end
     println(io, "| start | label | radius | candidate # | gp | max Delta* over families |")
     println(io, "|---|---|---|---|---|---|")
