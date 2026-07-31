@@ -31,15 +31,27 @@ function git_here(repo, args...)
     read(Cmd(String["git", "-C", repo, string.(args)...]), String)
 end
 
+# A non-ancestor commit SHA is needed to exercise the "wrong ancestry" refusal path. This
+# used to be a hardcoded SHA borrowed from an unrelated branch in the repo this was originally
+# written against (trade_robustness_modular) -- that object is NOT part of what gets pushed to
+# a shared remote (only commits reachable from a pushed branch tip travel with it), so the
+# test broke immediately the first time this integration branch was relocated to a different
+# clone (cdw/melitz/...), exactly the kind of repo-portability bug Phase 3's own audit is
+# supposed to catch. Fixed to fabricate a guaranteed-non-ancestor commit locally instead:
+# `git commit-tree` on the empty tree with NO parent creates a real, locally-reachable commit
+# object with no path to/from HEAD, so it exists in every clone (we just created it) and is
+# provably not an ancestor (it has no parents at all).
+const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's well-known empty-tree hash, universal across all repos
+NONANCESTOR_SHA = strip(git_here(REPO, "commit-tree", EMPTY_TREE_SHA, "-m", "melitz_test_production_launcher: synthetic non-ancestor commit (no parent)"))
+
 @testset "melitz_check_ancestry: real known commit pairs" begin
     # d0904c7 -> 6e803d4 -> ... -> HEAD is this repo's own real, linear Melitz campaign
     # history (the exact ancestry chain the governing prompt describes).
     @test melitz_check_ancestry(REPO, "6e803d43875e73deb3cf8acf3c04e8febd808e53", "d0904c7") == true
     @test melitz_check_ancestry(REPO, readchomp(`git -C $REPO rev-parse HEAD`), "6e803d43875e73deb3cf8acf3c04e8febd808e53") == true
-    # A real commit from a totally unrelated, non-ancestor branch (an old Ricardian diag
-    # branch, `diag/fullA-d20-fast-infeasibility`) -- confirmed via a direct `git merge-base
-    # --is-ancestor` check (both directions) neither commit descends from the other.
-    @test melitz_check_ancestry(REPO, readchomp(`git -C $REPO rev-parse HEAD`), "91f5ec2") == false
+    # A synthetic, parentless commit: guaranteed to exist in THIS clone (just created above)
+    # and guaranteed not an ancestor of HEAD in either direction (it has no parents at all).
+    @test melitz_check_ancestry(REPO, readchomp(`git -C $REPO rev-parse HEAD`), NONANCESTOR_SHA) == false
 end
 
 # Real, disposable scratch worktree at the current commit -- isolated from the main
@@ -89,7 +101,7 @@ try
     end
 
     @testset "melitz_production_preflight!: refuses on wrong ancestry (env override)" begin
-        ENV["MELITZ_PRODUCTION_APPROVED_BASE"] = "91f5ec2"
+        ENV["MELITZ_PRODUCTION_APPROVED_BASE"] = NONANCESTOR_SHA
         try
             refusal = nothing
             try
