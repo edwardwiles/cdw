@@ -12,7 +12,7 @@
 #      draw matrices and wire cleanly through d20_real_setup_qmc to a working
 #      evaluate_fullA call.
 # ============================================================================
-include(joinpath(@__DIR__, "qmc_context_real_d20.jl"))
+include(joinpath(@__DIR__, "context_real_d20.jl"))   # unify-random-draw-production-pipeline 2026-07-30: qmc_context_real_d20.jl deleted, d20_real_setup now takes U= directly
 include(joinpath(@__DIR__, "qmc_draws.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
 include(joinpath(@__DIR__, "winners.jl"))
@@ -25,7 +25,7 @@ println("="^80); println("Phase 7 wiring smoke test (W=", W_SMOKE, ")"); println
 # ---- 1. Equivalence: qmc fork w/ seed-888 pseudorandom U == production d20_real_setup ----
 ctx_prod = d20_real_setup(W = W_SMOKE, find_smallest = true)
 U_prod_seed888 = pseudorandom_U(W_SMOKE, ctx_prod.D; seed = 888)
-ctx_qmc_same = d20_real_setup_qmc(W = W_SMOKE, U_injected = U_prod_seed888, find_smallest = true)
+ctx_qmc_same = d20_real_setup(W = W_SMOKE, U = U_prod_seed888, find_smallest = true)
 
 println("[1] D match: ", ctx_prod.D == ctx_qmc_same.D)
 println("    theta0_up match: ", ctx_prod.θ0_up == ctx_qmc_same.θ0_up, " (max abs diff=", maximum(abs.(ctx_prod.θ0_up .- ctx_qmc_same.θ0_up)), ")")
@@ -51,8 +51,8 @@ U_sobol  = sobol_U(W_SMOKE, D; seed = 101)
 println("\n[2] Halton U: shape=", size(U_halton), " finite=", all(isfinite, U_halton), " positive=", all(U_halton .>= 0), " mean=", round(mean(U_halton), digits=3), " (Exp(1) target 1.0)")
 println("    Sobol  U: shape=", size(U_sobol), " finite=", all(isfinite, U_sobol), " positive=", all(U_sobol .>= 0), " mean=", round(mean(U_sobol), digits=3), " (Exp(1) target 1.0)")
 
-ctx_halton = d20_real_setup_qmc(W = W_SMOKE, U_injected = U_halton, find_smallest = true)
-ctx_sobol  = d20_real_setup_qmc(W = W_SMOKE, U_injected = U_sobol, find_smallest = true)
+ctx_halton = d20_real_setup(W = W_SMOKE, U = U_halton, find_smallest = true)
+ctx_sobol  = d20_real_setup(W = W_SMOKE, U = U_sobol, find_smallest = true)
 r_halton = evaluate_fullA(ctx_halton.θ0_up[vcat(ctx_halton.free_idx)], ctx_halton; warm = false)
 r_sobol  = evaluate_fullA(ctx_sobol.θ0_up[vcat(ctx_sobol.free_idx)], ctx_sobol; warm = false)
 println("    Halton ctx: inner_status=", r_halton.inner_status, " Delta=", r_halton.Delta_dual)

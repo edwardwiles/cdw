@@ -15,7 +15,7 @@
 # 1 Sobol replicate. Reports candidate kappa after the capped continuation,
 # for a like-for-like comparison across draw types.
 # ============================================================================
-include(joinpath(@__DIR__, "qmc_context_real_d20.jl"))
+include(joinpath(@__DIR__, "context_real_d20.jl"))   # unify-random-draw-production-pipeline 2026-07-30: qmc_context_real_d20.jl deleted, d20_real_setup now takes U= directly
 include(joinpath(@__DIR__, "qmc_draws.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
 include(joinpath(@__DIR__, "winners.jl"))
@@ -166,7 +166,7 @@ for (kind, s, label) in replicates
     seed = 1000 * s + (kind == :pseudorandom ? 1 : kind == :halton ? 2 : 3)
     logprint("\n", "="^90); logprint("REPLICATE: ", label, " seed=", seed); logprint("="^90)
     U = draw_fn(kind)(W_REAL, 20; seed = seed)
-    ctx = d20_real_setup_qmc(W = W_REAL, U_injected = U, find_smallest = true)
+    ctx = d20_real_setup(W = W_REAL, U = U, find_smallest = true)
     pe = build_pivot_elimination(ctx)
     res = joint_polish_capped(label, ctx, pe; gp0 = gp_start, zfree0 = zfree_start, maxit = MAXIT_CAP)
     push!(results_cont, res)

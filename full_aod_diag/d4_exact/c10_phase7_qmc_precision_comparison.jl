@@ -27,7 +27,7 @@
 #      pivot-reduced z-space (h=0.05), same style as Phase 6/c9_phase8's
 #      directional secant diagnostic.
 # ============================================================================
-include(joinpath(@__DIR__, "qmc_context_real_d20.jl"))
+include(joinpath(@__DIR__, "context_real_d20.jl"))   # unify-random-draw-production-pipeline 2026-07-30: qmc_context_real_d20.jl deleted, d20_real_setup now takes U= directly
 include(joinpath(@__DIR__, "qmc_draws.jl"))
 include(joinpath(@__DIR__, "oracle.jl"))
 include(joinpath(@__DIR__, "winners.jl"))
@@ -126,7 +126,7 @@ for (label, w, find_smallest) in POINTS
             t_draw = time() - t_draw0
 
             t_ctx0 = time()
-            ctx = d20_real_setup_qmc(W = W_REAL, U_injected = U, find_smallest = find_smallest)
+            ctx = d20_real_setup(W = W_REAL, U = U, find_smallest = find_smallest)
             t_ctx = time() - t_ctx0
 
             xf = x_free_from_w(w, pe)
