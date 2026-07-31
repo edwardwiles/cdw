@@ -559,13 +559,23 @@ discovering the committed one was generated one minute before its own fix landed
    (2026-07-30) and this session's `reduced_q_switch_geometry.jl` gap. Worked around (both new
    files added to both lists) but not fixed structurally; a future session collapsing this to
    a single include call would remove an entire class of "forgot to add it" bugs.
-5. **`melitz/fullD-delta-star` has advanced past this integration's base** (`20e9f2c` then
-   `64a0e2a` — an independent adversarial economic audit and its own self-correction,
-   concluding the full maintained equilibrium holds at both incumbents under a corrected
-   closure). Neither commit is part of this integration by explicit decision (the audit
-   finding was live and unresolved when this task began; it resolved itself via a concurrent
-   session's correction commit partway through this one). They are compatible with this
-   integration (no file overlap) and should be picked up in the merge below or a follow-up.
+5. **`melitz/fullD-delta-star` has advanced past this integration's base**, three commits now:
+   `20e9f2c` (independent adversarial economic audit), `64a0e2a` (the audit's own
+   self-correction, concluding the full maintained equilibrium holds at both incumbents under
+   a corrected closure), and `037f476` ("Final bounded qpoll extension," landed after this
+   document's Phase 10 verdict was written — checked and confirmed harmless: 62 files, all
+   campaign scripts/checkpoints/results/docs, **zero changes to any `src/melitz/` or other
+   production file**; the real bug it fixes — a campaign driver script's periodic-gating
+   misuse of the `periodic_safeguard_due` flag — was in the caller, not in
+   `melitz_middle_two_start_adaptive!` itself, which is unchanged and was already part of this
+   integration's base via `0622db1`, well before `6e803d4`). It produces new cold-verified
+   "final" incumbents, GT=8.891899%/0.233985% (upper/lower), superseding the
+   8.849341%/0.272266% pair this document's Phase 6 gate cold-verified — expected and
+   harmless, since that gate's job was proving *code* parity at a fixed incumbent pair, not
+   tracking the campaign's latest result; it will come along for free whenever the merge
+   below runs, since all three commits are already part of `melitz/fullD-delta-star`'s own
+   history. None of the three are part of this integration branch by explicit decision, and
+   none require porting (no source content in any of them).
 6. **The other, currently-live `sigma3_W500k` five-family campaign** (10 real KNITRO
    processes, branch `campaign/resource-layout-test-sigma3-W500k-2026-07-30`, a completely
    different worktree) is unrelated to and unaffected by this consolidation, noted here only
