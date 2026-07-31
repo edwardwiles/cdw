@@ -56,8 +56,23 @@ returned) gets the same checksum treatment as the QMC paths with no change to
 genExpRands!/drawU.jl.
 """
 
+"Best-effort git HEAD SHA of the generation code producing this manifest -- cached after first
+call (repo HEAD doesn't change mid-process); `missing` if `git` isn't available (e.g. a packaged
+deployment without a .git directory)."
+const _GENERATION_CODE_SHA = Ref{Union{Missing,String}}(missing)
+function _generation_code_sha()
+    if _GENERATION_CODE_SHA[] === missing
+        _GENERATION_CODE_SHA[] = try
+            strip(read(`git -C $(D4X_ROOT) rev-parse HEAD`, String))
+        catch
+            missing
+        end
+    end
+    return _GENERATION_CODE_SHA[]
+end
+
 function draw_design_meta(design::Symbol, seed::Int, D::Int, W::Int, Uexp::AbstractMatrix{Float64};
-        timing::NamedTuple = NamedTuple())
+        timing::NamedTuple = NamedTuple(), artifact_path::Union{Nothing,AbstractString} = nothing)
     U01_recovered = 1.0 .- exp.(-Uexp)
     return (
         draw_design = design,
@@ -65,9 +80,13 @@ function draw_design_meta(design::Symbol, seed::Int, D::Int, W::Int, Uexp::Abstr
         draw_seed = seed,
         D = D,
         W = W,
-        transform_convention = "Exp(1) via U[i] = -log(1 - U01[i]) (prepare_cc/genRands.jl::transform_unit01_to_exp1!, the single shared implementation used identically by all designs)",
+        scalar_type = eltype(Uexp),
+        matrix_layout = "W x D, column-major (Julia native Array layout)",
+        transform_convention = "Exp(1) via U[i] = -log(1 - U01[i]) (prepare_cc/genRands.jl::transform_unit01_to_exp1!, the single shared implementation used identically by all designs, version=v1-2026-07-30)",
         sobol_jl_version = design == :sobol_randomized ? string(pkgversion(Sobol)) : missing,
         julia_version = string(VERSION),
+        generation_code_sha = _generation_code_sha(),
+        artifact_path = artifact_path,
         checksum_uniform = sha256_of_matrix(U01_recovered),
         checksum_transformed = sha256_of_matrix(Uexp),
         n_at_boundary = count(x -> x <= 0.0 || x >= 1.0, U01_recovered),
@@ -111,6 +130,11 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         log_draw_meta::Bool = true,
         U_precomputed::Union{Nothing,AbstractMatrix{Float64}} = nothing,
         precomputed_already_transformed::Bool = true,
+        # Provenance only (task §11/§10): a caller that loaded U_precomputed from a persisted
+        # artifact should pass its path here so draw_meta records it; this file does not itself
+        # implement artifact loading (no such loader exists anywhere in this codebase today --
+        # see reachability audit).
+        artifact_path::Union{Nothing,AbstractString} = nothing,
         # Part A (2026-07-23): passthrough to d20_real_setup's own destination_sample kwarg
         # (default :exclude_row, matching that function's new default). CM/originZC checkpoint
         # callers (cm_checkpoint.jl, cm_originzc_checkpoint.jl) explicitly pass :all_legacy here
@@ -153,6 +177,6 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
                   pairwise = ctx0.screen_setup_wall.pairwise, witness = ctx0.screen_setup_wall.witness)
     end
 
-    meta = log_draw_meta ? draw_design_meta(draw_design, draw_seed, ctx0.D, W, ctx0.U; timing = timing) : nothing
+    meta = log_draw_meta ? draw_design_meta(draw_design, draw_seed, ctx0.D, W, ctx0.U; timing = timing, artifact_path = artifact_path) : nothing
     return merge(ctx0, (draw_design = draw_design, draw_seed = draw_seed, draw_meta = meta))
 end
