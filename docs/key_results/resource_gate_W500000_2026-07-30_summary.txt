@@ -1,0 +1,17 @@
+-9999999999999999999 = -9999999999999999999
+κ = 0.011562504161350518
+κ_upper = 0.011562504161350518
+κ_lower = 0.011562504161350518
+numMoments = 382
+numMomentInnerSimple = 381
+inequality_index = Int64[]
+δ_star_initial = -0.00014752369016075379
+val = 0.00014752369016075379
+δ_star_initial_low = -0.00014752369016075379
+val = 0.00014752369016075379
+δ_star_initial_up = -0.00014752369016075379
+δ_star_initial = -0.00014752369016075379
+δ_grid = [1]
+δ_grid_filtered = [1]
+halton_scrambled    total= 138.97s  draw_gen=   1.90s  ctx= 135.27s  pairwise=  0.57s  witness= 20.33s  U=0.0745GB  peak_RSS=20.319GB
+Wrote docs/key_results/draw_pipeline_resource_gate_W500000_2026-07-30.csv

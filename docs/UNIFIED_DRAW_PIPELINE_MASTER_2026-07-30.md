@@ -80,8 +80,12 @@ landed on `production/fullA-exact` itself (not that worktree).
   in-place draw generation, 0 extra copies beyond `U` itself); Sobol/Halton ~22s each (includes one
   pre-existing top-level `copyto!`, not newly introduced by this refactor). See
   `docs/key_results/draw_pipeline_resource_gate_W80000_2026-07-30.csv`.
-- **Resource gate at W=500,000** (real campaign scale): see
-  `DRAW_PIPELINE_W500K_RESOURCE_GATE_2026-07-30.csv` for exact figures.
+- **Resource gate at W=500,000** (real campaign scale, real measurement, not extrapolated):
+  context build 163s (pseudorandom) / 124s (Sobol) / 135s (Halton), screen construction ~21s for
+  every design, draw matrix 0.0745GB (`80,000,000` `Float64` entries) for every design, individual
+  process peak RSS 10.8GB for the first (cleanest) measurement. See
+  `DRAW_PIPELINE_W500K_RESOURCE_GATE_2026-07-30.csv` for exact figures and an explicit caveat about
+  the later two designs' peak-RSS figures (measured cumulatively in one process, not isolated).
 - **D=4 regression check**: the D=4 synthetic economy has no draw-design selection and never did
   (`qmc_context_real_d20.jl`'s own header explicitly excluded it) -- reported honestly as N/A for
   draw-design gates, with the real applicable check (the `master_prepare_cc` signature-compatibility
@@ -138,12 +142,15 @@ OLD_NEW_EQUIVALENCE =
     halton_scrambled: pass
 
 W500K_SOBOL_PRODUCTION_GATE =
-    construction_only_pass -- context/draw-generation/screen construction verified at real
-    W=500,000 (see DRAW_PIPELINE_W500K_RESOURCE_GATE_2026-07-30.csv); no outer-loop KNITRO
-    optimization or five-family campaign entry-point smoke was run, per this task's explicit
-    "do not launch a production campaign" instruction, which this session interpreted
-    conservatively (construction-only, not even a reduced-iteration real solve) given the
-    live campaign context.
+    construction_only_pass -- REAL measurement (not extrapolated) at W=500,000 for all 3
+    generated designs: context build 124-178s, screen construction ~21s, draw matrix
+    0.0745GB, individual process peak RSS 10.8GB (see
+    DRAW_PIPELINE_W500K_RESOURCE_GATE_2026-07-30.csv for exact figures and a measurement
+    caveat on the cumulative-vs-isolated peak-RSS figures for designs 2-3). No outer-loop
+    KNITRO optimization or five-family campaign entry-point smoke was run, per this task's
+    explicit "do not launch a production campaign" instruction, interpreted conservatively
+    (construction-only, not even a reduced-iteration real solve) given the live campaign
+    context.
 
 PRODUCTION_MERGE = port_ready_waiting_for_campaign
 ```
