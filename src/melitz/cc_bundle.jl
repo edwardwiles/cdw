@@ -25,6 +25,19 @@
 using KNITRO
 using LinearAlgebra: BLAS
 
+# 2026-07-31 perf audit: shared, NEVER-mutated empty sentinels for the MelitzCCBundle
+# functor's default arguments (below). Literal `Float64[]`/`Array{Float64}(undef,0,0)`
+# default-argument EXPRESSIONS are re-evaluated (and freshly heap-allocated) on every call
+# that omits that argument -- confirmed live via Profile.Allocs at real D=20/W=80,000: a
+# plain objective-only callback call allocated ~176 bytes/call (4 empty Vector{Float64} +
+# 1 empty Matrix{Float64}), on what is the single hottest call site in the whole codebase
+# (KNITRO's own line-search calls this functor many times per Newton iteration). Every use
+# of `g`/`θ`/`h`/`constr`/`jac` in the functor body below is gated behind `length(...) > 0`
+# before any read/write, so the shared singleton is never mutated -- reusing one immutable
+# empty instance across every call is safe and eliminates the allocation entirely.
+const _MELITZ_CC_EMPTY_VEC = Float64[]
+const _MELITZ_CC_EMPTY_MAT = Array{Float64}(undef, 0, 0)
+
 # ============================================================================
 # Melitz-owned single-flight inner-solve guard (ports cc_algo/parallelism_guards.jl's
 # guard_enter_inner_solve!/guard_exit_inner_solve! -- same simple invariant, independent
@@ -268,10 +281,10 @@ end
 # misbehaving.
 # ============================================================================
 
-function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float64}=Float64[],
-                              θ::AbstractVector{Float64}=Float64[]; h::AbstractVector{Float64}=Float64[],
-                              constr::AbstractVector{Float64}=Float64[],
-                              jac::AbstractMatrix{Float64}=Array{Float64}(undef, 0, 0))
+function (Q::MelitzCCBundle)(x::AbstractVector{Float64}, g::AbstractVector{Float64}=_MELITZ_CC_EMPTY_VEC,
+                              θ::AbstractVector{Float64}=_MELITZ_CC_EMPTY_VEC; h::AbstractVector{Float64}=_MELITZ_CC_EMPTY_VEC,
+                              constr::AbstractVector{Float64}=_MELITZ_CC_EMPTY_VEC,
+                              jac::AbstractMatrix{Float64}=_MELITZ_CC_EMPTY_MAT)
     length(θ) == 0 || error("MelitzCCBundle functor: the outer theta-gradient branch (jac_h) " *
         "is not implemented -- confirmed unreachable on the production-fast path (see this " *
         "file's header). Use gradient_backend in the :B_direct_argument_* family.")
@@ -422,6 +435,21 @@ Matrix-free analogue of `melitz_moments_adapter!` (delta_star.jl): re-equilibrat
 Returns `gamma_prime_j` so the caller can set `H_save = (gamma_prime_j - 1) * (-1)^find_smallest`
 for `:implicit`-mode bundles (mirrors `melitz_moments_adapter!`'s own `K .=
 p.gamma_prime_target - 1`).
+
+**Allocation (2026-07-31 perf audit, measured live at real D=20/W=80,000):** ~77 KB/call, one
+per outer-point update (not per KNITRO iteration -- `melitz_update_moment_operator!`'s own
+docstring already exempts this class of call from the hot-path zero-alloc requirement). The
+dominant contributor (`Profile.Allocs`-confirmed) is `melitz_expand_theta`'s NON-mutating
+return of fresh `A`/`f` matrices and related state -- this file's own `melitz_update_operator_at_theta!`
+never adopted the mutating `melitz_expand_theta!`/`MelitzExpandedState`/
+`MelitzThetaExpansionWorkspace` machinery (`log_cutoff_param.jl`) already built and used by
+the coordinate-probe gradient code (`direct_gradient.jl` etc.) for exactly this reason. A
+secondary contributor is `melitz_update_moment_operator!`'s own per-origin `sortperm(cutoff_o)`
+(`moment_operator.jl`), which could be replaced with `sortperm!` into a preallocated `Vector{Int}`
+buffer to avoid its own small allocation. Neither was changed by this audit (both would require
+threading a workspace through `MelitzPrimitives`/`MelitzEquilibrium`/`MelitzCounterfactual`
+construction, a larger change than this session's scope) -- flagged here as a concrete,
+evidence-backed target for a future session, not claimed to be fixed.
 """
 function melitz_update_operator_at_theta!(op::MelitzMomentOperator, theta::AbstractVector, ctx)
     # Governing prompt Phase 2 (2026-07-XX outer-search session): split this function's own
