@@ -18,6 +18,7 @@ const D4E = joinpath(REPO_ROOT, "full_aod_diag", "d4_exact")
 ENV["REAL_DATA_DIR"] = joinpath(INPUTS_DIR, "data_snapshot")
 
 lp(xs...) = (println(xs...); flush(stdout))
+include(joinpath(D4E, "json_lite.jl"))  # json_load
 include(joinpath(D4E, "campaign_cell_io.jl"))  # write_json_file
 
 results = Dict{String,Any}()
@@ -90,7 +91,8 @@ end
 # earlier version of this script incorrectly built a bare d20_real_setup_design ctx per family,
 # which would only actually exercise the unrestricted family's real bundle path).
 try
-    for f in ["draw_design.jl", "winners.jl", "oracle.jl", "gravity_elimination.jl",
+    for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl", "common_marginals_interval.jl",
+              "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
               "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
               "compressed_factual_buffer_reuse.jl", "core_exact_hessian.jl",
               "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
@@ -112,7 +114,7 @@ try
     gate_probs = nested_grid_sequence([10, 20, 50])[50]
     gate_layout = OriginByPowerLayout(gate_ctx.D, 2, 2)
     build_inner_for(family) =
-        family === :unrestricted   ? (() -> gate_ctx) :
+        family === :unrestricted   ? (() -> build_unrestricted_operator_ctx(gate_ctx; moment_representation = :operator)) :
         family === :flexible_cm    ? (() -> build_cm_production_context(gate_ctx, CS; L = 50, contrasts = :orthonormal, probs = gate_probs)) :
         family === :common_frechet ? (() -> build_cm_frechet_production_context(gate_ctx, CS; L = 50, contrasts = :orthonormal, probs = gate_probs, cm_hessian_backend = :structured)) :
         family === :cm_meanzc      ? (() -> build_cm_meanzc_production_context(gate_ctx, CS; L = 50, K_mean = 2, K_pair = 2, contrasts = :orthonormal, probs = gate_probs)) :
