@@ -1110,11 +1110,19 @@ function evaluate_melitz_delta_from_solution(theta_free::AbstractVector, ctx, ob
         if G_precomputed !== nothing
             G_out = Matrix{Float64}(G_precomputed)
         else
-            W = size(obj_like.U, 1)
-            Ktmp = zeros(W)
-            Gtmp = zeros(W, obj_like.d)
-            obj_like.moments!(Ktmp, Gtmp, theta_free, obj_like.U, obj_like)
-            G_out = Gtmp
+            # 2026-07-31 (legacy-H removal audit): was an inline `obj_like.moments!(...)` dense
+            # fill -- correct for the legacy dense bundles but a guaranteed FieldError for
+            # MelitzCCBundle (no `.moments!` field). No current caller reaches this branch
+            # (both call sites, finite_delta_outer.jl/reduced_q_controller.jl, leave `store_G`
+            # at its own default `false`), so this was a dormant landmine rather than a live
+            # bug -- but `evaluate_melitz_delta_from_solution`'s own sibling `evaluate_melitz_delta`
+            # (same file) already dispatches this exact operation through
+            # `melitz_bundle_dense_G_at_theta` (cc_bundle.jl: dense bundles rebuild via
+            # `obj.moments!` unchanged; `MelitzCCBundle` materializes G from the operator via
+            # the diagnostic-only `melitz_dense_G_from_operator`) -- reusing that same dispatch
+            # here closes the gap instead of leaving two independently-written copies of "get a
+            # dense G for this bundle" that can drift out of sync.
+            G_out = melitz_bundle_dense_G_at_theta(obj_like, theta_free)
         end
     end
 

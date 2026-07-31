@@ -63,3 +63,4 @@ include("predictor_corrector.jl")
 include("lfd_preserving_state.jl")
 include("hybrid_chamber_corrector.jl")
 include("fixed_q_a_middle_loop.jl")
+include("production_structural_gate.jl")   # 2026-07-31 legacy-H removal audit, Phase 14
