@@ -41,14 +41,14 @@ into git) count as "dirty" for launch-refusal purposes. This is the exact split 
 requirement #2/"untracked output files should not by themselves block launch" describes.
 """
 function melitz_git_state(repo_dir::AbstractString)
-    git(args...) = strip(read(Cmd([`git`; "-C"; repo_dir; args...]), String))
+    git(args...) = strip(read(Cmd(String["git", "-C", repo_dir, string.(args)...]), String))
     common_dir = git("rev-parse", "--git-common-dir")
     # git-common-dir can be relative to repo_dir (e.g. "../.git") -- normalize to absolute.
     common_dir_abs = isabspath(common_dir) ? common_dir : normpath(joinpath(repo_dir, common_dir))
     worktree_path = git("rev-parse", "--show-toplevel")
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
     commit_sha = git("rev-parse", "HEAD")
-    porcelain = read(Cmd([`git`; "-C"; repo_dir; "status"; "--porcelain"; "--untracked-files=no"]), String)
+    porcelain = read(Cmd(String["git", "-C", repo_dir, "status", "--porcelain", "--untracked-files=no"]), String)
     dirty_files = String[l[4:end] for l in split(porcelain, '\n') if !isempty(l)]
     return (common_dir=common_dir_abs, worktree_path=worktree_path, branch=branch,
         commit_sha=commit_sha, tracked_dirty=!isempty(dirty_files), dirty_files=dirty_files)
@@ -62,7 +62,7 @@ descends from (or equals) `approved_base_sha`. Exit code 0 -> true, 1 -> false, 
 (e.g. unknown commit) -> throws (a config error, not a normal refusal).
 """
 function melitz_check_ancestry(repo_dir::AbstractString, current_sha::AbstractString, approved_base_sha::AbstractString)
-    cmd = Cmd([`git`; "-C"; repo_dir; "merge-base"; "--is-ancestor"; approved_base_sha; current_sha]; ignorestatus=true)
+    cmd = Cmd(String["git", "-C", repo_dir, "merge-base", "--is-ancestor", approved_base_sha, current_sha]; ignorestatus=true)
     proc = run(cmd)
     code = proc.exitcode
     code in (0, 1) || error("melitz_check_ancestry: git merge-base returned unexpected exit code $code " *
