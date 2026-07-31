@@ -181,11 +181,18 @@ traced to a pre-existing stale include chain in that script, not this task's cha
 
 ## 10. Production merge
 
-See git log for the exact commit sequence and SHA (this section is completed at merge time — see
-`git log production/fullA-exact` after merge).
+Merged locally (fast-forward, clean, all 8 commits above production tip `81a6730`) onto a local
+staging branch tracking `remotes/cdw/production/fullA-exact`. Re-ran the real-D20 pivot gate
+(21/21 PASS) on the merged tip to reconfirm before requesting push authorization. **Not yet pushed
+or tagged** — per this repo's standing "confirm before pushing to a real remote" policy, pushing
+and tagging `exclude-brazil-korea-gravity-release-2026-07-31` requires explicit user go-ahead,
+which is being requested separately from this document.
 
 ```
 PRODUCTION_MERGE = merged_locally_pending_push_confirmation
+    local_merge_sha: e622366e308a7e3b6370130e652cedd8db4b0754
+    base_production_sha: 81a673054551a5d91a672f1a7258655e4d868cb0
+    commits_ahead: 8
 ```
 
 ## 11. Campaign readiness
