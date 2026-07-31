@@ -359,7 +359,19 @@ else
     println("[$CHAINID] FRESH START -- establishing profiled anchor (Step 1)")
     state = ChainState(ANCHOR_LABEL, DIRECTION, FINGERPRINT, ChainPoint[], :expand, GT_STEP0, nothing,
         0, 0, 0, 1, 0, 0.0, :running, copy(A_free0_d20), copy(q0_anchor), copy(p_star0_d20), g0, GT0, nothing)
-    sys0 = melitz_fixed_q_middle_constraint_system(theta_plain0_d20, ctx_d20, obj_d20)
+    # BUG FIX (caught live at launch, 2026-07-31): the constraint system at the anchor welfare
+    # point must be built from the ANCHOR's OWN q (q_free_fixed), not the calibration's q --
+    # theta_plain0_d20 only equals the anchor theta for the current_calibration anchor itself
+    # (q_free_fixed==q_free0_d20 there); for reduced_q_pre_switch/reduced_q_post_switch it is a
+    # DIFFERENT point, so building sys0 from theta_plain0_d20 registers the WRONG linear
+    # ordering/same-bin rows and can classify the anchor's own true-feasible start as infeasible
+    # (observed live: reduced_q_post_switch's first evaluation landed on the fixed 50.0 barrier
+    # value with a 0-iteration "locally optimal" KNITRO exit, failing the FiniteSolved assertion
+    # on both anchor directions). Matches scripts/melitz_phase7_cutoff_portfolio_2026-07-30.jl's
+    # own correct `theta_anchor_plain` construction (anchor-specific q_free baked in).
+    theta_anchor_plain0 = copy(theta_plain0_d20)
+    theta_anchor_plain0[2+nA20:end] .= q_free_fixed
+    sys0 = melitz_fixed_q_middle_constraint_system(theta_anchor_plain0, ctx_d20, obj_d20)
     A_start0 = melitz_project_start_to_middle_constraints(copy(A_free0_d20), sys0, ctx_d20)
     write_pending(GT0, :anchor)
     session_d20.obj.use_cached_x = false; session_d20.obj.x .= NaN
@@ -414,7 +426,7 @@ while state.status == :running
         elseif abs(GT_infeas - GT_feas) <= GT_BRACKET_STOP_TOL
             state.status = :converged   # bracket width converged even if not exactly at delta-tol
         else
-            state.status = :max_points   # polish budget exhausted without full convergence
+            state.status = :polish_exhausted   # 3-polish-evaluation cap reached without full convergence (governing-prompt rule, not a failure)
         end
         break
     end

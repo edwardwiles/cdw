@@ -1,0 +1,2 @@
+idx,phase,g,GT,classification,Delta,within_budget,best_start,trigger_reason,lfd_ok,lfd_Delta,nStatus,unique_A_points,unique_inner_solves,n_fc_calls,n_ga_calls,wall_s,timestamp
+1,anchor,-0.48546126592859407,6.290640522201974,FiniteSolved,0.48326468182383187,true,continuation,anchor_establish,true,0.48326468182383187,0,5,5,5,5,5.9428510665893555,2026-07-30T20:42:26.128

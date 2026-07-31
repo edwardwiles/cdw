@@ -1,0 +1,5 @@
+Melitz thread startup report:
+  Julia threads available = 5 (require >= 20)
+  BLAS threads selected   = 1
+  WARNING: melitz_thread_startup_report: Threads.nthreads()=5 < required 20 -- using all 5 available Julia threads instead of the 20-thread production default. Outer-gradient/structured-Hessian/moment-construction kernels will run with less parallelism than the documented Melitz production default (src/melitz/CLAUDE.md).
+Julia threads: 5  BLAS threads: 1

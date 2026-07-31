@@ -3,8 +3,8 @@ Melitz thread startup report:
   BLAS threads selected   = 1
   WARNING: melitz_thread_startup_report: Threads.nthreads()=5 < required 20 -- using all 5 available Julia threads instead of the 20-thread production default. Outer-gradient/structured-Hessian/moment-construction kernels will run with less parallelism than the documented Melitz production default (src/melitz/CLAUDE.md).
 Julia threads: 5  BLAS threads: 1
-[reduced_q_post_switch_lower] focal country index = 2
-[reduced_q_post_switch_lower] fingerprint = (D = 20, W = 80000, seed = 1, sigma = 2.5, focal = 2, anchor_label = "reduced_q_post_switch", direction = "lower", q_free_hash = 0x34aa768743ac987e, theta0_hash = 0x9e47adfdd15d2915, git_commit = "169f77d4a9eedb908a078095629a0be77d9c61ca")
+[reduced_q_post_switch_upper] focal country index = 2
+[reduced_q_post_switch_upper] fingerprint = (D = 20, W = 80000, seed = 1, sigma = 2.5, focal = 2, anchor_label = "reduced_q_post_switch", direction = "upper", q_free_hash = 0x34aa768743ac987e, theta0_hash = 0x9e47adfdd15d2915, git_commit = "74f0d23f615779d76e59e0140ff3167e0c8a1e67")
 
 =======================================
            Academic License
@@ -65,12 +65,12 @@ Final optimality error  (abs / rel) =   0.00e+00 / 0.00e+00
 # of CG iterations                  =          0 
 # of function evaluations           =          1
 # of gradient evaluations           =          1
-Total program time (secs)           =       0.17823 (     0.176 CPU time)
+Total program time (secs)           =       0.16955 (     0.168 CPU time)
 Time spent in evaluations (secs)    =       0.00000
 
 ===============================================================================
 
-ERROR: LoadError: AssertionError: [reduced_q_post_switch_lower] anchor profiled point did not reach FiniteSolved
+ERROR: LoadError: AssertionError: [reduced_q_post_switch_upper] anchor profiled point did not reach FiniteSolved
 Stacktrace:
  [1] top-level scope
    @ ~/gravity_robustness/trade_robustness_modular/scripts/melitz_production_chain_2026-07-31.jl:370
@@ -81,4 +81,4 @@ Stacktrace:
  [4] _start()
    @ Base ./client.jl:550
 in expression starting at /bbkinghome/edav/gravity_robustness/trade_robustness_modular/scripts/melitz_production_chain_2026-07-31.jl:339
-[reduced_q_post_switch_lower] FRESH START -- establishing profiled anchor (Step 1)
+[reduced_q_post_switch_upper] FRESH START -- establishing profiled anchor (Step 1)
