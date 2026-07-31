@@ -1,0 +1,166 @@
+==========================================================================================
+Julia threads = 20   BLAS threads = 1
+==========================================================================================
+
+--- D=4: build_melitz_psi_bundle with PURE PRODUCTION DEFAULTS (no backend kwarg) ---
+concrete bundle type      = MelitzCCBundle
+fieldnames                = (:op, :mode, :γ, :U, :M, :d, :outer_constr_index, :find_smallest, :lower_limit, :policy, :use_cached_x, :x, :H_save, :arg0, :arg1, :arg2, :Hfull, :Psi!, :dPsi!, :ddPsi!, :inner_loop_opt, :outer_loop_opt, :hessian_backend, :threshold_crossed, :threshold_crossing_bound, :threshold_crossing_x, :threshold_crossing_time_ns, :needs_outer_moment_jacobian, :jac_h)
+has .H field?              = false
+has .G field?              = false
+has .K field?              = false
+has .moments! field?       = false
+RSS before/after construct = 759.6 / 729.5 MB  (delta=-30.07)
+
+-- field sizes / bytes --
+  U                            Matrix{Float64}      size=(20000, 4)     bytes=640048
+  x                            Vector{Float64}      size=(18,)          bytes=184
+  arg0                         Vector{Float64}      size=(20000,)       bytes=160040
+  arg1                         Vector{Float64}      size=(20000,)       bytes=160040
+  arg2                         Vector{Float64}      size=(20000,)       bytes=160040
+  Hfull                        Matrix{Float64}      size=(18, 18)       bytes=2640
+  jac_h                        Array{Float64, 3}    size=(0, 0, 0)      bytes=56
+  TOTAL Base.summarysize(obj4) bytes = 6045286
+
+--- D=4: build_melitz_implicit_bundle with PURE PRODUCTION DEFAULTS ---
+concrete bundle type      = MelitzCCBundle
+has .H field?              = false
+has .G field?              = false
+
+--- counters after CONSTRUCTION ONLY ---
+(sorted_moment_calls = 0, dense_moment_calls = 0, sorted_outer_gradient_calls = 0, dense_outer_gradient_calls = 0, matrix_free_objective_calls = 0, matrix_free_gradient_calls = 0, matrix_free_hessian_calls = 0, matrix_free_range_screen_calls = 0, dense_inner_objective_calls = 0, dense_inner_gradient_calls = 0, dense_inner_hessian_calls = 0, dense_G_materializations = 0, exact_point_cache_hits = 0, FC_to_GA_cache_hits = 0, operator_rebuilds = 0, evaluation_cap_exits = 0, numerical_failures = 0, production_dense_screen_calls = 0, diagnostic_dense_screen_calls = 0)
+
+--- D=4: real inner KNITRO solve (melitz_bundle_inner_loop: prepare-then-solve, the real production composition) ---
+nStatus=0  val=7.554508757038529e-6  |x|=18
+counters after ONE real D=4 inner solve:
+(sorted_moment_calls = 1, dense_moment_calls = 0, sorted_outer_gradient_calls = 0, dense_outer_gradient_calls = 0, matrix_free_objective_calls = 7, matrix_free_gradient_calls = 4, matrix_free_hessian_calls = 3, matrix_free_range_screen_calls = 0, dense_inner_objective_calls = 0, dense_inner_gradient_calls = 0, dense_inner_hessian_calls = 0, dense_G_materializations = 0, exact_point_cache_hits = 0, FC_to_GA_cache_hits = 0, operator_rebuilds = 1, evaluation_cap_exits = 0, numerical_failures = 0, production_dense_screen_calls = 0, diagnostic_dense_screen_calls = 0)
+
+==========================================================================================
+--- REAL D=20/W=80,000 production fixture (real_data/noah_D20) ---
+focal country index = 2
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+Knitro presolve eliminated 0 variables and 23 constraints.
+
+algorithm:               1
+feastol:                 1e-07
+feastol_abs:             1e-08
+hessopt:                 6
+honorbnds:               1
+maxit:                   10000
+maxtime_real:            90
+numthreads:              1
+opttol:                  0.001
+opttol_abs:              0.0001
+outlev:                  1
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                399 (         399)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                        399 (         399)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                              380 (         357)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                  380 (         357)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                    1157 (        1111)
+Number of nonzeros in Hessian:                        0 (           0)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+EXIT: Primal feasible solution estimate cannot be improved; desired accuracy
+      in dual feasibility could not be achieved.
+
+Final Statistics
+----------------
+Final objective value               =   4.57902650943736e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   9.01e-02 / 5.05e-02
+# of iterations                     =          4 
+# of CG iterations                  =         34 
+# of function evaluations           =         67
+# of gradient evaluations           =          3
+Total program time (secs)           =       3.90615 (     7.936 CPU time)
+Time spent in evaluations (secs)    =       3.69628
+
+===============================================================================
+
+  Activating project at `~/gravity_robustness/worktrees/melitz-legacy-H-audit-2026-07-31`
+ERROR: LoadError: FieldError: type MelitzMiddleProfileV2EvalLogEntry has no field `kind`, available fields: `call_kind`, `n_call`, `is_new_point`, `classification_sym`, `Delta_or_bound`, `cache_hit`, `elapsed_s`
+Stacktrace:
+  [1] getproperty
+    @ ./Base_compiler.jl:54 [inlined]
+  [2] (::var"#546#547")(e::MelitzMiddleProfileV2EvalLogEntry)
+    @ Main ~/gravity_robustness/worktrees/melitz-legacy-H-audit-2026-07-31/scripts/audit_phase1_2_live_bundle_2026-07-31.jl:199
+  [3] (::Base.var"#_bool##0#_bool##1"{var"#546#547"})(x::MelitzMiddleProfileV2EvalLogEntry)
+    @ Base ./reduce.jl:1053
+  [4] MappingRF
+    @ ./reduce.jl:92 [inlined]
+  [5] _foldl_impl
+    @ ./reduce.jl:50 [inlined]
+  [6] foldl_impl
+    @ ./reduce.jl:40 [inlined]
+  [7] mapfoldl_impl(f::Base.var"#_bool##0#_bool##1"{var"#546#547"}, op::typeof(Base.add_sum), nt::Int64, itr::Vector{MelitzMiddleProfileV2EvalLogEntry})
+    @ Base ./reduce.jl:36
+  [8] _mapreduce_dim(f::Function, op::Function, nt::Int64, A::Vector{MelitzMiddleProfileV2EvalLogEntry}, ::Colon)
+    @ Base ./reducedim.jl:331
+  [9] mapreduce
+    @ ./reducedim.jl:326 [inlined]
+ [10] _sum
+    @ ./reducedim.jl:984 [inlined]
+ [11] sum
+    @ ./reducedim.jl:980 [inlined]
+ [12] _simple_count
+    @ ./reduce.jl:1084 [inlined]
+ [13] _count
+    @ ./reducedim.jl:411 [inlined]
+ [14] count(f::Function, A::Vector{MelitzMiddleProfileV2EvalLogEntry})
+    @ Base ./reducedim.jl:409
+ [15] top-level scope
+    @ ~/gravity_robustness/worktrees/melitz-legacy-H-audit-2026-07-31/scripts/audit_phase1_2_live_bundle_2026-07-31.jl:199
+ [16] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [17] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [18] _start()
+    @ Base ./client.jl:550
+in expression starting at /bbkinghome/edav/gravity_robustness/worktrees/melitz-legacy-H-audit-2026-07-31/scripts/audit_phase1_2_live_bundle_2026-07-31.jl:199
+concrete bundle type (D=20,W=80000) = MelitzCCBundle
+has .H/.G/.K/.moments! field? = (false, false, false, false)
+RSS before/after construct  = 959.0 / 934.3 MB  (delta=-24.67)
+Base.summarysize(obj20) bytes = 109016880
+  U                            Matrix{Float64}      size=(80000, 20)    bytes=12800048
+  x                            Vector{Float64}      size=(402,)         bytes=3256
+  arg0                         Vector{Float64}      size=(80000,)       bytes=640040
+  arg1                         Vector{Float64}      size=(80000,)       bytes=640040
+  arg2                         Vector{Float64}      size=(80000,)       bytes=640040
+  Hfull                        Matrix{Float64}      size=(402, 402)     bytes=1292880
+  jac_h                        Array{Float64, 3}    size=(0, 0, 0)      bytes=56
+
+Implied bytes of a legacy dense H=[K|1|G] at D=20,W=80000: W*(M+2)*8 = 257920000 bytes = 0.24 GiB
+construction counters (should be all-zero): (sorted_moment_calls = 0, dense_moment_calls = 0, sorted_outer_gradient_calls = 0, dense_outer_gradient_calls = 0, matrix_free_objective_calls = 0, matrix_free_gradient_calls = 0, matrix_free_hessian_calls = 0, matrix_free_range_screen_calls = 0, dense_inner_objective_calls = 0, dense_inner_gradient_calls = 0, dense_inner_hessian_calls = 0, dense_G_materializations = 0, exact_point_cache_hits = 0, FC_to_GA_cache_hits = 0, operator_rebuilds = 0, evaluation_cap_exits = 0, numerical_failures = 0, production_dense_screen_calls = 0, diagnostic_dense_screen_calls = 0)
+
+--- D=20 real inner solve (real anchor theta) + counters ---
+D20 base-point solve: 1.65s  Delta0=0.4832764950  lfd_ok=true  nStatus=0
+counters after ONE real D=20/W=80000 inner solve:
+(sorted_moment_calls = 0, dense_moment_calls = 0, sorted_outer_gradient_calls = 0, dense_outer_gradient_calls = 0, matrix_free_objective_calls = 19, matrix_free_gradient_calls = 10, matrix_free_hessian_calls = 9, matrix_free_range_screen_calls = 0, dense_inner_objective_calls = 0, dense_inner_gradient_calls = 0, dense_inner_hessian_calls = 0, dense_G_materializations = 0, exact_point_cache_hits = 0, FC_to_GA_cache_hits = 0, operator_rebuilds = 1, evaluation_cap_exits = 0, numerical_failures = 0, production_dense_screen_calls = 0, diagnostic_dense_screen_calls = 0)
+
+--- fixed-q A middle loop: REAL solve_melitz_fixed_q_A_profile_v2, >=20 evals ---
+middle-loop wall = 13.32s ; n_evals in log = 26
+counters after the REAL profiled-A middle-loop run:
+(sorted_moment_calls = 25, dense_moment_calls = 0, sorted_outer_gradient_calls = 0, dense_outer_gradient_calls = 0, matrix_free_objective_calls = 400, matrix_free_gradient_calls = 128, matrix_free_hessian_calls = 102, matrix_free_range_screen_calls = 25, dense_inner_objective_calls = 0, dense_inner_gradient_calls = 0, dense_inner_hessian_calls = 0, dense_G_materializations = 0, exact_point_cache_hits = 0, FC_to_GA_cache_hits = 0, operator_rebuilds = 25, evaluation_cap_exits = 19, numerical_failures = 11, production_dense_screen_calls = 0, diagnostic_dense_screen_calls = 0)
