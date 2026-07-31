@@ -84,16 +84,43 @@ catch e
 end
 
 # ---- 5. Exact campaign-entry-point operator-only gate for all five families ----
+# Matches full_aod_diag/d4_exact/test_all_family_real_production_entrypoints_operator_bundle.jl's
+# own pattern: ONE shared base ctx, unrestricted uses it directly, the other 4 families layer
+# their real build_*_production_context wrapper on top -- NOT 5 independent base contexts (an
+# earlier version of this script incorrectly built a bare d20_real_setup_design ctx per family,
+# which would only actually exercise the unrestricted family's real bundle path).
 try
-    include(joinpath(D4E, "context_real_d20.jl"))
-    include(joinpath(D4E, "production_bundle_api.jl"))
-    include(joinpath(D4E, "production_bundle_preflight.jl"))
-    build_inner_for(family) = () -> d20_real_setup_design(W = 2000, δ = 0.1, find_smallest = true,
-        draw_design = :sobol_randomized, draw_seed = 20260719, destination_sample = :exclude_row,
-        exclude_diagonal_gravity = true, σHat = 3.0)
+    for f in ["draw_design.jl", "winners.jl", "oracle.jl", "gravity_elimination.jl",
+              "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
+              "compressed_factual_buffer_reuse.jl", "core_exact_hessian.jl",
+              "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
+              "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_hessian_threaded.jl",
+              "cm_production_bundle.jl", "cm_screen_bridge.jl", "cm_outer_driver.jl",
+              "gradient_workspace.jl", "lfix_factorized.jl", "lfix_factorized_workspace.jl",
+              "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_aspace_coordinate.jl",
+              "cm_config.jl", "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
+              "cm_originzc_target_layout.jl", "cm_originzc_config.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl",
+              "cm_frechet_level.jl", "cm_frechet_lookup_production.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
+              "cm_exact_cache_production.jl", "cm_dual_bank_production.jl", "threaded_cross_hessian.jl", "zc_gram_blas_candidates.jl",
+              "hcz_drawchunk_candidate_2026-07-29.jl", "cm_lookup_production.jl", "cm_frechet_lookup_kernels.jl",
+              "cm_meanzc_lookup_production.jl", "cm_originzc_lookup_production.jl",
+              "production_bundle_api.jl", "production_bundle_preflight.jl"]
+        include(joinpath(D4E, f))
+    end
+    gate_ctx = d20_real_setup_design(W = 2000, δ = 0.1, find_smallest = true, draw_design = :sobol_randomized,
+        draw_seed = 20260719, destination_sample = :exclude_row, exclude_diagonal_gravity = true, σHat = 3.0)
+    gate_probs = nested_grid_sequence([10, 20, 50])[50]
+    gate_layout = OriginByPowerLayout(gate_ctx.D, 2, 2)
+    build_inner_for(family) =
+        family === :unrestricted   ? (() -> gate_ctx) :
+        family === :flexible_cm    ? (() -> build_cm_production_context(gate_ctx, CS; L = 50, contrasts = :orthonormal, probs = gate_probs)) :
+        family === :common_frechet ? (() -> build_cm_frechet_production_context(gate_ctx, CS; L = 50, contrasts = :orthonormal, probs = gate_probs, cm_hessian_backend = :structured)) :
+        family === :cm_meanzc      ? (() -> build_cm_meanzc_production_context(gate_ctx, CS; L = 50, K_mean = 2, K_pair = 2, contrasts = :orthonormal, probs = gate_probs)) :
+        family === :origin_zc      ? (() -> build_originzc_production_context(gate_ctx, CS, gate_layout)) :
+        error("build_inner_for: unknown family $family")
     gate_dir = joinpath(CAMPAIGN_ROOT, "preflight_manifests")
     ok = campaign_preflight([:unrestricted, :flexible_cm, :common_frechet, :cm_meanzc, :origin_zc], build_inner_for; manifest_dir = gate_dir)
-    record!("5_operator_only_gate_all_families", ok, "campaign_preflight() over all 5 families, manifests in $gate_dir")
+    record!("5_operator_only_gate_all_families", ok, "campaign_preflight() over all 5 families (family-specific real build_*_production_context wrappers), manifests in $gate_dir")
 catch e
     record!("5_operator_only_gate_all_families", false, "exception: $(sprint(showerror, e))")
 end
