@@ -5483,6 +5483,19 @@ end
         obj_s, theta0_s = build_melitz_psi_bundle(policy=FullValueEvaluation(), FIXTURE;
             inner_loop_opt=inner_opt_sentinel, forbid_dense_fallback=true)
         @test obj_s isa MelitzCCBundle
+        # CRITICAL (found live during this consolidation's own background full-suite run --
+        # this test's first draft segfaulted the whole Julia process): `build_melitz_psi_bundle`
+        # returns a bundle whose `op::MelitzMomentOperator` is FRESHLY ALLOCATED but NOT YET
+        # equilibrated at any theta (`order`/`bin`/`coef`/`lambda` are all zero-initialized by
+        # `build_melitz_moment_operator`, not real gravity-pivot data). Calling the functor
+        # (which calls `mul_G!`) against an un-equilibrated operator reads `order[m,o]==0` and
+        # then indexes `trade_index[o, 0]` -- an out-of-bounds index 0 that `mul_G!`'s
+        # `@inbounds` does NOT catch, corrupting memory / segfaulting instead of throwing a
+        # clean BoundsError. `melitz_update_operator_at_theta!` (called by every other test in
+        # this file before ever calling a functor) MUST run first -- this is not optional
+        # setup, it is a precondition for functor-calling memory safety, not just economic
+        # correctness.
+        melitz_update_operator_at_theta!(obj_s.op, theta0_s, obj_s.γ)
 
         @testset "sentinels start empty and are the actual shared const objects" begin
             @test length(_MELITZ_CC_EMPTY_VEC) == 0
