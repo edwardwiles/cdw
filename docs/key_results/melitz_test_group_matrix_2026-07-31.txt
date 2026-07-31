@@ -1,0 +1,56 @@
+generated: 2026-07-31T06:43:20.365
+julia: 1.12.6  nthreads: 20
+pass	62	Pareto draws	5.65s
+pass	63	Firm-level Melitz calculations	0.11s
+pass	64	Gravity coefficient vector and pivot machinery	12.16s
+pass	65	normalize_baseline_entrant_mass invariance	0.61s
+pass	68	Fixture construction (active N_o=1, searched gamma_prime_j closure)	0.72s
+pass	69	Autarky price-power fix: economic zero-profit residual (not just cutoff_prime==1)	0.2s
+pass	70	Full-D indexing (no rest-of-world aggregation)	0.36s
+pass	71	melitz_moments! structure and sensitivity	0.78s
+pass	72	min_active_draw_count and cell_participation_diagnostics	1.05s
+pass	73	Sorted-tail moment construction (2026-07-25)	42.81s
+pass	74	Matrix-free moment operator (2026-07-26)	32.15s
+pass	75	Population-Pareto construction: exact population-level identities	1.39s
+pass	76	solve_fstar: archived debugging utility (structural smoke test only)	0.69s
+pass	78	Pareto data-only calibration	70.44s
+pass	81	CC inner minimum-divergence loop + LFD recovery (real KNITRO)	393.88s
+pass	82	Nearby gravity-feasible perturbations (pivot-based, always exact)	0.3s
+pass	83	Section 1.2: melitz_outer_state never reuses a stale benchmark cutoff	0.58s
+pass	84	Section 1.3: deterministic cutoff constraints and their exact Jacobian	2.86s
+pass	85	Session prompt Section 3: affine cutoff constraint map	2.78s
+pass	86	Session prompt Section 5: log-cutoff parameterization	1.43s
+pass	87	Section 5 (live wiring): :logf vs :logcutoff live fixed-point equivalence (real KNITRO)	8.0s
+pass	88	Legacy Pareto-fixed-N closure (archived, pareto_* diagnostics only)	0.15s
+pass	89	Closure Phase A1: needs_outer_moment_jacobian defaults to false, every production path	5.2s
+pass	90	Closure Phase B1: registered Jacobian == central FD of the registered constraint	1.92s
+pass	91	Closure Phase D: content fingerprint + compact/heavy cache split	1.0s
+pass	92	Phase 1/architecture-consolidation: evaluation-cap-impossible-to-omit infrastructure	43.57s
+pass	93	Phase 2 (2026-07-26): strict production-fast forbids every dense fallback	1.25s
+pass	94	MelitzCCBundle shared empty-sentinel (_MELITZ_CC_EMPTY_VEC/_MELITZ_CC_EMPTY_MAT) safety	0.7s
+pass	95	Phase 0 (2026-07-28 continuation): 20-thread default reporting + explicit-serial-despite-parallel warning	0.16s
+pass	96	Phase 3 (2026-07-28 continuation): incumbent retention is direction-correct for an artificial feasible pair	4.36s
+pass	97	Phase 3 (2026-07-26): MelitzWelfareMetrics eliminates the g/kappa_ratio/GT confusion	0.6s
+pass	98	Phase 5 (2026-07-26): divergence-constraint scaling audit -- dimensionless vs legacy_1e10	1.44s
+pass	99	Phase 6 (2026-07-26): nuisance-profile matrix-free port matches dense reference	126.41s
+pass	100	Phase 7 (2026-07-26): matrix-free range screen matches dense reference	13.95s
+pass	101	Governing prompt Phase 7 (2026-07-27 addendum): outer-parameterization roundtrip, all 6 combinations	1.35s
+pass	102	Governing prompt Phase 8 (2026-07-27 addendum): registered-Jacobian chain rule, all 6 combinations	1.14s
+pass	103	Standalone (no cc_algo) subprocess: MelitzCCBundle is genuinely cc_algo-independent	46.77s
+pass	104	Governing prompt Phase 2-3 (2026-07-27 evening): mutating theta expansion + ctx-owned pivot	11.22s
+pass	105	Governing prompt Phase 10 (2026-07-27 evening): FC-to-GA cache / re-solve consistency A/B/A	0.88s
+pass	106	Governing prompt Phase 1.1/1.3/5 (2026-07-27 night): focal-link + plain-backend in-place expansion, allocation ceilings	51.85s
+pass	107	Governing prompt Phase 10 (2026-07-27 night): cache isolation across theta/parameterization/technology/seed/W/evaluation-cap	1.0s
+pass	108	Section 11 (architecture consolidation): static scan for unsafe defaults/direct low-level calls	0.42s
+pass	109	Governing prompt 2026-07-29 (A_q separation and gradient diagnostics)	6.75s
+pass	110	q-bandwidth convergence campaign 2026-07-29 (Phase 1-2)	4.65s
+pass	111	Reduced-q-subspace outer-search backend (2026-07-29 continuation)	8.1s
+pass	112	Typed evaluation counters (2026-07-29 Phase 0 report repair)	3.2s
+pass	113	NumericalFailure/lower_limit forensic audit (2026-07-30): threshold_crossed is mode-independent	8.91s
+pass	114	Gate 2/3 matched-effort + threaded direction infrastructure (2026-07-29 validation session)	6.99s
+pass	115	D20 negative-switch geometry audit (2026-07-30)	1.87s
+pass	116	LFD-preserving joint (A,q) feasibility-preserving state constructor (2026-07-30)	3.58s
+pass	117	Hybrid chamber-aware LFD-preserving corrector (2026-07-30)	8.73s
+pass	118	Governing prompt 2026-07-30 (fixed-q A middle loop, three-level architecture)	5.41s
+pass	119	Mandatory addendum 2026-07-30 (repaired v2 middle-loop driver)	2.45s
+SUMMARY	pass=53	fail=0	error=0
