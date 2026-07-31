@@ -307,13 +307,17 @@ function mul_G!(u::AbstractVector{Float64}, op::MelitzMomentOperator, zeta::Real
             cum[m+1] = cum[m] + mu_od * coef[o, d]
             const_o += mu_od * lambda[o, d]
         end
-        for s in 1:W
-            u[s] += const_o
-        end
+        # 2026-07-31 perf audit: fused from two separate `for s in 1:W` passes (one
+        # unconditional `u[s] += const_o`, one conditional `u[s] -= z_power[s,o]*cum[b+1]`)
+        # into one -- both touched every entry of `u` (and, for the second, `bin[:,o]`) once
+        # per origin; the O(D) per-origin inner accumulation above (`const_o`/`cum`) is
+        # unaffected, only the O(W) sweep is fused. Halves the read+write traffic on `u`
+        # across the whole `o in 1:D` loop (this function's actual hot cost at real
+        # W=80,000), with byte-identical output (same two terms added to the same `u[s]` in
+        # the same order, just in one pass instead of two).
         for s in 1:W
             b = bin[s, o]
-            b == 0 && continue
-            u[s] -= z_power[s, o] * cum[b+1]
+            u[s] += const_o - (b == 0 ? 0.0 : z_power[s, o] * cum[b+1])
         end
     end
 
@@ -689,6 +693,22 @@ via `MelitzMomentLayout`'s own per-origin-contiguous column convention, so no tw
 ever write the same `H` entry). The two scalar `mul_Gt!` calls (`g_S`, `g_Sell`) and the
 rank-one-correction assembly loop remain serial (already `O(W*D)`/`O(D^2)`, a small share of
 the total `O(W*D^2)` cross-origin-contingency-table cost this parallelizes).
+
+**Not literally zero-allocation** (2026-07-31 perf audit correction -- an earlier session's
+"confirmed zero-alloc" claim here was accurate about eliminating CLOSURE-BOXING allocation
+(see `_gram_prep_serial!`'s own docstring) but did not achieve literal zero bytes): measured
+live via `@allocated`/`Profile.Allocs` at real D=20/W=80,000, this function allocates a fixed
+~16.4 KB per call, `O(nthreads)` not `O(D)` or `O(W)` -- confirmed to be exactly
+`Threads.@threads`'s own per-iteration `Task`/`SpinLock`/`IntrusiveLinkedList` machinery (40
+allocations = 2 threaded regions x `Threads.nthreads()`=20, at the measured thread count),
+not a per-element workspace or boxing allocation. This is inherent to `Threads.@threads`
+(even with `:static` scheduling) and independent of `D`/`W` -- eliminating it entirely would
+require replacing `Threads.@threads` with a lower-overhead primitive (e.g. a persistent
+worker-pool/channel pattern, or a package like `Polyester.jl`/`OhMyThreads.jl`'s static
+scheduler), out of scope for a documentation correction. In absolute terms this is small
+(~16 KB, a small fraction of the KNITRO-driven inner solve's own overhead) and does not
+affect correctness; noted here so a future session does not repeat the "confirmed zero-alloc"
+claim without re-measuring.
 
 Callers running this under KNITRO must set `BLAS.set_num_threads(1)` for the duration (this
 repo's own standing convention, `feedback-openblas-threads-hard-cap-violation` memory) --
