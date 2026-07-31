@@ -66,6 +66,17 @@ include(joinpath(MELITZ_DIR, "q_bandwidth_policy.jl"))
 include(joinpath(MELITZ_DIR, "aq_experimental_backend.jl"))
 include(joinpath(MELITZ_DIR, "finite_delta_outer.jl"))
 include(joinpath(MELITZ_DIR, "reduced_q_subspace.jl"))
+include(joinpath(MELITZ_DIR, "reduced_q_switch_geometry.jl"))   # 2026-07-31 production-consolidation
+    # Phase 5 finding: this file IS included by src/melitz/include_melitz.jl (between
+    # reduced_q_subspace.jl and reduced_q_controller.jl) but was MISSING from this file's own
+    # hand-duplicated include list -- exactly the same "forgot to add it to runtests.jl's own
+    # copy" gap this file's header already documents happening at least once before
+    # (lfd_preserving_state.jl, 2026-07-30). Confirmed pre-existing (present on canonical base
+    # commit 6e803d4 too): the "D20 negative-switch geometry audit (2026-07-30)" testset below
+    # calls melitz_q_direction_exact_switches (defined in this file) and would fail with
+    # UndefVarError under ANY full run of this file, group-runner or plain `julia
+    # test/melitz/runtests.jl` alike -- not an artifact of this session's own group-runner
+    # tooling. Fixed by adding the missing include, matching include_melitz.jl's own order.
 include(joinpath(MELITZ_DIR, "reduced_q_controller.jl"))
 include(joinpath(MELITZ_DIR, "typed_eval_counters.jl"))
 include(joinpath(MELITZ_DIR, "matched_effort_controller.jl"))
