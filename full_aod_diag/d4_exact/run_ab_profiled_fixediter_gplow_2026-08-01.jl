@@ -39,21 +39,22 @@ const W = 80_000
 const DELTA = 1.0
 const MAXIT = parse(Int, get(ENV, "AB_MAXIT", "60"))
 const SAFETY_BUDGET = 3600.0
-const GP_FRAC = 0.99
+const GP_FRAC = parse(Float64, get(ENV, "AB_GP_FRAC", "0.99"))
+const TAG = replace(@sprintf("gp%.3f", GP_FRAC), "." => "p")
 
 ctx = d20_real_setup(W = W, find_smallest = true, δ = DELTA, destination_sample = :exclude_row)
 spec, gauge, pe = build_profiled_ab_spec_pe(ctx; global_overrides = Dict(14 => 3))
 w_start = reduce_calibration_to_w_profiled(ctx, pe)
 w_start[1] *= GP_FRAC
 
-println("="^90); println("PROFILED ARM (fixed-iteration, gp=$(GP_FRAC)*calib, ADAPTIVE-bandwidth incremental gradient): maxit=$MAXIT, gp_start=$(w_start[1])"); println("="^90); flush(stdout)
+println("="^90); println("PROFILED ARM (fixed-iteration, gp=$(GP_FRAC)*calib, tag=$TAG, ADAPTIVE-bandwidth incremental gradient): maxit=$MAXIT, gp_start=$(w_start[1])"); println("="^90); flush(stdout)
 
-TRACE_CSV = joinpath(D4X_ROOT, "FULL_VS_PROFILED_OUTER_AB_FIXEDITER_GPLOW_2026-08-01_PROFILED_TRACE.csv")
-res = run_profiled_outer_search("profiled_fixediter_gplow", w_start; ctx = ctx, spec = spec, pe = pe,
+TRACE_CSV = joinpath(D4X_ROOT, "FULL_VS_PROFILED_OUTER_AB_FIXEDITER_2026-08-01_$(TAG)_PROFILED_TRACE.csv")
+res = run_profiled_outer_search("profiled_fixediter_$TAG", w_start; ctx = ctx, spec = spec, pe = pe,
     maxtime_real = SAFETY_BUDGET, maxit_override = MAXIT, trace_csv = TRACE_CSV,
     gradient_fn = profiled_composite_gradient_at_incremental)
 
 println("="^90)
-@printf("RESULT profiled_fixediter_gplow: wall=%.1fs n_eval=%d n_grad_calls=%d\n", res.wall_ext, res.n_eval, res.n_grad_calls)
+@printf("RESULT profiled_fixediter_%s: wall=%.1fs n_eval=%d n_grad_calls=%d\n", TAG, res.wall_ext, res.n_eval, res.n_grad_calls)
 println("best=", res.best)
 println("="^90)
