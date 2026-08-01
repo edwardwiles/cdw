@@ -62,6 +62,10 @@ isdefined(Main, :dest_slot) || include(joinpath(dirname(dirname(@__DIR__)), "cc_
 isdefined(Main, :AnchorSpec) || include(joinpath(@__DIR__, "relative_a_coordinate_2026-07-31.jl"))
 isdefined(Main, :ProfiledEconomicMomentLayout) || include(joinpath(@__DIR__, "profiled_economic_moment_layout_2026-08-01.jl"))
 isdefined(Main, :ReducedHomogeneousWinnerPairHessCtx) || include(joinpath(@__DIR__, "reduced_homogeneous_hessian_2026-08-01.jl"))
+# build_reduced_base_obj_for_family/materialize_dense_factual_structured_reduced! -- used by
+# build_cm_augmented_obj_archB's base_obj kwarg and wrap_moments_with_cm_archB's profiled_layout
+# kwarg respectively (both additive, both nothing by default).
+isdefined(Main, :materialize_dense_factual_structured_reduced!) || include(joinpath(@__DIR__, "profiled_restricted_family_base_2026-08-01.jl"))
 # port/shared-inner-fg-operator-and-verification-2026-07-26: compressed_live.jl (as of Addendum
 # Part A, fbb7d79) references EconomicFGWorkspace/compressed_cc_value_grad! from
 # compressed_cc_inner.jl but never includes it itself (every pre-existing caller happened to
@@ -246,6 +250,7 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
                                      use_compressed_core::Bool = true,
                                      core_cf_ref::Ref{Any} = Ref{Any}(nothing),
                                      theta_ref::Ref{Any} = Ref{Any}(nothing),   # profiled all-families completion task (2026-08-01): shared box, published alongside core_cf_ref, needed by the reduced H_EE kernel (see CMBinHessCtx's own profiled_theta_ref field docstring). Unused/harmless for every caller that doesn't opt into a profiled_layout.
+                                     profiled_layout::Any = nothing,   # profiled all-families completion task (2026-08-01), FG-callback gap closure: when set, G is ALWAYS fully filled (skip_fill is ignored/irrelevant for a profiled context -- there is no separate ":cm_lookup priming" concept here), using the REDUCED economic materialization (materialize_dense_factual_structured_reduced!, profiled_restricted_family_base_2026-08-01.jl) instead of the full one. `nothing` (every existing caller) preserves every line below byte-for-byte.
                                      skip_fill::Bool = false)   # skip_cm_fill_ref removal (2026-07-27):
                                      # was a caller-toggled `Ref{Bool}` read at CALL time (a mutable
                                      # shared box archC_base_state/archC_verified_state set/reset around
@@ -271,6 +276,10 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
+    # Profiled all-families completion task (2026-08-01): persistent full-width scratch for
+    # materialize_dense_factual_structured_reduced!'s own `scratch_full` keyword -- only ever
+    # allocated/resized when `profiled_layout !== nothing` (harmless empty buffer otherwise).
+    profiled_full_scratch_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
     # Allocation/Hessian port task §4.1: persistent bview*R product scratch, built once (per
     # closure lifetime -- this closure itself is built once per outer-solve process, see
     # build_cm_production_context) and reused across every fill_cm_columns_from_bins! call.
@@ -324,7 +333,14 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             # is safe to skip in every real production configuration (which never sets
             # core_hessian_backend=:dense_reference) -- validated D=4, all 4 sections,
             # test_shared_core_hessian_d4_gates.jl, 40/40 PASS including the real-solved-point arm.
-            if !skip_fill
+            if profiled_layout !== nothing
+                ncol_full = cf.oci - 1
+                if size(profiled_full_scratch_cache[]) != (n, ncol_full)
+                    profiled_full_scratch_cache[] = Matrix{Float64}(undef, n, ncol_full)
+                end
+                materialize_dense_factual_structured_reduced!(@view(Gtmp[:, 1:pregrav]), cf, profiled_layout;
+                    scratch_full = profiled_full_scratch_cache[])
+            elseif !skip_fill
                 materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
             end
             grav_raw = compressed_gravity_raw(θ, ctx)
@@ -348,11 +364,11 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
         # this call (undef-backed scratch, not zeroed), so copying them would propagate stale
         # memory into G for no reason; nothing on the production path reads G's economic columns
         # when skip_fill=true (see the root-cause note above).
-        if !skip_fill
+        if profiled_layout !== nothing || !skip_fill
             @views G[:, 1:pregrav] .= Gtmp[:, 1:pregrav]
         end
         @views G[:, end] .= Gtmp[:, end]
-        if !skip_fill
+        if profiled_layout !== nothing || !skip_fill
             cm_cols = pregrav + 1 : pregrav + L * nO
             fill_cm_columns_from_bins!(@view(G[:, cm_cols]), Bidx, origins, refIndex1, L, R;
                                         chunk_size = chunk_size, prod_scratch = prod_scratch)
@@ -399,7 +415,7 @@ path).
 """
 function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anchored,
                                        refIndex1::Int = ctx.γ.refIndex1, chunk_size::Int = 2000,
-                                       base_obj = nothing)
+                                       base_obj = nothing, profiled_layout = nothing)
     obj0 = base_obj === nothing ? ctx.obj : base_obj
     ncore = obj0.d
     _CM_throwaway, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; contrasts = contrasts)
@@ -429,7 +445,7 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
     # publishing the current outer theta -- see CMBinHessCtx's own `profiled_theta_ref` docstring.
     theta_ref = Ref{Any}(nothing)
     moments_cm! = wrap_moments_with_cm_archB(obj0.moments!, ncore, Bidx, origins, refIndex1, L, R, ctx;
-        chunk_size = chunk_size, core_cf_ref = core_cf_ref, theta_ref = theta_ref)
+        chunk_size = chunk_size, core_cf_ref = core_cf_ref, theta_ref = theta_ref, profiled_layout = profiled_layout)
 
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_cm!, moments_jacobian! = error,

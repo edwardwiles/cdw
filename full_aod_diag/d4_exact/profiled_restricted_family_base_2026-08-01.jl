@@ -24,15 +24,23 @@
 # keyword on `build_cm_augmented_obj_archB` (cm_hessian_architectures.jl) that
 # consumes it -- see that function's own updated docstring.
 #
-# What this file does NOT do (honest scope cut, not a silent gap -- see
-# PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md for the full remaining
-# plan): it does not wire the reduced H_EE kernel
-# (`reduced_homogeneous_winner_pair_hessian!`) into `_fill_cm_HEE!`, does not
-# implement the H_EC/H_EF/H_EZ "gather retained rows only" step in
-# `hessian_cm_structured!`/`archA_partitioned_hess_cb_builder`, and does not
-# touch `build_originzc_augmented_obj`/`build_cm_meanzc_augmented_obj` (the
-# ZC-only/CM+ZC analogues) at all -- only the dimension-bookkeeping
-# prerequisite common to all four families is built and tested here.
+# CORRECTION (later same session, see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md's own
+# "important correction" section): the claim above ("requires ZERO changes... on the production
+# path") holds ONLY for dimension bookkeeping. It does NOT mean a reduced family's `obj_cm.moments!`
+# can run a real FG callback -- `skip_fill=true` is a narrow priming mechanism (skips ALL of G, not
+# just economic columns) never installed as any family's PRIMARY `moments!` in the default
+# (`:dense_reference` inner-FG-backend) configuration; the primary `moments!` genuinely calls
+# `materialize_dense_factual_structured!` every callback, which requires the FULL (unreduced)
+# `cf.oci-1` width and errors immediately on a reduced-width view. `materialize_dense_factual_
+# structured_reduced!` below closes this gap (added later this session): a genuine reduced dense-G
+# materialization, needed for `wrap_moments_with_cm_archB` to support a real solve under
+# `profiled_layout!==nothing` -- see that function's own updated docstring.
+#
+# H_EE/H_EC wiring (`_fill_cm_HEE!`/`hessian_cm_structured!`) was completed later this session too
+# (in `cm_hessian_architectures.jl` directly, D4-verified bit-identical) -- see the master doc's
+# full accounting for exactly what remains: `hessian_cm_structured_v2!` (threaded), H_EF (common
+# Fréchet), H_EZ (ZC-only/CM+ZC), and everything past a D4 Hessian-formula gate (D20, inner
+# equivalence, outer gradient, performance, W500k).
 # ============================================================================
 
 isdefined(Main, :ProfiledEconomicMomentLayout) || include(joinpath(@__DIR__, "profiled_economic_moment_layout_2026-08-01.jl"))
@@ -83,4 +91,42 @@ function build_reduced_base_obj_for_family(ctx, layout::ProfiledEconomicMomentLa
         threshold_state = obj0.threshold_state,
         outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
         needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
+end
+
+isdefined(Main, :materialize_dense_factual_structured!) || error("profiled_restricted_family_base_2026-08-01.jl requires structured_moment_build.jl to be included first.")
+
+"""
+    materialize_dense_factual_structured_reduced!(Gview, cf::CompressedFactual, layout::ProfiledEconomicMomentLayout;
+        scratch_full::Union{Nothing,Matrix{Float64}}=nothing) -> Gview
+
+Reduced/anchor-omitting analog of `materialize_dense_factual_structured!`, closing the FG-callback
+gap flagged in this file's own header correction (and PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md).
+`Gview` must be sized `(cf.W, layout.total_reduced_economic_moments)` -- columns
+`1:n_bilateral` are `layout.retained_full_factual_j`-selected (in that order), the LAST column (if
+`layout.france_ratio_reduced_j > 0`) is the France/counterfactual-price-index column.
+
+DESIGN: rather than re-deriving `structured_fill_chunk!`'s rank-one-fixed-term + winner-scatter
+formula in reduced-index form (risking a fresh bug in a hand-rewritten formula), this GATHERS from
+the existing, already-validated `materialize_dense_factual_structured!` computed into a full-width
+scratch buffer -- the same "gather at assembly, don't touch the underlying validated primitive"
+design this session already used for H_EC. Cost: `O(W*D*Ddest)` to build the full scratch (same
+complexity class as the old full fill; not FLOP-optimal, matching this session's own stated
+priority of correctness/dimension-reduction over cross-block FLOP reduction) plus a cheap `O(W*
+n_reduced)` column-gather. `scratch_full`, if supplied, is reused (not reallocated) across repeated
+calls -- callers that call this every FG callback (the real use case) should own a persistent buffer
+sized `(cf.W, cf.oci-1)` and pass it in.
+"""
+function materialize_dense_factual_structured_reduced!(Gview::AbstractMatrix, cf, layout::ProfiledEconomicMomentLayout;
+        scratch_full::Union{Nothing,Matrix{Float64}} = nothing)
+    W = cf.W
+    n_reduced = layout.total_reduced_economic_moments
+    size(Gview) == (W, n_reduced) || error("materialize_dense_factual_structured_reduced!: size(Gview)=$(size(Gview)) != (W,n_reduced)=($W,$n_reduced)")
+    ncol_full = cf.oci - 1
+    Gfull = scratch_full === nothing ? Matrix{Float64}(undef, W, ncol_full) : scratch_full
+    size(Gfull) == (W, ncol_full) || error("materialize_dense_factual_structured_reduced!: scratch_full size $(size(Gfull)) != (W,cf.oci-1)=($W,$ncol_full)")
+    materialize_dense_factual_structured!(Gfull, cf)
+    n_bilateral = length(layout.retained_full_factual_j)
+    @views Gview[:, 1:n_bilateral] .= Gfull[:, layout.retained_full_factual_j]
+    layout.france_ratio_reduced_j > 0 && (@views Gview[:, end] .= Gfull[:, cf.cf_col])
+    return Gview
 end

@@ -159,6 +159,76 @@ factor", "latent OOB read"). This session's own honest contribution, in order of
      `test_winner_pair_cross_hessian_zc_d4.jl` all pass, `test_profiled_restricted_family_base_2026-08-01.jl`
      32/32, all still `max|Δ|=0.0` / unchanged).
 
+4. **Closed the FG-callback gap** flagged immediately below (item 5 as originally written), then
+   diagnosed — but did **not** fully resolve — a real numerical-conditioning issue blocking an actual
+   live KNITRO solve:
+   - New `materialize_dense_factual_structured_reduced!(Gview, cf, layout; scratch_full=...)`
+     (`profiled_restricted_family_base_2026-08-01.jl`) — the reduced analog of
+     `materialize_dense_factual_structured!`, built via the SAME "gather from the existing validated
+     full function into a persistent scratch buffer" design this session already used for H_EC — not
+     a re-derived formula.
+   - `wrap_moments_with_cm_archB` gained a `profiled_layout::Any=nothing` keyword: when set, `G` is
+     **always** fully filled (both the reduced economic block AND the CM-grid columns — `skip_fill` is
+     ignored/irrelevant for a profiled context, since there is no separate "`:cm_lookup` priming"
+     concept for it); `nothing` (every existing caller) preserves every line byte-for-byte.
+     `build_cm_augmented_obj_archB` threads this through as its own `profiled_layout` keyword.
+   - **New gate, Part 1**: `test_profiled_flexcm_d4_fg_and_solve_gate_2026-08-01.jl` — calls
+     `obj_reduced.moments!` **directly** (bypassing KNITRO entirely) at the calibration θ and compares
+     every piece of its output against a gather from the FULL model's own (already-validated)
+     `moments!` output at the same θ: **K matches exactly, bilateral columns match exactly, the France
+     column matches exactly, the CM-grid columns match exactly, and the gravity column matches
+     exactly** (all `max|Δ| < 1e-12`) — **ALL PASS**. This is a genuine, real closure of the gap: a
+     reduced family's FG callback now produces numerically correct output.
+   - **Part 2 (real KNITRO solve) does NOT pass** — diagnosed in detail, not merely observed:
+     - First found the TRUE production default is `inner_fg_backend=:cm_lookup`
+       (`CM_INNER_FG_BACKEND_DEFAULT[]`, `core_exact_hessian.jl:228`), **not** `:dense_reference` as
+       every pre-existing D4 test's explicit override had suggested — a separate, not-yet-touched
+       O(W·(D-1)) operator-based FG evaluator (`cm_lookup_kernels.jl`). Forcing
+       `inner_fg_backend=:dense_reference` (matching what this session's new dense-G reduction
+       actually supports) was necessary just to reach the `:dense_reference` code path at all.
+     - Then found `build_cm_bin_ctx`'s own `threaded_bins=true` default routes the Hessian callback to
+       `hessian_cm_structured_v2!` (the threaded twin) — never given a profiled/gather branch this
+       session (see below) — forcing `threaded_bins=false` was necessary to reach the serial path that
+       WAS wired.
+     - With both forced, hit a `nStatus=-400` (KNITRO's generic "callback error" code) on the real
+       `archC_base_state` solve. Root-caused as far as time allowed, via three escalating manual
+       checks rather than accepting the code at face value:
+       1. Manually called the Hessian callback and the dense-BLAS `arg0`-prep step
+          (`_prep_dual_index_for_archC!`/the object's own `PsiObjectiveBundleImplicitMethodBFullA`
+          functor, `H[:,2:1+outer_constr_index]*(-x)`) at `x=0` and at a small random `x` — both ran
+          without error, and (once `obj.H` was filled the SAME way `inner_loop_internal_archgeneric`
+          itself fills it — an earlier attempt using separate scratch buffers gave a false-alarm
+          discrepancy from stale/undef memory, corrected) matched an independent hand-derived `q`
+          formula to **machine precision** (`max|Δ|≈2.2e-16`). This also settled a real, initially
+          confusing question: `H`'s gravity column (the LAST column) is deliberately **excluded** from
+          both the dual contraction `q` and the gradient formula (`H[:,3:1+outer_constr_index]`, one
+          column short of `G`'s own full width) — confirmed this is the FULL model's OWN pre-existing
+          convention too (same "one column short" pattern, `H_FULL` has 50 columns, `λstar` has 47
+          entries, not 48), not a bug introduced by this session's reduced-width construction.
+       2. Ran a crude, deliberately unsophisticated damped-Newton trace (5 steps, step size 0.5, no
+          line search) using ONLY this session's own validated FG/Hessian machinery, starting from
+          `x=0`: the objective **diverges catastrophically** (`f: 0 → 1731 → 1.9e34 → 3.2e65 →
+          7.5e97` in 5 steps, `|x|` growing to `4e49`) — even though every individual FG/Hessian
+          evaluation along the way returned finite, correctly-formed numbers. This strongly suggests
+          the reduced dual problem's Hessian is **very poorly conditioned** near `x=0` for this
+          particular D4 test point/anchor choice (a large Newton step from a small gradient implies a
+          near-singular curvature direction) — KNITRO's own trust-region/line-search machinery is far
+          more robust than this crude trace, but a `nStatus=-400` (consistent with an uncaught
+          `DomainError` from `Psi!`/`dPsi!`/`ddPsi!` being evaluated at an extreme, out-of-domain `q`
+          during KNITRO's own step) is fully consistent with this diagnosis.
+     - **Conclusion**: this is very likely a genuine numerical-conditioning issue with the specific
+       anchor choice (`build_anchor_spec_from_ctx`'s own-cell default) and/or D4 test point, not a
+       formula-correctness bug — every formula touched this session has now been independently
+       validated to machine precision at multiple points. But it is **not resolved**: a real live
+       KNITRO solve of the reduced dual problem for flexible CM does not currently converge from a
+       cold start at this test point. Per this repo's own CLAUDE.md standing guidance ("the inner
+       solve's warm/cold start affects speed, never whether it converges... look for what actually
+       changed about the *problem*"), the right next step is investigating the anchor choice's effect
+       on conditioning (e.g. a different `AnchorSpec`, or whether the unrestricted family's own
+       already-validated reduced solve exhibits the same sensitivity at this exact point) — not
+       assuming a better warm start would fix it. Left as an honestly-failing, diagnostic-rich test
+       (not deleted, not silently downgraded) for whoever continues this.
+
 ## Important correction to this session's own earlier claim (found while building the H_EE/H_EC gate)
 
 Item 1 above states "the dense economic-column materialization is already unconditionally skipped on
@@ -192,9 +262,11 @@ suggest the reduced family is closer to a real solve than it is.
 
 Everything below is genuinely `not_started`/`not_run`, not "quietly assumed to work":
 
-- **A working FG callback for the reduced economic layout** (see the correction above) — the single
-  most important remaining gap; without it, nothing in this branch can run an actual KNITRO solve for
-  any restricted family under the reduced layout, only Hessian-formula gates at hand-set dual points.
+- **A converging live KNITRO solve for the reduced economic layout** — the FG callback itself is now
+  CLOSED and validated correct (item 4 above, Part 1 of the new gate, `:dense_reference` inner-FG-
+  backend only), but a real solve from a cold start still fails (`nStatus=-400`), diagnosed as likely
+  a conditioning issue (item 4's Part 2) rather than a formula bug, and not yet resolved. The TRUE
+  production default (`:cm_lookup`) is separately, entirely unaddressed.
 - **`hessian_cm_structured_v2!`** (the threaded twin, `cm_hessian_threaded.jl`): not given the
   analogous profiled/gather branch — only the serial `hessian_cm_structured!` was touched this session.
 - **H_EF (`colsum!`/`esum!`) gather for common Fréchet**: not implemented (explicitly guarded to
@@ -241,7 +313,7 @@ OLD_FULL_PATH_OVERHEAD =
 
 GENUINE_REDUCED_LAYOUT =
     unrestricted:      pass                          # pre-existing, source branch, unchanged
-    flexible_CM:        hessian_callback_pass_fg_callback_not_wired   # see "important correction" above
+    flexible_CM:        fg_and_hessian_formulas_pass_live_knitro_solve_fails_400_conditioning_not_isolated
     common_Frechet:      not_started   # shares flexible CM's plumbing but H_EF gather not built
     ZC_only:             not_started
     CM_plus_ZC:          not_started
@@ -263,7 +335,10 @@ D20_CROSS_BLOCK_REFERENCE =
     not_run
 
 INNER_EQUIVALENCE =
-    not_run   # blocked on the FG-callback gap above -- no reduced-family inner solve exists yet to test equivalence of
+    not_run   # the FG-callback gap is now closed (moments! validated correct, Part 1) but a live
+              # KNITRO solve of the reduced dual problem does not yet converge (nStatus=-400,
+              # diagnosed as likely a conditioning issue, not a formula bug -- see above) -- no
+              # reduced-family inner solve exists yet to test equivalence of
 
 SHARED_PROFILED_A_GP_GRADIENT =
     not_started   # unchanged from source branch
@@ -294,25 +369,33 @@ CAMPAIGN_LAUNCHED = false
 
 ## Recommended next steps (in order, for whoever continues this)
 
-1. **Close the FG-callback gap** (the single largest remaining blocker, see the correction above):
-   write a small, layout-aware dense-G materialization function (mirroring
-   `materialize_dense_factual_structured!` but writing only `layout.retained_full_factual_j`-selected
-   columns, in reduced-index order) and wire it into a new `skip_fill=false`-compatible variant of
-   `wrap_moments_with_cm_archB`'s economic-fill branch when `profiled_layout` is present — OR wire the
-   reduced case through the `:cm_lookup`/operator inner-FG-backend instead. Either path unblocks an
-   actual KNITRO inner solve for the reduced flexible-CM family, which everything below needs.
-2. Once (1) exists: re-run this session's `test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl`-style
-   comparison but at a GENUINELY SOLVED reduced-model point (not a hand-set one) — a real, if narrow,
-   version of the mission's §9 inner-equivalence gate for flexible CM specifically.
+1. **Isolate the nStatus=-400 conditioning issue** (the single largest remaining blocker now): try a
+   different `AnchorSpec` (e.g. explicit non-own-cell anchors via `build_anchor_spec_from_ctx`'s
+   `global_overrides` keyword) to see if conditioning near `x=0` improves; try a genuinely-warmed
+   start (recover the FULL calibration solve's retained-λ entries, matching this session's own D4
+   Hessian gate's "zeroed-anchor" point, as `KN_set_var_primal_init_values_all` instead of zeros);
+   check whether the UNRESTRICTED family's own already-validated reduced solve
+   (`inner_loop_KNITRO_profiled`) exhibits the same sensitivity at an analogous D4 point (if it does
+   NOT, the issue is specific to flexible CM's wiring, not the reduced-layout theory itself; if it
+   DOES, this may be a more general, known-and-tolerated property of the profiled formulation). Per
+   this repo's own CLAUDE.md standing guidance, do not attribute this to "cold start" without first
+   ruling out a genuine problem-level cause.
+2. Once (1) yields a converging solve: re-run this session's
+   `test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl`-style comparison but at a GENUINELY SOLVED
+   reduced-model point (not a hand-set one) — a real, if narrow, version of the mission's §9
+   inner-equivalence gate for flexible CM specifically.
 3. Thread the profiled/gather branch into `hessian_cm_structured_v2!` (threaded twin,
    `cm_hessian_threaded.jl`) — mechanical once (1)-(2) are solid, but not yet done or gated.
-4. Resolve H_EF's open Wtab/T1 question (`PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md` §4) and
+4. Wire the reduced layout through `cm_lookup_kernels.jl`'s `:cm_lookup` operator FG evaluator (the
+   TRUE production default, `CM_INNER_FG_BACKEND_DEFAULT[]`) — this session only closed the
+   `:dense_reference` FG path; production itself does not default to that path.
+5. Resolve H_EF's open Wtab/T1 question (`PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md` §4) and
    implement the analogous gather branch for common Fréchet (which already gets the dimension/H_EE
    plumbing for free via shared `CMBinHessCtx`, per this session's design).
-5. Port ZC-only (`OriginZCCoreHessCtx`/`archA_partitioned_hess_cb_builder`) and then CM+ZC's widened
+6. Port ZC-only (`OriginZCCoreHessCtx`/`archA_partitioned_hess_cb_builder`) and then CM+ZC's widened
    case — structurally analogous to this session's flexible-CM work but a SEPARATE codebase surface,
    not automatically covered by anything done so far.
-6. Only after (1)-(5): D20 cross-block/inner-equivalence gates, outer-gradient sharing, performance
+7. Only after (1)-(6): D20 cross-block/inner-equivalence gates, outer-gradient sharing, performance
    profiling, W500k smokes, per the mission's own ordering — each is real, separately gate-able work.
 
 Given the source branch's own prior verdict (`PORT_TO_RESTRICTED_FAMILIES = insufficient_evidence`, a
