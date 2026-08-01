@@ -29,6 +29,100 @@ where explicitly marked corrected, since the mathematical content and conclusion
 only the phrase "live production code" throughout should now be read as referring to the
 *corrected* gates.
 
+## EXECUTIVE SUMMARY (as of 2026-08-01, session close)
+
+**Decision going forward (user, end of session): start the next session on the unrestricted family
+only** (needs only `H_EE`, no `H_EC`/`H_EZ`/`H_CZ` cross-blocks), get a real KNITRO comparison
+matching there, then extend to the restricted families. §5a above has the concrete, ready-to-execute
+path for that.
+
+### What was modified
+
+**Nothing existing.** Every file below is new, in `full_aod_diag/d4_exact/`, following this repo's
+own "additive only, verify against the trusted path" convention. No production file was edited.
+
+Core pieces (7 files): `relative_a_coordinate_2026-07-31.jl` (`AnchorSpec`, `decode_relative_A`/
+`encode_relative_A`, `build_anchor_gauge`); `gravity_pivot_on_retained_2026-07-31.jl` (composes the
+anchor reduction with the existing gravity pivot); `outer_coordinate_layout_profiled_2026-07-31.jl`
+(the KNITRO-facing reduced outer vector); `recover_full_a_2026-07-31.jl` (`destination_M_d`,
+`destination_Q_od`, exact recovery back to the full formulation); `homogeneous_moments_2026-07-31.jl`
+(the per-cell homogeneous moment + France ratio moment); `homogeneous_contraction_2026-07-31.jl` (FG
+forward/transpose, built on the real `compressed_dual_contraction!`/`compressed_transpose_
+contraction!` algebra); `homogeneous_hessian_2026-07-31.jl` (`H_EE`). Plus 8 `test_*.jl` gate files
+and the docs (this report, the theory doc, the anchor manifest, the call-graph audit + change
+matrix).
+
+### What matches (all D4, all against `build_compressed_factual` — the real operator-representative
+path, not the legacy dense bundle)
+
+| Piece | Result |
+|---|---|
+| Winner identity under destination-column rescale | exact, 0 mismatches |
+| Share ratio `Q_od(ω)/M_d(ω)` | invariant, ~1e-16 |
+| `M_d(ω)` rescaling exponent | exactly `κ^{μ(σ-1)}`, ~1e-16 |
+| Gravity residual under destination shift | invariant, ~1e-18 (proven analytically *and* confirmed numerically) |
+| Relative-A round-trip | exact; decoded point reproduces calibration bit-for-bit |
+| Anchor+gravity-pivot composition | dimension exact (16→12→11 at D=4); pivot never lands on an anchor |
+| Full-A recovery | `γ̃_d` driven to exactly 1 (2.2e-16) from a deliberately non-normalized point; winners/ratios unchanged |
+| Homogeneous factual moment | `Σ_o` = 0 exactly (1.8e-15); rescales exactly by `κ^{μ(σ-1)}` |
+| France ratio moment | same rescaling property (2.7e-12) |
+| FG forward/transpose | match direct computation from the moments above, ~1e-15–2e-13; confirmed mutual adjoints |
+| `H_EE` | matches a finite-difference Hessian of the verified dual objective, 4e-9 (after catching and fixing a real scaling bug, see below) |
+
+Everything above is direct-evaluation D4 testing — **no KNITRO run has happened yet.**
+
+### What's in the outer loop
+
+At D=4 (square test economy), fixed-theta:
+
+- **Full formulation**: `w_full = [gp; A_nonpivot]`, length `D² = 16` — `gp` plus 15 of the 16
+  A-cells (1 eliminated by the pre-existing global gravity pivot, unrelated to this work).
+- **Profiled formulation**: `w_profiled = [gp; r_free]`, length `1 + 11 = 12` — 4 fewer
+  coordinates, exactly `Ddest`, one per destination.
+
+`gp` itself is untouched by any of this — same variable, same role, in both. At real D=20:
+`380 → 361` (anchor removal) `→ 360` (existing gravity pivot), vs. the full formulation's
+`380 → 379`.
+
+### What the normalizations actually are
+
+- **Old formulation**: `γ_d ≡ 1` is *forced* for every destination (never fit). The moment is
+  `E_F[Q_od] − λ_od·denom[d] = 0`, `denom[d] = γ_d^σ·w_d·L_d = w_d·L_d` — a **fixed data
+  constant**. An initial assumption this session that this left the destination-column scale of
+  `A` unidentified was WRONG — these are `D−1` independent absolute equations against a fixed
+  target, and they pin the scale exactly. In the old formulation, `A`'s overall column scale is
+  genuinely fit, not wasted.
+- **New (homogeneous) formulation**: replace the fixed `denom[d]` with the model's own per-draw
+  `M_d(ω)`: `E_F[Q_od − λ_od·M_d(ω)] = 0`. This IS exactly scale-invariant (verified: rescales by
+  precisely `κ^{μ(σ-1)}` under any column rescale — satisfied at one scale iff satisfied at every
+  scale). This is what makes the scale genuinely unidentified under this moment set, and is the
+  actual justification for fixing it via a gauge instead of an equation.
+- **The anchor gauge**: one origin `j_d` per destination (France→France, Korea→Brazil, else
+  own-cell). `A_{j_d,d}` is fixed to its **calibration value** — not 1, not the gravity pivot's
+  `zfree=0` reference point (this repo has a standing warning about conflating that with
+  calibration; deliberately avoided). Every other origin is represented relative to that fixed
+  value.
+- **France's moment**: same treatment. Old target was `gp^σ·wPrime_bi·LPrime_bi` (fixed, using
+  counterfactual population, confirmed numerically identical to factual population). New target is
+  `gp^σ·M_f(ω)` (endogenous). `gp` itself doesn't change meaning — it's the outer objective (the
+  welfare/GT quantity KNITRO extremizes), not a fitted moment target. This session got it wrong
+  once mid-way (claimed `ρ_f = gp` with no power, conflating `gp`'s objective role with the
+  moment's actual target) and corrected it — the `gp^σ` structure was right.
+- **Gravity** (a separate, pre-existing single scalar constraint) is unchanged and proven exactly
+  invariant to any destination gauge choice, so it composes cleanly with the anchor reduction.
+
+### Corrections made mid-session (three, all self- or user-caught, all documented in place rather
+than silently fixed)
+
+1. Every D4 gate initially read the legacy dense `G`/`H`/`K` bundle instead of the real operator
+   path — user-caught, fixed in commit `408a4b1`.
+2. `ρ_f = gp` was wrong (conflated the outer objective `K` with the actual moment target) —
+   self-caught, fixed in commit `54cbb5e`.
+3. The audit's "`H_EE` unchanged" claim was wrong, and `H_EC` needed direct verification rather
+   than trusting the same audit label — self-caught, `H_EE` fixed (commit `2194c8a`, including a
+   real scaling bug the finite-difference gate caught on first run), `H_EC`'s scope documented but
+   not yet implemented (commit `b2a745b`).
+
 ## 0. Scope of this session, and why
 
 The full task specification is 26 sections covering: theory proof, a full call-graph audit, an
