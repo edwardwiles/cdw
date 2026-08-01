@@ -79,5 +79,12 @@ catch e
     end
 end
 lp(">> wall = ", round(time() - t0, digits = 1), "s  errored=", errored)
-result !== nothing && lp(">> result = ", result)
+# NOTE (2026-08-01, post-run fix): originally `lp(">> result = ", result)` -- result is a
+# NamedTuple that nests the full ctx (all its large matrices) and printing it flooded ~1.6GB of
+# output, which got the background job SIGKILL'd on first run. Print only the scalar summary
+# fields actually needed to confirm success.
+if result !== nothing
+    lp(">> result: knitro_status=", get(result, :knitro_status, get(result, :status, "?")),
+       "  n_eval=", get(result, :n_eval, "?"))
+end
 lp("DONE")
