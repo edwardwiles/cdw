@@ -147,7 +147,22 @@ calibration (`c10_d20_production_driver.jl`'s own comment: "a 1% deviation infla
 ~0.0026 to ~0.13, a ~50x jump"). Verdict: **PASS with one well-diagnosed, non-differential edge
 case**, not a formulation defect.
 
-## 6. Outer A/B search (task §14-17)
+## ⚠️ RETRACTION NOTICE (read before §6/§6b below)
+
+**Sections §6 and §6b's numbers are WRONG and RETRACTED.** They were produced by
+`run_profiled_outer_search` (`profiled_outer_ab_harness_2026-08-01.jl`) with a real bug: `gp`
+(`w_start[1]`) was included **inside** KNITRO's free-variable vector with a `±30` box, instead of
+being held fixed as the production "profile stage" contract requires (`run_profile_checkpointed`
+captures `g_in` by closure and never adds it to KNITRO's variables at all). The profiled arm was
+therefore silently solving an **easier problem** than the full arm in every A/B below §6c — free
+to drift `gp` back toward its easy, well-fitting calibration value instead of being held at the
+caller's intended fixed target. Every "profiled wins big" / "full wins big" number in §6 and §6b
+is an artifact of this asymmetry, not a real finding about either formulation. **See §6c for the
+diagnosis (caught via a live user-requested LFD/gravity verification) and §6d for the corrected,
+apples-to-apples results.** §6/§6b are left in place below, struck through in spirit but not
+deleted, per this repo's own convention of correcting in place rather than erasing a wrong result.
+
+## 6. [RETRACTED] Outer A/B search (task §14-17)
 
 Matched setup: real D=20, `:exclude_row`, unrestricted family, fixed theta, W=80,000, delta=1,
 same calibration start point (profiled start reduced from the exact same full calibration point,
@@ -185,7 +200,7 @@ finds it is only PART of the story.
 **Lower bound**: not run. The upper-bound result already answers the question this A/B was
 designed to answer, once combined with §6b's follow-up.
 
-## 6b. Follow-up: fixed-outer-iteration-count A/B (live user request, same day)
+## 6b. [RETRACTED] Follow-up: fixed-outer-iteration-count A/B (live user request, same day)
 
 The wall-clock-matched result in §6 conflates two different questions: "does the profiled
 coordinate system make each outer step more effective?" and "how much does each formulation's
@@ -222,9 +237,98 @@ gradient may simply be a noisier local model of the objective at this bandwidth.
 tested further (out of scope for a same-day follow-up) and is flagged as the natural next step
 before drawing a final conclusion about the coordinate system's own merit.
 
+## 6c. The gp-drift bug: diagnosis and fix
+
+After §6b reported a 7.5x gap that survived fixing the gradient's speed, the user asked for a
+deeper check: *"verify your profiled solutions by using the LFD to evaluate all of the trade
+shares and the gravity regression. I am a bit suspicious of differences that large."*
+`verify_lfd_shares_gravity_2026-08-01.jl` was built to do exactly that — for both arms' best
+points, recompute the LFD-weighted implied bilateral trade share for every `(o, destination)` cell
+and compare to the factual data share, and check the gravity regression residual.
+
+**That specific check came back looking fine for both arms** (mean|diff| identically ~1.4e-9,
+gravity residual ~1e-19/1e-20 for both) — which is itself informative in hindsight: bilateral
+share-matching is essentially guaranteed by each solve's own KKT/moment conditions regardless of
+the overall `Delta_dual` value, so it cannot distinguish "genuinely better fit" from "cheating on
+a different margin." **The actual smoking gun came from printing the raw `gp` value at each arm's
+best point**, prompted by the same investigation: the full arm's checkpoint correctly showed
+`gp=0.983116` (the intended fixed value for that run); the profiled arm's best point showed
+`gp=0.993019` — almost exactly back at calibration (`0.9930463...`), even though the profile-stage
+task explicitly fixes `gp` and searches only over the A-block.
+
+**Root cause**: `run_profiled_outer_search` passed `w_start` (length 361, `[gp; r_free]`) wholesale
+into `KN_add_vars`/`KN_set_var_lobnds_all`/`KN_set_var_upbnds_all` with a `±30` box on every
+coordinate, including `gp` — there was never any mechanism holding `gp` fixed. Every gradient call
+also returned the FULL length-361 gradient (`g[1]` = the gp component) directly to
+`evalResult.objGrad`, meaning KNITRO was both free to move `gp` AND told exactly which direction
+would improve it. The full arm never had this problem: `run_profile_checkpointed` takes `g_in` as
+a **separate scalar argument**, captured by closure, never added to KNITRO's variable set at all.
+
+**Fix** (`profiled_outer_ab_harness_2026-08-01.jl`): `gp` is now captured by closure
+(`gp_fixed = w_start[1]`), `KN_add_vars` only allocates the `n_free` A-block coordinates, and
+`cb_G!` drops the gradient's `gp` component before writing to KNITRO
+(`evalResult.objGrad .= g[2:end]`) — exactly mirroring production's own `gfull[2:end]` convention.
+**Verified live**: a short test run confirms the terminal free-variable vector has length 360 (not
+361) and `best.w[1]` stays at *exactly* the caller's fixed `gp` throughout the search.
+
+This invalidates every profiled-arm result computed before this fix — §6, §6b, and the killed
+gp=0.995/0.988 sweep points. §6d below re-runs the key comparisons with the fix in place.
+
+## 6d. Corrected matched A/B (post-fix), across three difficulty levels
+
+Same fixed-iteration protocol as §6b (both arms capped at the identical KNITRO `maxit=60`, same
+outer solver config, `gp` now genuinely held fixed for the profiled arm too), run at three points
+of increasing distance from calibration — `gp=0.99×calib`, `gp=0.985×calib`, and a `gp` reached via
+a short **continuation** (`continuation_gt_targets_2026-08-01.jl`, walking `gp` down in 6 small
+steps of `run_profile_checkpointed` calls, each warm-started from the previous step's converged A,
+since a direct jump to these `gp` values from calibration's own A already fails to converge — see
+§6e) corresponding to a **gains-from-trade target of GT=5%**
+(`κ = 1 - gp^(σ/(σ-1)) = 0.05`, confirmed formula, `c12_sign_convention_smoke_test.jl` and others;
+`σ=2.5` in this live D20 context, confirmed from `ctx.σ`, not assumed). The GT=5% point's shared
+starting A-matrix was taken from the continuation's own converged state and translated into both
+arms' coordinate systems (`pivot_expand` → `reduce_to_w_profiled`) so both start from the
+economically identical point, per the task's own "same initial economic point" requirement.
+
+| Point | gp (fixed) | full Δ (n_grad) | profiled Δ (n_grad) | profiled better by |
+|---|---|---|---|---|
+| gp=0.99×calib (κ≈2.8%) | 0.983116 | 0.15175 (61) | 0.14612 (61) | **3.85%** |
+| gp=0.985×calib (κ≈3.6%) | 0.978151 | 0.36264 (60) | 0.33582 (57) | **7.99%** |
+| GT=5% waypoint (κ=5.0%) | 0.969693 | 0.97312 (61) | 0.92158 (61) | **5.59%** |
+
+`run_ab_{full,profiled}_fixediter_gplow_2026-08-01.jl` (parametrized via `AB_GP_FRAC`) and
+`run_ab_{full,profiled}_fixediter_gt5_2026-08-01.jl`; traces
+`FULL_VS_PROFILED_OUTER_AB_FIXEDITER_2026-08-01_{gp0p990,gp0p985,gt5}_{FULL,PROFILED}_TRACE.csv`.
+`gp` confirmed held exactly fixed at every run via the printed `seed: gp_fixed=...` line, matching
+the intended target to machine precision in every case. Re-ran the LFD/gravity verification on the
+corrected gp=0.99 point: gravity residual ~1e-19/1e-20 for both arms (fully gravity-feasible,
+consistent with the earlier check), `Delta_dual` matches the completed run to 5 significant figures.
+
+**Corrected picture, replacing §6/§6b entirely**: at matched gradient-call counts across three
+genuinely fixed-gp difficulty levels, the profiled formulation shows a **small, consistent 4-8%
+better objective** than the full formulation — not a 12x or 7.5x gap in either direction. This is
+a plausible, believable result for two mathematically equivalent reparameterizations of the same
+problem (the profiled arm has 1 fewer free coordinate — 360 vs 361 counting the pivot — and no
+destination-scale nuisance directions to traverse, matching §6a's own finding that the full
+formulation spends little of its step budget on those directions anyway, so a small edge rather
+than a large one is exactly what one would expect a priori).
+
+## 6e. Continuation mechanics (for the GT=5% waypoint)
+
+A direct jump from calibration to `gp=0.9697` (holding the A-block at calibration values) fails to
+converge (`inner_status=-400`) well before reaching that target — probed directly: `gp` fractions
+down to `0.985` (κ≈3.6%) converge cleanly, `0.982` (κ≈4.1%) does not. `continuation_gt_targets_2026-08-01.jl`
+instead steps `gp` down by a factor of `0.996` per step (6 steps total to reach κ=5.0% from
+calibration's κ≈1.16%), re-optimizing the A-block at each step via a **short**
+`run_profile_checkpointed` call (`maxit=10`, warm-started from the previous step's own converged
+`zfree`) — reusing the trusted production driver at every step rather than writing new continuation
+machinery. All 6 steps converged to a verified feasible point before advancing; total continuation
+wall-clock ≈2000s (6 × ~330s/step). The final waypoint (`gp=0.9696927825876808`,
+`kappa=0.049999999999999993`) is serialized to `results/profiled_ab_2026-08-01/continuation_gt/waypoint_GT5.jls`.
+
 ## 6a. Destination-scale step decomposition (task §15)
 
-Computed from the full arm's own 88 accepted (`:new_best`) outer steps
+(Unaffected by the §6c bug — computed entirely from the FULL arm's own trajectory, which never had
+a `gp`-fixing problem.) Computed from the full arm's own 88 accepted (`:new_best`) outer steps
 (`DESTINATION_SCALE_STEP_DECOMPOSITION_2026-08-01.csv`), decomposing each step's `Δlog(A)` into a
 per-destination common-SCALE component (`mean_d(Δa_{.,d})·1`) and a RELATIVE component
 (`Δa_{.,d} - mean_d(Δa_{.,d})·1`):
@@ -298,31 +402,35 @@ REFERENCE_PATH_FD_EQUIVALENCE = pass
     gp-direction solver edge case affecting both formulations identically, not a profiled-only
     defect)
 
-OUTER_AB_UPPER = full_better_objective_at_matched_time
-    (wall-clock-matched, slow full-rebuild profiled gradient: full Delta=8.15e-5 @ 1552.5s/221
-    evals/89 grads; profiled Delta=8.11e-4 @ 1687.4s/30 evals/13 grads -- full ~12x better at
-    matched wall-clock. See OUTER_AB_FIXEDITER below for the corrected, apples-to-apples
-    iteration-matched follow-up using the now-fixed 10-15x-faster gradient.)
-OUTER_AB_FIXEDITER = full_better_objective_at_matched_iterations
-    (BOTH arms capped at the identical KNITRO maxit=60, landed on the identical 61 gradient calls,
-    using the fixed O(1)-incremental profiled gradient (13.7s/call, actually cheaper than full's
-    18.5s/call): full Delta=9.80e-5 vs profiled Delta=7.37e-4 -- full still ~7.5x better at
-    IDENTICAL gradient-call count and comparable-or-less wall-clock for profiled. This is the
-    decisive result: the wall-clock gap in OUTER_AB_UPPER was real but not the whole story --
-    a genuine per-iteration search-quality gap remains even after fixing gradient speed. See §6b
-    for the leading unexamined hypothesis (production's adaptive per-coordinate FD bandwidth vs
-    this diagnostic's single fixed h=0.01).)
+OUTER_AB_UPPER = RETRACTED_see_OUTER_AB_FIXEDITER
+    (the original wall-clock-matched full-vs-profiled comparison, and its own "fixed-iteration"
+    follow-up, were both computed with a real bug in the profiled harness: gp was included in
+    KNITRO's free-variable set instead of held fixed, letting the profiled arm silently drift gp
+    back toward its easy calibration value -- an unfair comparison invalidating both the 12x and
+    7.5x gaps originally reported. See §6c for the full diagnosis (caught via a live user-requested
+    LFD/gravity verification) and §6d for the corrected results.)
+OUTER_AB_FIXEDITER = profiled_better_by_4_to_8_pct_at_matched_gradient_calls
+    (CORRECTED, post-bugfix, three points of increasing distance from calibration -- gp=0.99*calib
+    (kappa~2.8%): full=0.15175/profiled=0.14612 (61/61 grads, profiled +3.85%); gp=0.985*calib
+    (kappa~3.6%): full=0.36264/profiled=0.33582 (60/57 grads, profiled +7.99%); GT=5% waypoint via
+    continuation (kappa=5.0%): full=0.97312/profiled=0.92158 (61/61 grads, profiled +5.59%). gp
+    confirmed held exactly fixed in every run. A small, consistent, believable edge -- not a wild
+    anomaly in either direction -- across three genuinely matched difficulty levels. See §6d.)
 OUTER_AB_LOWER = not_run
 SCALE_DIRECTION_DIAGNOSTIC = negligible
     (full formulation's own accepted steps: mean 3.59% of step norm in destination-scale
-    directions, 96.41% in relative directions -- independently corroborates the A/B result)
-PORT_TO_RESTRICTED_FAMILIES = do_not_recommend
-    (BOTH the wall-clock-matched AND the iteration-matched A/B favor full, the latter after fixing
-    the profiled gradient's speed to be competitive-or-better than production's own. This is a
-    stronger, more decisive basis than the first (superseded) verdict, which had wrongly attributed
-    the entire gap to gradient-implementation speed. Caveat retained: the adaptive-bandwidth
-    hypothesis in §6b was not tested and could narrow or close the remaining per-iteration gap --
-    flagged as the concrete next step, not dismissed.)
+    directions, 96.41% in relative directions -- unaffected by the §6c bug, independently
+    corroborates the small (not large) effect size found in the corrected A/B)
+PORT_TO_RESTRICTED_FAMILIES = insufficient_evidence
+    (revised down from the earlier "do_not_recommend" verdict, which was based on invalidated
+    numbers. The CORRECTED result -- a consistent but modest 4-8% edge for the profiled formulation
+    across three difficulty levels -- is directionally encouraging but far too small a sample (3
+    points, one A/B seed each, upper-bound direction only, one real-data draw) to recommend a
+    multi-family rewrite on. A genuine recommendation would need: the lower-bound direction, more
+    seeds/starting points, and a check of whether the 4-8% edge holds or changes at yet-more-extreme
+    gp values. This session's own repeated experience with getting the comparison wrong twice
+    (envelope-theorem gradient rejected, O(1)-incremental gradient's gp-formula bug, then this
+    gp-drift harness bug) is itself a reason for caution before generalizing from 3 points.)
 
 PRODUCTION_DEFAULT_CHANGED = false
 PRODUCTION_MERGE = not_attempted

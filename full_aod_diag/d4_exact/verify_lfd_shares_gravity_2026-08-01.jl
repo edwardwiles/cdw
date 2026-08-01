@@ -89,7 +89,7 @@ end
 # PROFILED arm: parse the best w from the completed gp=0.99 run's log.
 # ---------------------------------------------------------------------------
 println("\n" * "="^90); println("PROFILED ARM (gp=0.99 fixed-iteration best point)"); println("="^90); flush(stdout)
-w_str = read(joinpath(@__DIR__, "profiled_w_best_gp099.txt"), String)
+w_str = read(joinpath(@__DIR__, get(ENV, "VERIFY_W_FILE", "profiled_w_best_gp099.txt")), String)
 w_profiled_best = Float64.(eval(Meta.parse(w_str)))
 @assert length(w_profiled_best) == outer_dim_profiled(pe_profiled) "parsed w has length $(length(w_profiled_best)), expected $(outer_dim_profiled(pe_profiled))"
 println("gp (profiled best) = ", w_profiled_best[1])
