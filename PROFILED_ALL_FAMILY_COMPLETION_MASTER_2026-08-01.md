@@ -216,18 +216,42 @@ factor", "latent OOB read"). This session's own honest contribution, in order of
           more robust than this crude trace, but a `nStatus=-400` (consistent with an uncaught
           `DomainError` from `Psi!`/`dPsi!`/`ddPsi!` being evaluated at an extreme, out-of-domain `q`
           during KNITRO's own step) is fully consistent with this diagnosis.
-     - **Conclusion**: this is very likely a genuine numerical-conditioning issue with the specific
-       anchor choice (`build_anchor_spec_from_ctx`'s own-cell default) and/or D4 test point, not a
-       formula-correctness bug — every formula touched this session has now been independently
-       validated to machine precision at multiple points. But it is **not resolved**: a real live
-       KNITRO solve of the reduced dual problem for flexible CM does not currently converge from a
-       cold start at this test point. Per this repo's own CLAUDE.md standing guidance ("the inner
-       solve's warm/cold start affects speed, never whether it converges... look for what actually
-       changed about the *problem*"), the right next step is investigating the anchor choice's effect
-       on conditioning (e.g. a different `AnchorSpec`, or whether the unrestricted family's own
-       already-validated reduced solve exhibits the same sensitivity at this exact point) — not
-       assuming a better warm start would fix it. Left as an honestly-failing, diagnostic-rich test
-       (not deleted, not silently downgraded) for whoever continues this.
+     - **Two further, decisive checks (same session, after the above)** narrow this down sharply:
+       1. **Warm start does NOT fix it.** Built the exact "zeroed-anchor" point from the FULL model's
+          own real converged solve (the SAME point this session's D4 Hessian gate already validated
+          numerically) and set it as `obj_reduced.x` (consumed by `CS.inner_loop_initial_values`
+          whenever `use_cached_x && norm(obj.x)<1e6`) instead of a cold `zeros` start — still
+          `nStatus=-400`, byte-identical failure. This is exactly the outcome this repo's own
+          CLAUDE.md standing guidance predicts ("the inner solve's warm/cold start affects speed,
+          never whether it converges") — strong evidence this is a genuine problem-level issue, not a
+          starting-point artifact, and specifically rules out "just needs a better initial guess" as a
+          fix.
+       2. **The UNRESTRICTED family's own already-validated reduced solve converges FINE at the exact
+          same θ and `AnchorSpec`.** Called `build_profiled_operator_bundle`/`inner_loop_KNITRO_profiled`
+          (this branch's own pre-existing, merged, validated unrestricted-family machinery) directly at
+          the identical calibration θ and `spec` used throughout this session's flexible-CM work:
+          `nStatus=0`, converges normally. **This is the decisive finding**: it proves the reduced
+          economic layout itself, this exact anchor choice, and this exact D4 test point are **not**
+          inherently ill-conditioned — a model containing ONLY the reduced economic block (no
+          restriction columns at all) solves fine. The failure is therefore specific to something
+          about how flexible CM's OWN restriction block (the 30 CM-grid columns) interacts with the
+          now-smaller (13-column, vs the unrestricted family's own economic-only problem which is
+          solved standalone) reduced economic block — most plausibly a genuine relative-scale/
+          conditioning interaction between `H_EE`(now smaller) and `H_CC`(unchanged, still full CM-grid
+          size) in the assembled Hessian, rather than a further formula bug (`pack_upper_cm_hessian!`/
+          `fill_cm_HCC!` were re-read and confirmed fully generic over `NCORE`/`n`, no hardcoded
+          assumption found; both are also exercised, unmodified, inside this session's own already-
+          bit-identical D4 Hessian gate, via the packed `h` output that gate compares).
+     - **Conclusion**: NOT a formula-correctness bug (every formula independently validated to machine
+       precision, at multiple hand-set points, including via a completely independent reference
+       kernel); NOT a cold-start artifact (warm start doesn't help, consistent with this repo's own
+       standing guidance); NOT inherent to the reduced economic layout alone (the unrestricted family's
+       own reduced solve converges fine at the identical point). The remaining, unresolved, and now
+       much more precisely bounded question is a **numerical-conditioning interaction specific to
+       flexible CM's combination of a reduced economic block with its unchanged CM-grid restriction
+       block**, at this particular D4 test point — genuinely open, not yet closed. Left as an
+       honestly-failing, diagnostic-rich test (not deleted, not silently downgraded) for whoever
+       continues this.
 
 ## Important correction to this session's own earlier claim (found while building the H_EE/H_EC gate)
 
@@ -313,7 +337,7 @@ OLD_FULL_PATH_OVERHEAD =
 
 GENUINE_REDUCED_LAYOUT =
     unrestricted:      pass                          # pre-existing, source branch, unchanged
-    flexible_CM:        fg_and_hessian_formulas_pass_live_knitro_solve_fails_400_conditioning_not_isolated
+    flexible_CM:        fg_and_hessian_formulas_pass_live_solve_fails_400_isolated_to_HEE_HCC_interaction
     common_Frechet:      not_started   # shares flexible CM's plumbing but H_EF gather not built
     ZC_only:             not_started
     CM_plus_ZC:          not_started
@@ -369,17 +393,18 @@ CAMPAIGN_LAUNCHED = false
 
 ## Recommended next steps (in order, for whoever continues this)
 
-1. **Isolate the nStatus=-400 conditioning issue** (the single largest remaining blocker now): try a
-   different `AnchorSpec` (e.g. explicit non-own-cell anchors via `build_anchor_spec_from_ctx`'s
-   `global_overrides` keyword) to see if conditioning near `x=0` improves; try a genuinely-warmed
-   start (recover the FULL calibration solve's retained-λ entries, matching this session's own D4
-   Hessian gate's "zeroed-anchor" point, as `KN_set_var_primal_init_values_all` instead of zeros);
-   check whether the UNRESTRICTED family's own already-validated reduced solve
-   (`inner_loop_KNITRO_profiled`) exhibits the same sensitivity at an analogous D4 point (if it does
-   NOT, the issue is specific to flexible CM's wiring, not the reduced-layout theory itself; if it
-   DOES, this may be a more general, known-and-tolerated property of the profiled formulation). Per
-   this repo's own CLAUDE.md standing guidance, do not attribute this to "cold start" without first
-   ruling out a genuine problem-level cause.
+1. **Isolate the nStatus=-400 conditioning issue** (the single largest remaining blocker now) —
+   narrowed THIS session to "an interaction between the reduced H_EE and flexible CM's unchanged
+   CM-grid H_CC block", via two decisive checks already run (warm start does not help; the
+   unrestricted family's own reduced solve converges fine at the identical θ/AnchorSpec — see above).
+   Next: (a) compare `eigvals`/condition number of the assembled reduced Hessian's `H_EE` block vs its
+   `H_CC` block at the SAME dual point, to see if one dominates/vanishes relative to the other once
+   the economic block shrinks; (b) try a SMALLER `L` (fewer CM-grid columns, e.g. `L=2`) to see if the
+   failure is sensitive to the CM-grid's own relative size; (c) try `:orthonormal` vs `:anchored`
+   contrasts (both already exercised in this session's Hessian-formula gates, but not in the live
+   solve) in case one is better-conditioned; (d) as a structural check, try whether `KN_set_var_scalings_all`
+   (used successfully elsewhere in this repo per memory `melitz-real-d20-scaled-knitro-native-scaling`)
+   changes the outcome — but only AFTER (a)-(c) narrow the actual cause, not as a first resort.
 2. Once (1) yields a converging solve: re-run this session's
    `test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl`-style comparison but at a GENUINELY SOLVED
    reduced-model point (not a hand-set one) — a real, if narrow, version of the mission's §9
