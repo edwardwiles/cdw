@@ -317,25 +317,141 @@ function profiled_gp_component_analytic(cache::ProfiledLFixCache, w_profiled::Ab
 end
 
 """
-    profiled_composite_gradient_at_incremental(w_profiled, ctx, spec, pe, ev; h=0.01) -> (g, meta)
+    profiled_count_winner_flips(cache, ctx, θ_full, d, changed_origins) -> Int
 
-O(1)-per-changed-cell profiled outer gradient: `g[1]` exact analytic gp
-(`profiled_gp_component_analytic`), `g[2:end]` central FD via
-`profiled_lfix_incremental_at` (O(1)-ish per probe, NOT a full
-`build_compressed_factual` rebuild). Same fixed `h` for every A-block
-coordinate (no adaptive per-coordinate bandwidth in this diagnostic version
--- a documented, honest simplification vs production's `select_bandwidth`).
+Profiled analog of `composite_gradient.jl::count_winner_flips` -- counts how
+many of the W draws' cached winner at destination `d` flip under a probed
+perturbation, using the SAME `update_winner_o1`/top-3-cache case analysis
+already validated in `dest_contrib_reduced_o1`. Needed so
+`profiled_select_bandwidth` can target the same switching-mass window
+production's own selector does.
+"""
+function profiled_count_winner_flips(cache::ProfiledLFixCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
+    D = cache.D; W = cache.W
+    if length(changed_origins) == 1
+        o = changed_origins[1]
+        new_price, _ = price_and_pTsigma_cell(θ_full, ctx, o, d)
+        flips = 0
+        @inbounds for ω in 1:W
+            wo, _, _, _, _ = update_winner_o1(cache.winner_price0[ω, d], cache.winner0[ω, d],
+                cache.runnerup_price0[ω, d], cache.runnerup0[ω, d], o, new_price[ω])
+            flips += (wo != cache.winner0[ω, d])
+        end
+        return flips
+    else
+        length(changed_origins) <= 2 || error("profiled_count_winner_flips: >2 changed origins unreachable for a single profiled coordinate")
+        Cd = changed_origins
+        new_price = Dict{Int,Vector{Float64}}()
+        for o in Cd
+            p, _ = price_and_pTsigma_cell(θ_full, ctx, o, d)
+            new_price[o] = p
+        end
+        flips = 0
+        @inbounds for ω in 1:W
+            r1 = cache.winner0[ω, d]; r2 = cache.runnerup0[ω, d]; r3 = cache.third0[ω, d]
+            best_o = 0; best_p = Inf
+            if !(r1 in Cd)
+                best_o = r1; best_p = cache.winner_price0[ω, d]
+            elseif !(r2 in Cd)
+                best_o = r2; best_p = cache.runnerup_price0[ω, d]
+            elseif r3 != 0 && !(r3 in Cd)
+                best_o = r3; best_p = cache.third_price0[ω, d]
+            end
+            bo = best_o; bp = best_p
+            for o in Cd
+                v = new_price[o][ω]
+                if v < bp || (v == bp && o < bo)
+                    bp = v; bo = o
+                end
+            end
+            if bo == 0
+                col = Vector{Float64}(undef, D)
+                for o in 1:D
+                    col[o] = haskey(new_price, o) ? new_price[o][ω] : cache.price0[ω, o, d]
+                end
+                _, bo, _ = min_and_secondmin(col)
+            end
+            flips += (bo != r1)
+        end
+        return flips
+    end
+end
+
+"""
+    profiled_select_bandwidth(cache, ctx, spec, pe, w0, coord_idx; kwargs...) -> (h, mass, meta)
+
+EXACT profiled analog of `composite_gradient.jl::select_bandwidth` -- same
+switching-mass-targeted geometric bisection (default `h0=0.01`,
+`h_floor=1e-4`, `h_ceil=0.1`, `target_mass_frac=(0.003,0.03)`, `max_iter=6`).
+Per live user feedback ("I just wanted you to do the same thing and method
+but with slightly modified formula") this is now wired into
+`profiled_composite_gradient_at_incremental` exactly the way production
+calls `select_bandwidth` once per A-block coordinate -- no methodological
+simplification, only the per-draw contribution formula differs (§9 of the
+derivation doc).
+"""
+function profiled_select_bandwidth(cache::ProfiledLFixCache, ctx, spec::AnchorSpec, pe::PivotGravityElimOnRetained,
+        w0::AbstractVector, coord_idx::Int; h0::Float64 = 0.01, h_floor::Float64 = 1e-4, h_ceil::Float64 = 0.1,
+        target_mass_frac::Tuple{Float64,Float64} = (0.003, 0.03), max_iter::Int = 6)
+    cells = profiled_affected_cells(spec, pe, coord_idx)
+    affected_dests = unique(last.(cells))
+
+    function mass_at(h::Float64)
+        w = copy(w0); w[coord_idx] += h
+        decoded = decode_outer_profiled(w, ctx, pe)
+        θ_full = CS.reconstruct_full(decoded.xf, ctx.m)
+        total_flips = 0
+        for d in affected_dests
+            origins_here = [o for (o, dd) in cells if dd == d]
+            total_flips += profiled_count_winner_flips(cache, ctx, θ_full, d, origins_here)
+        end
+        return total_flips / (cache.W * length(affected_dests))
+    end
+
+    h = h0
+    lo_frac, hi_frac = target_mass_frac
+    m = mass_at(h)
+    n_iter = 0
+    while n_iter < max_iter
+        if m < lo_frac && h < h_ceil
+            h = min(h * 2, h_ceil)
+        elseif m > hi_frac && h > h_floor
+            h = max(h / 2, h_floor)
+        else
+            break
+        end
+        m = mass_at(h)
+        n_iter += 1
+        (h == h_ceil || h == h_floor) && break
+    end
+    return h, m, (n_iter = n_iter, hit_floor = h == h_floor, hit_ceil = h == h_ceil)
+end
+
+"""
+    profiled_composite_gradient_at_incremental(w_profiled, ctx, spec, pe, ev; multi_method=:top3) -> (g, meta)
+
+O(1)-per-changed-cell profiled outer gradient, now matching production's
+`composite_gradient_at` EXACTLY in method: `g[1]` exact analytic gp
+(`profiled_gp_component_analytic`, mirrors `gamma_component_analytic`);
+`g[2:end]` central FD via `profiled_lfix_incremental_at`, each coordinate's
+step `h` chosen by `profiled_select_bandwidth` (mirrors production's own
+per-coordinate `select_bandwidth` call inside its `for k in 2:D2` loop) --
+no fixed global `h` anymore.
 """
 function profiled_composite_gradient_at_incremental(w_profiled::AbstractVector{Float64}, ctx, spec::AnchorSpec,
-        pe::PivotGravityElimOnRetained, ev; h::Float64 = 0.01)
+        pe::PivotGravityElimOnRetained, ev)
     cache = build_profiled_lfix_cache(w_profiled, ctx, spec, pe, ev)
     n_total = outer_dim_profiled(pe)
     g = zeros(n_total)
     g[1] = profiled_gp_component_analytic(cache, w_profiled, ev, ctx)
+
+    h_used = zeros(n_total); switch_mass = zeros(n_total)
     @inbounds for coord_idx in 2:n_total
+        h, m, _selmeta = profiled_select_bandwidth(cache, ctx, spec, pe, w_profiled, coord_idx)
+        h_used[coord_idx] = h; switch_mass[coord_idx] = m
         Lp = profiled_lfix_incremental_at(cache, ctx, spec, pe, w_profiled, coord_idx, w_profiled[coord_idx] + h)
         Lm = profiled_lfix_incremental_at(cache, ctx, spec, pe, w_profiled, coord_idx, w_profiled[coord_idx] - h)
         g[coord_idx] = (Lp - Lm) / (2h)
     end
-    return g, (cache = cache, w0 = collect(Float64, w_profiled), h = h)
+    return g, (cache = cache, w0 = collect(Float64, w_profiled), h_used = h_used, switch_mass = switch_mass)
 end
