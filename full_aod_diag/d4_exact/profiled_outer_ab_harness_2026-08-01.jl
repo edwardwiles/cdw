@@ -43,7 +43,11 @@ implicitly through `ctx.obj`).
 """
 function run_profiled_outer_search(label::String, w_start::Vector{Float64}; ctx, spec::AnchorSpec,
         pe::PivotGravityElimOnRetained, maxtime_real::Float64 = 1800.0, hessopt_tag::String = "sr1",
-        maxit_override::Union{Nothing,Int} = nothing, trace_csv::Union{Nothing,AbstractString} = nothing)
+        maxit_override::Union{Nothing,Int} = nothing, trace_csv::Union{Nothing,AbstractString} = nothing,
+        gradient_fn::Function = profiled_composite_gradient_at)   # swappable: profiled_composite_gradient_at
+        # (full-rebuild FD, §9 original) or profiled_composite_gradient_at_incremental
+        # (O(1)-per-changed-cell, profiled_lfix_incremental_2026-08-01.jl) -- same call signature
+        # (w, ctx, spec, pe, ev) -> (g, meta) for both, so this is a pure drop-in.
     n = length(w_start)
     lp(xs...) = (println(xs...); flush(stdout))
 
@@ -97,7 +101,7 @@ function run_profiled_outer_search(label::String, w_start::Vector{Float64}; ctx,
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         w = collect(Float64, evalRequest.x)
         ev = (last_w[] !== nothing && last_w[] == w) ? last_ev[] : evaluate_profiled_point(w, ctx, spec, pe)
-        g, meta = profiled_composite_gradient_at(w, ctx, spec, pe, ev)
+        g, meta = gradient_fn(w, ctx, spec, pe, ev)
         n_grad_calls[] += 1
         evalResult.objGrad .= g
         return 0
