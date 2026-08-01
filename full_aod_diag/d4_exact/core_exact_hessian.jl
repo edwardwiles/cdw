@@ -357,6 +357,16 @@ struct WinnerPairHessCtx
     y::Matrix{Float64}           # W x Ddest, kappa0-scaled winner value
     winner::Matrix{Int}          # W x Ddest (alias of cf.winner)
     cf_raw_scaled::Vector{Float64}  # kappa0[cf_col]*cf_raw[w], length W (empty if !has_cf)
+    # Profiled economic block port (2026-08-01): raw, winner-INDEPENDENT per-draw destination
+    # value (alias of cf.wval, ALWAYS defined including on draws where an economic column has no
+    # explicit row -- e.g. an omitted anchor in a future reduced-layout ctx) and each column's own
+    # destination slot, `target_slot[j] = ((j-1) % Ddest) + 1` for this ctx's OLD full-index
+    # `j = slot + (o-1)*Ddest` convention. Both are read-only additions consumed ONLY by the new
+    # `use_profiled_correction=true` path in winner_pair_cross_hessian.jl -- unused (harmless) for
+    # every existing `use_profiled_correction=false` (default) caller, so this addition changes no
+    # existing behavior.
+    wval::Matrix{Float64}        # W x Ddest (alias of cf.wval)
+    target_slot::Vector{Int}     # length ncolI
     Snu_buf::Vector{Float64}
     Snu2_buf::Vector{Float64}
     u_buf::Vector{Float64}
@@ -401,7 +411,24 @@ function build_winner_pair_ctx(cf::CompressedFactual)
         cf_raw_scaled = k0cf .* cf.cf_raw
     end
 
+    # target_slot[j] = the destination slot economic column j belongs to. For the D*Ddest bilateral
+    # columns this is the trivial inverse of j = slot + (o-1)*Ddest. The France/cf column (when
+    # present) has NO single well-defined destination slot from `cf` alone -- its true target slot
+    # is the Brazil-Korea comparison destination's own slot (`dest_slot(ctx, ctx.bi)`), which
+    # requires `ctx`, not available in this `cf`-only constructor. Left at the sentinel 0 rather
+    # than guessed; `winner_pair_cross_hessian_cm_block!`'s profiled-correction path deliberately
+    # keeps the France row on the OLD (destination-independent) correction until a genuine bi_slot
+    # is threaded through (see PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §2 -- an explicit,
+    # documented scope cut, not a silent gap).
+    target_slot = Vector{Int}(undef, ncolI)
+    @inbounds for slot in 1:Ddest, o in 1:D
+        j = slot + (o - 1) * Ddest
+        target_slot[j] = slot
+    end
+    has_cf && (target_slot[cf.cf_col] = 0)
+
     return WinnerPairHessCtx(D, Ddest, W, ncolI, has_cf, kappa0, pi_vec, copy(cf.SW), y, cf.winner, cf_raw_scaled,
+        cf.wval, target_slot,
         Vector{Float64}(undef, W), Vector{Float64}(undef, W),
         Vector{Float64}(undef, ncolI), Vector{Float64}(undef, ncolI),
         Matrix{Float64}(undef, ncolI, ncolI))
