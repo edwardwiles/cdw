@@ -58,3 +58,54 @@ function homogeneous_factual_moment(θ_full::AbstractVector{Float64}, ctx; d_lis
     end
     return out
 end
+
+# ============================================================================
+# Task §1.3 / theory doc section 2.5: France homogeneous ratio moment.
+#
+# OLD (absolute) target: rho_f_absolute = gp^sigma * wPrime_bi * LPrime_bi
+# (compressed_moments.jl:262-266's own cf_raw/denom_cf construction --
+# wPrime_bi==1 exactly, confirmed). NEW (homogeneous) target coefficient:
+# rho_f_ratio = gp^sigma (theory doc section 2.5's derivation: matches the
+# old target exactly at the gamma-normalized point, using the confirmed
+# identity LPrime_bi == L_bi -- population is physically invariant across
+# the factual/counterfactual scenario).
+#
+# CORRECTION NOTE: an EARLIER pass in this session concluded rho_f == gp
+# (identity, no sigma power), by misreading K (the OUTER KNITRO objective
+# value -- gp/gamma'_focal itself, being extremized -- confirmed by tracing
+# cc_algo/PsiObjectiveBundle.jl's callable, which never reads column 1 of H
+# in its inner-dual/outer-constraint computation) as if it were the France
+# moment's target. The actual France moment is G's own cf_col, an INNER-DUAL
+# column (confirmed live: D=4 test context has outer_constr_index==obj.d==18,
+# numMomentInnerSimple==17==D^2+1, i.e. gravity alone is the outer column).
+# See PROFILED_DESTINATION_SCALE_THEORY_2026-07-31.md section 0's correction
+# and section 2.5 for the full derivation.
+# ============================================================================
+
+"""
+    homogeneous_france_moment(θ_full, ctx) -> Vector{Float64}
+
+Per-draw homogeneous France ratio moment `Phi_ff(w) - gp^sigma * M_f(w)`,
+where `Phi_ff(w)` is reconstructed from the live `moments!` output's `cf_col`
+column (adding back its own internal `denom_cf` target, the same pattern
+`homogeneous_factual_moment` uses for the bilateral columns) and `M_f(w)` is
+France's (baseIndex's) factual destination total via `destination_M_d`.
+"""
+function homogeneous_france_moment(θ_full::AbstractVector{Float64}, ctx)
+    D = ctx.D
+    W = size(ctx.U, 1)
+    bi = ctx.bi
+    K = zeros(W); G = zeros(W, ctx.nTotalMoments)
+    ctx.obj.moments!(K, G, θ_full, ctx.U, ctx.obj)
+    μ = θ_full[1]; σ = θ_full[2]
+    gp = θ_full[3 + D]
+    gammafac = spgamma(μ * (1 - σ) + 1)
+    SW = ctx.γ.SamplingWeights[1:W]
+    wscale = SW ./ gammafac
+    cf_col = D^2 + 1
+    wPrime_bi = 1.0   # confirmed exact (compressed_moments.jl: wPrime built by inserting 1.0 at bi)
+    denom_cf = gp^σ * wPrime_bi * ctx.γ.LPrime[bi]
+    Phi_ff = G[:, cf_col] ./ wscale .+ denom_cf
+    M_f = destination_M_d(θ_full, ctx; d_list = [bi])[bi]
+    return Phi_ff .- gp^σ .* M_f
+end

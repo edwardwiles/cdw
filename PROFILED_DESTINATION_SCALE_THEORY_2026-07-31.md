@@ -71,17 +71,43 @@ faith):
   mode) against `free_idx = vcat(3+D, Aod_offset+1:...)` (`fast_range_screen.jl:57`, confirmed live
   not hardcoded) shows `gp` overwrites `θ_full[3+D]` **directly, with no transform** — `gp ≡
   γ_prime_bi` as an identity map. **[VERIFIED]**
-- **France's moment target is verified NOT to be `ρ_f = gp^σ`.** In both the diagnostic dense path
-  (`autarky_cf.jl:137`: `K[:] = γ_prime_bi`) and the live compressed builder
-  (`compressed_moments.jl:262-264`: `γ_prime_bi = θ_full[3+D]`, used as the **target**), the France
-  autarky moment's right-hand side is `γ_prime_bi` to the **first power**. `γ_prime_bi` separately
-  appears **inside** the moment's own G-column formula as a σ-powered CES price deflator
-  (`denom_cf = γ_prime_bi^σ * wPrime_bi * LPrime_bi`, `compressed_moments.jl:264`) — this is a
-  *different* occurrence (the self-referential CES price-index identity, `P^{1-σ} = E[...]`
-  rewritten as a fixed-point moment), not the target's exponent. **Conclusion: `ρ_f = gp` (identity),
-  not `gp^σ`. [VERIFIED — corrects the task brief's speculative §1.1 relation.]** This must be
-  re-confirmed against `RunPurpose`-dispatched production drivers (not yet done) before being relied
-  on for §9/§13 code, but two independent code paths already agree.
+- **CORRECTION (2026-07-31, later in this session): the earlier finding in this section was WRONG.**
+  An initial pass concluded `ρ_f = gp` (identity), because `K[:] = γ_prime_bi` in both
+  `autarky_cf.jl` and `compressed_moments.jl`. That conclusion conflated two genuinely different
+  objects. Tracing `K`'s actual consumer (`cc_algo/PsiObjectiveBundle.jl`'s
+  `(Q::PsiObjectiveBundleImplicit)` callable, `:282-368`) shows `K` (column 1 of the combined `H`
+  matrix) **never enters the inner CC-dual objective or constraint computation at all** — `arg0`
+  (the dual's argument) is built from `H[:,2:1+outer_constr_index]` (the `ones` intercept column
+  plus `G`'s inner-dual columns), and the KNITRO outer-constraint vector is built from
+  `H[:,2+outer_constr_index:2+d]` — both **skip column 1 entirely**. `K` is used only in the
+  `θ`-gradient branch (`calculate_grad_k!`, "gradient of objective is simply derivative of K wrt
+  θ") — **`K` is the OUTER KNITRO OBJECTIVE VALUE itself** (the scalar `gp`/`γ'_focal` being
+  minimized or maximized by the outer search, i.e. this whole apparatus computes GT/welfare bounds
+  by extremizing `gp` subject to inner-moment and gravity feasibility), **not an economic moment or
+  constraint at all**.
+
+  The *actual* France autarky moment — the real analogue of the task's conceptual
+  `E_F[Φ_ff]-ρ_f=0` — is `G`'s own `cf_col` (`compressed_moments.jl:249-266`), one of the
+  **inner-dual** columns (confirmed live: D=4 test context has `outer_constr_index=18=obj.d`,
+  `numMomentInnerSimple=17=D²+1`, i.e. all 16 bilateral + this 1 France column are inner-dual,
+  with column 18 — the gravity moment — the sole outer-constraint column, exactly matching
+  `gravity_elimination.jl`'s own header note that gravity is "a SECOND explicit KNITRO equality
+  constraint, not eliminated" in this base setup). This column's target, subtracted inside its own
+  construction, is `denom_cf = γ_prime_bi^σ · wPrime_bi · LPrime_bi` — **and `γ_prime_bi^σ` IS
+  present here**, exactly the exponent the task brief's aside guessed. With `wPrime_bi=1` exactly
+  (confirmed, `wPrime[bi]` is inserted as `1.0`) this is `ρ_f_absolute = gp^σ · LPrime_bi`, where
+  `LPrime_bi` (France's counterfactual/autarky population) is confirmed **numerically equal** to
+  `L_bi` (France's factual population) at the D=4 test point (`γ.LPrime[bi] == γ.L[bi] ==
+  1.7763294468836013` exactly) — consistent with `autarky_cf.jl`'s own comment documenting this as
+  a general modeling identity (population is physically invariant across the factual/counterfactual
+  scenario), not a coincidence of this one dataset.
+
+  **Corrected conclusion: `ρ_f = gp` was wrong; the real target has the `gp^σ` structure the task
+  brief originally guessed, `ρ_f_absolute = gp^σ · LPrime_bi`.** See §2.5 below for the
+  homogeneous-ratio-moment coefficient this implies (`gp^σ`, confirmed by a second, independent
+  argument). This correction is left visible rather than silently edited, since catching and
+  documenting one's own prior mistake mid-session is exactly the discipline this repo's CLAUDE.md
+  exists to enforce.
 
 ## 1. The gravity pivot is a SEPARATE, orthogonal reduction — not the same operation
 
@@ -265,6 +291,29 @@ task). A structural guard rejecting `anchor_spec` objects with more than one anc
 is specified in the anchor manifest (`DESTINATION_SCALE_ANCHOR_MANIFEST_2026-07-31.json`,
 `requirements_checklist.one_profiled_anchor_per_destination_structural_guard`) but **not yet
 implemented as a runtime assertion** — tracked as open work.
+
+### 2.5 France ratio moment coefficient `[NUMERICALLY VERIFIED via two independent arguments]`
+
+Task §1.3 replaces the absolute autarky equation `E_F[Φ_ff]-ρ_f_absolute=0` (§0's correction above:
+`ρ_f_absolute = gp^σ·LPrime_bi`) with a homogeneous ratio moment `E_F[Φ_ff(ω) - ρ_f_ratio·M_f(ω)]
+= 0`, using the model's own `M_f(ω)` (France's factual destination total) in place of the fixed
+`LPrime_bi` scalar, exactly mirroring §2.1/§8's bilateral homogeneous moment
+(`Q_od - λ_od·denom[d]` → `Q_od - λ_od·M_d(ω)`).
+
+Homogeneity alone (both `Φ_ff(ω)` and `M_f(ω)` scale by `κ^{μ(σ-1)}` under a France-column rescale,
+since France's own anchor cell `A[bi,bi]` is part of that column) does not pin down *which* constant
+`ρ_f_ratio` to use — any fixed constant makes the moment homogeneous. The correct value is fixed by
+requiring the new moment to agree with the old one exactly at the gamma-normalized point (where
+`E_F[M_f] = denom_f = γ[f]^σ·gdp_f = 1^σ·L_f = L_f`, since France's *trade*-side gamma is forced to
+1 like every other destination):
+```
+ρ_f_ratio · E_F[M_f] = ρ_f_absolute  =>  ρ_f_ratio = gp^σ·LPrime_bi / L_f = gp^σ
+```
+using `LPrime_bi = L_f` exactly (§0's correction above). **`ρ_f_ratio = gp^σ`** — matching the task
+brief's original `ρ_f=gp^σ` hypothesis almost exactly (the brief's simplified notation apparently
+already intended this ratio-moment coefficient, not the absolute target, which does carry the extra
+`LPrime_bi` factor). Implemented and D=4-gated in `homogeneous_moments_2026-07-31.jl`'s
+`homogeneous_france_moment` — see that file and its test for the numerical confirmation.
 
 ## 3. What Phase 1 established vs. what remains
 
