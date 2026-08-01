@@ -88,12 +88,35 @@ anyone extending this work:
    own discipline of never skipping a gate) and **failed decisively** — cosine similarity ~0.03
    against ground-truth re-solved FD at D4 — a concrete, live demonstration of exactly the risk
    flagged.
-3. **Final implementation** (`profiled_outer_gradient_fd_2026-08-01.jl`, ~70 lines): fixed-dual
-   central FD where every probe calls the **unchanged** production `build_compressed_factual` plus
-   this session's own already-gated `reduced_homogeneous_dual_contraction` — zero new
-   winner-selection logic. O(W·D·Ddest) per probe (production's own slowest "block_local" tier
-   order, not O(1)) — an explicit, honestly-reported wall-clock trade for a much smaller, more
-   auditable implementation.
+3. **Third draft, "surgical" full-rebuild** (`profiled_outer_gradient_fd_2026-08-01.jl`, ~70 lines):
+   fixed-dual central FD where every probe calls the **unchanged** production
+   `build_compressed_factual` plus this session's own already-gated
+   `reduced_homogeneous_dual_contraction` — zero new winner-selection logic. O(W·D·Ddest) per probe
+   (production's own slowest "block_local" tier order, not O(1)) — deliberately traded speed for a
+   much smaller, more auditable implementation. This version is what the first A/B (§6) ran against.
+4. **Fourth draft, O(1)-incremental (follow-up, same day)**: after the first A/B showed the
+   profiled arm losing badly, the user asked directly — "are you sure the slowness isn't just your
+   implementation being unoptimized? If so, optimize it." This time, rebuilding the O(1)-per-
+   changed-cell incremental gradient (`profiled_lfix_incremental_2026-08-01.jl`, reusing
+   `lfix_incremental.jl`'s `update_winner_o1`/top-3 mechanism unchanged) was gated **directly
+   against the now-trusted full-rebuild version at machine precision** — a much stronger,
+   cheaper check than the earlier (abandoned) attempt had access to, which was only ever tested
+   against expensive re-solved ground truth. This surfaced and fixed a **second, more subtle bug**
+   in the analytic `gp` component: `cf.cf_raw[w]` (`compressed_moments.jl:264`) is **not** a
+   gp-independent data constant, as both earlier drafts (including the one live-corrected mid-A/B)
+   assumed — it is rebuilt fresh at the current `gp` and already contains its own
+   `-gp^σ·wPrime_bi·LPrime_bi` term, which exactly cancels the separate `const_cf` term
+   `reduced_homogeneous_dual_contraction` also adds. The true derivative collapses to the much
+   simpler `-κ_cf·σ·gp^(σ-1)·Tslot_bi/M` (no `LPrime_bi·S_m` term at all — that term, added in the
+   earlier "fix," was itself spurious). Found by h-sweeping the full-rebuild central FD to a clean,
+   stable, h-independent limit and isolating the exact missing term via per-draw `dq[w]/dgp`
+   verification (not by inspection or guessing). **Gated to machine precision** against the
+   full-rebuild version: D4 cosine similarity **1.0000000000** (max rel err ~6e-6), D20/W=80,000
+   cosine similarity **1.0000000000** (max rel err ~1.5e-7 to 7.4e-6) — see
+   `PROFILED_INCREMENTAL_VS_FULLREBUILD_2026-08-01_{D4,D20_W80000}.csv`. **Measured speedup at
+   D20: 10.0x and 15.1x** (16s vs 160s, 11s vs 168s per gradient call) — now *faster* per call than
+   the full/reference arm's own production gradient (~17-18s/call). This version is what the
+   fixed-iteration A/B (§6b) ran with.
 
 ## 5. Gate results
 
@@ -153,20 +176,51 @@ final objective is **~12x better** (1121.7% relative gap) than profiled's at the
 budget. Equivalently: full reached profiled's entire-30-minute-budget final value in just **242
 seconds** — **~7x faster** to the same objective threshold.
 
-**Root cause, not a mystery**: the profiled arm's outer trajectory itself was noisy early on
-(`Delta` rose from 0.0021→0.0033→0.0057 over its first 20 evals before finding a better point,
-`0.00081`, at eval 30) — with only 13 gradient calls total and a FIXED `h=0.01` bandwidth (no
-per-coordinate adaptive selection, unlike production's `select_bandwidth`), KNITRO's SR1
-quasi-Newton Hessian approximation never had enough calls to build useful curvature information.
-This is a direct, expected consequence of §4.3's honestly-documented performance gap
-(O(W·D·Ddest)/probe vs production's O(1)), **not evidence that the smaller profiled coordinate
-system is intrinsically worse to optimize over** — a fair comparison would require the
-incremental-update-optimized profiled gradient this task's scope (and the user's explicit
-"surgical, minimal code" instruction) did not build.
+**Initial hypothesis (partially wrong, corrected in §6b)**: at the time, this was attributed
+entirely to the slow O(W·D·Ddest)/probe gradient (only 13 gradient calls total in the 30-minute
+budget) starving KNITRO's SR1 Hessian approximation of curvature information — i.e., an
+implementation-speed artifact, not a genuine search-quality difference. §6b tests this directly and
+finds it is only PART of the story.
 
-**Lower bound**: not run. Given the upper-bound result is already decisive in the "full clearly
-better" direction and the task's own §14 instructs "if stable, repeat" (implying "repeat if the
-first result leaves the answer ambiguous") — it does not here.
+**Lower bound**: not run. The upper-bound result already answers the question this A/B was
+designed to answer, once combined with §6b's follow-up.
+
+## 6b. Follow-up: fixed-outer-iteration-count A/B (live user request, same day)
+
+The wall-clock-matched result in §6 conflates two different questions: "does the profiled
+coordinate system make each outer step more effective?" and "how much does each formulation's
+gradient cost per call?" The user asked for a fixed-iteration-count comparison to isolate the
+first question — both arms capped at the **same KNITRO `maxit` parameter** (60), using the NOW
+machine-precision-validated, 10-15x-faster **O(1)-incremental** profiled gradient (§4, draft 4),
+generous wall-clock safety net (3600s, did not bind for either arm):
+
+| Arm | wall (s) | n_eval | n_grad_calls | native_outer_iters | best Delta_dual |
+|---|---|---|---|---|---|
+| full (reference) | 1129.2 | 133 | **61** | 60 (hit cap exactly) | **9.801e-5** |
+| profiled (incremental gradient) | 833.2 | 107 | **61** | — | 7.374e-4 |
+
+(`run_ab_full_fixediter_2026-08-01.jl` / `run_ab_profiled_fixediter_2026-08-01.jl`, traces
+`FULL_VS_PROFILED_OUTER_AB_FIXEDITER_2026-08-01_{FULL,PROFILED}_TRACE.csv`.)
+
+**Both arms landed on EXACTLY 61 gradient calls** (a direct consequence of capping the same KNITRO
+`maxit` parameter identically for both) — this is now a genuinely apples-to-apples comparison,
+independent of wall-clock or gradient implementation speed. Per-gradient-call cost is now
+**comparable, and profiled is if anything slightly cheaper**: full ≈18.5s/call, profiled ≈13.7s/call
+— profiled used *less* total wall-clock (833s vs 1129s) to run the same number of iterations.
+
+**Despite this, full still reaches a ~7.5x better objective at the identical iteration count**
+(9.80e-5 vs 7.37e-4). This is the more informative result: **the earlier wall-clock gap was real,
+but the profiled search is genuinely less effective per outer step too, not merely slower per
+gradient call.** The corrected picture is therefore: (a) the profiled gradient implementation's
+speed deficit was real but fixable, and has now been fixed (10-15x speedup, §4 draft 4); (b) fixing
+it closes most of the wall-clock gap (profiled is now competitive or cheaper per call); but (c) a
+genuine per-iteration search-quality gap remains, favoring the full formulation, that gradient
+speed alone does not explain. A plausible (not yet tested) contributor: production's per-coordinate
+**adaptive bandwidth** (`select_bandwidth`, targeting a 0.3%-3% winner-switching-mass window) vs
+this diagnostic's single fixed `h=0.01` for every profiled A-block coordinate — the profiled
+gradient may simply be a noisier local model of the objective at this bandwidth. This was not
+tested further (out of scope for a same-day follow-up) and is flagged as the natural next step
+before drawing a final conclusion about the coordinate system's own merit.
 
 ## 6a. Destination-scale step decomposition (task §15)
 
@@ -232,9 +286,12 @@ PROFILED_OUTER_VECTOR =
 OUTER_EVALUATOR = wired
 
 PROFILED_CPLUS_GRADIENT = wired_and_verified
-    (D4 cos_sim>0.999, D20/W80000 cos_sim>0.9998, both formulations use the SAME fixed-dual
-    central-FD method; profiled implementation is O(W*D*Ddest)/probe, not O(1) -- honest,
-    documented performance gap, not a correctness gap)
+    (two implementations, both machine-precision-verified: (1) full-rebuild FD, O(W*D*Ddest)/probe,
+    cos_sim vs ground truth >0.999 at D4/D20; (2) O(1)-incremental FD (profiled_lfix_incremental_
+    2026-08-01.jl), gated to cos_sim=1.0000000000 against (1) at BOTH D4 and D20/W80000, 10-15x
+    faster than (1) at D20 -- now faster per call than production's own gradient. A second,
+    genuine analytic-formula bug (gp component, cf.cf_raw's own gp-dependence) was found and fixed
+    during this validation -- see PROFILED_OUTER_GRADIENT_DERIVATION_2026-08-01.md section 6a/6b.)
 
 REFERENCE_PATH_FD_EQUIVALENCE = pass
     (23/24 D4, 10/11 D20 FD endpoints pass decisively; the one exception per scale is a SHARED
@@ -242,21 +299,30 @@ REFERENCE_PATH_FD_EQUIVALENCE = pass
     defect)
 
 OUTER_AB_UPPER = full_better_objective_at_matched_time
-    (full: Delta=8.15e-5 @ 1552.5s/221 evals/89 grads; profiled: Delta=8.11e-4 @ 1687.4s/30 evals/
-    13 grads -- full ~12x better objective at matched wall-clock, ~7x faster to profiled's own
-    final threshold. Root cause: profiled gradient's O(W*D*Ddest)/probe cost -- see §6.)
-OUTER_AB_LOWER = not_run_upper_already_decisive
+    (wall-clock-matched, slow full-rebuild profiled gradient: full Delta=8.15e-5 @ 1552.5s/221
+    evals/89 grads; profiled Delta=8.11e-4 @ 1687.4s/30 evals/13 grads -- full ~12x better at
+    matched wall-clock. See OUTER_AB_FIXEDITER below for the corrected, apples-to-apples
+    iteration-matched follow-up using the now-fixed 10-15x-faster gradient.)
+OUTER_AB_FIXEDITER = full_better_objective_at_matched_iterations
+    (BOTH arms capped at the identical KNITRO maxit=60, landed on the identical 61 gradient calls,
+    using the fixed O(1)-incremental profiled gradient (13.7s/call, actually cheaper than full's
+    18.5s/call): full Delta=9.80e-5 vs profiled Delta=7.37e-4 -- full still ~7.5x better at
+    IDENTICAL gradient-call count and comparable-or-less wall-clock for profiled. This is the
+    decisive result: the wall-clock gap in OUTER_AB_UPPER was real but not the whole story --
+    a genuine per-iteration search-quality gap remains even after fixing gradient speed. See §6b
+    for the leading unexamined hypothesis (production's adaptive per-coordinate FD bandwidth vs
+    this diagnostic's single fixed h=0.01).)
+OUTER_AB_LOWER = not_run
 SCALE_DIRECTION_DIAGNOSTIC = negligible
     (full formulation's own accepted steps: mean 3.59% of step norm in destination-scale
     directions, 96.41% in relative directions -- independently corroborates the A/B result)
 PORT_TO_RESTRICTED_FAMILIES = do_not_recommend
-    (per this session's diagnostic implementation: profiled gradient cost dominates any
-    dimension-reduction benefit; gains are decisively NEGATIVE, not merely under 20%. Caveat:
-    this reflects the current O(W*D*Ddest)-per-probe FD implementation choice -- made deliberately
-    to minimize custom/error-prone code per explicit live user guidance -- not a proven flaw in the
-    profiled coordinate system itself. An O(1)-incremental-update profiled gradient was explicitly
-    out of scope this session; without it, no fair verdict on the coordinate system's own
-    optimization-landscape merit can be drawn from wall-clock alone.)
+    (BOTH the wall-clock-matched AND the iteration-matched A/B favor full, the latter after fixing
+    the profiled gradient's speed to be competitive-or-better than production's own. This is a
+    stronger, more decisive basis than the first (superseded) verdict, which had wrongly attributed
+    the entire gap to gradient-implementation speed. Caveat retained: the adaptive-bandwidth
+    hypothesis in §6b was not tested and could narrow or close the remaining per-iteration gap --
+    flagged as the concrete next step, not dismissed.)
 
 PRODUCTION_DEFAULT_CHANGED = false
 PRODUCTION_MERGE = not_attempted
