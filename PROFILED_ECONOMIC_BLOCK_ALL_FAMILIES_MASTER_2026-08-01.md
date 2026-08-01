@@ -102,6 +102,14 @@ and a *pre-existing*, unrelated `moment_representation` production-default drift
   construction and an `obj.moments!` dependency in the H_ZZ BLAS gate) — not fixed this session,
   out of scope; H_EF's correctness is independently covered by this session's own new test instead.
 
+**8. Threaded H_EZ twin** (`winner_pair_cross_hessian_zc_block_threaded!`, `threaded_cross_hessian.jl`)
+— amended with the identical `use_profiled_correction` keyword and `TZ` gemm as the serial version
+(commit `81b6225`). D4-gated (`test_profiled_hez_threaded_d4_2026-08-01.jl`, 3 points ×
+worker_counts {1,2,4} = 9 combos each) for **bit-identical** agreement (`max|Δ|=0.0`, not just
+close) against the already-validated serial path, both under the new `use_profiled_correction=true`
+and the regression `=false` path — matching this file's own stated design guarantee exactly. ALL
+PASS, 9/9 + 9/9.
+
 ## What is NOT done (honest accounting against the mission's 23 sections / 12 commits)
 
 - **Outer A/gp gradient sharing (mission §13, commit 6)**: not started. The profiled machinery
@@ -148,7 +156,7 @@ H_EF =
     existing_optimized_function_surgically_amended   # colsum!/esum!, D4-validated
 
 H_EZ =
-    existing_optimized_function_surgically_amended   # winner_pair_cross_hessian_zc_block!, D4-validated (threaded twin _threaded! NOT yet amended)
+    existing_optimized_function_surgically_amended   # winner_pair_cross_hessian_zc_block!, D4-validated; threaded twin _threaded! ALSO amended, D4-validated bit-identical to serial (commit 81b6225)
 
 RESTRICTION_ONLY_BLOCKS_CHANGED =
     none
