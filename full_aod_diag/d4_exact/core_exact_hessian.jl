@@ -755,7 +755,7 @@ function hessian_core_winner_pair!(hess_packed::AbstractVector, curvature_weight
     end
     S_sum = 0.0; t0_tot = 0.0; s0_tot = 0.0
     for wk in 1:workers
-        Ss, t0v, s0v = fetch(tasks[wk])
+        Ss, t0v, s0v = fetch(tasks[wk])::Tuple{Float64,Float64,Float64}
         S_sum += Ss; t0_tot += t0v; s0_tot += s0v
     end
 
