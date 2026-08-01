@@ -64,12 +64,17 @@ depended upon.
 - Winner identities and factual share ratios are proven exactly invariant to a destination-column
   gauge shift, using that exponent (§2.1 of the theory doc) — the core mathematical claim the
   whole reparameterization rests on.
-- **`ρ_f = gp` (identity map), not `ρ_f = gp^σ`.** The task brief explicitly flagged this relation
-  as needing verification before hard-coding; it is verified here, from two independent code paths
-  (`autarky_cf.jl`'s diagnostic dense path and `compressed_moments.jl`'s live compressed builder),
-  to be the identity map — `gp^σ` was a plausible-looking but incorrect guess (a different,
-  genuinely-σ-powered occurrence of the same variable, as a CES price deflator *inside* the
-  moment's own formula, exists nearby and is presumably what motivated the guess).
+- **`ρ_f` — corrected mid-session.** An earlier finding here claimed `ρ_f = gp` (identity), based
+  on `K[:] = γ_prime_bi`. That was wrong: tracing `K`'s actual consumer
+  (`cc_algo/PsiObjectiveBundle.jl`) shows `K` is the **outer KNITRO objective value** (`gp` itself,
+  being extremized), never read by the inner-dual/constraint computation at all — not an economic
+  moment. The real France autarky moment is `G`'s own `cf_col` (confirmed an inner-dual column at
+  D=4: `outer_constr_index=obj.d=18`, gravity alone is the outer column), whose target is
+  `gp^σ·wPrime_bi·LPrime_bi`. **The task brief's original `ρ_f=gp^σ` hypothesis was closer to
+  right than the earlier "correction" claimed** — the homogeneous-ratio-moment coefficient this
+  implies is exactly `gp^σ` (theory doc §2.5, D=4-gated to 4e-12: `homogeneous_france_moment`
+  scales exactly by `κ^{μ(σ-1)}` under a France-column rescale). Left visible in the theory doc as
+  a documented correction rather than silently edited.
 - The existing gravity-pivot mechanism (`gravity_elimination.jl`) removes one **global** scalar
   coordinate via a linear constraint across the whole `D×D_dest` block; the destination-anchor
   reduction this task implements removes **19** coordinates via a *different*, per-column
@@ -186,6 +191,25 @@ gravity-pivot reparameterization, and the recovery map back to the full formulat
 consistent against production code at machine precision. This closes theory §2.2's previously
 open "recovery construction unexecuted" gap.
 
+- **§8 homogeneous factual moment** (`homogeneous_moments_2026-07-31.jl`): `Q_od(ω)-λ_od·M_d(ω)`,
+  replacing the old formulation's fixed `denom[d]` with the model's own `M_d(ω)`. D=4 gate (all
+  pass): `Σ_o` of the moment is **exactly** 0 for every draw (1.8e-15, confirms task §1.2's
+  "omitted anchor share follows automatically" algebraically); the moment rescales by **exactly**
+  `κ^{μ(σ-1)}` under a destination shift (6.7e-16–8.9e-16). This also resolved an open question:
+  the OLD absolute moments (fixed `denom[d]`) actually *do* pin the destination scale uniquely —
+  it's specifically swapping to this homogeneous form that makes the scale genuinely unidentified.
+- **§1.3 France ratio moment** (`homogeneous_moments_2026-07-31.jl`'s `homogeneous_france_moment`)
+  — built after finding and correcting a real mistake mid-session: an earlier claim that
+  `ρ_f = gp` was wrong (it conflated `K`, the **outer KNITRO objective value**, with the actual
+  France moment's target, `G`'s own `cf_col`). The corrected target has the `gp^σ` structure the
+  task brief originally guessed. D=4 gate: cross-checked against the real production `G` column;
+  exact proportional rescaling under a France-column shift confirmed to 4e-12.
+
+Together, §6/§7/§8/§1.3 now cover every piece needed to construct the reduced formulation's moment
+system for a given point — what remains for a *complete* reduced `moments!`-equivalent function is
+mostly assembly (packing these per-destination pieces into one `G`-like matrix with the right
+column count) rather than new derivation.
+
 ## 5. Recommended next steps (in dependency order)
 
 1. ~~Decide on consolidation vs. per-site duplication~~ — resolved: the relative-A layer above
@@ -223,10 +247,16 @@ ANCHORS =
     one_per_destination:pass (enforced at the TYPE level in AnchorSpec, not just a runtime check)
 
 MOMENT_SYSTEM =
-    factual_homogeneous:not_implemented
-    anchor_share_implied:not_implemented
-    no_factual_gamma_moment:not_implemented
-    France_ratio_moment:not_implemented
+    factual_homogeneous:pass_D4 (Q_od-lambda_od*M_d; Sigma_o==0 exact 1.8e-15; rescales exactly by
+        kappa^mu(sigma-1), 6.7e-16-8.9e-16)
+    anchor_share_implied:pass_D4 (same gate: Sigma_o H==0 exactly proves the omitted anchor share
+        follows automatically, not just asymptotically)
+    no_factual_gamma_moment:not_applicable_by_construction (the homogeneous moment never
+        references gamma_d at all, so there is nothing to omit)
+    France_ratio_moment:pass_D4 (Phi_ff-gp^sigma*M_f; corrects an earlier in-session mistake, see
+        master report §4 for the correction; exact rescaling confirmed to 4e-12)
+    NOTE: components are built and individually gated; not yet assembled into one drop-in
+        moments!-equivalent function with the reduced column count
 
 DIMENSIONS =
     active_A:380->361 (live-derived, D=20/D_dest=19; D=4 analog 16->12 numerically confirmed)
