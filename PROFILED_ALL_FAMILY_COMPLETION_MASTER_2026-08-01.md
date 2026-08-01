@@ -100,53 +100,135 @@ factor", "latent OOB read"). This session's own honest contribution, in order of
      restriction block itself (`ncm`) is untouched, and the resulting `cctx_reduced.NCORE`/`Hfull` size
      shrink accordingly.
 
+3. **Wired and D4-verified the reduced H_EE kernel and the H_EC gather step for flexible CM** — the
+   full mission §6/§4 Hessian-orchestrator wiring, for one family, with a genuine numeric gate (not
+   just dimensions):
+   - `CMBinHessCtx` gained 9 new fields (`profiled_layout`, `profiled_theta_ref`,
+     `profiled_reduced_wctx`/`_for`, `profiled_hee_packed`, `profiled_full_wctx`/`_for`,
+     `profiled_full_ws`, `profiled_hraw_ec_full`), all via the struct's own pre-existing
+     "outer-constructor-appends-fields-with-defaults" idiom (matching `hcz_prep_backend`/
+     `bin_zc_drawchunk`) — every existing `CMBinHessCtx(...)` call site is untouched.
+   - `wrap_moments_with_cm_archB` gained a `theta_ref::Ref{Any}` keyword (mirrors `core_cf_ref`
+     exactly), publishing `copy(θ)` alongside the existing `core_cf_ref[]=cf` line;
+     `build_cm_augmented_obj_archB` creates and returns it; `build_cm_bin_ctx` picks it up via the
+     same `hasproperty(aug,...)` discipline `core_cf_ref` already uses, and gained a `profiled_layout`
+     keyword threading a caller-supplied `ProfiledEconomicMomentLayout` onto the new `cctx` field.
+   - `_fill_cm_HEE!` gained an early, self-contained branch (zero lines of the pre-existing
+     `cf isa CompressedFactual`/dense-fallback logic touched): when `cctx.profiled_layout !== nothing`,
+     builds (cf-identity-cached) a `ReducedHomogeneousWinnerPairHessCtx` via
+     `build_reduced_homogeneous_winner_pair_ctx(cf, cctx.econ_ctx, cctx.profiled_theta_ref[], layout)`
+     and calls `reduced_homogeneous_winner_pair_hessian!` — the UNRESTRICTED family's own,
+     already-validated reduced H_EE kernel, reused verbatim — into a persistent packed scratch buffer,
+     then unpacks (row-major upper-triangle, same convention `fill_core_hessian_upper!` itself uses)
+     into the caller's dense `HEE` view. Guarded to error (not silently misbehave) if a caller ever
+     combines `profiled_layout` with CM+ZC's mean/pair widening (`ncore_core < NCORE`) — not ported.
+   - `hessian_cm_structured!` gained an early branch implementing item 1's "gather" design exactly:
+     rebuilds (cf-identity-cached) a FULL, unreduced `WinnerPairHessCtx`/`WinnerBinCrossScratch` from
+     the same `cf`, calls the untouched `winner_pair_cross_hessian_fill!`/`_cm_block!(...;
+     use_profiled_correction=true)` per threshold block, and copies only
+     `layout.retained_full_factual_j`-selected rows (+ row 1 + the France row) into the reduced
+     `Hfull`, then proceeds through the pre-existing (untouched) `fill_cm_HCC!`/packing tail. Guarded
+     to error if combined with a common-Fréchet `extension` (H_EF's own gather is not built — see
+     below). `hessian_cm_structured_v2!` (the threaded twin, `cm_hessian_threaded.jl`) was **not**
+     touched — the serial path only, this session.
+   - **New D4 numeric gate**, `test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl` — **ALL PASS**
+     (16 checks: both contrasts × both `L` × 2 points, feasibility/cf checks + H_EE + H_EC +
+     finite/symmetric), `max|Δ|=0.0` (bit-identical, not merely close) for BOTH H_EE and H_EC at every
+     combination. Design: solves the FULL (unreduced) model normally to get a real
+     `(ζ*,λ*)`, then zeroes the ANCHOR entries of `λ*` (one per destination) — this makes the full
+     model's own `q = -ζ-Σ_j E_jλ_j` collapse to exactly the reduced model's `q_reduced` (the anchor's
+     contribution drops out because its coefficient, not its formula, is zero), giving a dual point at
+     which the two models are provably contracting the same way. H_EC is checked by gathering the
+     FULL model's own `winner_pair_cross_hessian_cm_block!(...;use_profiled_correction=true)` output
+     (the prior session's already-D4-validated primitive) at this point — **this passed on the first
+     correct attempt** (`max|Δ|=0.0`), confirming the gather-index logic (`layout.retained_full_factual_j`
+     row selection) is exactly right. H_EE required one real methodology correction, documented in
+     detail in the test file's own header: an initial attempt gathered from `core_exact_hessian.jl`'s
+     OLD `winner_pair_hessian!` kernel and found a genuine, reproducible ~0.22 discrepancy — traced
+     (by reading `winner_pair_hessian!`'s body directly, not guessed) to that kernel's own "keep"/
+     correction structure being **destination-independent** (scalar `t0`/`s0`, the exact H_EE analog
+     of H_EC's OLD `nu_diff` correction this whole port replaces) — i.e. gathering from the
+     *unprofiled* full H_EE is comparing two genuinely different formulas, not testing the same thing
+     with fewer columns (no bug in the new code). Corrected to compare against directly invoking
+     `build_reduced_homogeneous_winner_pair_ctx`/`reduced_homogeneous_winner_pair_hessian!` (the
+     already-independently-validated reduced kernel) on the identical `(cf,ctx,θ_full,layout,arg0)` —
+     a genuine, still-rigorous check of exactly what is NEW this session (the struct-field
+     threading/caching/unpacking), not a re-derivation of the kernel's own math (out of scope, already
+     done by the unrestricted family's prior session). Re-ran all three pre-existing/prior D4 test
+     files after these changes — zero regression (`test_winner_pair_cross_hessian_cm_d4.jl` 20/20,
+     `test_winner_pair_cross_hessian_zc_d4.jl` all pass, `test_profiled_restricted_family_base_2026-08-01.jl`
+     32/32, all still `max|Δ|=0.0` / unchanged).
+
+## Important correction to this session's own earlier claim (found while building the H_EE/H_EC gate)
+
+Item 1 above states "the dense economic-column materialization is already unconditionally skipped on
+the current production path" and concluded no changes were needed to `wrap_moments_with_cm_archB` for
+a real FG solve. **This is only true for the dimension-bookkeeping half of the problem** (confirmed by
+the dimension gate) — it does **not** mean a reduced family's `obj_cm.moments!` can actually run an
+end-to-end FG callback yet. Found while trying to build a fully-wired KNITRO-driven gate (not merely a
+Hessian-formula gate): `wrap_moments_with_cm_archB`'s `skip_fill=true` path skips **all** of `G`
+(economic block AND the CM-grid restriction columns both — confirmed by direct re-read of
+`cm_hessian_architectures.jl`'s `if !skip_fill` guards, both the economic copy and
+`fill_cm_columns_from_bins!` are inside the SAME guard), not just the economic columns as a narrower
+reading might suggest — `skip_fill=true` is a narrow priming mechanism for the separate `:cm_lookup`/
+operator inner-FG-backend machinery (`cm_lookup_kernels.jl`), used only for a specific priming call,
+**not** installed as any family's primary `obj_cm.moments!` in the default (`:dense_reference`
+inner-FG-backend) configuration. In the DEFAULT configuration (`CM_INNER_FG_BACKEND_DEFAULT[]`), the
+primary `moments!` is the `skip_fill=false` variant, which genuinely does call
+`materialize_dense_factual_structured!` every callback — and that function, for the reduced case,
+would be asked to fill a `pregrav`-width (small, reduced) view while itself requiring
+`size(Gview)==(W,cf.oci-1)` (the FULL, unreduced width) — an immediate dimension-mismatch error, not a
+silent no-op. **Consequence**: this session's D4 Hessian gate above is legitimate and rigorous for what
+it tests (the Hessian-callback formula and wiring, at a hand-set valid dual point) but does **not**
+demonstrate a working end-to-end reduced-family KNITRO FG+Hessian solve — that requires either (a) a
+new, small, layout-aware dense-G materialization function (mirroring
+`materialize_dense_factual_structured!` but writing only `layout`-retained columns), or (b) wiring the
+reduced case through the `:cm_lookup`/operator inner-FG-backend instead (a separate, larger
+subsystem). Neither is done. This is a real, previously-understated gap — flagged prominently here
+rather than left implicit, since acting on the OLD phrasing ("zero changes needed") would wrongly
+suggest the reduced family is closer to a real solve than it is.
+
 ## What is NOT done — honest accounting against the mission's 18 sections
 
 Everything below is genuinely `not_started`/`not_run`, not "quietly assumed to work":
 
-- **H_EE reduced-kernel wiring** (mission §6, the `_fill_cm_HEE!` swap to
-  `reduced_homogeneous_winner_pair_hessian!`/`build_reduced_homogeneous_winner_pair_ctx`): NOT wired.
-  Requires threading `θ_full` to the Hessian callback (currently only `cf` is published via
-  `core_cf_ref`, a shared `Ref{Any}` box the `moments!` closure fills every call — `θ_full` would need
-  an analogous shared box, since `_fill_cm_HEE!`'s signature `(HEE, w, obj, cctx, H, M)` has no `θ`
-  argument today), plus a `layout` field on `CMBinHessCtx` (additive, via the SAME
-  "outer-constructor-appends-fields" idiom the struct already uses for `hcz_prep_backend`/
-  `bin_zc_drawchunk`), plus a branch in `_fill_cm_HEE!` dispatching to the reduced kernel when
-  `cctx.profiled_layout !== nothing`.
-- **H_EC "gather retained rows" step** (mission §4, the design resolved in item 1 above): NOT
-  implemented. Requires the same `layout`/`bi_slot` fields on `cctx`, and a new branch in
-  `hessian_cm_structured!` (and its threaded twin `hessian_cm_structured_v2!`) that, when a layout is
-  present, builds `Hraw_EC` at full width exactly as today but copies only
-  `layout.retained_full_factual_j`-selected rows (plus the France row, plus row 1) into the
-  now-smaller `Hfull`.
-- **H_EF (`colsum!`/`esum!`) and H_EZ gather**: same pattern as H_EC, not implemented; H_EF additionally
-  needs the "open question" from `PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md` §4 resolved by reading
-  `CMFrechetExtension`'s actual `Wtab`/`T1` construction (not attempted this session).
-- **ZC-only and CM+ZC families**: `build_originzc_augmented_obj`/`build_cm_meanzc_augmented_obj` were
-  read (confirmed to follow the identical `ncore_econ = obj0.d` generic-width pattern as flexible CM,
-  per the earlier research pass) but **not** given the analogous `base_obj` keyword or tested — this
-  should be mechanical once flexible CM's full path (H_EE + H_EC gather) is validated end-to-end, but
-  "should be mechanical" is a prediction, not a verified result.
-- **Common Fréchet**: reuses flexible CM's `CMBinHessCtx`/`build_cm_augmented_obj_archB` unchanged, so
-  the `base_obj` plumbing already technically reaches it, but H_EF's own gather step (above) is not
-  done, and it was not tested.
+- **A working FG callback for the reduced economic layout** (see the correction above) — the single
+  most important remaining gap; without it, nothing in this branch can run an actual KNITRO solve for
+  any restricted family under the reduced layout, only Hessian-formula gates at hand-set dual points.
+- **`hessian_cm_structured_v2!`** (the threaded twin, `cm_hessian_threaded.jl`): not given the
+  analogous profiled/gather branch — only the serial `hessian_cm_structured!` was touched this session.
+- **H_EF (`colsum!`/`esum!`) gather for common Fréchet**: not implemented (explicitly guarded to
+  `error()` rather than silently mishandled if `extension!==nothing` is combined with
+  `profiled_layout!==nothing`); still needs the "open question" from
+  `PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md` §4 resolved by reading `CMFrechetExtension`'s actual
+  `Wtab`/`T1` construction.
+- **H_EZ gather for ZC-only and CM+ZC**: not implemented — `OriginZCCoreHessCtx`/
+  `archA_partitioned_hess_cb_builder` are architecturally separate from `CMBinHessCtx`/
+  `hessian_cm_structured!` (per the earlier research pass) and were not touched this session; would
+  need their own (structurally analogous, but separately written and separately gated) field
+  additions and gather branch.
+- **CM+ZC's mean/pair-widened H_EE/H_EM**: explicitly out of scope this session (`_fill_cm_HEE!`'s new
+  branch asserts `ncore_core==NCORE`, i.e. errors fast rather than silently mishandling the widened
+  case).
 - **Dual bounds / initial dual / moment names / verification slices** (mission §5's explicit checklist):
   not audited. `outer_constr_index`/`d` bookkeeping is confirmed generic and correctly reduces (this
   session's own gate), but KNITRO variable-bound arrays, moment-name diagnostics, and the
   `_verify_inner_solution_operator_cm_core`-style verification path were not checked for hardcoded
-  `D*Ddest`-shaped assumptions — likely candidates for a second latent bug, on the pattern of this
+  `D*Ddest`-shaped assumptions — likely candidates for a further latent bug, on the pattern of this
   session's own `Bidx` type-dispatch finding.
-- **Every D4/D20/inner-equivalence/outer-gradient/performance/W500k gate the mission asks for
-  (§8-21)**: not run. No `PROFILED_ALL_FAMILY_D4_FULL_HESSIAN_GATE_2026-08-01.csv`,
-  `..._D4_INNER_EQUIVALENCE...`, `..._D20_CROSS_BLOCK_GATE...`, `..._D20_INNER_EQUIVALENCE...`,
-  `..._OUTER_GRADIENT_GATE...`, `..._PERFORMANCE_GATE...`, or W500k smoke doc exist from this session
-  — writing empty/fabricated versions of these would misrepresent the state of the work, so they are
-  omitted rather than stubbed.
+- **Every D20/inner-equivalence/outer-gradient/performance/W500k gate the mission asks for (§9-21)**:
+  status as of THIS section's own scope is `not_run` for all of them; see the verdict block below for
+  whether a D20 cross-block gate was reached later in this same session (it reflects the true final
+  state; this section is a narrative walkthrough of the flexible-CM H_EE/H_EC work specifically).
 - **`FULL_FORMULATION_NO_OVERHEAD_GATE_2026-08-01.csv`** (mission §3): not run. Worth noting the
   profiled-only scratch fields (`MTab`/`MCScum`/`SnuWval`/`TZ_buf`/etc.) were already confirmed, by the
   SOURCE branch's own prior session, to be filled unconditionally but cheaply (one extra
   multiply-add per existing loop iteration, no new O(W) pass) — this session did not re-verify that
-  claim or measure allocations/wall-time directly.
+  claim or measure allocations/wall-time directly. The NEW `profiled_full_ws`/`profiled_hraw_ec_full`
+  scratch this session added is sized to the FULL (unreduced) width and lives on `cctx`, but is only
+  ever touched when `cctx.profiled_layout!==nothing` — a non-profiled `cctx` never allocates or fills
+  it, preserving the "no overhead on the old path" property by construction, though this was not
+  independently allocation-profiled.
 
 ## Verdict block (mission's own format)
 
@@ -159,31 +241,42 @@ OLD_FULL_PATH_OVERHEAD =
 
 GENUINE_REDUCED_LAYOUT =
     unrestricted:      pass                          # pre-existing, source branch, unchanged
-    flexible_CM:        dimension_bookkeeping_pass_hessian_wiring_not_started
-    common_Frechet:      not_started
+    flexible_CM:        hessian_callback_pass_fg_callback_not_wired   # see "important correction" above
+    common_Frechet:      not_started   # shares flexible CM's plumbing but H_EF gather not built
     ZC_only:             not_started
     CM_plus_ZC:          not_started
 
 HESSIAN_ORCHESTRATOR_WIRING =
-    fail_all_four_restricted_families   # H_EE reduced-kernel swap and H_EC/EF/EZ gather step neither implemented
+    flexible_CM: pass_serial_only_D4_verified   # hessian_cm_structured! only; _v2! (threaded) not touched
+    common_Frechet: fail_H_EF_not_implemented
+    ZC_only: fail_not_started
+    CM_plus_ZC: fail_not_started_and_out_of_scope_widened_case
 
 D4_COMPLETE_HESSIAN =
-    not_run   # only a dimension/construction gate ran this session, not a numeric Hessian-vs-reference gate
+    flexible_CM: pass   # test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl, H_EE+H_EC, max|Δ|=0.0,
+                         # both contrasts x both L x 2 points; H_EF/H_EZ/other families not_run
+    common_Frechet: not_run
+    ZC_only: not_run
+    CM_plus_ZC: not_run
 
 D20_CROSS_BLOCK_REFERENCE =
     not_run
 
 INNER_EQUIVALENCE =
-    not_run
+    not_run   # blocked on the FG-callback gap above -- no reduced-family inner solve exists yet to test equivalence of
 
 SHARED_PROFILED_A_GP_GRADIENT =
     not_started   # unchanged from source branch
 
 RESTRICTION_ONLY_CODE_CHANGED =
-    none   # confirmed: only cm_hessian_architectures.jl's build_cm_augmented_obj_archB (additive
-           # base_obj kwarg + one pre-existing Bidx-dtype bugfix) and one new additive file touched;
-           # H_CC/H_CF/H_FF/H_CZ/H_ZZ/CM bins/Fréchet level moments/Z features/restriction FG/
-           # verification/restriction-parameter gradients: byte-for-byte untouched
+    none   # confirmed: only cm_hessian_architectures.jl (additive base_obj/theta_ref/profiled_layout
+           # kwargs on build_cm_augmented_obj_archB/wrap_moments_with_cm_archB/build_cm_bin_ctx, new
+           # CMBinHessCtx fields via its own append idiom, new early branches in _fill_cm_HEE!/
+           # hessian_cm_structured! gated on profiled_layout!==nothing, one pre-existing Bidx-dtype
+           # bugfix) and two new additive files touched; H_CC/H_CF/H_FF/H_CZ/H_ZZ/CM bins/Fréchet
+           # level moments/Z features/restriction FG/verification/restriction-parameter gradients:
+           # byte-for-byte untouched -- confirmed by zero regression on all 3 pre-existing/prior D4
+           # test files after every change this session
 
 ZC_OPTIMIZATION_INTEGRATION =
     pending   # this session made no contact with that separate workstream; nothing to integrate yet
@@ -193,7 +286,7 @@ W500K_PUBLIC_ENTRY_SMOKE =
 
 PRODUCTION_RECOMMENDATION =
     insufficient_evidence   # unchanged from the source branch's own honest verdict; this session did
-                             # not add outer-loop A/B evidence, only infrastructure
+                             # not add outer-loop A/B evidence, only infrastructure/correctness gates
 
 PRODUCTION_DEFAULT_CHANGED = false
 CAMPAIGN_LAUNCHED = false
@@ -201,31 +294,30 @@ CAMPAIGN_LAUNCHED = false
 
 ## Recommended next steps (in order, for whoever continues this)
 
-1. Add `θ_full_ref::Base.RefValue{Union{Nothing,Vector{Float64}}}` and
-   `profiled_layout::Union{Nothing,ProfiledEconomicMomentLayout}` fields to `CMBinHessCtx` (via the
-   struct's own "outer constructor appends new fields with keyword defaults" idiom, matching
-   `hcz_prep_backend`/`bin_zc_drawchunk` exactly) and `OriginZCCoreHessCtx`. Publish `θ_full` from
-   `wrap_moments_with_cm_archB`'s closure into that ref, alongside its existing `core_cf_ref[] = cf`
-   line.
-2. In `_fill_cm_HEE!`, when `cctx.profiled_layout !== nothing`, call
-   `build_reduced_homogeneous_winner_pair_ctx(cf, cctx.econ_ctx, cctx.θ_full_ref[], cctx.profiled_layout)`
-   + `reduced_homogeneous_winner_pair_hessian!` instead of `build_core_exact_hessian_workspace`/
-   `fill_core_hessian_upper!`, writing into a correctly-reduced-size `HEE` view.
-3. In `hessian_cm_structured!`/`_v2!`, when `cctx.profiled_layout !== nothing`: build `wctx` from the
-   FULL `cf` as today (`build_winner_pair_ctx(cf; bi_slot=...)`), call the existing amended H_EC
-   functions with `use_profiled_correction=true`, then gather only
-   `cctx.profiled_layout.retained_full_factual_j`-selected rows into the reduced `Hfull` (implementing
-   item 1's resolved design above).
-4. D4 dense-reference gate for flexible CM specifically: compare the fully-wired reduced structured
-   Hessian against an independent `G'diag(S)G` reference built directly from a reduced `G` (only
-   `layout`-retained columns materialized) — the mission's own §8 gate, restricted to one family first.
-5. Only after (4) passes: repeat (1)-(4)'s mechanical parts for ZC-only/CM+ZC/common-Fréchet, resolve
-   H_EF's open Wtab/T1 question, then proceed to D20/inner-equivalence/outer-gradient/performance/W500k
-   per the mission's own ordering — each is real, separately gate-able work, not a rubber stamp.
+1. **Close the FG-callback gap** (the single largest remaining blocker, see the correction above):
+   write a small, layout-aware dense-G materialization function (mirroring
+   `materialize_dense_factual_structured!` but writing only `layout.retained_full_factual_j`-selected
+   columns, in reduced-index order) and wire it into a new `skip_fill=false`-compatible variant of
+   `wrap_moments_with_cm_archB`'s economic-fill branch when `profiled_layout` is present — OR wire the
+   reduced case through the `:cm_lookup`/operator inner-FG-backend instead. Either path unblocks an
+   actual KNITRO inner solve for the reduced flexible-CM family, which everything below needs.
+2. Once (1) exists: re-run this session's `test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl`-style
+   comparison but at a GENUINELY SOLVED reduced-model point (not a hand-set one) — a real, if narrow,
+   version of the mission's §9 inner-equivalence gate for flexible CM specifically.
+3. Thread the profiled/gather branch into `hessian_cm_structured_v2!` (threaded twin,
+   `cm_hessian_threaded.jl`) — mechanical once (1)-(2) are solid, but not yet done or gated.
+4. Resolve H_EF's open Wtab/T1 question (`PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md` §4) and
+   implement the analogous gather branch for common Fréchet (which already gets the dimension/H_EE
+   plumbing for free via shared `CMBinHessCtx`, per this session's design).
+5. Port ZC-only (`OriginZCCoreHessCtx`/`archA_partitioned_hess_cb_builder`) and then CM+ZC's widened
+   case — structurally analogous to this session's flexible-CM work but a SEPARATE codebase surface,
+   not automatically covered by anything done so far.
+6. Only after (1)-(5): D20 cross-block/inner-equivalence gates, outer-gradient sharing, performance
+   profiling, W500k smokes, per the mission's own ordering — each is real, separately gate-able work.
 
 Given the source branch's own prior verdict (`PORT_TO_RESTRICTED_FAMILIES = insufficient_evidence`, a
 real-but-small 3.85-7.99% unrestricted-only outer-loop edge from 3 points/one seed/upper-direction-only)
 was already judged too thin to justify the FULL remaining campaign before this session started, and
-this session's own contribution is infrastructure/design resolution rather than new outer-loop evidence,
-that judgment call — whether to continue investing in the full five-family port before more unrestricted
-evidence exists — still stands open for the user, not resolved here.
+this session's own contribution is infrastructure/correctness-gate work rather than new outer-loop
+evidence, that judgment call — whether to continue investing in the full five-family port before more
+unrestricted evidence exists — still stands open for the user, not resolved here.

@@ -50,6 +50,18 @@ using LinearAlgebra: BLAS, mul!
 # real caller of this file).
 isdefined(Main, :CompressedFactual) || include(joinpath(@__DIR__, "compressed_moments.jl"))
 isdefined(Main, :materialize_dense_factual_structured!) || include(joinpath(@__DIR__, "structured_moment_build.jl"))
+# Profiled all-families completion task (2026-08-01): the reduced/anchor-omitting H_EE kernel
+# _fill_cm_HEE! now optionally dispatches to (build_reduced_homogeneous_winner_pair_ctx/
+# reduced_homogeneous_winner_pair_hessian!, only reached when a caller opts in via
+# build_cm_bin_ctx(...; profiled_layout=...)) -- guarded includes for that dependency chain, same
+# order test_reduced_homogeneous_hessian_2026-08-01.jl already establishes as canonical
+# (active_layout.jl -> relative_a_coordinate_2026-07-31.jl -> profiled_economic_moment_layout_2026-08-01.jl
+# -> reduced_homogeneous_hessian_2026-08-01.jl; the FG-only reduced_homogeneous_contraction_2026-08-01.jl
+# is NOT needed here, this task only touches the Hessian side).
+isdefined(Main, :dest_slot) || include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
+isdefined(Main, :AnchorSpec) || include(joinpath(@__DIR__, "relative_a_coordinate_2026-07-31.jl"))
+isdefined(Main, :ProfiledEconomicMomentLayout) || include(joinpath(@__DIR__, "profiled_economic_moment_layout_2026-08-01.jl"))
+isdefined(Main, :ReducedHomogeneousWinnerPairHessCtx) || include(joinpath(@__DIR__, "reduced_homogeneous_hessian_2026-08-01.jl"))
 # port/shared-inner-fg-operator-and-verification-2026-07-26: compressed_live.jl (as of Addendum
 # Part A, fbb7d79) references EconomicFGWorkspace/compressed_cc_value_grad! from
 # compressed_cc_inner.jl but never includes it itself (every pre-existing caller happened to
@@ -233,6 +245,7 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
                                      R::Union{Nothing,Matrix{Float64}}, ctx; chunk_size::Int = 2000,
                                      use_compressed_core::Bool = true,
                                      core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                                     theta_ref::Ref{Any} = Ref{Any}(nothing),   # profiled all-families completion task (2026-08-01): shared box, published alongside core_cf_ref, needed by the reduced H_EE kernel (see CMBinHessCtx's own profiled_theta_ref field docstring). Unused/harmless for every caller that doesn't opt into a profiled_layout.
                                      skip_fill::Bool = false)   # skip_cm_fill_ref removal (2026-07-27):
                                      # was a caller-toggled `Ref{Bool}` read at CALL time (a mutable
                                      # shared box archC_base_state/archC_verified_state set/reset around
@@ -323,6 +336,10 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             # at a new point before the first Hessian call there, so this is set before any
             # Hessian callback that needs it runs.
             core_cf_ref[] = cf
+            # Profiled all-families completion task (2026-08-01): publish theta alongside cf, same
+            # box/lifecycle discipline -- `copy(θ)`, not an alias, since θ is a KNITRO-owned buffer
+            # that may be mutated/reused before the Hessian callback (which reads this ref) runs.
+            theta_ref[] = copy(θ)
         else
             core_moments!(K, Gtmp, θ, U, obj)
             core_cf_ref[] = :compressed_state_unavailable   # use_compressed_core=false: no winner-form cf built this call, Hessian must fall back to dense
@@ -408,8 +425,11 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
     # publishes its freshly-built `cf` into, for `build_cm_bin_ctx`/`hessian_cm_structured!` to
     # pick up -- see CMBinHessCtx's own `core_cf_ref` field docstring for the full rationale.
     core_cf_ref = Ref{Any}(nothing)
+    # Profiled all-families completion task (2026-08-01): sibling shared box, same lifecycle,
+    # publishing the current outer theta -- see CMBinHessCtx's own `profiled_theta_ref` docstring.
+    theta_ref = Ref{Any}(nothing)
     moments_cm! = wrap_moments_with_cm_archB(obj0.moments!, ncore, Bidx, origins, refIndex1, L, R, ctx;
-        chunk_size = chunk_size, core_cf_ref = core_cf_ref)
+        chunk_size = chunk_size, core_cf_ref = core_cf_ref, theta_ref = theta_ref)
 
     obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
         γ = obj0.γ, (moments!) = moments_cm!, moments_jacobian! = error,
@@ -423,7 +443,8 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
     @assert obj_cm.outer_constr_index == obj_cm.d
 
     return (obj_cm = obj_cm, z = z, origins = origins, ncore = ncore, ncm = ncm, L = L,
-            contrasts = contrasts, refIndex1 = refIndex1, Bidx = Bidx, core_cf_ref = core_cf_ref)
+            contrasts = contrasts, refIndex1 = refIndex1, Bidx = Bidx, core_cf_ref = core_cf_ref,
+            theta_ref = theta_ref)
 end
 
 # ============================================================================
@@ -648,11 +669,57 @@ mutable struct CMBinHessCtx
     # level correct -- not yet the default pending a complete-inner-solve gate).
     hcz_prep_backend::Symbol
     bin_zc_drawchunk::Any
+    # Profiled all-families completion task (2026-08-01): `profiled_layout` is `nothing` for every
+    # existing caller (plain/OLD full economic layout, unchanged behavior) or a
+    # `ProfiledEconomicMomentLayout` when this `cctx` was built for the REDUCED economic block
+    # (`build_cm_augmented_obj_archB(...; base_obj=build_reduced_base_obj_for_family(...))`).
+    # `profiled_theta_ref` is a shared `Ref{Any}` box (mirrors `core_cf_ref`'s own "moments! closure
+    # publishes, Hessian callback reads" pattern exactly) holding the CURRENT outer point's full
+    # theta vector -- needed by `build_reduced_homogeneous_winner_pair_ctx`, which `_fill_cm_HEE!`
+    # cannot otherwise reach (unlike `cf`, theta is not derivable from anything already threaded to
+    # the Hessian callback). `profiled_reduced_wctx`/`profiled_reduced_wctx_for` cache the built
+    # `ReducedHomogeneousWinnerPairHessCtx`, rebuilt only when the `cf` identity changes -- same
+    # "rebuild only on a new outer point" discipline as `core_ws`/`core_ws_for`.
+    # `profiled_hee_packed` is persistent packed-Hessian scratch (row-major upper-triangle, length
+    # `n(n+1)/2` for `n=1+layout.total_reduced_economic_moments`) for
+    # `reduced_homogeneous_winner_pair_hessian!`'s own packed-output convention, unpacked into the
+    # caller's dense `HEE` view -- sized once, resized only if `layout` itself changes (campaign-
+    # lifetime constant in practice, exactly like `Hfull`/`Ews` above).
+    profiled_layout::Any
+    profiled_theta_ref::Base.RefValue{Any}
+    profiled_reduced_wctx::Any
+    profiled_reduced_wctx_for::Any
+    profiled_hee_packed::Vector{Float64}
+    # Profiled all-families completion task (2026-08-01), H_EC gather step: the "gather retained
+    # rows at assembly" design (see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md) rebuilds a
+    # FULL-width (unreduced) `WinnerPairHessCtx`/`WinnerBinCrossScratch` from the SAME `cf` every
+    # outer point -- deliberately NOT the same object as `core_ws`/`cross_scratch` above (those, if
+    # present at all for this cctx, are sized/keyed for the OLD non-profiled path and must not be
+    # reused/aliased here). `profiled_full_wctx`/`profiled_full_wctx_for` cache the full `wctx`
+    # (rebuild only on `cf` identity change, same discipline as `core_ws`); `profiled_full_ws` is its
+    # `WinnerBinCrossScratch` (sized to the FULL `D*Ddest(+cf)` width, NOT the reduced `NCORE` --
+    # genuinely larger than `cross_scratch` would be, since the cross-block computation itself is
+    # NOT reduced by this design, only the packed output is -- see the master doc's own "not
+    # FLOP-optimal for the cross-block" note). `profiled_hraw_ec_full` is the corresponding
+    # full-width `(wctx.ncolI+1) x nO` raw-block scratch, gathered down into the existing (already
+    # reduced-sized) `Hraw_EC` field above before the R-congruence/Hfull-write step.
+    profiled_full_wctx::Any
+    profiled_full_wctx_for::Any
+    profiled_full_ws::Union{Nothing,WinnerBinCrossScratch}
+    profiled_hraw_ec_full::Matrix{Float64}
 end
 
-"Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change."
-function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAULT[], bin_zc_drawchunk = nothing)
-    return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk)
+"Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change. Profiled all-families completion task (2026-08-01): also appends the profiled-layout fields with their own defaults (nothing/fresh-Ref/empty-buffer), same backward-compatibility discipline."
+function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAULT[], bin_zc_drawchunk = nothing,
+        profiled_layout = nothing, profiled_theta_ref::Base.RefValue{Any} = Ref{Any}(nothing),
+        profiled_reduced_wctx = nothing, profiled_reduced_wctx_for = nothing,
+        profiled_hee_packed::Vector{Float64} = Float64[],
+        profiled_full_wctx = nothing, profiled_full_wctx_for = nothing,
+        profiled_full_ws::Union{Nothing,WinnerBinCrossScratch} = nothing,
+        profiled_hraw_ec_full::Matrix{Float64} = Matrix{Float64}(undef, 0, 0))
+    return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk,
+        profiled_layout, profiled_theta_ref, profiled_reduced_wctx, profiled_reduced_wctx_for, profiled_hee_packed,
+        profiled_full_wctx, profiled_full_wctx_for, profiled_full_ws, profiled_hraw_ec_full)
 end
 
 """
@@ -671,7 +738,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
         cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
         zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
-        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
+        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[],
+        profiled_layout = nothing)
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
     refIndex1 = aug.refIndex1; z = aug.z
     NCORE = aug.ncore; ncm = aug.ncm
@@ -691,6 +759,14 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     # to `nothing`, so `inner_loop_internal_cmlookup_production`'s `skip_fill=true`-argument branch
     # falls back to the always-fill `obj.moments!` (see that function's own dispatch).
     moments_skip_fn = hasproperty(aug, :moments_skip!) ? aug.moments_skip! : nothing
+    # Profiled all-families completion task (2026-08-01): `aug.theta_ref`, if present (only when
+    # `aug` came from `build_cm_augmented_obj_archB(...; use_compressed_core=true)`, the same
+    # precondition as `core_cf_ref` above), is the shared box `wrap_moments_with_cm_archB`'s closure
+    # publishes the current outer theta into -- needed by the reduced H_EE kernel
+    # (`build_reduced_homogeneous_winner_pair_ctx`) when `profiled_layout !== nothing`. Absent for
+    # every pre-existing `aug` (non-archB, or archB before this task), defaults to an unused fresh
+    # `Ref{Any}(nothing)` -- harmless since `profiled_layout===nothing` means it's never read.
+    profiled_theta_ref = hasproperty(aug, :theta_ref) ? aug.theta_ref : Ref{Any}(nothing)
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE, L1), zeros(D, D, L, L), zeros(D, NCORE, L),
         Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm),
@@ -705,7 +781,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cross_hessian_threaded, cross_hessian_workers,
         zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: plain CM has no ZC block, lazily unused
         ctx,   # econ_ctx: true no-H operator bundle continuation
-        nothing)   # frechet_ext_cache: harmonization task -- lazily built, nothing until first common-Fréchet Hessian call
+        nothing;   # frechet_ext_cache: harmonization task -- lazily built, nothing until first common-Fréchet Hessian call
+        profiled_layout = profiled_layout, profiled_theta_ref = profiled_theta_ref)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -821,6 +898,41 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
     ncore = cctx.ncore_core
     NCORE = cctx.NCORE
     cf = cctx.core_cf_ref[]   # a CompressedFactual (success) OR a Symbol fallback reason (:tied_winner / :compressed_state_unavailable)
+    # Profiled all-families completion task (2026-08-01): when this cctx was built for the reduced
+    # economic layout (build_cm_bin_ctx(...; profiled_layout=layout)), H_EE is filled by the
+    # ALREADY-VALIDATED unrestricted-family reduced kernel
+    # (reduced_homogeneous_hessian_2026-08-01.jl), never the full winner-pair kernel below -- an
+    # early, self-contained branch, so the pre-existing (profiled_layout===nothing) code path below
+    # is completely untouched. Only reachable for `ncore == NCORE` (no CM+ZC mean/pair widening --
+    # that combination is not ported yet, see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md).
+    if cctx.profiled_layout !== nothing
+        cf isa CompressedFactual || error("_fill_cm_HEE!: profiled_layout set but core_cf_ref[] is not a CompressedFactual (got $(typeof(cf))) -- the compressed-core fallback path is not supported for the reduced economic layout.")
+        ncore == NCORE || error("_fill_cm_HEE!: profiled_layout set but ncore_core=$ncore != NCORE=$NCORE -- CM+ZC/mean-pair widening is not ported for the reduced economic layout yet.")
+        layout = cctx.profiled_layout
+        θ_full = cctx.profiled_theta_ref[]
+        θ_full === nothing && error("_fill_cm_HEE!: profiled_layout set but profiled_theta_ref[] is nothing -- theta was never published for this outer point (moments! closure not yet called before this Hessian callback?).")
+        if cctx.profiled_reduced_wctx === nothing || cctx.profiled_reduced_wctx_for !== cf
+            cctx.profiled_reduced_wctx = build_reduced_homogeneous_winner_pair_ctx(cf, cctx.econ_ctx, θ_full, layout)
+            cctx.profiled_reduced_wctx_for = cf
+        end
+        wctx_r = cctx.profiled_reduced_wctx
+        n = 1 + wctx_r.ncolI
+        n == ncore || error("_fill_cm_HEE!: reduced width n=$n (1+layout.total_reduced_economic_moments) != cctx.ncore_core=$ncore -- CMBinHessCtx built inconsistently with this layout.")
+        npacked = n * (n + 1) ÷ 2
+        length(cctx.profiled_hee_packed) == npacked || (cctx.profiled_hee_packed = Vector{Float64}(undef, npacked))
+        reduced_homogeneous_winner_pair_hessian!(cctx.profiled_hee_packed, obj, wctx_r)
+        HEE_core = @view HEE[1:ncore, 1:ncore]
+        packed = cctx.profiled_hee_packed
+        k = 1
+        @inbounds for i in 1:n
+            for j in i:n
+                v = packed[k]; k += 1
+                HEE_core[i, j] = v
+                HEE_core[j, i] = v
+            end
+        end
+        return HEE
+    end
     if cf isa CompressedFactual && cctx.core_hessian_backend !== :dense_reference
         if cctx.core_ws === nothing || cctx.core_ws_for !== cf
             cctx.core_ws = build_core_exact_hessian_workspace(cf)
@@ -1139,6 +1251,58 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
     cf = cctx.core_cf_ref[]
     _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
 
+    if cctx.profiled_layout !== nothing
+        # Profiled all-families completion task (2026-08-01): H_EC "gather retained rows at
+        # assembly" step -- see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md for the full
+        # design rationale. Rebuilds (cf-identity-cached) the FULL, unreduced
+        # `WinnerPairHessCtx`/`WinnerBinCrossScratch` from the SAME `cf` _fill_cm_HEE! already used
+        # for the reduced H_EE, calls the already-validated, UNTOUCHED cross-block primitives
+        # (`winner_pair_cross_hessian_fill!`/`_cm_block!`) with `use_profiled_correction=true`
+        # exactly as the unrestricted family does, then gathers only `layout`-retained rows into
+        # the (smaller) `Hfull` -- zero lines inside either of those two functions change.
+        extension === nothing || error("hessian_cm_structured!: common-Fréchet's H_EF gather is not implemented for the profiled economic layout yet (H_EC only) -- see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md.")
+        layout = cctx.profiled_layout
+        has_france = layout.france_ratio_reduced_j > 0
+        bi_slot = has_france ? dest_slot(cctx.econ_ctx, cctx.econ_ctx.bi) : 0
+        if cctx.profiled_full_wctx === nothing || cctx.profiled_full_wctx_for !== cf
+            cctx.profiled_full_wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot)
+            cctx.profiled_full_wctx_for = cf
+        end
+        wctx_full = cctx.profiled_full_wctx
+        ws_full = cctx.profiled_full_ws
+        if ws_full === nothing || ws_full.ncolI != wctx_full.ncolI || ws_full.D != D || ws_full.L != L || ws_full.Ddest != wctx_full.Ddest
+            ws_full = WinnerBinCrossScratch(wctx_full.ncolI, D, L, wctx_full.Ddest)
+            cctx.profiled_full_ws = ws_full
+        end
+        record_winner_cross_hessian_call!()
+        winner_pair_cross_hessian_fill!(wctx_full, ws_full, obj, cctx.Bidx)
+        if size(cctx.profiled_hraw_ec_full) != (wctx_full.ncolI + 1, nO)
+            cctx.profiled_hraw_ec_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, nO)
+        end
+        Hraw_EC_full = cctx.profiled_hraw_ec_full
+        Hraw_EC = cctx.Hraw_EC   # reduced-sized (NCORE x nO) -- reused as the gather TARGET here
+        n_bilateral = length(layout.retained_full_factual_j)
+        @inbounds for l in 1:L
+            winner_pair_cross_hessian_cm_block!(Hraw_EC_full, wctx_full, ws_full, l, origins, refIndex1, M; use_profiled_correction = true)
+            @views Hraw_EC[1, :] .= Hraw_EC_full[1, :]
+            @inbounds for k in 1:n_bilateral
+                j_full = layout.retained_full_factual_j[k]
+                @views Hraw_EC[1 + k, :] .= Hraw_EC_full[1 + j_full, :]
+            end
+            if has_france
+                @views Hraw_EC[1 + layout.total_reduced_economic_moments, :] .= Hraw_EC_full[1 + wctx_full.ncolI, :]
+            end
+            cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
+            block_ec = if cctx.R === nothing
+                Hraw_EC
+            else
+                mul!(cctx.block_ec, Hraw_EC, cctx.R)
+            end
+            @views Hfull[1:NCORE, cols] .= block_ec
+            @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
+        end
+        fill_cm_HCC!(Hfull, cctx, M)
+    else
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
     use_direct_hcz = _cm_cross_hessian_wants_direct_hcz(cctx, cf)
     build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)
@@ -1228,6 +1392,7 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
     # throw UndefVarError for them even though they never take this branch.
     if extension !== nothing
         _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension)
+    end
     end
 
     # symmetrize defensively (analytically symmetric; absorbs FP-order noise, same
