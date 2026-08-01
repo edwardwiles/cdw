@@ -73,6 +73,13 @@ mutable struct WinnerBinCrossScratch
     MTab::Array{Float64,3}     # Ddest x D x (L+1)
     MCScum::Array{Float64,3}   # Ddest x D x L
     T0_slot::Vector{Float64}   # Ddest
+    # Profiled economic block port (2026-08-01): H_EF's colsum!/esum! analog of H_EC's
+    # per-(o,refIndex1) MCScum DIFFERENCE -- colsum! needs a SUM over all D CM-grid origins x
+    # (common-Fréchet's level restriction has no reference-contrast structure, see
+    # winner_pair_cross_hessian_colsum!'s own docstring), so MSumX[d,l] = Σ_x MCScum[d,x,l]
+    # (Ddest x L, computed once per callback, O(Ddest*D*L), reused by every l/j pair -- no new
+    # O(W) pass). Only read by the new use_profiled_correction=true path.
+    MSumX::Matrix{Float64}     # Ddest x L
     # optimize/structured-cross-hessian-ZC-CM-2026-07-28: persistent `Threads.@spawn` task buffer
     # for `winner_pair_cross_hessian_fill_threaded!` (threaded_cross_hessian.jl), sized to
     # `Threads.nthreads()` at construction so no `Vector{Task}` is allocated per Hessian callback.
@@ -109,7 +116,7 @@ function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int, Ddest::Int = cld(ncol
     return WinnerBinCrossScratch(ncolI, D, L, Ddest,
         zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
         zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L),
-        zeros(Ddest, D, L + 1), zeros(Ddest, D, L), zeros(Ddest),
+        zeros(Ddest, D, L + 1), zeros(Ddest, D, L), zeros(Ddest), zeros(Ddest, L),
         Vector{Task}(undef, Threads.nthreads()), zeros(ncolI))
 end
 
@@ -213,6 +220,18 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
         for l in 1:L
             acc += MTab[slot, x, l]
             MCScum[slot, x, l] = acc
+        end
+    end
+    # H_EF's colsum!/esum! sum-over-x analog of H_EC's per-x difference -- see MSumX's own field
+    # docstring on WinnerBinCrossScratch. O(Ddest*D*L), cheap next to the O(W*Ddest*D) fill above.
+    MSumX = ws.MSumX
+    @inbounds for slot in 1:Ddest
+        for l in 1:L
+            acc = 0.0
+            for x in 1:D
+                acc += MCScum[slot, x, l]
+            end
+            MSumX[slot, l] = acc
         end
     end
     return ws
@@ -535,7 +554,7 @@ end
 # ============================================================================
 
 """
-    winner_pair_cross_hessian_colsum!(colsum, wctx, ws, l) -> colsum
+    winner_pair_cross_hessian_colsum!(colsum, wctx, ws, l; use_profiled_correction=false) -> colsum
 
 `colsum[j] = sum_{o=1}^D CS_[o,j,l]` for `j = 1:NCORE` (`NCORE = wctx.ncolI + 1`, SAME row
 convention as `winner_pair_cross_hessian_cm_block!`: row 1 = the ones/zeta column, S-only; rows
@@ -546,11 +565,20 @@ difference against `refIndex1`). `O(D)` per row, `O(D*NCORE)` total per `l` -- s
 as the dense `for o in 1:D; acc += CS_[o,j,l]; end` loop this replaces. Caller must call
 `winner_pair_cross_hessian_fill!` once per Hessian callback first (same precondition as
 `winner_pair_cross_hessian_cm_block!`).
+
+`use_profiled_correction=false` (default): byte-for-byte the original behavior (single global
+`sumNu` correction, same for every economic row `j`). `use_profiled_correction=true`: replaces
+`sumNu` with the destination-specific `ws.MSumX[wctx.target_slot[j], l]` (see that field's own
+docstring on `WinnerBinCrossScratch`) -- the mission's `T^F_{d,k}` for H_EF, per
+PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §4. Same France/cf-row scope boundary as H_EC/H_EZ
+(kept on `sumNu`).
 """
 function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerBinCrossScratch, l::Int)
+        ws::WinnerBinCrossScratch, l::Int; use_profiled_correction::Bool = false)
     QCScum = ws.QCScum; NuCScum = ws.NuCScum; SOnlyCScum = ws.SOnlyCScum; QCfCScum = ws.QCfCScum
+    MSumX = ws.MSumX
     pi_vec = wctx.pi_vec
+    target_slot = wctx.target_slot
     has_cf = wctx.has_cf
     jcf = wctx.ncolI   # the cf column's index WITHIN wctx's own 1:ncolI numbering (cf.cf_col)
     D = ws.D
@@ -571,12 +599,13 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
         for o in 1:D
             sumQ += QCScum[j, o, l]
         end
-        colsum[j + 1] = sumQ - pi_vec[j] * sumNu
+        corr = use_profiled_correction ? MSumX[target_slot[j], l] : sumNu
+        colsum[j + 1] = sumQ - pi_vec[j] * corr
     end
 
     # Same cf-column override as winner_pair_cross_hessian_cm_block! -- QCScum[jcf,:,:] was left at
     # zero by the main slot-loop (the cf column is not a (slot,origin) pair), so overwrite that one
-    # entry with its own dedicated accumulation.
+    # entry with its own dedicated accumulation. Always sumNu (France row excluded, see docstring).
     if has_cf
         sumQCf = 0.0
         @inbounds for o in 1:D
@@ -588,7 +617,13 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
 end
 
 """
-    winner_pair_cross_hessian_esum!(Esum, wctx, ws, w, Wtot) -> Esum
+    winner_pair_cross_hessian_esum!(Esum, wctx, ws, w, Wtot; use_profiled_correction=false) -> Esum
+
+`use_profiled_correction=false` (default): byte-for-byte the original behavior (single global `t0`
+correction). `use_profiled_correction=true`: replaces `t0` with the destination-specific
+`ws.T0_slot[wctx.target_slot[j]]` -- the UN-BINNED counterpart of `winner_pair_cross_hessian_colsum!`'s
+`MSumX`, already built by `winner_pair_cross_hessian_fill!` (see `T0_slot`'s own field docstring).
+Same France/cf-row scope boundary as the other amended cross-block functions.
 
 `Esum[j] = sum_s w[s]*E[s,j]` for `j = 1:NCORE` -- the UN-binned (no threshold dependence) column
 sum common-Fréchet's `H_E,level` block needs for its nonzero-target correction term (the level
@@ -615,7 +650,7 @@ own `snucf = snu*crs[w]` weighting for `QCfTab`), computed in the SAME O(W) pass
 traversal).
 """
 function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerBinCrossScratch, w::AbstractVector{Float64}, Wtot::Float64)
+        ws::WinnerBinCrossScratch, w::AbstractVector{Float64}, Wtot::Float64; use_profiled_correction::Bool = false)
     Esum[1] = Wtot
     nu = wctx.nu
     has_cf = wctx.has_cf
@@ -634,9 +669,12 @@ function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::Wi
         end
     end
     pi_vec = wctx.pi_vec
+    target_slot = wctx.target_slot
+    T0_slot = ws.T0_slot
     EsumEcon = ws.EsumEcon
     @inbounds for j in 1:wctx.ncolI
-        Esum[j + 1] = EsumEcon[j] - pi_vec[j] * t0
+        corr = use_profiled_correction ? T0_slot[target_slot[j]] : t0
+        Esum[j + 1] = EsumEcon[j] - pi_vec[j] * corr
     end
     if has_cf
         jcf = wctx.ncolI
