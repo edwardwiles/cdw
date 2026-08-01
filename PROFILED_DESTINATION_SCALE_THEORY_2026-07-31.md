@@ -4,6 +4,18 @@ Branch: `architecture/profile-all-destination-scales-2026-07-31`
 Base: `production/fullA-exact @ cd17235` (2018 ICIO pi/tau update; see master report for why this
 base was chosen over `origin/production/fullA-exact`'s current tip).
 
+**CORRECTION NOTICE (2026-07-31, mid-session, user stop):** every D=4 numerical gate below was
+originally run against the LEGACY dense `G`/`H`/`K` moment matrix (via `ctx.obj.moments!` on the
+`PsiObjectiveBundleImplicit` bundle `d4_exact_setup()` happens to attach), which this repo's
+production stack has moved away from entirely (genuinely no-H/no-G/no-K `OperatorPsiBundle`s).
+Calling that path "live production code," as this document originally did throughout, was a real
+mischaracterization. Every gate has since been rebuilt to use `build_compressed_factual` (the
+actual winner-compressed representation production uses) and re-run; every numerical conclusion
+below reproduced **identically or better** on the corrected path (see commit `408a4b1` for the
+full diff and re-run numbers). The mathematics was never wrong — only the verification code path
+was. References to "the live `moments!`"/"real production code" below describe the *corrected*
+(`build_compressed_factual`-based) gates as they now exist, not the original run.
+
 **Status of this document: PARTIAL, with §2.1 now NUMERICALLY VERIFIED.** Every claim below is
 labeled `[VERIFIED]` (re-derived from and cross-checked against actual code, not assumed),
 `[NUMERICALLY VERIFIED]` (executed against real production code at a real D=4 point, not just
@@ -11,9 +23,10 @@ derived on paper — see `test_profiled_destination_scale_invariance_2026-07-31.
 `[UNVERIFIED — needs code check]`.
 
 **D=4 numerical gate (§2.1a/b/c and the exact exponent) — ALL PASS, machine precision, real
-production code, run 2026-07-31**: `full_aod_diag/d4_exact/test_profiled_destination_scale_invariance_2026-07-31.jl`
-calls the actual live `ctx.obj.moments!` (`EK_moments_gammanorm_directgp!`) and
-`gravity_elimination.jl::gravity_from_logz` at the genuine calibration point `ctx.θ0_up`
+production code, run 2026-07-31 (corrected path)**: `full_aod_diag/d4_exact/test_profiled_destination_scale_invariance_2026-07-31.jl`
+calls `build_compressed_factual` (compressed_moments.jl, the winner-compressed representation
+production's operator path uses) and `gravity_elimination.jl::gravity_from_logz` at the genuine
+calibration point `ctx.θ0_up`
 (D=4, W=8000, μ=1/6, σ=2.5, baseIndex=2), applies an explicit κ=1.7 rescale to one destination
 column's `Aod_theta`, and checks: winner identity (0/8000 mismatches), per-draw share-ratio
 invariance (max diff 4.1e-18), the exact `κ^{μ(σ-1)}` homogeneity of `M_d(ω)` (max diff 6.7e-16 —

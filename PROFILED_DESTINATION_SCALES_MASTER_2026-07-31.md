@@ -4,6 +4,31 @@ Branch: `architecture/profile-all-destination-scales-2026-07-31`
 Worktree: `/bbkinghome/edav/gravity_robustness/worktrees/architecture-profile-all-destination-scales-2026-07-31`
 Base: `production/fullA-exact @ cd17235`
 
+## CORRECTION NOTICE (2026-07-31, mid-session, user stop)
+
+Every D=4 gate in this session was originally implemented against the **legacy dense `G`/`H`/`K`
+moment matrix** (`ctx.obj.moments!`, only present because `d4_exact_setup()` attaches a
+pre-hardening `PsiObjectiveBundleImplicit`), and repeatedly, wrongly, described as "live production
+code" in this report and in commit messages. The user stopped the session to correct this: *"The
+code does not use G or PsiObjectiveBundleImplicit. We use newer bundles that do not define G or H
+or K... I worked very hard to remove all reference to H and G and those old bundles."* This
+session's **own earlier audit** (§3a(i) below) had already found exactly this — "no dense G/H...
+operator-only hardening 2026-07-25 through 2026-07-30" — and should have changed which interface
+every gate used from the start; it didn't, which is the actual failure here, not a lack of
+information.
+
+**Fix, commit `408a4b1`**: every helper and every test file rebuilt to read
+`build_compressed_factual(θ_full, ctx)` (`compressed_moments.jl`) directly — the real
+winner-compressed representation production's operator path uses — instead of reconstructing
+values by inverting dense-`G` post-processing. Every numerically-asserted finding was re-run end to
+end and reproduced **identically or better** on the corrected path (exponent test 4.4e-16 vs. the
+original 6.7e-16; recovery gate 2.2e-16 exact, unchanged; homogeneous-moment identity 1.78e-15,
+unchanged; France ratio-moment rescaling 2.7e-12, unchanged). The underlying mathematics was never
+wrong — the verification code path was. All narrative below is left as originally written except
+where explicitly marked corrected, since the mathematical content and conclusions did not change;
+only the phrase "live production code" throughout should now be read as referring to the
+*corrected* gates.
+
 ## 0. Scope of this session, and why
 
 The full task specification is 26 sections covering: theory proof, a full call-graph audit, an
@@ -306,7 +331,14 @@ EQUIVALENCE =
     all_families:not_run
 
 OPERATOR_ONLY_GATE =
-    not_run
+    pass_informal (the repo's own static_bundle_guard_2026-07-30.sh, pulled read-only from the
+        concurrent Brazil-Korea branch where it lives -- not merged onto this branch's base --
+        was run by hand against this branch's full_aod_diag/d4_exact/ and reports 0 violations:
+        no hardcoded :dense_reference default, no direct PsiObjectiveBundleImplicit construction,
+        no select_G_from_H use, no static bundle_type=OperatorPsiBundle claim, in any non-test
+        file this session added. Not "formal" because the guard script itself isn't part of this
+        branch's own history/CI -- but it is the actual repo-authored check, run for real,
+        confirming the post-correction (commit 408a4b1) state.)
 
 PRODUCTION_DEFAULT =
     full_gamma_normalized_reference
