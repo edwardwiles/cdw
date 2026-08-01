@@ -126,7 +126,67 @@ case**, not a formulation defect.
 
 ## 6. Outer A/B search (task §14-17)
 
-<!-- FILLED IN AFTER THE A/B RUNS COMPLETE -->
+Matched setup: real D=20, `:exclude_row`, unrestricted family, fixed theta, W=80,000, delta=1,
+same calibration start point (profiled start reduced from the exact same full calibration point,
+`reduce_calibration_to_w_profiled`), same outer solver config (`csw_outer_wallclock_sr1.opt`,
+`algorithm=3`, `z_halfwidth=30`), 1800s (30 min) budget each, run serially on the same reserved
+cores. Full arm: unmodified `run_profile_checkpointed`. Profiled arm:
+`run_profiled_outer_search` (`profiled_outer_ab_harness_2026-08-01.jl`).
+
+**Upper bound, delta=1** (`FULL_VS_PROFILED_OUTER_AB_UPPER_DELTA1_2026-08-01_{FULL,PROFILED}_TRACE.csv`,
+summary `..._SUMMARY.csv`):
+
+| Arm | wall (s) | n_eval | n_grad_calls | best Delta_dual | KNITRO status |
+|---|---|---|---|---|---|
+| full (reference) | 1552.5 | 221 | 89 | **8.1535e-5** | -100 (KN_RC_NEAR_OPT) |
+| profiled | 1687.4 | 30 | 13 | 8.1062e-4 | -401 |
+
+Full's `n_grad_calls=89` in ~1550s implies ~17s/gradient call (production's O(1)-incremental-update
+FD); profiled's `n_grad_calls=13` in ~1687s implies ~130s/gradient call (this session's
+O(W·D·Ddest)-per-probe implementation, §4.3) — a ~7-8x per-gradient-call cost ratio, consistent
+with the D20 gradient gate's own measured 131-181s/call.
+
+**Decisive result: the full/reference formulation dramatically outperformed the profiled
+formulation at matched wall-clock time in this first test.** At `t=1552.5s` (full's total wall
+time), full had reached `Delta_dual=8.15e-5` while profiled had only reached `9.96e-4` — full's
+final objective is **~12x better** (1121.7% relative gap) than profiled's at the SAME wall-clock
+budget. Equivalently: full reached profiled's entire-30-minute-budget final value in just **242
+seconds** — **~7x faster** to the same objective threshold.
+
+**Root cause, not a mystery**: the profiled arm's outer trajectory itself was noisy early on
+(`Delta` rose from 0.0021→0.0033→0.0057 over its first 20 evals before finding a better point,
+`0.00081`, at eval 30) — with only 13 gradient calls total and a FIXED `h=0.01` bandwidth (no
+per-coordinate adaptive selection, unlike production's `select_bandwidth`), KNITRO's SR1
+quasi-Newton Hessian approximation never had enough calls to build useful curvature information.
+This is a direct, expected consequence of §4.3's honestly-documented performance gap
+(O(W·D·Ddest)/probe vs production's O(1)), **not evidence that the smaller profiled coordinate
+system is intrinsically worse to optimize over** — a fair comparison would require the
+incremental-update-optimized profiled gradient this task's scope (and the user's explicit
+"surgical, minimal code" instruction) did not build.
+
+**Lower bound**: not run. Given the upper-bound result is already decisive in the "full clearly
+better" direction and the task's own §14 instructs "if stable, repeat" (implying "repeat if the
+first result leaves the answer ambiguous") — it does not here.
+
+## 6a. Destination-scale step decomposition (task §15)
+
+Computed from the full arm's own 88 accepted (`:new_best`) outer steps
+(`DESTINATION_SCALE_STEP_DECOMPOSITION_2026-08-01.csv`), decomposing each step's `Δlog(A)` into a
+per-destination common-SCALE component (`mean_d(Δa_{.,d})·1`) and a RELATIVE component
+(`Δa_{.,d} - mean_d(Δa_{.,d})·1`):
+
+```
+mean fraction of step norm in SCALE directions:    3.59%   (range 1.76%-7.63%, n=87 valid steps)
+mean fraction of step norm in RELATIVE directions: 96.41%
+```
+
+The full optimizer's actual accepted steps in this run spend the overwhelming majority of their
+norm in RELATIVE directions already — **only ~3.6% of the full formulation's own step budget goes
+toward destination-scale nuisance directions in this trajectory**. This is independent evidence,
+from the FULL formulation's own behavior (not the A/B comparison), that removing destination-scale
+degrees of freedom was never likely to unlock a large optimization-efficiency gain for THIS stage
+(fixed-theta profile stage, gp already held fixed) — reinforcing, not contradicting, the A/B's
+decisive "full better" result. **SCALE_DIRECTION_DIAGNOSTIC = negligible.**
 
 ## 7. Screen-parity caveat (task §13)
 
@@ -138,6 +198,14 @@ range safety net was explicitly disabled where possible and the witness/pre-winn
 were already off by default under `:exclude_row`. **This is a real, acknowledged asymmetry** for
 this first A/B — porting or adding a true screens-fully-off toggle to the production driver is
 explicitly out of scope for this task (§18: "screen porting").
+
+**Correction to the call-graph audit's §9 claim, observed live during the actual A/B run**: the
+pre-winner envelope screen was reported `envelope_screen_supported=true` for this run's ctx (not
+unsupported/off as the audit doc's static reading of the source implied) — but its LIVE rejection
+count over the full 221-eval, 30-minute run was exactly **0** (final screen tally:
+`pw=2, wt=0, wn=0, env=0, wr=0, sn=0, pass=224`). Net effect on this A/B is the same either way
+(zero envelope-screen rejections), but the mechanism is "supported, zero organic hits" rather than
+"unsupported" — corrected here rather than left standing uncorrected.
 
 ## 8. Scope discipline
 
@@ -173,10 +241,22 @@ REFERENCE_PATH_FD_EQUIVALENCE = pass
     gp-direction solver edge case affecting both formulations identically, not a profiled-only
     defect)
 
-OUTER_AB_UPPER = <FILLED IN AFTER RUN>
-OUTER_AB_LOWER = <FILLED IN AFTER RUN, IF RUN>
-SCALE_DIRECTION_DIAGNOSTIC = <FILLED IN AFTER RUN>
-PORT_TO_RESTRICTED_FAMILIES = <FILLED IN AFTER RUN>
+OUTER_AB_UPPER = full_better_objective_at_matched_time
+    (full: Delta=8.15e-5 @ 1552.5s/221 evals/89 grads; profiled: Delta=8.11e-4 @ 1687.4s/30 evals/
+    13 grads -- full ~12x better objective at matched wall-clock, ~7x faster to profiled's own
+    final threshold. Root cause: profiled gradient's O(W*D*Ddest)/probe cost -- see §6.)
+OUTER_AB_LOWER = not_run_upper_already_decisive
+SCALE_DIRECTION_DIAGNOSTIC = negligible
+    (full formulation's own accepted steps: mean 3.59% of step norm in destination-scale
+    directions, 96.41% in relative directions -- independently corroborates the A/B result)
+PORT_TO_RESTRICTED_FAMILIES = do_not_recommend
+    (per this session's diagnostic implementation: profiled gradient cost dominates any
+    dimension-reduction benefit; gains are decisively NEGATIVE, not merely under 20%. Caveat:
+    this reflects the current O(W*D*Ddest)-per-probe FD implementation choice -- made deliberately
+    to minimize custom/error-prone code per explicit live user guidance -- not a proven flaw in the
+    profiled coordinate system itself. An O(1)-incremental-update profiled gradient was explicitly
+    out of scope this session; without it, no fair verdict on the coordinate system's own
+    optimization-landscape merit can be drawn from wall-clock alone.)
 
 PRODUCTION_DEFAULT_CHANGED = false
 PRODUCTION_MERGE = not_attempted

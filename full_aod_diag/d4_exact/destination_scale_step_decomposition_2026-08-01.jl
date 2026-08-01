@@ -10,11 +10,12 @@
 # D x Ddest log-A matrix, gravity-pivot-EXPANDED) -- no new decode logic.
 # ============================================================================
 include(joinpath(@__DIR__, "c10_d20_production_driver.jl"))
-using CSV, DataFrames, Printf, Glob
+using CSV, DataFrames, Printf
 
 function load_iteration_checkpoints(ckpt_dir::AbstractString, label::AbstractString)
-    files = sort(glob("$(label)_iteration_neval*.jls", ckpt_dir))
-    isempty(files) && (files = sort(glob("$(label)_*_neval*.jls", ckpt_dir)))  # fallback: any reason
+    all_files = readdir(ckpt_dir; join = true)
+    files = filter(f -> occursin("$(label)_iteration_neval", f) && endswith(f, ".jls"), all_files)
+    isempty(files) && (files = filter(f -> occursin(r"_neval\d+\.jls$", f) && occursin(label, f), all_files))  # fallback: any reason
     ckpts = [load_checkpoint(f) for f in files]
     sort!(ckpts, by = c -> c.n_eval)
     return ckpts
