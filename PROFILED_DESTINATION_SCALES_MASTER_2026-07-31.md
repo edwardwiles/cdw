@@ -240,34 +240,56 @@ open "recovery construction unexecuted" gap.
   (non-calibration) points too. This closes the loop on making the reduced coordinate system
   genuinely usable by production code, not just testable in isolation.
 
-Together, §6/§7/§8/§1.3/§10 now cover every piece needed to construct the reduced formulation's
-moment system for a given point — what remains for a *complete* reduced `moments!`-equivalent function is
-mostly assembly (packing these per-destination pieces into one `G`-like matrix with the right
-column count) rather than new derivation.
+- **§9 FG forward/transpose** (`homogeneous_contraction_2026-07-31.jl`) — implemented after
+  correcting a second mischaracterization mid-session: an earlier response described the remaining
+  work as "assembling a reduced `moments!`-equivalent function," which is still legacy-bundle
+  thinking (the user correctly pushed back). The actual production kernels
+  (`economic_forward!`/`economic_transpose!`) call `compressed_dual_contraction!`/
+  `compressed_transpose_contraction!` (`compressed_moments.jl`), which encode the OLD absolute
+  target as one fixed scalar `cf.denom[slot]` multiplied by a global weighted count, pulled outside
+  the per-draw loop. The homogeneous moment requires moving that term inside the loop and
+  multiplying by the model's own per-draw `cf.wval[w,slot]` (`== M_d(w)` exactly, already a
+  `CompressedFactual` field) instead — a small, targeted, well-understood change to two existing
+  kernels, not a new `moments!`-shaped function. D=4 gate (`test_homogeneous_contraction_2026-07-31.jl`):
+  both new kernels cross-checked against direct `G_new*β`/`G_new'*weights` computation (using the
+  independently-verified `homogeneous_factual_moment`/`homogeneous_france_moment` functions to build
+  the reference), diff `~1e-15`–`2e-13`; forward/transpose independently confirmed exact mutual
+  adjoints (`~4.7e-14`), a check with no dependency on the hand-rolled reference at all.
+
+Together, §6/§7/§8/§1.3/§9/§10 now cover the coordinate layer, the per-cell homogeneous moment
+definitions, AND their integration into the real compressed-contraction kernels the production
+operator path actually calls. What remains is wiring these kernels behind
+`economic_forward!`/`economic_transpose!` themselves (gated behind an explicit parameterization
+choice, not default-on), the Hessian side (§11–§12, likely largely unchanged per the audit),
+the outer gradient (§13), screens (§14), and an actual KNITRO inner-solve comparison (§2.3).
 
 ## 5. Recommended next steps (in dependency order)
 
-1. ~~Decide on consolidation vs. per-site duplication~~ — resolved: the relative-A layer above
-   avoids the question entirely by operating in z-space, independent of the Topic-2 formula. The
-   consolidation question still applies to *other* sections (screens, `OperatorPsiBundle`
-   construction, `outer_coordinate_layout.jl` generalization) that must read the FULL reconstructed
-   `AodPow`, not just the anchor bookkeeping — still open for those.
-2. ~~Implement §16's exact full-A recovery scalar~~ — done, D=4 gate passing, see §4 above.
-3. Resolve the `gravity_sample_mask` reuse-vs-reimplement question once the concurrent Brazil-Korea
+Done this session (all D=4-gated on the corrected `build_compressed_factual` path): consolidation
+question resolved for the coordinate layer (§6 operates purely in z-space, independent of the
+Topic-2 duplicated formula); §16 exact recovery; §6/§7 composed anchor+gravity-pivot coordinate
+layer; §10 KNITRO-facing outer vector; §8 homogeneous moment + §1.3 France ratio moment; §9 FG
+forward/transpose wired against the real `compressed_dual_contraction!`/
+`compressed_transpose_contraction!` kernels.
+
+Remaining:
+
+1. Wire `homogeneous_dual_contraction`/`homogeneous_transpose_contraction!` *behind*
+   `economic_forward!`/`economic_transpose!` themselves, gated by an explicit
+   `economic_parameterization` choice (task §5) — currently they're correct, tested, callable
+   functions, but a real driver still calls the original (unchanged) kernels by default.
+2. Resolve the `gravity_sample_mask` reuse-vs-reimplement question once the concurrent Brazil-Korea
    task's branch is stable (own-cell + Brazil→Korea eligibility masking is needed by both efforts).
-4. Execute theory §2.3 (comparison theorem) — requires an actual KNITRO inner solve (not just
-   direct `moments!` evaluation, which is all sections 6/7/16's gates needed), a materially larger
-   lift than anything done so far this session.
-5. Generalize `OuterCoordinateLayout`/`outer_dim`/`decode_outer_unified`/`reduce_to_w_unified`/
-   `layout_fingerprint` (Topic 1) and `free_idx` construction in all 4 context builders (Topic 10)
-   to actually wire the relative-A layer into a real KNITRO-facing outer vector — the pieces built
-   this session are correct and tested in isolation but not yet wired into a live driver.
-6. Only after the above: proceed to §8 (moment state) and §9 (FG forward/transpose, mostly
-   `unchanged` per the audit — see §3a(i)), then re-scope §§11–12 (`H_EE`, cross-Hessian) in light
-   of the audit's finding that those kernels are largely `unchanged` already, then §13 (outer
-   gradient — the one genuinely new derivative-bookkeeping site, `composite_gradient_at_Cplus`) and
-   §14 (screens, contained per the audit — they inherit the Topic-2 dependency but don't need
+3. Re-scope §§11–12 (`H_EE`, cross-Hessian) against the audit's finding that those kernels are
+   largely `unchanged` already (they consume `cf`/`WinnerPairHessCtx` generically) — needs a direct
+   check now that §9's kernels exist, not just the audit's structural argument.
+4. §13 outer gradient (`composite_gradient_at_Cplus` — the one genuinely new derivative-bookkeeping
+   site) and §14 screens (contained per the audit, inherit the Topic-2 dependency but need no
    anchor-aware logic of their own).
+5. Execute theory §2.3 (comparison theorem) — requires an actual KNITRO inner solve, not just
+   direct evaluation (which is all every gate this session needed), a materially larger lift than
+   anything done so far, and depends on (1)-(4) existing first to have a real reduced inner problem
+   to solve.
 
 ## 6. Final verdict block
 
@@ -310,8 +332,19 @@ COORDINATE_LAYER (task section 6) =
         usable by production-shaped evaluation code, not just tested in isolation)
 
 FG =
-    forward:not_implemented
-    transpose:not_implemented
+    forward:pass_D4 (homogeneous_dual_contraction, real compressed kernel algebra -- see
+        homogeneous_contraction_2026-07-31.jl; cross-checked against direct G_new*beta at
+        ~1e-15-3e-15, three random beta draws)
+    transpose:pass_D4 (homogeneous_transpose_contraction!, same file; cross-checked against direct
+        G_new'*weights at ~4e-14-2e-13; forward/transpose independently confirmed exact mutual
+        adjoints, diff ~4.7e-14)
+    NOTE: implemented as new parallel functions alongside the UNCHANGED real production kernels
+        (compressed_dual_contraction!/compressed_transpose_contraction!, compressed_moments.jl)
+        that economic_forward!/economic_transpose! actually call -- not a new moments!-shaped
+        function (a mischaracterization corrected mid-session, see the user exchange this commit
+        follows). Not yet wired behind economic_forward!/economic_transpose! themselves (that
+        wiring would be the next step, gated behind an explicit parameterization choice per task
+        §5, not a default-on change).
 
 HESSIAN =
     H_EE:not_implemented (audit finding: likely unchanged/no-op once moment state is reduced --
@@ -338,11 +371,12 @@ FULL_RECOVERY =
 
 EQUIVALENCE =
     D4:partial (coordinate-layer, gravity-pivot-composition, recovery, homogeneous-moment,
-        France-ratio-moment, and KNITRO-facing-outer-vector sub-gates ALL pass at machine
-        precision on the corrected build_compressed_factual path, 8 gate files, 0 failures on
-        re-run; full inner-solve equivalence, theory section 2.3, not yet attempted -- requires
-        assembling these pieces into one drop-in reduced moments!-equivalent function AND a real
-        KNITRO inner solve, the one remaining piece needed to call D4 fully pass)
+        France-ratio-moment, KNITRO-facing-outer-vector, AND FG forward/transpose sub-gates ALL
+        pass at machine precision on the corrected build_compressed_factual path, 9 gate files, 0
+        failures on re-run; full inner-solve equivalence, theory section 2.3, not yet attempted --
+        requires wiring the new FG kernels behind economic_forward!/economic_transpose!, the
+        Hessian side, the outer gradient, AND a real KNITRO inner solve, the remaining pieces
+        needed to call D4 fully pass)
     D20_W100k:not_run
     D20_W500k:not_run
     all_families:not_run
@@ -361,6 +395,6 @@ PRODUCTION_DEFAULT =
     full_gamma_normalized_reference
 
 BRANCH_STATUS =
-    incomplete_theory_audit_coordinate_layer_moment_pieces_and_outer_vector_done_and_corrected_
-    assembly_KNITRO_comparison_H_EE_gradient_screens_D20_not_started
+    incomplete_theory_audit_coordinate_layer_moment_pieces_outer_vector_and_FG_kernels_done_
+    and_corrected_twice_mid_session_FG_wiring_H_EE_gradient_screens_KNITRO_comparison_D20_not_started
 ```
