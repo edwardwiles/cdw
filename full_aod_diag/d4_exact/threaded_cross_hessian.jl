@@ -204,15 +204,22 @@ end
 # ============================================================================
 
 """
-    winner_pair_cross_hessian_zc_block_threaded!(HEZ, wctx, ws, S, Z, M; workers) -> HEZ
+    winner_pair_cross_hessian_zc_block_threaded!(HEZ, wctx, ws, S, Z, M; workers, use_profiled_correction=false) -> HEZ
 
 Threaded drop-in replacement for `winner_pair_cross_hessian_zc_block!`. Requires
 `winner_pair_cross_hessian_zc_prep!(ws, wctx, S)` to have been called already this callback (same
 precondition as the serial version). Bit-identical output (same accumulation order per row, just
 executed by a different worker for disjoint row ranges).
+
+`use_profiled_correction` mirrors the serial function's own keyword exactly (added profiled
+economic block port, 2026-08-01): `false` (default) is byte-for-byte unchanged; `true` replaces the
+destination-independent `NuZ[x]` correction with `TZ[target_slot[j],x]` (same single `BLAS.gemm!`
+this file's serial twin uses, computed once here too -- not chunked, cheap relative to the threaded
+scatter above it). Same France/cf-row scope boundary (kept on `NuZ`) as the serial version.
 """
 function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerZCCrossScratch, S::AbstractVector{Float64}, Z::AbstractMatrix{Float64}, M::Real; workers::Int)
+        ws::WinnerZCCrossScratch, S::AbstractVector{Float64}, Z::AbstractMatrix{Float64}, M::Real; workers::Int,
+        use_profiled_correction::Bool = false)
     workers <= nthreads() || error("winner_pair_cross_hessian_zc_block_threaded!: workers=$workers exceeds Threads.nthreads()=$(nthreads())")
     workers <= length(ws.tasks_ez) || error("winner_pair_cross_hessian_zc_block_threaded!: workers=$workers exceeds scratch's tasks_ez capacity=$(length(ws.tasks_ez)) -- rebuild scratch")
     W = wctx.W; Ddest = wctx.Ddest
@@ -221,8 +228,10 @@ function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float6
     size(HEZ) == (ncolI + 1, nx) || error("winner_pair_cross_hessian_zc_block_threaded!: size(HEZ)=$(size(HEZ)) != ($(ncolI + 1), $nx)")
     length(S) == W || error("winner_pair_cross_hessian_zc_block_threaded!: length(S)=$(length(S)) != wctx.W=$W")
     size(Z, 1) == W || error("winner_pair_cross_hessian_zc_block_threaded!: size(Z,1)=$(size(Z, 1)) != wctx.W=$W")
+    use_profiled_correction && ws.Ddest != Ddest &&
+        error("winner_pair_cross_hessian_zc_block_threaded!: use_profiled_correction=true requires ws.Ddest=$(ws.Ddest) == wctx.Ddest=$Ddest -- rebuild scratch via ensure_winner_zc_cross_scratch!(...; Ddest)")
 
-    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec
+    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec; target_slot = wctx.target_slot
     has_cf = wctx.has_cf; jcf = ncolI
     Snu = ws.Snu
     invM = 1.0 / M
@@ -263,10 +272,23 @@ function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float6
     NuZ = @view ws.NuZ_buf[1:nx]
     BLAS.gemv!('T', 1.0, Z, Snu, 0.0, NuZ)
 
+    TZ = nothing
+    if use_profiled_correction
+        TZ = @view ws.TZ_buf[:, 1:nx]
+        BLAS.gemm!('T', 'N', 1.0, ws.SnuWval, Z, 0.0, TZ)
+    end
+
     @inbounds for j in 1:nbilateral
         pij = pi_vec[j]
-        for x in 1:nx
-            HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+        if use_profiled_correction
+            d = target_slot[j]
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * TZ[d, x])
+            end
+        else
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+            end
         end
     end
 
@@ -274,6 +296,7 @@ function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float6
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
         pij = pi_vec[jcf]
+        # France/cf row deliberately excluded from the profiled path -- always NuZ, see docstring.
         @inbounds for x in 1:nx
             row_cf[x] -= invM * pij * NuZ[x]
         end
