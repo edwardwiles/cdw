@@ -62,12 +62,18 @@ reading `cm_frechet_hessian.jl`, not assuming) that H_EF's level restriction sha
   gained a `use_profiled_correction::Bool = false` keyword. `false` (the default, every existing
   production caller) is **byte-for-byte unchanged** — confirmed to `max|Δ| = 0.0` exactly in the
   H_EC gate, and to machine precision (~1e-10 to ~1e-15) in the H_EZ/H_EF gates.
-- The France/cf row is **deliberately excluded** from the profiled path in all three functions
-  (kept on the old destination-independent correction) — the true France destination slot needs
-  `ctx.bi`, unavailable to `build_winner_pair_ctx(cf::CompressedFactual)`'s current signature. This
-  is documented as an explicit scope boundary in every amended function's docstring, not a silent
-  gap: requesting the profiled path with `has_cf=true` still produces a *correct* (if not yet
-  profiled) France row.
+- The France/cf row's profiled correction is now also implemented (commit `1afe1be`, follow-up to
+  the original three amendments): `build_winner_pair_ctx` gained an optional `bi_slot::Int=0`
+  keyword (`dest_slot(ctx, ctx.bi)`) — when supplied, every amended function applies the identical
+  profiled correction to the France row that every other row already gets; when omitted (default,
+  every pre-existing caller), the France row falls back to the old destination-independent
+  correction exactly as before, so nothing existing changes. Validated to ~1e-12–1e-16 against
+  independent brute-force references for H_EC/H_EZ/H_EF, and bit-identical threaded-vs-serial for
+  H_EZ's threaded twin (`test_profiled_france_row_d4_2026-08-01.jl`,
+  `test_profiled_hez_threaded_d4_2026-08-01.jl` re-run with `bi_slot` supplied). Along the way, a
+  genuine (if previously harmless) out-of-bounds `@inbounds` read was found and fixed in H_EC's and
+  H_EF's generic per-column loops (they iterate the cf column too, and were reading
+  `target_slot[jcf]`'s sentinel `0` as an array index before this fix).
 - The "keep" (winner) term in every block is **completely untouched** — only the target-correction
   term was ever edited, per the mission's own instruction.
 
