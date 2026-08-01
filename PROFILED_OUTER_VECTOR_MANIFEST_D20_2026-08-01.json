@@ -1,0 +1,29 @@
+{
+  "context": "real D=20, destination_sample=:exclude_row, unrestricted family, fixed theta, W=80000",
+  "source": "live re-derivation via build_anchor_spec_from_ctx/build_profiled_economic_moment_layout/build_pivot_elimination_on_retained, confirmed 2026-08-01 in test_unrestricted_knitro_d20_omitrow_smallw_2026-08-01.jl rerun (this session)",
+  "D": 20,
+  "Ddest": 19,
+  "active_A_cells": 380,
+  "anchor_cells_removed": 19,
+  "retained_relative_A_before_gravity_pivot": 361,
+  "free_A_after_gravity_pivot": 360,
+  "D20_INNER_LAYOUT": {
+    "factual_share_moments": 361,
+    "france_ratio_moments": 1,
+    "total_economic_moments": 362,
+    "cc_zeta_intercept_variables": 1,
+    "total_inner_dual_dimension": 363
+  },
+  "PROFILED_OUTER_VECTOR": {
+    "gp": 1,
+    "free_A": 360,
+    "total": 361
+  },
+  "anchor_rules_confirmed_live": {
+    "korea_anchor": "Brazil (global_overrides={korea_idx: brazil_idx}, korea_idx=14, brazil_idx=3)",
+    "france_anchor": "own-cell (France->France, default rule)",
+    "other_destinations": "own-cell default (anchor_origin[d]=global_destination(ctx,d))",
+    "row_destination": "absent (destination_sample=:exclude_row omits ROW from active destinations entirely)"
+  },
+  "notes": "361 retained relative-A coordinates before the pivot are all bilateral (o,d) cells with o != anchor(d); the ONE additional gravity-pivot deletion removes exactly one of these 361, leaving 360 free. The 361 factual-share economic moments (D20_INNER_LAYOUT) and the 361 retained relative-A coordinates (PROFILED_OUTER_VECTOR before pivot) are numerically equal (both are D*Ddest-Ddest=380-19=361) but live in DIFFERENT index spaces (moment j=slot+(o-1)*Ddest vs A-coordinate i=o+(d-1)*D) -- see profiled_economic_moment_layout_2026-08-01.jl's own header warning; they must never be cross-indexed directly."
+}
