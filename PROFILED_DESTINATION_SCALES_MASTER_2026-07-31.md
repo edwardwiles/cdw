@@ -230,8 +230,18 @@ open "recovery construction unexecuted" gap.
   task brief originally guessed. D=4 gate: cross-checked against the real production `G` column;
   exact proportional rescaling under a France-column shift confirmed to 4e-12.
 
-Together, §6/§7/§8/§1.3 now cover every piece needed to construct the reduced formulation's moment
-system for a given point — what remains for a *complete* reduced `moments!`-equivalent function is
+- **§6/§10 (Topic 1/10) KNITRO-facing profiled outer vector**
+  (`outer_coordinate_layout_profiled_2026-07-31.jl`): `decode_outer_profiled`/`reduce_to_w_profiled`,
+  layered on top of the unchanged `outer_coordinate_layout.jl`, producing the exact `xf` shape
+  `decode_outer_unified`/screened-evaluation entry points already expect from a genuinely shorter
+  outer vector. D=4 gate: profiled outer vector is exactly `Ddest=4` shorter than full (`12` vs
+  `16`); round trip from genuine calibration reproduces `Aod_theta` to `7e-15`; the resulting `xf`
+  feeds `build_compressed_factual` cleanly; round trip and gravity-feasibility hold at random
+  (non-calibration) points too. This closes the loop on making the reduced coordinate system
+  genuinely usable by production code, not just testable in isolation.
+
+Together, §6/§7/§8/§1.3/§10 now cover every piece needed to construct the reduced formulation's
+moment system for a given point — what remains for a *complete* reduced `moments!`-equivalent function is
 mostly assembly (packing these per-destination pieces into one `G`-like matrix with the right
 column count) rather than new derivation.
 
@@ -290,10 +300,14 @@ DIMENSIONS =
 
 COORDINATE_LAYER (task section 6) =
     relative_A_encode_decode:pass_D4 (round-trip exact 1e-16; calibration round-trip exact 0.0;
-        bit-exact end-to-end through live moments!)
+        bit-exact end-to-end through build_compressed_factual, the operator-representative path)
     gravity_pivot_composition (task section 7):pass_D4 (dimension audit exact; pivot never an
-        anchor cell; gravity residual ~1e-18 at 5 random points; not yet wired into a live
-        KNITRO-facing outer vector -- OuterCoordinateLayout/free_idx generalization still open)
+        anchor cell; gravity residual ~1e-18 at 5 random points)
+    KNITRO_facing_outer_vector (task section 10, Topic 1/10):pass_D4 (decode_outer_profiled
+        produces the exact xf shape decode_outer_unified/screened-evaluation code already expects,
+        from a vector exactly Ddest shorter; round trip 7e-15 at calibration, exact at 5 random
+        points; xf feeds build_compressed_factual cleanly -- the coordinate layer is now genuinely
+        usable by production-shaped evaluation code, not just tested in isolation)
 
 FG =
     forward:not_implemented
@@ -323,9 +337,12 @@ FULL_RECOVERY =
     objective:not_run (requires an actual inner solve, not just moments! evaluation)
 
 EQUIVALENCE =
-    D4:partial (coordinate-layer, gravity-pivot-composition, AND recovery sub-gates all pass at
-        machine precision; full inner-solve equivalence, theory section 2.3, not yet attempted --
-        this is the one remaining piece needed to call D4 fully pass)
+    D4:partial (coordinate-layer, gravity-pivot-composition, recovery, homogeneous-moment,
+        France-ratio-moment, and KNITRO-facing-outer-vector sub-gates ALL pass at machine
+        precision on the corrected build_compressed_factual path, 8 gate files, 0 failures on
+        re-run; full inner-solve equivalence, theory section 2.3, not yet attempted -- requires
+        assembling these pieces into one drop-in reduced moments!-equivalent function AND a real
+        KNITRO inner solve, the one remaining piece needed to call D4 fully pass)
     D20_W100k:not_run
     D20_W500k:not_run
     all_families:not_run
@@ -344,5 +361,6 @@ PRODUCTION_DEFAULT =
     full_gamma_normalized_reference
 
 BRANCH_STATUS =
-    incomplete_theory_audit_coordinate_layer_and_recovery_done_moment_system_and_beyond_not_started
+    incomplete_theory_audit_coordinate_layer_moment_pieces_and_outer_vector_done_and_corrected_
+    assembly_KNITRO_comparison_H_EE_gradient_screens_D20_not_started
 ```
