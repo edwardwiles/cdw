@@ -34,6 +34,7 @@ isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_ca
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))   # D=20 profiling task (2026-07-28): opt-in live-pcx stash this function writes below, default off
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
+isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 
 const CM_CHECKPOINT_SCHEMA = 9
 # Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
@@ -686,11 +687,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         meanzc_basis::Symbol = :direct,
         meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
         # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
-        # the same name. `false`/`nothing` defaults reproduce every pre-existing caller's behavior
-        # bit-exactly -- opt-in, not a change to this driver's historical default.
-        exclude_diagonal_gravity::Bool = false,
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
-        σHat::Union{Nothing,Float64} = nothing,
+        # the same name. DEFAULT FLIPPED 2026-08-01 (user-directed) -- see
+        # c10_d20_production_driver_unified.jl's own identical comment for the full rationale and
+        # the audit that scoped this change to only the 3 real production driver functions.
+        exclude_diagonal_gravity::Bool = true,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
+        σHat::Union{Nothing,Float64} = 3.0,
         destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): :exclude_row (PRODUCTION DEFAULT -- true D_origin/D_dest dimension shrink,
         # ROW dropped as a destination only; validated real D=20/W=80000 both cm_gradient_backend

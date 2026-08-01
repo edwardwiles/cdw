@@ -18,6 +18,7 @@
 # ============================================================================
 
 isdefined(Main, :run_polish_checkpointed) || error("c10_d20_production_driver_unified.jl requires c10_d20_production_driver.jl to already be included.")
+isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 isdefined(Main, :make_layout) || error("c10_d20_production_driver_unified.jl requires outer_coordinate_layout.jl to already be included.")
 isdefined(Main, :make_flexible_theta) || error("c10_d20_production_driver_unified.jl requires flexible_theta.jl (freeze_theta_ctx) to already be included.")
 isdefined(Main, :theta_fixed_dual_delta_pivot_A) || error("c10_d20_production_driver_unified.jl requires flexible_theta_aspace_production.jl to already be included.")
@@ -146,11 +147,25 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         skip_cold_retry::Bool = true,
         use_neg_cache::Bool = false, neg_cache_code_version::String = "unified_v1",
         # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
-        # the same name. `false`/`nothing` defaults reproduce every pre-existing caller's behavior
-        # bit-exactly -- opt-in, not a change to this driver's historical default.
-        exclude_diagonal_gravity::Bool = false,
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
-        σHat::Union{Nothing,Float64} = nothing,
+        # the same name.
+        # DEFAULT FLIPPED 2026-08-01 (user-directed): this is a REAL production entry point --
+        # every real campaign run goes through this function (directly or via
+        # campaign_unrestricted_runner_sigma3.jl, which already passed these explicitly and is
+        # unaffected). Defaults now match the Brazil-Korea-excluded, sigma=3 release
+        # (exclude-brazil-korea-gravity-release-2026-07-31) rather than the pre-release regime --
+        # a caller that passes nothing now gets theta*=7.4894, not theta*=4.7293. Explicit
+        # overrides still work exactly as before. `gravity_exclude_cells`'s default is DERIVED
+        # (default_gravity_exclude_cells_brazil_korea, country_resolve.jl), not a hardcoded
+        # `[(3,14)]` literal, and assumes `destination_sample` is left at ITS OWN default
+        # (:exclude_row, below) -- if you override destination_sample, override
+        # gravity_exclude_cells explicitly too. The shared low-level context builders
+        # (d20_real_setup/d20_real_setup_design/build_ad_context_real_d20) were deliberately NOT
+        # touched by this flip -- ~200 unrelated diagnostic/benchmark scripts depend on their old
+        # defaults; only the 3 real production driver functions were changed. See
+        # WHAT_ACTUALLY_HAPPENED_2026-08-01.md / this branch's own commit message for the audit.
+        exclude_diagonal_gravity::Bool = true,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
+        σHat::Union{Nothing,Float64} = 3.0,
         destination_sample::Symbol = :exclude_row,
         blas_threads::Union{Nothing,Int} = nothing,   # reconciliation (task §1/Phase 1): same
         # kwarg/semantics as run_polish_checkpointed's -- process-scoped BLAS thread count, set

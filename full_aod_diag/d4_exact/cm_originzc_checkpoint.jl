@@ -22,6 +22,7 @@ isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, 
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26)
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
+isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
 # Bumped 4 -> 5 (origin-specific-ZC integration, 2026-07-23): adds
@@ -489,11 +490,12 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
         nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
         # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
-        # the same name. `false`/`nothing` defaults reproduce every pre-existing caller's behavior
-        # bit-exactly -- opt-in, not a change to this driver's historical default.
-        exclude_diagonal_gravity::Bool = false,
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
-        σHat::Union{Nothing,Float64} = nothing,
+        # the same name. DEFAULT FLIPPED 2026-08-01 (user-directed) -- see
+        # c10_d20_production_driver_unified.jl's own identical comment for the full rationale and
+        # the audit that scoped this change to only the 3 real production driver functions.
+        exclude_diagonal_gravity::Bool = true,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
+        σHat::Union{Nothing,Float64} = 3.0,
         # sigma3 campaign prep (2026-07-30): this driver had NO outer-algorithm-pinning mechanism
         # at all before this (unlike run_cm_upper_checkpointed/run_polish_checkpointed_unified) --
         # opt_file above leaves algorithm=auto, which knitro_outer_algorithm.jl's own 2026-07-25
