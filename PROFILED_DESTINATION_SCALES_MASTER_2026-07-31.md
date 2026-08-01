@@ -138,18 +138,20 @@ depended upon.
 
 ### 3a. Two audit findings that change the implementation plan
 
-**(i) Good news — the Hessian machinery needs no changes, or close to it.** Topics 6–8 (economic
-operator forward/transpose, `H_EE`/winner-pair, and every `H_EC`/`H_EZ`/`H_CZ` economic×restriction
-cross-block) all classify as **unchanged**: they already operate entirely on the compressed
-`CompressedFactual`/`WinnerPairHessCtx` abstraction, agnostic to how many outer A-coordinates are
-free or how they're laid out. This is a direct consequence of this repo's own prior "no dense
-G/H, operator-only" hardening (2026-07-25 through 2026-07-30, confirmed from file headers). **This
-means task §§11–12 (H_EE derivation, economic×restriction cross-Hessian rework) are very likely
-much smaller than the task brief assumes** — the brief's derivations there describe what the
-*moment values feeding into* these kernels look like, not new Hessian math, since the kernels
-themselves don't need to change. This should be re-confirmed once the moment-state builder (§8) is
-actually reduced, but it substantially de-risks what looked like the task's largest single
-implementation section.
+**(i) CORRECTED (see task §11 commit `2194c8a`, later in this session): this finding was WRONG for
+`H_EE`, and the `H_EC`/`H_EZ`/`H_CZ` part is unverified, not confirmed.** This section originally
+claimed Topics 6–8 (economic operator forward/transpose, `H_EE`/winner-pair, and every
+`H_EC`/`H_EZ`/`H_CZ` cross-block) all classify as **unchanged**, reasoning they operate entirely on
+`CompressedFactual`/`WinnerPairHessCtx`, decoupled from A-coordinate layout. That reasoning
+overlooked that `build_winner_pair_ctx` (the `H_EE` constructor) reads `cf.denom[slot]` directly —
+the exact same fixed-target dependency the FG kernels turned out to have (§9, commit `4178527`).
+Once actually implemented and gated, `H_EE` needed genuinely new accumulators (not present in the
+original kernel at all), a materially bigger fix than the one-line FG swap. **The `H_EC`/`H_EZ`/
+`H_CZ` cross-blocks have NOT been re-checked against this corrected understanding** — do not trust
+their "unchanged" classification either without a direct read of their construction, the same way
+`H_EE`'s classification turned out not to hold up. Economic-operator forward/transpose (Topic 6,
+`economic_forward!`/`economic_transpose!` themselves, as opposed to the kernels they call) remains
+accurately classified as thin wrappers — that part of the finding was correct.
 
 **(ii) Bad news — the real complexity is a pre-existing duplication problem, not a new derivation.**
 The "outer A-coordinate → gauge-normalized level A" reconstruction formula
@@ -347,11 +349,19 @@ FG =
         §5, not a default-on change).
 
 HESSIAN =
-    H_EE:not_implemented (audit finding: likely unchanged/no-op once moment state is reduced --
-        see master report section 3a(i); not yet confirmed)
-    H_E_CM:not_implemented (same audit finding applies)
-    H_E_Frechet:not_implemented (same audit finding applies)
-    H_E_ZC:not_implemented (same audit finding applies)
+    H_EE:pass_D4 (CORRECTS the audit's "likely unchanged" claim -- build_winner_pair_ctx DOES
+        read cf.denom[slot] directly via pi_vec, same dependency as FG. Fix is materially bigger
+        than FG's one-line swap: two new O(W*Ddest)+O(W*Ddest^2) accumulators (T1 for the
+        zeta-lambda row, R2/R4 for the lambda-lambda block), QQ itself unchanged. D4 gate
+        (test_homogeneous_hessian_2026-07-31.jl): verified against a finite-difference Hessian of
+        the already-verified homogeneous_dual_contraction's own objective (an independent method,
+        not a second hand-derived formula) -- caught a real bug on first run (missing kappa0[j]
+        scale factor, 30% error), fixed, re-verified to 4.05e-9 vs FD)
+    H_E_CM:not_implemented (audit's "unchanged" claim for cross-Hessian blocks NOT yet re-checked
+        against H_EE's corrected finding -- do not trust the audit's classification here either
+        without a direct check)
+    H_E_Frechet:not_implemented (same caveat)
+    H_E_ZC:not_implemented (same caveat)
 
 OUTER_GRADIENT =
     Cplus:not_implemented
@@ -371,11 +381,12 @@ FULL_RECOVERY =
 
 EQUIVALENCE =
     D4:partial (coordinate-layer, gravity-pivot-composition, recovery, homogeneous-moment,
-        France-ratio-moment, KNITRO-facing-outer-vector, AND FG forward/transpose sub-gates ALL
-        pass at machine precision on the corrected build_compressed_factual path, 9 gate files, 0
-        failures on re-run; full inner-solve equivalence, theory section 2.3, not yet attempted --
-        requires wiring the new FG kernels behind economic_forward!/economic_transpose!, the
-        Hessian side, the outer gradient, AND a real KNITRO inner solve, the remaining pieces
+        France-ratio-moment, KNITRO-facing-outer-vector, FG forward/transpose, AND H_EE sub-gates
+        ALL pass at machine/FD precision on the corrected build_compressed_factual path, 10 gate
+        files, 0 failures on re-run; full inner-solve equivalence, theory section 2.3, not yet
+        attempted -- requires wiring the new FG/H_EE kernels behind the real production callbacks,
+        H_EC/H_EZ/H_CZ (unverified, do not trust the audit's "unchanged" label), the outer
+        gradient, AND a real KNITRO inner solve, the remaining pieces
         needed to call D4 fully pass)
     D20_W100k:not_run
     D20_W500k:not_run
@@ -395,6 +406,7 @@ PRODUCTION_DEFAULT =
     full_gamma_normalized_reference
 
 BRANCH_STATUS =
-    incomplete_theory_audit_coordinate_layer_moment_pieces_outer_vector_and_FG_kernels_done_
-    and_corrected_twice_mid_session_FG_wiring_H_EE_gradient_screens_KNITRO_comparison_D20_not_started
+    incomplete_theory_audit_coordinate_layer_moment_pieces_outer_vector_FG_and_H_EE_kernels_done_
+    and_corrected_three_times_mid_session_wiring_H_EC_H_EZ_H_CZ_gradient_screens_KNITRO_comparison_
+    D20_not_started
 ```
