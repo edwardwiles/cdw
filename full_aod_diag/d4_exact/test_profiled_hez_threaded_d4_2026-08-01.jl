@@ -70,7 +70,9 @@ for (pi_, x) in enumerate(xs)
     E = @view H[:, 2:1+NCORE_ext]
     Z = @view E[:, ncore+1:NCORE_ext]
 
-    wctx = build_winner_pair_ctx(cf)
+    # bi_slot supplied (follow-up to the original gate): also exercises the France/cf row's
+    # profiled-correction path threaded-vs-serial, not just the bilateral rows.
+    wctx = build_winner_pair_ctx(cf; bi_slot = dest_slot(ctx, ctx.bi))
     ws_ref = Ref{Union{Nothing,WinnerZCCrossScratch}}(nothing)
     ws = ensure_winner_zc_cross_scratch!(ws_ref, wctx.W, n_restr, wctx.Ddest)
     winner_pair_cross_hessian_zc_prep!(ws, wctx, S)

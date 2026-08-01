@@ -375,12 +375,19 @@ struct WinnerPairHessCtx
 end
 
 """
-    build_winner_pair_ctx(cf::CompressedFactual) -> WinnerPairHessCtx
+    build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int=0) -> WinnerPairHessCtx
 
 O(W*Ddest) construction (dominated by computing `y`), theta-fixed -- build
 once per outer point/inner solve.
+
+`bi_slot`: the France/gravity-comparison destination's own slot (`dest_slot(ctx, ctx.bi)`),
+OPTIONAL because this function only receives `cf`, not `ctx` -- callers that want the cf/France row
+included in the `use_profiled_correction=true` path (previously an explicit, documented scope
+boundary in every amended cross-block function, see `PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md`
+§2/§6) must pass it. Default `0` preserves the sentinel/excluded behavior exactly (every existing
+caller, and any caller that doesn't have `ctx` in scope, is unaffected).
 """
-function build_winner_pair_ctx(cf::CompressedFactual)
+function build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int = 0)
     D = cf.D; Ddest = cf.D_dest; W = cf.W; ncolI = cf.oci - 1
     has_cf = cf.cf_col > 0
 
@@ -415,17 +422,17 @@ function build_winner_pair_ctx(cf::CompressedFactual)
     # columns this is the trivial inverse of j = slot + (o-1)*Ddest. The France/cf column (when
     # present) has NO single well-defined destination slot from `cf` alone -- its true target slot
     # is the Brazil-Korea comparison destination's own slot (`dest_slot(ctx, ctx.bi)`), which
-    # requires `ctx`, not available in this `cf`-only constructor. Left at the sentinel 0 rather
-    # than guessed; `winner_pair_cross_hessian_cm_block!`'s profiled-correction path deliberately
-    # keeps the France row on the OLD (destination-independent) correction until a genuine bi_slot
-    # is threaded through (see PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §2 -- an explicit,
-    # documented scope cut, not a silent gap).
+    # requires `ctx`, not available in this `cf`-only constructor -- so it comes from the caller's
+    # optional `bi_slot` keyword instead. Sentinel `0` (bi_slot not supplied) keeps the France row on
+    # the OLD (destination-independent) correction in every amended cross-block function's
+    # `use_profiled_correction=true` path (see PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §2/§6) --
+    # an explicit, documented scope cut, not a silent gap.
     target_slot = Vector{Int}(undef, ncolI)
     @inbounds for slot in 1:Ddest, o in 1:D
         j = slot + (o - 1) * Ddest
         target_slot[j] = slot
     end
-    has_cf && (target_slot[cf.cf_col] = 0)
+    has_cf && (target_slot[cf.cf_col] = bi_slot)
 
     return WinnerPairHessCtx(D, Ddest, W, ncolI, has_cf, kappa0, pi_vec, copy(cf.SW), y, cf.winner, cf_raw_scaled,
         cf.wval, target_slot,

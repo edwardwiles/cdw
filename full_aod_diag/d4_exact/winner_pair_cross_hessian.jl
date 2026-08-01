@@ -250,13 +250,14 @@ common Fréchet, CM+ZC) is unaffected by this method's existence.
 `T_diff = MCScum[d,o,l] - MCScum[d,refIndex1,l]`, `d = wctx.target_slot[j]` -- the mission's
 `T^R_{d,k} = Σ_o' W^R_{o'd,k}` (design doc §2), correct for a reduced/anchor-omitting economic
 layout because `MCScum` is built from `wctx.wval` (always defined, including on draws where an
-omitted anchor wins), not from the winner-conditioned `QCScum` buckets. The France/cf row is
-DELIBERATELY EXCLUDED from this switch (kept on `nu_diff` even when `use_profiled_correction=true`)
--- `wctx.target_slot[cf.cf_col]` is a sentinel `0` because the true France destination slot needs
-`ctx.bi`, unavailable to `build_winner_pair_ctx(cf::CompressedFactual)`; see design doc §2 and
-`core_exact_hessian.jl`'s own `target_slot` field docstring. This is a documented scope boundary,
-not a silent gap: requesting the profiled correction with `wctx.has_cf=true` still produces a
-CORRECT (if not-yet-profiled) France row, it does not produce a wrong one.
+omitted anchor wins), not from the winner-conditioned `QCScum` buckets. The France/cf row ALSO
+gets the profiled correction, using `wctx.target_slot[cf.cf_col]` in place of `d`, whenever that
+was set to a real destination slot -- i.e. whenever the caller built `wctx` via
+`build_winner_pair_ctx(cf; bi_slot=dest_slot(ctx, ctx.bi))` (see `core_exact_hessian.jl`'s own
+`bi_slot` keyword docstring). If `wctx` was built without `bi_slot` (the default, sentinel `0`),
+the France row falls back to `nu_diff` regardless of `use_profiled_correction` -- a documented
+scope boundary, not a silent gap: requesting the profiled correction with `wctx.has_cf=true` and no
+`bi_slot` still produces a CORRECT (if not-yet-profiled) France row, it does not produce a wrong one.
 """
 function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, wctx::WinnerPairHessCtx,
         ws::WinnerBinCrossScratch, l::Int, origins::Vector{Int}, refIndex1::Int, M;
@@ -273,7 +274,10 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
         nu_diff = NuCScum[o, l] - NuCScum[refIndex1, l]
         for j in 1:wctx.ncolI
             q_diff = QCScum[j, o, l] - QCScum[j, refIndex1, l]
-            corr = if use_profiled_correction
+            # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded here to
+            # avoid an out-of-bounds @inbounds read; harmless either way since row jcf is always
+            # overwritten by its own dedicated computation below, but not relying on that.
+            corr = if use_profiled_correction && target_slot[j] != 0
                 d = target_slot[j]
                 MCScum[d, o, l] - MCScum[d, refIndex1, l]
             else
@@ -284,11 +288,15 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
         # The "cf"/common-factor column (if present) is NOT winner-conditioned like the regular
         # economic columns above -- QTab[jcf,:,:] was left at zero by the main slot-loop (no
         # sample's `winner[w,slot]` ever equals it, it isn't a bilateral (slot,origin) pair at
-        # all), so overwrite that one row here with its own dedicated accumulation. Always uses
-        # nu_diff (see docstring: France row profiling is an explicit follow-on, not done here).
+        # all), so overwrite that one row here with its own dedicated accumulation. Uses the
+        # profiled correction too when `target_slot[jcf]` is a real bi_slot (build_winner_pair_ctx's
+        # optional `bi_slot` keyword was supplied) -- falls back to nu_diff otherwise (target_slot[jcf]
+        # is the sentinel 0), matching every other amended function's France-row scope discipline.
         if has_cf
             qcf_diff = QCfCScum[o, l] - QCfCScum[refIndex1, l]
-            Hraw_EC[jcf + 1, oi] = (qcf_diff - pi_vec[jcf] * nu_diff) * invM
+            corr_cf = (use_profiled_correction && target_slot[jcf] != 0) ?
+                (MCScum[target_slot[jcf], o, l] - MCScum[target_slot[jcf], refIndex1, l]) : nu_diff
+            Hraw_EC[jcf + 1, oi] = (qcf_diff - pi_vec[jcf] * corr_cf) * invM
         end
     end
     return Hraw_EC
@@ -534,9 +542,18 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
         pij = pi_vec[jcf]
-        # France/cf row deliberately excluded from the profiled path -- always NuZ, see docstring.
-        @inbounds for x in 1:nx
-            row_cf[x] -= invM * pij * NuZ[x]
+        # France/cf row gets the profiled TZ correction too, when target_slot[jcf] is a real
+        # bi_slot (see build_winner_pair_ctx's own bi_slot keyword docstring) -- falls back to NuZ
+        # otherwise (sentinel 0), same discipline as winner_pair_cross_hessian_cm_block!.
+        if use_profiled_correction && target_slot[jcf] != 0
+            d_cf = target_slot[jcf]
+            @inbounds for x in 1:nx
+                row_cf[x] -= invM * pij * TZ[d_cf, x]
+            end
+        else
+            @inbounds for x in 1:nx
+                row_cf[x] -= invM * pij * NuZ[x]
+            end
         end
     end
 
@@ -599,19 +616,24 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
         for o in 1:D
             sumQ += QCScum[j, o, l]
         end
-        corr = use_profiled_correction ? MSumX[target_slot[j], l] : sumNu
+        # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded (see
+        # winner_pair_cross_hessian_cm_block!'s identical guard/comment); row jcf is always
+        # overwritten below regardless.
+        corr = (use_profiled_correction && target_slot[j] != 0) ? MSumX[target_slot[j], l] : sumNu
         colsum[j + 1] = sumQ - pi_vec[j] * corr
     end
 
     # Same cf-column override as winner_pair_cross_hessian_cm_block! -- QCScum[jcf,:,:] was left at
     # zero by the main slot-loop (the cf column is not a (slot,origin) pair), so overwrite that one
-    # entry with its own dedicated accumulation. Always sumNu (France row excluded, see docstring).
+    # entry with its own dedicated accumulation. Uses MSumX[target_slot[jcf],l] too when that's a
+    # real bi_slot, else falls back to sumNu (France row scope discipline, see docstring).
     if has_cf
         sumQCf = 0.0
         @inbounds for o in 1:D
             sumQCf += QCfCScum[o, l]
         end
-        colsum[jcf + 1] = sumQCf - pi_vec[jcf] * sumNu
+        corr_cf = (use_profiled_correction && target_slot[jcf] != 0) ? MSumX[target_slot[jcf], l] : sumNu
+        colsum[jcf + 1] = sumQCf - pi_vec[jcf] * corr_cf
     end
     return colsum
 end
@@ -673,12 +695,16 @@ function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::Wi
     T0_slot = ws.T0_slot
     EsumEcon = ws.EsumEcon
     @inbounds for j in 1:wctx.ncolI
-        corr = use_profiled_correction ? T0_slot[target_slot[j]] : t0
+        # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded (see
+        # winner_pair_cross_hessian_cm_block!'s identical guard/comment); row jcf is always
+        # overwritten below regardless.
+        corr = (use_profiled_correction && target_slot[j] != 0) ? T0_slot[target_slot[j]] : t0
         Esum[j + 1] = EsumEcon[j] - pi_vec[j] * corr
     end
     if has_cf
         jcf = wctx.ncolI
-        Esum[jcf + 1] = ecf - pi_vec[jcf] * t0
+        corr_cf = (use_profiled_correction && target_slot[jcf] != 0) ? T0_slot[target_slot[jcf]] : t0
+        Esum[jcf + 1] = ecf - pi_vec[jcf] * corr_cf
     end
     return Esum
 end

@@ -296,9 +296,17 @@ function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float6
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
         pij = pi_vec[jcf]
-        # France/cf row deliberately excluded from the profiled path -- always NuZ, see docstring.
-        @inbounds for x in 1:nx
-            row_cf[x] -= invM * pij * NuZ[x]
+        # France/cf row gets the profiled TZ correction too, when target_slot[jcf] is a real
+        # bi_slot -- same discipline as the serial version's identical amendment.
+        if use_profiled_correction && target_slot[jcf] != 0
+            d_cf = target_slot[jcf]
+            @inbounds for x in 1:nx
+                row_cf[x] -= invM * pij * TZ[d_cf, x]
+            end
+        else
+            @inbounds for x in 1:nx
+                row_cf[x] -= invM * pij * NuZ[x]
+            end
         end
     end
 
