@@ -265,6 +265,34 @@ operator path actually calls. What remains is wiring these kernels behind
 choice, not default-on), the Hessian side (§11–§12, likely largely unchanged per the audit),
 the outer gradient (§13), screens (§14), and an actual KNITRO inner-solve comparison (§2.3).
 
+## 5a. Concrete, ready-to-execute path to a real KNITRO comparison test (task §2.3)
+
+Found by reading the real unrestricted-family callback wiring
+(`compressed_live.jl:210-299`, `inner_loop_KNITRO_compressed`/`_callbackEvalFG_inner_compressed!`/
+`_callbackEvalH_inner_compressed!`) — this is the exact, concrete shape of what remains, not a
+vague "wire it in":
+
+- FG callback calls `compressed_cc_value_grad!(st.fg_ws, grad_view, ζ, λ, st.cf; Psi!, dPsi!)`,
+  writing the objective value and `g_λ` gradient. The homogeneous analogue would compose
+  `homogeneous_dual_contraction`/`homogeneous_transpose_contraction!` (both already built and
+  D4-gated, §9) into the same value+gradient calling convention.
+- Hessian callback calls `winner_pair_hessian!(evalResult.hess, obj, wctx)` (built from
+  `st.core_ws`). The homogeneous analogue is exactly `homogeneous_winner_pair_hessian!` (already
+  built and D4-gated, §11) with `HomogeneousWinnerPairHessCtx` in place of `WinnerPairHessCtx`.
+- Both would need new additive wrapper functions (`_callbackEvalFG_inner_homogeneous!`,
+  `_callbackEvalH_inner_homogeneous!`, `inner_loop_KNITRO_homogeneous`) mirroring
+  `inner_loop_KNITRO_compressed`'s KNITRO setup (`KN_add_vars`/`KN_add_eval_callback`/option file)
+  exactly, swapping only the two callbacks.
+- This is scoped specifically to the **unrestricted family**, which needs only `H_EE` (no
+  `H_EC`/`H_EZ`/`H_CZ` cross-blocks at all) — so it does NOT depend on the still-unimplemented
+  cross-Hessian fix (§3a(i) above) and is achievable with what already exists on this branch.
+
+**Deliberately not attempted this session**: this repo's own history (`gravity-robustness-knitro-
+hang-past-timeout` and similar) flags real hang/concurrency risk with live KNITRO runs, and this
+session is already very long. Standing repo guidance is to check in on any such run within the
+first ~30-60 seconds rather than launch-and-wait — better done as the first action of a fresh
+session than the last action of a marathon one.
+
 ## 5. Recommended next steps (in dependency order)
 
 Done this session (all D=4-gated on the corrected `build_compressed_factual` path): consolidation
