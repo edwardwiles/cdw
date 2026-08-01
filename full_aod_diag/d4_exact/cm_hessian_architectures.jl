@@ -361,16 +361,46 @@ IDENTICAL to what Architecture A's reference CM matrix uses -- required for
 the correctness comparison to be apples-to-apples) but the dense CM matrix it
 returns is discarded immediately (never stored) -- Architecture B's whole
 point is to not carry that persistent buffer.
+
+Profiled all-families completion task (2026-08-01): `base_obj` (optional,
+default `nothing` = old behavior exactly) lets a caller supply an alternate
+`ctx.obj`-shaped object to read `ncore`/`outer_constr_index` bookkeeping from
+instead of `ctx.obj` itself -- e.g. `build_reduced_base_obj_for_family(ctx,
+layout, CS)` (profiled_restricted_family_base_2026-08-01.jl), whose `.d` is
+the profiled/reduced economic width `1+layout.total_reduced_economic_moments`
+rather than the full `D*Ddest+2`. Every other input (`Bidx`/`z`/`origins`/
+`ctx` itself, used for the moments!-closure fallback and `precalc_common_
+marginals_cdf`) is UNCHANGED regardless of `base_obj` -- only the economic
+dual-dimension bookkeeping (`ncore`, hence `d_new`/`outer_constr_index_new`,
+hence `wrap_moments_with_cm_archB`'s own `pregrav`/`cm_cols` offset) shrinks.
+No other line in this function or `wrap_moments_with_cm_archB` needed to
+change for this: both already read the economic width as a plain parameter,
+never a hardcoded `D*Ddest`-shaped constant (confirmed by direct read, not
+assumed -- see profiled_restricted_family_base_2026-08-01.jl's own header for
+the full derivation of why this is safe on the production `skip_fill=true`
+path).
 """
 function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anchored,
-                                       refIndex1::Int = ctx.γ.refIndex1, chunk_size::Int = 2000)
-    obj0 = ctx.obj
+                                       refIndex1::Int = ctx.γ.refIndex1, chunk_size::Int = 2000,
+                                       base_obj = nothing)
+    obj0 = base_obj === nothing ? ctx.obj : base_obj
     ncore = obj0.d
     _CM_throwaway, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; contrasts = contrasts)
     ncm = L * length(origins)
     @assert ncm == n_cm_moments(ctx.D, L)
     R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
-    Bidx = compute_bin_indices(ctx.U, z)
+    # Profiled all-families completion task (2026-08-01): found while exercising this function
+    # DIRECTLY (a new, direct `base_obj`-keyword call site this task adds; the only pre-existing
+    # caller, build_cm_production_context, apparently sidesteps this) -- explicit `Matrix{Int}(...)`
+    # coercion, was a bare `compute_bin_indices(ctx.U, z)`. Two methods of that name exist
+    # (common_marginals_interval.jl:72, `z::Vector{Float64}` -- MORE specific, returns a compact
+    # `Matrix{bin_index_dtype(L)}` i.e. UInt8/UInt16; cm_hessian_architectures.jl:104,
+    # `z::AbstractVector{Float64}`, returns `Matrix{Int}`); `z` here is a plain `Vector{Float64}`
+    # (from `precalc_common_marginals_cdf`), so Julia's dispatch picks the FIRST, narrower-dtype
+    # method whenever both files are included -- which then fails `wrap_moments_with_cm_archB`'s
+    # declared `Bidx::Matrix{Int}` parameter with a `MethodError` (confirmed live). Pre-existing,
+    # latent, unrelated to this task's own `base_obj` addition; harmless value-preserving widening.
+    Bidx = Matrix{Int}(compute_bin_indices(ctx.U, z))
 
     d_new = ncore + ncm
     outer_constr_index_new = obj0.outer_constr_index + ncm
