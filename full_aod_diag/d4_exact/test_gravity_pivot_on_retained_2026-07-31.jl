@@ -1,11 +1,18 @@
 # ============================================================================
 # Task §7 composition gate: anchor reduction + gravity pivot together.
 # ADDITIVE ONLY -- see gravity_pivot_on_retained_2026-07-31.jl header.
+#
+# CORRECTED 2026-07-31 (same day, user stop): Test 6 originally called the
+# LEGACY dense `ctx.obj.moments!` (G/K matrix). Rebuilt to use
+# `build_compressed_factual` -- see recover_full_a_2026-07-31.jl's header for
+# the full correction rationale.
 # ============================================================================
 include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(@__DIR__, "gravity_elimination.jl"))
 include(joinpath(@__DIR__, "relative_a_coordinate_2026-07-31.jl"))
 include(joinpath(@__DIR__, "gravity_pivot_on_retained_2026-07-31.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
+include(joinpath(@__DIR__, "compressed_moments.jl"))
 using Random
 
 ctx = d4_exact_setup()
@@ -67,15 +74,13 @@ for trial in 1:3
 end
 println("PASS")
 
-println("\n" * "="^78); println("TEST 6: end-to-end -- composed point feeds ctx.obj.moments! cleanly (no throw)"); println("="^78)
+println("\n" * "="^78); println("TEST 6: end-to-end -- composed point feeds build_compressed_factual cleanly (no throw)"); println("="^78)
 r_free_test = randn(rng, n_free_composed) .* 0.2
 z_full = decode_full_z_on_retained(r_free_test, pe)
 θ_test = copy(θ0)
 θ_test[Aod_offset+1:Aod_offset+D^2] .= vec(exp.(z_full))
-W = size(ctx.U, 1)
-K_t = zeros(W); G_t = zeros(W, ctx.nTotalMoments)
-ctx.obj.moments!(K_t, G_t, θ_test, ctx.U, ctx.obj)
-println("moments! evaluated cleanly at a fully-composed (anchor+gravity-pivot) point")
+build_compressed_factual(θ_test, ctx; check_ties = false)
+println("build_compressed_factual evaluated cleanly at a fully-composed (anchor+gravity-pivot) point")
 println("PASS")
 
 println("\n" * "="^78); println("ALL TESTS PASSED"); println("="^78)

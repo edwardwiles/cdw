@@ -1,9 +1,13 @@
 # ============================================================================
 # Task §8 core-piece gate: homogeneous factual moment.
 # ADDITIVE ONLY -- see homogeneous_moments_2026-07-31.jl header.
+# (Already used only the corrected build_compressed_factual-based helpers;
+# this update just adds the includes those helpers require.)
 # ============================================================================
 include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(@__DIR__, "relative_a_coordinate_2026-07-31.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
+include(joinpath(@__DIR__, "compressed_moments.jl"))
 include(joinpath(@__DIR__, "recover_full_a_2026-07-31.jl"))
 include(joinpath(@__DIR__, "homogeneous_moments_2026-07-31.jl"))
 using Random, Statistics

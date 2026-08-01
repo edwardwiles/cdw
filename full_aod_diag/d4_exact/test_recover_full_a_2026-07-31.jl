@@ -1,9 +1,17 @@
 # ============================================================================
 # Task §16 / theory doc section 2.2 numerical gate: exact full-A recovery.
 # ADDITIVE ONLY -- see recover_full_a_2026-07-31.jl header.
+#
+# CORRECTED 2026-07-31 (same day, user stop): Test 2 originally called the
+# LEGACY dense `ctx.obj.moments!` (G/K matrix) directly. Rebuilt to use
+# `destination_Q_od`/`destination_M_d` (both already corrected to use
+# `build_compressed_factual`) -- see recover_full_a_2026-07-31.jl's header
+# for the full correction rationale.
 # ============================================================================
 include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(@__DIR__, "relative_a_coordinate_2026-07-31.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
+include(joinpath(@__DIR__, "compressed_moments.jl"))
 include(joinpath(@__DIR__, "recover_full_a_2026-07-31.jl"))
 using Random, Statistics
 
@@ -48,26 +56,13 @@ println("max|gamma_tilde_after - 1| over all d = $maxdev")
 println("PASS -- recovery is exact (not just approximately gamma-normalized)")
 
 println("\n" * "="^78); println("TEST 2: winner identities and share ratios unchanged by recovery (per theory section 2.1)"); println("="^78)
-W = size(ctx.U, 1)
-K_w = zeros(W); G_w = zeros(W, ctx.nTotalMoments)
-K_r = zeros(W); G_r = zeros(W, ctx.nTotalMoments)
-ctx.obj.moments!(K_w, G_w, θ_working, ctx.U, ctx.obj)
-ctx.obj.moments!(K_r, G_r, θ_recovered, ctx.U, ctx.obj)
-lambda = reshape(ctx.γ.P, (D, D))'
-gammafac_t2 = spgamma(θ_working[1] * (1 - θ_working[2]) + 1)
-wscale_t2 = ctx.γ.SamplingWeights[1:W] ./ gammafac_t2
 maxratiodiff = 0.0
 for d in 1:D
-    denom_d = ctx.γ.wHat[d] * ctx.γ.L[d]
-    Qw = zeros(W, D); Qr = zeros(W, D)
-    for o in 1:D
-        d1 = d + (o - 1) * D
-        @. Qw[:, o] = G_w[:, d1] / wscale_t2 + lambda[o, d] * denom_d
-        @. Qr[:, o] = G_r[:, d1] / wscale_t2 + lambda[o, d] * denom_d
-    end
+    Qw = destination_Q_od(θ_working, ctx, d)
+    Qr = destination_Q_od(θ_recovered, ctx, d)
     Mw = vec(sum(Qw, dims = 2)); Mr = vec(sum(Qr, dims = 2))
-    winw = [argmax(@view Qw[w, :]) for w in 1:W]
-    winr = [argmax(@view Qr[w, :]) for w in 1:W]
+    winw = [argmax(@view Qw[w, :]) for w in 1:size(Qw, 1)]
+    winr = [argmax(@view Qr[w, :]) for w in 1:size(Qr, 1)]
     nmis = sum(winw .!= winr)
     rdiff = maximum(abs.((Qw ./ Mw) .- (Qr ./ Mr)))
     global maxratiodiff = max(maxratiodiff, rdiff)

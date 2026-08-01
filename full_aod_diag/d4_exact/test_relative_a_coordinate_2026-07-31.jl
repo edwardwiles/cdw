@@ -1,9 +1,18 @@
 # ============================================================================
 # Task §6 round-trip + integration gate for relative_a_coordinate_2026-07-31.jl.
 # ADDITIVE ONLY -- see that file's header for the design rationale.
+#
+# CORRECTED 2026-07-31 (same day, user stop): Tests 3-4's "end-to-end
+# integration" originally called the LEGACY dense `ctx.obj.moments!`
+# (G/K matrix). Rebuilt to use `build_compressed_factual` -- see
+# recover_full_a_2026-07-31.jl's header for the full correction rationale.
+# `ctx = d4_exact_setup()` is still used only as a DATA/economy builder; its
+# dense `ctx.obj` is never read.
 # ============================================================================
 include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(@__DIR__, "relative_a_coordinate_2026-07-31.jl"))
+include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
+include(joinpath(@__DIR__, "compressed_moments.jl"))
 using Random, LinearAlgebra
 
 ctx = d4_exact_setup()
@@ -54,21 +63,19 @@ println("max|z_calib - z_rebuilt| = $maxdiff2")
 @assert maxdiff2 < 1e-13
 println("PASS -- exact at genuine calibration, not the zfree=0 reference point")
 
-println("\n" * "="^78); println("TEST 3: end-to-end integration -- decode into a real theta vector, feed ctx.obj.moments!, confirm bit-identical to direct evaluation"); println("="^78)
+println("\n" * "="^78); println("TEST 3: end-to-end integration -- decode into a real theta vector, feed build_compressed_factual, confirm bit-identical to direct evaluation"); println("="^78)
 θ_rebuilt = copy(θ0)
 θ_rebuilt[Aod_offset+1:Aod_offset+D^2] .= vec(exp.(z_rebuilt))
-W = size(ctx.U, 1)
-K_direct = zeros(W); G_direct = zeros(W, ctx.nTotalMoments)
-K_rebuilt = zeros(W); G_rebuilt = zeros(W, ctx.nTotalMoments)
-ctx.obj.moments!(K_direct, G_direct, θ0, ctx.U, ctx.obj)
-ctx.obj.moments!(K_rebuilt, G_rebuilt, θ_rebuilt, ctx.U, ctx.obj)
-maxdiff3 = maximum(abs.(G_direct .- G_rebuilt))
-maxdiffK = maximum(abs.(K_direct .- K_rebuilt))
-println("max|G_direct - G_rebuilt| = $maxdiff3   max|K_direct - K_rebuilt| = $maxdiffK")
-@assert maxdiff3 < 1e-10 && maxdiffK < 1e-10
-println("PASS -- relative-A round-trip through decode->theta->moments! reproduces genuine calibration bit-for-bit")
+cf_direct = build_compressed_factual(θ0, ctx; check_ties = false)
+cf_rebuilt = build_compressed_factual(θ_rebuilt, ctx; check_ties = false)
+maxdiff_wval = maximum(abs.(cf_direct.wval .- cf_rebuilt.wval))
+maxdiff_cfraw = maximum(abs.(cf_direct.cf_raw .- cf_rebuilt.cf_raw))
+n_winner_mismatch = sum(cf_direct.winner .!= cf_rebuilt.winner)
+println("max|wval_direct - wval_rebuilt| = $maxdiff_wval   max|cf_raw_direct - cf_raw_rebuilt| = $maxdiff_cfraw   winner mismatches = $n_winner_mismatch")
+@assert maxdiff_wval < 1e-10 && maxdiff_cfraw < 1e-10 && n_winner_mismatch == 0
+println("PASS -- relative-A round-trip through decode->theta->build_compressed_factual reproduces genuine calibration bit-for-bit")
 
-println("\n" * "="^78); println("TEST 4: perturbing ONLY retained coordinates leaves anchor cells fixed at gauge, and moments! runs cleanly"); println("="^78)
+println("\n" * "="^78); println("TEST 4: perturbing ONLY retained coordinates leaves anchor cells fixed at gauge, and build_compressed_factual runs cleanly"); println("="^78)
 r_perturbed = r_calib .+ 0.05 .* randn(rng, n_retained(spec))
 z_perturbed = decode_relative_A(r_perturbed, spec, gauge)
 for d in 1:Ddest
@@ -76,9 +83,8 @@ for d in 1:Ddest
 end
 θ_perturbed = copy(θ0)
 θ_perturbed[Aod_offset+1:Aod_offset+D^2] .= vec(exp.(z_perturbed))
-K_p = zeros(W); G_p = zeros(W, ctx.nTotalMoments)
-ctx.obj.moments!(K_p, G_p, θ_perturbed, ctx.U, ctx.obj)   # must not throw
-println("moments! evaluated cleanly at a retained-only perturbation; anchor cells confirmed unmoved")
+build_compressed_factual(θ_perturbed, ctx; check_ties = false)   # must not throw
+println("build_compressed_factual evaluated cleanly at a retained-only perturbation; anchor cells confirmed unmoved")
 println("PASS")
 
 println("\n" * "="^78); println("ALL TESTS PASSED"); println("="^78)

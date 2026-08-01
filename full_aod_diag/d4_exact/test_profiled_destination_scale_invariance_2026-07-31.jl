@@ -1,13 +1,23 @@
 # ============================================================================
 # Task §2.1/§2.2/§2.1(c) numerical falsification gate, D=4.
 #
-# ADDITIVE ONLY (repo convention): does not modify context.jl, moments_gammanorm.jl,
-# gravity_elimination.jl, or any other trusted production file. Calls the EXISTING,
-# already-validated `ctx.obj.moments!` (== EK_moments_gammanorm_directgp!, confirmed
-# in context.jl) and `gravity_elimination.jl` functions exactly as production does,
-# at the GENUINE calibration point `ctx.θ0_up` (NOT the gravity-elimination pivot's
-# `zfree=0` reference point -- see this repo's standing CLAUDE.md warning) perturbed
-# by an explicit, documented destination-column rescale.
+# CORRECTED 2026-07-31 (same day, user stop): the original version of this
+# file read the LEGACY dense G/K moment matrix via `ctx.obj.moments!`, which
+# only exists on the pre-hardening `PsiObjectiveBundleImplicit` bundle
+# `d4_exact_setup()` happens to attach. This repo's production stack uses
+# genuinely no-H/no-G/no-K `OperatorPsiBundle`s -- rebuilt to read
+# `build_compressed_factual`'s `winner`/`wval`/`Pmat`/`denom` fields directly,
+# the actual winner-compressed representation production uses (see
+# recover_full_a_2026-07-31.jl's header for the full correction rationale).
+# `ctx = d4_exact_setup()` is still used only as a DATA/economy builder
+# (gamma, U, theta0_up, etc.) -- its dense `ctx.obj` is never read.
+#
+# ADDITIVE ONLY (repo convention): does not modify context.jl,
+# compressed_moments.jl, gravity_elimination.jl, or any other trusted file.
+# Evaluated at the GENUINE calibration point `ctx.θ0_up` (NOT the
+# gravity-elimination pivot's `zfree=0` reference point -- see this repo's
+# standing CLAUDE.md warning) perturbed by an explicit, documented
+# destination-column rescale.
 #
 # What this tests, from PROFILED_DESTINATION_SCALE_THEORY_2026-07-31.md:
 #   (A) winner identities unchanged under a common rescale of one destination's A column
@@ -21,7 +31,8 @@
 # ============================================================================
 include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(@__DIR__, "gravity_elimination.jl"))
-using SpecialFunctions: gamma as spgamma
+include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
+include(joinpath(@__DIR__, "compressed_moments.jl"))
 using Random, Statistics, LinearAlgebra
 
 ctx = d4_exact_setup()
@@ -39,9 +50,25 @@ d_test = 2  # arbitrary non-baseIndex destination to shift; re-run with d_test=c
 e_exponent = μ * (σ - 1)
 println("Testing destination d_test=$d_test with rescale kappa=$κ, predicted exponent mu*(sigma-1)=$e_exponent")
 
+function winner_and_M(θ, ctx, d)
+    cf = build_compressed_factual(θ, ctx; check_ties = false)
+    s = dest_slot(ctx, d)
+    return cf.winner[:, s], cf.wval[:, s]   # (winner origin per draw, M_d(w)=winning value per draw)
+end
+
+function Q_matrix(θ, ctx, d)
+    D = ctx.D
+    winner, wval = winner_and_M(θ, ctx, d)
+    Q = zeros(length(winner), D)
+    @inbounds for w in eachindex(winner)
+        Q[w, winner[w]] = wval[w]
+    end
+    return Q
+end
+
 # ---- baseline evaluation at GENUINE calibration (theta0_up itself, not zfree=0) ----
-K0 = zeros(W); G0 = zeros(W, ctx.nTotalMoments)
-ctx.obj.moments!(K0, G0, θ0, ctx.U, ctx.obj)
+winner0, M0 = winner_and_M(θ0, ctx, d_test)
+Q0 = Q_matrix(θ0, ctx, d_test)
 
 # ---- shifted evaluation: multiply Aod_theta[:, d_test] (LEVEL) by kappa, everything else fixed ----
 θ1 = copy(θ0)
@@ -49,35 +76,10 @@ for o in 1:D
     idx = Aod_offset + (d_test - 1) * D + o
     θ1[idx] *= κ
 end
-K1 = zeros(W); G1 = zeros(W, ctx.nTotalMoments)
-ctx.obj.moments!(K1, G1, θ1, ctx.U, ctx.obj)
+winner1, M1 = winner_and_M(θ1, ctx, d_test)
+Q1 = Q_matrix(θ1, ctx, d_test)
 
-# ---- reconstruct Q_od(w), M_d(w) from G at both points ----
-lambda = reshape(ctx.γ.P, (D, D))'          # lambda[o,d], data
-denom_d = ctx.γ.wHat[d_test] * ctx.γ.L[d_test]  # denom[d] under gamma_d==1 (forced in this formulation)
-gammafac = spgamma(μ * (1 - σ) + 1)
-SW = ctx.γ.SamplingWeights[1:W]
-uniform_SW = maximum(abs.(SW .- SW[1])) < 1e-12
-println("SamplingWeights uniform: $uniform_SW (value=$(SW[1]))")
-wscale = SW ./ gammafac   # per-draw scalar; == a single constant if SW uniform
-
-function extract_Q_M(G, d, D, lambda, denom_d, wscale)
-    W = size(G, 1)
-    Q = zeros(W, D)
-    for o in 1:D
-        d1 = d + (o - 1) * D
-        @. Q[:, o] = G[:, d1] / wscale + lambda[o, d] * denom_d
-    end
-    M = vec(sum(Q, dims = 2))
-    return Q, M
-end
-
-Q0, M0 = extract_Q_M(G0, d_test, D, lambda, denom_d, wscale)
-Q1, M1 = extract_Q_M(G1, d_test, D, lambda, denom_d, wscale)
-
-println("\n" * "="^78); println("TEST A: winner identity unchanged (argmax_o Q_od(w) same o, every draw)"); println("="^78)
-winner0 = [argmax(@view Q0[w, :]) for w in 1:W]
-winner1 = [argmax(@view Q1[w, :]) for w in 1:W]
+println("\n" * "="^78); println("TEST A: winner identity unchanged (same winning origin, every draw)"); println("="^78)
 n_mismatch = sum(winner0 .!= winner1)
 println("mismatches out of $W draws: $n_mismatch")
 @assert n_mismatch == 0 "TEST A FAILED: winner identity changed under destination-column rescale"
@@ -99,7 +101,7 @@ println("empirical M1/M0: min=$(minimum(empirical_ratio))  max=$(maximum(empiric
 maxdiff_C = maximum(abs.(empirical_ratio .- predicted))
 println("max|empirical - predicted| = $maxdiff_C")
 @assert maxdiff_C < 1e-6 "TEST C FAILED: homogeneity exponent mu*(sigma-1) does not match production code"
-println("PASS -- exponent mu*(sigma-1) confirmed numerically, not just from reading code")
+println("PASS -- exponent mu*(sigma-1) confirmed numerically against the compressed/operator-representative path")
 
 println("\n" * "="^78); println("TEST D: gravity residual exactly unchanged under the same shift"); println("="^78)
 Aod_θ0 = reshape(θ0[Aod_offset+1:Aod_offset+D^2], (D, D))
@@ -112,9 +114,13 @@ println("g_gravity(shifted) = $g1")
 println("abs diff = $(abs(g1 - g0))")
 @assert abs(g1 - g0) < 1e-9 "TEST D FAILED: gravity residual changed under a pure destination-column shift"
 println("PASS -- confirms theory doc section 2.1(c)'s closed-form proof numerically")
+println("(gravity_elimination.jl is unchanged/shared regardless of dense-G vs operator bundle -- it only")
+println(" reads Aod_theta levels via gravity_from_logz, never touches G/H/K at all)")
 
 println("\n" * "="^78); println("TEST E: is E_F[M_d_raw]/denom[d] == 1 at genuine calibration (theta0_up)?"); println("="^78)
-EF_M0_over_denom = mean(M0) / denom_d
+cf0 = build_compressed_factual(θ0, ctx; check_ties = false)
+s_test = dest_slot(ctx, d_test)
+EF_M0_over_denom = mean(M0) / cf0.denom[s_test]
 println("mean(M_d(w)) / denom[d] at genuine calibration = $EF_M0_over_denom  (task's 'E_F[M_d]=1' claim)")
 println("(informational -- not asserted; see script header note E)")
 
@@ -125,13 +131,10 @@ for o in 1:D
     idx = Aod_offset + (d_test2 - 1) * D + o
     θ2[idx] *= κ
 end
-K2 = zeros(W); G2 = zeros(W, ctx.nTotalMoments)
-ctx.obj.moments!(K2, G2, θ2, ctx.U, ctx.obj)
-denom_d2 = ctx.γ.wHat[d_test2] * ctx.γ.L[d_test2]
-Q0b, M0b = extract_Q_M(G0, d_test2, D, lambda, denom_d2, wscale)
-Q2, M2 = extract_Q_M(G2, d_test2, D, lambda, denom_d2, wscale)
-winner0b = [argmax(@view Q0b[w, :]) for w in 1:W]
-winner2 = [argmax(@view Q2[w, :]) for w in 1:W]
+winner0b, M0b = winner_and_M(θ0, ctx, d_test2)
+Q0b = Q_matrix(θ0, ctx, d_test2)
+winner2, M2 = winner_and_M(θ2, ctx, d_test2)
+Q2 = Q_matrix(θ2, ctx, d_test2)
 @assert sum(winner0b .!= winner2) == 0 "baseIndex destination: winner identity changed"
 maxdiff_b = maximum(abs.((Q0b ./ M0b) .- (Q2 ./ M2)))
 @assert maxdiff_b < 1e-8 "baseIndex destination: share ratios not invariant"
