@@ -337,10 +337,16 @@ OLD_FULL_PATH_OVERHEAD =
 
 GENUINE_REDUCED_LAYOUT =
     unrestricted:      pass                          # pre-existing, source branch, unchanged
-    flexible_CM:        fg_and_hessian_formulas_pass_live_solve_fails_400_isolated_to_HEE_HCC_interaction
-    common_Frechet:      not_started   # shares flexible CM's plumbing but H_EF gather not built
-    ZC_only:             not_started
-    CM_plus_ZC:          not_started
+    flexible_CM:        pass   # RESOLVED this session's Phase 4-6, see "nStatus=-400 root-caused and
+                                # fixed" section below -- was NOT a conditioning issue, was two real
+                                # formula bugs; assembled Hessian now machine-precision-exact vs
+                                # ForwardDiff and the live KNITRO solve converges in 4-6 iterations
+                                # to nStatus=0, matching the full model's own signature
+    common_Frechet:      not_started   # shares flexible CM's plumbing but H_EF gather not built;
+                                        # ALSO now known to carry the same pi_vec/Lam_homog bug
+                                        # pattern in its own H_EF kernels -- see below, NOT fixed
+    ZC_only:             not_started   # H_EZ kernel also carries the same bug pattern -- NOT fixed
+    CM_plus_ZC:          not_started   # inherits ZC_only's H_EZ bug
 
 HESSIAN_ORCHESTRATOR_WIRING =
     flexible_CM: pass_serial_only_D4_verified   # hessian_cm_structured! only; _v2! (threaded) not touched
@@ -349,8 +355,12 @@ HESSIAN_ORCHESTRATOR_WIRING =
     CM_plus_ZC: fail_not_started_and_out_of_scope_widened_case
 
 D4_COMPLETE_HESSIAN =
-    flexible_CM: pass   # test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl, H_EE+H_EC, max|Δ|=0.0,
-                         # both contrasts x both L x 2 points; H_EF/H_EZ/other families not_run
+    flexible_CM: pass   # test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl (fixed reference, see
+                         # below), H_EE+H_EC, max|Δ| now 0.0/machine-precision after the Phase 4-6
+                         # bugfixes, both contrasts x both L x 2 points; ALSO independently confirmed
+                         # via ForwardDiff autodiff of the real production code path (verify_fix.jl),
+                         # max|ΔH_EE|=7.2e-15, max|ΔH_EC|=1.3-1.4e-15, max|ΔH_CC|=3.3e-15;
+                         # H_EF/H_EZ/other families not_run (out of scope this session)
     common_Frechet: not_run
     ZC_only: not_run
     CM_plus_ZC: not_run
@@ -359,10 +369,17 @@ D20_CROSS_BLOCK_REFERENCE =
     not_run
 
 INNER_EQUIVALENCE =
-    not_run   # the FG-callback gap is now closed (moments! validated correct, Part 1) but a live
-              # KNITRO solve of the reduced dual problem does not yet converge (nStatus=-400,
-              # diagnosed as likely a conditioning issue, not a formula bug -- see above) -- no
-              # reduced-family inner solve exists yet to test equivalence of
+    flexible_CM: real_knitro_solve_converges_to_optimality_not_full_equivalence_gate
+        # test_profiled_flexcm_d4_fg_and_solve_gate_2026-08-01.jl Part 2 (rewritten this session):
+        # a REAL KNITRO solve of the reduced dual problem now converges nStatus=0 (true optimality,
+        # not merely feasible) in 4-6 iterations -- matching the full model's own ~4-iteration
+        # quadratic-convergence signature. This is NOT the mission's full "ζ*_reduced == ζ*_full"
+        # inner-equivalence gate -- that expectation was itself found to be WRONG this session (see
+        # below): the homogeneous/profiled formulation is a deliberately different moment definition
+        # from the structured/production one, so a different ζ* is expected and correct, not a bug.
+        # The gate that DOES apply and now passes is "the reduced dual solve is well-posed and
+        # converges like the full model does", which was the actual open question.
+    other_families: not_run
 
 SHARED_PROFILED_A_GP_GRADIENT =
     not_started   # unchanged from source branch
@@ -391,33 +408,125 @@ PRODUCTION_DEFAULT_CHANGED = false
 CAMPAIGN_LAUNCHED = false
 ```
 
+## Phase 4-6: nStatus=-400 root-caused and fixed (2026-08-01, later same session)
+
+The "GENUINE_REDUCED_LAYOUT: flexible_CM" line above previously read
+`fg_and_hessian_formulas_pass_live_solve_fails_400_isolated_to_HEE_HCC_interaction`, with a
+"diagnosed as likely a conditioning issue, not a formula bug" note and a recommended-next-steps
+entry proposing eigenvalue/condition-number comparisons, smaller `L`, alternate contrasts, and
+`KN_set_var_scalings_all` as remediation. **That diagnosis was wrong**, caught only because the
+user pushed back on it directly and repeatedly rather than accepting "conditioning issue" at face
+value. The real cause was two concrete formula bugs, found and fixed via independent autodiff
+verification. Full account, in the order the user's questions actually forced it:
+
+1. **User challenge**: pointed out the unrestricted family's own reduced solve converges fine at
+   the identical θ/anchor spec, which rules out "the reduced layout is just inherently
+   ill-conditioned" as an explanation, and asked directly whether the moment formulas had an error.
+   This reopened blocks that had been treated as "unchanged from source branch, already validated"
+   (H_CC in particular) — found `hessian_cm_structured!`'s new `profiled_layout` branch never called
+   `build_bin_tables!`/`prefix_sum_tables!` before `fill_cm_HCC!`, leaving `cctx.CT` stale. Fixed.
+   This alone did not resolve the -400.
+2. **User instruction**: explicitly asked for gradient AND Hessian to be checked against
+   ForwardDiff autodiff to machine precision, not hand-derived references, on the observation that a
+   correctly-formulated inner KNITRO solve in this codebase essentially never hits an iteration
+   limit — it either converges fast or is genuinely infeasible/unbounded, so grinding at the limit
+   is itself evidence of a formula bug, not merely "hard". Building an autodiff-comparable objective
+   required writing element-type-generic (`Dual`-compatible) copies of the moment-contraction
+   functions, since production uses hardcoded `Vector{Float64}`/BLAS. First two comparison attempts
+   used the WRONG reference (the old structured-formulation full kernel, and a structured-formulation
+   reduced G) and wrongly suggested ~30-95% disagreement; both were methodology errors, not real bugs
+   — resolved once compared against the correct same-family (homogeneous) reference throughout.
+3. **User instruction**: asked to compare directly against the non-reduced (full) Hessian formulas
+   rather than re-deriving by hand, since they should differ only by a price-index term. This led to
+   reading `homogeneous_contraction_2026-07-31.jl`'s own header comment, which revealed the
+   "homogeneous" formulation used by the reduced/profiled machinery is a **deliberately different**
+   moment definition from the "structured" one used by full/production — not a reparametrization of
+   the same moments, not a bug, an intentional design choice already present in code this session
+   didn't write. Two REAL bugs were then found in `winner_pair_cross_hessian_cm_block!` (H_EC's
+   `use_profiled_correction=true` path) by comparing against the correct homogeneous reference:
+   - **Bilateral column**: used `pi_vec[j]` (the structured-formulation multiplier) where the
+     homogeneous formulation needs `Lam_homog[j] = kappa0[j]*Pmat[o,slot]` instead. Two hand-derived
+     "fixes" attempted first, both made the discrepancy WORSE (0.076 → then worse still) — abandoned
+     hand algebra in favor of directly reading off the correct multiplier from
+     `reduced_homogeneous_winner_pair_hessian!`'s own already-autodiff-verified `Lam[j]` formula.
+   - **France/counterfactual row**: even after the bilateral fix, a residual 0.25 discrepancy
+     remained, traced to a constant term (`denom_cf`) in the homogeneous France coefficient that does
+     NOT cancel in the `QCfCScum`-style contrast (unlike the bilateral case) because bin membership
+     differs by origin — fixed by adding `denom_cf_scaled * nu_diff` (`denom_cf_scaled =
+     kappa0_cf*denom_cf`, both new fields threaded through `WinnerPairHessCtx`/`build_winner_pair_ctx`
+     via new `gpσ`/`denom_cf` keyword args).
+4. **Verification, both bugs fixed**: the complete assembled reduced Hessian (H_EE+H_EC+H_CC) now
+   matches ForwardDiff autodiff of the real production code path to machine precision at multiple
+   random points (`max|ΔH_EE|=7.2e-15`, `max|ΔH_EC|=1.3-1.4e-15`, `max|ΔH_CC|=3.3e-15`), and a real
+   KNITRO solve of the reduced dual problem converges in **4 iterations to nStatus=0** (optimality
+   error `1.4e-17`) — the same fast, clean signature as the full model's own solve. The FG side was
+   also rewired to consistently use the homogeneous formulation (`materialize_homogeneous_dense_G_reduced!`,
+   already present from earlier in the session) rather than the structured one it had been
+   inconsistently paired with.
+5. **Test regression pass**: three existing D4 test files had their OWN brute-force/reference
+   constructions built with the identical `pi_vec`-instead-of-`Lam_homog` bug baked in (so they
+   "passed" before by being self-consistently wrong against the buggy production code) or were
+   missing the new `gpσ`/`denom_cf` keywords needed to match the now-more-complete production
+   context — fixed in all three (`test_profiled_hec_correction_d4_2026-08-01.jl`,
+   `test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl`,
+   `test_profiled_flexcm_d4_fg_and_solve_gate_2026-08-01.jl` — the last one fully rewritten, since
+   its Part 2 asserted ζ*_reduced ≈ ζ*_full, which is now understood to be the wrong expectation, see
+   point 3 above). `test_profiled_france_row_d4_2026-08-01.jl` passed unmodified as independent
+   confirmation. `test_profiled_hez_correction_d4_2026-08-01.jl` and
+   `test_profiled_hez_threaded_d4_2026-08-01.jl` (H_EZ, untouched this session) also re-ran clean,
+   confirming no regression outside H_EC.
+
+**Not expected to match, not a bug**: ζ*_reduced ≠ ζ*_full for flexible CM is the CORRECT outcome,
+not a discrepancy to chase — the homogeneous (reduced/profiled) and structured (full/production)
+formulations are genuinely different moment definitions by design, confirmed via direct comparison
+of their linear functionals (disagree by 30-95%, not a constant/rescaling factor). The gate that
+matters is that the reduced solve is well-posed and converges the way the full model's own solve
+does, which it now does.
+
+**Systemic bug found but explicitly NOT fixed this session (flag for whoever ports the remaining
+families)**: the identical `pi_vec`-vs-`Lam_homog`/missing-constant-term bug pattern exists,
+unfixed, in `winner_pair_cross_hessian_zc_block!` (H_EZ, used by ZC-only and CM+ZC) and in
+`winner_pair_cross_hessian_colsum!`/`winner_pair_cross_hessian_esum!` (H_EF, used by common
+Fréchet) — confirmed via grep showing `pi_vec[j]`/`pi_vec[jcf]` in their own
+`use_profiled_correction=true` paths. Their existing test files
+(`test_profiled_hez_correction_d4_2026-08-01.jl`, `test_profiled_hef_correction_d4_2026-08-01.jl`)
+also validate against a brute-force reference that itself uses `wctx.pi_vec[j]` — i.e. they
+currently PASS by being self-consistently wrong, exactly the same trap `test_profiled_hec_correction_d4_2026-08-01.jl`
+was in before this session's fix. **Whoever wires a genuinely reduced layout through ZC-only,
+CM+ZC, or common Fréchet must NOT trust those two tests' current green status as evidence of
+correctness for the reduced/`use_profiled_correction=true` path** — they need the same
+`Lam_homog`/`denom_cf_scaled`-style fix (or a from-scratch autodiff check) before being trusted, or
+the same iteration-limit symptom will resurface in those families.
+
 ## Recommended next steps (in order, for whoever continues this)
 
-1. **Isolate the nStatus=-400 conditioning issue** (the single largest remaining blocker now) —
-   narrowed THIS session to "an interaction between the reduced H_EE and flexible CM's unchanged
-   CM-grid H_CC block", via two decisive checks already run (warm start does not help; the
-   unrestricted family's own reduced solve converges fine at the identical θ/AnchorSpec — see above).
-   Next: (a) compare `eigvals`/condition number of the assembled reduced Hessian's `H_EE` block vs its
-   `H_CC` block at the SAME dual point, to see if one dominates/vanishes relative to the other once
-   the economic block shrinks; (b) try a SMALLER `L` (fewer CM-grid columns, e.g. `L=2`) to see if the
-   failure is sensitive to the CM-grid's own relative size; (c) try `:orthonormal` vs `:anchored`
-   contrasts (both already exercised in this session's Hessian-formula gates, but not in the live
-   solve) in case one is better-conditioned; (d) as a structural check, try whether `KN_set_var_scalings_all`
-   (used successfully elsewhere in this repo per memory `melitz-real-d20-scaled-knitro-native-scaling`)
-   changes the outcome — but only AFTER (a)-(c) narrow the actual cause, not as a first resort.
-2. Once (1) yields a converging solve: re-run this session's
-   `test_profiled_flexcm_d4_hessian_gate_2026-08-01.jl`-style comparison but at a GENUINELY SOLVED
-   reduced-model point (not a hand-set one) — a real, if narrow, version of the mission's §9
-   inner-equivalence gate for flexible CM specifically.
+1. ~~Isolate the nStatus=-400 conditioning issue~~ — **RESOLVED this session (Phase 4-6, see above)**:
+   it was not conditioning, it was two real formula bugs in `winner_pair_cross_hessian_cm_block!`
+   (H_EC), now fixed and verified to machine precision against autodiff, with the live KNITRO solve
+   converging cleanly in 4-6 iterations.
+2. At a genuinely-solved reduced-model point (`test_profiled_flexcm_d4_fg_and_solve_gate_2026-08-01.jl`'s
+   `base_reduced`, now available), consider extending the D4 hessian-gate comparison to that live
+   point rather than only hand-set/perturbed ones — a slightly stronger version of what's already
+   passing, not blocking, but cheap to add.
 3. Thread the profiled/gather branch into `hessian_cm_structured_v2!` (threaded twin,
-   `cm_hessian_threaded.jl`) — mechanical once (1)-(2) are solid, but not yet done or gated.
+   `cm_hessian_threaded.jl`) — mechanical now that the serial path's formulas are confirmed correct,
+   but not yet done or gated.
 4. Wire the reduced layout through `cm_lookup_kernels.jl`'s `:cm_lookup` operator FG evaluator (the
    TRUE production default, `CM_INNER_FG_BACKEND_DEFAULT[]`) — this session only closed the
    `:dense_reference` FG path; production itself does not default to that path.
-5. Resolve H_EF's open Wtab/T1 question (`PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md` §4) and
-   implement the analogous gather branch for common Fréchet (which already gets the dimension/H_EE
-   plumbing for free via shared `CMBinHessCtx`, per this session's design).
-6. Port ZC-only (`OriginZCCoreHessCtx`/`archA_partitioned_hess_cb_builder`) and then CM+ZC's widened
+5. **Before** implementing H_EF for common Fréchet: fix the same `pi_vec`-vs-`Lam_homog`/missing-
+   constant-term bug pattern this session found (but did not fix) in
+   `winner_pair_cross_hessian_colsum!`/`winner_pair_cross_hessian_esum!` — see the "systemic bug
+   found but not fixed" paragraph above. Resolve H_EF's open Wtab/T1 question
+   (`PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md` §4) at the same time, then implement the analogous
+   gather branch (which already gets the dimension/H_EE plumbing for free via shared `CMBinHessCtx`,
+   per this session's design). Do NOT trust `test_profiled_hef_correction_d4_2026-08-01.jl`'s current
+   green status as evidence the `use_profiled_correction=true` path is correct — its own reference
+   has the same bug baked in.
+6. **Before** porting ZC-only/CM+ZC: fix the same bug pattern in `winner_pair_cross_hessian_zc_block!`
+   (H_EZ) first, for the same reason — `test_profiled_hez_correction_d4_2026-08-01.jl`/
+   `test_profiled_hez_threaded_d4_2026-08-01.jl` currently pass against a self-consistently-wrong
+   reference. Then port `OriginZCCoreHessCtx`/`archA_partitioned_hess_cb_builder` and CM+ZC's widened
    case — structurally analogous to this session's flexible-CM work but a SEPARATE codebase surface,
    not automatically covered by anything done so far.
 7. Only after (1)-(6): D20 cross-block/inner-equivalence gates, outer-gradient sharing, performance

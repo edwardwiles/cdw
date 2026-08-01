@@ -367,6 +367,38 @@ struct WinnerPairHessCtx
     # existing behavior.
     wval::Matrix{Float64}        # W x Ddest (alias of cf.wval)
     target_slot::Vector{Int}     # length ncolI
+    # Profiled all-families completion task (2026-08-01), H_EC formula-mismatch bugfix: `pi_vec[j]`
+    # is the STRUCTURED-formulation constant (`kappa0[j]*Pmat[o,slot]*denom[slot] + PMM term`,
+    # confirmed via direct autodiff cross-check to be the exact analogue of structured_moment_
+    # build.jl's own `FixedCol[j]`) -- correct ONLY for `use_profiled_correction=false` (the OLD,
+    # destination-independent correction it was always designed for). The profiled/reduced H_EE
+    # kernel (`reduced_homogeneous_hessian_2026-08-01.jl`) uses a DIFFERENT, HOMOGENEOUS-formulation
+    # multiplier `Lam[j] = kappa0[j]*lambda_coef[j]`, `lambda_coef[j] = Pmat[o(j),slot(j)]` (no
+    # `denom`/PMM at all) -- confirmed correct to machine precision against an independent ForwardDiff
+    # Hessian of the homogeneous objective. `winner_pair_cross_hessian_cm_block!`'s own
+    # `use_profiled_correction=true` path was (until this fix) multiplying a homogeneous-style
+    # destination-specific correction (`MCScum`-based `T_diff`) by the WRONG (structured) `pi_vec[j]`
+    # -- confirmed via autodiff (max|Δ|=0.076 on the assembled H_EC block, exactly 0 on H_EE/H_CC) to
+    # be a genuine, located formula bug, not a design choice. `Lam_homog[j] = kappa0[j]*Pmat[o,slot]`
+    # (bilateral) / `kappa0[jcf]*gpσ` (France, only when `gpσ` is supplied -- see `build_winner_pair_ctx`'s
+    # own new `gpσ` keyword) is the CORRECT multiplier for the `use_profiled_correction=true` path;
+    # `pi_vec` remains exactly as it was, still used unchanged for `use_profiled_correction=false`.
+    Lam_homog::Vector{Float64}   # length ncolI
+    # Profiled all-families completion task (2026-08-01), H_EC France-row second bugfix: the
+    # homogeneous formulation's own France coefficient (`reduced_homogeneous_contraction_2026-08-01.jl`'s
+    # `t[w]`'s France contribution) is `k0cf*(denom_cf + cf_raw[w] - gpσ*wval[w,bi_slot])`, i.e. a
+    # CONSTANT term (`denom_cf = gpσ*wPrime_bi*ctx.γ.LPrime[bi]`, `wPrime_bi≡1`) IN ADDITION TO
+    # `cf_raw[w]` and the `-gpσ*wval[.,bi_slot]` piece (which `Lam_homog[jcf]*corr_cf` already
+    # handles). `QCfCScum`-based `qcf_diff` (H_EC's "keep" term) only ever accumulated `cf_raw`
+    # (`cf_raw_scaled`), never this constant -- and unlike a genuinely draw-varying quantity, this
+    # constant does NOT cancel in the `qcf_diff = QCfCScum[o,l]-QCfCScum[refIndex1,l]` contrast,
+    # because bin membership (which draws satisfy `bin(U[w,x])<=l`) differs by feature `x=o` vs
+    # `x=refIndex1` -- it contributes `denom_cf*(NuCScum[o,l]-NuCScum[refIndex1,l]) = denom_cf*nu_diff`
+    # (the SAME `nu_diff` already computed for the bilateral case), analogous to how `pi_vec[jcf]`'s
+    # own PMM piece would if usePMM were active for this column. `denom_cf_scaled = k0cf*denom_cf`,
+    # precomputed here so `winner_pair_cross_hessian_cm_block!` need only add `denom_cf_scaled*nu_diff`
+    # to `qcf_diff`. `0.0` (harmless) whenever `!has_cf` or the caller doesn't supply `denom_cf`.
+    denom_cf_scaled::Float64
     Snu_buf::Vector{Float64}
     Snu2_buf::Vector{Float64}
     u_buf::Vector{Float64}
@@ -375,7 +407,7 @@ struct WinnerPairHessCtx
 end
 
 """
-    build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int=0) -> WinnerPairHessCtx
+    build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int=0, gpσ::Float64=0.0) -> WinnerPairHessCtx
 
 O(W*Ddest) construction (dominated by computing `y`), theta-fixed -- build
 once per outer point/inner solve.
@@ -386,18 +418,26 @@ included in the `use_profiled_correction=true` path (previously an explicit, doc
 boundary in every amended cross-block function, see `PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md`
 §2/§6) must pass it. Default `0` preserves the sentinel/excluded behavior exactly (every existing
 caller, and any caller that doesn't have `ctx` in scope, is unaffected).
+
+`gpσ`: `gp^σ` (`θ_full[3+D]^θ_full[2]`), needed ONLY to populate `Lam_homog[cf.cf_col]` correctly
+(mirrors `build_reduced_homogeneous_winner_pair_ctx`'s own `gpσ` computation exactly, same formula)
+-- optional for the same reason `bi_slot` is: callers without `ctx`/`θ_full` in scope simply don't
+get a profiled France-row multiplier (harmless, since `target_slot[cf.cf_col]` stays the sentinel 0
+whenever `bi_slot` is also omitted, so `Lam_homog[cf.cf_col]` is never read in that case anyway).
 """
-function build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int = 0)
+function build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int = 0, gpσ::Float64 = 0.0, denom_cf::Float64 = 0.0)
     D = cf.D; Ddest = cf.D_dest; W = cf.W; ncolI = cf.oci - 1
     has_cf = cf.cf_col > 0
 
     kappa0 = Vector{Float64}(undef, ncolI)
     pi_vec = Vector{Float64}(undef, ncolI)
+    Lam_homog = Vector{Float64}(undef, ncolI)
     @inbounds for slot in 1:Ddest, o in 1:D
         j = slot + (o - 1) * Ddest
         k0 = cf.nrm[j] * cf.gdiv[j]
         kappa0[j] = k0
         pi_vec[j] = k0 * cf.Pmat[o, slot] * cf.denom[slot] + cf.nrm[j] * cf.usePMM * cf.PMM[j]
+        Lam_homog[j] = k0 * cf.Pmat[o, slot]
     end
 
     y = Matrix{Float64}(undef, W, Ddest)
@@ -410,11 +450,14 @@ function build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int = 0)
     end
 
     cf_raw_scaled = Float64[]
+    denom_cf_scaled = 0.0
     if has_cf
         jcf = cf.cf_col
         k0cf = cf.nrm[jcf] * cf.gdiv[jcf]
         kappa0[jcf] = k0cf
         pi_vec[jcf] = cf.nrm[jcf] * cf.usePMM * cf.PMM[jcf]
+        Lam_homog[jcf] = k0cf * gpσ
+        denom_cf_scaled = k0cf * denom_cf
         cf_raw_scaled = k0cf .* cf.cf_raw
     end
 
@@ -435,7 +478,7 @@ function build_winner_pair_ctx(cf::CompressedFactual; bi_slot::Int = 0)
     has_cf && (target_slot[cf.cf_col] = bi_slot)
 
     return WinnerPairHessCtx(D, Ddest, W, ncolI, has_cf, kappa0, pi_vec, copy(cf.SW), y, cf.winner, cf_raw_scaled,
-        cf.wval, target_slot,
+        cf.wval, target_slot, Lam_homog, denom_cf_scaled,
         Vector{Float64}(undef, W), Vector{Float64}(undef, W),
         Vector{Float64}(undef, ncolI), Vector{Float64}(undef, ncolI),
         Matrix{Float64}(undef, ncolI, ncolI))

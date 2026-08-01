@@ -265,6 +265,7 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
     QCScum = ws.QCScum; NuCScum = ws.NuCScum; SOnlyCScum = ws.SOnlyCScum; QCfCScum = ws.QCfCScum
     MCScum = ws.MCScum
     pi_vec = wctx.pi_vec
+    Lam_homog = wctx.Lam_homog
     target_slot = wctx.target_slot
     invM = 1.0 / M
     has_cf = wctx.has_cf
@@ -277,13 +278,26 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
             # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded here to
             # avoid an out-of-bounds @inbounds read; harmless either way since row jcf is always
             # overwritten by its own dedicated computation below, but not relying on that.
-            corr = if use_profiled_correction && target_slot[j] != 0
+            #
+            # BUGFIX (found live, 2026-08-01, via a direct autodiff cross-check the user pushed for
+            # after finding the "iteration limit" convergence behavior suspicious): the multiplier
+            # MUST switch in lockstep with the correction term -- `nu_diff` (destination-independent,
+            # OLD/structured-formulation) pairs with `pi_vec[j]` (also structured, = FixedCol[j]);
+            # the destination-specific MCScum-based correction (HOMOGENEOUS-formulation, matching
+            # `reduced_homogeneous_winner_pair_hessian!`'s own `Lam[j]=kappa0[j]*Pmat[o,slot]`) pairs
+            # with `Lam_homog[j]`, NOT `pi_vec[j]` -- confirmed via ForwardDiff: using `pi_vec[j]`
+            # here (the pre-existing, prior-session code) gave max|Δ|=0.076 on the assembled H_EC
+            # block against an independent autodiff Hessian of the homogeneous-formulation objective,
+            # with H_EE/H_CC both exactly 0 -- i.e. this was a real, isolated formula bug, not a
+            # design choice (see WinnerPairHessCtx's own Lam_homog field docstring for the full
+            # derivation).
+            if use_profiled_correction && target_slot[j] != 0
                 d = target_slot[j]
-                MCScum[d, o, l] - MCScum[d, refIndex1, l]
+                corr = MCScum[d, o, l] - MCScum[d, refIndex1, l]
+                Hraw_EC[j + 1, oi] = (q_diff - Lam_homog[j] * corr) * invM
             else
-                nu_diff
+                Hraw_EC[j + 1, oi] = (q_diff - pi_vec[j] * nu_diff) * invM
             end
-            Hraw_EC[j + 1, oi] = (q_diff - pi_vec[j] * corr) * invM
         end
         # The "cf"/common-factor column (if present) is NOT winner-conditioned like the regular
         # economic columns above -- QTab[jcf,:,:] was left at zero by the main slot-loop (no
@@ -292,11 +306,23 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
         # profiled correction too when `target_slot[jcf]` is a real bi_slot (build_winner_pair_ctx's
         # optional `bi_slot` keyword was supplied) -- falls back to nu_diff otherwise (target_slot[jcf]
         # is the sentinel 0), matching every other amended function's France-row scope discipline.
+        # SAME multiplier bugfix as above applies here (Lam_homog[jcf] for the profiled path).
         if has_cf
             qcf_diff = QCfCScum[o, l] - QCfCScum[refIndex1, l]
-            corr_cf = (use_profiled_correction && target_slot[jcf] != 0) ?
-                (MCScum[target_slot[jcf], o, l] - MCScum[target_slot[jcf], refIndex1, l]) : nu_diff
-            Hraw_EC[jcf + 1, oi] = (qcf_diff - pi_vec[jcf] * corr_cf) * invM
+            if use_profiled_correction && target_slot[jcf] != 0
+                # SECOND bugfix (found live, same session): the homogeneous formulation's own France
+                # coefficient has a CONSTANT term (`denom_cf`) in addition to `cf_raw`/the
+                # `-gpσ*wval[.,bi_slot]` piece (see `WinnerPairHessCtx.denom_cf_scaled`'s own
+                # docstring for the full derivation) -- it does NOT cancel in the `qcf_diff` contrast
+                # (bin membership differs by feature o vs refIndex1), contributing
+                # `denom_cf_scaled*nu_diff` (reusing the SAME nu_diff already computed above).
+                # `qcf_diff` alone (missing this term) was confirmed, via autodiff, to still leave a
+                # real residual (max|Δ|=0.25 on H_EC's France row) even after the Lam_homog fix.
+                corr_cf = MCScum[target_slot[jcf], o, l] - MCScum[target_slot[jcf], refIndex1, l]
+                Hraw_EC[jcf + 1, oi] = (qcf_diff + wctx.denom_cf_scaled * nu_diff - Lam_homog[jcf] * corr_cf) * invM
+            else
+                Hraw_EC[jcf + 1, oi] = (qcf_diff - pi_vec[jcf] * nu_diff) * invM
+            end
         end
     end
     return Hraw_EC

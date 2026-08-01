@@ -141,11 +141,23 @@ for contrasts in (:anchored, :orthonormal), L in (10, 20)
                     o_row = div(j - slot_row, Ddest_wctx) + 1
                     q_diff_bf, T_diff_bf = brute_force_hec_entry(cf, cctx.Bidx, S, j, slot_row, o_row, o_col, cctx.refIndex1, l)
                     kappa0_j = wctx.kappa0[j]
-                    # q_diff (real QCScum) IS kappa0-scaled (y=kappa0*wval); T_diff (real MCScum) is
-                    # RAW/unscaled (mv=Snu*wval, no kappa0) -- pi_vec[j] ALREADY carries kappa0[j] as
-                    # a factor (see build_winner_pair_ctx), so it must NOT be multiplied by kappa0_j
-                    # again here. Matches the real code's `(q_diff - pi_vec[j]*T_diff)*invM` exactly.
-                    expected = (kappa0_j * q_diff_bf - wctx.pi_vec[j] * T_diff_bf) * (1.0 / M)
+                    # BUGFIX (2026-08-01, later same session, found via a direct user challenge that
+                    # led to an independent ForwardDiff cross-check of the FULL assembled Hessian):
+                    # this reference used `wctx.pi_vec[j]` -- the STRUCTURED-formulation multiplier
+                    # (`FixedCol[j]`-analogue, correct ONLY for the OLD, `use_profiled_correction=
+                    # false` destination-independent correction). The profiled/homogeneous formulation
+                    # (matching `reduced_homogeneous_winner_pair_hessian!`'s own `Lam[j]=kappa0[j]*
+                    # Pmat[o,slot]`, confirmed correct to machine precision against autodiff of the
+                    # homogeneous objective) needs `wctx.Lam_homog[j]` instead -- ALSO already carries
+                    # kappa0[j] as a factor (same convention as pi_vec), so still must NOT be
+                    # multiplied by kappa0_j again here. This test's own ORIGINAL reference was itself
+                    # bugged (assumed pi_vec stays unchanged when only nu_diff->T_diff swaps) -- caught
+                    # only once a genuinely reduced flexible-CM KNITRO solve was run and found grinding
+                    # through KNITRO's iteration limit instead of the ~4-iteration quadratic
+                    # convergence a correct Hessian gives (see PROFILED_ALL_FAMILY_COMPLETION_MASTER_
+                    # 2026-08-01.md for the full account). q_diff (real QCScum) IS kappa0-scaled
+                    # (y=kappa0*wval); T_diff (real MCScum) is RAW/unscaled (mv=Snu*wval, no kappa0).
+                    expected = (kappa0_j * q_diff_bf - wctx.Lam_homog[j] * T_diff_bf) * (1.0 / M)
                     got = Hraw_EC_new[j + 1, oi]
                     maxdiff_new = max(maxdiff_new, abs(got - expected))
                 end

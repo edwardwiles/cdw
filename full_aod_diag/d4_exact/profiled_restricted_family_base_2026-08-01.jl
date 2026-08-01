@@ -130,3 +130,64 @@ function materialize_dense_factual_structured_reduced!(Gview::AbstractMatrix, cf
     layout.france_ratio_reduced_j > 0 && (@views Gview[:, end] .= Gfull[:, cf.cf_col])
     return Gview
 end
+
+# ============================================================================
+# FORMULATION-CONSISTENCY BUGFIX (2026-08-01, found live via direct autodiff cross-check after the
+# user correctly flagged the reduced flexible-CM solve hitting KNITRO's iteration limit -- unusual
+# for this class of problem and rightly treated as suspicious rather than accepted at face value):
+#
+# `reduced_homogeneous_winner_pair_hessian!` (H_EE) and `winner_pair_cross_hessian_cm_block!`'s
+# `use_profiled_correction=true` path (H_EC, after this session's own Lam_homog fix) both implement
+# the HOMOGENEOUS moment formulation (`homogeneous_contraction_2026-07-31.jl`'s own `kappa`/`Cbar`
+# convention, deliberately DIFFERENT from the STRUCTURED formulation
+# `materialize_dense_factual_structured!`/`structured_fill_chunk!` production `G` is built from --
+# confirmed via direct comparison, NOT a reparametrization of the same moments: their linear
+# functionals `t(w)=sum_j beta_j*G[w,j]` disagree by ~30-95% at matched beta, not a constant scale
+# factor). `materialize_dense_factual_structured_reduced!` above is therefore the WRONG G for a
+# reduced context whose Hessian goes through the homogeneous-formulation kernels -- it was validated
+# internally consistent with ITSELF (Part 1 of test_profiled_flexcm_d4_fg_and_solve_gate_2026-08-01.jl
+# still passes, correctly, since gathering from the FULL structured G is exactly what it's supposed
+# to do) but not consistent with the Hessian it was paired with, which is why the D4 KNITRO solve
+# ground through the 100-iteration default limit (linear, not quadratic, convergence -- the classic
+# signature of a Hessian that doesn't match the objective's actual curvature) instead of the ~4
+# iterations to machine precision the FULL model achieves on the identical problem. This function
+# closes that gap: reuses ONLY the already-validated `reduced_homogeneous_dual_contraction` (this
+# branch's own, pre-existing, autodiff-confirmed-to-machine-precision homogeneous kernel), never
+# re-deriving its formula by hand (two earlier hand-derivation attempts this session each introduced
+# a fresh, different bug -- see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md's full account).
+# ============================================================================
+
+isdefined(Main, :reduced_homogeneous_dual_contraction) || error("profiled_restricted_family_base_2026-08-01.jl requires reduced_homogeneous_contraction_2026-08-01.jl to be included first (for materialize_homogeneous_dense_G_reduced!).")
+
+"""
+    materialize_homogeneous_dense_G_reduced!(Gview, cf, ctx, θ_full, layout) -> Gview
+
+Dense HOMOGENEOUS-formulation `G` for the reduced economic block, sized `(cf.W,
+layout.total_reduced_economic_moments)` -- the correct FG counterpart to
+`reduced_homogeneous_winner_pair_hessian!` (H_EE) and the `use_profiled_correction=true` path of
+`winner_pair_cross_hessian_cm_block!` (H_EC), REPLACING `materialize_dense_factual_structured_reduced!`
+above wherever a reduced context's Hessian goes through those kernels (i.e. whenever
+`profiled_layout !== nothing`, unconditionally -- there is no case where mixing formulations is
+correct).
+
+DESIGN: since `reduced_homogeneous_dual_contraction(β, cf, ctx, θ_full, layout)` is LINEAR in `β`,
+column `j` of `G` is EXACTLY `reduced_homogeneous_dual_contraction(e_j, cf, ctx, θ_full, layout)` for
+the `j`-th unit vector `e_j` -- guaranteed correct by construction (no hand-derived closed form,
+which twice produced a fresh bug earlier this session when attempted). Cost:
+`O(n_reduced)` calls to an `O(W)` function = `O(W*n_reduced)`, the same complexity class as the
+structured version it replaces; not yet optimized to a genuine O(1)-per-column closed form (a real,
+documented follow-up, not attempted here given this function's own cautionary history).
+"""
+function materialize_homogeneous_dense_G_reduced!(Gview::AbstractMatrix, cf, ctx, θ_full::AbstractVector,
+        layout::ProfiledEconomicMomentLayout)
+    W = cf.W
+    n_reduced = layout.total_reduced_economic_moments
+    size(Gview) == (W, n_reduced) || error("materialize_homogeneous_dense_G_reduced!: size(Gview)=$(size(Gview)) != (W,n_reduced)=($W,$n_reduced)")
+    e = zeros(n_reduced)
+    @inbounds for j in 1:n_reduced
+        e[j] = 1.0
+        Gview[:, j] .= reduced_homogeneous_dual_contraction(e, cf, ctx, θ_full, layout)
+        e[j] = 0.0
+    end
+    return Gview
+end

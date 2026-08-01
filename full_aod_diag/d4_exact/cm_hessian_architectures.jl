@@ -62,6 +62,10 @@ isdefined(Main, :dest_slot) || include(joinpath(dirname(dirname(@__DIR__)), "cc_
 isdefined(Main, :AnchorSpec) || include(joinpath(@__DIR__, "relative_a_coordinate_2026-07-31.jl"))
 isdefined(Main, :ProfiledEconomicMomentLayout) || include(joinpath(@__DIR__, "profiled_economic_moment_layout_2026-08-01.jl"))
 isdefined(Main, :ReducedHomogeneousWinnerPairHessCtx) || include(joinpath(@__DIR__, "reduced_homogeneous_hessian_2026-08-01.jl"))
+# reduced_homogeneous_dual_contraction -- needed by materialize_homogeneous_dense_G_reduced!
+# (profiled_restricted_family_base_2026-08-01.jl), the FG counterpart of the homogeneous H_EE/H_EC
+# kernels above (formulation-consistency bugfix, 2026-08-01).
+isdefined(Main, :reduced_homogeneous_dual_contraction) || include(joinpath(@__DIR__, "reduced_homogeneous_contraction_2026-08-01.jl"))
 # build_reduced_base_obj_for_family/materialize_dense_factual_structured_reduced! -- used by
 # build_cm_augmented_obj_archB's base_obj kwarg and wrap_moments_with_cm_archB's profiled_layout
 # kwarg respectively (both additive, both nothing by default).
@@ -276,10 +280,6 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
     pregrav = ncore_full - 1
     nO = length(origins)
     Gtmp_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
-    # Profiled all-families completion task (2026-08-01): persistent full-width scratch for
-    # materialize_dense_factual_structured_reduced!'s own `scratch_full` keyword -- only ever
-    # allocated/resized when `profiled_layout !== nothing` (harmless empty buffer otherwise).
-    profiled_full_scratch_cache = Ref{Matrix{Float64}}(Matrix{Float64}(undef, 0, 0))
     # Allocation/Hessian port task §4.1: persistent bview*R product scratch, built once (per
     # closure lifetime -- this closure itself is built once per outer-solve process, see
     # build_cm_production_context) and reused across every fill_cm_columns_from_bins! call.
@@ -334,12 +334,14 @@ function wrap_moments_with_cm_archB(core_moments!::Function, ncore_full::Int,
             # core_hessian_backend=:dense_reference) -- validated D=4, all 4 sections,
             # test_shared_core_hessian_d4_gates.jl, 40/40 PASS including the real-solved-point arm.
             if profiled_layout !== nothing
-                ncol_full = cf.oci - 1
-                if size(profiled_full_scratch_cache[]) != (n, ncol_full)
-                    profiled_full_scratch_cache[] = Matrix{Float64}(undef, n, ncol_full)
-                end
-                materialize_dense_factual_structured_reduced!(@view(Gtmp[:, 1:pregrav]), cf, profiled_layout;
-                    scratch_full = profiled_full_scratch_cache[])
+                # Formulation-consistency bugfix (2026-08-01): MUST be the HOMOGENEOUS-formulation
+                # G (matching reduced_homogeneous_winner_pair_hessian!/winner_pair_cross_hessian_
+                # cm_block!'s use_profiled_correction=true path), NOT the structured-formulation one
+                # -- see materialize_homogeneous_dense_G_reduced!'s own docstring for the full
+                # derivation (confirmed via autodiff: mixing the two gave a real, ~30-95%-off H_EC
+                # block and a KNITRO solve that ground through the iteration limit instead of
+                # converging in ~4 iterations like the full model).
+                materialize_homogeneous_dense_G_reduced!(@view(Gtmp[:, 1:pregrav]), cf, ctx, θ, profiled_layout)
             elseif !skip_fill
                 materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
             end
@@ -1277,11 +1279,30 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
         # exactly as the unrestricted family does, then gathers only `layout`-retained rows into
         # the (smaller) `Hfull` -- zero lines inside either of those two functions change.
         extension === nothing || error("hessian_cm_structured!: common-Fréchet's H_EF gather is not implemented for the profiled economic layout yet (H_EC only) -- see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md.")
+        # BUGFIX (found live, 2026-08-01, via a direct user challenge to re-verify H_CC rather than
+        # trust "unchanged code must be correct"): this branch skipped build_bin_tables!/
+        # prefix_sum_tables! entirely, so cctx.CT (the theta/weight-dependent bin table
+        # fill_cm_HCC! below reads) was STALE -- whatever it held from a previous, unrelated call
+        # (or all-zeros if never built). H_CC is CM-grid-only (does not depend on the economic
+        # block at all, `fill_S=false` since this path never reads Stab/CScum), so this fix is
+        # identical in spirit to the non-profiled branch's own `build_bin_tables!(cctx, H, w;
+        # fill_S=!use_winner_bin)` call -- just always fill_S=false here, since the profiled path
+        # never uses the dense S-table for ANY block. Confirmed the actual bug (not a conditioning
+        # issue) via a direct H_CC-only numeric comparison against the full model: max|Δ| was
+        # ~0.5 (real, reproducible, non-noise) before this fix.
+        build_bin_tables!(cctx, H, w; fill_S = false)
+        prefix_sum_tables!(cctx; fill_S = false)
         layout = cctx.profiled_layout
         has_france = layout.france_ratio_reduced_j > 0
         bi_slot = has_france ? dest_slot(cctx.econ_ctx, cctx.econ_ctx.bi) : 0
+        # gpσ = gp^σ, needed for build_winner_pair_ctx's own Lam_homog[cf.cf_col] -- SAME formula as
+        # build_reduced_homogeneous_winner_pair_ctx's own gpσ computation (θ_full[2]=σ, θ_full[3+D]=gp).
+        # denom_cf = gpσ*wPrime_bi*LPrime[bi] (wPrime_bi≡1) -- SAME formula, needed for
+        # WinnerPairHessCtx's own denom_cf_scaled field (H_EC France-row second bugfix).
+        gpσ = has_france ? cctx.profiled_theta_ref[][3 + D]^cctx.profiled_theta_ref[][2] : 0.0
+        denom_cf = has_france ? gpσ * cctx.econ_ctx.γ.LPrime[cctx.econ_ctx.bi] : 0.0
         if cctx.profiled_full_wctx === nothing || cctx.profiled_full_wctx_for !== cf
-            cctx.profiled_full_wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot)
+            cctx.profiled_full_wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot, gpσ = gpσ, denom_cf = denom_cf)
             cctx.profiled_full_wctx_for = cf
         end
         wctx_full = cctx.profiled_full_wctx

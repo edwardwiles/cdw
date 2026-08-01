@@ -72,6 +72,14 @@ has_france = cf_probe.cf_col > 0
 layout = build_profiled_economic_moment_layout(ctx, spec; has_france_ratio = has_france)
 assert_no_factual_price_index_moment(layout)
 bi_slot = has_france ? dest_slot(ctx, ctx.bi) : 0
+# Formulation-consistency bugfix (2026-08-01): build_winner_pair_ctx's Lam_homog[cf.cf_col]/
+# denom_cf_scaled (needed for a correct France-row H_EC correction, see that struct's own field
+# docstrings) require gpσ/denom_cf -- previously omitted here, which is why this gate initially
+# showed a real (0.088) H_EC discrepancy after the Lam_homog fix landed elsewhere: this test's OWN
+# reference wctx_full was stale, not the production code (which now computes both correctly inside
+# hessian_cm_structured!).
+gpσ = has_france ? θ_full_calib[3 + ctx.D]^θ_full_calib[2] : 0.0
+denom_cf = has_france ? gpσ * ctx.γ.LPrime[ctx.bi] : 0.0
 D = ctx.D; Ddest = cf_probe.D_dest
 reduced_obj0 = build_reduced_base_obj_for_family(ctx, layout, CS)
 
@@ -147,7 +155,7 @@ for contrasts in (:anchored, :orthonormal), L in (10, 20)
         HEE_gathered = unpack_packed(h_direct, n_reduced)   # "gathered" name kept for the diff-report lines below
 
         # ---- Reference H_EC: FULL primitive with use_profiled_correction=true, gathered ----
-        wctx_full = build_winner_pair_ctx(cf_full; bi_slot = bi_slot)
+        wctx_full = build_winner_pair_ctx(cf_full; bi_slot = bi_slot, gpσ = gpσ, denom_cf = denom_cf)
         gather_idx = Vector{Int}(undef, n_reduced)
         gather_idx[1] = 1
         for k in 1:n_bilateral
