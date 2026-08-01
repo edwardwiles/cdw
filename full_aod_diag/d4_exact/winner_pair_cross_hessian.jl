@@ -337,10 +337,20 @@ reuse forever" discipline for `cross_scratch`/`core_ws`).
 mutable struct WinnerZCCrossScratch
     W::Int
     max_nx::Int
+    Ddest::Int   # profiled economic block port (2026-08-01): needed to size SnuWval/TZ_buf below
     Snu::Vector{Float64}
     crs_buf::Vector{Float64}
     v::Vector{Float64}
     NuZ_buf::Vector{Float64}
+    # Profiled economic block port (2026-08-01): the H_EZ analog of H_EC's MCScum
+    # (PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §3) -- `SnuWval[w,d] = Snu[w]*wctx.wval[w,d]`
+    # (W x Ddest, filled once per callback in `winner_pair_cross_hessian_zc_prep!`, same lifecycle
+    # as `Snu`) and `TZ_buf[d,x] = Σ_w SnuWval[w,d]*Z[w,x]` (Ddest x max_nx, ONE BLAS.gemm! call
+    # per `winner_pair_cross_hessian_zc_block!` invocation, replacing the old single-vector `NuZ`
+    # correction with a per-destination one). Filled/read only by the new
+    # `use_profiled_correction=true` path -- unread by every existing caller.
+    SnuWval::Matrix{Float64}   # W x Ddest
+    TZ_buf::Matrix{Float64}    # Ddest x max_nx
     # optimize/structured-cross-hessian-ZC-CM-2026-07-28: persistent scratch for
     # `winner_pair_cross_hessian_zc_block_threaded!` (threaded_cross_hessian.jl) -- `tasks_ez`
     # (sized to `Threads.nthreads()`) avoids a per-callback `Vector{Task}` allocation;
@@ -352,16 +362,20 @@ mutable struct WinnerZCCrossScratch
     thread_scratch_ez::Vector{Vector{Float64}}
 end
 
-WinnerZCCrossScratch(W::Int, max_nx::Int) =
-    WinnerZCCrossScratch(W, max_nx, zeros(W), zeros(W), zeros(W), zeros(max_nx),
+"`Ddest` defaults to 1 (a deliberately conservative, deliberately-too-small-to-silently-misuse
+default) for callers that don't pass it explicitly -- SnuWval/TZ_buf are unread on any path that
+doesn't opt into `use_profiled_correction=true`, so no existing caller needs to change."
+WinnerZCCrossScratch(W::Int, max_nx::Int, Ddest::Int = 1) =
+    WinnerZCCrossScratch(W, max_nx, Ddest, zeros(W), zeros(W), zeros(W), zeros(max_nx),
+        zeros(W, Ddest), zeros(Ddest, max_nx),
         Vector{Task}(undef, Threads.nthreads()),
         [zeros(W) for _ in 1:Threads.nthreads()])
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(W, max_nx)` -- mirrors this file's own `ensure_winner_bin_cross_scratch!` idiom."
-function ensure_winner_zc_cross_scratch!(ws_ref::Base.RefValue{Union{Nothing,WinnerZCCrossScratch}}, W::Int, max_nx::Int)
+function ensure_winner_zc_cross_scratch!(ws_ref::Base.RefValue{Union{Nothing,WinnerZCCrossScratch}}, W::Int, max_nx::Int, Ddest::Int = 1)
     ws = ws_ref[]
-    if ws === nothing || ws.W != W || ws.max_nx < max_nx
-        ws_ref[] = WinnerZCCrossScratch(W, max_nx)
+    if ws === nothing || ws.W != W || ws.max_nx < max_nx || ws.Ddest != Ddest
+        ws_ref[] = WinnerZCCrossScratch(W, max_nx, Ddest)
     end
     return ws_ref[]
 end
@@ -390,6 +404,17 @@ function winner_pair_cross_hessian_zc_prep!(ws::WinnerZCCrossScratch, wctx::Winn
             crsbuf[w] = Snu[w] * crs[w]
         end
     end
+    # Profiled economic block port (2026-08-01): SnuWval, same lifecycle as Snu -- see
+    # WinnerZCCrossScratch's own field docstring. Cheap/harmless when ws.Ddest==1 (the
+    # not-yet-profiled-caller default, still correct-if-unused since it's simply never read);
+    # ws.Ddest must never exceed wctx.Ddest (indexes into wctx.wval's own Ddest dimension below).
+    Ddest_ws = ws.Ddest
+    Ddest_ws <= wctx.Ddest || error("winner_pair_cross_hessian_zc_prep!: ws.Ddest=$Ddest_ws exceeds wctx.Ddest=$(wctx.Ddest) -- rebuild scratch via ensure_winner_zc_cross_scratch! with the correct Ddest")
+    wval = wctx.wval
+    SnuWval = ws.SnuWval
+    @inbounds for d in 1:Ddest_ws, w in 1:W
+        SnuWval[w, d] = Snu[w] * wval[w, d]
+    end
     return ws
 end
 
@@ -403,9 +428,18 @@ header). Requires `winner_pair_cross_hessian_zc_prep!(ws, wctx, S)` to have been
 THIS Hessian callback (does not recompute `Snu`/`crs_buf` itself, so it is safe/cheap to call this
 function more than once per callback against the SAME `ws`/`S` -- e.g. once per level -- without
 redoing the O(W) prep work).
+
+`use_profiled_correction=false` (default): byte-for-byte the original OLD-formulation behavior
+(the single global `NuZ` correction) -- every existing caller (CM+ZC, ZC-only) is unaffected.
+`use_profiled_correction=true`: replaces `NuZ[x]` (destination-independent) with the
+destination-specific `TZ[d,x] = Σ_w Snu[w]*wctx.wval[w,d]*Z[w,x]`, `d = wctx.target_slot[j]`,
+computed as ONE `BLAS.gemm!` call (`TZ = SnuWval' * Z`) -- see
+PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §3. Same France/cf-row scope boundary as
+`winner_pair_cross_hessian_cm_block!` (kept on `NuZ`, see that function's own docstring).
 """
 function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerZCCrossScratch, S::AbstractVector{Float64}, Z::AbstractMatrix{Float64}, M::Real)
+        ws::WinnerZCCrossScratch, S::AbstractVector{Float64}, Z::AbstractMatrix{Float64}, M::Real;
+        use_profiled_correction::Bool = false)
     W = wctx.W; Ddest = wctx.Ddest
     ncolI = wctx.ncolI
     nx = size(Z, 2)
@@ -413,8 +447,10 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
     length(S) == W || error("winner_pair_cross_hessian_zc_block!: length(S)=$(length(S)) != wctx.W=$W")
     size(Z, 1) == W || error("winner_pair_cross_hessian_zc_block!: size(Z,1)=$(size(Z, 1)) != wctx.W=$W")
     nx <= ws.max_nx || error("winner_pair_cross_hessian_zc_block!: nx=$nx exceeds ws.max_nx=$(ws.max_nx) -- rebuild scratch via ensure_winner_zc_cross_scratch!")
+    use_profiled_correction && ws.Ddest != Ddest &&
+        error("winner_pair_cross_hessian_zc_block!: use_profiled_correction=true requires ws.Ddest=$(ws.Ddest) == wctx.Ddest=$Ddest -- rebuild scratch via ensure_winner_zc_cross_scratch!(...; Ddest)")
 
-    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec
+    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec; target_slot = wctx.target_slot
     has_cf = wctx.has_cf; jcf = ncolI
     Snu = ws.Snu; v = ws.v
     invM = 1.0 / M
@@ -452,10 +488,26 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
     NuZ = @view ws.NuZ_buf[1:nx]
     BLAS.gemv!('T', 1.0, Z, Snu, 0.0, NuZ)
 
+    # Profiled economic block port (2026-08-01): TZ[d,x] = Σ_w SnuWval[w,d]*Z[w,x], ONE BLAS.gemm!
+    # call, only computed when actually needed (use_profiled_correction=true) -- see
+    # PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §3.
+    TZ = nothing
+    if use_profiled_correction
+        TZ = @view ws.TZ_buf[:, 1:nx]
+        BLAS.gemm!('T', 'N', 1.0, ws.SnuWval, Z, 0.0, TZ)
+    end
+
     @inbounds for j in 1:nbilateral
         pij = pi_vec[j]
-        for x in 1:nx
-            HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+        if use_profiled_correction
+            d = target_slot[j]
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * TZ[d, x])
+            end
+        else
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+            end
         end
     end
 
@@ -463,6 +515,7 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
         pij = pi_vec[jcf]
+        # France/cf row deliberately excluded from the profiled path -- always NuZ, see docstring.
         @inbounds for x in 1:nx
             row_cf[x] -= invM * pij * NuZ[x]
         end
