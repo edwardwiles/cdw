@@ -1,0 +1,3 @@
+label,p_ok,ref_ok,nStatus_p,nStatus_ref,Delta_primal_p,Delta_primal_ref,mw_diff,div_diff,winner_match,gamma_dev,kkt_p,kkt_ref,t_solve_p_sec,t_solve_ref_sec
+calibration,true,true,0,0,2.1192257477e-03,2.1192224822e-03,4.791412e-05,3.265475e-09,true,7.055309e-04,2.020765e-13,6.772292e-13,1.525,0.841
+modest_perturbation,true,true,0,0,3.4965507057e-03,3.4965455986e-03,4.481499e-05,5.107128e-09,true,1.320565e-03,2.730763e-13,3.276916e-13,0.630,0.871
