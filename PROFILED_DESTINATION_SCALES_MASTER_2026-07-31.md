@@ -357,11 +357,18 @@ HESSIAN =
         the already-verified homogeneous_dual_contraction's own objective (an independent method,
         not a second hand-derived formula) -- caught a real bug on first run (missing kappa0[j]
         scale factor, 30% error), fixed, re-verified to 4.05e-9 vs FD)
-    H_E_CM:not_implemented (audit's "unchanged" claim for cross-Hessian blocks NOT yet re-checked
-        against H_EE's corrected finding -- do not trust the audit's classification here either
-        without a direct check)
-    H_E_Frechet:not_implemented (same caveat)
-    H_E_ZC:not_implemented (same caveat)
+    H_E_CM:not_implemented (CONFIRMED via direct read, not the audit label: winner_pair_cross_
+        hessian_cm_block! [winner_pair_cross_hessian.jl:198-222] uses wctx.pi_vec directly at
+        lines 201/210/218 -- the SAME fixed-target dependency H_EE had. Fix direction understood
+        in principle (replace pi_vec*nu_diff with a per-slot-weighted subgroup sum, same Lam-style
+        idea as H_EE) but NOT implemented: the correction needs new accumulators inside the
+        threshold-binning infrastructure (WinnerBinCrossScratch/QCScum/NuCScum, per-bin cumulative
+        sums across draws) that has not yet been read/understood, and rushing it without doing so
+        risks repeating the exact kappa0-scaling-omission bug H_EE's gate caught)
+    H_E_Frechet:not_implemented (not yet directly checked; given H_EC's confirmed dependency,
+        assume the same until verified -- do not default to "unchanged")
+    H_E_ZC:not_implemented (winner_pair_cross_hessian_zc_block! not yet read in this session; same
+        caveat)
 
 OUTER_GRADIENT =
     Cplus:not_implemented
