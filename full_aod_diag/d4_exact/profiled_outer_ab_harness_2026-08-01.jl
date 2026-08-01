@@ -48,7 +48,18 @@ function run_profiled_outer_search(label::String, w_start::Vector{Float64}; ctx,
         # (full-rebuild FD, §9 original) or profiled_composite_gradient_at_incremental
         # (O(1)-per-changed-cell, profiled_lfix_incremental_2026-08-01.jl) -- same call signature
         # (w, ctx, spec, pe, ev) -> (g, meta) for both, so this is a pure drop-in.
-    n = length(w_start)
+    # BUGFIX (live user-prompted verification, 2026-08-01): gp MUST be held fixed for the
+    # "profile stage" (matching run_profile_checkpointed's own contract exactly -- there, g_in is a
+    # separate scalar argument captured by closure, NEVER added to KNITRO's free-variable vector at
+    # all). An earlier version of this function put ALL of w_start (including gp, w[1]) into
+    # KN_add_vars with a +-30 box, letting KNITRO silently drift gp back toward its easy,
+    # well-fitting calibration value instead of being held at the caller's fixed target -- caught via
+    # a live LFD/gravity verification the user asked for after a suspiciously large (509x) A/B gap:
+    # the "best" checkpoint's own gp had drifted from 0.9831 (the intended fixed value) back to
+    # 0.9930 (~calibration), which is not a legitimate profile-stage comparison at all.
+    gp_fixed = w_start[1]
+    r_free_start = w_start[2:end]
+    n_free = length(r_free_start)
     lp(xs...) = (println(xs...); flush(stdout))
 
     t_start = time()
@@ -60,21 +71,22 @@ function run_profiled_outer_search(label::String, w_start::Vector{Float64}; ctx,
 
     ev0 = evaluate_profiled_point(w_start, ctx, spec, pe)
     ev0.result.inner_status in (0, -100, -101, -103) || error("run_profiled_outer_search($label): start point not inner-feasible (status=$(ev0.result.inner_status))")
-    lp("[$label] seed: Delta_dual=$(ev0.result.Delta_dual)  status=$(ev0.result.inner_status)")
+    lp("[$label] seed: gp_fixed=$gp_fixed  Delta_dual=$(ev0.result.Delta_dual)  status=$(ev0.result.inner_status)")
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
     KNITRO.KN_set_param_by_name(kc, "algorithm", 3)
-    xIndices = KNITRO.KN_add_vars(kc, n)
+    xIndices = KNITRO.KN_add_vars(kc, n_free)
     z_halfwidth = 30.0
-    KNITRO.KN_set_var_lobnds_all(kc, w_start .- z_halfwidth)
-    KNITRO.KN_set_var_upbnds_all(kc, w_start .+ z_halfwidth)
-    KNITRO.KN_set_var_primal_init_values_all(kc, w_start)
+    KNITRO.KN_set_var_lobnds_all(kc, r_free_start .- z_halfwidth)
+    KNITRO.KN_set_var_upbnds_all(kc, r_free_start .+ z_halfwidth)
+    KNITRO.KN_set_var_primal_init_values_all(kc, r_free_start)
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
-        w = collect(Float64, evalRequest.x)
+        r_free = collect(Float64, evalRequest.x)
+        w = vcat(gp_fixed, r_free)
         ev = evaluate_profiled_point(w, ctx, spec, pe)
         if !(ev.result.inner_status in (0, -100, -101, -103)) || !isfinite(ev.result.Delta_dual)
             evalResult.obj[1] = 1e10
@@ -99,11 +111,12 @@ function run_profiled_outer_search(label::String, w_start::Vector{Float64}; ctx,
     end
 
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
-        w = collect(Float64, evalRequest.x)
+        r_free = collect(Float64, evalRequest.x)
+        w = vcat(gp_fixed, r_free)
         ev = (last_w[] !== nothing && last_w[] == w) ? last_ev[] : evaluate_profiled_point(w, ctx, spec, pe)
         g, meta = gradient_fn(w, ctx, spec, pe, ev)
         n_grad_calls[] += 1
-        evalResult.objGrad .= g
+        evalResult.objGrad .= g[2:end]   # drop gp component -- gp is fixed, not a KNITRO free variable (matches production's own gfull[2:end] convention)
         return 0
     end
 
