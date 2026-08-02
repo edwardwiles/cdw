@@ -1,0 +1,9 @@
+family,arm,wall_s,iters,nStatus,dense_econ,drawmajor_v2_dispatch,drawmajor_v2_fallback,draw_chunk_reordered_dispatch,draw_chunk_reordered_fallback
+cm_meanzc,FULL,71.02708101272583,9,0,0,-1,-1,-1,-1
+cm_meanzc,REDUCED_BASELINE,299.5836720466614,9,0,0,0,8,0,8
+cm_meanzc,REDUCED_DRAWMAJOR_ONLY,178.8066520690918,9,0,0,8,0,0,8
+cm_meanzc,REDUCED_DRAWMAJOR_PLUS_HCZ,58.75429582595825,8,0,0,7,0,7,0
+cm_meanzc,REDUCED_ALL_ACCEPTED,59.53918099403381,8,0,0,7,0,7,0
+origin_zc,FULL,51.78282189369202,12,-103,0,-1,-1,-1,-1
+origin_zc,REDUCED_BASELINE,140.81250405311584,9,0,0,0,8,0,0
+origin_zc,REDUCED_ALL_ACCEPTED,42.10558199882507,9,0,0,8,0,0,0
