@@ -118,6 +118,15 @@ mutable struct ReducedCMLookupState
     hw_cache::HessianWeightCache
 end
 
+# `shared_family_outer_gradient`/`diag_profiled_full_rebuild_gradient` (the pre-existing,
+# family-agnostic outer-gradient engine and its independent reference, both built for the
+# unrestricted family's own `ProfiledCBState` which carries `cf::CompressedFactual` directly) read
+# `st.cf`. This state instead carries `core_cf_ref::Ref{Any}` -- the SAME box `prime_operator!`
+# (shared, unchanged, family-agnostic priming already used by every restricted family) publishes
+# into -- so `st.cf` is forwarded to `core_cf_ref[]` here rather than duplicating a `cf` field that
+# would need to be kept in sync by hand.
+Base.getproperty(st::ReducedCMLookupState, s::Symbol) = s === :cf ? getfield(st, :core_cf_ref)[] : getfield(st, s)
+
 function ReducedCMLookupState(obj::OperatorPsiBundle, ctx, layout::ProfiledEconomicMomentLayout, θ_full::Vector{Float64},
         ncm::Int, L::Int, origins::Vector{Int}, refIndex1::Int, bins::Matrix{<:Unsigned}, R;
         method::Symbol = :suffix, core_cf_ref::Ref{Any} = Ref{Any}(nothing))

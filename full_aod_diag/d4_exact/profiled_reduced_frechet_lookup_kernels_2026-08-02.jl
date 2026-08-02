@@ -61,6 +61,11 @@ mutable struct ReducedCMFrechetLookupState
     hw_cache::HessianWeightCache
 end
 
+# Same forward as `ReducedCMLookupState`'s own (profiled_reduced_lookup_kernels_2026-08-02.jl): the
+# shared, family-agnostic outer-gradient engine reads `st.cf` directly; this state carries
+# `core_cf_ref::Ref{Any}` (the box `prime_operator!` publishes into), so `st.cf` forwards there.
+Base.getproperty(st::ReducedCMFrechetLookupState, s::Symbol) = s === :cf ? getfield(st, :core_cf_ref)[] : getfield(st, s)
+
 function ReducedCMFrechetLookupState(obj::OperatorPsiBundle, ctx, layout::ProfiledEconomicMomentLayout, θ_full::Vector{Float64},
         ncm_cm::Int, ncm_level::Int, L::Int, D::Int, origins::Vector{Int}, refIndex1::Int, bins::Matrix{<:Unsigned}, R,
         level_targets::Vector{Float64}; core_cf_ref::Ref{Any} = Ref{Any}(nothing))
