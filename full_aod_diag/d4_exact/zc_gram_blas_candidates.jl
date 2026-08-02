@@ -274,15 +274,19 @@ function zc_gram_dispatch!(HZZ::AbstractMatrix{Float64}, backend::Symbol,
         S::AbstractVector{Float64}, M::Real; workers::Int)
     if backend === :reference
         cs === nothing && error("zc_gram_dispatch!: backend=:reference requires a built ZCCenteredScratch")
+        record_blas_syrk_fallback!()
         return zc_restriction_gram!(HZZ, cs, op, M)
     elseif backend === :blas_syrk
         raw_ws === nothing && error("zc_gram_dispatch!: backend=:blas_syrk requires a built ZCRawWeightedWorkspace")
+        record_blas_syrk_dispatch!()
         return zc_gram_blas_syrk!(HZZ, raw_ws, S, M)
     elseif backend === :blas_gemm
         raw_ws === nothing && error("zc_gram_dispatch!: backend=:blas_gemm requires a built ZCRawWeightedWorkspace")
+        record_blas_syrk_fallback!()
         return zc_gram_blas_gemm!(HZZ, raw_ws, S, M)
     elseif backend === :threaded_packed
         raw_ws === nothing && error("zc_gram_dispatch!: backend=:threaded_packed requires a built ZCRawWeightedWorkspace")
+        record_blas_syrk_fallback!()
         return zc_gram_threaded_packed!(HZZ, raw_ws, S, M; workers = workers)
     else
         error("zc_gram_dispatch!: unknown backend :$backend (must be :reference|:blas_syrk|:blas_gemm|:threaded_packed)")

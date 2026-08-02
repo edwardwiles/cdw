@@ -72,6 +72,30 @@ Base.@kwdef mutable struct NoDenseGCounters
     # (not the number of Hessian callbacks) once that mode is enabled.
     zc_centered_rebuilds::Int = 0
     zc_centered_cache_hits::Int = 0
+    # Phase 7 (dispatch-counters, 2026-08-02): BACKEND-SPECIFIC runtime dispatch proof for the
+    # three optimized Hessian-cross-block backends this integration branch's own reduced FG
+    # evaluators rely on -- `blas_syrk` (H_ZZ/H_MM/H_RR, zc_gram_dispatch!, zc_gram_blas_
+    # candidates.jl), `drawmajor_v2` (H_EZ/H_EM/H_ER, the if/elseif chain in cm_hessian_
+    # architectures.jl's `_fill_cm_HEE!`/`archA_partitioned_hess_cb_builder`), and
+    # `draw_chunk_reordered` (H_CZ, CM+ZC only, `hcz_prep_dispatch!`, hcz_drawchunk_candidate_
+    # 2026-07-29.jl). Distinct from the pre-existing `winner_cross_hessian_calls`/`dense_cross_
+    # hessian_calls` pair above, which only proves "the winner-aware (non-dense-G) path was
+    # used", NOT which specific optimized kernel backend fired within that path -- e.g. the
+    # winner-aware path can legitimately choose :reference/:blas_gemm/:threaded_packed/:drawmajor
+    # (v1)/serial instead of the fast backend without tripping `dense_cross_hessian_calls` at all.
+    # A `_dispatch_count` increment means the fast backend's own branch executed; a
+    # `_fallback_count` increment means the SAME dispatcher/if-chain executed but selected a
+    # DIFFERENT (non-fast) branch -- both counters live at the SAME decision point per backend, so
+    # `_dispatch_count>0 && _fallback_count==0` is a genuine "always the fast backend, never a
+    # silent regression to a slower sibling" assertion. See test_zc_lane_cmzc_dispatch_proof_
+    # 2026-08-02.jl / test_zc_lane_originzc_dispatch_proof_2026-08-02.jl for the real-KNITRO-solve
+    # gates that check these.
+    blas_syrk_dispatch_count::Int = 0
+    blas_syrk_fallback_count::Int = 0
+    drawmajor_v2_dispatch_count::Int = 0
+    drawmajor_v2_fallback_count::Int = 0
+    draw_chunk_reordered_dispatch_count::Int = 0
+    draw_chunk_reordered_fallback_count::Int = 0
 end
 
 const NO_DENSE_G_COUNTERS = Ref(NoDenseGCounters())
@@ -201,6 +225,25 @@ record_zc_centered_rebuild!() = (NO_DENSE_G_COUNTERS[].zc_centered_rebuilds += 1
 record_zc_centered_cache_hit!() = (NO_DENSE_G_COUNTERS[].zc_centered_cache_hits += 1; nothing)
 
 """
+    record_blas_syrk_dispatch!() / record_blas_syrk_fallback!()
+    record_drawmajor_v2_dispatch!() / record_drawmajor_v2_fallback!()
+    record_draw_chunk_reordered_dispatch!() / record_draw_chunk_reordered_fallback!()
+
+Phase 7 (dispatch-counters, 2026-08-02): call exactly one of the pair from EVERY execution of the
+corresponding dispatcher/if-chain (`zc_gram_dispatch!`, the H_EZ/H_EM/H_ER drawmajor if/elseif
+chain, `hcz_prep_dispatch!`) -- `_dispatch!` when the fast backend's own branch is the one that
+ran, `_fallback!` when the SAME call site ran but chose a different (slower/reference) branch
+instead. See the fields' own docstring in `NoDenseGCounters` above for why this is a DISTINCT
+signal from `winner_cross_hessian_calls`/`dense_cross_hessian_calls`.
+"""
+record_blas_syrk_dispatch!() = (NO_DENSE_G_COUNTERS[].blas_syrk_dispatch_count += 1; nothing)
+record_blas_syrk_fallback!() = (NO_DENSE_G_COUNTERS[].blas_syrk_fallback_count += 1; nothing)
+record_drawmajor_v2_dispatch!() = (NO_DENSE_G_COUNTERS[].drawmajor_v2_dispatch_count += 1; nothing)
+record_drawmajor_v2_fallback!() = (NO_DENSE_G_COUNTERS[].drawmajor_v2_fallback_count += 1; nothing)
+record_draw_chunk_reordered_dispatch!() = (NO_DENSE_G_COUNTERS[].draw_chunk_reordered_dispatch_count += 1; nothing)
+record_draw_chunk_reordered_fallback!() = (NO_DENSE_G_COUNTERS[].draw_chunk_reordered_fallback_count += 1; nothing)
+
+"""
     record_hessian_weight_cache_hit!() / _cache_miss!() / _operator_recompute!() / _dense_recompute!()
 
 No-moments/no-composite-G task (2026-07-28): call exactly once per Hessian callback invocation from
@@ -248,7 +291,13 @@ function no_dense_g_report()
             hessian_weight_operator_recomputes = c.hessian_weight_operator_recomputes,
             hessian_weight_dense_recomputes = c.hessian_weight_dense_recomputes,
             zc_centered_rebuilds = c.zc_centered_rebuilds,
-            zc_centered_cache_hits = c.zc_centered_cache_hits)
+            zc_centered_cache_hits = c.zc_centered_cache_hits,
+            blas_syrk_dispatch_count = c.blas_syrk_dispatch_count,
+            blas_syrk_fallback_count = c.blas_syrk_fallback_count,
+            drawmajor_v2_dispatch_count = c.drawmajor_v2_dispatch_count,
+            drawmajor_v2_fallback_count = c.drawmajor_v2_fallback_count,
+            draw_chunk_reordered_dispatch_count = c.draw_chunk_reordered_dispatch_count,
+            draw_chunk_reordered_fallback_count = c.draw_chunk_reordered_fallback_count)
 end
 
 """
