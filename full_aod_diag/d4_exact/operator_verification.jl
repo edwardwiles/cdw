@@ -70,7 +70,21 @@ function verify_inner_solution_operator_originzc!(zeta::Float64, lambda::Abstrac
 
     g_lambda = vcat(g_E, g_mean, g_pair)
     record_operator_verification!()
-    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
+    # Phase 10 audit (2026-08-02): explicit per-block KKT residual breakdown -- checklist items
+    # "reduced economic moments" (kkt_resid_E), "Z moments" (kkt_resid_mean/kkt_resid_pair), and
+    # "France ratio" (france_ratio_resid, the SPECIFIC g_E[cf.cf_col] coordinate -- cf.cf_col is
+    # the France/cf-row inner-dual column per compressed_moments.jl:151/249-266). None of this is
+    # new math: g_E/g_mean/g_pair were already computed above for g_lambda; this only NAMES and
+    # exposes the sub-maxima that were previously only visible merged into a single scalar
+    # kkt_resid = maximum(abs, g_lambda) (which already correctly bounds every one of these, since
+    # max over a concatenation cannot hide a large sub-block -- see this file's own audit notes).
+    kkt_resid_E = isempty(g_E) ? 0.0 : maximum(abs, g_E)
+    kkt_resid_mean = isempty(g_mean) ? 0.0 : maximum(abs, g_mean)
+    kkt_resid_pair = isempty(g_pair) ? 0.0 : maximum(abs, g_pair)
+    france_ratio_resid = (cf.cf_col > 0 && cf.cf_col <= length(g_E)) ? abs(g_E[cf.cf_col]) : NaN
+    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda),
+            kkt_resid_E = kkt_resid_E, kkt_resid_mean = kkt_resid_mean, kkt_resid_pair = kkt_resid_pair,
+            france_ratio_resid = france_ratio_resid)
 end
 
 isdefined(Main, :CMLookupState) || include(joinpath(@__DIR__, "cm_lookup_kernels.jl"))
@@ -142,7 +156,17 @@ function verify_inner_solution_operator_cmmeanzc!(zeta::Float64, lambda::Abstrac
 
     g_lambda = vcat(g_E, g_mean, g_pair, vec(g_stored))
     record_operator_verification!()
-    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
+    # Phase 10 audit (2026-08-02): same per-block breakdown as verify_inner_solution_operator_originzc!
+    # above, plus kkt_resid_cm for the CM-grid block (C in the E/Z/C family split) -- reuses the
+    # already-computed g_E/g_mean/g_pair/g_stored, no new math.
+    kkt_resid_E = isempty(g_E) ? 0.0 : maximum(abs, g_E)
+    kkt_resid_mean = isempty(g_mean) ? 0.0 : maximum(abs, g_mean)
+    kkt_resid_pair = isempty(g_pair) ? 0.0 : maximum(abs, g_pair)
+    kkt_resid_cm = maximum(abs, g_stored)
+    france_ratio_resid = (cf.cf_col > 0 && cf.cf_col <= length(g_E)) ? abs(g_E[cf.cf_col]) : NaN
+    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda),
+            kkt_resid_E = kkt_resid_E, kkt_resid_mean = kkt_resid_mean, kkt_resid_pair = kkt_resid_pair,
+            kkt_resid_cm = kkt_resid_cm, france_ratio_resid = france_ratio_resid)
 end
 
 """
@@ -261,15 +285,26 @@ function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::Abstract
     g_stored = zeros(nO, L)
     apply_contrast!(g_stored, g_block, R)
 
+    g_level_local = nothing
     g_lambda = if level_targets === nothing
         vcat(g_E, vec(g_stored))
     else
         g_level = zeros(L)
         frechet_level_backward_gradient!(g_level, Hpre, D_bins, L, W, invsqrtD, level_targets, sum_dPsi)
+        g_level_local = g_level
         vcat(g_E, vec(g_stored), g_level)
     end
     record_operator_verification!()
-    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
+    # Phase 10 audit (2026-08-02): per-block breakdown shared by flexible-CM (level_targets===
+    # nothing, kkt_resid_level=nothing) and common-Frechet (kkt_resid_level = the "F" level-anchor
+    # block's own residual) -- reuses g_E/g_stored/g_level already computed above, no new math.
+    kkt_resid_E = isempty(g_E) ? 0.0 : maximum(abs, g_E)
+    kkt_resid_cm = maximum(abs, g_stored)
+    kkt_resid_level = g_level_local === nothing ? nothing : maximum(abs, g_level_local)
+    france_ratio_resid = (cf.cf_col > 0 && cf.cf_col <= length(g_E)) ? abs(g_E[cf.cf_col]) : NaN
+    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda),
+            kkt_resid_E = kkt_resid_E, kkt_resid_cm = kkt_resid_cm, kkt_resid_level = kkt_resid_level,
+            france_ratio_resid = france_ratio_resid)
 end
 
 """
@@ -303,7 +338,13 @@ function verify_inner_solution_operator_unrestricted!(zeta::Float64, lambda::Abs
     g_lambda .*= -(1.0 / W)
 
     record_operator_verification!()
-    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
+    # Phase 10 audit (2026-08-02): unrestricted's G=E only, so kkt_resid_E == kkt_resid exactly --
+    # added for API symmetry with the 4 restricted verifiers' new breakdown fields, plus the
+    # France-ratio-column residual (france_ratio_resid, cf.cf_col -- see the ZC verifier's own
+    # comment above for what this column is).
+    france_ratio_resid = (cf.cf_col > 0 && cf.cf_col <= length(g_lambda)) ? abs(g_lambda[cf.cf_col]) : NaN
+    return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda),
+            kkt_resid_E = maximum(abs, g_lambda), france_ratio_resid = france_ratio_resid)
 end
 
 # ================================================================================================
@@ -354,6 +395,76 @@ function verify_namedtuple_from_operator(ov, obj, W::Int, nStatus::Integer)
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = ov.kkt_resid,
               m_mean = s_m_weights / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
     return (m_weights, verify)
+end
+
+# ================================================================================================
+# Phase 10 audit (2026-08-02): checklist item "recovered full factual shares" -- NONE of the 5
+# `verify_inner_solution_operator_*!` functions above ever reconstruct the full A_od/factual
+# winner allocation from the converged (zeta*,lambda*)/its LFD and confirm it reproduces the
+# correct factual outcome; that was a genuine gap (grep-confirmed: no caller of
+# `recover_gamma_normalized_full_A_from_lfd` exists in this file before this addition). This is
+# ADDITIVE, family-agnostic (needs only `cf`/`m_weights`/`theta_full`/`ctx`, no family-specific
+# restriction state), and built entirely from ALREADY-VALIDATED reused helpers -- no new economics:
+#   - `recover_gamma_normalized_full_A_from_lfd` (reduced_recovery_from_lfd_2026-08-01.jl) recovers
+#     the gamma-normalized full A_od implied by THIS solve's own LFD (`m_weights = dPsi(ov.r)`,
+#     already returned by every verifier above).
+#   - `destination_Q_od`/argmax-winner comparison (recover_full_a_2026-07-31.jl,
+#     `test_recover_full_a_2026-07-31.jl`'s own Test 2 pattern) confirms recovery changes only the
+#     destination-column SCALE, not WHO wins each draw or the within-destination share ratios --
+#     i.e. the recovered full shares reproduce the exact same factual outcome the solve was run
+#     against, not merely "some economically plausible" outcome.
+# Requires recover_full_a_2026-07-31.jl + reduced_recovery_from_lfd_2026-08-01.jl (which in turn
+# requires active_layout.jl for active_destinations/dest_slot) included by the caller first, same
+# include-discipline as this file's own economic/ZC/CM includes above.
+# ================================================================================================
+
+isdefined(Main, :active_destinations) || include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
+isdefined(Main, :destination_Q_od) || include(joinpath(@__DIR__, "recover_full_a_2026-07-31.jl"))
+isdefined(Main, :recover_gamma_normalized_full_A_from_lfd) || include(joinpath(@__DIR__, "reduced_recovery_from_lfd_2026-08-01.jl"))
+
+"""
+    verify_recovered_full_factual_shares(theta_full, ctx, cf, m_weights; d_list=active_destinations(ctx)) -> NamedTuple
+
+Phase 10 audit (2026-08-02) checklist item "recovered full factual shares", shared across all 5
+families (family-agnostic -- takes only the economic-core `cf`/`m_weights`, no restriction-block
+state). `theta_full` must be the SAME full theta vector `cf` was built at; `m_weights` must be
+`dPsi(ov.r)` from a `verify_inner_solution_operator_*!` call at that same converged solve (exactly
+what `verify_namedtuple_from_operator` above already computes as its own `m_weights` return).
+
+Recovers the gamma-normalized full A_od implied by this solve's own LFD
+(`recover_gamma_normalized_full_A_from_lfd`), then checks that recovering it and re-evaluating the
+model reproduces the IDENTICAL winner (argmax) at every draw and destination, and the identical
+within-destination share ratios, as `theta_full` itself -- i.e. the recovered full factual shares
+are economically consistent with (reproduce) the factual outcome the inner solve was run against,
+not merely dimensionally valid. `max_winner_mismatch == 0` and small `max_share_ratio_diff` is a
+PASS; any winner mismatch is a hard failure (the recovery changed who wins some draw, which the
+theory this recovery is built on says should never happen -- see
+`reduced_recovery_from_lfd_2026-08-01.jl`'s own header).
+"""
+function verify_recovered_full_factual_shares(theta_full::AbstractVector{Float64}, ctx, cf::CompressedFactual,
+        m_weights::AbstractVector{Float64}; d_list = active_destinations(ctx))
+    Aod_offset = ctx.Aod_offset
+    D = ctx.D
+    Ddest = length(active_destinations(ctx))
+    z_full, c, gamma_tilde = recover_gamma_normalized_full_A_from_lfd(theta_full, ctx, cf, m_weights; d_list = d_list)
+    theta_recovered = copy(theta_full)
+    theta_recovered[Aod_offset+1:Aod_offset+D*Ddest] .= vec(exp.(z_full))
+
+    max_winner_mismatch = 0
+    max_share_ratio_diff = 0.0
+    for d in d_list
+        Qw = destination_Q_od(theta_full, ctx, d)
+        Qr = destination_Q_od(theta_recovered, ctx, d)
+        Mw = vec(sum(Qw, dims = 2)); Mr = vec(sum(Qr, dims = 2))
+        winw = [argmax(@view Qw[w, :]) for w in 1:size(Qw, 1)]
+        winr = [argmax(@view Qr[w, :]) for w in 1:size(Qr, 1)]
+        nmis = sum(winw .!= winr)
+        max_winner_mismatch = max(max_winner_mismatch, nmis)
+        rdiff = maximum(abs.((Qw ./ Mw) .- (Qr ./ Mr)))
+        max_share_ratio_diff = max(max_share_ratio_diff, rdiff)
+    end
+    return (z_full = z_full, c = c, gamma_tilde = gamma_tilde,
+            max_winner_mismatch = max_winner_mismatch, max_share_ratio_diff = max_share_ratio_diff)
 end
 
 """
