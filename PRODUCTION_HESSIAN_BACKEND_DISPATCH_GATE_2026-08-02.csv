@@ -1,0 +1,27 @@
+family,block,expected_backend,confirmed_backend,match,evidence_source
+unrestricted,core(H_EE),exact_winner_pair_parallel,exact_winner_pair_parallel,TRUE,harness backend_info (live core_hessian_backend Ref read post-solve)
+unrestricted,moment_bundle,OperatorPsiBundle (no dense H/H_copy/K field -- true no-H operator path),OperatorPsiBundle{...},TRUE,harness backend_info (live typeof(ctx.obj))
+flexible_cm,core(H_EE),exact_winner_pair_parallel,exact_winner_pair_parallel,TRUE,harness backend_info (live cctx.core_hessian_backend)
+flexible_cm,cross(H_EC),winner_bin,winner_bin,TRUE,harness backend_info (live cctx.cm_cross_hessian_backend)
+flexible_cm,threaded_bins,true (production default),true,TRUE,harness backend_info (live cctx.use_threaded_bins)
+flexible_cm,inner_fg,cm_lookup (matrix-free),cm_lookup,TRUE,harness backend_info (live cctx.inner_fg_backend)
+common_frechet,core(H_EE),exact_winner_pair_parallel,exact_winner_pair_parallel,TRUE,harness backend_info (live cctx.core_hessian_backend)
+common_frechet,cross(H_EC/level),winner_bin,winner_bin,TRUE,harness backend_info (live cctx.cm_cross_hessian_backend)
+common_frechet,threaded_bins,true (production default),true,TRUE,harness backend_info (live cctx.use_threaded_bins)
+common_frechet,inner_fg,cm_frechet_lookup (matrix-free),cm_frechet_lookup,TRUE,harness backend_info (live cctx.inner_fg_backend)
+origin_zc,core(H_EE),exact_winner_pair_parallel,exact_winner_pair_parallel,TRUE,harness backend_info (live octx.core_hessian_backend)
+origin_zc,H_ZZ(gram),blas_syrk,blas_syrk,TRUE,harness backend_info (live octx.zc_gram_backend)
+origin_zc,H_EZ(fill),drawmajor_v2,drawmajor_v2,TRUE,harness backend_info (live octx.zc_ez_backend)
+origin_zc,H_CZ,not_applicable (no CM-grid block for this family),not_applicable,TRUE,per-task-brief Section 5 exclusion, confirmed by absence of any cctx/H_CZ field on OriginZCCoreHessCtx
+cm_meanzc,core(H_EE),exact_winner_pair_parallel,exact_winner_pair_parallel,TRUE,harness backend_info (live cctx.core_hessian_backend)
+cm_meanzc,H_ZZ(gram),blas_syrk,blas_syrk,TRUE,harness backend_info (live cctx.zc_gram_backend)
+cm_meanzc,H_CZ(prep),draw_chunk_reordered,draw_chunk_reordered,TRUE,harness backend_info (live cctx.hcz_prep_backend)
+cm_meanzc,H_EZ(fill),drawmajor_v2,drawmajor_v2,TRUE,harness backend_info (live cctx.zc_ez_backend)
+cm_meanzc,threaded_bins,true (production default),true,TRUE,harness backend_info (live cctx.use_threaded_bins)
+cm_meanzc,negative_counter:dense_fallback_calls,0,NOT_YET_VERIFIED,PENDING,"config field confirms non-dense backend selected; runtime CORE_HESSIAN_COUNTERS/record_dense_cross_hessian_call! NOT read by harness yet -- config match is NOT sufficient proof per task brief Section 13's own warning"
+cm_meanzc,negative_counter:reference_H_ZZ_calls,0,NOT_YET_VERIFIED,PENDING,"same caveat -- zc_gram_dispatch! call-count not instrumented in this pass"
+cm_meanzc,negative_counter:winner_bin_H_EZ_calls,0,NOT_YET_VERIFIED,PENDING,"same caveat -- zc_ez fallback call-count not instrumented in this pass"
+cm_meanzc,negative_counter:draw_chunk_thread_local_H_CZ_calls,0,NOT_YET_VERIFIED,PENDING,"same caveat -- hcz_prep fallback call-count not instrumented in this pass"
+origin_zc,negative_counter:dense_fallback_calls,0,NOT_YET_VERIFIED,PENDING,"same caveat as cm_meanzc"
+origin_zc,negative_counter:reference_H_ZZ_calls,0,NOT_YET_VERIFIED,PENDING,"same caveat as cm_meanzc"
+origin_zc,negative_counter:winner_bin_H_EZ_calls,0,NOT_YET_VERIFIED,PENDING,"same caveat as cm_meanzc"
