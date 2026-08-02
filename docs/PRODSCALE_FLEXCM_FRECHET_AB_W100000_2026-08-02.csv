@@ -1,0 +1,5 @@
+family,arm,wall_s,iters,nStatus,dense_econ
+flexcm,FULL,2.6683411598205566,7,0,0
+flexcm,REDUCED,3.06925106048584,6,0,0
+frechet,FULL,3.31506609916687,9,0,0
+frechet,REDUCED,3.214617967605591,6,0,0
