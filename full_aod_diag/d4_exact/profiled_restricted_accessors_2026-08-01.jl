@@ -328,27 +328,23 @@ built from `Bidx`/`U` alone, theta-independent, confirmed by direct read of
 `fill_cm_columns_from_bins!`/`fill_frechet_level_columns_from_bins!`/`mean_columns_direct!`/
 `pair_columns!`'s own signatures -- none take `θ`).
 
-⚠️ KNOWN UNRESOLVED DISCREPANCY (2026-08-01) -- DO NOT RELY ON THE NUMERICAL A/gp-INDEPENDENCE CLAIM
-YET. The STRUCTURAL pieces (`economic_dual_range`/`restriction_dual_ranges`/`gravity_dual_index`,
-verified via `verify_dual_ranges_partition` -- a real construction-only check, no numerical risk) are
-solid. But under a GENUINE theta perturbation (re-running the real `moments!` FG callback, confirmed
-via `obj.H`'s own gravity column showing zero spurious drift), `q_restriction` changes by roughly
-**2x** `q_economic`'s own change, reproducibly, across TWO independently-constructed perturbations
-(a direct `theta_full` coordinate poke, and a proper `x_free`-based `reconstruct_full` perturbation --
-both gave the identical ratio, ruling out an invalid/inconsistent perturbed `theta_full` as the cause).
-This means EITHER `q_economic` (via `reduced_homogeneous_dual_contraction`) under-counts the true
-economic sensitivity `obj.H`'s own dense reconstruction reflects, OR there is a THIRD component this
-decomposition has not yet identified (beyond economic/gravity/restriction) that is also A/gp-DEPENDENT
-and is currently getting silently absorbed into `q_restriction`. Root cause NOT FOUND despite finding
-and fixing three real index bugs in this same function during this investigation (gravity/economic
-boundary, economic column slicing, gravity's own separate dual slot) -- each fix moved the observed
-ratio (was exact equality, became exact 2x) but did not resolve it. See
-`Q_DECOMPOSITION_KNOWN_ISSUE_2026-08-01.md` for the full repro and investigation log. Whoever picks
-this up next should start from `materialize_homogeneous_dense_G_reduced!`'s own construction
-(`Gview[:,j] = reduced_homogeneous_dual_contraction(e_j, cf, ctx, θ_full, layout)` for unit vectors,
-by linearity) and verify it EXACTLY reproduces `obj.H`'s own economic columns post-`moments!`, column
-by column, at the SAME `cf`/`θ_full` -- that direct comparison (not yet done) would immediately show
-whether the bug is in `q_economic`'s own formula/slicing or somewhere else entirely.
+✅ RESOLVED (2026-08-02, integration/profiled-restricted-production-ready-2026-08-02): the ~2x
+discrepancy was a missing sign negation in `q_economic`, not a missing/mis-scaled component.
+`reduced_homogeneous_dual_contraction` returns the RAW `+G*β` contraction (the same convention
+`materialize_homogeneous_dense_G_reduced!` uses to build `G`'s own columns directly, unnegated), but
+`q_total`/`obj.arg0` is built via a uniform `-H*x` convention for EVERY dual-indexed column
+(`_archC_prep_for_hessian!`'s own `BLAS.gemv!('N', 1.0, H[:, 2:1+outer_constr_index], -x, 0.0, arg0)`),
+and `_q_gravity` already correctly applies that negation (`-G_view[:,ncore] .* λstar[ncore]`).
+`q_economic` did not. Fix: negate it (`q_economic = -reduced_homogeneous_dual_contraction(...)`),
+consistent with the SAME convention the outer bridge's own already-passing q-decomposition gate uses
+independently (`profiled_restricted_q_decomposition_gate_2026-08-01.jl`'s own
+`q_recon = -zeta - reduced_homogeneous_dual_contraction(...) - restriction_contrib0`). Verified live:
+pre-fix `max|Δq_economic under pert|=1.065e-3`, `max|Δq_restriction under pert|=2.129e-3` (ratio
+exactly 2.0); post-fix `max|Δq_restriction under pert|=2.776e-17` (machine precision). The three
+earlier index-bug fixes (gravity/economic boundary, economic column slicing, gravity's own dual slot)
+were real and necessary but insufficient on their own -- this sign fix is what closed the gap to zero.
+See `Q_DECOMPOSITION_KNOWN_ISSUE_2026-08-01.md` for the original investigation log (superseded by this
+resolution) and the integration master report for the full root-cause writeup.
 """
 function q_decomposition(cctx::CMBinHessCtx, obj, cf, θ_full::AbstractVector, ζstar::Float64, λstar::AbstractVector{Float64})
     layout = cctx.profiled_layout
@@ -361,7 +357,18 @@ function q_decomposition(cctx::CMBinHessCtx, obj, cf, θ_full::AbstractVector, �
     # 2:NCORE, see that accessor's own corrected docstring) -- a direct dual-index-to-lambda_star
     # mapping (dual index k -> lambda_star[k-1]), no further offset needed.
     β_econ = λstar[er .- 1]
-    q_economic = reduced_homogeneous_dual_contraction(β_econ, cf, cctx.econ_ctx, collect(θ_full), layout)
+    # SIGN FIX (2026-08-02, resolves the q-decomposition known issue): arg0/q_total is built via the
+    # SAME -H*x convention for every dual-indexed column (_archC_prep_for_hessian!'s own
+    # `BLAS.gemv!('N', 1.0, H[:, 2:1+outer_constr_index], -x, 0.0, arg0)`, and _q_gravity's own
+    # `-G_view[:,ncore] .* λstar[ncore]`). reduced_homogeneous_dual_contraction, however, returns the
+    # RAW +G*β contraction unnegated (exactly the convention materialize_homogeneous_dense_G_reduced!
+    # uses to build G's own columns, i.e. G[:,j] itself, not -G[:,j]). Without this negation,
+    # q_economic carried the WRONG sign relative to q_total/q_gravity, so
+    # `q_restriction = q_total - q_economic - q_gravity` picked up an extra `+2*(true q_economic)`
+    # term -- exactly the reproducible "q_restriction changes by ~2x q_economic's own change"
+    # discrepancy (Q_DECOMPOSITION_KNOWN_ISSUE_2026-08-01.md). Confirmed live: pre-fix
+    # max|Δq_economic|=1.065e-3, max|Δq_restriction|=2.129e-3 (ratio exactly 2.0).
+    q_economic = -reduced_homogeneous_dual_contraction(β_econ, cf, cctx.econ_ctx, collect(θ_full), layout)
     q_gravity = _q_gravity(obj, gravity_dual_index(cctx), λstar)
     q_restriction = q_total .- q_economic .- q_gravity
     return (q_total = q_total, q_economic = q_economic, q_gravity = q_gravity, q_restriction = q_restriction,
@@ -379,7 +386,8 @@ function q_decomposition(octx::OriginZCCoreHessCtx, obj, cf, θ_full::AbstractVe
     # 2:NCORE, see that accessor's own corrected docstring) -- a direct dual-index-to-lambda_star
     # mapping (dual index k -> lambda_star[k-1]), no further offset needed.
     β_econ = λstar[er .- 1]
-    q_economic = reduced_homogeneous_dual_contraction(β_econ, cf, octx.econ_ctx, collect(θ_full), layout)
+    # SIGN FIX (2026-08-02): see the identical fix + rationale in the CMBinHessCtx method above.
+    q_economic = -reduced_homogeneous_dual_contraction(β_econ, cf, octx.econ_ctx, collect(θ_full), layout)
     q_gravity = _q_gravity(obj, gravity_dual_index(octx), λstar)
     q_restriction = q_total .- q_economic .- q_gravity
     return (q_total = q_total, q_economic = q_economic, q_gravity = q_gravity, q_restriction = q_restriction,

@@ -141,7 +141,7 @@ cf_synth_pert = cctx_cm.core_cf_ref[]
 qd_synth_pert = q_decomposition(cctx_cm, aug_cm.obj_cm, cf_synth_pert, θ_full_pert, base_cm.ζstar, λ_synth)
 check("flexible CM (synthetic nonzero dual): q_decomposition construction identity holds (perturbed point)",
     maximum(abs.(qd_synth_pert.q_economic .+ qd_synth_pert.q_gravity .+ qd_synth_pert.q_restriction .- qd_synth_pert.q_total)) < 1e-10)
-check_known_issue("flexible CM (synthetic nonzero dual): q_restriction is A/gp-INDEPENDENT under a GENUINE theta perturbation (real moments! re-evaluation) -- KNOWN UNRESOLVED, see q_decomposition's own docstring",
+check("flexible CM (synthetic nonzero dual): q_restriction is A/gp-INDEPENDENT under a GENUINE theta perturbation (real moments! re-evaluation) -- RESOLVED 2026-08-02, see q_decomposition's own docstring for the sign-fix writeup",
     maximum(abs.(qd_synth.q_restriction .- qd_synth_pert.q_restriction)) < 1e-10)
 check("flexible CM (synthetic nonzero dual): q_economic DOES change under the same genuine theta perturbation (sanity: perturbation is real)",
     maximum(abs.(qd_synth.q_economic .- qd_synth_pert.q_economic)) > 1e-8)
