@@ -62,7 +62,18 @@ end
 @printf("layout build: %.2fs  total_reduced_econ=%d  france=%s\n", t_layout, layout.total_reduced_economic_moments, has_france)
 flush(stdout)
 
-νvec0 = fill(1.0, K_MEAN)
+
+# BUG FIX (found live this session, same root cause as the origin-ZC cold-solve driver): the
+# per-level nu TARGET is E[U^k] = k! under this codebase's Exp(1)-draw convention, NOT a flat 1.0
+# for every level -- confirmed by test_cm_meanzc_cplus_equivalence.jl's own
+# `nu0vec(K) = [Float64(factorial(k)) for k in 1:K]` construction. Every prior K_mean=1 gate in this
+# repo (this task's own D20/W20k/W80k gates included) never exposed this because factorial(1)==1.0
+# coincidentally. A flat-1.0 vector at K_mean=3 is an internally INCONSISTENT calibration point
+# (levels k=2,3 impose "mean of U^2=1"/"mean of U^3=1", inconsistent with real Exp(1)-ish draws
+# whose true k-th moment is k!), which is exactly why the first (buggy) attempt at this file
+# returned nStatus=-400 (KNITRO's genuine infeasible-detection code, not a solver quirk -- per this
+# repo's own standing note that -300/-400 reflect real problem infeasibility).
+νvec0 = [Float64(factorial(k)) for k in 1:K_MEAN]
 t_build = @elapsed begin
     aug_reduced = build_cm_meanzc_augmented_obj(ctx, CS; L = L_VAL, K_mean = K_MEAN, K_pair = K_PAIR,
         base_obj = reduced_obj0, profiled_layout = layout)

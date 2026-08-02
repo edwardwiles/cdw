@@ -65,14 +65,22 @@ flush(stdout)
 
 layout_o = OriginByPowerLayout(D, K_MEAN, K_PAIR)
 
-# BUG FIX (found live this session): OriginByPowerLayout's target_index(o,k) = (k-1)*D + o requires
-# νfull to have length K_MEAN*D (one value per origin PER level k=1:K_MEAN), not just D -- confirmed
-# by test_cm_originzc_checkpoint.jl's own `eta0 = randn(K_mean * D)` construction. The K_mean=1
-# D20 gates (this repo's existing test_zc_lane_originzc_recover_resolve_d20_2026-08-02.jl) never
-# exposed this because at K_mean=1, K_MEAN*D == D coincidentally. At this task's mandated K_mean=3,
-# passing length-D caused a BoundsError (mean_targets indexing νfull[(k-1)*D+o] for k=2,3 reads past
-# the end of a length-D vector) inside refresh_zc_targets! -> reduced_originzc_base_state.
-νfull0 = fill(1.0, K_MEAN * D)
+# BUG FIX 1 (found live this session): OriginByPowerLayout's target_index(o,k) = (k-1)*D + o
+# requires νfull to have length K_MEAN*D (one value per origin PER level k=1:K_MEAN), not just D --
+# confirmed by test_cm_originzc_checkpoint.jl's own `eta0 = randn(K_mean * D)` construction. The
+# K_mean=1 D20 gates (this repo's existing test_zc_lane_originzc_recover_resolve_d20_2026-08-02.jl)
+# never exposed this because at K_mean=1, K_MEAN*D == D coincidentally.
+#
+# BUG FIX 2 (found live this session, SECOND bug at this same line): the per-level nu TARGET value
+# is E[U^k] = k! (factorial), not a flat 1.0 for every level -- confirmed by
+# test_cm_originzc_cplus_equivalence.jl's own `nu0_origin(K,D) = vcat([fill(Float64(factorial(k)),
+# D) for k in 1:K]...)` construction. A flat-1.0 vector at K_mean=3 is an internally INCONSISTENT
+# calibration point (levels k=2,3 impose "mean of U^2=1"/"mean of U^3=1", inconsistent with real
+# draws whose true k-th moment is k!) -- this is exactly why the first (length-fixed but
+# value-wrong) attempt at this file returned nStatus=-400 (KNITRO's genuine infeasible-detection
+# code; per this repo's own standing note, -300/-400 reflect real problem infeasibility, not a
+# solver quirk to paper over).
+νfull0 = vcat([fill(Float64(factorial(k)), D) for k in 1:K_MEAN]...)
 
 t_build = @elapsed begin
     aug_reduced = build_originzc_augmented_obj(ctx, CS, layout_o; base_obj = reduced_obj0, profiled_layout = layout)
