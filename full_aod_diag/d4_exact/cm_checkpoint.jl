@@ -428,6 +428,145 @@ function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV9)
     return path
 end
 
+# ============================================================================
+# Phase 12 (integration/phase12-13-runner-checkpoints-2026-08-02), item 3: version
+# checkpoints with economic parameterization + outer/inner layout digest + backend
+# manifest + recovery convention, so a profiled/reduced-basis checkpoint can never be
+# silently loaded as (or confused with) a full-formulation one. ADDITIVE ONLY -- every
+# CMCheckpointV9 field/method above is untouched; V10 is already claimed by
+# cm_originzc_checkpoint.jl's own analogous bump (see that file's CM_CHECKPOINT_SCHEMA_V10
+# comment and this file's own CM_CHECKPOINT_SCHEMA comment for the shared-namespace
+# interleaving discipline), so this bump takes the next globally-unclaimed number, 11
+# (confirmed via a whole-tree `grep -rn "struct CMCheckpointV"` before choosing it).
+#
+# `CMCheckpointV11` is NOT wired into `run_cm_upper_checkpointed`'s own write call site
+# (still constructs CMCheckpointV9 unchanged, a few hundred lines below) -- per this task's
+# explicit "do not touch production defaults" constraint, the existing dense-formulation
+# production driver keeps writing schema 9 exactly as before. V11 exists so the NEW
+# profiled/reduced-basis runner (profiled_production_outer_runner_2026-08-01.jl and its
+# 2026-08-02 adaptation) has a real, versioned, round-trippable checkpoint format of its
+# own to write to -- distinct from, but load-compatible with (via the upgrade chain below),
+# every prior schema.
+# ============================================================================
+const CM_CHECKPOINT_SCHEMA_V11 = 11
+
+"""
+    CMCheckpointV11
+
+`CMCheckpointV9` plus the profiled/reduced-basis versioning fields (task Phase 12 item 3):
+  - `economic_parameterization::Symbol` -- `:full_gamma_normalized` (dense) or
+    `:profiled_destination_scales` (reduced); mirrors `VALID_ECONOMIC_PARAMETERIZATIONS`
+    (profiled_ab_comparability_and_plumbing_2026-08-01.jl).
+  - `outer_layout_digest::String` -- `stable_layout_digest(fctx)` (profiled_stable_layout_digest_2026-08-01.jl),
+    empty string for a `:full_gamma_normalized` checkpoint (no profiled outer layout to digest).
+  - `inner_layout_digest::String` -- family-specific inner reduced-FG layout fingerprint
+    (`profiled_inner_layout_digest`, profiled_checkpoint_versioning_2026-08-02.jl); "" for dense.
+  - `h_zz_backend`/`h_cz_backend`/`h_ez_backend::Symbol` -- which Hessian dispatch backend was
+    active (`:blas_syrk`/`:draw_chunk_reordered`/`:drawmajor_v2`/etc, or `:not_applicable` for a
+    family/block that doesn't use that backend, or `:unknown_legacy_dense` for an upgraded
+    pre-V11 file that never recorded this).
+  - `backend_manifest_source::String` -- free-text provenance note for the three backend fields
+    above (e.g. which commit/session validated that backend selection).
+  - `recovery_convention::Symbol` -- which gauge-normalization/anchor convention recovers the
+    full A from a reduced/profiled solve (`:profiled_pivot_recovery`) or `:full_gamma_normalized`
+    (no recovery needed -- the checkpoint's own `logA_full` already IS the full A).
+  - `checkpoint_namespace::String` -- collision-prevention key (`economic_parameterization` +
+    family + first 16 hex chars of `outer_layout_digest`), mirrors
+    `ProfiledProductionConfig.checkpoint_namespace`; `assert_checkpoint_compatible` (existing,
+    profiled_ab_comparability_and_plumbing_2026-08-01.jl) throws on any mismatch.
+"""
+struct CMCheckpointV11
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    destination_sample::Symbol
+    row_idx::Union{Nothing,Int}
+    D_dest::Int
+    marginal_restriction::Symbol
+    A_coordinate_mode::Symbol
+    # ---- NEW (schema 11): profiled/reduced-basis versioning (task Phase 12 item 3) ----
+    economic_parameterization::Symbol
+    outer_layout_digest::String
+    inner_layout_digest::String
+    h_zz_backend::Symbol
+    h_cz_backend::Symbol
+    h_ez_backend::Symbol
+    backend_manifest_source::String
+    recovery_convention::Symbol
+    checkpoint_namespace::String
+end
+
+"Same discipline as every prior save_cm_checkpoint method -- new method (multiple dispatch), no prior method touched."
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV11)
+    tmp = path * ".tmp"
+    serialize(tmp, ckpt)
+    mv(tmp, path; force = true)
+    return path
+end
+
+"""
+    upgrade_schema9_to_v11(old::CMCheckpointV9) -> CMCheckpointV11
+
+Upgrades a pre-V11 `CMCheckpointV9` file. `economic_parameterization = :full_gamma_normalized`
+and `recovery_convention = :full_gamma_normalized` are CORRECT (not a guess): every schema-9 file
+was written by `run_cm_upper_checkpointed`, which only ever solves the dense/full formulation --
+the profiled/reduced-basis economic parameterization did not exist anywhere in this codebase when
+any schema-9 file was written. `outer_layout_digest`/`inner_layout_digest` are empty strings (no
+profiled layout was ever built for these runs, so there is nothing to digest -- NOT
+`:unknown_pending_inner`, which would wrongly imply a profiled layout exists but wasn't recorded).
+`h_zz_backend`/`h_cz_backend`/`h_ez_backend = :unknown_legacy_dense` (schema 9 never recorded which
+Hessian backend variant solved a given run at all; this is an honest "not recorded", not a made-up
+concrete value). `checkpoint_namespace` is a best-effort legacy tag (still useful for uniqueness,
+even though pre-V11 files never asserted namespace compatibility against anything).
+"""
+function upgrade_schema9_to_v11(old::CMCheckpointV9)
+    return CMCheckpointV11(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
+        old.moment_layout_version,
+        old.g, old.zfree, old.eta_nu, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version, old.destination_sample, old.row_idx, old.D_dest,
+        old.marginal_restriction, old.A_coordinate_mode,
+        :full_gamma_normalized, "", "", :unknown_legacy_dense, :unknown_legacy_dense, :unknown_legacy_dense,
+        "pre-schema-11 legacy dense checkpoint, backend not recorded", :full_gamma_normalized,
+        "full_gamma_normalized__legacy__$(old.run_id)")
+end
+
 "Upgrades a legacy schema-2 `CMCheckpoint` to `CMCheckpointV3`, filling `cm_gradient_backend = :reference` -- CORRECT (not a guess) for every schema-2 file that exists, since :reference was the kwarg's own default throughout schema-2's entire lifetime and the only value the real 2026-07-22 campaign's stage runner ever passed (confirmed by direct read of cm_production_stage_runner.jl, which never sets cm_gradient_backend)."
 function upgrade_schema2(old::CMCheckpoint)
     return CMCheckpointV3(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
@@ -554,6 +693,27 @@ function load_cm_checkpoint(path::AbstractString)
               "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
               "run instead of resuming from an incompatible checkpoint.")
     return ckpt
+end
+
+"""
+    load_cm_checkpoint_v11(path) -> CMCheckpointV11
+
+Phase 12 item 3's versioned load entry point. Tries the CURRENT (schema 11, `CMCheckpointV11`)
+shape first; falls back to `load_cm_checkpoint(path)` (existing, UNTOUCHED -- returns a
+`CMCheckpointV9`, itself already upgrading from every older schema down to schema 1/2) plus
+`upgrade_schema9_to_v11`. Additive sibling of `load_cm_checkpoint`, not a replacement -- every
+existing caller of `load_cm_checkpoint` keeps its exact current behavior (still returns
+`CMCheckpointV9`, schema-9 write call site in `run_cm_upper_checkpointed` below is unchanged);
+this function exists only for the NEW profiled/reduced-basis runner, which wants the versioning
+fields and should never see a bare V9 shape.
+"""
+function load_cm_checkpoint_v11(path::AbstractString)
+    try
+        return deserialize(path)::CMCheckpointV11
+    catch e
+        (e isa TypeError || e isa EOFError || e isa MethodError) || rethrow()
+        return upgrade_schema9_to_v11(load_cm_checkpoint(path))
+    end
 end
 
 """
