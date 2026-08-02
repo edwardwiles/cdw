@@ -141,12 +141,14 @@ the `BinZCrossDrawChunkScratch` (`cctx.bin_zc_drawchunk`, lazily built/resized h
 function hcz_prep_dispatch!(bin_zc_ws::BinZCrossScratch, backend::Symbol,
         Bidx::AbstractMatrix{<:Integer}, ZcS::AbstractMatrix{Float64}, cctx; workers::Int, threaded::Bool)
     if backend === :origin_owned
+        record_draw_chunk_reordered_fallback!()
         if threaded
             bin_zc_cross_hessian_fill_threaded!(bin_zc_ws, Bidx, ZcS; workers = workers)
         else
             bin_zc_cross_hessian_fill!(bin_zc_ws, Bidx, ZcS)
         end
     elseif backend === :draw_chunk_thread_local
+        record_draw_chunk_reordered_fallback!()
         cctx.bin_zc_drawchunk = ensure_bin_zc_drawchunk_scratch!(cctx.bin_zc_drawchunk, bin_zc_ws.D, bin_zc_ws.L, bin_zc_ws.nz, workers)
         bin_zc_cross_hessian_fill_drawchunk!(bin_zc_ws, cctx.bin_zc_drawchunk, Bidx, ZcS; workers = workers)
     elseif backend === :draw_chunk_reordered
@@ -157,6 +159,7 @@ function hcz_prep_dispatch!(bin_zc_ws::BinZCrossScratch, backend::Symbol,
         # real-KNITRO-driver run throwing KN_RC_CALLBACK_ERR("hcz_prep_dispatch!: unknown backend
         # :draw_chunk_reordered"), which Gate 2's direct (non-threaded_bins) call path had not
         # exercised. Fixed before merge.
+        record_draw_chunk_reordered_dispatch!()
         cctx.bin_zc_drawchunk = ensure_bin_zc_drawchunk_scratch!(cctx.bin_zc_drawchunk, bin_zc_ws.D, bin_zc_ws.L, bin_zc_ws.nz, workers)
         bin_zc_cross_hessian_fill_drawchunk_reordered!(bin_zc_ws, cctx.bin_zc_drawchunk, Bidx, ZcS; workers = workers)
     else

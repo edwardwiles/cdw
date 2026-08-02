@@ -1041,6 +1041,15 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 cctx.profiled_hraw_em_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, n_restr)
             end
             HEM_full = cctx.profiled_hraw_em_full
+            # Phase 7 (dispatch-counters, 2026-08-02): CONFIRMED LIVE -- this profiled/reduced-layout
+            # H_EM gather calls the base `winner_pair_cross_hessian_zc_block!` kernel UNCONDITIONALLY,
+            # never consulting `cctx.zc_ez_backend` at all (unlike the non-profiled ncore<NCORE branch
+            # above, which has a real :drawmajor/:drawmajor_v2/:threaded/serial if-chain). So on the
+            # profiled/reduced path, H_EM/H_EZ never dispatches through :drawmajor_v2 regardless of
+            # `zc_ez_backend`'s value -- recorded as a fallback so this is VISIBLE in the counters
+            # rather than a silent gap; wiring the profiled gather to the drawmajor_v2 backend is a
+            # separate, larger follow-up (not attempted here, out of this task's surgical scope).
+            record_drawmajor_v2_fallback!()
             winner_pair_cross_hessian_zc_block!(HEM_full, wctx_full, ws_full, w, Z, M; use_profiled_correction = true)
             n_bilateral = length(layout.retained_full_factual_j)
             @views HEM[1, :] .= HEM_full[1, :]
@@ -1134,6 +1143,7 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 Z = @view cctx.hzz_centered.Zc[:, 1:nx]   # already-centered restriction columns, unweighted
               end
               @cmhess_prof "H_ER" if cctx.zc_ez_backend === :drawmajor
+                    record_drawmajor_v2_fallback!()
                     nbilateral = wctx.has_cf ? wctx.ncolI - 1 : wctx.ncolI
                     cctx.zc_drawmajor = ensure_winner_zc_drawmajor_scratch!(cctx.zc_drawmajor, wctx.W, wctx.Ddest, nbilateral, nx, cctx.cross_hessian_workers)
                     winner_pair_cross_hessian_zc_block_drawmajor!(HEM, wctx, cctx.zc_cross_scratch, cctx.zc_drawmajor, w, Z, M; workers = cctx.cross_hessian_workers)
@@ -1148,18 +1158,22 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                     # via Gate 3's real-KNITRO-driver run (the isolated-kernel benchmark in Section 6
                     # called winner_pair_cross_hessian_zc_block_drawmajor_v2! directly, bypassing
                     # this dispatch entirely, so it never caught the gap). Fixed before merge.
+                    record_drawmajor_v2_dispatch!()
                     nbilateral = wctx.has_cf ? wctx.ncolI - 1 : wctx.ncolI
                     cctx.zc_drawmajor = ensure_winner_zc_drawmajor_v2_scratch!(cctx.zc_drawmajor, wctx.W, wctx.Ddest, nbilateral, nx, cctx.cross_hessian_workers)
                     winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEM, wctx, cctx.zc_cross_scratch, cctx.zc_drawmajor, w, Z, M; workers = cctx.cross_hessian_workers)
                 elseif cctx.cross_hessian_threaded
+                    record_drawmajor_v2_fallback!()
                     winner_pair_cross_hessian_zc_block_threaded!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M; workers = cctx.cross_hessian_workers)
                 else
+                    record_drawmajor_v2_fallback!()
                     winner_pair_cross_hessian_zc_block!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M)
                 end
                 # ADDENDUM (2026-07-28): H_ZZ backend dispatch -- :reference (existing, centered-Zc
                 # BLAS gemm) | :blas_syrk | :blas_gemm | :threaded_packed (all three built directly
                 # from the immutable raw Phi, zc_gram_blas_candidates.jl).
               @cmhess_prof "H_ZZ" if cctx.zc_gram_backend === :reference
+                    record_blas_syrk_fallback!()
                     zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
                 else
                     cctx.raw_zc_ws = ensure_zc_raw_weighted_workspace!(cctx.raw_zc_ws, op, wctx.W)
@@ -1469,6 +1483,12 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
             nz_ec = n_restriction(cctx.hzz_zc_op)
             bin_zc_ws_ec = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz_ec)
             cctx.bin_zc_cross = bin_zc_ws_ec
+            # Phase 7 (dispatch-counters, 2026-08-02): this profiled/reduced H_CZ gather calls the
+            # plain serial kernel directly, bypassing `hcz_prep_dispatch!`/`cctx.hcz_prep_backend`
+            # entirely (see the file-header comment a few lines above this branch) -- :draw_chunk_
+            # reordered never dispatches here regardless of that Ref's value. Recorded so it is
+            # visible, not fixed here (out of this task's surgical scope).
+            record_draw_chunk_reordered_fallback!()
             bin_zc_cross_hessian_fill!(bin_zc_ws_ec, cctx.Bidx, cctx.hzz_centered.ZcS)
         end
         # BUGFIX (found live, 2026-08-01, via a direct user challenge to re-verify H_CC rather than
@@ -1577,6 +1597,14 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
             nz = n_restriction(cctx.hzz_zc_op)
             bin_zc_ws = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz)
             cctx.bin_zc_cross = bin_zc_ws
+            # Phase 7 (dispatch-counters, 2026-08-02): the SERIAL Architecture-C callback
+            # (hessian_cm_structured!, this function) never calls `hcz_prep_dispatch!` at all --
+            # that dispatcher is wired ONLY into the threaded twin (hessian_cm_structured_v2!,
+            # cm_hessian_threaded.jl). So :draw_chunk_reordered never fires here regardless of
+            # `cctx.hcz_prep_backend`'s value; recorded so it is visible, not fixed here (out of
+            # this task's surgical scope -- see the file-header comment on the profiled H_CZ branch
+            # above for the identical rationale).
+            record_draw_chunk_reordered_fallback!()
             bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
         end
     else
@@ -2144,6 +2172,13 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         octx.profiled_her_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, n_eta_total)
                     end
                     HER_full = octx.profiled_her_full
+                    # Phase 7 (dispatch-counters, 2026-08-02): CONFIRMED LIVE -- same gap as CM+ZC's
+                    # own profiled H_EM branch above (cm_hessian_architectures.jl's _fill_cm_HEE!):
+                    # this profiled/reduced-layout H_EZ gather calls the base kernel unconditionally,
+                    # never consulting `octx.zc_ez_backend` -- :drawmajor_v2 never dispatches here
+                    # regardless of that Ref's value. Recorded so it is visible, not silently absent
+                    # from the counters; not fixed here (out of this task's surgical scope).
+                    record_drawmajor_v2_fallback!()
                     winner_pair_cross_hessian_zc_block!(HER_full, wctx_full, ws_full, arg2, Z, M; use_profiled_correction = true)
                     n_bilateral = length(layout.retained_full_factual_j)
                     HER = @view ∂∂f_∂∂x[1:NCORE, NCORE+1:n]
@@ -2213,16 +2248,20 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                             Z = @view octx.hzz_centered.Zc[:, 1:nx]   # already-centered restriction columns, UNweighted
                         end
                         @cmhess_prof "originZC_H_EZ_fill" if octx.zc_ez_backend === :drawmajor
+                            record_drawmajor_v2_fallback!()
                             nbilateral_o = wctx.has_cf ? wctx.ncolI - 1 : wctx.ncolI
                             octx.zc_drawmajor = ensure_winner_zc_drawmajor_scratch!(octx.zc_drawmajor, wctx.W, wctx.Ddest, nbilateral_o, nx, octx.cross_hessian_workers)
                             winner_pair_cross_hessian_zc_block_drawmajor!(HER, wctx, octx.zc_cross_scratch, octx.zc_drawmajor, arg2, Z, M; workers = octx.cross_hessian_workers)
                         elseif octx.zc_ez_backend === :drawmajor_v2
+                            record_drawmajor_v2_dispatch!()
                             nbilateral_o = wctx.has_cf ? wctx.ncolI - 1 : wctx.ncolI
                             octx.zc_drawmajor = ensure_winner_zc_drawmajor_v2_scratch!(octx.zc_drawmajor, wctx.W, wctx.Ddest, nbilateral_o, nx, octx.cross_hessian_workers)
                             winner_pair_cross_hessian_zc_block_drawmajor_v2!(HER, wctx, octx.zc_cross_scratch, octx.zc_drawmajor, arg2, Z, M; workers = octx.cross_hessian_workers)
                         elseif octx.cross_hessian_threaded
+                            record_drawmajor_v2_fallback!()
                             winner_pair_cross_hessian_zc_block_threaded!(HER, wctx, octx.zc_cross_scratch, arg2, Z, M; workers = octx.cross_hessian_workers)
                         else
+                            record_drawmajor_v2_fallback!()
                             winner_pair_cross_hessian_zc_block!(HER, wctx, octx.zc_cross_scratch, arg2, Z, M)
                         end
                     else
@@ -2277,6 +2316,7 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                             refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2; fill_S = octx.zc_gram_backend === :reference)
                         end
                         @cmhess_prof "originZC_H_ZZ_gram" if octx.zc_gram_backend === :reference
+                            record_blas_syrk_fallback!()
                             zc_restriction_gram!(HRR, octx.hzz_centered, op, M)
                         else
                             octx.raw_zc_ws = ensure_zc_raw_weighted_workspace!(octx.raw_zc_ws, op, M)
