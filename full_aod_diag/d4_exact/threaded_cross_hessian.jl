@@ -231,7 +231,7 @@ function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float6
     use_profiled_correction && ws.Ddest != Ddest &&
         error("winner_pair_cross_hessian_zc_block_threaded!: use_profiled_correction=true requires ws.Ddest=$(ws.Ddest) == wctx.Ddest=$Ddest -- rebuild scratch via ensure_winner_zc_cross_scratch!(...; Ddest)")
 
-    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec; target_slot = wctx.target_slot
+    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec; Lam_homog = wctx.Lam_homog; target_slot = wctx.target_slot
     has_cf = wctx.has_cf; jcf = ncolI
     Snu = ws.Snu
     invM = 1.0 / M
@@ -278,14 +278,18 @@ function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float6
         BLAS.gemm!('T', 'N', 1.0, ws.SnuWval, Z, 0.0, TZ)
     end
 
+    # BUGFIX (2026-08-01, same pattern as the serial winner_pair_cross_hessian_zc_block! fix): the
+    # multiplier must switch in lockstep with the correction term -- `Lam_homog[j]`, NOT `pi_vec[j]`,
+    # pairs with the destination-specific `TZ` correction.
     @inbounds for j in 1:nbilateral
-        pij = pi_vec[j]
         if use_profiled_correction
             d = target_slot[j]
+            lamj = Lam_homog[j]
             for x in 1:nx
-                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * TZ[d, x])
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - lamj * TZ[d, x])
             end
         else
+            pij = pi_vec[j]
             for x in 1:nx
                 HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
             end
@@ -295,15 +299,19 @@ function winner_pair_cross_hessian_zc_block_threaded!(HEZ::AbstractMatrix{Float6
     if has_cf
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
-        pij = pi_vec[jcf]
         # France/cf row gets the profiled TZ correction too, when target_slot[jcf] is a real
-        # bi_slot -- same discipline as the serial version's identical amendment.
+        # bi_slot -- same discipline as the serial version's identical amendment. SECOND bugfix,
+        # same as serial: the homogeneous formulation's constant term `denom_cf` contributes
+        # `denom_cf_scaled*NuZ[x]` here, added before subtracting `Lam_homog[jcf]*TZ`.
         if use_profiled_correction && target_slot[jcf] != 0
             d_cf = target_slot[jcf]
+            lamcf = Lam_homog[jcf]
+            dcfscaled = wctx.denom_cf_scaled
             @inbounds for x in 1:nx
-                row_cf[x] -= invM * pij * TZ[d_cf, x]
+                row_cf[x] += invM * (dcfscaled * NuZ[x] - lamcf * TZ[d_cf, x])
             end
         else
+            pij = pi_vec[jcf]
             @inbounds for x in 1:nx
                 row_cf[x] -= invM * pij * NuZ[x]
             end

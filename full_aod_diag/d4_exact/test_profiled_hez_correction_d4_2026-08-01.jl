@@ -111,7 +111,10 @@ for (pi_, x) in enumerate(xs)
                 end
             end
             Tdx = brute_force_tz(cf, S, Z, d, x)
-            expected = (keep - wctx.pi_vec[j] * Tdx) / M
+            # BUGFIX (2026-08-01, same pattern as test_profiled_hec_correction_d4_2026-08-01.jl's
+            # own fix): the profiled/homogeneous correction pairs with wctx.Lam_homog[j], NOT
+            # wctx.pi_vec[j] -- see winner_pair_cross_hessian_zc_block!'s own bugfix comment.
+            expected = (keep - wctx.Lam_homog[j] * Tdx) / M
             # row j+1 in HEZ's own convention: row 1 is the ones/zeta row, row j+1 is economic column j.
             maxdiff = max(maxdiff, abs(H_EM_new[j + 1, x] - expected))
         end

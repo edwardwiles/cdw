@@ -39,6 +39,26 @@ bi_slot = dest_slot(ctx, ctx.bi)
 println("ctx.bi=", ctx.bi, "  bi_slot=", bi_slot)
 Random.seed!(2026)
 
+# BUGFIX (2026-08-01): this test previously called build_winner_pair_ctx(cf; bi_slot=bi_slot) with
+# NO gpσ/denom_cf keywords, i.e. both silently defaulted to 0.0 -- which makes
+# wctx.Lam_homog[cf.cf_col]=kappa0[cf.cf_col]*0.0=0 and wctx.denom_cf_scaled=kappa0[cf.cf_col]*0.0=0
+# identically, so the FIXED production formula collapses to bare `qcf_diff*invM` regardless of
+# whether Lam_homog/denom_cf_scaled are wired correctly. The test's own (unfixed) brute-force
+# reference `qcf_diff - wctx.pi_vec[jcf]*Tbi_diff` then only matched because `cf.usePMM=false` in
+# this D4 fixture makes wctx.pi_vec[jcf]==0 too -- i.e. this test was PASSING VACUOUSLY, never
+# actually exercising the Lam_homog/denom_cf_scaled fix with real nonzero values. Fixed by computing
+# the REAL gpσ=gp^σ/denom_cf=gpσ*LPrime[bi] this session's production wiring itself uses
+# (cm_hessian_architectures.jl's own hessian_cm_structured! profiled branch, and
+# reduced_homogeneous_hessian_2026-08-01.jl's build_reduced_homogeneous_winner_pair_ctx), and
+# switching every brute-force reference below from wctx.pi_vec[jcf] to
+# wctx.Lam_homog[jcf]/wctx.denom_cf_scaled with the additive constant term the production fix added.
+θ_full_calib_france = CS.reconstruct_full(x_free_calib, ctx.m)
+σ_france = θ_full_calib_france[2]
+gp_france = θ_full_calib_france[3 + ctx.D]
+gpσ_france = gp_france^σ_france
+denom_cf_france = gpσ_france * ctx.γ.LPrime[ctx.bi]
+println("gpσ_france=", gpσ_france, "  denom_cf_france=", denom_cf_france)
+
 # ============================================================================
 # H_EC (flexible CM) -- France row via winner_pair_cross_hessian_cm_block!
 # ============================================================================
@@ -53,8 +73,9 @@ x = vcat(base.ζstar, base.λstar) .+ vcat(0.01, 0.02 .* randn(length(base.λsta
 _archC_prep_for_hessian!(obj, x)
 cf = cctx.core_cf_ref[]
 check("H_EC: cf is a real CompressedFactual, has_cf", cf isa CompressedFactual && cf.cf_col > 0)
-wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot)
+wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot, gpσ = gpσ_france, denom_cf = denom_cf_france)
 check("H_EC: wctx.target_slot[cf.cf_col] == bi_slot", wctx.target_slot[cf.cf_col] == bi_slot)
+check("H_EC: wctx.Lam_homog[cf.cf_col] is genuinely nonzero (test has real teeth)", abs(wctx.Lam_homog[cf.cf_col]) > 1e-10)
 ws_ref = Ref{Union{Nothing,WinnerBinCrossScratch}}(nothing)
 ws = ensure_winner_bin_cross_scratch!(ws_ref, wctx.ncolI, cctx.D, cctx.L, wctx.Ddest)
 winner_pair_cross_hessian_fill!(wctx, ws, obj, cctx.Bidx)
@@ -70,6 +91,7 @@ for l in (1, cctx.L)
         # QCfCScum's own accumulation, NOT winner-conditioned like the bilateral columns)
         qcf_o = 0.0; qcf_ref = 0.0
         Tbi_o = 0.0; Tbi_ref = 0.0
+        nu_o = 0.0; nu_ref = 0.0
         for w in 1:cf.W
             snu = S[w] * cf.SW[w]
             in_o = cctx.Bidx[w, o_col] <= l
@@ -80,10 +102,13 @@ for l in (1, cctx.L)
             m = snu * cf.wval[w, bi_slot]
             in_o && (Tbi_o += m)
             in_ref && (Tbi_ref += m)
+            in_o && (nu_o += snu)
+            in_ref && (nu_ref += snu)
         end
         qcf_diff = qcf_o - qcf_ref
         Tbi_diff = Tbi_o - Tbi_ref
-        expected = (qcf_diff - wctx.pi_vec[jcf] * Tbi_diff) * (1.0 / M)
+        nu_diff = nu_o - nu_ref
+        expected = (qcf_diff + wctx.denom_cf_scaled * nu_diff - wctx.Lam_homog[jcf] * Tbi_diff) * (1.0 / M)
         got = Hraw_EC[jcf + 1, oi]
         global maxdiff_hec = max(maxdiff_hec, abs(got - expected))
     end
@@ -118,8 +143,9 @@ Hz = objA.H; Mz = objA.M
 ddPsi! = objA.ddPsi!; ddPsi!(objA.arg2, objA.arg0); Sz = objA.arg2
 Ez = @view Hz[:, 2:1+NCORE_ext]
 Zz = @view Ez[:, ncore+1:NCORE_ext]
-wctxz = build_winner_pair_ctx(cfz; bi_slot = bi_slot)
+wctxz = build_winner_pair_ctx(cfz; bi_slot = bi_slot, gpσ = gpσ_france, denom_cf = denom_cf_france)
 check("H_EZ: wctx.target_slot[cf.cf_col] == bi_slot", wctxz.target_slot[cfz.cf_col] == bi_slot)
+check("H_EZ: wctx.Lam_homog[cf.cf_col] is genuinely nonzero (test has real teeth)", abs(wctxz.Lam_homog[cfz.cf_col]) > 1e-10)
 wsz_ref = Ref{Union{Nothing,WinnerZCCrossScratch}}(nothing)
 wsz = ensure_winner_zc_cross_scratch!(wsz_ref, wctxz.W, n_restr, wctxz.Ddest)
 winner_pair_cross_hessian_zc_prep!(wsz, wctxz, Sz)
@@ -130,12 +156,14 @@ maxdiff_hez = 0.0
 for x in 1:n_restr
     row_bf = 0.0
     Tbi_bf = 0.0
+    NuZ_bf = 0.0
     for w in 1:cfz.W
         snu = Sz[w] * cfz.SW[w]
         row_bf += snu * wctxz.kappa0[jcfz] * cfz.cf_raw[w] * Zz[w, x]
         Tbi_bf += snu * cfz.wval[w, bi_slot] * Zz[w, x]
+        NuZ_bf += snu * Zz[w, x]
     end
-    expected = (row_bf - wctxz.pi_vec[jcfz] * Tbi_bf) / Mz
+    expected = (row_bf + wctxz.denom_cf_scaled * NuZ_bf - wctxz.Lam_homog[jcfz] * Tbi_bf) / Mz
     got = H_new[jcfz + 1, x]
     global maxdiff_hez = max(maxdiff_hez, abs(got - expected))
 end
@@ -165,8 +193,9 @@ xf = vcat(basef.ζstar, basef.λstar) .+ vcat(0.01, 0.02 .* randn(length(basef.�
 _archC_prep_for_hessian!(objf, xf)
 cff = cctxf.core_cf_ref[]
 check("H_EF: cf is a real CompressedFactual, has_cf", cff isa CompressedFactual && cff.cf_col > 0)
-wctxf = build_winner_pair_ctx(cff; bi_slot = bi_slot)
+wctxf = build_winner_pair_ctx(cff; bi_slot = bi_slot, gpσ = gpσ_france, denom_cf = denom_cf_france)
 check("H_EF: wctx.target_slot[cf.cf_col] == bi_slot", wctxf.target_slot[cff.cf_col] == bi_slot)
+check("H_EF: wctx.Lam_homog[cf.cf_col] is genuinely nonzero (test has real teeth)", abs(wctxf.Lam_homog[cff.cf_col]) > 1e-10)
 wsf_ref = Ref{Union{Nothing,WinnerBinCrossScratch}}(nothing)
 wsf = ensure_winner_bin_cross_scratch!(wsf_ref, wctxf.ncolI, cctxf.D, cctxf.L, wctxf.Ddest)
 winner_pair_cross_hessian_fill!(wctxf, wsf, objf, cctxf.Bidx)
@@ -179,15 +208,17 @@ for l in (1, cctxf.L)
     winner_pair_cross_hessian_colsum!(colsum_new, wctxf, wsf, l; use_profiled_correction = true)
     sumQCf_bf = 0.0
     Tbi_bf = 0.0
+    sumNu_bf = 0.0
     for x_ in 1:cctxf.D
         for w in 1:cff.W
             cctxf.Bidx[w, x_] <= l || continue
             snu = Sf[w] * cff.SW[w]
             sumQCf_bf += snu * wctxf.kappa0[jcff] * cff.cf_raw[w]
             Tbi_bf += snu * cff.wval[w, bi_slot]
+            sumNu_bf += snu
         end
     end
-    expected = sumQCf_bf - wctxf.pi_vec[jcff] * Tbi_bf
+    expected = sumQCf_bf + wctxf.denom_cf_scaled * sumNu_bf - wctxf.Lam_homog[jcff] * Tbi_bf
     global maxdiff_colsum = max(maxdiff_colsum, abs(colsum_new[jcff + 1] - expected))
 end
 check("H_EF: France row colsum! use_profiled_correction=true matches brute-force (max|Δ|=$(maxdiff_colsum))",
@@ -198,12 +229,14 @@ Esum_new = zeros(wctxf.ncolI + 1)
 winner_pair_cross_hessian_esum!(Esum_new, wctxf, wsf, Sf, Wtot; use_profiled_correction = true)
 ecf_bf = 0.0
 T0bi_bf = 0.0
+t0_bf = 0.0
 for w in 1:cff.W
     snu = Sf[w] * cff.SW[w]
     global ecf_bf += snu * wctxf.kappa0[jcff] * cff.cf_raw[w]
     global T0bi_bf += snu * cff.wval[w, bi_slot]
+    global t0_bf += snu
 end
-expected_esum = ecf_bf - wctxf.pi_vec[jcff] * T0bi_bf
+expected_esum = ecf_bf + wctxf.denom_cf_scaled * t0_bf - wctxf.Lam_homog[jcff] * T0bi_bf
 maxdiff_esum = abs(Esum_new[jcff + 1] - expected_esum)
 check("H_EF: France row esum! use_profiled_correction=true matches brute-force (max|Δ|=$(maxdiff_esum))",
       maxdiff_esum < 1e-6)

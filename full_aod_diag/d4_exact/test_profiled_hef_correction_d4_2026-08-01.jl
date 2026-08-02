@@ -108,7 +108,11 @@ for contrasts in (:anchored, :orthonormal), L in (10, 20)
                     cctx.Bidx[w, xx] <= l && (sumNu_bf += S[w] * cf.SW[w])
                 end
                 expected_old = sumQ - wctx.pi_vec[j] * sumNu_bf
-                expected_new = sumQ - wctx.pi_vec[j] * Tdl
+                # BUGFIX (2026-08-01, same pattern as test_profiled_hec_correction_d4_2026-08-01.jl's
+                # own fix): the profiled/homogeneous correction pairs with wctx.Lam_homog[j], NOT
+                # wctx.pi_vec[j] -- this reference was itself bugged the same way production code was,
+                # see winner_pair_cross_hessian_colsum!'s own bugfix comment.
+                expected_new = sumQ - wctx.Lam_homog[j] * Tdl
                 maxdiff_colsum_old = max(maxdiff_colsum_old, abs(colsum_old[j+1] - expected_old))
                 maxdiff_colsum_new = max(maxdiff_colsum_new, abs(colsum_new[j+1] - expected_new))
             end
@@ -143,7 +147,8 @@ for contrasts in (:anchored, :orthonormal), L in (10, 20)
             # y already kappa0-scaled) -- same scaling discipline as brute_force_colsum_pieces above.
             EsumEcon_j *= wctx.kappa0[j]
             expected_old = EsumEcon_j - wctx.pi_vec[j] * t0_bf
-            expected_new = EsumEcon_j - wctx.pi_vec[j] * T0_bf
+            # BUGFIX, same pattern as colsum! above: profiled correction pairs with Lam_homog[j].
+            expected_new = EsumEcon_j - wctx.Lam_homog[j] * T0_bf
             maxdiff_esum_old = max(maxdiff_esum_old, abs(Esum_old[j+1] - expected_old))
             maxdiff_esum_new = max(maxdiff_esum_new, abs(Esum_new[j+1] - expected_new))
         end

@@ -503,7 +503,7 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
     use_profiled_correction && ws.Ddest != Ddest &&
         error("winner_pair_cross_hessian_zc_block!: use_profiled_correction=true requires ws.Ddest=$(ws.Ddest) == wctx.Ddest=$Ddest -- rebuild scratch via ensure_winner_zc_cross_scratch!(...; Ddest)")
 
-    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec; target_slot = wctx.target_slot
+    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec; Lam_homog = wctx.Lam_homog; target_slot = wctx.target_slot
     has_cf = wctx.has_cf; jcf = ncolI
     Snu = ws.Snu; v = ws.v
     invM = 1.0 / M
@@ -550,14 +550,19 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
         BLAS.gemm!('T', 'N', 1.0, ws.SnuWval, Z, 0.0, TZ)
     end
 
+    # BUGFIX (2026-08-01, same pattern as winner_pair_cross_hessian_cm_block!/_colsum!/_esum!): the
+    # multiplier must switch in lockstep with the correction term -- `NuZ[x]`
+    # (destination-independent) pairs with `pi_vec[j]`; the destination-specific `TZ`-based
+    # correction pairs with `Lam_homog[j]`, NOT `pi_vec[j]`.
     @inbounds for j in 1:nbilateral
-        pij = pi_vec[j]
         if use_profiled_correction
             d = target_slot[j]
+            lamj = Lam_homog[j]
             for x in 1:nx
-                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * TZ[d, x])
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - lamj * TZ[d, x])
             end
         else
+            pij = pi_vec[j]
             for x in 1:nx
                 HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
             end
@@ -567,16 +572,21 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
     if has_cf
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
-        pij = pi_vec[jcf]
         # France/cf row gets the profiled TZ correction too, when target_slot[jcf] is a real
         # bi_slot (see build_winner_pair_ctx's own bi_slot keyword docstring) -- falls back to NuZ
-        # otherwise (sentinel 0), same discipline as winner_pair_cross_hessian_cm_block!.
+        # otherwise (sentinel 0), same discipline as winner_pair_cross_hessian_cm_block!. SECOND
+        # bugfix, same pattern as H_EC/colsum!/esum!'s France row: the homogeneous formulation's
+        # constant term `denom_cf` contributes `denom_cf_scaled*NuZ[x]` here (NuZ is the un-binned,
+        # Z-feature analog of `nu_diff`/`sumNu`/`t0`), added before subtracting `Lam_homog[jcf]*TZ`.
         if use_profiled_correction && target_slot[jcf] != 0
             d_cf = target_slot[jcf]
+            lamcf = Lam_homog[jcf]
+            dcfscaled = wctx.denom_cf_scaled
             @inbounds for x in 1:nx
-                row_cf[x] -= invM * pij * TZ[d_cf, x]
+                row_cf[x] += invM * (dcfscaled * NuZ[x] - lamcf * TZ[d_cf, x])
             end
         else
+            pij = pi_vec[jcf]
             @inbounds for x in 1:nx
                 row_cf[x] -= invM * pij * NuZ[x]
             end
@@ -621,6 +631,7 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
     QCScum = ws.QCScum; NuCScum = ws.NuCScum; SOnlyCScum = ws.SOnlyCScum; QCfCScum = ws.QCfCScum
     MSumX = ws.MSumX
     pi_vec = wctx.pi_vec
+    Lam_homog = wctx.Lam_homog
     target_slot = wctx.target_slot
     has_cf = wctx.has_cf
     jcf = wctx.ncolI   # the cf column's index WITHIN wctx's own 1:ncolI numbering (cf.cf_col)
@@ -637,6 +648,14 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
     end
     colsum[1] = sumS
 
+    # BUGFIX (2026-08-01, same pattern as winner_pair_cross_hessian_cm_block!'s H_EC fix): the
+    # multiplier MUST switch in lockstep with the correction term -- `sumNu` (destination-independent,
+    # OLD/structured-formulation, the sum-over-x analog of that function's `nu_diff`) pairs with
+    # `pi_vec[j]`; the destination-specific `MSumX`-based correction (HOMOGENEOUS-formulation, the
+    # sum-over-x analog of `MCScum[d,o,l]-MCScum[d,refIndex1,l]`) pairs with `Lam_homog[j]`, NOT
+    # `pi_vec[j]`. `MSumX`'s own field docstring already documents it as "H_EF's colsum!/esum!
+    # sum-over-x analog of H_EC's per-x difference" -- this fix makes the multiplier follow that same
+    # analogy, not just the correction term.
     @inbounds for j in 1:wctx.ncolI
         sumQ = 0.0
         for o in 1:D
@@ -645,21 +664,32 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
         # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded (see
         # winner_pair_cross_hessian_cm_block!'s identical guard/comment); row jcf is always
         # overwritten below regardless.
-        corr = (use_profiled_correction && target_slot[j] != 0) ? MSumX[target_slot[j], l] : sumNu
-        colsum[j + 1] = sumQ - pi_vec[j] * corr
+        if use_profiled_correction && target_slot[j] != 0
+            colsum[j + 1] = sumQ - Lam_homog[j] * MSumX[target_slot[j], l]
+        else
+            colsum[j + 1] = sumQ - pi_vec[j] * sumNu
+        end
     end
 
     # Same cf-column override as winner_pair_cross_hessian_cm_block! -- QCScum[jcf,:,:] was left at
     # zero by the main slot-loop (the cf column is not a (slot,origin) pair), so overwrite that one
-    # entry with its own dedicated accumulation. Uses MSumX[target_slot[jcf],l] too when that's a
-    # real bi_slot, else falls back to sumNu (France row scope discipline, see docstring).
+    # entry with its own dedicated accumulation. Uses MSumX[target_slot[jcf],l]/Lam_homog[jcf] too
+    # when that's a real bi_slot, else falls back to sumNu/pi_vec[jcf] (France row scope discipline,
+    # see docstring). SECOND bugfix, same pattern as H_EC's France row: the homogeneous formulation's
+    # France coefficient has a CONSTANT term (`denom_cf`) that does not cancel in this sum (unlike a
+    # (o,refIndex1)-DIFFERENCE, a plain sum over origins does not cancel a constant either -- it
+    # accumulates `denom_cf_scaled` once per unit of `sumNu`, the sum-over-x analog of H_EC's
+    # `nu_diff`), contributing `denom_cf_scaled*sumNu` (reusing the SAME sumNu already computed above).
     if has_cf
         sumQCf = 0.0
         @inbounds for o in 1:D
             sumQCf += QCfCScum[o, l]
         end
-        corr_cf = (use_profiled_correction && target_slot[jcf] != 0) ? MSumX[target_slot[jcf], l] : sumNu
-        colsum[jcf + 1] = sumQCf - pi_vec[jcf] * corr_cf
+        if use_profiled_correction && target_slot[jcf] != 0
+            colsum[jcf + 1] = sumQCf + wctx.denom_cf_scaled * sumNu - Lam_homog[jcf] * MSumX[target_slot[jcf], l]
+        else
+            colsum[jcf + 1] = sumQCf - pi_vec[jcf] * sumNu
+        end
     end
     return colsum
 end
@@ -717,20 +747,34 @@ function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::Wi
         end
     end
     pi_vec = wctx.pi_vec
+    Lam_homog = wctx.Lam_homog
     target_slot = wctx.target_slot
     T0_slot = ws.T0_slot
     EsumEcon = ws.EsumEcon
+    # BUGFIX (2026-08-01, same pattern as winner_pair_cross_hessian_cm_block!/_colsum!): the
+    # multiplier must switch with the correction term -- `t0` (destination-independent) pairs with
+    # `pi_vec[j]`; the destination-specific `T0_slot`-based correction (the UN-binned analog of
+    # `MSumX`) pairs with `Lam_homog[j]`.
     @inbounds for j in 1:wctx.ncolI
         # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded (see
         # winner_pair_cross_hessian_cm_block!'s identical guard/comment); row jcf is always
         # overwritten below regardless.
-        corr = (use_profiled_correction && target_slot[j] != 0) ? T0_slot[target_slot[j]] : t0
-        Esum[j + 1] = EsumEcon[j] - pi_vec[j] * corr
+        if use_profiled_correction && target_slot[j] != 0
+            Esum[j + 1] = EsumEcon[j] - Lam_homog[j] * T0_slot[target_slot[j]]
+        else
+            Esum[j + 1] = EsumEcon[j] - pi_vec[j] * t0
+        end
     end
     if has_cf
         jcf = wctx.ncolI
-        corr_cf = (use_profiled_correction && target_slot[jcf] != 0) ? T0_slot[target_slot[jcf]] : t0
-        Esum[jcf + 1] = ecf - pi_vec[jcf] * corr_cf
+        # SECOND bugfix, same pattern as H_EC/colsum!'s France row: the homogeneous formulation's
+        # constant term `denom_cf` contributes `denom_cf_scaled*t0` here (the UN-binned analog of
+        # `denom_cf_scaled*sumNu` in colsum!), reusing the SAME t0 already computed above.
+        if use_profiled_correction && target_slot[jcf] != 0
+            Esum[jcf + 1] = ecf + wctx.denom_cf_scaled * t0 - Lam_homog[jcf] * T0_slot[target_slot[jcf]]
+        else
+            Esum[jcf + 1] = ecf - pi_vec[jcf] * t0
+        end
     end
     return Esum
 end
