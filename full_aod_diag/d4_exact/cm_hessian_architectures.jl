@@ -755,9 +755,20 @@ mutable struct CMBinHessCtx
     # `profiled_full_ws` (rebuilt/cached only on `cf` identity change, not duplicated here).
     profiled_colsum_full::Vector{Float64}
     profiled_esum_full::Vector{Float64}
+    # ZC lane task (2026-08-02), CM+ZC widened-core H_EM gather: `profiled_full_ws_zc` is the ZC-
+    # specific full-width scratch (`WinnerZCCrossScratch`, from `winner_pair_cross_hessian_zc_prep!`
+    # -- a DIFFERENT type than flexible-CM's own `profiled_full_ws::WinnerBinCrossScratch` above,
+    # hence a separate field rather than a reuse) for the mean/pair-Z cross block H_EM (this family's
+    # own "H_EZ", filled via the SAME `winner_pair_cross_hessian_zc_block!(...; use_profiled_
+    # correction=true)` kernel origin-ZC's H_EZ gather already uses -- reuses `profiled_full_wctx`/
+    # `profiled_full_wctx_for` above unchanged, same `cf`-identity-keyed rebuild discipline).
+    # `profiled_hraw_em_full` is the corresponding full-width `(wctx.ncolI+1) x n_restr` raw-block
+    # scratch, gathered down into the reduced-sized `HEM` view before the H_EE-block write.
+    profiled_full_ws_zc::Union{Nothing,WinnerZCCrossScratch}
+    profiled_hraw_em_full::Matrix{Float64}
 end
 
-"Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change. Also appends the genuine-cold H_EZ backend selector fields (zc_ez_backend/zc_drawmajor) and the profiled all-families completion task's reduced-layout fields with their own defaults (nothing/fresh-Ref/empty-buffer), same backward-compatibility discipline throughout."
+"Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change. Also appends the genuine-cold H_EZ backend selector fields (zc_ez_backend/zc_drawmajor), the profiled all-families completion task's reduced-layout fields, and the ZC lane task's CM+ZC widened-core H_EM gather fields, all with their own defaults (nothing/fresh-Ref/empty-buffer), same backward-compatibility discipline throughout."
 function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAULT[], bin_zc_drawchunk = nothing,
         zc_ez_backend::Symbol = ZC_EZ_BACKEND_DEFAULT[], zc_drawmajor = nothing,
         profiled_layout = nothing, profiled_theta_ref::Base.RefValue{Any} = Ref{Any}(nothing),
@@ -767,11 +778,13 @@ function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAU
         profiled_full_ws::Union{Nothing,WinnerBinCrossScratch} = nothing,
         profiled_hraw_ec_full::Matrix{Float64} = Matrix{Float64}(undef, 0, 0),
         profiled_colsum_full::Vector{Float64} = Float64[],
-        profiled_esum_full::Vector{Float64} = Float64[])
+        profiled_esum_full::Vector{Float64} = Float64[],
+        profiled_full_ws_zc::Union{Nothing,WinnerZCCrossScratch} = nothing,
+        profiled_hraw_em_full::Matrix{Float64} = Matrix{Float64}(undef, 0, 0))
     return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk, zc_ez_backend, zc_drawmajor,
         profiled_layout, profiled_theta_ref, profiled_reduced_wctx, profiled_reduced_wctx_for, profiled_hee_packed,
         profiled_full_wctx, profiled_full_wctx_for, profiled_full_ws, profiled_hraw_ec_full,
-        profiled_colsum_full, profiled_esum_full)
+        profiled_colsum_full, profiled_esum_full, profiled_full_ws_zc, profiled_hraw_em_full)
 end
 
 """
@@ -959,7 +972,6 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
     # that combination is not ported yet, see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md).
     if cctx.profiled_layout !== nothing
         cf isa CompressedFactual || error("_fill_cm_HEE!: profiled_layout set but core_cf_ref[] is not a CompressedFactual (got $(typeof(cf))) -- the compressed-core fallback path is not supported for the reduced economic layout.")
-        ncore == NCORE || error("_fill_cm_HEE!: profiled_layout set but ncore_core=$ncore != NCORE=$NCORE -- CM+ZC/mean-pair widening is not ported for the reduced economic layout yet.")
         layout = cctx.profiled_layout
         θ_full = cctx.profiled_theta_ref[]
         θ_full === nothing && error("_fill_cm_HEE!: profiled_layout set but profiled_theta_ref[] is nothing -- theta was never published for this outer point (moments! closure not yet called before this Hessian callback?).")
@@ -981,6 +993,69 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 v = packed[k]; k += 1
                 HEE_core[i, j] = v
                 HEE_core[j, i] = v
+            end
+        end
+        # ZC lane task (2026-08-02): CM+ZC widened-core H_EM/H_MM. H_EE above is genuinely family-
+        # independent (economic block only) -- reused verbatim. When ncore<NCORE (a real mean/pair-Z
+        # widened block exists, i.e. this cctx is CM+ZC's, not plain flexible CM/common-Frechet),
+        # H_EM is filled via the SAME "gather at assembly" design origin-ZC's own H_EZ gather uses
+        # (archA_partitioned_hess_cb_builder): a FULL-width wctx/ws built once per callback via
+        # winner_pair_cross_hessian_zc_prep!/_zc_block!(use_profiled_correction=true), gathered into
+        # the reduced-sized HEM view. H_MM is copied VERBATIM from the non-profiled ncore<NCORE
+        # branch below (depends only on cctx.hzz_zc_op/cctx.nu_ref, confirmed independent of economic
+        # block width by direct read -- matches this task's own "unchanged H_ZZ" instruction, HMM
+        # here being CM+ZC's own name for that same restriction-self-block).
+        if ncore < NCORE
+            HEM = @view HEE[1:ncore, ncore+1:NCORE]
+            HMM = @view HEE[ncore+1:NCORE, ncore+1:NCORE]
+            n_restr = NCORE - ncore
+            cctx.hzz_zc_op !== nothing || error("_fill_cm_HEE!: profiled_layout set with ncore<NCORE (widened CM+ZC) but cctx.hzz_zc_op is nothing -- built unconditionally by build_cm_meanzc_bin_ctx whenever there IS a mean/pair block; this should be provably unreachable in production.")
+            has_france = layout.france_ratio_reduced_j > 0
+            bi_slot = has_france ? dest_slot(cctx.econ_ctx, cctx.econ_ctx.bi) : 0
+            gpσ = has_france ? θ_full[3 + cctx.econ_ctx.D]^θ_full[2] : 0.0
+            denom_cf = has_france ? gpσ * cctx.econ_ctx.γ.LPrime[cctx.econ_ctx.bi] : 0.0
+            if cctx.profiled_full_wctx === nothing || cctx.profiled_full_wctx_for !== cf
+                cctx.profiled_full_wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot, gpσ = gpσ, denom_cf = denom_cf)
+                cctx.profiled_full_wctx_for = cf
+            end
+            wctx_full = cctx.profiled_full_wctx
+            ws_full = cctx.profiled_full_ws_zc
+            if ws_full === nothing || ws_full.W != wctx_full.W || ws_full.max_nx < n_restr || ws_full.Ddest != wctx_full.Ddest
+                ws_full = WinnerZCCrossScratch(wctx_full.W, n_restr, wctx_full.Ddest)
+                cctx.profiled_full_ws_zc = ws_full
+            end
+            record_winner_cross_hessian_call!()
+            winner_pair_cross_hessian_zc_prep!(ws_full, wctx_full, w)
+            op = cctx.hzz_zc_op
+            refresh_zc_targets!(cctx.hzz_zc_ws, op, cctx.hzz_zc_layout, cctx.nu_ref[])
+            cctx.hzz_centered = ensure_zc_centered_scratch!(cctx.hzz_centered, op, size(w, 1))
+            # ROOT-CAUSE FIX precedent (diagnose-optimize/HZZ-BLAS-and-HCZ-prep-2026-07-29, Part B,
+            # see the non-profiled ncore<NCORE branch's own identical comment below): ZcS is read
+            # UNCONDITIONALLY by bin_zc_cross_hessian_fill! (H_ZC, hessian_cm_structured!'s own
+            # profiled-branch widened-CM-grid gather, added alongside this H_EM/H_MM code) regardless
+            # of zc_gram_backend -- always fill_S=true here, not gated.
+            refresh_zc_centered!(cctx.hzz_centered, op, cctx.hzz_zc_ws, w; fill_S = true)
+            nx = n_restriction(op)
+            Z = @view cctx.hzz_centered.Zc[:, 1:nx]
+            if size(cctx.profiled_hraw_em_full) != (wctx_full.ncolI + 1, n_restr)
+                cctx.profiled_hraw_em_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, n_restr)
+            end
+            HEM_full = cctx.profiled_hraw_em_full
+            winner_pair_cross_hessian_zc_block!(HEM_full, wctx_full, ws_full, w, Z, M; use_profiled_correction = true)
+            n_bilateral = length(layout.retained_full_factual_j)
+            @views HEM[1, :] .= HEM_full[1, :]
+            @inbounds for kk in 1:n_bilateral
+                j_full = layout.retained_full_factual_j[kk]
+                @views HEM[1 + kk, :] .= HEM_full[1 + j_full, :]
+            end
+            has_france && (@views HEM[ncore, :] .= HEM_full[1 + wctx_full.ncolI, :])
+            # ---- H_MM -- UNCHANGED, copied verbatim from the non-profiled ncore<NCORE branch below ----
+            if cctx.zc_gram_backend === :reference
+                zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
+            else
+                cctx.raw_zc_ws = ensure_zc_raw_weighted_workspace!(cctx.raw_zc_ws, op, size(w, 1))
+                refresh_zc_raw_target_vector!(cctx.raw_zc_ws, cctx.hzz_zc_ws, op)
+                zc_gram_dispatch!(HMM, cctx.zc_gram_backend, nothing, op, cctx.raw_zc_ws, w, M; workers = cctx.zc_gram_workers)
             end
         end
         return HEE
@@ -1336,6 +1411,34 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
         # `extension isa CMFrechetExtension` a supported case here too -- previously this line
         # unconditionally errored for any non-nothing `extension` (H_EC only). Any OTHER non-nothing,
         # non-CMFrechetExtension `extension` is still not a recognized case for this branch.
+        # ZC lane task (2026-08-02): this branch's own gather loop below only fills
+        # `Hraw_EC[1:cctx.ncore_core, :]` (the TRUE-economic rows) before copying `Hraw_EC[1:NCORE,
+        # :]` wholesale into `Hfull` -- correct only when `ncore_core==NCORE` (plain flexible
+        # CM/common-Frechet, this branch's ONLY callers until this task). CM+ZC's own widened
+        # `ncore_core<NCORE` case would silently copy STALE `Hraw_EC[ncore_core+1:NCORE,:]` (the
+        # mean/pair-Z rows, never written by this loop) into the CM-grid cross block -- a genuine
+        # gap this task did not close (H_ZC/H_CC gather for CM+ZC's own CM-grid block under the
+        # reduced economic layout is separately-scoped follow-up work, not attempted here; H_EE/
+        # H_EM/H_MM above ARE closed and gated). Loud, not silent: refuse rather than corrupt.
+        # ZC lane task (2026-08-02): CM+ZC widened-core H_ZC (mean/pair-Z x CM-grid cross). When
+        # ncore<NCORE, `Hraw_EC[ncore+1:NCORE,:]` (the mean/pair-Z rows) is filled from the SAME
+        # `bin_zc_cross_hessian_fill!`/`_block!` primitive the non-profiled `use_direct_hcz` branch
+        # below already uses UNCHANGED -- it depends only on `cctx.Bidx`/`cctx.hzz_centered.ZcS`
+        # (theta/bin-table-based), never on the economic block width or `wctx`, so it is genuinely
+        # independent of the profiled/reduced layout, same rationale as H_MM above. NOTE: this
+        # dispatches through the plain serial kernel, not `hcz_prep_dispatch!`'s optimized
+        # `:draw_chunk_reordered` candidate -- that dispatch is only wired into the THREADED twin
+        # (cm_hessian_threaded.jl), which the profiled/reduced path does not use for ANY family
+        # (flexible CM's own profiled H_EC gather predates this task and has the identical
+        # limitation -- `threaded_bins=false` is required for every profiled/reduced cctx in this
+        # codebase, not a new restriction this task introduces).
+        local bin_zc_ws_ec
+        if cctx.ncore_core < NCORE
+            nz_ec = n_restriction(cctx.hzz_zc_op)
+            bin_zc_ws_ec = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz_ec)
+            cctx.bin_zc_cross = bin_zc_ws_ec
+            bin_zc_cross_hessian_fill!(bin_zc_ws_ec, cctx.Bidx, cctx.hzz_centered.ZcS)
+        end
         # BUGFIX (found live, 2026-08-01, via a direct user challenge to re-verify H_CC rather than
         # trust "unchanged code must be correct"): this branch skipped build_bin_tables!/
         # prefix_sum_tables! entirely, so cctx.CT (the theta/weight-dependent bin table
@@ -1385,6 +1488,10 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
             end
             if has_france
                 @views Hraw_EC[1 + layout.total_reduced_economic_moments, :] .= Hraw_EC_full[1 + wctx_full.ncolI, :]
+            end
+            if cctx.ncore_core < NCORE
+                Hraw_EC_z = @view Hraw_EC[cctx.ncore_core+1:NCORE, :]
+                bin_zc_cross_hessian_block!(Hraw_EC_z, bin_zc_ws_ec, l, origins, refIndex1, M)
             end
             cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
             block_ec = if cctx.R === nothing
