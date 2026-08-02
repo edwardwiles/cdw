@@ -1041,16 +1041,24 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 cctx.profiled_hraw_em_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, n_restr)
             end
             HEM_full = cctx.profiled_hraw_em_full
-            # Phase 7 (dispatch-counters, 2026-08-02): CONFIRMED LIVE -- this profiled/reduced-layout
-            # H_EM gather calls the base `winner_pair_cross_hessian_zc_block!` kernel UNCONDITIONALLY,
-            # never consulting `cctx.zc_ez_backend` at all (unlike the non-profiled ncore<NCORE branch
-            # above, which has a real :drawmajor/:drawmajor_v2/:threaded/serial if-chain). So on the
-            # profiled/reduced path, H_EM/H_EZ never dispatches through :drawmajor_v2 regardless of
-            # `zc_ez_backend`'s value -- recorded as a fallback so this is VISIBLE in the counters
-            # rather than a silent gap; wiring the profiled gather to the drawmajor_v2 backend is a
-            # separate, larger follow-up (not attempted here, out of this task's surgical scope).
-            record_drawmajor_v2_fallback!()
-            winner_pair_cross_hessian_zc_block!(HEM_full, wctx_full, ws_full, w, Z, M; use_profiled_correction = true)
+            # Performance closeout (2026-08-02), Section 6: wire the profiled/reduced H_EM gather
+            # through the SAME `cctx.zc_ez_backend` dispatch the non-profiled ncore<NCORE branch
+            # above already uses (lines ~1145-1171), always with `use_profiled_correction=true`
+            # (this branch only ever runs for the reduced economic layout). drawmajor_v2's W-scale
+            # scatter loop is completely unchanged (hez_drawmajor_v2_candidate_2026-08-01.jl); only
+            # its `use_profiled_correction=true` branch (added this task, mirrors the serial
+            # kernel's TZ/Lam_homog formula exactly) is exercised here. Every other backend value
+            # (:drawmajor v1, :threaded, serial/default) still falls back to the base kernel, since
+            # only v2 was ported.
+            if cctx.zc_ez_backend === :drawmajor_v2
+                record_drawmajor_v2_dispatch!()
+                nbilateral_full = wctx_full.has_cf ? wctx_full.ncolI - 1 : wctx_full.ncolI
+                cctx.zc_drawmajor = ensure_winner_zc_drawmajor_v2_scratch!(cctx.zc_drawmajor, wctx_full.W, wctx_full.Ddest, nbilateral_full, nx, cctx.cross_hessian_workers)
+                winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEM_full, wctx_full, ws_full, cctx.zc_drawmajor, w, Z, M; workers = cctx.cross_hessian_workers, use_profiled_correction = true)
+            else
+                record_drawmajor_v2_fallback!()
+                winner_pair_cross_hessian_zc_block!(HEM_full, wctx_full, ws_full, w, Z, M; use_profiled_correction = true)
+            end
             n_bilateral = length(layout.retained_full_factual_j)
             @views HEM[1, :] .= HEM_full[1, :]
             @inbounds for kk in 1:n_bilateral
@@ -1483,13 +1491,15 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
             nz_ec = n_restriction(cctx.hzz_zc_op)
             bin_zc_ws_ec = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz_ec)
             cctx.bin_zc_cross = bin_zc_ws_ec
-            # Phase 7 (dispatch-counters, 2026-08-02): this profiled/reduced H_CZ gather calls the
-            # plain serial kernel directly, bypassing `hcz_prep_dispatch!`/`cctx.hcz_prep_backend`
-            # entirely (see the file-header comment a few lines above this branch) -- :draw_chunk_
-            # reordered never dispatches here regardless of that Ref's value. Recorded so it is
-            # visible, not fixed here (out of this task's surgical scope).
-            record_draw_chunk_reordered_fallback!()
-            bin_zc_cross_hessian_fill!(bin_zc_ws_ec, cctx.Bidx, cctx.hzz_centered.ZcS)
+            # Performance closeout (2026-08-02), Section 7: wire this profiled/reduced H_CZ gather
+            # through the SAME `hcz_prep_dispatch!`/`cctx.hcz_prep_backend` dispatcher the threaded
+            # twin (cm_hessian_threaded.jl) already uses, so `:draw_chunk_reordered` can fire on the
+            # reduced path too. `threaded=false`: this serial function has no thread-local variant
+            # of its own call site -- `:draw_chunk_reordered`/`:draw_chunk_thread_local`'s own
+            # internal `Threads.@spawn` workers are gated on `workers`, not this `threaded` kwarg
+            # (only `hcz_prep_dispatch!`'s `:origin_owned` branch reads `threaded` at all).
+            hcz_prep_dispatch!(bin_zc_ws_ec, cctx.hcz_prep_backend, cctx.Bidx, cctx.hzz_centered.ZcS, cctx;
+                workers = cctx.cross_hessian_workers, threaded = cctx.cross_hessian_threaded)
         end
         # BUGFIX (found live, 2026-08-01, via a direct user challenge to re-verify H_CC rather than
         # trust "unchanged code must be correct"): this branch skipped build_bin_tables!/
@@ -2172,14 +2182,21 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
                         octx.profiled_her_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, n_eta_total)
                     end
                     HER_full = octx.profiled_her_full
-                    # Phase 7 (dispatch-counters, 2026-08-02): CONFIRMED LIVE -- same gap as CM+ZC's
-                    # own profiled H_EM branch above (cm_hessian_architectures.jl's _fill_cm_HEE!):
-                    # this profiled/reduced-layout H_EZ gather calls the base kernel unconditionally,
-                    # never consulting `octx.zc_ez_backend` -- :drawmajor_v2 never dispatches here
-                    # regardless of that Ref's value. Recorded so it is visible, not silently absent
-                    # from the counters; not fixed here (out of this task's surgical scope).
-                    record_drawmajor_v2_fallback!()
-                    winner_pair_cross_hessian_zc_block!(HER_full, wctx_full, ws_full, arg2, Z, M; use_profiled_correction = true)
+                    # Performance closeout (2026-08-02), Section 6: same fix as CM+ZC's own profiled
+                    # H_EM branch (cm_hessian_architectures.jl's _fill_cm_HEE!) -- wire this
+                    # profiled/reduced-layout H_EZ gather through the SAME `octx.zc_ez_backend`
+                    # dispatch the non-profiled branch below already uses (lines ~2258-2267), always
+                    # with `use_profiled_correction=true`. drawmajor_v2's W-scale scatter loop is
+                    # unchanged; only its use_profiled_correction=true branch is exercised here.
+                    if octx.zc_ez_backend === :drawmajor_v2
+                        record_drawmajor_v2_dispatch!()
+                        nbilateral_full = wctx_full.has_cf ? wctx_full.ncolI - 1 : wctx_full.ncolI
+                        octx.zc_drawmajor = ensure_winner_zc_drawmajor_v2_scratch!(octx.zc_drawmajor, wctx_full.W, wctx_full.Ddest, nbilateral_full, nx, octx.cross_hessian_workers)
+                        winner_pair_cross_hessian_zc_block_drawmajor_v2!(HER_full, wctx_full, ws_full, octx.zc_drawmajor, arg2, Z, M; workers = octx.cross_hessian_workers, use_profiled_correction = true)
+                    else
+                        record_drawmajor_v2_fallback!()
+                        winner_pair_cross_hessian_zc_block!(HER_full, wctx_full, ws_full, arg2, Z, M; use_profiled_correction = true)
+                    end
                     n_bilateral = length(layout.retained_full_factual_j)
                     HER = @view ∂∂f_∂∂x[1:NCORE, NCORE+1:n]
                     @views HER[1, :] .= HER_full[1, :]

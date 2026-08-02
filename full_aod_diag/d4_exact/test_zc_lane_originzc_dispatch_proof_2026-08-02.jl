@@ -36,13 +36,13 @@ include(joinpath(D4X, "test_profiled_originzc_d4_fg_and_solve_gate_2026-08-01.jl
 # 2026-08-02.jl). Origin-ZC has no CM-grid block, hence no H_CZ/draw_chunk_reordered concern here
 # (confirmed: OriginZCCoreHessCtx has no hcz_prep_backend field at all).
 #
-# Honest finding from a direct read of cm_hessian_architectures.jl's archA_partitioned_hess_cb_
-# builder (confirmed live): the REDUCED/PROFILED branch (octx.profiled_layout !== nothing, ~line
-# 2088) calls `winner_pair_cross_hessian_zc_block!` UNCONDITIONALLY for H_EZ (~line 2161), never
-# consulting `octx.zc_ez_backend` -- so :drawmajor_v2 does NOT dispatch on the reduced path,
-# regardless of that Ref's value (same architectural gap CM+ZC's own profiled H_EM branch has).
-# Only H_ZZ/HRR (blas_syrk) is wired to its backend Ref in BOTH the profiled and non-profiled
-# branches -- confirmed below.
+# Performance closeout task (2026-08-02), Section 6: this test used to document a confirmed gap
+# (the REDUCED/PROFILED branch in archA_partitioned_hess_cb_builder called
+# winner_pair_cross_hessian_zc_block! unconditionally for H_EZ, never consulting
+# octx.zc_ez_backend). That gather is now wired through the same octx.zc_ez_backend dispatch the
+# non-profiled branch already used, mirroring CM+ZC's own H_EM fix -- drawmajor_v2's W-scale
+# scatter loop itself was not touched. This test now asserts the REDUCED path genuinely
+# dispatches, matching FULL.
 println()
 println("=== Phase 7: backend-specific dispatch counters (isolated per scenario) ===")
 
@@ -62,9 +62,9 @@ cr = NO_DENSE_G_COUNTERS[]
 @printf("  blas_syrk:    dispatch=%d  fallback=%d\n", cr.blas_syrk_dispatch_count, cr.blas_syrk_fallback_count)
 @printf("  drawmajor_v2: dispatch=%d  fallback=%d\n", cr.drawmajor_v2_dispatch_count, cr.drawmajor_v2_fallback_count)
 reduced_blas_syrk_ok = cr.blas_syrk_dispatch_count > 0 && cr.blas_syrk_fallback_count == 0
-reduced_drawmajor_ok_as_expected = cr.drawmajor_v2_dispatch_count == 0 && cr.drawmajor_v2_fallback_count > 0
+reduced_drawmajor_ok = cr.drawmajor_v2_dispatch_count > 0 && cr.drawmajor_v2_fallback_count == 0
 check("REDUCED path: blas_syrk genuinely dispatches (positive>0, negative==0)", reduced_blas_syrk_ok)
-check("REDUCED path: drawmajor_v2 CONFIRMED architecturally unreachable here (dispatch==0, fallback>0) -- documented gap, not a regression", reduced_drawmajor_ok_as_expected)
+check("REDUCED path: drawmajor_v2 now genuinely dispatches (positive>0, negative==0) -- gap closed", reduced_drawmajor_ok)
 
 reset_no_dense_g_counters!()
 ctx_cm_full.obj.use_cached_x = false

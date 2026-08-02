@@ -33,21 +33,20 @@ println(ok ?
 # (blas_syrk/drawmajor_v2/draw_chunk_reordered _dispatch_count/_fallback_count), isolating each
 # scenario with an explicit counter reset so the attribution is exact (not mixed across runs).
 #
-# Honest finding from a direct read of cm_hessian_architectures.jl (confirmed live, not assumed):
-# the REDUCED/PROFILED path (cctx_reduced above, cctx.profiled_layout !== nothing -- the actual
-# subject of this integration branch's reduced-FG work) calls `winner_pair_cross_hessian_zc_block!`
-# UNCONDITIONALLY for H_EM (the profiled branch inside _fill_cm_HEE!, ~line 1044), never consulting
-# `cctx.zc_ez_backend` -- so :drawmajor_v2 genuinely does NOT dispatch on the reduced path,
-# regardless of that Ref's value. Likewise H_CZ's profiled gather (~line 1486) and the serial
-# (threaded_bins=false) non-profiled H_CZ branch (~line 1600) both call `bin_zc_cross_hessian_fill!`
-# directly, bypassing `hcz_prep_dispatch!` entirely -- :draw_chunk_reordered is architecturally
-# unreachable from ANY threaded_bins=false cctx (profiled or not), because that dispatcher is wired
-# ONLY into the threaded twin (hessian_cm_structured_v2!, cm_hessian_threaded.jl), which itself does
-# not understand `profiled_layout` at all (confirmed: no `profiled_layout` reference anywhere in
-# hessian_cm_structured_v2!) -- so threaded_bins=true is incompatible with the reduced/profiled
-# layout, which is exactly why cctx_reduced above must (and does) explicitly pass threaded_bins=false.
-# Only blas_syrk (H_ZZ/H_MM) is wired to dispatch through its backend Ref on EVERY cctx variant
-# (profiled or not, threaded or not) -- confirmed below.
+# Performance closeout task (2026-08-02), Section 6/7: this test used to document a confirmed gap
+# (drawmajor_v2/draw_chunk_reordered architecturally unreachable on the reduced/profiled path,
+# because the profiled H_EM gather in _fill_cm_HEE! called winner_pair_cross_hessian_zc_block!
+# unconditionally, and the profiled H_CZ gather in hessian_cm_structured! called
+# bin_zc_cross_hessian_fill! directly, bypassing hcz_prep_dispatch! entirely). Both gathers are now
+# wired through the SAME dispatch pattern the non-profiled/threaded paths already used
+# (cctx.zc_ez_backend for H_EM; cctx.hcz_prep_backend via hcz_prep_dispatch! for H_CZ) -- see
+# cm_hessian_architectures.jl's profiled branches. drawmajor_v2's own W-scale scatter loop
+# (hez_drawmajor_v2_candidate_2026-08-01.jl) was not rewritten; it gained the same
+# use_profiled_correction branch the serial/threaded kernels already had, gated exactly the way
+# those kernels gate it (validated bit-identical to the serial kernel at D4,
+# test_profiled_hez_drawmajor_v2_d4_2026-08-02.jl). hcz_prep_dispatch! itself was not touched at
+# all -- the profiled H_CZ gather now simply calls it instead of the bare fallback kernel. This
+# test now asserts the REDUCED path genuinely dispatches through both backends, matching FULL.
 println()
 println("=== Phase 7: backend-specific dispatch counters (isolated per scenario) ===")
 
@@ -67,11 +66,11 @@ cr = NO_DENSE_G_COUNTERS[]
 @printf("  drawmajor_v2:         dispatch=%d  fallback=%d\n", cr.drawmajor_v2_dispatch_count, cr.drawmajor_v2_fallback_count)
 @printf("  draw_chunk_reordered: dispatch=%d  fallback=%d\n", cr.draw_chunk_reordered_dispatch_count, cr.draw_chunk_reordered_fallback_count)
 reduced_blas_syrk_ok = cr.blas_syrk_dispatch_count > 0 && cr.blas_syrk_fallback_count == 0
-reduced_drawmajor_ok_as_expected = cr.drawmajor_v2_dispatch_count == 0 && cr.drawmajor_v2_fallback_count > 0
-reduced_hcz_ok_as_expected = cr.draw_chunk_reordered_dispatch_count == 0 && cr.draw_chunk_reordered_fallback_count > 0
+reduced_drawmajor_ok = cr.drawmajor_v2_dispatch_count > 0 && cr.drawmajor_v2_fallback_count == 0
+reduced_hcz_ok = cr.draw_chunk_reordered_dispatch_count > 0 && cr.draw_chunk_reordered_fallback_count == 0
 check("REDUCED path: blas_syrk genuinely dispatches (positive>0, negative==0)", reduced_blas_syrk_ok)
-check("REDUCED path: drawmajor_v2 CONFIRMED architecturally unreachable here (dispatch==0, fallback>0) -- documented gap, not a regression", reduced_drawmajor_ok_as_expected)
-check("REDUCED path: draw_chunk_reordered CONFIRMED architecturally unreachable here (dispatch==0, fallback>0) -- documented gap, not a regression", reduced_hcz_ok_as_expected)
+check("REDUCED path: drawmajor_v2 now genuinely dispatches (positive>0, negative==0) -- gap closed", reduced_drawmajor_ok)
+check("REDUCED path: draw_chunk_reordered now genuinely dispatches (positive>0, negative==0) -- gap closed", reduced_hcz_ok)
 
 reset_no_dense_g_counters!()
 ctx_cm_full.obj.use_cached_x = false

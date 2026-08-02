@@ -42,14 +42,24 @@ function ensure_winner_zc_drawmajor_v2_scratch!(dm::Union{Nothing,WinnerZCDrawMa
 end
 
 """
-    winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEZ, wctx, ws, dm, S, Z, M; workers, xtile=64) -> HEZ
+    winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEZ, wctx, ws, dm, S, Z, M; workers, xtile=64, use_profiled_correction=false) -> HEZ
 
 drawmajor-v2: same public contract as `winner_pair_cross_hessian_zc_block_drawmajor!` (v1), fixing
 v1's identified redundant per-x strided winner/v re-read via a per-worker one-time transpose.
+
+Performance closeout task (2026-08-02), Section 6: `use_profiled_correction` mirrors
+`winner_pair_cross_hessian_zc_block!`'s own keyword EXACTLY (same formula, same `ws.SnuWval`/
+`ws.TZ_buf`/`wctx.target_slot`/`wctx.Lam_homog`/`wctx.denom_cf_scaled` fields, same single
+`BLAS.gemm!('T','N',...)` TZ computation) -- the expensive winner-conditioned W-scale scatter loop
+above (lines computing `dm.local_tabs`) is completely untouched by this keyword; only the final
+O(nbilateral*nx)/O(nx) correction loop below (already present, tiny relative to the W-loop) branches
+between the old (NuZ/pi_vec) and profiled (TZ/Lam_homog) corrections, exactly as the serial and
+threaded siblings already do. No second W-scale pass, no dense G, no duplicated Z weighting.
 """
 function winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEZ::AbstractMatrix{Float64}, wctx::WinnerPairHessCtx,
         ws::WinnerZCCrossScratch, dm::WinnerZCDrawMajorV2Scratch, S::AbstractVector{Float64},
-        Z::AbstractMatrix{Float64}, M::Real; workers::Int, xtile::Int = 64)
+        Z::AbstractMatrix{Float64}, M::Real; workers::Int, xtile::Int = 64,
+        use_profiled_correction::Bool = false)
     workers <= nthreads() || error("winner_pair_cross_hessian_zc_block_drawmajor_v2!: workers=$workers exceeds Threads.nthreads()=$(nthreads())")
     workers == dm.workers || error("winner_pair_cross_hessian_zc_block_drawmajor_v2!: workers=$workers != scratch's dm.workers=$(dm.workers) -- rebuild scratch")
     W = wctx.W; Ddest = wctx.Ddest
@@ -59,8 +69,10 @@ function winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEZ::AbstractMatrix{Fl
     length(S) == W || error("winner_pair_cross_hessian_zc_block_drawmajor_v2!: length(S)=$(length(S)) != wctx.W=$W")
     size(Z, 1) == W || error("winner_pair_cross_hessian_zc_block_drawmajor_v2!: size(Z,1)=$(size(Z, 1)) != wctx.W=$W")
     nx <= dm.max_nx || error("winner_pair_cross_hessian_zc_block_drawmajor_v2!: nx=$nx exceeds dm.max_nx=$(dm.max_nx) -- rebuild scratch")
+    use_profiled_correction && ws.Ddest != Ddest &&
+        error("winner_pair_cross_hessian_zc_block_drawmajor_v2!: use_profiled_correction=true requires ws.Ddest=$(ws.Ddest) == wctx.Ddest=$Ddest -- rebuild scratch via ensure_winner_zc_cross_scratch!(...; Ddest)")
 
-    winner = wctx.winner; pi_vec = wctx.pi_vec; y = wctx.y
+    winner = wctx.winner; pi_vec = wctx.pi_vec; y = wctx.y; target_slot = wctx.target_slot; Lam_homog = wctx.Lam_homog
     has_cf = wctx.has_cf; jcf = ncolI
     Snu = ws.Snu
     invM = 1.0 / M
@@ -126,19 +138,48 @@ function winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEZ::AbstractMatrix{Fl
     NuZ = @view ws.NuZ_buf[1:nx]
     BLAS.gemv!('T', 1.0, Z, Snu, 0.0, NuZ)
 
+    # Profiled economic block port (2026-08-02, mirrors winner_pair_cross_hessian_zc_block!'s own
+    # use_profiled_correction=true branch exactly): TZ[d,x] = Σ_w SnuWval[w,d]*Z[w,x], ONE
+    # BLAS.gemm! call, only computed when actually needed -- see
+    # PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §3. Not a second W-scale draw-major pass: this
+    # gemm operates on the already-filled (W x Ddest) SnuWval built once per callback by
+    # winner_pair_cross_hessian_zc_prep!, shared with the serial/threaded kernels.
+    TZ = nothing
+    if use_profiled_correction
+        TZ = @view ws.TZ_buf[:, 1:nx]
+        BLAS.gemm!('T', 'N', 1.0, ws.SnuWval, Z, 0.0, TZ)
+    end
+
     @inbounds for j in 1:nbilateral
-        pij = pi_vec[j]
-        for x in 1:nx
-            HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+        if use_profiled_correction
+            d = target_slot[j]
+            lamj = Lam_homog[j]
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - lamj * TZ[d, x])
+            end
+        else
+            pij = pi_vec[j]
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+            end
         end
     end
 
     if has_cf
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
-        pij = pi_vec[jcf]
-        @inbounds for x in 1:nx
-            row_cf[x] -= invM * pij * NuZ[x]
+        if use_profiled_correction && target_slot[jcf] != 0
+            d_cf = target_slot[jcf]
+            lamcf = Lam_homog[jcf]
+            dcfscaled = wctx.denom_cf_scaled
+            @inbounds for x in 1:nx
+                row_cf[x] += invM * (dcfscaled * NuZ[x] - lamcf * TZ[d_cf, x])
+            end
+        else
+            pij = pi_vec[jcf]
+            @inbounds for x in 1:nx
+                row_cf[x] -= invM * pij * NuZ[x]
+            end
         end
     end
 
