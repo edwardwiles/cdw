@@ -506,10 +506,15 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): same option/semantics/production-default as run_cm_upper_checkpointed's
         # own destination_sample kwarg.
-        blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3/§7: set once
-        # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
-        # process BLAS thread count untouched, zero behavior change. Added for section 7's bounded
-        # origin-ZC BLAS benchmark; origin-ZC retains Architecture A (dense) regardless of this.
+        blas_threads::Union{Nothing,Int} = ZC_GRAM_BLAS_THREADS_DEFAULT[],   # allocation/Hessian
+        # port task §6.3/§7: set once right after ctx build (see blas_thread_policy.jl). ZC Hessian
+        # backend production integration (2026-08-01): defaults to 8 (ZC_GRAM_BLAS_THREADS_DEFAULT[],
+        # see zc_gram_blas_candidates.jl) -- origin-ZC's H_ZZ now defaults to the BLAS-threaded
+        # `:blas_syrk` backend (the stale note this comment used to carry, "origin-ZC retains
+        # Architecture A (dense) regardless of this," predates that port and the H_ZZ backend flip;
+        # both this family's core_hessian_backend AND its H_ZZ backend are BLAS/Julia-threaded
+        # today). `nothing` explicitly passed by a caller leaves the ambient process BLAS thread
+        # count untouched instead, unchanged escape hatch.
         A_coordinate_mode::Symbol = :powered_aspace,   # transformed-A restricted-family port
         # (2026-07-26 five-family finish task §8): same option/semantics/NEW production default as
         # run_cm_upper_checkpointed's own A_coordinate_mode kwarg -- the shared decode/encode/

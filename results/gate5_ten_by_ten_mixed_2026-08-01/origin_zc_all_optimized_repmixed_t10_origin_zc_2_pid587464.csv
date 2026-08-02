@@ -1,0 +1,2 @@
+family,arm,rep,W,hzz_backend,hcz_backend,hez_backend,pid,ctx_build_s,solve_s,nStatus,timestamp
+origin_zc,all_optimized,mixed_t10_origin_zc_2,100000,blas_syrk,draw_chunk_reordered,drawmajor_v2,587464,64.00291609764099,25.460055112838745,0,2026-08-01T23:30:15.734

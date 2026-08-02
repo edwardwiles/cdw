@@ -5,11 +5,20 @@
 # matching smoke_delta1_unrestricted.jl's own convention.)
 #
 # Usage:
-#   OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 julia --project=. -t <threads_per_family> \
+#   OPENBLAS_NUM_THREADS=8 OMP_NUM_THREADS=8 julia --project=. -t 10 \
 #       campaign_cm_family_runner.jl <family> <direction> <manifest_json> <outroot> [maxtime_real=30.0]
 #
 #   family:    flexible_cm | common_frechet | cm_meanzc | origin_zc
 #   direction: upper | lower
+#
+#   ZC Hessian backend production integration (2026-08-01): cm_meanzc/origin_zc's validated H_ZZ/
+#   H_CZ/H_EZ backends (blas_syrk/draw_chunk_reordered/drawmajor_v2) need real Julia threads (>=~10)
+#   for core_hessian_backend=exact_winner_pair_parallel's own parallelism -- at -t 1 that backend
+#   cannot parallelize at all, which this session's own measurement harness discovered the hard way
+#   (see ZC_MEASUREMENT_METHODOLOGY_CORRECTION_2026-08-01.md). `-t 10` / `OPENBLAS_NUM_THREADS=8` is
+#   the validated ten-by-ten deployment target for these two families specifically; flexible_cm/
+#   common_frechet/unrestricted were not part of this validation and keep whatever thread count an
+#   operator already uses for them.
 #
 # No continuation: every (delta,start) cell calls the real public checkpointed driver FRESH
 # (resume_from=nothing, a brand-new ckpt_dir), so each cell gets its own outer model, incumbent
@@ -69,6 +78,16 @@ lp("prior_delta_state_loaded = false")
 lp("prior_direction_state_loaded = false")
 lp("cross_start_state_loaded = false")
 lp("julia threads=", Threads.nthreads(), " BLAS threads=", BLAS.get_num_threads())
+# ZC Hessian backend production integration (2026-08-01): a real, measured pitfall this session --
+# running cm_meanzc/origin_zc with too few Julia threads starves core_hessian_backend=
+# exact_winner_pair_parallel and the H_CZ/H_EZ candidates of the real parallelism they need,
+# silently inflating wall time (~2x, no error, no correctness change) rather than failing loudly.
+# Warn, don't error -- an operator may have a deliberate reason to run fewer threads.
+FAMILY in ("cm_meanzc", "origin_zc") && Threads.nthreads() < 10 &&
+    lp("WARNING: family=", FAMILY, " is running with Threads.nthreads()=", Threads.nthreads(),
+       " < 10 -- the validated H_ZZ/H_CZ/H_EZ backend speedups assume >=10 Julia threads for ",
+       "core_hessian_backend=exact_winner_pair_parallel's own parallelism; expect real but ",
+       "smaller wall-clock gains than ZC_HESSIAN_BACKEND_CLOSEOUT_MASTER_2026-08-01.md reports.")
 lp("="^100)
 
 manifest = json_load(MANIFEST_PATH)
