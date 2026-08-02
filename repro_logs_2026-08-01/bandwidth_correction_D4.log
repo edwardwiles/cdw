@@ -1,0 +1,60 @@
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+tag=D4  n_total=12
+
+==========================================================================================
+POINT: calibration
+==========================================================================================
+base Delta_dual=0.0008944064101798138  inner_status=0
+full-rebuild gradient computed in 0.5149850845336914s
+incremental gradient computed in 1.9628698825836182s (speedup=0.3x)
+[mismatched_bandwidth] max_abs_err=2.4241e-03  max_rel_err=2.0480e+00  cos_sim=0.9998982415  worst_k=9 (full=5.006800e-03 inc=2.582675e-03)
+gp: full=2.3295865567e-01  inc=2.3296009410e-01  diff=1.438e-06
+full-rebuild (matched bandwidth) computed in 0.25759100914001465s
+[same_bandwidth_Ablock(2:end)] max_abs_err=3.9031e-18  max_rel_err=1.5113e-15  cos_sim=1.0000000000  worst_k=8 (full=2.582675e-03 inc=2.582675e-03)
+[same_bandwidth_gp] analytic(inc)=2.3296009410e-01  FD(full,h=0.01)=2.3295865567e-01  diff=1.438e-06 (expected small, NOT part of A-block pass criterion)
+
+==========================================================================================
+POINT: small_perturbation
+==========================================================================================
+base Delta_dual=0.000836505436409674  inner_status=0
+full-rebuild gradient computed in 0.08928608894348145s
+incremental gradient computed in 0.07629013061523438s (speedup=1.2x)
+[mismatched_bandwidth] max_abs_err=2.8140e-03  max_rel_err=3.6546e+00  cos_sim=0.9997887864  worst_k=8 (full=3.962031e-03 inc=6.776066e-03)
+gp: full=2.2329436224e-01  inc=2.2329557378e-01  diff=1.212e-06
+full-rebuild (matched bandwidth) computed in 0.0772550106048584s
+[same_bandwidth_Ablock(2:end)] max_abs_err=5.2042e-18  max_rel_err=1.7572e-15  cos_sim=1.0000000000  worst_k=1 (full=9.999724e-03 inc=9.999724e-03)
+[same_bandwidth_gp] analytic(inc)=2.2329557378e-01  FD(full,h=0.01)=2.2329436224e-01  diff=1.212e-06 (expected small, NOT part of A-block pass criterion)
+
+Wrote /bbkinghome/edav/gravity_robustness/worktrees/architecture-profiled-restricted-production-outer-bridge-2026-08-01/full_aod_diag/d4_exact/../../PROFILED_INCREMENTAL_VS_FULLREBUILD_2026-08-01_D4.csv
+2×13 DataFrame
+ Row │ label               t_full     t_inc      speedup   mismatched_max_abs_err  mismatched_max_rel_err  mismatched_cos_sim  same_bw_Ablock_max_abs_err  same_bw_Ablock_max_rel_err  same_bw_Ablock_cos_sim  same_bw_gp_diff  gp_full   gp_inc
+     │ String              Float64    Float64    Float64   Float64                 Float64                 Float64             Float64                     Float64                     Float64                 Float64          Float64   Float64
+─────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ calibration         0.514985   1.96287    0.262363              0.00242412                 2.04803            0.999898                 3.90313e-18                 1.51127e-15                     1.0       1.43843e-6  0.232959  0.23296
+   2 │ small_perturbation  0.0892861  0.0762901  1.17035               0.00281404                 3.65456            0.999789                 5.20417e-18                 1.75717e-15                     1.0       1.21155e-6  0.223294  0.223296
+
+SAME-BANDWIDTH formula-equivalence gate (D4): PASS (machine precision)
+MISMATCHED-BANDWIDTH robustness/approximation check (D4): cos_sim>0.999 (expected, NOT machine precision)
+
+INCREMENTAL VS FULL-REBUILD (D4): PASS

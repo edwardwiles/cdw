@@ -118,6 +118,24 @@ anyone extending this work:
    the full/reference arm's own production gradient (~17-18s/call). This version is what the
    fixed-iteration A/B (§6b) ran with.
 
+   > **CORRECTION (production outer bridge task, §12, 2026-08-01)**: the "1.0000000000 (max rel
+   > err ~6e-6)" figure above does not reproduce by re-running
+   > `test_profiled_incremental_vs_fullrebuild_2026-08-01.jl` as originally committed — that script
+   > actually computes `cos_sim≈0.9998982`, `max_rel_err≈2.0` at D4 (and similarly ≈0.9998,
+   > max_rel_err≈3.65 at the small-perturbation point). Root cause, isolated directly: the
+   > full-rebuild comparator (`profiled_composite_gradient_at`) used one FIXED `h=0.01` for every
+   > coordinate, while the incremental method uses an ADAPTIVE, per-coordinate `h`
+   > (`profiled_select_bandwidth`) — two different finite-difference formulas' worth of truncation
+   > error, not a defect in either gradient. The script has been corrected (now reports
+   > `mismatched_bandwidth` — the historical, genuinely ~0.9999-not-1.0 comparison above — and
+   > `same_bandwidth` — the true formula-equivalence claim, re-running the full-rebuild reference
+   > at the incremental method's own selected `h`) and re-verified: D4 A-block(2:end) same-bandwidth
+   > `max_rel_err=1.5e-15`/`1.8e-15`, `cos_sim=1.0000000000` — genuine machine precision. This
+   > underlying speedup/correctness result is NOT invalidated (the formula was always right,
+   > confirmed now more rigorously); only this specific "1.0000000000/6e-6" sentence was describing
+   > a comparison the committed script did not actually run. See
+   > `PROFILED_RESTRICTED_PRODUCTION_OUTER_BRIDGE_MASTER_2026-08-01.md` §12 for the full writeup.
+
 ## 5. Gate results
 
 **D4 gradient gate** (`PROFILED_OUTER_GRADIENT_GATE_D4_2026-08-01.csv`, vs ground-truth re-solved

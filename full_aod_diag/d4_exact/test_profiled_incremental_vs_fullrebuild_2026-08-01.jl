@@ -9,6 +9,30 @@
 # mechanism is correct. This is the direct, cheap test of whether the
 # earlier (abandoned) incremental draft's failure was really just the
 # separately-diagnosed gp-formula bug.
+#
+# CORRECTED 2026-08-01 (production outer bridge task, §12): this script's own
+# header above, and PROFILED_UNRESTRICTED_OUTER_AB_MASTER_2026-08-01.md /
+# PROFILED_OUTER_GRADIENT_DERIVATION_2026-08-01.md, previously described this
+# comparison's result as "machine precision" / "cos_sim=1.0000000000 (max rel
+# err ~6e-6)". Re-running this exact script (unedited) does NOT reproduce
+# that claim -- it reproduces `cos_sim~0.9998982`, `max_rel_err~2.0` at D4,
+# because `profiled_composite_gradient_at` (the full-rebuild comparator) uses
+# one FIXED `h=0.01` for every coordinate while
+# `profiled_composite_gradient_at_incremental` uses an ADAPTIVE, per-
+# coordinate `h` from `profiled_select_bandwidth` -- two different formulas'
+# worth of truncation error, not a bug in either method (confirmed directly:
+# see the sibling outer-gradient branch's mock-family gate, §2c-B of
+# PROFILED_RESTRICTED_OUTER_GRADIENT_MASTER_2026-08-01.md). This script now
+# reports BOTH comparisons explicitly, never conflating them:
+#   - `mismatched_bandwidth` (fixed h=0.01 vs adaptive h): the historical
+#     comparison, kept for continuity -- an APPROXIMATION/robustness check,
+#     NOT a formula-equivalence proof. Expect cos_sim~0.9999, NOT ~1.0.
+#   - `same_bandwidth` (full-rebuild re-run at the incremental method's own
+#     h_used per coordinate): the genuine formula-equivalence gate -- THIS is
+#     the one that should, and does, hit machine precision (~1e-16).
+# Nothing about the incremental or full-rebuild gradient MATH changed here --
+# this is a diagnostic/test correction only (task §12: "not a change to
+# production gradient mathematics").
 # ============================================================================
 include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(dirname(dirname(@__DIR__)), "cc_algo", "active_layout.jl"))
@@ -67,23 +91,52 @@ function compare_at(label::String, w::Vector{Float64}, rows)
     println("full-rebuild gradient computed in $(t_full)s"); flush(stdout)
 
     t2 = time()
-    g_inc, _ = profiled_composite_gradient_at_incremental(w, ctx, spec, pe, ev)
+    g_inc, meta_inc = profiled_composite_gradient_at_incremental(w, ctx, spec, pe, ev)
     t_inc = time() - t2
     println("incremental gradient computed in $(t_inc)s (speedup=$(round(t_full/t_inc,digits=1))x)"); flush(stdout)
 
-    diff = g_full .- g_inc
-    max_abs_err = maximum(abs.(diff))
-    max_rel_err = maximum(abs.(diff) ./ max.(abs.(g_full), 1e-8))
-    cos_sim = dot(g_full, g_inc) / (norm(g_full) * norm(g_inc) + 1e-300)
-    worst_k = argmax(abs.(diff))
-    println(@sprintf("max_abs_err=%.4e  max_rel_err=%.4e  cos_sim=%.10f  worst_k=%d (full=%.6e inc=%.6e)",
-        max_abs_err, max_rel_err, cos_sim, worst_k, g_full[worst_k], g_inc[worst_k]))
+    function report(tag::String, gA, gB)
+        diff = gA .- gB
+        max_abs_err = maximum(abs.(diff))
+        max_rel_err = maximum(abs.(diff) ./ max.(abs.(gA), 1e-8))
+        cos_sim = dot(gA, gB) / (norm(gA) * norm(gB) + 1e-300)
+        worst_k = argmax(abs.(diff))
+        println(@sprintf("[%s] max_abs_err=%.4e  max_rel_err=%.4e  cos_sim=%.10f  worst_k=%d (full=%.6e inc=%.6e)",
+            tag, max_abs_err, max_rel_err, cos_sim, worst_k, gA[worst_k], gB[worst_k]))
+        flush(stdout)
+        return (max_abs_err = max_abs_err, max_rel_err = max_rel_err, cos_sim = cos_sim)
+    end
+
+    # (A) mismatched_bandwidth: the historical comparison (fixed h=0.01 vs incremental's
+    # adaptive h). An approximation/robustness check, NOT formula-equivalence -- expect
+    # cos_sim~0.9999, not ~1.0. `g_full` above already used the default fixed h=0.01.
+    mm = report("mismatched_bandwidth", g_full, g_inc)
     println(@sprintf("gp: full=%.10e  inc=%.10e  diff=%.3e", g_full[1], g_inc[1], abs(g_full[1]-g_inc[1])))
-    flush(stdout)
+
+    # (B) same_bandwidth: re-run the full-rebuild comparator at the incremental method's
+    # OWN per-coordinate h_used (coordinate 1 = gp is analytic in the incremental method,
+    # not FD-derived, so its h_used[1] entry is meaningless for gp -- reuse g_full[1] there
+    # and only match bandwidth on coordinates 2:end, which are genuinely FD-vs-FD).
+    h_matched = copy(meta_inc.h_used); h_matched[1] = 0.01  # gp: no FD step to match
+    t3 = time()
+    g_full_matched, _ = profiled_composite_gradient_at(w, ctx, spec, pe, ev; h = h_matched)
+    t_matched = time() - t3
+    println("full-rebuild (matched bandwidth) computed in $(t_matched)s"); flush(stdout)
+    # A-block (coords 2:end) is the genuine same-bandwidth formula-equivalence claim.
+    # Coordinate 1 (gp) is EXCLUDED from that claim -- the incremental method computes gp via
+    # an exact analytic formula, not FD, so there is no "h" to match for it; its own small
+    # analytic-vs-FD gap (~1e-7-1e-6, already documented in the mock-family gate, §2c of
+    # PROFILED_RESTRICTED_OUTER_GRADIENT_MASTER_2026-08-01.md) is reported separately, never
+    # folded into the A-block's machine-precision pass criterion.
+    sb = report("same_bandwidth_Ablock(2:end)", g_full_matched[2:end], g_inc[2:end])
+    gp_diff = abs(g_full_matched[1] - g_inc[1])
+    println(@sprintf("[same_bandwidth_gp] analytic(inc)=%.10e  FD(full,h=0.01)=%.10e  diff=%.3e (expected small, NOT part of A-block pass criterion)",
+        g_inc[1], g_full_matched[1], gp_diff))
 
     push!(rows, (label = label, t_full = t_full, t_inc = t_inc, speedup = t_full / t_inc,
-        max_abs_err = max_abs_err, max_rel_err = max_rel_err, cos_sim = cos_sim,
-        gp_full = g_full[1], gp_inc = g_inc[1]))
+        mismatched_max_abs_err = mm.max_abs_err, mismatched_max_rel_err = mm.max_rel_err, mismatched_cos_sim = mm.cos_sim,
+        same_bw_Ablock_max_abs_err = sb.max_abs_err, same_bw_Ablock_max_rel_err = sb.max_rel_err, same_bw_Ablock_cos_sim = sb.cos_sim,
+        same_bw_gp_diff = gp_diff, gp_full = g_full[1], gp_inc = g_inc[1]))
     return rows
 end
 
@@ -102,5 +155,9 @@ CSV.write(outpath, df)
 println("\nWrote $outpath")
 println(df)
 
-all_pass = all(r.max_rel_err < 1e-6 for r in rows)
-println("\nINCREMENTAL VS FULL-REBUILD (machine precision) ($tag): ", all_pass ? "PASS" : "NEEDS REVIEW")
+# Two SEPARATE pass criteria (task §12) -- do not conflate them:
+same_bw_pass = all(r.same_bw_Ablock_max_rel_err < 1e-6 for r in rows)
+mismatched_bw_reasonable = all(r.mismatched_cos_sim > 0.999 for r in rows)   # sanity only, NOT a machine-precision claim
+println("\nSAME-BANDWIDTH formula-equivalence gate ($tag): ", same_bw_pass ? "PASS (machine precision)" : "FAIL")
+println("MISMATCHED-BANDWIDTH robustness/approximation check ($tag): ", mismatched_bw_reasonable ? "cos_sim>0.999 (expected, NOT machine precision)" : "FAIL (unexpectedly large gap)")
+println("\nINCREMENTAL VS FULL-REBUILD ($tag): ", same_bw_pass ? "PASS" : "NEEDS REVIEW")
