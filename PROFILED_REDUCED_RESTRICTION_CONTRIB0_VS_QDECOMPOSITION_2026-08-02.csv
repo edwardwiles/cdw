@@ -1,0 +1,4 @@
+family,max_abs_err,max_rel_err,pass
+flexible_CM,0.0,0.0,true
+common_Frechet,0.0,0.0,true
+ZC_only,0.0,0.0,true

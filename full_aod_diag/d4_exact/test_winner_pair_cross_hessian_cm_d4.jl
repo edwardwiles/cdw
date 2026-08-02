@@ -8,7 +8,8 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
           "core_exact_hessian.jl", "winner_pair_cross_hessian.jl",
           "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
-          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_production_bundle.jl"]
+          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "threaded_cross_hessian.jl",
+          "hcz_drawchunk_candidate_2026-07-29.jl", "cm_hessian_architectures.jl", "cm_production_bundle.jl"]
     include(joinpath(D4X, f))
 end
 using Test, Printf, LinearAlgebra, Random
@@ -34,7 +35,11 @@ x_free_calib = ctx.θ0_up[ctx.free_idx]
 Random.seed!(2026)
 
 for contrasts in (:anchored, :orthonormal), L in (10, 20)
-    pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, use_compressed_core = true)
+    # moment_representation=:dense_reference explicit: production default has since moved to
+    # :operator (no dense obj.H) -- this test needs the dense hessian_cm_structured! reference,
+    # matching test_profiled_hec_correction_d4_2026-08-01.jl's identical fix.
+    pcx = build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, use_compressed_core = true,
+                                       moment_representation = :dense_reference)
     cctx = pcx.cctx
     obj = pcx.ctx_cm.obj
     base = archC_base_state(x_free_calib, pcx.ctx_cm, cctx)

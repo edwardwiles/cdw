@@ -76,7 +76,11 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
         cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
         zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
-        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
+        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[],
+        profiled_layout = nothing)   # ZC lane task (2026-08-02): mirrors build_originzc_core_hess_ctx's
+        # own kwarg -- `nothing` (every existing caller) preserves this function byte-for-byte;
+        # threaded straight to CMBinHessCtx's own outer kwarg constructor below, which already
+        # supports it (added when the ZC-only port merged onto this branch).
     inner_fg_backend in (:dense_reference, :operator) ||
         error("build_cm_meanzc_bin_ctx: inner_fg_backend must be :dense_reference or :operator, got :$inner_fg_backend (CM+ZC does not support :cm_lookup -- CMLookupState is CM-grid-only, no mean/pair block)")
     L = aug.L; D = ctx.D; origins = aug.origins; nO = length(origins)
@@ -92,6 +96,12 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     # `wrap_moments_with_cm_meanzc` (cm_meanzc_moments.jl), which now optionally builds a
     # `CompressedFactual` exactly like `wrap_moments_with_cm_archB` does for the CM-only family.
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
+    # ZC lane task (2026-08-02): mirrors build_originzc_core_hess_ctx's own identical wiring --
+    # `aug.theta_ref` (built by build_cm_meanzc_augmented_obj, published by wrap_moments_with_cm_meanzc's
+    # profiled branch) must be the SAME Ref object as cctx.profiled_theta_ref, or _fill_cm_HEE!'s
+    # profiled branch reads a permanently-nothing Ref (its own fresh kwarg default) instead of the
+    # theta moments! actually published, throwing "theta was never published for this outer point".
+    profiled_theta_ref = hasproperty(aug, :theta_ref) ? aug.theta_ref : Ref{Any}(nothing)
     # port/shared-inner-fg-operator-and-verification-2026-07-26: build the ZC restriction operator
     # EAGERLY (aug.Zraw_all/Zpairraw_all/K_mean/K_pair already available here), same pattern as
     # origin-ZC's build_originzc_core_hess_ctx. SharedByPowerLayout(K_mean,K_pair) reproduces
@@ -130,7 +140,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cross_hessian_threaded, cross_hessian_workers,
         zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: lazily built on first H_ZZ call
         ctx,   # econ_ctx: true no-H operator bundle continuation
-        nothing)   # frechet_ext_cache: harmonization task -- CM+ZC never populates this (no level block)
+        nothing;   # frechet_ext_cache: harmonization task -- CM+ZC never populates this (no level block)
+        profiled_layout = profiled_layout, profiled_theta_ref = profiled_theta_ref)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
