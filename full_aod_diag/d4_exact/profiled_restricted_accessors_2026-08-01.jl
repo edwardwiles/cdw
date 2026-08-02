@@ -95,15 +95,26 @@ profiled_outer_coordinate_layout(ctx; global_overrides::Dict{Int,Int} = Dict{Int
     economic_dual_range(cctx::CMBinHessCtx) -> UnitRange{Int}
     economic_dual_range(octx::OriginZCCoreHessCtx) -> UnitRange{Int}
 
-Dual-vector index range (1-based). Dual index 1 is `zeta`, a KNITRO dual variable entirely SEPARATE
-from `G`'s own columns (`inner_loop_internal_archgeneric`'s own `obj.H[:,2] .= 1.0` "ones" column is
-part of `G`/`H`'s column space, NOT the same thing as dual index 1) -- so `G`'s column `k` (`k=1:d`)
-corresponds to dual index `k+1`, for every `k`. `cctx.NCORE`/`octx.NCORE` IS `1 + n_economic` and
-spans `G`'s OWN columns `1:NCORE` (column 1 there is the "ones"/zeta-paired economic column, per
-`winner_pair_cross_hessian_esum!`'s own docstring: "j=1 (the ones/zeta column, E[:,1]≡1)") -- so the
-economic block occupies dual indices `2:(1+NCORE)`, NOT `2:NCORE` (confirmed by
-`verify_dual_ranges_partition` below: `2:NCORE` left the LAST dual index uncovered, a genuine
-off-by-one caught by that structural self-check before this was ever handed off).
+Dual-vector index range (1-based). Dual index 1 is `zeta`. `G`'s column `k` (`k=1:d`) corresponds to
+dual index `k+1`, for every `k`. `G`'s OWN economic columns are `1:pregrav`
+(`pregrav = layout.total_reduced_economic_moments`, confirmed directly from
+`materialize_homogeneous_dense_G_reduced!`'s own fill target `Gtmp[:,1:pregrav]`), NOT `1:NCORE` --
+`NCORE = 1 + pregrav`, but `G`'s column `NCORE` is the GRAVITY column
+(`fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), ...)`, present in EVERY ONE of
+`wrap_moments_with_cm_archB`/`wrap_moments_with_cm_frechet_archB`/`wrap_moments_with_originzc`, same
+pattern, `ncore_full == NCORE`), a SEPARATE "sole outer-only column" (this file's own top-of-file
+notation comment) -- NOT part of either the economic block or any restriction block. So the economic
+block occupies dual indices `2:NCORE` (`NCORE-1 = pregrav` slots), and `gravity_dual_index` below is
+the SEPARATE single dual index `1+NCORE`, sitting between `economic_dual_range` and
+`restriction_dual_ranges`.
+
+This was gotten wrong twice before landing here (first as `2:NCORE` with no separate gravity
+accounting, silently absorbing gravity's dual index into whichever range happened to be adjacent
+depending on which bug was live; caught both times only by `q_decomposition`'s own numerical
+cross-check against a directly-reconstructed `G[:,1:pregrav]*beta`, NOT by `verify_dual_ranges_
+partition` alone, which cannot distinguish "right split, right total" from "wrong split, right
+total" -- see this file's own commit history for the full account). Treat this docstring, not the
+git history, as authoritative.
 
 CM+ZC (`cctx.ncore_core < cctx.NCORE`, the widened-core case, `CMZC_WIDENED_CORE_FINDING_2026-08-01.md`)
 is EXPLICITLY NOT SUPPORTED here -- errors loudly rather than silently returning a range that
@@ -113,11 +124,22 @@ function economic_dual_range(cctx::CMBinHessCtx)
     cctx.ncore_core == cctx.NCORE ||
         error("economic_dual_range: cctx.ncore_core=$(cctx.ncore_core) != cctx.NCORE=$(cctx.NCORE) -- " *
               "this is a CM+ZC widened-core context (see CMZC_WIDENED_CORE_FINDING_2026-08-01.md); " *
-              "economic_dual_range's simple 2:(1+NCORE) range is not well-defined for it (would " *
+              "economic_dual_range's simple 2:NCORE range is not well-defined for it (would " *
               "conflate the true economic block with the widened mean/pair-ZC columns). Not supported.")
-    return 2:(1 + cctx.NCORE)
+    return 2:cctx.NCORE
 end
-economic_dual_range(octx::OriginZCCoreHessCtx) = 2:(1 + octx.NCORE)
+economic_dual_range(octx::OriginZCCoreHessCtx) = 2:octx.NCORE
+
+"""
+    gravity_dual_index(cctx::CMBinHessCtx) -> Int
+    gravity_dual_index(octx::OriginZCCoreHessCtx) -> Int
+
+The single dual-vector index (1-based) for the gravity moment -- `G`'s own column `NCORE` (see
+`economic_dual_range`'s docstring), sitting between the economic block and the first restriction
+block. `1 + cctx.NCORE`.
+"""
+gravity_dual_index(cctx::CMBinHessCtx) = 1 + cctx.NCORE
+gravity_dual_index(octx::OriginZCCoreHessCtx) = 1 + octx.NCORE
 
 """
     restriction_dual_ranges(cctx::CMBinHessCtx) -> NamedTuple
@@ -157,16 +179,18 @@ end
 """
     verify_dual_ranges_partition(cctx_or_octx, total_dual_dim::Int) -> Bool
 
-Structural self-check (not a numerical gate): confirms `economic_dual_range`/`restriction_dual_ranges`
-together, plus dual index 1 (zeta), partition `1:total_dual_dim` exactly -- no gaps, no overlaps, no
-out-of-bounds. `total_dual_dim` should be `1 + obj.outer_constr_index` for the reduced `obj` this
-context was built alongside (dual vector = [zeta; economic; restrictions...], length
-`1 + outer_constr_index`).
+Structural self-check (not a numerical gate -- see `economic_dual_range`'s own docstring for why this
+alone is NOT sufficient to catch a wrong-but-same-total-count split): confirms `economic_dual_range`/
+`gravity_dual_index`/`restriction_dual_ranges` together, plus dual index 1 (zeta), partition
+`1:total_dual_dim` exactly -- no gaps, no overlaps, no out-of-bounds. `total_dual_dim` should be
+`1 + obj.outer_constr_index` for the reduced `obj` this context was built alongside (dual vector =
+[zeta; economic; gravity; restrictions...], length `1 + outer_constr_index`).
 """
 function verify_dual_ranges_partition(ctx_hess, total_dual_dim::Int)
     econ = economic_dual_range(ctx_hess)
+    grav = gravity_dual_index(ctx_hess)
     restr = restriction_dual_ranges(ctx_hess)
-    all_ranges = vcat([econ], collect(values(restr)))
+    all_ranges = vcat([econ, grav:grav], collect(values(restr)))
     covered = falses(total_dual_dim)
     covered[1] = true   # zeta, index 1, not part of either accessor's own range
     for r in all_ranges
@@ -177,4 +201,188 @@ function verify_dual_ranges_partition(ctx_hess, total_dual_dim::Int)
         end
     end
     return all(covered)
+end
+
+# ============================================================================
+# Addendum (2026-08-01): additional hooks requested by the outer-bridge
+# workstream. Still read-only / structural -- no outer gradient, no
+# restriction-parameter gradient assembly, no outer runner, no A/B harness.
+# ============================================================================
+
+"""
+    stable_inner_layout_fields(ctx; global_overrides=Dict{Int,Int}()) -> NamedTuple
+
+A stable, minimal bundle of structural facts the outer bridge needs without reaching into any
+built reduced context's own internal fields directly. Every field here is read from `ctx`/the
+shared layout objects above -- no new computation.
+"""
+function stable_inner_layout_fields(ctx; global_overrides::Dict{Int,Int} = Dict{Int,Int}())
+    layout = profiled_economic_layout(ctx; global_overrides = global_overrides)
+    spec = profiled_anchor_spec(ctx; global_overrides = global_overrides)
+    return (D = ctx.D, Ddest = layout.Ddest,
+            destination_ids = layout.destination_ids, anchor_origin_by_slot = layout.anchor_origin_by_slot,
+            n_bilateral_reduced = length(layout.retained_full_factual_j),
+            has_france_ratio = layout.france_ratio_reduced_j > 0,
+            n_economic_reduced = layout.total_reduced_economic_moments,
+            anchor_spec = spec, economic_layout = layout)
+end
+
+"""
+    restriction_outer_parameter_layout(cctx::CMBinHessCtx) -> NamedTuple
+    restriction_outer_parameter_layout(octx::OriginZCCoreHessCtx) -> NamedTuple
+
+For a built reduced family context, the PHYSICAL outer parameter each restriction dual-vector slot
+(from `restriction_dual_ranges`) corresponds to -- structural metadata only, read directly off
+fields the context/its `aug` already carry (theta-independent, computed once at context-build time),
+no new numerical logic:
+  - flexible CM: `(C = (origins=cctx.origins, refIndex1=cctx.refIndex1, z=<per-level threshold>, L=cctx.L),)`
+    -- column `(oi-1)*L + l` of the C block is the CDF contrast for origin `origins[oi]` (vs.
+    `refIndex1`) at threshold level `l` of `L`.
+  - common Fréchet: `(C = <as above>, F = (level_targets = ext.level_targets, L = cctx.L),)` -- column
+    `l` of the F block targets `level_targets[l]`.
+  - ZC-only: `(Z = (K_mean = octx.fg_layout/hzz_zc_layout's own K_mean, K_pair = ..., D = ...),)` --
+    columns `1:K_mean*D` are per-(origin,mean-power-level) targets, remaining `K_pair*npair` columns
+    are per-(pair,pair-power-level) targets (SAME layout `n_eta`/`mean_targets`/`pair_targets`
+    already use to interpret `nu_full` -- `cm_originzc_moments.jl`).
+
+Requires `cctx.z`/`cctx.frechet_ext_cache` (CM-family) or `octx.hzz_zc_layout` (origin-ZC) to already
+be populated -- call AFTER the context has been used in at least one real FG/Hessian callback (same
+precondition `restriction_dual_ranges` has for `frechet_ext_cache`).
+"""
+function restriction_outer_parameter_layout(cctx::CMBinHessCtx)
+    cctx.ncore_core == cctx.NCORE ||
+        error("restriction_outer_parameter_layout: CM+ZC widened-core context; not supported (see economic_dual_range's identical guard).")
+    C_meta = (origins = cctx.origins, refIndex1 = cctx.refIndex1, z = cctx.z, L = cctx.L)
+    ext = cctx.frechet_ext_cache
+    if ext isa CMFrechetExtension
+        return (C = C_meta, F = (level_targets = ext.level_targets, L = cctx.L))
+    else
+        return (C = C_meta,)
+    end
+end
+function restriction_outer_parameter_layout(octx::OriginZCCoreHessCtx)
+    layout = octx.hzz_zc_layout
+    layout === nothing && error("restriction_outer_parameter_layout: octx.hzz_zc_layout is nothing -- octx.n_eta must be > 0 (this context has no restriction block).")
+    return (Z = (K_mean = layout.K_mean, K_pair = layout.K_pair, D = octx.econ_ctx.D),)
+end
+
+"""
+    _q_gravity(obj, gdi::Int, λstar::AbstractVector{Float64}) -> Vector{Float64}
+
+Gravity's own per-draw dual contribution -- `G`'s column `NCORE` (`gdi = gravity_dual_index(...)`,
+`H`'s column `gdi` under the SAME 1:1 dual-index-to-H-column correspondence `E = H[:,2:1+NCORE]`
+establishes), read DIRECTLY from `obj.H` (already populated by the caller's own prior `moments!`
+call -- never re-derived via `compressed_gravity_raw` independently, which would risk yet another
+hand-derivation bug of the kind this session's own `materialize_homogeneous_dense_G_reduced!`
+docstring warns against). Sign/scale matches `_archC_prep_for_hessian!`'s/`operator_prep_for_hessian!`'s
+own `arg0 = -H_view*x` convention exactly (each dual-indexed column contributes `-H[:,k]*x[k-1]`)
+-- gravity is A/gp-DEPENDENT (it is itself a function of the A_od block, confirmed empirically: this
+session's own D4 gate showed `q_restriction` picking up a spurious ~2x-the-economic-delta shift
+under an A_od perturbation before this piece was separated out), so it must NOT be folded into
+`q_restriction`.
+"""
+function _q_gravity(obj, gdi::Int, λstar::AbstractVector{Float64})
+    G_view = CS.select_G_from_H(obj, obj.H)
+    ncore = gdi - 1
+    return -G_view[:, ncore] .* λstar[ncore]
+end
+
+"""
+    q_decomposition(cctx_or_octx, obj, ζstar::Float64, λstar::AbstractVector{Float64}) -> NamedTuple
+
+Diagnostic accessor for the complete per-draw dual index `q` at a VERIFIED FIXED dual point
+(`ζstar`, `λstar` -- e.g. `base.ζstar`/`base.λstar` from `archC_base_state`/`archC_frechet_base_state`/
+`archOZ_base_state`), decomposed into `q_economic` (A/gp-DEPENDENT -- the only piece an A/gp outer
+gradient call needs to re-differentiate), `q_gravity` (ALSO A/gp-DEPENDENT -- gravity is itself a
+function of the A_od block, see `_q_gravity`'s own docstring), and `q_restriction` (A/gp-INDEPENDENT
+at fixed restriction parameters -- held fixed during an A/gp gradient call, per the outer bridge's
+own stated convention).
+
+Design (matches this session's own "safe by linearity, verify against production, never hand-derive
+a parallel formula" discipline used throughout Phase 8): `q_total` is read DIRECTLY from `obj.arg0`
+after re-priming it at `x=[ζstar;λstar]` via the EXISTING, already-validated
+`_prep_dual_index_for_archC!`/`_prep_dual_index_for_archA!` (the same dual-index refresh every real
+Hessian callback in this codebase already calls -- NOT re-derived here). `q_economic` is computed via
+the EXISTING, already-validated `reduced_homogeneous_dual_contraction` (this session's own repeatedly
+gated "safe by linearity" kernel) at the economic sub-vector of `λstar`. `q_gravity` is read directly
+off `obj.H`'s own gravity column (see `_q_gravity`). `q_restriction` is obtained by SUBTRACTION
+(`q_total - q_economic - q_gravity`, using `q_total`'s own already-correct sign convention, whatever
+it is) rather than by independently re-deriving a restriction forward formula (which this session's
+own `materialize_homogeneous_dense_G_reduced!` docstring documents TWICE produced a fresh, different
+bug when hand-derived) -- so `q_restriction` is correct BY CONSTRUCTION relative to production's own
+`q_total`, not by trusting a parallel derivation.
+
+NORMALIZATION / SW WEIGHTING (explicit, per the outer bridge's own requirement): `q_total`/
+`q_economic`/`q_gravity`/`q_restriction` are all per-draw, UNWEIGHTED by sampling weights `SW`/`nu` --
+weighting (if any) happens downstream, inside `Psi!`/`dPsi!`/`ddPsi!`'s own `arg1`/`arg2` consumers
+and the `sum(...)/M` normalization in the objective functor (`PsiObjectiveBundle.jl`), never inside
+`q` itself. `θ_full` passed to `reduced_homogeneous_dual_contraction` must be the CURRENT outer
+point's theta (the same one this `cctx`/`octx`'s `cf`/`profiled_theta_ref` were built/published at,
+AND the same one `obj.H` was last refreshed at via a real `moments!` call -- `q_gravity` reads `obj.H`
+directly, so a stale `obj.H` silently produces a stale `q_gravity`) -- if the caller is mid an A/gp
+probe with the restriction dual fixed but theta perturbed, `q_economic`/`q_gravity` genuinely change
+(A/gp-DEPENDENT) while `q_restriction`, evaluated at the SAME fixed `λstar` restriction sub-vector, is
+unaffected by the perturbation to the extent the restriction columns themselves don't depend on theta
+(true for every restriction type this session touched -- CM-grid/level/mean-pair-ZC columns are all
+built from `Bidx`/`U` alone, theta-independent, confirmed by direct read of
+`fill_cm_columns_from_bins!`/`fill_frechet_level_columns_from_bins!`/`mean_columns_direct!`/
+`pair_columns!`'s own signatures -- none take `θ`).
+
+⚠️ KNOWN UNRESOLVED DISCREPANCY (2026-08-01) -- DO NOT RELY ON THE NUMERICAL A/gp-INDEPENDENCE CLAIM
+YET. The STRUCTURAL pieces (`economic_dual_range`/`restriction_dual_ranges`/`gravity_dual_index`,
+verified via `verify_dual_ranges_partition` -- a real construction-only check, no numerical risk) are
+solid. But under a GENUINE theta perturbation (re-running the real `moments!` FG callback, confirmed
+via `obj.H`'s own gravity column showing zero spurious drift), `q_restriction` changes by roughly
+**2x** `q_economic`'s own change, reproducibly, across TWO independently-constructed perturbations
+(a direct `theta_full` coordinate poke, and a proper `x_free`-based `reconstruct_full` perturbation --
+both gave the identical ratio, ruling out an invalid/inconsistent perturbed `theta_full` as the cause).
+This means EITHER `q_economic` (via `reduced_homogeneous_dual_contraction`) under-counts the true
+economic sensitivity `obj.H`'s own dense reconstruction reflects, OR there is a THIRD component this
+decomposition has not yet identified (beyond economic/gravity/restriction) that is also A/gp-DEPENDENT
+and is currently getting silently absorbed into `q_restriction`. Root cause NOT FOUND despite finding
+and fixing three real index bugs in this same function during this investigation (gravity/economic
+boundary, economic column slicing, gravity's own separate dual slot) -- each fix moved the observed
+ratio (was exact equality, became exact 2x) but did not resolve it. See
+`Q_DECOMPOSITION_KNOWN_ISSUE_2026-08-01.md` for the full repro and investigation log. Whoever picks
+this up next should start from `materialize_homogeneous_dense_G_reduced!`'s own construction
+(`Gview[:,j] = reduced_homogeneous_dual_contraction(e_j, cf, ctx, θ_full, layout)` for unit vectors,
+by linearity) and verify it EXACTLY reproduces `obj.H`'s own economic columns post-`moments!`, column
+by column, at the SAME `cf`/`θ_full` -- that direct comparison (not yet done) would immediately show
+whether the bug is in `q_economic`'s own formula/slicing or somewhere else entirely.
+"""
+function q_decomposition(cctx::CMBinHessCtx, obj, cf, θ_full::AbstractVector, ζstar::Float64, λstar::AbstractVector{Float64})
+    layout = cctx.profiled_layout
+    layout === nothing && error("q_decomposition: cctx.profiled_layout is nothing -- this accessor is for reduced/profiled contexts only.")
+    x = vcat(ζstar, λstar)
+    _prep_dual_index_for_archC!(cctx, obj, x)
+    q_total = copy(obj.arg0)
+    er = economic_dual_range(cctx)
+    # er (economic_dual_range) now spans EXACTLY G's economic columns 1:pregrav (dual indices
+    # 2:NCORE, see that accessor's own corrected docstring) -- a direct dual-index-to-lambda_star
+    # mapping (dual index k -> lambda_star[k-1]), no further offset needed.
+    β_econ = λstar[er .- 1]
+    q_economic = reduced_homogeneous_dual_contraction(β_econ, cf, cctx.econ_ctx, collect(θ_full), layout)
+    q_gravity = _q_gravity(obj, gravity_dual_index(cctx), λstar)
+    q_restriction = q_total .- q_economic .- q_gravity
+    return (q_total = q_total, q_economic = q_economic, q_gravity = q_gravity, q_restriction = q_restriction,
+            economic_dual_range = er, gravity_dual_index = gravity_dual_index(cctx),
+            restriction_dual_ranges = restriction_dual_ranges(cctx))
+end
+function q_decomposition(octx::OriginZCCoreHessCtx, obj, cf, θ_full::AbstractVector, ζstar::Float64, λstar::AbstractVector{Float64})
+    layout = octx.profiled_layout
+    layout === nothing && error("q_decomposition: octx.profiled_layout is nothing -- this accessor is for reduced/profiled contexts only.")
+    x = vcat(ζstar, λstar)
+    _prep_dual_index_for_archA!(octx, obj, x)
+    q_total = copy(obj.arg0)
+    er = economic_dual_range(octx)
+    # er (economic_dual_range) now spans EXACTLY G's economic columns 1:pregrav (dual indices
+    # 2:NCORE, see that accessor's own corrected docstring) -- a direct dual-index-to-lambda_star
+    # mapping (dual index k -> lambda_star[k-1]), no further offset needed.
+    β_econ = λstar[er .- 1]
+    q_economic = reduced_homogeneous_dual_contraction(β_econ, cf, octx.econ_ctx, collect(θ_full), layout)
+    q_gravity = _q_gravity(obj, gravity_dual_index(octx), λstar)
+    q_restriction = q_total .- q_economic .- q_gravity
+    return (q_total = q_total, q_economic = q_economic, q_gravity = q_gravity, q_restriction = q_restriction,
+            economic_dual_range = er, gravity_dual_index = gravity_dual_index(octx),
+            restriction_dual_ranges = restriction_dual_ranges(octx))
 end
