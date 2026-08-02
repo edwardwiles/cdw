@@ -63,23 +63,24 @@ struct ProfiledLFixCache
 end
 
 """
-    build_profiled_lfix_cache(w_profiled, ctx, spec, pe, ev) -> ProfiledLFixCache
+    build_price_winner_base_cache(ctx, θ_full, cf) -> NamedTuple
 
-`ev` must be `evaluate_profiled_point`'s return at `w_profiled` (reused, not
-resolved). Builds the dense (W x D x Ddest) price/pTsigma/winner/runnerup/
-third cache ONCE (same O(W*D*Ddest) one-time cost `build_lfix_base_cache`
-pays for the full formulation), then the reduced-formula `contrib0`/
-`Cbar_eff`/`q0` -- exactly `reduced_homogeneous_dual_contraction`'s own
-`κ`/`Cbar`/`const_cf`/`pmmterm` construction (lines 47-93 of that file),
-independently re-verified line-by-line against that source, not re-derived
-from scratch.
+EXTRACTED (2026-08-01, parallel outer-gradient-layer task, unchanged logic --
+pure code motion, no formula change) from `build_profiled_lfix_cache`'s first
+half: the dense `(W x D x Ddest)` price/pTsigma cache and the per-draw
+winner/runnerup/third top-3 cache, identical for EVERY family (task §4: "the
+shared base cache must remain usable by both" formulations/families -- this
+is the "SAME `LFixBaseCache`-style" one-time `O(W*D*Ddest)` build the
+mission's shared-engine section describes). `build_profiled_lfix_cache` below
+is unchanged in behavior; it now simply calls this helper instead of
+inlining the same code, so the identical winner-update MECHANISM
+(`price_and_pTsigma_cell`/`min_secondthirdmin_with_idx`, both reused
+unmodified) is available to a restricted-family cache builder without a
+second implementation of it anywhere (task §4: "Do not write another
+winner-update algorithm").
 """
-function build_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, ctx, spec::AnchorSpec,
-        pe::PivotGravityElimOnRetained, ev)
-    st = ev.st; cf = st.cf; layout = st.layout; θ_full = ev.theta_full; obj = ev.obj
+function build_price_winner_base_cache(ctx, θ_full::AbstractVector, cf)
     D = cf.D; Ddest = cf.D_dest; W = cf.W
-    μ = θ_full[1]; σ = θ_full[2]
-    SW = cf.SW
 
     price0 = Array{Float64}(undef, W, D, Ddest)
     pTσ0 = Array{Float64}(undef, W, D, Ddest)
@@ -102,7 +103,25 @@ function build_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, ctx, spe
         t = third0[ω, d]
         third_pTσ0[ω, d] = t == 0 ? Inf : pTσ0[ω, t, d]
     end
-    winner0 == cf.winner || error("build_profiled_lfix_cache: rebuilt winner0 disagrees with cf.winner -- price_and_pTsigma_cell/build_compressed_factual formulas have diverged")
+    winner0 == cf.winner || error("build_price_winner_base_cache: rebuilt winner0 disagrees with cf.winner -- price_and_pTsigma_cell/build_compressed_factual formulas have diverged")
+
+    return (price0 = price0, pTσ0 = pTσ0, winner0 = winner0, winner_price0 = winner_price0,
+        runnerup0 = runnerup0, runnerup_price0 = runnerup_price0, third0 = third0,
+        third_price0 = third_price0, third_pTσ0 = third_pTσ0)
+end
+
+function build_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, ctx, spec::AnchorSpec,
+        pe::PivotGravityElimOnRetained, ev)
+    st = ev.st; cf = st.cf; layout = st.layout; θ_full = ev.theta_full; obj = ev.obj
+    D = cf.D; Ddest = cf.D_dest; W = cf.W
+    μ = θ_full[1]; σ = θ_full[2]
+    SW = cf.SW
+
+    base = build_price_winner_base_cache(ctx, θ_full, cf)
+    price0 = base.price0; pTσ0 = base.pTσ0
+    winner0 = base.winner0; winner_price0 = base.winner_price0
+    runnerup0 = base.runnerup0; runnerup_price0 = base.runnerup_price0
+    third0 = base.third0; third_price0 = base.third_price0; third_pTσ0 = base.third_pTσ0
 
     β = ev.result.beta
     κ = zeros(D, Ddest)
@@ -441,6 +460,32 @@ no fixed global `h` anymore.
 function profiled_composite_gradient_at_incremental(w_profiled::AbstractVector{Float64}, ctx, spec::AnchorSpec,
         pe::PivotGravityElimOnRetained, ev)
     cache = build_profiled_lfix_cache(w_profiled, ctx, spec, pe, ev)
+    return profiled_composite_gradient_from_cache(cache, ctx, spec, pe, w_profiled, ev)
+end
+
+"""
+    profiled_composite_gradient_from_cache(cache, ctx, spec, pe, w_profiled, ev) -> (g, meta)
+
+EXTRACTED (2026-08-01, parallel outer-gradient-layer task, unchanged logic --
+pure code motion) from `profiled_composite_gradient_at_incremental`'s second
+half: the exact analytic gp component plus the per-coordinate adaptively-
+bandwidthed central-FD loop, taking an ALREADY-BUILT `ProfiledLFixCache` as
+input instead of building one itself. `ev` is used ONLY for its `m_weights`
+field (the gp component's `Tslot_bi` accumulation) -- it need not be the same
+`ev` that built `cache` in general, only one carrying `m_weights` at the same
+solved dual point (family adapters that build `ev` differently must ensure
+this). This is the ONE concrete method every family's outer gradient
+(unrestricted and, via the shared engine, every restricted family) calls --
+`profiled_composite_gradient_at_incremental` (unrestricted call site,
+unchanged behavior) and `shared_family_outer_gradient`
+(`profiled_shared_economic_gradient_engine_2026-08-01.jl`, restricted-family
+call site) both delegate here, so the A/gp gradient formula and the
+winner-update mechanism it drives are defined in exactly one place (task §8:
+"The A/gp portion returned by every family must come from the same concrete
+shared method").
+"""
+function profiled_composite_gradient_from_cache(cache::ProfiledLFixCache, ctx, spec::AnchorSpec,
+        pe::PivotGravityElimOnRetained, w_profiled::AbstractVector{Float64}, ev)
     n_total = outer_dim_profiled(pe)
     g = zeros(n_total)
     g[1] = profiled_gp_component_analytic(cache, w_profiled, ev, ctx)

@@ -1,0 +1,226 @@
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+PASS  invalid_mode_throws  -- mode=:bogus_mode
+[smoke_ab] family=:unrestricted  seed: gp_fixed=0.9609650007465946  Delta_dual=0.0008944064101798138  status=0
+WARNING:  Option 'par_blasnumthreads' deprecated, please use 'blas_numthreads'.
+WARNING:  Option 'par_concurrent_evals' deprecated, please use 'concurrent_evals'.
+WARNING:  Option 'par_lsnumthreads' deprecated, please use 'linsolver_numthreads'.
+WARNING:  Option 'par_conicnumthreads' deprecated, please use 'conic_numthreads'.
+WARNING:  Option 'par_msnumthreads' deprecated, please use 'ms_numthreads'.
+WARNING:  Option 'par_numthreads' deprecated, please use 'numthreads'.
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+  [smoke_ab] eval 1 t=0.2s Delta=0.0008944064101798138 status=0
+Knitro presolve eliminated 0 variables and 0 constraints.
+
+algorithm:               3
+bar_conic_enable:        0
+hessopt:                 3
+honorbnds:               1
+maxit:                   4
+maxtime_real:            1800
+numthreads:              1
+outlev:                  3
+restarts:                0
+WARNING: Option ms_maxsolves was set, but option ms_enable='no'.
+WARNING: Option ms_startptrange was set, but option ms_enable='no'.
+The problem is identified as bound constrained only.
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                 11 (          11)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                         11 (          11)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                                0 (           0)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                    0 (           0)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                       0 (           0)
+Number of nonzeros in Hessian:                        0 (          66)
+
+Knitro using the Active-Set Conjugate Gradient algorithm.
+
+  Iter      Objective      FeasError   OptError    ||Step||    CGits 
+--------  --------------  ----------  ----------  ----------  -------
+       0    8.944064e-04   0.000e+00
+  [smoke_ab] eval 2 t=3.1s Delta=0.0006509294655386966 status=0
+       1    6.509295e-04   0.000e+00   6.092e-03   1.686e-02        1
+  [smoke_ab] eval 5 t=4.5s Delta=0.12638254654678338 status=0
+       2    6.459853e-04   0.000e+00   1.650e-02   5.182e-02        7
+  [smoke_ab] eval 10 t=4.7s Delta=0.0003769986985620788 status=0
+       3    3.769987e-04   0.000e+00   4.597e-03   1.532e-02        2
+       4    2.546209e-04   0.000e+00   2.205e-03   4.576e-02        3
+
+EXIT: Iteration limit reached. Current point is feasible.
+
+Final Statistics
+----------------
+Final objective value               =   2.54620891792762e-04
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   2.21e-03 / 2.21e-03
+# of iterations                     =          4 
+# of CG iterations                  =         13 
+# of function evaluations           =         11
+# of gradient evaluations           =          5
+Total program time (secs)           =       4.81376 (     4.786 CPU time)
+Time spent in evaluations (secs)    =       1.72156
+
+===============================================================================
+
+[smoke_ab] PROFILED FAMILY SEARCH DONE: status=-400 wall=4.8s n_eval=11 n_grad=5
+  best: Delta=0.0002546208917927616 found_at_eval=11 t=4.7479469776153564s
+PASS  fixed_gp_ab_runs  -- n_eval=11 status=-400
+PASS  fixed_gp_ab_manifest_excludes_gp  -- gp_free=false n_free=11 names[1:2]=["r_free_1", "r_free_2"]
+[smoke_pb] :production_bound_search family=:unrestricted  gp_start=0.9609650007465946  Delta_dual=0.0008944064101798138  status=0
+WARNING:  Option 'par_blasnumthreads' deprecated, please use 'blas_numthreads'.
+WARNING:  Option 'par_concurrent_evals' deprecated, please use 'concurrent_evals'.
+WARNING:  Option 'par_lsnumthreads' deprecated, please use 'linsolver_numthreads'.
+WARNING:  Option 'par_conicnumthreads' deprecated, please use 'conic_numthreads'.
+WARNING:  Option 'par_msnumthreads' deprecated, please use 'ms_numthreads'.
+WARNING:  Option 'par_numthreads' deprecated, please use 'numthreads'.
+
+=======================================
+           Academic License
+       (NOT FOR COMMERCIAL USE)
+         Artelys Knitro 13.0.1
+=======================================
+
+  [smoke_pb] eval 1 t=0.2s Delta=0.0008944064101798138 gp=0.9609650007465946 status=0
+Knitro presolve eliminated 0 variables and 0 constraints.
+
+algorithm:               3
+bar_conic_enable:        0
+hessopt:                 3
+honorbnds:               1
+maxit:                   4
+maxtime_real:            1800
+numthreads:              1
+outlev:                  3
+restarts:                0
+WARNING: Option ms_maxsolves was set, but option ms_enable='no'.
+WARNING: Option ms_startptrange was set, but option ms_enable='no'.
+The problem is identified as bound constrained only.
+
+Problem Characteristics                                 (   Presolved)
+-----------------------
+Objective goal:  Minimize
+Objective type:  general
+Number of variables:                                 12 (          12)
+    bounded below only:                               0 (           0)
+    bounded above only:                               0 (           0)
+    bounded below and above:                         12 (          12)
+    fixed:                                            0 (           0)
+    free:                                             0 (           0)
+Number of constraints:                                0 (           0)
+    linear equalities:                                0 (           0)
+    quadratic equalities:                             0 (           0)
+    gen. nonlinear equalities:                        0 (           0)
+    linear one-sided inequalities:                    0 (           0)
+    quadratic one-sided inequalities:                 0 (           0)
+    gen. nonlinear one-sided inequalities:            0 (           0)
+    linear two-sided inequalities:                    0 (           0)
+    quadratic two-sided inequalities:                 0 (           0)
+    gen. nonlinear two-sided inequalities:            0 (           0)
+Number of nonzeros in Jacobian:                       0 (           0)
+Number of nonzeros in Hessian:                        0 (          78)
+
+Knitro using the Active-Set Conjugate Gradient algorithm.
+
+  Iter      Objective      FeasError   OptError    ||Step||    CGits 
+--------  --------------  ----------  ----------  ----------  -------
+       0    8.944064e-04   0.000e+00
+  [smoke_pb] eval 2 t=0.4s Delta=0.07643582585390367 gp=0.9409650007465946 status=0
+  [smoke_pb] eval 3 t=0.4s Delta=0.03109641237983388 gp=0.9479203863759595 status=0
+  [smoke_pb] eval 4 t=0.4s Delta=0.007828891641634387 gp=0.9544426935612771 status=0
+  [smoke_pb] eval 5 t=0.5s Delta=0.002285353114402655 gp=0.9577038471539359 status=0
+       1    8.429318e-04   0.000e+00   1.060e-01   8.174e-04        6
+       2    8.208073e-04   0.000e+00   1.023e-02   8.174e-04        2
+       3    8.064933e-04   0.000e+00   2.289e-02   1.635e-03        2
+  [smoke_pb] eval 10 t=0.8s Delta=0.000744080404898441 gp=0.9604311238385921 status=0
+       4    7.440804e-04   0.000e+00   1.014e-02   3.270e-03        2
+
+EXIT: Iteration limit reached. Current point is feasible.
+
+Final Statistics
+----------------
+Final objective value               =   7.44080404898441e-04
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.01e-02 / 1.01e-02
+# of iterations                     =          4 
+# of CG iterations                  =         12 
+# of function evaluations           =         10
+# of gradient evaluations           =          5
+Total program time (secs)           =       0.81314 (     0.804 CPU time)
+Time spent in evaluations (secs)    =       0.44877
+
+===============================================================================
+
+[smoke_pb] PRODUCTION BOUND SEARCH DONE: status=-400 wall=0.8s n_eval=10 n_grad=5
+  best: Delta=0.000744080404898441 found_at_eval=10 t=0.7521770000457764s
+PASS  production_bound_search_runs  -- n_eval=10 status=-400
+PASS  production_bound_search_manifest_includes_gp  -- gp_free=true n_free=12 (ab n_free=11)
+PASS  ab_comparable_passes_with_allowed_gp_diff  -- man_pb vs man_ab (concrete subsystems), allow_gp_free_diff=true
+PASS  ab_comparable_throws_on_unlabeled_gp_diff  -- default allow_gp_free_diff=false
+PASS  ab_comparable_throws_on_unrecorded_placeholder_fields  -- both arms share :not_yet_wired subsystem fields
+PASS  production_config_namespace_deterministic  -- cfg1=profiled_destination_scales__unrestricted__1ba976ed1b9966e8 cfg2=profiled_destination_scales__unrestricted__1ba976ed1b9966e8
+PASS  production_config_invalid_parameterization_throws  -- economic_parameterization=:bogus_param
+PASS  production_config_namespaces_differ_by_parameterization  -- full=full_gamma_normalized__unrestricted__1ba976ed1b9966e8 profiled=profiled_destination_scales__unrestricted__1ba976ed1b9966e8
+PASS  checkpoint_compatible_positive  -- loaded_namespace == cfg1.checkpoint_namespace
+PASS  checkpoint_compatible_negative_throws  -- loading a full-formulation namespace into a profiled cfg
+
+Wrote /bbkinghome/edav/gravity_robustness/worktrees/architecture-profiled-restricted-production-outer-bridge-2026-08-01/PROFILED_PRODUCTION_RUNNER_AB_HARDENING_PLUMBING_GATE_2026-08-01.csv
+13×3 DataFrame
+ Row │ test                               pass  detail
+     │ String                             Bool  String
+─────┼────────────────────────────────────────────────────────────────────────────
+   1 │ invalid_mode_throws                true  mode=:bogus_mode
+   2 │ fixed_gp_ab_runs                   true  n_eval=11 status=-400
+   3 │ fixed_gp_ab_manifest_excludes_gp   true  gp_free=false n_free=11 names[1:…
+   4 │ production_bound_search_runs       true  n_eval=10 status=-400
+   5 │ production_bound_search_manifest…  true  gp_free=true n_free=12 (ab n_fre…
+   6 │ ab_comparable_passes_with_allowe…  true  man_pb vs man_ab (concrete subsy…
+   7 │ ab_comparable_throws_on_unlabele…  true  default allow_gp_free_diff=false
+   8 │ ab_comparable_throws_on_unrecord…  true  both arms share :not_yet_wired s…
+   9 │ production_config_namespace_dete…  true  cfg1=profiled_destination_scales…
+  10 │ production_config_invalid_parame…  true  economic_parameterization=:bogus…
+  11 │ production_config_namespaces_dif…  true  full=full_gamma_normalized__unre…
+  12 │ checkpoint_compatible_positive     true  loaded_namespace == cfg1.checkpo…
+  13 │ checkpoint_compatible_negative_t…  true  loading a full-formulation names…
+
+PRODUCTION RUNNER + AB HARDENING + PLUMBING GATE: PASS

@@ -1,0 +1,10 @@
+family,test,pass,detail
+flexible_CM,A_no_coupling_bit_identical,true,"beta restriction slice scale 1.0 vs 1e6, rc0 held fixed"
+common_Frechet,A_no_coupling_bit_identical,true,"beta restriction slice scale 1.0 vs 1e6, rc0 held fixed"
+ZC_only,A_no_coupling_bit_identical,true,"beta restriction slice scale 1.0 vs 1e6, rc0 held fixed"
+CM_plus_ZC,A_no_coupling_bit_identical,true,"beta restriction slice scale 1.0 vs 1e6, rc0 held fixed"
+flexible_CM,B_shared_vs_fullrebuild_matched_bandwidth,true,"A-block(2:end) max_abs_err=4.337e-18 max_rel_err=3.286e-15; gp shared=2.329601e-01 full_FD=2.329599e-01 diff=2.036e-07 (excluded from pass/fail, analytic-vs-FD)"
+common_Frechet,B_shared_vs_fullrebuild_matched_bandwidth,true,"A-block(2:end) max_abs_err=5.638e-18 max_rel_err=3.285e-15; gp shared=2.329601e-01 full_FD=2.329590e-01 diff=1.087e-06 (excluded from pass/fail, analytic-vs-FD)"
+ZC_only,B_shared_vs_fullrebuild_matched_bandwidth,true,"A-block(2:end) max_abs_err=8.240e-18 max_rel_err=5.482e-15; gp shared=2.329601e-01 full_FD=2.329598e-01 diff=3.092e-07 (excluded from pass/fail, analytic-vs-FD)"
+CM_plus_ZC,B_shared_vs_fullrebuild_matched_bandwidth,true,"A-block(2:end) max_abs_err=5.638e-18 max_rel_err=4.387e-15; gp shared=2.329601e-01 full_FD=2.329553e-01 diff=4.790e-06 (excluded from pass/fail, analytic-vs-FD)"
+flexible_CM,sanity_rc0_magnitude_perturbs_baseline,true,"documents that gradient DOES depend on rc0's value through Psi nonlinearity -- expected, not a bug"

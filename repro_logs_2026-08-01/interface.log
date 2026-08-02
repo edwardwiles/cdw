@@ -1,0 +1,46 @@
+diffTheory = diff = 0.1519684774892025
+diffPreStep = diff = 0.015141068512143363
+κ = 0.06420809457817289
+κ_upper = 0.06420809457817289
+κ_lower = 0.06420809457817289
+θ_initial = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_upper = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+θ_initial_lower = [0.16666666666666669, 2.5, 0.9701548739451527, 0.898534602899728, 0.9256006070125016, 0.8675016084408224, 0.8634603053463782, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+numMoments = 18
+numMomentInnerSimple = 17
+inequality_index = Int64[]
+PMM = [-0.014664979927902281 -0.005935220396847227 -0.013986223392776819 -0.003852371890807344 0.006699597939990179 0.003289347825961807 0.005295866332722169 -0.00034646591202940237 0.006296473870416427 0.004646171273375345 0.00956705276408345 0.004082107584692901 -0.001765038842908199 1.9653221561696022e-5 -0.0014992153476952217 0.0011452448247125746 0.0016486937273406607 7.053695813710375e-17]
+moments_with_var = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+moments_without_var = Int64[]
+δ_star_initial = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_low = -0.0010029941762690656
+val = 0.0010029941762690656
+δ_star_initial_up = -0.0010029941762690656
+δ_star_initial = -0.0010029941762690656
+δ_grid = [1]
+δ_grid_filtered = [1]
+PASS  no_hardcoded_offset__economic_range_matches_unrestricted  -- economic_dual_range(mock)=1:13 economic_dual_range(unrestricted)=1:13
+PASS  restriction_range_disjoint_and_after_economic  -- restriction_dual_ranges(mock)=RestrictionDualRange[RestrictionDualRange(:cm_marginals, 14:18)]
+PASS  validate_family_layout_contract_passes_wellformed  -- unrestricted + mock flexible_CM
+PASS  incorrect_layout_checksum_throws  -- bad_checksum=true adapter
+PASS  wrong_dual_length__contract_validator_throws  -- economic_dual_range too long vs total_reduced_economic_moments
+PASS  wrong_dual_length__cache_builder_throws  -- economic_dual_range exceeds actual beta length (caught by validator or cache builder)
+PASS  anchor_coordinate_cannot_appear__corrupted_layout_throws  -- anchor cell reinserted into retained_full_factual_j
+PASS  shared_gradient_method_identity  -- profiled_composite_gradient_from_cache has exactly one applicable method
+
+Wrote /bbkinghome/edav/gravity_robustness/worktrees/architecture-profiled-restricted-production-outer-bridge-2026-08-01/full_aod_diag/d4_exact/../../PROFILED_RESTRICTED_OUTER_GRADIENT_PREINTEGRATION_GATE_2026-08-01.csv
+8×3 DataFrame
+ Row │ test                               pass  detail
+     │ String                             Bool  String
+─────┼────────────────────────────────────────────────────────────────────────────
+   1 │ no_hardcoded_offset__economic_ra…  true  economic_dual_range(mock)=1:13 e…
+   2 │ restriction_range_disjoint_and_a…  true  restriction_dual_ranges(mock)=Re…
+   3 │ validate_family_layout_contract_…  true  unrestricted + mock flexible_CM
+   4 │ incorrect_layout_checksum_throws   true  bad_checksum=true adapter
+   5 │ wrong_dual_length__contract_vali…  true  economic_dual_range too long vs …
+   6 │ wrong_dual_length__cache_builder…  true  economic_dual_range exceeds actu…
+   7 │ anchor_coordinate_cannot_appear_…  true  anchor cell reinserted into reta…
+   8 │ shared_gradient_method_identity    true  profiled_composite_gradient_from…
+
+INTERFACE TESTS: PASS
