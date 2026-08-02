@@ -31,18 +31,26 @@
 isdefined(Main, :ProfiledEconomicMomentLayout) || error("reduced_homogeneous_contraction_2026-08-01.jl requires profiled_economic_moment_layout_2026-08-01.jl to be included first.")
 
 """
-    reduced_homogeneous_dual_contraction(β, cf, ctx, θ_full, layout) -> Vector{Float64}  (length W)
+    reduced_homogeneous_dual_contraction!(out, β, cf, ctx, θ_full, layout) -> out  (length W)
 
-Forward contraction under the REDUCED homogeneous moment definitions:
+In-place forward contraction under the REDUCED homogeneous moment definitions:
 `length(β) == layout.total_reduced_economic_moments` (NOT `cf.oci-1`). No
 anchor column exists in `β` at all -- this is the actual dimension reduction
-task §3 requires, not merely a value change.
+task §3 requires, not merely a value change. Writes into caller-supplied `out`
+(length W) -- no allocation. Every family's hot-path FG callback
+(`economic_forward_into_arg0_reduced!`) calls this directly into its own
+persistent `st.arg0` buffer; `reduced_homogeneous_dual_contraction` (below,
+non-mutating) remains for the many one-shot/diagnostic call sites
+(gradient references, verification, dense-G materialization by unit vectors)
+where a fresh allocation per call is immaterial.
 """
-function reduced_homogeneous_dual_contraction(β::AbstractVector, cf::CompressedFactual, ctx, θ_full::AbstractVector,
-                                               layout::ProfiledEconomicMomentLayout)
+function reduced_homogeneous_dual_contraction!(out::AbstractVector{Float64}, β::AbstractVector, cf::CompressedFactual,
+                                                ctx, θ_full::AbstractVector, layout::ProfiledEconomicMomentLayout)
     D = cf.D; Ddest = cf.D_dest; W = cf.W
     length(β) == layout.total_reduced_economic_moments ||
-        error("reduced_homogeneous_dual_contraction: β length $(length(β)) != total_reduced_economic_moments = $(layout.total_reduced_economic_moments)")
+        error("reduced_homogeneous_dual_contraction!: β length $(length(β)) != total_reduced_economic_moments = $(layout.total_reduced_economic_moments)")
+    length(out) == W ||
+        error("reduced_homogeneous_dual_contraction!: out length $(length(out)) != W=$W")
 
     κ = zeros(D, Ddest)          # anchor cells structurally left at 0.0 -- no β entry ever written there
     Cbar = zeros(Ddest)
@@ -81,7 +89,6 @@ function reduced_homogeneous_dual_contraction(β::AbstractVector, cf::Compressed
         end
     end
 
-    t = Vector{Float64}(undef, W)
     @inbounds for w in 1:W
         acc = const_cf
         for slot in 1:Ddest
@@ -90,9 +97,25 @@ function reduced_homogeneous_dual_contraction(β::AbstractVector, cf::Compressed
         if has_france
             acc += κ_cf * cf.cf_raw[w] - κ_cf * gpσ * cf.wval[w, bi_slot]
         end
-        t[w] = cf.SW[w] * (acc - pmmterm)
+        out[w] = cf.SW[w] * (acc - pmmterm)
     end
-    return t
+    return out
+end
+
+"""
+    reduced_homogeneous_dual_contraction(β, cf, ctx, θ_full, layout) -> Vector{Float64}  (length W)
+
+Non-mutating wrapper around `reduced_homogeneous_dual_contraction!` -- allocates a fresh output
+vector and delegates. Kept for the many one-shot/diagnostic call sites (gradient references,
+verification, dense-G materialization by unit vectors) where a fresh allocation per call is
+immaterial; hot-path callers should use the `!` form with a persistent buffer instead (see
+`economic_forward_into_arg0_reduced!`, profiled_reduced_lookup_kernels_2026-08-02.jl).
+"""
+function reduced_homogeneous_dual_contraction(β::AbstractVector, cf::CompressedFactual, ctx, θ_full::AbstractVector,
+                                               layout::ProfiledEconomicMomentLayout)
+    out = Vector{Float64}(undef, cf.W)
+    reduced_homogeneous_dual_contraction!(out, β, cf, ctx, θ_full, layout)
+    return out
 end
 
 """

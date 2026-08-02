@@ -50,10 +50,12 @@ isdefined(Main, :HessianWeightCache) || error("profiled_reduced_lookup_kernels_2
     economic_forward_into_arg0_reduced!(st, x) -> st.arg0
 
 Reduced-economic-layout sibling of `economic_forward_into_arg0!` (cm_lookup_kernels.jl): computes
-`st.arg0 = -zeta - t_econ` in place. `t_econ` comes from `reduced_homogeneous_dual_contraction` (the
+`st.arg0 = -zeta - t_econ` in place. `t_econ` comes from `reduced_homogeneous_dual_contraction!` (the
 SAME "safe by linearity" kernel `materialize_homogeneous_dense_G_reduced!` uses to build G's own
-columns -- already gated). No gravity term (user correction, 2026-08-02: gravity is legacy, not an
-inner moment, must not appear in this dual problem at all).
+columns -- already gated), written directly into `st.arg0` itself (no fresh W-length allocation on
+this hot path -- every family's inner-FG callback calls this once per KNITRO iteration). No gravity
+term (user correction, 2026-08-02: gravity is legacy, not an inner moment, must not appear in this
+dual problem at all).
 """
 function economic_forward_into_arg0_reduced!(st, x::AbstractVector{Float64})
     ζ = x[1]
@@ -61,8 +63,8 @@ function economic_forward_into_arg0_reduced!(st, x::AbstractVector{Float64})
 
     cf = st.core_cf_ref[]
     cf isa CompressedFactual || error("economic_forward_into_arg0_reduced!: core_cf_ref[] is not a CompressedFactual (got $(typeof(cf))) -- prime_operator! must run before any FG/Hessian callback at this outer point.")
-    t_econ = reduced_homogeneous_dual_contraction(β_econ, cf, st.ctx, st.θ_full, st.layout)
-    st.arg0 .= (-ζ) .- t_econ
+    reduced_homogeneous_dual_contraction!(st.arg0, β_econ, cf, st.ctx, st.θ_full, st.layout)
+    st.arg0 .= (-ζ) .- st.arg0
     return cf
 end
 

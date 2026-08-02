@@ -31,6 +31,21 @@ const _CM_FAMILY_LIST = [
     "cm_checkpoint.jl", "cm_originzc_checkpoint.jl", "postmerge_smoke_diagnostics.jl", "cross_hessian_live_stash_2026-07-28.jl",
     "c10_d20_production_driver.jl", "flexible_theta.jl", "flexible_theta_aspace_production.jl",
     "outer_coordinate_layout.jl", "c10_d20_production_driver_unified.jl",
+    # ---- phase4-5-allocation-audit-2026-08-02 (Part A): reduced-path FG evaluators, NOT covered
+    # by the original 2026-08-02 allocation audit (built afterward) -- adds the genuine zero-dense
+    # ReducedCMLookupState/ReducedCMFrechetLookupState/ReducedOriginZCOperatorState/
+    # ReducedCMMeanZCOperatorState FG functors for all 4 restricted families. This is a UNION with
+    # the list above (dedup'd below), not a replacement -- the dense-path testsets above are
+    # unchanged.
+    "winner_pair_cross_hessian.jl", "no_dense_g_counters.jl", "economic_operator.jl",
+    "zc_restriction_operator.jl", "cm_meanzc_lookup_kernels.jl", "cm_meanzc_lookup_production.jl",
+    "cm_originzc_lookup_kernels.jl", "cm_originzc_lookup_production.jl", "cm_frechet_lookup_kernels.jl",
+    "operator_hessian_weights.jl", "operator_psi_bundle.jl", "cm_lookup_live_knitro.jl", "cm_lookup_production.jl",
+    "relative_a_coordinate_2026-07-31.jl", "profiled_economic_moment_layout_2026-08-01.jl",
+    "homogeneous_contraction_2026-07-31.jl", "reduced_homogeneous_hessian_2026-08-01.jl",
+    "reduced_homogeneous_contraction_2026-08-01.jl", "profiled_restricted_family_base_2026-08-01.jl",
+    "profiled_reduced_lookup_kernels_2026-08-02.jl", "profiled_reduced_frechet_lookup_kernels_2026-08-02.jl",
+    "profiled_reduced_originzc_lookup_kernels_2026-08-02.jl", "profiled_reduced_meanzc_lookup_kernels_2026-08-02.jl",
 ]
 for f in unique(_CM_FAMILY_LIST)
     include(joinpath(D4X, f))
@@ -50,12 +65,26 @@ const ALLOC_CEILING_BYTES = Dict(
     :common_frechet  => 100_000,     # measured 41,504-42,160 post-fix (was 561,504+ pre-fix)
     :origin_zc       => 100_000,     # measured 47,920-48,148
     :cm_meanzc       => 150_000,     # measured 70,392-71,544 post-fix (was 1,995,792+ pre-fix)
+    # ---- phase4-5-allocation-audit-2026-08-02 (Part A/B), reduced-path FG functors, same
+    # D=20/W=20000/L=50/K=3 scientific config as the dense-path ceilings above. Measured PRE-Part-B-
+    # fix (fresh Vector{Float64}(undef,W) + D x Ddest kappa/Cbar allocated every FG call, see Part B
+    # commit): reduced_flexible_cm=168,032  reduced_common_frechet=168,064  reduced_origin_zc=163,856
+    # reduced_cm_meanzc=168,032 bytes/call -- all dominated by the W=20000 * 8 bytes = 160,000-byte
+    # forward-kernel allocation Part B removes. Ceiling set with 2x margin over the PRE-fix number so
+    # this commit (Part A) passes cleanly against current code; Part B's own commit tightens these
+    # after the in-place fix lands, re-measuring the real post-fix bytes/call.
+    :reduced_flexible_cm    => 350_000,
+    :reduced_common_frechet => 350_000,
+    :reduced_origin_zc      => 350_000,
+    :reduced_cm_meanzc      => 350_000,
 )
 # Expected dual dimension at this audit's canonical scientific config (D=20/L=50/K=3) -- a change
 # here signals a live-dimension drift the task brief's own "confirm live dimensions" requirement
 # is meant to catch, not just a cosmetic difference.
 const EXPECTED_N = Dict(:unrestricted => 382, :flexible_cm => 1332, :common_frechet => 1382,
-                         :origin_zc => 1012, :cm_meanzc => 1962)
+                         :origin_zc => 1012, :cm_meanzc => 1962,
+                         :reduced_flexible_cm => 1313, :reduced_common_frechet => 1363,
+                         :reduced_origin_zc => 993, :reduced_cm_meanzc => 1943)
 
 println("="^100)
 println("HESSIAN ALLOCATION/BACKEND/DIMENSION REGRESSION SUITE -- ", Dates.now())
@@ -159,5 +188,89 @@ println("="^100)
         @test pcx.octx.zc_gram_backend == :blas_syrk
         @test pcx.octx.zc_ez_backend == :drawmajor_v2
         @test CORE_HESSIAN_COUNTERS[].dense_core_fallback_calls == 0
+    end
+
+    # =========================================================================================
+    # phase4-5-allocation-audit-2026-08-02 (Part A): reduced-path (genuine zero-dense-G) FG
+    # functor allocation, all 4 restricted families, SAME W_TEST/K_ZC/CM_L scientific config as
+    # the dense-path testsets above -- this audit's own ceilings never covered these evaluators
+    # (built after the original 2026-08-02 audit ran). Measures the `(st::Reduced*State)(x, g)`
+    # functor call itself (steady state, post-JIT-warmup), not the Hessian callback.
+    # =========================================================================================
+    red_spec = build_anchor_spec_from_ctx(ctx0)
+    red_cf_probe = build_compressed_factual(collect(CS.reconstruct_full(x_free_calib, ctx0.m)), ctx0; check_ties = false)
+    red_has_france = red_cf_probe.cf_col > 0
+    red_layout = build_profiled_economic_moment_layout(ctx0, red_spec; has_france_ratio = red_has_france)
+    assert_no_factual_price_index_moment(red_layout)
+    red_obj0 = build_reduced_base_obj_for_family(ctx0, red_layout, CS)
+    red_SNAPS = nested_grid_sequence([10, 20, 50])
+
+    @testset "reduced_flexible_cm" begin
+        aug = build_cm_augmented_obj_archB(ctx0, CS; L = CM_L, contrasts = :orthonormal, base_obj = red_obj0, profiled_layout = red_layout)
+        cctx = build_cm_bin_ctx(ctx0, aug; profiled_layout = red_layout, inner_fg_backend = :dense_reference, threaded_bins = false)
+        base = reduced_cm_base_state(x_free_calib, ctx0, red_layout, cctx)
+        @test base.inner_status in (0, -100, -101, -103)
+        x_state = vcat(base.ζstar, base.λstar); n = length(x_state)
+        @test n == EXPECTED_N[:reduced_flexible_cm]
+        st = cctx.cmlookup_st; g = zeros(n)
+        st(x_state, g)   # JIT warm-up
+        b = @allocated st(x_state, g)
+        @test b <= ALLOC_CEILING_BYTES[:reduced_flexible_cm]
+        @printf("  [reduced_flexible_cm] bytes/call=%d  n=%d\n", b, n)
+    end
+
+    @testset "reduced_common_frechet" begin
+        aug = build_cm_frechet_augmented_obj_archB(ctx0, CS; L = CM_L, contrasts = :orthonormal, base_obj = red_obj0,
+            profiled_layout = red_layout, probs = red_SNAPS[CM_L])
+        level_targets = aug.level_targets
+        cctx = build_cm_bin_ctx(ctx0, aug; profiled_layout = red_layout, inner_fg_backend = :dense_reference,
+            threaded_bins = false, core_hessian_backend = :exact_winner_pair_parallel, cm_cross_hessian_backend = :winner_bin)
+        base = reduced_frechet_base_state(x_free_calib, ctx0, red_layout, cctx, level_targets)
+        @test base.inner_status in (0, -100, -101, -103)
+        x_state = vcat(base.ζstar, base.λstar); n = length(x_state)
+        @test n == EXPECTED_N[:reduced_common_frechet]
+        st = cctx.cmlookup_st; g = zeros(n)
+        st(x_state, g)
+        b = @allocated st(x_state, g)
+        @test b <= ALLOC_CEILING_BYTES[:reduced_common_frechet]
+        @printf("  [reduced_common_frechet] bytes/call=%d  n=%d\n", b, n)
+    end
+
+    @testset "reduced_origin_zc" begin
+        layout_o = OriginByPowerLayout(ctx0.D, K_ZC, K_ZC)
+        nu0 = Vector{Float64}(undef, n_eta(layout_o))
+        for k in 1:K_ZC, o in 1:ctx0.D
+            nu0[target_index(layout_o, o, k)] = mean(@view (ctx0.U .^ k)[:, o])
+        end
+        aug = build_originzc_augmented_obj(ctx0, CS, layout_o; base_obj = red_obj0, profiled_layout = red_layout)
+        octx = build_originzc_core_hess_ctx(aug, ctx0; core_hessian_backend = :exact_winner_pair_parallel,
+            zc_cross_hessian_backend = :winner_bin, profiled_layout = red_layout)
+        base = reduced_originzc_base_state(x_free_calib, ctx0, red_layout, octx, nu0)
+        @test base.inner_status in (0, -100, -101, -103)
+        x_state = vcat(base.ζstar, base.λstar); n = length(x_state)
+        @test n == EXPECTED_N[:reduced_origin_zc]
+        st = octx.fg_lookup_st; g = zeros(n)
+        st(x_state, g)
+        b = @allocated st(x_state, g)
+        @test b <= ALLOC_CEILING_BYTES[:reduced_origin_zc]
+        @printf("  [reduced_origin_zc] bytes/call=%d  n=%d\n", b, n)
+    end
+
+    @testset "reduced_cm_meanzc" begin
+        νvec = Float64.(factorial.(1:K_ZC))
+        aug = build_cm_meanzc_augmented_obj(ctx0, CS; L = CM_L, K_mean = K_ZC, K_pair = K_ZC,
+            base_obj = red_obj0, profiled_layout = red_layout, contrasts = :orthonormal, meanzc_basis = :direct)
+        cctx = build_cm_meanzc_bin_ctx(ctx0, aug; core_hessian_backend = :exact_winner_pair_parallel,
+            zc_cross_hessian_backend = :winner_bin, threaded_bins = false, inner_fg_backend = :dense_reference,
+            profiled_layout = red_layout)
+        base = reduced_meanzc_base_state(x_free_calib, νvec, ctx0, red_layout, cctx)
+        @test base.inner_status in (0, -100, -101, -103)
+        x_state = vcat(base.ζstar, base.λstar); n = length(x_state)
+        @test n == EXPECTED_N[:reduced_cm_meanzc]
+        st = cctx.cmlookup_st; g = zeros(n)
+        st(x_state, g)
+        b = @allocated st(x_state, g)
+        @test b <= ALLOC_CEILING_BYTES[:reduced_cm_meanzc]
+        @printf("  [reduced_cm_meanzc] bytes/call=%d  n=%d\n", b, n)
     end
 end
