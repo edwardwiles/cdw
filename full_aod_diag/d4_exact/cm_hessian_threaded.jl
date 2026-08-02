@@ -207,6 +207,92 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     HEE = @view Hfull[1:NCORE, 1:NCORE]
     @cmhess_prof "H_EE" _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
 
+    # Performance closeout task (2026-08-02), Section 8: this threaded twin previously had NO
+    # `cctx.profiled_layout` branch at all (confirmed by grep -- zero references before this edit),
+    # so any profiled/reduced cctx would silently fall into the non-profiled `use_winner_bin` logic
+    # below and either error (wctx = serial_ctx(cctx.core_ws) with core_ws never built for a
+    # profiled cctx) or use the wrong (full, non-reduced) NCORE width. This is why every profiled/
+    # reduced cctx in this codebase has had to pass `threaded_bins=false` -- there was no threaded
+    # code path that understood the reduced layout at all, not merely an unthreaded one.
+    #
+    # Fix: port the serial `hessian_cm_structured!`'s own profiled branch
+    # (cm_hessian_architectures.jl) into this function VERBATIM (same H_EC/H_CZ gather logic, same
+    # `use_profiled_correction=true` calls, same `hcz_prep_dispatch!` call this task's Section 7
+    # already wired into the serial branch) -- the ONLY change from that serial branch is the
+    # bin-table prep call, which now reuses the SAME threaded_bins-conditional this function
+    # already applies to the non-profiled branch a few lines below (`build_bin_tables_threaded!`/
+    # `prefix_sum_tables_threaded!`, both pre-existing, already-validated kernels -- ported unchanged
+    # from diag/fullA-inner-blas-threading per this file's own header). No new kernel, no new
+    # orchestration primitive: this is the same dispatch-by-`threaded_bins` pattern used everywhere
+    # else in this function, applied to the one branch that was missing it.
+    if cctx.profiled_layout !== nothing
+        local bin_zc_ws_ec
+        if cctx.ncore_core < NCORE
+            nz_ec = n_restriction(cctx.hzz_zc_op)
+            bin_zc_ws_ec = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz_ec)
+            cctx.bin_zc_cross = bin_zc_ws_ec
+            @cmhess_prof "H_CZ_prep" hcz_prep_dispatch!(bin_zc_ws_ec, cctx.hcz_prep_backend, cctx.Bidx, cctx.hzz_centered.ZcS, cctx;
+                workers = cctx.cross_hessian_workers, threaded = cctx.cross_hessian_threaded)
+        end
+        @cmhess_prof "bintables_prep" if threaded_bins
+            tls === nothing && error("hessian_cm_structured_v2!(threaded_bins=true) requires tls (build_thread_local_scratch(cctx))")
+            build_bin_tables_threaded!(cctx, tls, H, w; fill_S = false)
+            prefix_sum_tables_threaded!(cctx; fill_S = false)
+        else
+            build_bin_tables!(cctx, H, w; fill_S = false)
+            prefix_sum_tables!(cctx; fill_S = false)
+        end
+        layout = cctx.profiled_layout
+        has_france = layout.france_ratio_reduced_j > 0
+        bi_slot = has_france ? dest_slot(cctx.econ_ctx, cctx.econ_ctx.bi) : 0
+        gpσ = has_france ? cctx.profiled_theta_ref[][3 + D]^cctx.profiled_theta_ref[][2] : 0.0
+        denom_cf = has_france ? gpσ * cctx.econ_ctx.γ.LPrime[cctx.econ_ctx.bi] : 0.0
+        if cctx.profiled_full_wctx === nothing || cctx.profiled_full_wctx_for !== cf
+            cctx.profiled_full_wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot, gpσ = gpσ, denom_cf = denom_cf)
+            cctx.profiled_full_wctx_for = cf
+        end
+        wctx_full = cctx.profiled_full_wctx
+        ws_full = cctx.profiled_full_ws
+        if ws_full === nothing || ws_full.ncolI != wctx_full.ncolI || ws_full.D != D || ws_full.L != L || ws_full.Ddest != wctx_full.Ddest
+            ws_full = WinnerBinCrossScratch(wctx_full.ncolI, D, L, wctx_full.Ddest)
+            cctx.profiled_full_ws = ws_full
+        end
+        @cmhess_prof "H_EC_prep" record_winner_cross_hessian_call!()
+        @cmhess_prof "H_EC_prep" winner_pair_cross_hessian_fill!(wctx_full, ws_full, obj, cctx.Bidx)
+        if size(cctx.profiled_hraw_ec_full) != (wctx_full.ncolI + 1, nO)
+            cctx.profiled_hraw_ec_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, nO)
+        end
+        Hraw_EC_full = cctx.profiled_hraw_ec_full
+        Hraw_EC = cctx.Hraw_EC   # reduced-sized (NCORE x nO) -- reused as the gather TARGET here
+        n_bilateral = length(layout.retained_full_factual_j)
+        @cmhess_prof "H_EC_asm" @inbounds for l in 1:L
+            winner_pair_cross_hessian_cm_block!(Hraw_EC_full, wctx_full, ws_full, l, origins, refIndex1, M; use_profiled_correction = true)
+            @views Hraw_EC[1, :] .= Hraw_EC_full[1, :]
+            @inbounds for k in 1:n_bilateral
+                j_full = layout.retained_full_factual_j[k]
+                @views Hraw_EC[1 + k, :] .= Hraw_EC_full[1 + j_full, :]
+            end
+            if has_france
+                @views Hraw_EC[1 + layout.total_reduced_economic_moments, :] .= Hraw_EC_full[1 + wctx_full.ncolI, :]
+            end
+            if cctx.ncore_core < NCORE
+                Hraw_EC_z = @view Hraw_EC[cctx.ncore_core+1:NCORE, :]
+                bin_zc_cross_hessian_block!(Hraw_EC_z, bin_zc_ws_ec, l, origins, refIndex1, M)
+            end
+            cols = NCORE + (l-1)*nO + 1 : NCORE + l*nO
+            block_ec = if cctx.R === nothing
+                Hraw_EC
+            else
+                mul!(cctx.block_ec, Hraw_EC, cctx.R)
+            end
+            @views Hfull[1:NCORE, cols] .= block_ec
+            @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
+        end
+        @cmhess_prof "H_CC" fill_cm_HCC!(Hfull, cctx, M)
+        if extension !== nothing
+            _fill_frechet_level_blocks_profiled!(Hfull, cctx, w, wctx_full, ws_full, layout, extension, M)
+        end
+    else
     # winner-aware H_ER phase (2026-07-27): SAME decision function as the serial
     # hessian_cm_structured! (cm_hessian_architectures.jl), reused not re-derived -- see that
     # function's own docstring for the exact gating rationale.
@@ -300,6 +386,7 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     # (not `isa CMFrechetExtension`) for the same load-order reason documented there.
     if extension !== nothing
         _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension)
+    end
     end
 
     # Hessian upper-only cleanup (2026-07-28): now calls the ONE shared packing function
