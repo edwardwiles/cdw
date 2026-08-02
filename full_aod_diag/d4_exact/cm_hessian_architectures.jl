@@ -1049,6 +1049,18 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 @views HEM[1 + kk, :] .= HEM_full[1 + j_full, :]
             end
             has_france && (@views HEM[ncore, :] .= HEM_full[1 + wctx_full.ncolI, :])
+            # BUG FIX (found live 2026-08-02 via ForwardDiff Hessian cross-check on the reduced+
+            # widened operator FG -- profiled_reduced_meanzc_lookup_kernels_2026-08-02.jl's own
+            # gate): SAME class of bug as the H_EC fix's own precedent comment above
+            # ("c13_debug_archC.jl: uniform 2x discrepancy... the symmetrize-by-averaging step below
+            # reads BOTH Hfull[i,j] and Hfull[j,i]") -- the packing step (line ~1326,
+            # `0.5*(Hfull[i,j]+Hfull[j,i])`) applies to EVERY (i,j) pair with i,j<=NCORE, which
+            # includes this H_EM cross-block (both economic and mean/pair-Z rows are <=NCORE). Only
+            # `HEM` (upper: economic-row x mean/pair-col) was filled above; the transposed mirror
+            # (mean/pair-row x economic-col) was left at its initial zero, so the average silently
+            # halved every H_EM entry -- confirmed exactly (ratio 2.0 across the whole block, ForwardDiff
+            # vs production) before this fix.
+            @views HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)
             # ---- H_MM -- UNCHANGED, copied verbatim from the non-profiled ncore<NCORE branch below ----
             if cctx.zc_gram_backend === :reference
                 zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
