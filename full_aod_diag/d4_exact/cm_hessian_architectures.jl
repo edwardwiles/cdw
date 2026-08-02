@@ -725,6 +725,14 @@ mutable struct CMBinHessCtx
     profiled_full_wctx_for::Any
     profiled_full_ws::Union{Nothing,WinnerBinCrossScratch}
     profiled_hraw_ec_full::Matrix{Float64}
+    # Profiled restricted-inner-endtoend task (2026-08-01), H_EF profiled gather step: full-width
+    # `(wctx_full.ncolI+1)`-length scratch for `winner_pair_cross_hessian_colsum!`/`_esum!` (common
+    # Fréchet's H_E,level block), gathered down into `CMFrechetExtension.colsum`/`.Esum_wb`
+    # (already reduced-sized, `cctx.NCORE`) before the `H_E,level` write -- same "gather at
+    # assembly" design as `profiled_hraw_ec_full` above, reusing the SAME `profiled_full_wctx`/
+    # `profiled_full_ws` (rebuilt/cached only on `cf` identity change, not duplicated here).
+    profiled_colsum_full::Vector{Float64}
+    profiled_esum_full::Vector{Float64}
 end
 
 "Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change. Profiled all-families completion task (2026-08-01): also appends the profiled-layout fields with their own defaults (nothing/fresh-Ref/empty-buffer), same backward-compatibility discipline."
@@ -734,10 +742,13 @@ function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAU
         profiled_hee_packed::Vector{Float64} = Float64[],
         profiled_full_wctx = nothing, profiled_full_wctx_for = nothing,
         profiled_full_ws::Union{Nothing,WinnerBinCrossScratch} = nothing,
-        profiled_hraw_ec_full::Matrix{Float64} = Matrix{Float64}(undef, 0, 0))
+        profiled_hraw_ec_full::Matrix{Float64} = Matrix{Float64}(undef, 0, 0),
+        profiled_colsum_full::Vector{Float64} = Float64[],
+        profiled_esum_full::Vector{Float64} = Float64[])
     return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk,
         profiled_layout, profiled_theta_ref, profiled_reduced_wctx, profiled_reduced_wctx_for, profiled_hee_packed,
-        profiled_full_wctx, profiled_full_wctx_for, profiled_full_ws, profiled_hraw_ec_full)
+        profiled_full_wctx, profiled_full_wctx_for, profiled_full_ws, profiled_hraw_ec_full,
+        profiled_colsum_full, profiled_esum_full)
 end
 
 """
@@ -1278,7 +1289,10 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
         # (`winner_pair_cross_hessian_fill!`/`_cm_block!`) with `use_profiled_correction=true`
         # exactly as the unrestricted family does, then gathers only `layout`-retained rows into
         # the (smaller) `Hfull` -- zero lines inside either of those two functions change.
-        extension === nothing || error("hessian_cm_structured!: common-Fréchet's H_EF gather is not implemented for the profiled economic layout yet (H_EC only) -- see PROFILED_ALL_FAMILY_COMPLETION_MASTER_2026-08-01.md.")
+        # Restricted-inner-endtoend task (2026-08-01): the H_EF gather branch below (§8) makes
+        # `extension isa CMFrechetExtension` a supported case here too -- previously this line
+        # unconditionally errored for any non-nothing `extension` (H_EC only). Any OTHER non-nothing,
+        # non-CMFrechetExtension `extension` is still not a recognized case for this branch.
         # BUGFIX (found live, 2026-08-01, via a direct user challenge to re-verify H_CC rather than
         # trust "unchanged code must be correct"): this branch skipped build_bin_tables!/
         # prefix_sum_tables! entirely, so cctx.CT (the theta/weight-dependent bin table
@@ -1339,6 +1353,19 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
             @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
         end
         fill_cm_HCC!(Hfull, cctx, M)
+
+        # Restricted-inner-endtoend task (2026-08-01), §8: common-Fréchet's H_E,level (H_EF) gather
+        # branch. `extension !== nothing` (not `isa CMFrechetExtension`) for the same reason line
+        # ~1430 below uses it -- this file must not reference the CMFrechetExtension type name
+        # directly (flexible CM's own scripts never load cm_frechet_hessian.jl). H_CM,level/
+        # H_level,level (the OTHER two blocks `_fill_frechet_level_blocks!` computes) are genuinely
+        # UNCHANGED by the profiled economic layout -- they read only `cctx.CT`/`Wtab`/`T1`
+        # (restriction-bin tables, already freshened by `build_bin_tables!`/`prefix_sum_tables!`
+        # above), never `wctx`/the economic block width -- so `_fill_frechet_level_blocks_profiled!`
+        # below only replaces the H_E,level piece, reusing the verbatim H_CM,level/H_level,level code.
+        if extension !== nothing
+            _fill_frechet_level_blocks_profiled!(Hfull, cctx, w, wctx_full, ws_full, layout, extension, M)
+        end
     else
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
     use_direct_hcz = _cm_cross_hessian_wants_direct_hcz(cctx, cf)
