@@ -55,26 +55,28 @@ process (new PID, no warm-start reuse, `obj.x` never touched from a prior proces
 real D=20 context at W=100,000 from scratch, builds the reduced/zero-dense family objects at
 PRODUCTION dimensions, and performs exactly one cold KNITRO solve.
 
+**ALL 5 FAMILIES: DONE, PASS.**
+
 | Family | Status | nStatus | wall (solve) | wall (total) | Dense-G materializations at solve time |
 |---|---|---|---|---|---|
-| unrestricted | **DONE, PASS** | 0 | 5.17s | 92.3s | 0 |
-| flexible_CM | **DONE, PASS** | 0 | 14.4s | 126.5s | 0 (econ), 0 (CM) |
-| common_Frechet | **DONE, PASS** | 0 | 19.5s | 146.1s | 0 (econ), 0 (CM) |
-| origin-ZC | **IN PROGRESS** at report time (PID 2552725, ~10min CPU, steadily progressing, not hung) | -- | -- | -- | -- |
-| CM+ZC | **IN PROGRESS** at report time (PID 2547114, ~14min CPU, steadily progressing, not hung) | -- | -- | -- | -- |
+| unrestricted | DONE, PASS | 0 | 5.17s | 92.3s | 0 |
+| flexible_CM | DONE, PASS | 0 | 14.4s | 126.5s | 0 (econ), 0 (CM) |
+| common_Frechet | DONE, PASS | 0 | 19.5s | 146.1s | 0 (econ), 0 (CM) |
+| origin-ZC | DONE, PASS | 0 | 45.1s | 142.2s | 0 |
+| CM+ZC | DONE, PASS | 0 | 87.4s | 197.2s | 0 (econ), 0 (CM) |
 
-Detail for the 3 completed:
+Detail for all 5:
 ```
-unrestricted: nStatus=0  Delta_dual=Delta_primal=0.001915624515  n_fg=6  n_hess=5  dense_econ=0
-flexible_CM:  nStatus=0  zeta*=-0.0070649514  kkt_resid(verify)=6.596e-13  dense_econ=0 dense_CM=0
-common_Frechet: nStatus=0  zeta*=-0.0132281932 kkt_resid(verify)=7.138e-13  dense_econ=0 dense_CM=0
+unrestricted:   nStatus=0  Delta_dual=Delta_primal=0.001915624515  n_fg=6  n_hess=5  dense_econ=0
+flexible_CM:    nStatus=0  zeta*=-0.0070649514  kkt_resid(verify)=6.596e-13  dense_econ=0 dense_CM=0
+common_Frechet: nStatus=0  zeta*=-0.0132281932  kkt_resid(verify)=7.138e-13  dense_econ=0 dense_CM=0
+origin-ZC:      nStatus=0  zeta*=-0.0066761691  kkt_resid(verify)=7.428e-13  dense_econ=0
+CM+ZC:          nStatus=0  zeta*=-0.0118556840  kkt_resid(verify)=8.208e-14  winner_cross_hessian_calls=16
+                dense_cross_hessian_calls=0  dense_econ=0  dense_CM=0
 ```
-origin-ZC/CM+ZC were still executing their cold KNITRO solve when this report was finalized; logs
-so far show `context build`, `layout build`, `reduced object/octx build` completed cleanly and
-"Starting COLD KNITRO inner solve ..." printed, with steady CPU consumption (verified live via
-`ps`, no error/stack trace in the log, no stall). Whoever picks this up next should check
-`/tmp/.../scratchpad/logs/w100k_originzc_v3.log` and `w100k_cmzc_v2.log` (or their process's
-successor) for the final `SOLVE:`/`VERIFY:`/`RESULT:` lines.
+CM+ZC (the widened-core family, heaviest at production scale: NCORE=993, ncm=950) also confirms
+its winner-based cross-Hessian dispatch fired 16 times with zero dense fallback during the cold
+solve itself.
 
 ## Real bugs found + fixed this session
 
@@ -111,6 +113,18 @@ successor) for the final `SOLVE:`/`VERIFY:`/`RESULT:` lines.
    `profiled_reduced_lookup_kernels_2026-08-02.jl` included first (an `isdefined` guard on
    `economic_forward_into_arg0_reduced!`); the initial W100k origin-ZC/CM+ZC drivers omitted it.
 
+6. **The per-level ZC nu-vector TARGET value must be `k!` (factorial), not a flat `1.0`, for
+   `K_mean>1`** -- found live via a genuine `nStatus=-400` (KNITRO's real infeasibility-detection
+   code) on the first attempt at origin-ZC's W100k cold solve. `nu_{o,k}` is the target for
+   `E[U^k]` under this codebase's draw convention; `E[U^k]=k!`, so a flat-1.0 vector is an
+   internally INCONSISTENT calibration point once `k>1` (confirmed against this repo's own
+   `test_cm_originzc_cplus_equivalence.jl`'s `nu0_origin(K,D)=vcat([fill(factorial(k),D) for k in
+   1:K]...)` and `test_cm_meanzc_cplus_equivalence.jl`'s `nu0vec(K)=[factorial(k) for k in 1:K]`).
+   Every prior gate in this task (D20/W20k, W80k, and even this task's own first W100k
+   origin-ZC/CM+ZC attempts) used `K_mean=1`, where `factorial(1)==1.0` coincidentally masked this.
+   Fixed in both `run_coldsolve_originzc_w100k_2026-08-02.jl` and
+   `run_coldsolve_cmzc_w100k_2026-08-02.jl`; both then solved cleanly to `nStatus=0`.
+
 ## Files added (all additive, no reserved file touched)
 
 D4: `test_flexcm_hessian_dense_truth_audit_2026-08-02.jl`, `test_frechet_hessian_dense_truth_audit_2026-08-02.jl`
@@ -123,3 +137,23 @@ W100k production-dims: `run_coldsolve_{flexcm,frechet,originzc,cmzc,unrestricted
 - `50a4dad` unrestricted D20 operator verification at configurable W
 - `d80fc67` flexCM/Frechet D20/W20k combined gate + real verifier bug fix
 - `9bf2021` W80k all-5-families PASS + 2 real W100k cold-solve bugs fixed
+- `bb4d2e4` full gate report (interim)
+- `96c35f0` real bug fix: K_mean>1 nu-vector must be k! (factorial), not flat 1.0
+
+## FINAL VERDICT
+
+All gates requested by the task are complete and passing:
+- D4: operator FG vs ForwardDiff, complete Hessian vs ForwardDiff, complete Hessian vs dense-truth
+  G'Diag(S)G -- ALL 5 families (4 restricted + confirmed pre-existing unrestricted coverage), 100%
+  PASS.
+- D20/W20k: real KNITRO solve, operator-only verification, recover-then-resolve -- ALL 5 families,
+  100% PASS.
+- D20/W80k: recover-then-resolve extended -- ALL 5 families, 100% PASS.
+- W=100,000 at PRODUCTION dimensions (D=20, Ddest=19, L=50, K_mean=3, K_pair=3) genuine-cold solve,
+  fresh process per family, reduced/zero-dense inner-solve path -- **ALL 5 families, 100% PASS**.
+
+6 real bugs found and fixed live during this work (see above), none of them pre-existing production
+bugs -- all were bugs in this session's own new test/driver files, caught and corrected before
+being reported as passing. `PRODUCTION_DEFAULT_CHANGED=false`, `CAMPAIGN_LAUNCHED=false`, `git
+status` clean except this session's own additive commits, zero reserved files touched, nothing
+pushed to any remote.
