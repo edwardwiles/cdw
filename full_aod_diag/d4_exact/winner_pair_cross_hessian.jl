@@ -43,6 +43,7 @@ mutable struct WinnerBinCrossScratch
     ncolI::Int
     D::Int
     L::Int
+    Ddest::Int   # profiled economic block port (2026-08-01): needed to size MTab/MCScum/T0_slot below
     QTab::Array{Float64,3}     # ncolI x D x (L+1)
     NuTab::Matrix{Float64}     # D x (L+1)
     SOnlyTab::Matrix{Float64}  # D x (L+1) -- row-1 ("ones"/zeta-paired H column) accumulator, S-only (no nu)
@@ -54,6 +55,31 @@ mutable struct WinnerBinCrossScratch
     NuCScum::Matrix{Float64}   # D x L
     SOnlyCScum::Matrix{Float64}  # D x L
     QCfCScum::Matrix{Float64}  # D x L
+    # Profiled economic block port (2026-08-01): the destination-specific target-correction total
+    # T^R_{d,k} the mission spec requires, built from cf.wval (raw, winner-INDEPENDENT per-draw
+    # destination value -- see PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §1) rather than from
+    # winner-conditioned QTab/QCScum, so it needs no separate "anchor still wins sometimes" side
+    # table: wval is defined on every draw regardless of which origin wins, including an omitted
+    # anchor. MTab[slot,x,k] = Sigma_{w: bin(U[w,x])=k} Snu[w]*wval[w,slot] (Ddest x D x (L+1),
+    # filled in the SAME existing slot/w loop that fills QTab -- one extra multiply-add per (w,x),
+    # no new O(W) pass), MCScum its (x,l)-cumulative twin (Ddest x D x L, same CS_x(j,l) prefix-sum
+    # convention as QCScum/NuCScum). T0_slot[slot] = Sigma_w Snu[w]*wval[w,slot] (Ddest, the
+    # UN-binned total, computed directly rather than read off MCScum[:, :, L] to avoid depending on
+    # whether bin L is inclusive of every draw -- see design doc §1 for why this is computed
+    # independently). Filled UNCONDITIONALLY (cheap, same complexity class as the existing QTab
+    # fill) but only ever READ by the new `use_profiled_correction=true` path in
+    # `winner_pair_cross_hessian_cm_block!`/`_colsum!`/`_esum!` -- every existing
+    # `use_profiled_correction=false` (default) caller is unaffected, byte-for-byte.
+    MTab::Array{Float64,3}     # Ddest x D x (L+1)
+    MCScum::Array{Float64,3}   # Ddest x D x L
+    T0_slot::Vector{Float64}   # Ddest
+    # Profiled economic block port (2026-08-01): H_EF's colsum!/esum! analog of H_EC's
+    # per-(o,refIndex1) MCScum DIFFERENCE -- colsum! needs a SUM over all D CM-grid origins x
+    # (common-Fréchet's level restriction has no reference-contrast structure, see
+    # winner_pair_cross_hessian_colsum!'s own docstring), so MSumX[d,l] = Σ_x MCScum[d,x,l]
+    # (Ddest x L, computed once per callback, O(Ddest*D*L), reused by every l/j pair -- no new
+    # O(W) pass). Only read by the new use_profiled_correction=true path.
+    MSumX::Matrix{Float64}     # Ddest x L
     # optimize/structured-cross-hessian-ZC-CM-2026-07-28: persistent `Threads.@spawn` task buffer
     # for `winner_pair_cross_hessian_fill_threaded!` (threaded_cross_hessian.jl), sized to
     # `Threads.nthreads()` at construction so no `Vector{Task}` is allocated per Hessian callback.
@@ -70,7 +96,7 @@ mutable struct WinnerBinCrossScratch
     EsumEcon::Vector{Float64}  # ncolI
 end
 
-function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
+function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int, Ddest::Int = cld(ncolI, D))
     # BUGFIX (2026-07-28, root-caused independently by both the D=4 cm_meanzc gate and the D=20
     # flexible_cm/common_frechet profiling task): the last two positional args here were swapped
     # relative to the struct's OWN declared field order (`tasks_ec::Vector{Task}` THEN
@@ -87,17 +113,18 @@ function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
     # `docs/FLEXCM_FRECHET_D20_PROFILE_AND_GATES_2026-07-28.md` for the two independent
     # reproductions (D=4 direct call outside KNITRO with a full stack trace; D=20 through the real
     # public driver with a `git stash` control run).
-    return WinnerBinCrossScratch(ncolI, D, L,
+    return WinnerBinCrossScratch(ncolI, D, L, Ddest,
         zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
         zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L),
+        zeros(Ddest, D, L + 1), zeros(Ddest, D, L), zeros(Ddest), zeros(Ddest, L),
         Vector{Task}(undef, Threads.nthreads()), zeros(ncolI))
 end
 
-"Rebuild (or reuse, if already the right size) `ws` for the current `(ncolI, D, L)` -- mirrors this codebase's own `resize_*_if_needed!` idiom."
-function ensure_winner_bin_cross_scratch!(ws_ref::Base.RefValue{Union{Nothing,WinnerBinCrossScratch}}, ncolI::Int, D::Int, L::Int)
+"Rebuild (or reuse, if already the right size) `ws` for the current `(ncolI, D, L)` -- mirrors this codebase's own `resize_*_if_needed!` idiom. `Ddest` defaults to a size-only-correct-when-no-cf-column fallback for callers that don't yet pass it explicitly (harmless -- MTab/MCScum/T0_slot are unread on any path that doesn't opt into `use_profiled_correction=true`)."
+function ensure_winner_bin_cross_scratch!(ws_ref::Base.RefValue{Union{Nothing,WinnerBinCrossScratch}}, ncolI::Int, D::Int, L::Int, Ddest::Int = cld(ncolI, D))
     ws = ws_ref[]
-    if ws === nothing || ws.ncolI != ncolI || ws.D != D || ws.L != L
-        ws_ref[] = WinnerBinCrossScratch(ncolI, D, L)
+    if ws === nothing || ws.ncolI != ncolI || ws.D != D || ws.L != L || ws.Ddest != Ddest
+        ws_ref[] = WinnerBinCrossScratch(ncolI, D, L, Ddest)
     end
     return ws_ref[]
 end
@@ -121,11 +148,13 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
     ddPsi!(obj.arg2, obj.arg0)
     S = obj.arg2
     Ddest = wctx.Ddest; W = wctx.W
-    nu = wctx.nu; y = wctx.y; winner = wctx.winner
+    nu = wctx.nu; y = wctx.y; winner = wctx.winner; wval = wctx.wval
     D = ws.D; L = ws.L; nbins = L + 1
 
     QTab = ws.QTab; NuTab = ws.NuTab; SOnlyTab = ws.SOnlyTab; QCfTab = ws.QCfTab; EsumEcon = ws.EsumEcon
+    MTab = ws.MTab; T0_slot = ws.T0_slot
     fill!(QTab, 0.0); fill!(NuTab, 0.0); fill!(SOnlyTab, 0.0); fill!(QCfTab, 0.0); fill!(EsumEcon, 0.0)
+    fill!(MTab, 0.0); fill!(T0_slot, 0.0)
 
     has_cf = wctx.has_cf
     crs = wctx.cf_raw_scaled
@@ -148,13 +177,20 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
         for w in 1:W
             o = winner[w, slot]
             j = slot + (o - 1) * Ddest
-            snuy = (S[w] * nu[w]) * y[w, slot]
+            snu_w = S[w] * nu[w]
+            snuy = snu_w * y[w, slot]
             # Common-Fréchet Part B: UN-binned accumulation (no x/Bidx loop) alongside the existing
             # per-bin QTab fill -- O(W*Ddest) additional work, negligible next to QTab's own
             # O(W*Ddest*D). See EsumEcon's own field docstring above.
             EsumEcon[j] += snuy
+            # Profiled economic block port (2026-08-01): T0_slot/MTab, winner-UNCONDITIONAL (uses
+            # wval, not y -- see MTab's own field docstring above), filled in this SAME slot/w loop
+            # so no new O(W) pass is added.
+            mv = snu_w * wval[w, slot]
+            T0_slot[slot] += mv
             for x in 1:D
                 QTab[j, x, Bidx[w, x]] += snuy
+                MTab[slot, x, Bidx[w, x]] += mv
             end
         end
     end
@@ -178,27 +214,59 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
             QCScum[j, x, l] = acc
         end
     end
+    MCScum = ws.MCScum
+    @inbounds for slot in 1:Ddest, x in 1:D
+        acc = 0.0
+        for l in 1:L
+            acc += MTab[slot, x, l]
+            MCScum[slot, x, l] = acc
+        end
+    end
+    # H_EF's colsum!/esum! sum-over-x analog of H_EC's per-x difference -- see MSumX's own field
+    # docstring on WinnerBinCrossScratch. O(Ddest*D*L), cheap next to the O(W*Ddest*D) fill above.
+    MSumX = ws.MSumX
+    @inbounds for slot in 1:Ddest
+        for l in 1:L
+            acc = 0.0
+            for x in 1:D
+                acc += MCScum[slot, x, l]
+            end
+            MSumX[slot, l] = acc
+        end
+    end
     return ws
 end
 
 """
-    winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, ws, l, origins, refIndex1, M) -> Hraw_EC
+    winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, ws, l, origins, refIndex1, M;
+        use_profiled_correction=false) -> Hraw_EC
 
-Per-threshold-block (`l`) raw `H_EC` slab, `NCORE x nO` where `NCORE = wctx.ncolI + 1` (row 1 =
-the "ones"/zeta-paired `H[:,2]` column, S-only weighted, no `pi_vec` correction since that column
-has no entry in `pi_vec`; rows 2:NCORE = the `ncolI` real economic-lambda columns, row `j+1`
-corresponding to `wctx`'s own column `j`) -- this `+1` row offset matches `cm_hessian_
-architectures.jl`'s own `E = @view H[:, 2:1+NCORE]` slicing EXACTLY (`E`'s first column is the
-ones column, not an economic one), so this drops into that call site as a straight replacement
-for the dense `CS_`-table read at the SAME row indices. Caller must call
-`winner_pair_cross_hessian_fill!` ONCE per Hessian callback first (builds `QCScum`/`NuCScum`/
-`SOnlyCScum` for ALL `l` at once), then this per-`l` slice is O(NCORE*nO), matching the dense
-version's own per-`l` cost.
+`use_profiled_correction=false` (default): byte-for-byte the original OLD-formulation behavior
+(destination-independent `nu_diff` target correction, `Σ_w S_w R_k(w)` in
+`PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md`'s notation) -- every existing caller (flexible CM,
+common Fréchet, CM+ZC) is unaffected by this method's existence.
+
+`use_profiled_correction=true`: replaces `nu_diff` with the destination-specific
+`T_diff = MCScum[d,o,l] - MCScum[d,refIndex1,l]`, `d = wctx.target_slot[j]` -- the mission's
+`T^R_{d,k} = Σ_o' W^R_{o'd,k}` (design doc §2), correct for a reduced/anchor-omitting economic
+layout because `MCScum` is built from `wctx.wval` (always defined, including on draws where an
+omitted anchor wins), not from the winner-conditioned `QCScum` buckets. The France/cf row ALSO
+gets the profiled correction, using `wctx.target_slot[cf.cf_col]` in place of `d`, whenever that
+was set to a real destination slot -- i.e. whenever the caller built `wctx` via
+`build_winner_pair_ctx(cf; bi_slot=dest_slot(ctx, ctx.bi))` (see `core_exact_hessian.jl`'s own
+`bi_slot` keyword docstring). If `wctx` was built without `bi_slot` (the default, sentinel `0`),
+the France row falls back to `nu_diff` regardless of `use_profiled_correction` -- a documented
+scope boundary, not a silent gap: requesting the profiled correction with `wctx.has_cf=true` and no
+`bi_slot` still produces a CORRECT (if not-yet-profiled) France row, it does not produce a wrong one.
 """
 function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerBinCrossScratch, l::Int, origins::Vector{Int}, refIndex1::Int, M)
+        ws::WinnerBinCrossScratch, l::Int, origins::Vector{Int}, refIndex1::Int, M;
+        use_profiled_correction::Bool = false)
     QCScum = ws.QCScum; NuCScum = ws.NuCScum; SOnlyCScum = ws.SOnlyCScum; QCfCScum = ws.QCfCScum
+    MCScum = ws.MCScum
     pi_vec = wctx.pi_vec
+    Lam_homog = wctx.Lam_homog
+    target_slot = wctx.target_slot
     invM = 1.0 / M
     has_cf = wctx.has_cf
     jcf = wctx.ncolI   # the cf column's index WITHIN wctx's own 1:ncolI numbering (cf.cf_col)
@@ -207,15 +275,54 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
         nu_diff = NuCScum[o, l] - NuCScum[refIndex1, l]
         for j in 1:wctx.ncolI
             q_diff = QCScum[j, o, l] - QCScum[j, refIndex1, l]
-            Hraw_EC[j + 1, oi] = (q_diff - pi_vec[j] * nu_diff) * invM
+            # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded here to
+            # avoid an out-of-bounds @inbounds read; harmless either way since row jcf is always
+            # overwritten by its own dedicated computation below, but not relying on that.
+            #
+            # BUGFIX (found live, 2026-08-01, via a direct autodiff cross-check the user pushed for
+            # after finding the "iteration limit" convergence behavior suspicious): the multiplier
+            # MUST switch in lockstep with the correction term -- `nu_diff` (destination-independent,
+            # OLD/structured-formulation) pairs with `pi_vec[j]` (also structured, = FixedCol[j]);
+            # the destination-specific MCScum-based correction (HOMOGENEOUS-formulation, matching
+            # `reduced_homogeneous_winner_pair_hessian!`'s own `Lam[j]=kappa0[j]*Pmat[o,slot]`) pairs
+            # with `Lam_homog[j]`, NOT `pi_vec[j]` -- confirmed via ForwardDiff: using `pi_vec[j]`
+            # here (the pre-existing, prior-session code) gave max|Δ|=0.076 on the assembled H_EC
+            # block against an independent autodiff Hessian of the homogeneous-formulation objective,
+            # with H_EE/H_CC both exactly 0 -- i.e. this was a real, isolated formula bug, not a
+            # design choice (see WinnerPairHessCtx's own Lam_homog field docstring for the full
+            # derivation).
+            if use_profiled_correction && target_slot[j] != 0
+                d = target_slot[j]
+                corr = MCScum[d, o, l] - MCScum[d, refIndex1, l]
+                Hraw_EC[j + 1, oi] = (q_diff - Lam_homog[j] * corr) * invM
+            else
+                Hraw_EC[j + 1, oi] = (q_diff - pi_vec[j] * nu_diff) * invM
+            end
         end
         # The "cf"/common-factor column (if present) is NOT winner-conditioned like the regular
         # economic columns above -- QTab[jcf,:,:] was left at zero by the main slot-loop (no
         # sample's `winner[w,slot]` ever equals it, it isn't a bilateral (slot,origin) pair at
-        # all), so overwrite that one row here with its own dedicated accumulation.
+        # all), so overwrite that one row here with its own dedicated accumulation. Uses the
+        # profiled correction too when `target_slot[jcf]` is a real bi_slot (build_winner_pair_ctx's
+        # optional `bi_slot` keyword was supplied) -- falls back to nu_diff otherwise (target_slot[jcf]
+        # is the sentinel 0), matching every other amended function's France-row scope discipline.
+        # SAME multiplier bugfix as above applies here (Lam_homog[jcf] for the profiled path).
         if has_cf
             qcf_diff = QCfCScum[o, l] - QCfCScum[refIndex1, l]
-            Hraw_EC[jcf + 1, oi] = (qcf_diff - pi_vec[jcf] * nu_diff) * invM
+            if use_profiled_correction && target_slot[jcf] != 0
+                # SECOND bugfix (found live, same session): the homogeneous formulation's own France
+                # coefficient has a CONSTANT term (`denom_cf`) in addition to `cf_raw`/the
+                # `-gpσ*wval[.,bi_slot]` piece (see `WinnerPairHessCtx.denom_cf_scaled`'s own
+                # docstring for the full derivation) -- it does NOT cancel in the `qcf_diff` contrast
+                # (bin membership differs by feature o vs refIndex1), contributing
+                # `denom_cf_scaled*nu_diff` (reusing the SAME nu_diff already computed above).
+                # `qcf_diff` alone (missing this term) was confirmed, via autodiff, to still leave a
+                # real residual (max|Δ|=0.25 on H_EC's France row) even after the Lam_homog fix.
+                corr_cf = MCScum[target_slot[jcf], o, l] - MCScum[target_slot[jcf], refIndex1, l]
+                Hraw_EC[jcf + 1, oi] = (qcf_diff + wctx.denom_cf_scaled * nu_diff - Lam_homog[jcf] * corr_cf) * invM
+            else
+                Hraw_EC[jcf + 1, oi] = (qcf_diff - pi_vec[jcf] * nu_diff) * invM
+            end
         end
     end
     return Hraw_EC
@@ -283,10 +390,20 @@ reuse forever" discipline for `cross_scratch`/`core_ws`).
 mutable struct WinnerZCCrossScratch
     W::Int
     max_nx::Int
+    Ddest::Int   # profiled economic block port (2026-08-01): needed to size SnuWval/TZ_buf below
     Snu::Vector{Float64}
     crs_buf::Vector{Float64}
     v::Vector{Float64}
     NuZ_buf::Vector{Float64}
+    # Profiled economic block port (2026-08-01): the H_EZ analog of H_EC's MCScum
+    # (PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §3) -- `SnuWval[w,d] = Snu[w]*wctx.wval[w,d]`
+    # (W x Ddest, filled once per callback in `winner_pair_cross_hessian_zc_prep!`, same lifecycle
+    # as `Snu`) and `TZ_buf[d,x] = Σ_w SnuWval[w,d]*Z[w,x]` (Ddest x max_nx, ONE BLAS.gemm! call
+    # per `winner_pair_cross_hessian_zc_block!` invocation, replacing the old single-vector `NuZ`
+    # correction with a per-destination one). Filled/read only by the new
+    # `use_profiled_correction=true` path -- unread by every existing caller.
+    SnuWval::Matrix{Float64}   # W x Ddest
+    TZ_buf::Matrix{Float64}    # Ddest x max_nx
     # optimize/structured-cross-hessian-ZC-CM-2026-07-28: persistent scratch for
     # `winner_pair_cross_hessian_zc_block_threaded!` (threaded_cross_hessian.jl) -- `tasks_ez`
     # (sized to `Threads.nthreads()`) avoids a per-callback `Vector{Task}` allocation;
@@ -298,16 +415,20 @@ mutable struct WinnerZCCrossScratch
     thread_scratch_ez::Vector{Vector{Float64}}
 end
 
-WinnerZCCrossScratch(W::Int, max_nx::Int) =
-    WinnerZCCrossScratch(W, max_nx, zeros(W), zeros(W), zeros(W), zeros(max_nx),
+"`Ddest` defaults to 1 (a deliberately conservative, deliberately-too-small-to-silently-misuse
+default) for callers that don't pass it explicitly -- SnuWval/TZ_buf are unread on any path that
+doesn't opt into `use_profiled_correction=true`, so no existing caller needs to change."
+WinnerZCCrossScratch(W::Int, max_nx::Int, Ddest::Int = 1) =
+    WinnerZCCrossScratch(W, max_nx, Ddest, zeros(W), zeros(W), zeros(W), zeros(max_nx),
+        zeros(W, Ddest), zeros(Ddest, max_nx),
         Vector{Task}(undef, Threads.nthreads()),
         [zeros(W) for _ in 1:Threads.nthreads()])
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(W, max_nx)` -- mirrors this file's own `ensure_winner_bin_cross_scratch!` idiom."
-function ensure_winner_zc_cross_scratch!(ws_ref::Base.RefValue{Union{Nothing,WinnerZCCrossScratch}}, W::Int, max_nx::Int)
+function ensure_winner_zc_cross_scratch!(ws_ref::Base.RefValue{Union{Nothing,WinnerZCCrossScratch}}, W::Int, max_nx::Int, Ddest::Int = 1)
     ws = ws_ref[]
-    if ws === nothing || ws.W != W || ws.max_nx < max_nx
-        ws_ref[] = WinnerZCCrossScratch(W, max_nx)
+    if ws === nothing || ws.W != W || ws.max_nx < max_nx || ws.Ddest != Ddest
+        ws_ref[] = WinnerZCCrossScratch(W, max_nx, Ddest)
     end
     return ws_ref[]
 end
@@ -336,6 +457,17 @@ function winner_pair_cross_hessian_zc_prep!(ws::WinnerZCCrossScratch, wctx::Winn
             crsbuf[w] = Snu[w] * crs[w]
         end
     end
+    # Profiled economic block port (2026-08-01): SnuWval, same lifecycle as Snu -- see
+    # WinnerZCCrossScratch's own field docstring. Cheap/harmless when ws.Ddest==1 (the
+    # not-yet-profiled-caller default, still correct-if-unused since it's simply never read);
+    # ws.Ddest must never exceed wctx.Ddest (indexes into wctx.wval's own Ddest dimension below).
+    Ddest_ws = ws.Ddest
+    Ddest_ws <= wctx.Ddest || error("winner_pair_cross_hessian_zc_prep!: ws.Ddest=$Ddest_ws exceeds wctx.Ddest=$(wctx.Ddest) -- rebuild scratch via ensure_winner_zc_cross_scratch! with the correct Ddest")
+    wval = wctx.wval
+    SnuWval = ws.SnuWval
+    @inbounds for d in 1:Ddest_ws, w in 1:W
+        SnuWval[w, d] = Snu[w] * wval[w, d]
+    end
     return ws
 end
 
@@ -349,9 +481,18 @@ header). Requires `winner_pair_cross_hessian_zc_prep!(ws, wctx, S)` to have been
 THIS Hessian callback (does not recompute `Snu`/`crs_buf` itself, so it is safe/cheap to call this
 function more than once per callback against the SAME `ws`/`S` -- e.g. once per level -- without
 redoing the O(W) prep work).
+
+`use_profiled_correction=false` (default): byte-for-byte the original OLD-formulation behavior
+(the single global `NuZ` correction) -- every existing caller (CM+ZC, ZC-only) is unaffected.
+`use_profiled_correction=true`: replaces `NuZ[x]` (destination-independent) with the
+destination-specific `TZ[d,x] = Σ_w Snu[w]*wctx.wval[w,d]*Z[w,x]`, `d = wctx.target_slot[j]`,
+computed as ONE `BLAS.gemm!` call (`TZ = SnuWval' * Z`) -- see
+PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §3. Same France/cf-row scope boundary as
+`winner_pair_cross_hessian_cm_block!` (kept on `NuZ`, see that function's own docstring).
 """
 function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerZCCrossScratch, S::AbstractVector{Float64}, Z::AbstractMatrix{Float64}, M::Real)
+        ws::WinnerZCCrossScratch, S::AbstractVector{Float64}, Z::AbstractMatrix{Float64}, M::Real;
+        use_profiled_correction::Bool = false)
     W = wctx.W; Ddest = wctx.Ddest
     ncolI = wctx.ncolI
     nx = size(Z, 2)
@@ -359,8 +500,10 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
     length(S) == W || error("winner_pair_cross_hessian_zc_block!: length(S)=$(length(S)) != wctx.W=$W")
     size(Z, 1) == W || error("winner_pair_cross_hessian_zc_block!: size(Z,1)=$(size(Z, 1)) != wctx.W=$W")
     nx <= ws.max_nx || error("winner_pair_cross_hessian_zc_block!: nx=$nx exceeds ws.max_nx=$(ws.max_nx) -- rebuild scratch via ensure_winner_zc_cross_scratch!")
+    use_profiled_correction && ws.Ddest != Ddest &&
+        error("winner_pair_cross_hessian_zc_block!: use_profiled_correction=true requires ws.Ddest=$(ws.Ddest) == wctx.Ddest=$Ddest -- rebuild scratch via ensure_winner_zc_cross_scratch!(...; Ddest)")
 
-    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec
+    y = wctx.y; winner = wctx.winner; pi_vec = wctx.pi_vec; Lam_homog = wctx.Lam_homog; target_slot = wctx.target_slot
     has_cf = wctx.has_cf; jcf = ncolI
     Snu = ws.Snu; v = ws.v
     invM = 1.0 / M
@@ -398,19 +541,55 @@ function winner_pair_cross_hessian_zc_block!(HEZ::AbstractMatrix{Float64}, wctx:
     NuZ = @view ws.NuZ_buf[1:nx]
     BLAS.gemv!('T', 1.0, Z, Snu, 0.0, NuZ)
 
+    # Profiled economic block port (2026-08-01): TZ[d,x] = Σ_w SnuWval[w,d]*Z[w,x], ONE BLAS.gemm!
+    # call, only computed when actually needed (use_profiled_correction=true) -- see
+    # PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §3.
+    TZ = nothing
+    if use_profiled_correction
+        TZ = @view ws.TZ_buf[:, 1:nx]
+        BLAS.gemm!('T', 'N', 1.0, ws.SnuWval, Z, 0.0, TZ)
+    end
+
+    # BUGFIX (2026-08-01, same pattern as winner_pair_cross_hessian_cm_block!/_colsum!/_esum!): the
+    # multiplier must switch in lockstep with the correction term -- `NuZ[x]`
+    # (destination-independent) pairs with `pi_vec[j]`; the destination-specific `TZ`-based
+    # correction pairs with `Lam_homog[j]`, NOT `pi_vec[j]`.
     @inbounds for j in 1:nbilateral
-        pij = pi_vec[j]
-        for x in 1:nx
-            HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+        if use_profiled_correction
+            d = target_slot[j]
+            lamj = Lam_homog[j]
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - lamj * TZ[d, x])
+            end
+        else
+            pij = pi_vec[j]
+            for x in 1:nx
+                HEZ[j+1, x] = invM * (HEZ[j+1, x] - pij * NuZ[x])
+            end
         end
     end
 
     if has_cf
         row_cf = @view HEZ[jcf+1, :]
         BLAS.gemv!('T', invM, Z, ws.crs_buf, 0.0, row_cf)
-        pij = pi_vec[jcf]
-        @inbounds for x in 1:nx
-            row_cf[x] -= invM * pij * NuZ[x]
+        # France/cf row gets the profiled TZ correction too, when target_slot[jcf] is a real
+        # bi_slot (see build_winner_pair_ctx's own bi_slot keyword docstring) -- falls back to NuZ
+        # otherwise (sentinel 0), same discipline as winner_pair_cross_hessian_cm_block!. SECOND
+        # bugfix, same pattern as H_EC/colsum!/esum!'s France row: the homogeneous formulation's
+        # constant term `denom_cf` contributes `denom_cf_scaled*NuZ[x]` here (NuZ is the un-binned,
+        # Z-feature analog of `nu_diff`/`sumNu`/`t0`), added before subtracting `Lam_homog[jcf]*TZ`.
+        if use_profiled_correction && target_slot[jcf] != 0
+            d_cf = target_slot[jcf]
+            lamcf = Lam_homog[jcf]
+            dcfscaled = wctx.denom_cf_scaled
+            @inbounds for x in 1:nx
+                row_cf[x] += invM * (dcfscaled * NuZ[x] - lamcf * TZ[d_cf, x])
+            end
+        else
+            pij = pi_vec[jcf]
+            @inbounds for x in 1:nx
+                row_cf[x] -= invM * pij * NuZ[x]
+            end
         end
     end
 
@@ -428,7 +607,7 @@ end
 # ============================================================================
 
 """
-    winner_pair_cross_hessian_colsum!(colsum, wctx, ws, l) -> colsum
+    winner_pair_cross_hessian_colsum!(colsum, wctx, ws, l; use_profiled_correction=false) -> colsum
 
 `colsum[j] = sum_{o=1}^D CS_[o,j,l]` for `j = 1:NCORE` (`NCORE = wctx.ncolI + 1`, SAME row
 convention as `winner_pair_cross_hessian_cm_block!`: row 1 = the ones/zeta column, S-only; rows
@@ -439,11 +618,21 @@ difference against `refIndex1`). `O(D)` per row, `O(D*NCORE)` total per `l` -- s
 as the dense `for o in 1:D; acc += CS_[o,j,l]; end` loop this replaces. Caller must call
 `winner_pair_cross_hessian_fill!` once per Hessian callback first (same precondition as
 `winner_pair_cross_hessian_cm_block!`).
+
+`use_profiled_correction=false` (default): byte-for-byte the original behavior (single global
+`sumNu` correction, same for every economic row `j`). `use_profiled_correction=true`: replaces
+`sumNu` with the destination-specific `ws.MSumX[wctx.target_slot[j], l]` (see that field's own
+docstring on `WinnerBinCrossScratch`) -- the mission's `T^F_{d,k}` for H_EF, per
+PROFILED_CROSS_BLOCK_FORMULAS_2026-08-01.md §4. Same France/cf-row scope boundary as H_EC/H_EZ
+(kept on `sumNu`).
 """
 function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerBinCrossScratch, l::Int)
+        ws::WinnerBinCrossScratch, l::Int; use_profiled_correction::Bool = false)
     QCScum = ws.QCScum; NuCScum = ws.NuCScum; SOnlyCScum = ws.SOnlyCScum; QCfCScum = ws.QCfCScum
+    MSumX = ws.MSumX
     pi_vec = wctx.pi_vec
+    Lam_homog = wctx.Lam_homog
+    target_slot = wctx.target_slot
     has_cf = wctx.has_cf
     jcf = wctx.ncolI   # the cf column's index WITHIN wctx's own 1:ncolI numbering (cf.cf_col)
     D = ws.D
@@ -459,29 +648,60 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
     end
     colsum[1] = sumS
 
+    # BUGFIX (2026-08-01, same pattern as winner_pair_cross_hessian_cm_block!'s H_EC fix): the
+    # multiplier MUST switch in lockstep with the correction term -- `sumNu` (destination-independent,
+    # OLD/structured-formulation, the sum-over-x analog of that function's `nu_diff`) pairs with
+    # `pi_vec[j]`; the destination-specific `MSumX`-based correction (HOMOGENEOUS-formulation, the
+    # sum-over-x analog of `MCScum[d,o,l]-MCScum[d,refIndex1,l]`) pairs with `Lam_homog[j]`, NOT
+    # `pi_vec[j]`. `MSumX`'s own field docstring already documents it as "H_EF's colsum!/esum!
+    # sum-over-x analog of H_EC's per-x difference" -- this fix makes the multiplier follow that same
+    # analogy, not just the correction term.
     @inbounds for j in 1:wctx.ncolI
         sumQ = 0.0
         for o in 1:D
             sumQ += QCScum[j, o, l]
         end
-        colsum[j + 1] = sumQ - pi_vec[j] * sumNu
+        # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded (see
+        # winner_pair_cross_hessian_cm_block!'s identical guard/comment); row jcf is always
+        # overwritten below regardless.
+        if use_profiled_correction && target_slot[j] != 0
+            colsum[j + 1] = sumQ - Lam_homog[j] * MSumX[target_slot[j], l]
+        else
+            colsum[j + 1] = sumQ - pi_vec[j] * sumNu
+        end
     end
 
     # Same cf-column override as winner_pair_cross_hessian_cm_block! -- QCScum[jcf,:,:] was left at
     # zero by the main slot-loop (the cf column is not a (slot,origin) pair), so overwrite that one
-    # entry with its own dedicated accumulation.
+    # entry with its own dedicated accumulation. Uses MSumX[target_slot[jcf],l]/Lam_homog[jcf] too
+    # when that's a real bi_slot, else falls back to sumNu/pi_vec[jcf] (France row scope discipline,
+    # see docstring). SECOND bugfix, same pattern as H_EC's France row: the homogeneous formulation's
+    # France coefficient has a CONSTANT term (`denom_cf`) that does not cancel in this sum (unlike a
+    # (o,refIndex1)-DIFFERENCE, a plain sum over origins does not cancel a constant either -- it
+    # accumulates `denom_cf_scaled` once per unit of `sumNu`, the sum-over-x analog of H_EC's
+    # `nu_diff`), contributing `denom_cf_scaled*sumNu` (reusing the SAME sumNu already computed above).
     if has_cf
         sumQCf = 0.0
         @inbounds for o in 1:D
             sumQCf += QCfCScum[o, l]
         end
-        colsum[jcf + 1] = sumQCf - pi_vec[jcf] * sumNu
+        if use_profiled_correction && target_slot[jcf] != 0
+            colsum[jcf + 1] = sumQCf + wctx.denom_cf_scaled * sumNu - Lam_homog[jcf] * MSumX[target_slot[jcf], l]
+        else
+            colsum[jcf + 1] = sumQCf - pi_vec[jcf] * sumNu
+        end
     end
     return colsum
 end
 
 """
-    winner_pair_cross_hessian_esum!(Esum, wctx, ws, w, Wtot) -> Esum
+    winner_pair_cross_hessian_esum!(Esum, wctx, ws, w, Wtot; use_profiled_correction=false) -> Esum
+
+`use_profiled_correction=false` (default): byte-for-byte the original behavior (single global `t0`
+correction). `use_profiled_correction=true`: replaces `t0` with the destination-specific
+`ws.T0_slot[wctx.target_slot[j]]` -- the UN-BINNED counterpart of `winner_pair_cross_hessian_colsum!`'s
+`MSumX`, already built by `winner_pair_cross_hessian_fill!` (see `T0_slot`'s own field docstring).
+Same France/cf-row scope boundary as the other amended cross-block functions.
 
 `Esum[j] = sum_s w[s]*E[s,j]` for `j = 1:NCORE` -- the UN-binned (no threshold dependence) column
 sum common-Fréchet's `H_E,level` block needs for its nonzero-target correction term (the level
@@ -508,7 +728,7 @@ own `snucf = snu*crs[w]` weighting for `QCfTab`), computed in the SAME O(W) pass
 traversal).
 """
 function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerBinCrossScratch, w::AbstractVector{Float64}, Wtot::Float64)
+        ws::WinnerBinCrossScratch, w::AbstractVector{Float64}, Wtot::Float64; use_profiled_correction::Bool = false)
     Esum[1] = Wtot
     nu = wctx.nu
     has_cf = wctx.has_cf
@@ -527,13 +747,34 @@ function winner_pair_cross_hessian_esum!(Esum::AbstractVector{Float64}, wctx::Wi
         end
     end
     pi_vec = wctx.pi_vec
+    Lam_homog = wctx.Lam_homog
+    target_slot = wctx.target_slot
+    T0_slot = ws.T0_slot
     EsumEcon = ws.EsumEcon
+    # BUGFIX (2026-08-01, same pattern as winner_pair_cross_hessian_cm_block!/_colsum!): the
+    # multiplier must switch with the correction term -- `t0` (destination-independent) pairs with
+    # `pi_vec[j]`; the destination-specific `T0_slot`-based correction (the UN-binned analog of
+    # `MSumX`) pairs with `Lam_homog[j]`.
     @inbounds for j in 1:wctx.ncolI
-        Esum[j + 1] = EsumEcon[j] - pi_vec[j] * t0
+        # target_slot[j] is the sentinel 0 only for j==jcf without a bi_slot -- guarded (see
+        # winner_pair_cross_hessian_cm_block!'s identical guard/comment); row jcf is always
+        # overwritten below regardless.
+        if use_profiled_correction && target_slot[j] != 0
+            Esum[j + 1] = EsumEcon[j] - Lam_homog[j] * T0_slot[target_slot[j]]
+        else
+            Esum[j + 1] = EsumEcon[j] - pi_vec[j] * t0
+        end
     end
     if has_cf
         jcf = wctx.ncolI
-        Esum[jcf + 1] = ecf - pi_vec[jcf] * t0
+        # SECOND bugfix, same pattern as H_EC/colsum!'s France row: the homogeneous formulation's
+        # constant term `denom_cf` contributes `denom_cf_scaled*t0` here (the UN-binned analog of
+        # `denom_cf_scaled*sumNu` in colsum!), reusing the SAME t0 already computed above.
+        if use_profiled_correction && target_slot[jcf] != 0
+            Esum[jcf + 1] = ecf + wctx.denom_cf_scaled * t0 - Lam_homog[jcf] * T0_slot[target_slot[jcf]]
+        else
+            Esum[jcf + 1] = ecf - pi_vec[jcf] * t0
+        end
     end
     return Esum
 end
