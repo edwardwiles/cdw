@@ -52,11 +52,22 @@ mutable struct CMFrechetExtension
     Esum_wb::Vector{Float64}
     colsum::Vector{Float64}
     Hraw_cmlevel::Vector{Float64}
+    # production Hessian allocation audit (2026-08-02): persistent output buffer for the
+    # `cctx.R' * Hraw_cmlevel` product in `_fill_frechet_level_blocks!`'s H_CM,level loop (below),
+    # mirroring `CMBinHessCtx.block_ec`'s identical persistent-buffer-for-an-R-congruence-product
+    # pattern (cm_hessian_architectures.jl) -- that block's own header comment documents the exact
+    # same fix already applied there for H_EC ("Hraw_EC * cctx.R allocated FRESH on every one of
+    # the L=50 threshold-block iterations"); this field/loop had not received the same fix. Sized
+    # nO (matches Hraw_cmlevel's own length); `nothing` when R===nothing (that branch returns
+    # Hraw_cmlevel directly, no product needed, mirroring block_ec's own Union{Nothing,...} use).
+    block_cmlevel::Union{Nothing,Vector{Float64}}
 end
 
-function CMFrechetExtension(D::Int, L::Int, nO::Int, NCORE::Int, level_targets::Vector{Float64})
+function CMFrechetExtension(D::Int, L::Int, nO::Int, NCORE::Int, level_targets::Vector{Float64};
+        R::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     return CMFrechetExtension(level_targets, zeros(D, L + 1), zeros(D, L),
-        Vector{Float64}(undef, NCORE), Vector{Float64}(undef, NCORE), Vector{Float64}(undef, nO))
+        Vector{Float64}(undef, NCORE), Vector{Float64}(undef, NCORE), Vector{Float64}(undef, nO),
+        R === nothing ? nothing : Vector{Float64}(undef, nO))
 end
 
 """
@@ -174,7 +185,16 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
             end
             cm_rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
             col = level_off + lp
-            block_cmlevel = cctx.R === nothing ? Hraw_cmlevel : cctx.R' * Hraw_cmlevel
+            # production Hessian allocation audit (2026-08-02): was `cctx.R' * Hraw_cmlevel` --
+            # allocated a fresh length-nO vector on EVERY one of this loop's L*L=2500 iterations
+            # (L=50), the dominant recurring allocation for common_frechet (500,000 of ~562,000
+            # bytes/callback measured via Profile.Allocs at W=20,000, i.e. ~89% of the family's
+            # total and ~96% of its excess over flexible_cm at similar dual dimension). Mirrors
+            # `CMBinHessCtx.block_ec`'s identical already-fixed pattern for H_EC's own R-congruence
+            # product (cm_hessian_architectures.jl) -- that fix's own header comment describes
+            # this EXACT same "allocated FRESH on every threshold-block iteration" defect for a
+            # sibling block; this level-block loop had not received the analogous fix.
+            block_cmlevel = cctx.R === nothing ? Hraw_cmlevel : mul!(ext.block_cmlevel, cctx.R', Hraw_cmlevel)
             @views Hfull[cm_rows, col] .= block_cmlevel
             @views Hfull[col, cm_rows] .= block_cmlevel
         end
@@ -214,7 +234,7 @@ identity is not re-checked on the fast path (this cctx is built once per campaig
 function _resolve_frechet_ext!(cctx::CMBinHessCtx, level_targets::Vector{Float64})
     cached = cctx.frechet_ext_cache
     cached isa CMFrechetExtension && return cached
-    ext = CMFrechetExtension(cctx.D, cctx.L, cctx.nO, cctx.NCORE, level_targets)
+    ext = CMFrechetExtension(cctx.D, cctx.L, cctx.nO, cctx.NCORE, level_targets; R = cctx.R)
     cctx.frechet_ext_cache = ext
     return ext
 end
