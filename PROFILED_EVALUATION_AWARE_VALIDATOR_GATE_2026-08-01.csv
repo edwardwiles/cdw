@@ -1,0 +1,10 @@
+test,pass,detail
+positive_unrestricted_passes,true,real D4 ctx/ev
+positive_mock_restricted_passes,true,real D4 economic beta + 5 synthetic restriction entries
+truncated_beta_throws,true,ev.result.beta one entry short of economic_dual_range's own length
+restriction_range_out_of_bounds_throws,true,mock restriction range points past real (unextended) beta
+unexplained_trailing_entry_throws,true,"beta has 6 restriction entries, fctx only accounts for 5"
+family_kind_mismatch_throws,true,"fctx claims flexible_CM, ev claims common_Frechet"
+required_manifest_digest_missing_throws,true,"require_manifest_digest=true, ev has no :layout_digest_manifest field"
+manifest_digest_mismatch_throws,true,ev supplies deliberately wrong all-zero digest
+manifest_digest_match_passes,true,ev supplies the true stable_layout_digest(fctx)
