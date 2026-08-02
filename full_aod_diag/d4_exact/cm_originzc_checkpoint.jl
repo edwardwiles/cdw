@@ -18,9 +18,11 @@ using Serialization, Dates
 using LinearAlgebra: BLAS
 isdefined(Main, :with_blas_threads) || include(joinpath(@__DIR__, "blas_thread_policy.jl"))   # allocation/Hessian port task §6.3/§7
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2
+isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # sigma3 campaign prep (2026-07-30): this file previously had no outer-algorithm-pinning dependency at all; needed now for set_outer_algorithm_direct!/assert_outer_algorithm_direct! (outer_direct_hessopt kwarg)
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26)
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
+isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
 # Bumped 4 -> 5 (origin-specific-ZC integration, 2026-07-23): adds
@@ -487,13 +489,32 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         K_mean::Int, K_pair::Int = 0,
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
         nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
+        # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
+        # the same name. DEFAULT FLIPPED 2026-08-01 (user-directed) -- see
+        # c10_d20_production_driver_unified.jl's own identical comment for the full rationale and
+        # the audit that scoped this change to only the 3 real production driver functions.
+        exclude_diagonal_gravity::Bool = true,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
+        σHat::Union{Nothing,Float64} = 3.0,
+        # sigma3 campaign prep (2026-07-30): this driver had NO outer-algorithm-pinning mechanism
+        # at all before this (unlike run_cm_upper_checkpointed/run_polish_checkpointed_unified) --
+        # opt_file above leaves algorithm=auto, which knitro_outer_algorithm.jl's own 2026-07-25
+        # audit found resolves inconsistently by family. outer_direct_hessopt forces
+        # algorithm=Direct+hessopt=SR1(3)/BFGS(6) via set_outer_algorithm_direct!. `nothing`
+        # (default): zero behavior change.
+        outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
         destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): same option/semantics/production-default as run_cm_upper_checkpointed's
         # own destination_sample kwarg.
-        blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3/§7: set once
-        # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
-        # process BLAS thread count untouched, zero behavior change. Added for section 7's bounded
-        # origin-ZC BLAS benchmark; origin-ZC retains Architecture A (dense) regardless of this.
+        blas_threads::Union{Nothing,Int} = ZC_GRAM_BLAS_THREADS_DEFAULT[],   # allocation/Hessian
+        # port task §6.3/§7: set once right after ctx build (see blas_thread_policy.jl). ZC Hessian
+        # backend production integration (2026-08-01): defaults to 8 (ZC_GRAM_BLAS_THREADS_DEFAULT[],
+        # see zc_gram_blas_candidates.jl) -- origin-ZC's H_ZZ now defaults to the BLAS-threaded
+        # `:blas_syrk` backend (the stale note this comment used to carry, "origin-ZC retains
+        # Architecture A (dense) regardless of this," predates that port and the H_ZZ backend flip;
+        # both this family's core_hessian_backend AND its H_ZZ backend are BLAS/Julia-threaded
+        # today). `nothing` explicitly passed by a caller leaves the ambient process BLAS thread
+        # count untouched instead, unchanged escape hatch.
         A_coordinate_mode::Symbol = :powered_aspace,   # transformed-A restricted-family port
         # (2026-07-26 five-family finish task §8): same option/semantics/NEW production default as
         # run_cm_upper_checkpointed's own A_coordinate_mode kwarg -- the shared decode/encode/
@@ -581,7 +602,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # Phase E remediation (2026-07-26): cf_build (moments! closures below) reuses this instead of allocating fresh every call
     pe = build_pivot_elimination(ctx)
     D = ctx.D
@@ -680,6 +701,10 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
+    if outer_direct_hessopt !== nothing
+        outer_direct_hessopt in (:sr1, :bfgs) || error("run_originzc_upper_checkpointed($label): outer_direct_hessopt must be :sr1 or :bfgs, got :$outer_direct_hessopt")
+        set_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS)
+    end
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", 1_000_000)
     xIndices = KNITRO.KN_add_vars(kc, D2)
@@ -797,6 +822,9 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
 
+    if outer_direct_hessopt !== nothing
+        assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_originzc_upper_checkpointed($label)")
+    end
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus, _, xsol, _ = KNITRO.KN_get_solution(kc)

@@ -3,10 +3,10 @@
 # marginal (Latin Hypercube) draw generator for the W x D "F*" draw matrix,
 # following the house style of qmc_draws.jl's pseudorandom_U/halton_U/sobol_U
 # (same signature convention: (W, D; seed) -> W x D Exp(1) matrix). ADDITIVE
-# ONLY -- does not modify qmc_draws.jl or qmc_context_real_d20.jl. Depends on
-# `exp_from_uniform01` (defined in qmc_context_real_d20.jl) already being in
-# scope -- include qmc_context_real_d20.jl BEFORE this file, exactly as
-# qmc_draws.jl itself requires of its own callers.
+# ONLY -- does not modify qmc_draws.jl. Depends on `exp_from_uniform01` (relocated to
+# prepare_cc/genRands.jl by the unify-random-draw-production-pipeline task, 2026-07-30) already
+# being in scope -- include context_real_d20.jl BEFORE this file (it pulls in genRands.jl
+# transitively via context.jl), exactly as qmc_draws.jl itself requires of its own callers.
 #
 # WHY (distinct question from the prior QMC/Halton/Sobol investigation):
 # docs/fullA_D20_infeasibility_screening_report.md sec 5 found W=8,000

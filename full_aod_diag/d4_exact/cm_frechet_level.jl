@@ -215,8 +215,6 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
                                              R::Union{Nothing,Matrix{Float64}}, D::Int, level_targets::Vector{Float64},
                                              ctx; chunk_size::Int = 2000, use_compressed_core::Bool = true,
                                              core_cf_ref::Ref{Any} = Ref{Any}(nothing),
-                                             theta_ref::Ref{Any} = Ref{Any}(nothing),   # restricted-inner-endtoend task (2026-08-01): sibling shared box to wrap_moments_with_cm_archB's own theta_ref -- needed by _fill_cm_HEE!'s profiled H_EE kernel (cctx.profiled_theta_ref), which errors loudly if never published. Unused/harmless for every caller that doesn't opt into profiled_layout.
-                                             profiled_layout::Any = nothing,   # restricted-inner-endtoend task (2026-08-01), mirrors wrap_moments_with_cm_archB's own kwarg exactly: when set, the economic block (cols 1:pregrav) is filled via the HOMOGENEOUS-formulation materialize_homogeneous_dense_G_reduced! instead of the structured materialize_dense_factual_structured! -- `nothing` (every existing caller) preserves every line below byte-for-byte.
                                              skip_fill::Bool = false)
                                              # RE-INTRODUCED then kept UNUSED in production 2026-07-27/28
                                              # (docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md): a
@@ -255,17 +253,7 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
             # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
             # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB.
             cf = cf_build(θ, ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-            if profiled_layout !== nothing
-                # Formulation-consistency requirement (matches wrap_moments_with_cm_archB's identical
-                # branch/comment): MUST be the HOMOGENEOUS-formulation G, matching
-                # _fill_frechet_level_blocks_profiled!'s use_profiled_correction=true H_EF path --
-                # never materialize_dense_factual_structured!/_reduced! (the structured formulation)
-                # for a profiled context.
-                materialize_homogeneous_dense_G_reduced!(@view(Gtmp[:, 1:pregrav]), cf, ctx, θ, profiled_layout)
-                theta_ref[] = copy(θ)
-            else
-                materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
-            end
+            materialize_dense_factual_structured!(@view(Gtmp[:, 1:pregrav]), cf)
             grav_raw = compressed_gravity_raw(θ, ctx)
             fill_gravity_column_into!(@view(Gtmp[:, ncore_full]), grav_raw, ctx, ncore_full)
             fill_K_directgp!(K, θ, ctx)
@@ -296,75 +284,6 @@ function wrap_moments_with_cm_frechet_archB(core_moments!::Function, ncore_full:
         end
         return nothing
     end
-end
-
-"""
-    build_cm_frechet_augmented_obj_archB(ctx, CS; L, contrasts=:anchored, refIndex1=ctx.γ.refIndex1,
-                                          chunk_size=2000, base_obj=nothing, profiled_layout=nothing)
-        -> (obj_cm=..., z=..., origins=..., ncore=..., ncm=..., ncm_cm=..., ncm_level=..., L=...,
-            contrasts=..., level_targets=..., refIndex1=..., Bidx=..., core_cf_ref=..., theta_ref=...,
-            marginal_restriction=:common_frechet)
-
-Restricted-inner-endtoend task (2026-08-01), §6-8: common-Fréchet's counterpart to
-`build_cm_augmented_obj_archB` (cm_hessian_architectures.jl), the SAME "one function, `base_obj`/
-`profiled_layout` optional keywords" pattern -- `base_obj=nothing` (every existing call site would
-use this) preserves exactly what `build_cm_frechet_production_context`'s own inline construction
-already does; `base_obj`/`profiled_layout` set (this task's own new direct call sites, e.g. the D4
-gate) builds the REDUCED economic-width augmented obj instead, via
-`wrap_moments_with_cm_frechet_archB`'s own new `profiled_layout` branch (this same task).
-
-Column layout unchanged: `[core (pregrav, REDUCED width when profiled_layout set) | CM ((D-1)*L) |
-level (L) | gravity]`. `ncore`/`ncm`/`level_targets`/`Bidx`/`R` bookkeeping is IDENTICAL to
-`build_cm_frechet_level_augmented_obj`'s own (theta-independent, safe to reuse verbatim) -- this
-function differs from that one ONLY in which `moments!` closure it installs (`wrap_moments_with_cm_
-frechet_archB`, Architecture-B/production-speed, `base_obj`/`profiled_layout`-aware) and in reading
-`ncore` off `obj0.d` (`base_obj`-overridable) rather than unconditionally off `ctx.obj.d`.
-"""
-function build_cm_frechet_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anchored,
-                                               refIndex1::Int = ctx.γ.refIndex1, chunk_size::Int = 2000,
-                                               probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                               base_obj = nothing, profiled_layout = nothing)
-    obj0 = base_obj === nothing ? ctx.obj : base_obj
-    ncore = obj0.d
-    D = ctx.D
-    CM_throwaway, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; contrasts = contrasts, probs = probs)
-    ncm_cm = size(CM_throwaway, 2)
-    @assert ncm_cm == n_cm_moments(D, L)
-
-    level_probs = frechet_level_probs(L; probs = probs)
-    level_targets = frechet_level_targets(D, L; probs = level_probs)
-    ncm_level = L
-    ncm = ncm_cm + ncm_level
-    @assert ncm == D * L
-
-    R = contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
-    Bidx = Matrix{Int}(compute_bin_indices(ctx.U, z))   # same MethodError-avoidance widening as build_cm_augmented_obj_archB
-
-    d_new = ncore + ncm
-    outer_constr_index_new = obj0.outer_constr_index + ncm
-    core_cf_ref = Ref{Any}(nothing)
-    theta_ref = Ref{Any}(nothing)
-
-    moments_cmf! = wrap_moments_with_cm_frechet_archB(obj0.moments!, ncore, Bidx, origins, refIndex1, L, R, D,
-        level_targets, ctx; chunk_size = chunk_size, core_cf_ref = core_cf_ref, theta_ref = theta_ref,
-        profiled_layout = profiled_layout)
-
-    obj_cmf = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
-        γ = obj0.γ, (moments!) = moments_cmf!, moments_jacobian! = error,
-        d = d_new, outer_constr_index = outer_constr_index_new,
-        inequality_index = obj0.inequality_index, complement_index = obj0.complement_index,
-        l = obj0.l, U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
-        use_cached_x = obj0.use_cached_x,
-        threshold_state = obj0.threshold_state,
-        outer_loop_opt = obj0.outer_loop_opt, inner_loop_opt = obj0.inner_loop_opt,
-        needs_outer_moment_jacobian = obj0.needs_outer_moment_jacobian)
-    @assert obj_cmf.outer_constr_index == obj_cmf.d
-
-    return (obj_cm = obj_cmf, z = z, origins = origins, ncore = ncore, ncm = ncm,
-            ncm_cm = ncm_cm, ncm_level = ncm_level, L = L, contrasts = contrasts,
-            include_truncated_moment = false, refIndex1 = refIndex1, Bidx = Bidx,
-            core_cf_ref = core_cf_ref, theta_ref = theta_ref, level_targets = level_targets,
-            level_probs = level_probs, marginal_restriction = :common_frechet)
 end
 
 """

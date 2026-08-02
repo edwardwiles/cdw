@@ -18,6 +18,7 @@
 # ============================================================================
 
 isdefined(Main, :run_polish_checkpointed) || error("c10_d20_production_driver_unified.jl requires c10_d20_production_driver.jl to already be included.")
+isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 isdefined(Main, :make_layout) || error("c10_d20_production_driver_unified.jl requires outer_coordinate_layout.jl to already be included.")
 isdefined(Main, :make_flexible_theta) || error("c10_d20_production_driver_unified.jl requires flexible_theta.jl (freeze_theta_ctx) to already be included.")
 isdefined(Main, :theta_fixed_dual_delta_pivot_A) || error("c10_d20_production_driver_unified.jl requires flexible_theta_aspace_production.jl to already be included.")
@@ -145,6 +146,26 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         h_theta::Float64 = 1e-3, a_halfwidth::Float64 = 30.0,
         skip_cold_retry::Bool = true,
         use_neg_cache::Bool = false, neg_cache_code_version::String = "unified_v1",
+        # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
+        # the same name.
+        # DEFAULT FLIPPED 2026-08-01 (user-directed): this is a REAL production entry point --
+        # every real campaign run goes through this function (directly or via
+        # campaign_unrestricted_runner_sigma3.jl, which already passed these explicitly and is
+        # unaffected). Defaults now match the Brazil-Korea-excluded, sigma=3 release
+        # (exclude-brazil-korea-gravity-release-2026-07-31) rather than the pre-release regime --
+        # a caller that passes nothing now gets theta*=7.4894, not theta*=4.7293. Explicit
+        # overrides still work exactly as before. `gravity_exclude_cells`'s default is DERIVED
+        # (default_gravity_exclude_cells_brazil_korea, country_resolve.jl), not a hardcoded
+        # `[(3,14)]` literal, and assumes `destination_sample` is left at ITS OWN default
+        # (:exclude_row, below) -- if you override destination_sample, override
+        # gravity_exclude_cells explicitly too. The shared low-level context builders
+        # (d20_real_setup/d20_real_setup_design/build_ad_context_real_d20) were deliberately NOT
+        # touched by this flip -- ~200 unrelated diagnostic/benchmark scripts depend on their old
+        # defaults; only the 3 real production driver functions were changed. See
+        # WHAT_ACTUALLY_HAPPENED_2026-08-01.md / this branch's own commit message for the audit.
+        exclude_diagonal_gravity::Bool = true,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
+        σHat::Union{Nothing,Float64} = 3.0,
         destination_sample::Symbol = :exclude_row,
         blas_threads::Union{Nothing,Int} = nothing,   # reconciliation (task §1/Phase 1): same
         # kwarg/semantics as run_polish_checkpointed's -- process-scoped BLAS thread count, set
@@ -152,6 +173,15 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         pin_outer_algorithm::Bool = false,   # reconciliation: same kwarg/semantics as
         # run_polish_checkpointed's -- opt-in explicit algorithm=2(Interior/CG)+hessopt=6(L-BFGS)
         # via knitro_outer_algorithm.jl, for matched benchmark A/Bs only.
+        # sigma3 campaign prep (2026-07-30): hessopt_tag above only selects WHICH .opt file loads
+        # (csw_outer_wallclock_sr1/lbfgs.opt), and BOTH leave algorithm=auto -- this module's own
+        # documented 2026-07-25 audit found auto resolves to Active-Set/CG specifically for THIS
+        # family's unconstrained profile formulation, not Direct. So hessopt_tag="sr1" alone does
+        # NOT give "Direct interior-point with SR1" for the unrestricted family. outer_direct_hessopt
+        # (separate, mutually exclusive with pin_outer_algorithm) forces algorithm=Direct+the given
+        # hessopt via knitro_outer_algorithm.jl's set_outer_algorithm_direct!. `nothing` (default):
+        # zero behavior change.
+        outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
         )   # architecture/production-operator-bundle-hardening-2026-07-30: the moment_representation
         # kwarg that previously lived here is REMOVED, not defaulted -- production runners must not
         # accept a representation choice at all (task §2). This function now always constructs
@@ -195,7 +225,9 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     end
 
     ctx_base = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
-                                      draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
+                                      draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample,
+                                      exclude_diagonal_gravity = exclude_diagonal_gravity,
+                                      gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
     # Reconciliation (task §1/Phase 1): the same three campaign-lifetime workspace attaches and
     # BLAS-thread pin that run_polish_checkpointed itself carries -- attached to ctx_base BEFORE
     # build_unified_ctx so a flexible-mode `merge(ctx, (...))` (flexible_theta.jl:make_flexible_
@@ -290,6 +322,11 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
+    if outer_direct_hessopt !== nothing
+        pin_outer_algorithm && error("run_polish_checkpointed_unified($label): outer_direct_hessopt and pin_outer_algorithm are mutually exclusive -- set at most one.")
+        outer_direct_hessopt in (:sr1, :bfgs) || error("run_polish_checkpointed_unified($label): outer_direct_hessopt must be :sr1 or :bfgs, got :$outer_direct_hessopt")
+        set_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS)
+    end
     pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves the .opt file's algorithm=auto in effect
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", maxit_override === nothing ? 1_000_000 : maxit_override)
@@ -467,6 +504,9 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], n_outer), jacIndexVars = xIndices)
     KNITRO.KN_set_newpt_callback(kc, cb_newpt!)
 
+    if outer_direct_hessopt !== nothing
+        assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_polish_checkpointed_unified($label)")
+    end
     pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_polish_checkpointed_unified($label)")
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start

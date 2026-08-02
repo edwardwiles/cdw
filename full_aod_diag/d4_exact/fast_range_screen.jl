@@ -712,7 +712,7 @@ function evaluate_fullA_screened_compressed_with_cf(x_free::AbstractVector{Float
     lambda_g = reshape(ctx.γ.P, (D_dest_g, ctx.D))'
     Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
     AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
-    gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)
+    gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false), exclude_cells=get(ctx, :gravity_exclude_cells, Tuple{Int,Int}[]))
     logA = -log.(AodPow)
     R_sum = sum(ctx.q_tilde .* logA)
     R_mean = R_sum / (ctx.D * D_dest_g)

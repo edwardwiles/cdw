@@ -50,7 +50,7 @@
 # actual estimated divergence, is the metric that can genuinely shift with
 # fewer draws; both are reported).
 # ============================================================================
-include(joinpath(@__DIR__, "qmc_context_real_d20.jl"))   # -> d20_real_setup, d20_real_setup_qmc, exp_from_uniform01, screen fns (transitively, via context_real_d20.jl)
+include(joinpath(@__DIR__, "context_real_d20.jl"))   # unify-random-draw-production-pipeline 2026-07-30: qmc_context_real_d20.jl deleted, d20_real_setup now takes U= directly
 include(joinpath(@__DIR__, "qmc_draws.jl"))               # -> pseudorandom_U (baseline)
 include(joinpath(@__DIR__, "c10_stratmarg_draws.jl"))     # -> stratified_marginal_U (this task's new generator)
 include(joinpath(@__DIR__, "winners.jl"))
@@ -157,7 +157,7 @@ for (label, w, find_smallest) in POINTS
             for r in 1:n_rep
                 seed = 100_000 * Wt + 1_000 * r + (scheme == :plain ? 1 : 2)
                 t_draw0 = time(); U = f(Wt, D; seed = seed); t_draw = time() - t_draw0
-                t_ctx0 = time(); ctx = d20_real_setup_qmc(W = Wt, U_injected = U, find_smallest = find_smallest); t_ctx = time() - t_ctx0
+                t_ctx0 = time(); ctx = d20_real_setup(W = Wt, U = U, find_smallest = find_smallest); t_ctx = time() - t_ctx0
 
                 θ_full = CS.reconstruct_full(xf, ctx.m)
                 Pmat = target_shares(ctx)
@@ -222,7 +222,7 @@ followup_rows = NamedTuple[]
 function run_real_solve(label, Wt, scheme, seed, xf, find_smallest)
     f = draw_fn(scheme)
     U = f(Wt, D; seed = seed)
-    ctx = d20_real_setup_qmc(W = Wt, U_injected = U, find_smallest = find_smallest)
+    ctx = d20_real_setup(W = Wt, U = U, find_smallest = find_smallest)
     t0 = time()
     r, _ = evaluate_fullA_fast(xf, ctx; cache = nothing, use_cache = false, warm = false)
     t_solve = time() - t0

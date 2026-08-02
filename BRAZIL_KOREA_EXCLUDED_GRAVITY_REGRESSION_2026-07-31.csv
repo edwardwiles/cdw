@@ -1,0 +1,5 @@
+exclude_diagonal,destination_sample,D,Ddest,n_eligible,n_excluded,thetaHat,gravity_coefficient,rounds_to_neg_7_43,rounds_to_neg_7_49
+true,exclude_row,20,19,360,20,7.489399587926582,-7.489399587926582,false,true
+true,all_legacy,20,20,379,21,7.3195961308952135,-7.3195961308952135,false,false
+false,exclude_row,20,19,379,1,25.24477225295527,-25.24477225295527,false,false
+false,all_legacy,20,20,399,1,25.144965893730202,-25.144965893730202,false,false

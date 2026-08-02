@@ -27,7 +27,7 @@
 #       kappa is reported too but is trivially invariant whenever feasible
 #       (gp is part of the FIXED evaluation point, not re-solved here).
 # ============================================================================
-include(joinpath(@__DIR__, "qmc_context_real_d20.jl"))
+include(joinpath(@__DIR__, "context_real_d20.jl"))   # unify-random-draw-production-pipeline 2026-07-30: qmc_context_real_d20.jl deleted, d20_real_setup now takes U= directly
 include(joinpath(@__DIR__, "qmc_draws.jl"))
 include(joinpath(@__DIR__, "c10_stratmarg_draws.jl"))
 include(joinpath(@__DIR__, "winners.jl"))
@@ -82,7 +82,7 @@ draw_fn(scheme::Symbol) = scheme == :plain ? pseudorandom_U : stratified_margina
 function run_real_solve(label, Wt, scheme, seed, xf, find_smallest)
     f = draw_fn(scheme)
     U = f(Wt, D; seed = seed)
-    ctx = d20_real_setup_qmc(W = Wt, U_injected = U, find_smallest = find_smallest)
+    ctx = d20_real_setup(W = Wt, U = U, find_smallest = find_smallest)
     # confirm the screen's verdict independently, right before the real solve
     θ_full = CS.reconstruct_full(xf, ctx.m)
     Pmat = target_shares(ctx)

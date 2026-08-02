@@ -1,9 +1,0 @@
-test,pass,detail
-no_hardcoded_offset__economic_range_matches_unrestricted,true,economic_dual_range(mock)=1:13 economic_dual_range(unrestricted)=1:13
-restriction_range_disjoint_and_after_economic,true,"restriction_dual_ranges(mock)=RestrictionDualRange[RestrictionDualRange(:cm_marginals, 14:18)]"
-validate_family_layout_contract_passes_wellformed,true,unrestricted + mock flexible_CM
-incorrect_layout_checksum_throws,true,bad_checksum=true adapter
-wrong_dual_length__contract_validator_throws,true,economic_dual_range too long vs total_reduced_economic_moments
-wrong_dual_length__cache_builder_throws,true,economic_dual_range exceeds actual beta length (caught by validator or cache builder)
-anchor_coordinate_cannot_appear__corrupted_layout_throws,true,anchor cell reinserted into retained_full_factual_j
-shared_gradient_method_identity,true,profiled_composite_gradient_from_cache has exactly one applicable method

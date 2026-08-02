@@ -25,15 +25,44 @@ function master_prestep(data, counters, globalParams)
 	named_dest = row_idx === nothing ? (1:D) : filter(!=(row_idx), 1:D)
 	Ddest = length(named_dest)
 
+	# exclude_diagonal_gravity: also drop domestic/own-trade (o==d) cells from the theta
+	# identification sample (2026-07-30, user-directed fix: the production gravity restriction was
+	# sum_{o,d!=ROW}, which includes the diagonal and estimates theta far from the Stata regression's
+	# sum_{o!=d,d!=ROW} once that sample also drops own-trade -- confirmed live: 2018 goods-adjusted
+	# data gives theta~=15.55 under the old (diagonal-included) sample vs ~=4.73 once own-trade is
+	# excluded, matching the Stata side). Defaults to `false` (absent from globalParams for every
+	# pre-existing caller), reproducing today's behavior bit-exactly -- this is opt-in, not a global
+	# behavior change, so D4/D10/scaled synthetic contexts and their existing tests are unaffected.
+	exclude_diagonal_gravity = get(globalParams, :exclude_diagonal_gravity, false)
+
+	# gravity_exclude_cells (2026-07-31, Brazil-Korea gravity-exclusion task): additional
+	# (origin, dest-slot) cells dropped from the SAME sample the pivot uses. Empty (default)
+	# reproduces every pre-existing caller bit-exactly.
+	gravity_exclude_cells = get(globalParams, :gravity_exclude_cells, Tuple{Int,Int}[])
+
 	# Step 1: Estimate thetaHat via gravity or prespecified.
 	# Gravity = OLS of ln λ on ln τ with origin + destination fixed effects; by FWL this is the
 	# two-way "within" transform (matches the gravity-moment constraint used in the outer loop).
 	# (The previous version used a cell-referenced double-difference, which does NOT equal the
 	#  two-way-FE coefficient — see gravity_check.jl.) Restricted to named_dest columns so that
 	# excluding ROW as a destination re-estimates theta on the correct rectangular sample.
+	# 2026-07-31: the eligibility mask (diagonal exclusion + any explicit exclude_cells) is now
+	# built via the ONE shared `gravity_sample_mask` (full_aod_diag/gravity_tariff.jl) instead of
+	# an independently re-derived `[o!=d for o,d]` literal here -- same function the pivot
+	# (precompute_q_tilde/gravity_value) consumes, so a cell exclusion is visible to both
+	# identically, with no duplicated conditional.
 	if thetaIn == 0 # use gravity to estimate theta if no theta prespecified
-		Wlambda = within_transform_rect(lambda[:, named_dest])
-		Wtau = within_transform_rect(tau[:, named_dest])
+		lambda_dest = lambda[:, named_dest]
+		tau_dest = tau[:, named_dest]
+		if exclude_diagonal_gravity || !isempty(gravity_exclude_cells)
+			mask = gravity_sample_mask(D, Ddest; exclude_diagonal = exclude_diagonal_gravity,
+			                            exclude_cells = gravity_exclude_cells)
+			Wlambda = within_transform_masked(lambda_dest, mask)
+			Wtau = within_transform_masked(tau_dest, mask)
+		else
+			Wlambda = within_transform_rect(lambda_dest)
+			Wtau = within_transform_rect(tau_dest)
+		end
 		thetaHat = -sum(Wlambda .* Wtau) / sum(Wtau .* Wtau)
 	elseif thetaIn > 0
 		thetaHat = thetaIn

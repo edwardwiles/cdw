@@ -1,4 +1,0 @@
-label,scale,nStatus_p,nStatus_ref,Delta_primal_p,Delta_primal_ref,mw_diff,div_diff,winner_match,n_winner_diffs_vs_calib,gamma_dev_pre_recovery,gravity_resid_change,kkt_p,kkt_ref
-small,0.02,0,0,1.1384050938e-03,1.1384050938e-03,8.314460e-13,6.357762e-16,true,186,1.870130e-03,4.878910e-19,3.525413e-15,7.793018e-15
-moderate,0.15,0,0,3.5968979299e-02,3.5968979299e-02,5.981882e-13,1.262879e-15,true,1481,1.489652e-02,8.673617e-19,1.716319e-15,3.710961e-15
-multi_winner_change_trial_scale_0.5,0.5,0,0,4.7605902114e-01,4.7605902114e-01,6.759038e-13,4.163336e-15,true,5240,8.197646e-02,1.951564e-18,3.803735e-15,4.082057e-15

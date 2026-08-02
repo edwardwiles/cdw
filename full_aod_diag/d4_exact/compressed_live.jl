@@ -568,6 +568,20 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     #     regardless, OR the caller explicitly asked for the extra reporting fields via
     #     `dense_reference_diagnostics=true`.
     need_dense_block = (verification_backend === :dense_reference) || dense_reference_diagnostics
+    # exclude_diagonal_gravity guard (2026-07-30): this block's gravity_raw is computed via the
+    # OLDER newGravityMoment! path (fill_gravity_column! -> ... -> moments_fast.jl), which has no
+    # own-trade-exclusion awareness -- unlike the gravity_value field above/below (computed from
+    # ctx.q_tilde, which IS correctly masked when ctx.exclude_diagonal_gravity is set). Combining
+    # the two would silently report two DIFFERENT gravity conventions in the same result NamedTuple.
+    # Production campaigns never hit this (verification_backend=:operator, dense_reference_
+    # diagnostics=false, enforced by the operator-bundle hardening's no-dense-fallback invariant),
+    # so fail loudly here rather than let a future diagnostic run silently diverge.
+    need_dense_block && get(ctx, :exclude_diagonal_gravity, false) &&
+        error("evaluate_fullA_fast_compressed: dense-reference/diagnostics block (newGravityMoment! " *
+              "path) does not support exclude_diagonal_gravity=true -- would silently report a " *
+              "gravity_raw inconsistent with gravity_value's own-trade-excluded convention. Use " *
+              "verification_backend=:operator with dense_reference_diagnostics=false (the production " *
+              "default) when exclude_diagonal_gravity is set.")
     local K, G, cbuf, gravity_raw
     if need_dense_block
         # ---- ensure obj.H's dense G columns are populated (lazy; may already be done by the
@@ -638,7 +652,7 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     gravity_val, logA, R_sum, R_mean, R_beta = @prof "gravity_compute_compressed" begin
         Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
         AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
-        gv = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)
+        gv = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false), exclude_cells=get(ctx, :gravity_exclude_cells, Tuple{Int,Int}[]))
         lA = -log.(AodPow)
         rs = sum(ctx.q_tilde .* lA)
         (gv, lA, rs, rs / (ctx.D * D_dest_g), rs / sum(ctx.q_tilde .^ 2))

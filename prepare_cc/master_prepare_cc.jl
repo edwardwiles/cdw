@@ -1,5 +1,16 @@
 
-function master_prepare_cc(data, counters, prestep_output, globalParams)
+"""
+    master_prepare_cc(data, counters, prestep_output, globalParams; U=nothing)
+
+`U=nothing` (default): draw U internally exactly as before (`Random.seed!(seedU);
+U = drawU(SamplingWeight, globalParams)`) -- unchanged, bit-identical pseudorandom path.
+`U` given (a `W x D` `AbstractMatrix{Float64}`, already Exp(1)-transformed): use it directly
+instead of drawing -- no seeding, no `drawU` call. This is the single unified entry point for
+every draw design (task "unify random-draw production pipeline" 2026-07-30 §6); the pseudorandom
+and randomized-Sobol/scrambled-Halton/precomputed paths differ ONLY in whether `U` is supplied,
+nowhere else in this function.
+"""
+function master_prepare_cc(data, counters, prestep_output, globalParams; U::Union{Nothing,AbstractMatrix{Float64}} = nothing)
 
 	@unpack seedU,
 	W,
@@ -46,12 +57,16 @@ function master_prepare_cc(data, counters, prestep_output, globalParams)
 		counterType == 1 || error("row_idx (omit-ROW-destination) is only implemented for counterType==1 (autarky); counterType=$(counterType) is out of scope for this release.")
 	end
 
-	# set seed
-	Random.seed!(seedU)
-
 	SamplingWeight = ones(W)
-	# draw base U matrix from exp(1), using stratified or importance sampling as specified in parameters 
-	U = drawU(SamplingWeight, globalParams)
+
+	if U === nothing
+		# set seed
+		Random.seed!(seedU)
+		# draw base U matrix from exp(1), using stratified or importance sampling as specified in parameters
+		U = drawU(SamplingWeight, globalParams)
+	else
+		@assert size(U, 1) == W "U has W=$(size(U,1)) rows, expected $(W)"
+	end
 
 	Ū, Uσ = createUDerivatives!(U, prestep_output, globalParams)
 

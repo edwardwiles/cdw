@@ -1,0 +1,22 @@
+  same U input matrix: true
+  ctx.U identical: true
+  θ0_up identical: true
+  D, D_dest identical: true
+  bounds identical: true
+  OLD threshold_state.threshold: Inf   NEW: 10.0
+  OLD has ctx.pairwise? false   NEW has ctx.pairwise (built)? true
+  OLD inner_status=0 Delta_dual=0.004369231118385748
+  NEW inner_status=0 Delta_dual=0.004369231118385748
+  inner_status match: true   Delta_dual match: true
+  ---> sobol_randomized callback-equality PASS: true   (threshold/screen DIFFER BY DESIGN: NEW has threshold=10.0+screens, OLD had threshold=Inf+no screens -- this IS the bug this task fixes, not a regression)
+  same U input matrix: true
+  ctx.U identical: true
+  θ0_up identical: true
+  D, D_dest identical: true
+  bounds identical: true
+  OLD threshold_state.threshold: Inf   NEW: 10.0
+  OLD has ctx.pairwise? false   NEW has ctx.pairwise (built)? true
+  OLD inner_status=-300 Delta_dual=NaN
+  NEW inner_status=-300 Delta_dual=NaN
+  inner_status match: true   Delta_dual match: true
+  ---> halton_scrambled callback-equality PASS: true   (threshold/screen DIFFER BY DESIGN: NEW has threshold=10.0+screens, OLD had threshold=Inf+no screens -- this IS the bug this task fixes, not a regression)

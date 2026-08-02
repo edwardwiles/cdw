@@ -158,7 +158,15 @@ function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
         checkpoint_schema = CM_CHECKPOINT_SCHEMA,
         screen_stack = production_screen_stack(:flexible_cm),
     )
-    is_meanzc && return merge(nt, (K_mean = meanzc_K_mean, K_pair = meanzc_K_pair))
+    # ZC Hessian backend production integration (2026-08-01), requirement: every live manifest
+    # records the selected H_ZZ/H_CZ/H_EZ backends, not just the coarser hessian_backend/
+    # cross_hessian_backend/restriction_hessian_backend labels above -- read directly off `cctx`
+    # (not asserted), same discipline as every other field here. Meaningful for cm_meanzc only
+    # (flexible_cm/common_frechet have no Z-restriction block; the fields exist on the shared
+    # CMBinHessCtx struct but are never dispatched on for those families).
+    is_meanzc && return merge(nt, (K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
+        zc_gram_backend = cctx.zc_gram_backend, hcz_prep_backend = cctx.hcz_prep_backend,
+        zc_ez_backend = cctx.zc_ez_backend))
     return nt
 end
 
@@ -249,6 +257,11 @@ function resolve_origin_zc_manifest(; octx = nothing, blas_threads::Union{Nothin
         blas_threads = something(blas_threads, BLAS.get_num_threads()),
         checkpoint_schema = CM_CHECKPOINT_SCHEMA_V7,
         screen_stack = production_screen_stack(:origin_zc),
+        # ZC Hessian backend production integration (2026-08-01): the ZC-specific H_ZZ/H_EZ
+        # backend selections (origin-ZC has no H_CZ -- no CM-grid block) -- read directly off
+        # `octx`, not asserted, same discipline as every other field here.
+        zc_gram_backend = octx === nothing ? :none : octx.zc_gram_backend,
+        zc_ez_backend = octx === nothing ? :none : octx.zc_ez_backend,
     )
 end
 

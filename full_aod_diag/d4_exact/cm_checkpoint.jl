@@ -34,6 +34,7 @@ isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_ca
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))   # D=20 profiling task (2026-07-28): opt-in live-pcx stash this function writes below, default off
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
+isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 
 const CM_CHECKPOINT_SCHEMA = 9
 # Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
@@ -613,6 +614,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # algorithm=2(Interior/CG)+hessopt=6(L-BFGS) via knitro_outer_algorithm.jl, for matched
         # benchmark A/Bs only. false (default): unchanged existing behavior (.opt file's
         # algorithm=auto, as before this kwarg existed).
+        # sigma3 campaign prep (2026-07-30): DIFFERENT, separate opt-in from pin_outer_algorithm
+        # above -- forces algorithm=Direct+hessopt=SR1(3)/BFGS(6) via knitro_outer_algorithm.jl's
+        # set_outer_algorithm_direct!, not the CG+L-BFGS config `pin_outer_algorithm` pins to.
+        # `nothing` (default): zero behavior change. Takes priority over pin_outer_algorithm if
+        # both are somehow set (errors instead -- see the call site below).
+        outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
@@ -679,6 +686,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,   # only consulted when cm_extension=:cm_plus_moments
         meanzc_basis::Symbol = :direct,
         meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
+        # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
+        # the same name. DEFAULT FLIPPED 2026-08-01 (user-directed) -- see
+        # c10_d20_production_driver_unified.jl's own identical comment for the full rationale and
+        # the audit that scoped this change to only the 3 real production driver functions.
+        exclude_diagonal_gravity::Bool = true,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
+        σHat::Union{Nothing,Float64} = 3.0,
         destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): :exclude_row (PRODUCTION DEFAULT -- true D_origin/D_dest dimension shrink,
         # ROW dropped as a destination only; validated real D=20/W=80000 both cm_gradient_backend
@@ -842,7 +856,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # Phase E remediation (2026-07-26): cf_build (moments! closures below) reuses this instead of allocating fresh every call
     pe = build_pivot_elimination(ctx)
     # Transformed-A restricted-family port: theta_cm/xy_cm are only actually used when
@@ -933,7 +947,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
     family_tag = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
     dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)
-    blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
+    # ZC Hessian backend production integration (2026-08-01): cm_meanzc's own validated production
+    # BLAS-thread recommendation (8, see ZC_GRAM_BACKEND_DEFAULT's docstring) is applied here ONLY
+    # when the caller passed no explicit `blas_threads` AND this run is actually cm_meanzc --
+    # `run_cm_upper_checkpointed` is SHARED by flexible_cm/common_frechet/cm_meanzc, and neither
+    # sibling family was part of this optimization's validation, so their existing zero-behavior-
+    # change default (`nothing` -> ambient thread count untouched) is deliberately left alone.
+    effective_blas_threads = blas_threads !== nothing ? blas_threads :
+        (family_tag === :cm_meanzc ? ZC_GRAM_BLAS_THREADS_DEFAULT[] : nothing)
+    effective_blas_threads !== nothing && BLAS.set_num_threads(effective_blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, mode_label)
     print_screen_startup_banner(mode_label)
     th = pcx.ctx_cm.obj.threshold_state
@@ -952,9 +974,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         lp("[", label, "] core_hessian_backend=", pcx.cctx === nothing ? "dense_reference" : "exact_winner_pair_parallel (Architecture C)")
         lp("[backend-manifest]   bundle_type=", real_bundle_type)
     else
-        print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = blas_threads,
+        print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = effective_blas_threads,
             cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair,
-            bundle_type = real_bundle_type))   # allocation/Hessian port task §2
+            bundle_type = real_bundle_type))   # allocation/Hessian port task §2; effective_blas_threads
+            # (not the raw kwarg) so the manifest records what was ACTUALLY applied, including
+            # cm_meanzc's own ZC_GRAM_BLAS_THREADS_DEFAULT[] auto-selection above.
     end
     write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))   # architecture/production-operator-bundle-hardening-2026-07-30 (task §7): live manifest, replaces the static prints above as the source of truth
 
@@ -1011,6 +1035,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", 1_000_000)
+    if outer_direct_hessopt !== nothing
+        pin_outer_algorithm && error("run_cm_upper_checkpointed($label): outer_direct_hessopt and pin_outer_algorithm are mutually exclusive (different, incompatible pinned outer configs) -- set at most one.")
+        outer_direct_hessopt in (:sr1, :bfgs) || error("run_cm_upper_checkpointed($label): outer_direct_hessopt must be :sr1 or :bfgs, got :$outer_direct_hessopt")
+        set_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS)
+    end
     pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves opt_file's algorithm=auto in effect
     xIndices = KNITRO.KN_add_vars(kc, D2)
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
@@ -1194,6 +1223,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
     KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
 
+    if outer_direct_hessopt !== nothing
+        assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_cm_upper_checkpointed($label)")
+    end
     pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_cm_upper_checkpointed($label)")
     try
         KNITRO.KN_solve(kc)

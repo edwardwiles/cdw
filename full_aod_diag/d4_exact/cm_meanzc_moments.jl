@@ -284,6 +284,8 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
                                       meanzc_basis::Symbol = :direct, refIndex1::Int = 1,
                                       ctx = nothing, use_compressed_core::Bool = true,
                                       core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                                      theta_ref::Ref{Any} = Ref{Any}(nothing),   # ZC lane task (2026-08-02): sibling shared box to wrap_moments_with_originzc's/wrap_moments_with_cm_archB's own theta_ref -- needed by _fill_cm_HEE!'s profiled H_EE/H_EM kernel (cctx.profiled_theta_ref). Unused/harmless unless profiled_layout is set.
+                                      profiled_layout::Any = nothing,   # ZC lane task (2026-08-02): mirrors wrap_moments_with_originzc's/wrap_moments_with_cm_archB's own kwarg -- when set, the TRUE-economic block (cols 1:pregrav, pregrav computed from the now-REDUCED ncore_econ) is filled via the HOMOGENEOUS-formulation materialize_homogeneous_dense_G_reduced! instead of the structured materialize_dense_factual_structured!. The mean/pair/CM-grid/gravity column-offset arithmetic below is untouched and automatically narrows because it is all computed relative to `ncore_econ`/`pregrav`, which the caller (build_cm_meanzc_augmented_obj) already passes as the REDUCED width when a reduced `base_obj` is supplied -- exactly the same "swap the base shell object" mechanism origin-ZC's own port uses, not a second index-math derivation. `nothing` (every existing caller) preserves every line below byte-for-byte.
                                       skip_fill::Bool = false)   # Hessian upper-only / legacy-H cleanup
                                       # (2026-07-28): mirrors wrap_moments_with_cm_archB's now-fixed
                                       # skip_fill kwarg (cm_hessian_architectures.jl) -- see that
@@ -321,7 +323,13 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
             # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
             # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB.
             cf = cf_build(collect(θ_econ), ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-            if !skip_fill
+            if profiled_layout !== nothing
+                # Formulation-consistency requirement (matches wrap_moments_with_originzc's/
+                # wrap_moments_with_cm_archB's identical branch): MUST be the HOMOGENEOUS-formulation
+                # G, matching _fill_cm_HEE!'s profiled H_EE/H_EM use_profiled_correction=true path.
+                materialize_homogeneous_dense_G_reduced!(@view(G_tmp[:, 1:pregrav]), cf, ctx, collect(θ_econ), profiled_layout)
+                theta_ref[] = collect(θ_econ)
+            elseif !skip_fill
                 materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
             end
             grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
@@ -426,17 +434,27 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
                                         contrasts::Symbol = :anchored, meanzc_basis::Symbol = :direct,
                                         probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                         refIndex1::Int = ctx.γ.refIndex1,
-                                        moment_representation::Symbol = :dense_reference)   # true no-H
+                                        moment_representation::Symbol = :dense_reference,   # true no-H
                                         # operator bundle (2026-07-28 continuation): :dense_reference
                                         # (default, unchanged) constructs PsiObjectiveBundleImplicit +
                                         # both moments! closures exactly as before; :operator constructs
                                         # OperatorPsiBundle and skips building the closures entirely
                                         # (never called in that mode -- priming uses prime_operator!).
+                                        base_obj = nothing, profiled_layout = nothing)   # ZC lane task
+                                        # (2026-08-02): mirrors build_originzc_augmented_obj's/
+                                        # build_cm_augmented_obj_archB's own kwargs -- `nothing` (every
+                                        # existing caller) preserves this function byte-for-byte.
+                                        # `base_obj`, when supplied, is a reduced-width shell object
+                                        # (build_reduced_base_obj_for_family) whose `.d` becomes
+                                        # `ncore_econ` below -- narrows the TRUE-economic block only;
+                                        # mean/pair/CM-grid/gravity column offsets (all computed
+                                        # relative to `ncore_econ` in wrap_moments_with_cm_meanzc) shift
+                                        # automatically, no separate index-math change needed.
     K_mean >= 1 || error("build_cm_meanzc_augmented_obj: K_mean must be >= 1, got $K_mean")
     0 <= K_pair <= K_mean || error("build_cm_meanzc_augmented_obj: K_pair must satisfy 0 <= K_pair <= K_mean, got K_pair=$K_pair, K_mean=$K_mean")
     meanzc_basis in (:direct, :anchored) || error("build_cm_meanzc_augmented_obj: meanzc_basis must be :direct or :anchored, got $meanzc_basis")
 
-    obj0 = ctx.obj
+    obj0 = base_obj === nothing ? ctx.obj : base_obj
     ncore_econ = obj0.d
     CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; contrasts = contrasts, probs = probs)
     ncm = size(CM, 2)
@@ -452,11 +470,14 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
     d_new = ncore_econ + n_mean + n_pair + ncm
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair + ncm
     core_cf_ref = Ref{Any}(nothing)
+    theta_ref = Ref{Any}(nothing)
     moments_meanzc_skip! = nothing
     if moment_representation === :dense_reference
         moments_meanzc! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
                                                        meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
-                                                       ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
+                                                       ctx = ctx, core_cf_ref = core_cf_ref,
+                                                       theta_ref = theta_ref, profiled_layout = profiled_layout,
+                                                       skip_fill = false)
         # Legacy-H cleanup (2026-07-28): mirrors build_cm_production_context's dual-closure pattern
         # (cm_production_bundle.jl) -- a SECOND, separate closure sharing the SAME core_cf_ref, built
         # with skip_fill=true, installed on cctx.moments_skip! (build_cm_meanzc_bin_ctx below) and used
@@ -464,7 +485,9 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
         # skip_fill_safe is true.
         moments_meanzc_skip! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
                                                             meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
-                                                            ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
+                                                            ctx = ctx, core_cf_ref = core_cf_ref,
+                                                            theta_ref = theta_ref, profiled_layout = profiled_layout,
+                                                            skip_fill = true)
 
         obj_cm = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
             γ = obj0.γ, (moments!) = moments_meanzc!, moments_jacobian! = error,
@@ -491,7 +514,8 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
             L = L, contrasts = contrasts, refIndex1 = refIndex1,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, K_mean = K_mean, K_pair = K_pair,
             n_mean = n_mean, n_pair = n_pair, meanzc_basis = meanzc_basis,
-            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_meanzc_skip!)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, theta_ref = theta_ref,
+            moments_skip! = moments_meanzc_skip!)
 end
 
 """

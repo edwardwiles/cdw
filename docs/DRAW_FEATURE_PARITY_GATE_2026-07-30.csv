@@ -1,0 +1,10 @@
+feature,pseudorandom,sobol_randomized,halton_scrambled,precomputed,notes
+threshold_state_active_at_delta1,pass,pass,pass,pass,"all 4 designs: threshold=10.0=resolve_threshold_for_delta(1.0); pre-fix QMC designs silently got Inf"
+threshold_state_selfdisables_at_delta10,pass,pass,pass,pass,"all 4 designs: threshold=Inf at delta=10>=9, matches resolve_threshold_for_delta"
+pairwise_screen_built,pass,pass,pass,pass,"ctx.pairwise not nothing for every design; pre-fix QMC designs required a 3rd compensating copy in draw_design.jl"
+witness_screen_built,pass,pass,pass,pass,ctx.witness not nothing for every design
+screen_setup_wall_present,pass,pass,pass,pass,finite pairwise/witness timings recorded for every design
+destination_sample_routed,pass,pass,pass,pass,"default :exclude_row, D_dest=D-1, identical for every design"
+exclude_diagonal_gravity_routed,pass,pass,pass,pass,"merged from production/fullA-exact@8c1832e 2026-07-30; routes through the single d20_real_setup for every design (verified live at W=2000, not part of the W=80000 full run since that feature landed via a concurrent merge after the W=80000 run's script was frozen -- see UNIFIED_DRAW_PIPELINE_MASTER for the live-verification note)"
+bundle_architecture_operator_only,pass,pass,pass,pass,"scripts/static_bundle_guard_2026-07-30.sh: 0 violations after this task's changes"
+output_schema_context_field_set,pass,pass,pass,pass,"returned ctx field SET identical to :pseudorandom's, verified at W=2000 and W=80000"

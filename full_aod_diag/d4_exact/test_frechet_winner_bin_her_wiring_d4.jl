@@ -8,13 +8,9 @@
 # and persistent-workspace allocation stability.
 const D4X = @__DIR__
 for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl", "common_marginals_interval.jl",
-          "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
-          "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
-          "three_way_derivatives.jl",
+          "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl", "three_way_derivatives.jl",
           "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl", "cm_lookup_kernels.jl",
-          "lfix_cm_aware.jl", "core_exact_hessian.jl", "winner_pair_cross_hessian.jl",
-          "threaded_cross_hessian.jl", "hcz_drawchunk_candidate_2026-07-29.jl",
-          "cm_hessian_architectures.jl", "cm_hessian_threaded.jl", "cm_production_bundle.jl",
+          "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_hessian_threaded.jl", "cm_production_bundle.jl",
           "cm_screen_bridge.jl", "gradient_workspace.jl", "lfix_factorized.jl", "lfix_factorized_workspace.jl",
           "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_outer_driver.jl", "cm_config.jl",
           "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",

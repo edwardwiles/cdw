@@ -1,6 +1,0 @@
-point,economy,gamma_pre_recovery_max_dev_from_1,gamma_post_recovery,retained_shares_match,omitted_anchor_shares_match,france_ratio_preserved,gravity_residual_change,LFD_match_after_recovery_resolve,divergence_match_after_recovery_resolve,winner_checksum_match
-calibration,D4,0.0018701298731839122,exact_by_construction,pass,pass_algebraic_sum_to_one_identity,pass,4.879e-19,8.218981051300034e-13,2.8037468180475145e-16,true
-small_perturbation_scale0.02,D4,0.0018701298731839122,exact_by_construction,pass,pass,pass,4.879e-19,8.314460231417797e-13,6.357761539454998e-16,true
-moderate_perturbation_scale0.15,D4,0.014896521351496439,exact_by_construction,pass,pass,pass,8.674e-19,5.981881656680343e-13,1.2628786905111156e-15,true
-large_multiwinnerchange_scale0.5,D4,0.08197646157791016,exact_by_construction,pass,pass,pass,1.952e-18,6.759037773917953e-13,4.163336342344337e-15,true
-calibration,D20_real_exclude_row_W15000,not_reached,not_reached,not_run,not_run,not_run,not_run,not_run_profiled_solve_did_not_converge,not_run,not_run

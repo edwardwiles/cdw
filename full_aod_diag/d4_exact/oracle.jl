@@ -86,7 +86,16 @@ function primal_divergence(m_weights::AbstractVector)
     return sum(phi(W * mi / total) for mi in m_weights) / W
 end
 
-const CONTEXT_FINGERPRINT_SCHEMA = 2   # bumped for Part A (2026-07-23): digest content changed (destination_sample/row_idx/D_dest segment added)
+const CONTEXT_FINGERPRINT_SCHEMA = 4   # bumped 2026-07-31 (Brazil-Korea gravity-exclusion task):
+                                        # digest now also includes exclude_diagonal_gravity and
+                                        # gravity_exclude_cells -- CLOSES A PRE-EXISTING GAP: two
+                                        # contexts sharing the same τ/L/wHat but differing ONLY in
+                                        # exclude_diagonal_gravity (hence different ctx.q_tilde,
+                                        # different pivot, different gravity residual) previously
+                                        # hashed IDENTICALLY, since only τ itself (not the mask
+                                        # applied to it) was ever hashed. Schema 3 (2026-07-30,
+                                        # sigma3 campaign prep) added the sigma segment; schema 2
+                                        # (2026-07-23) added destination_sample/row_idx/D_dest.
 
 # AUD-08 fix: memoized per-ctx SHA-256 fingerprint, keyed by objectid(ctx.U) (uniquely identifies
 # one ctx's draw set/instance -- cheap identity lookup, avoids re-hashing large W x D draw
@@ -126,6 +135,26 @@ function context_fingerprint(ctx)::String
             row_idx_here = hasproperty(ctx, :row_idx) ? ctx.row_idx : nothing
             write(buf, row_idx_here === nothing ? "all_legacy" : "exclude_row_$(row_idx_here)")
             write(buf, row_idx_here === nothing ? "square_v1" : "rectangular_D_x_Dminus1_true_shrink_v1")
+            # sigma (2026-07-30, sigma3 campaign prep): CES elasticity of substitution enters the
+            # inner solve's own price-index/CES formulas directly, not merely as one entry of the
+            # outer theta vector that a fixed x_free would otherwise pin down -- two contexts built
+            # identically except for sigma can give DIFFERENT inner-solve answers at the same
+            # x_free. Previously unhashed here, so a sigma=2.5 and a sigma=3.0 context could alias
+            # to the same cache key/directory (exactly the risk the sigma3 campaign brief's "do not
+            # reuse caches built under sigma=2.5" requirement warns about). ctx.σ is present on
+            # every context builder in this file family (context.jl/context_scaled.jl/
+            # context_real_d20.jl/qmc_context_real_d20.jl all return σ=σ).
+            write(buf, htol(Float64(ctx.σ)))
+            # gravity-mask segment (2026-07-31, Brazil-Korea gravity-exclusion task, schema 4):
+            # exclude_diagonal_gravity and gravity_exclude_cells both change ctx.q_tilde/N_obs
+            # (hence the pivot cell, the pivot residual, and theta_star itself) without touching
+            # τ/L/wHat -- must be hashed explicitly, not left to alias via the data hash below.
+            write(buf, hasproperty(ctx, :exclude_diagonal_gravity) && ctx.exclude_diagonal_gravity ? "diag_excl" : "diag_incl")
+            excl_cells = hasproperty(ctx, :gravity_exclude_cells) ? ctx.gravity_exclude_cells : Tuple{Int,Int}[]
+            write(buf, htol(Int64(length(excl_cells))))
+            for (o, d) in sort(collect(excl_cells))
+                write(buf, htol(Int64(o))); write(buf, htol(Int64(d)))
+            end
             if hasproperty(ctx, :draw_meta)
                 write(buf, ctx.draw_meta.checksum_uniform)
                 write(buf, ctx.draw_meta.checksum_transformed)
@@ -430,7 +459,7 @@ function evaluate_fullA(x_free::AbstractVector{Float64}, ctx;
     lambda_g = reshape(ctx.γ.P, (D_dest, ctx.D))'
     Aod_lvl = Aod_θ .* ctx.γ.cHat .* (((ctx.γ.wHat .* ctx.τ) ./ (ctx.γ.wHat[1,1] .* ctx.τ[1,:]')) .^ (1/μ_here)) .* (lambda_g ./ lambda_g[1,:]')
     AodPow = (Aod_lvl ./ ctx.γ.cHat) .^ (-μ_here)
-    gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs)   # -(1/N_obs) sum q_tilde*log(A_od); see gravity_tariff.jl
+    gravity_val = gravity_value(ctx.τ, AodPow, ctx.q_tilde, ctx.N_obs; exclude_diagonal=get(ctx, :exclude_diagonal_gravity, false), exclude_cells=get(ctx, :gravity_exclude_cells, Tuple{Int,Int}[]))   # -(1/N_obs) sum q_tilde*log(A_od); see gravity_tariff.jl
     logA = -log.(AodPow)   # log(A_od) = -log(AodPow), per gravity_tariff.jl's module docstring
     # R_sum = sum(q_tilde .* logA_tilde) where logA_tilde is the two-way-demeaned logA; by the FWL
     # identity gravity_tariff.jl's own docstring proves (q_tilde already one-sided-residualized),
