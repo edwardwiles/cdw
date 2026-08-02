@@ -140,9 +140,22 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
             elseif !skip_fill
                 materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
             end
-            grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
-            fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
-            fill_K_directgp!(K, collect(θ_econ), ctx)
+            # ZC lane task (2026-08-02), USER-CONFIRMED FIX (ported from
+            # architecture/profiled-zc-lane-production-2026-08-02@8daca54): the "gravity moment"
+            # (compressed_gravity_raw/fill_gravity_column_into!, writing into G_tmp's own trailing
+            # column then copied into G's final column below) is pure legacy and has no business in
+            # this closure's output at all -- confirmed directly by the user, not inferred. It was
+            # ALSO the root cause of a real bug: with the pre-existing (unfixed) `d_new` formula, G's
+            # true width (`obj.d-1`, this codebase's own established convention) exactly equals
+            # `pregrav+n_mean_total+n_pair_total` -- the SAME position the mean/pair loop below
+            # already legitimately writes its own last column to -- so this legacy gravity write was
+            # silently OVERWRITING the true last mean/pair-Z target's own moment column in every real
+            # origin-ZC solve (dense and reduced), never a genuine gravity contribution at all.
+            # Removing it entirely (not widening G to make room for it) is therefore both
+            # economically correct (gravity was never supposed to be a moment here) AND the fix for
+            # that bug, with no change needed to d_new/outer_constr_index_new or the Hessian's own
+            # dimension.
+            fill_K_directgp!(K, collect(θ_econ), ctx)   # UNCHANGED: gp enters the objective directly here, unrelated to the removed gravity moment
             core_cf_ref[] = cf
         else
             core_moments!(K, G_tmp, θ_econ, U, obj)
@@ -164,7 +177,9 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
             νprod_k = pair_targets(layout, νfull, k, D)
             pair_columns!(dest, (@view Zpairraw_all[k][1:n, :]), νprod_k)
         end
-        @views G[:, end] .= G_tmp[:, end]
+        # gravity-column copy REMOVED (see the "USER-CONFIRMED FIX" comment above) -- G's true width
+        # (obj.d-1) now exactly equals mean_end+n_pair_total (the mean/pair loop's own last write),
+        # with no trailing gravity column to copy and no unclaimed column left over.
         return nothing
     end
 end

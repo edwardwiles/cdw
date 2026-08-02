@@ -332,9 +332,14 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
             elseif !skip_fill
                 materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
             end
-            grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
-            fill_gravity_column_into!(@view(G_tmp[:, ncore_econ]), grav_raw, ctx, ncore_econ)
-            fill_K_directgp!(K, collect(θ_econ), ctx)
+            # ZC lane task (2026-08-02), USER-CONFIRMED FIX (ported from
+            # architecture/profiled-zc-lane-production-2026-08-02@8daca54) -- SAME root cause and fix
+            # as the identical change in cm_originzc_moments.jl::wrap_moments_with_originzc: the
+            # "gravity moment" is pure legacy, confirmed directly by the user to have no business in
+            # this closure's output. Removing it (not widening G to make room for it) also fixes the
+            # real bug where this legacy write was silently overwriting the CM-grid block's own last
+            # contrast column.
+            fill_K_directgp!(K, collect(θ_econ), ctx)   # UNCHANGED: gp enters the objective directly here, unrelated to the removed gravity moment
             core_cf_ref[] = cf
         else
             core_moments!(K, G_tmp, θ_econ, U, obj)
@@ -359,7 +364,8 @@ function wrap_moments_with_cm_meanzc(core_moments!::Function, ncore_econ::Int, C
         end
         cm_cols = mean_end+n_pair_total+1 : mean_end+n_pair_total+ncm
         @views G[:, cm_cols] .= CM[1:n, :]
-        @views G[:, end] .= G_tmp[:, end]
+        # gravity-column copy REMOVED, 2026-08-02 (user-confirmed: the gravity moment is pure legacy
+        # and has no business here) -- see wrap_moments_with_cm_meanzc's own identical fix above.
         return nothing
     end
 end
@@ -405,7 +411,8 @@ function wrap_moments_with_cm_meanzc_dense(core_moments!::Function, ncore_econ::
         end
         cm_cols = mean_end+n_pair_total+1 : mean_end+n_pair_total+ncm
         @views G[:, cm_cols] .= CM[1:n, :]
-        @views G[:, end] .= G_tmp[:, end]
+        # gravity-column copy REMOVED, 2026-08-02 (user-confirmed: the gravity moment is pure legacy
+        # and has no business here) -- see wrap_moments_with_cm_meanzc's own identical fix above.
         return nothing
     end
 end
