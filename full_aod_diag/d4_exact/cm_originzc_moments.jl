@@ -99,6 +99,8 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
                                      layout::MeanZCTargetLayout;
                                      ctx = nothing, use_compressed_core::Bool = true,
                                      core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                                     theta_ref::Ref{Any} = Ref{Any}(nothing),   # restricted-inner-endtoend task (2026-08-01): sibling shared box to wrap_moments_with_cm_archB's own theta_ref -- needed by archA_partitioned_hess_cb_builder's profiled H_EE kernel (octx.profiled_theta_ref). Unused/harmless unless profiled_layout is set.
+                                     profiled_layout::Any = nothing,   # restricted-inner-endtoend task (2026-08-01): mirrors wrap_moments_with_cm_archB's own kwarg -- when set, the economic block (cols 1:pregrav) is filled via the HOMOGENEOUS-formulation materialize_homogeneous_dense_G_reduced! instead of the structured materialize_dense_factual_structured!. `nothing` (every existing caller) preserves every line below byte-for-byte.
                                      skip_fill::Bool = false)   # Legacy-H cleanup (2026-07-28):
                                      # mirrors wrap_moments_with_cm_archB/wrap_moments_with_cm_meanzc's
                                      # now-fixed skip_fill kwarg -- economic-block-only skip.
@@ -128,7 +130,14 @@ function wrap_moments_with_originzc(core_moments!::Function, ncore_econ::Int,
             # No-moments/no-composite-G task (2026-07-28): check_ties=false -- see the identical
             # change/rationale in cm_hessian_architectures.jl::wrap_moments_with_cm_archB.
             cf = cf_build(collect(θ_econ), ctx; check_ties = false)   # Phase E remediation (2026-07-26): reuses ctx.cf_workspace when attached
-            if !skip_fill
+            if profiled_layout !== nothing
+                # Formulation-consistency requirement (matches wrap_moments_with_cm_archB's/
+                # wrap_moments_with_cm_frechet_archB's identical branch): MUST be the HOMOGENEOUS-
+                # formulation G, matching archA_partitioned_hess_cb_builder's profiled H_EE/H_EZ
+                # use_profiled_correction=true path.
+                materialize_homogeneous_dense_G_reduced!(@view(G_tmp[:, 1:pregrav]), cf, ctx, collect(θ_econ), profiled_layout)
+                theta_ref[] = collect(θ_econ)
+            elseif !skip_fill
                 materialize_dense_factual_structured!(@view(G_tmp[:, 1:pregrav]), cf)
             end
             grav_raw = compressed_gravity_raw(collect(θ_econ), ctx)
@@ -221,12 +230,15 @@ PLUS `layout` itself (so callers can recover `K_mean`/`K_pair`/target-index
 mapping without re-threading them separately).
 """
 function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
-        moment_representation::Symbol = :dense_reference)   # true no-H operator bundle (2026-07-28
+        moment_representation::Symbol = :dense_reference,   # true no-H operator bundle (2026-07-28
         # continuation): :dense_reference (default, unchanged) | :operator (explicit opt-in).
+        base_obj = nothing, profiled_layout = nothing)   # restricted-inner-endtoend task (2026-08-01):
+        # mirrors build_cm_augmented_obj_archB's own kwargs -- `nothing` (every existing caller)
+        # preserves this function byte-for-byte.
     layout isa OriginByPowerLayout || layout isa SharedByPowerLayout ||
         error("build_originzc_augmented_obj: unsupported layout type $(typeof(layout))")
 
-    obj0 = ctx.obj
+    obj0 = base_obj === nothing ? ctx.obj : base_obj
     ncore_econ = obj0.d
     D = ctx.D
     K_mean = layout.K_mean; K_pair = layout.K_pair
@@ -240,14 +252,15 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
     d_new = ncore_econ + n_mean + n_pair
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair
     core_cf_ref = Ref{Any}(nothing)
+    theta_ref = Ref{Any}(nothing)
     moments_originzc_skip! = nothing
     if moment_representation === :dense_reference
         moments_originzc! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
-            ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
+            ctx = ctx, core_cf_ref = core_cf_ref, theta_ref = theta_ref, profiled_layout = profiled_layout, skip_fill = false)
         # Legacy-H cleanup (2026-07-28): second closure, same shared core_cf_ref, skip_fill=true --
         # mirrors build_cm_meanzc_augmented_obj's identical dual-closure pattern.
         moments_originzc_skip! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
-            ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = true)
+            ctx = ctx, core_cf_ref = core_cf_ref, theta_ref = theta_ref, profiled_layout = profiled_layout, skip_fill = true)
 
         obj_oz = CS.PsiObjectiveBundleImplicit(δ = obj0.δ, find_smallest = obj0.find_smallest,
             γ = obj0.γ, (moments!) = moments_originzc!, moments_jacobian! = error,
@@ -273,7 +286,8 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
     return (obj_cm = obj_oz, ncore = ncore_econ,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, layout = layout,
             K_mean = K_mean, K_pair = K_pair, n_mean = n_mean, n_pair = n_pair,
-            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_originzc_skip!)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, theta_ref = theta_ref,
+            moments_skip! = moments_originzc_skip!)
 end
 
 """

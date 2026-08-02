@@ -1698,6 +1698,26 @@ mutable struct OriginZCCoreHessCtx
     raw_zc_ws::Union{Nothing,ZCRawWeightedWorkspace}
     # True no-H operator bundle (2026-07-28 continuation): mirrors CMBinHessCtx's own econ_ctx field.
     econ_ctx::Any
+    # Restricted-inner-endtoend task (2026-08-01), §8: ZC-only's own profiled/reduced-economic-layout
+    # scratch, mirroring CMBinHessCtx's own identically-named fields field-for-field (same rationale,
+    # same "gather at assembly" design -- see that struct's own docstrings for the full derivation).
+    # `profiled_reduced_wctx`/`_for`/`profiled_hee_packed`: H_EE, via the SAME family-independent
+    # `build_reduced_homogeneous_winner_pair_ctx`/`reduced_homogeneous_winner_pair_hessian!` kernels
+    # `_fill_cm_HEE!` already uses -- H_EE has nothing to do with the restriction type, only the
+    # economic block, so this is a genuine reuse, not a re-derivation. `profiled_full_wctx`/`_for`/
+    # `profiled_full_ws`: the FULL (unreduced) WinnerPairHessCtx/WinnerBinCrossScratch for the H_EZ
+    # (HER) gather. `profiled_her_full`: the corresponding full-width `(wctx.ncolI+1) x n_eta_total`
+    # raw HER scratch, gathered down into the existing (already reduced-sized) HER view before the
+    # Hessian-write step.
+    profiled_layout::Any
+    profiled_theta_ref::Base.RefValue{Any}
+    profiled_reduced_wctx::Any
+    profiled_reduced_wctx_for::Any
+    profiled_hee_packed::Vector{Float64}
+    profiled_full_wctx::Any
+    profiled_full_wctx_for::Any
+    profiled_full_ws::Union{Nothing,WinnerZCCrossScratch}
+    profiled_her_full::Matrix{Float64}
 end
 
 """
@@ -1718,7 +1738,10 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
         cross_hessian_threaded::Bool = CROSS_HESSIAN_THREADED_DEFAULT[],
         cross_hessian_workers::Int = CROSS_HESSIAN_WORKERS_DEFAULT[],
         zc_gram_backend::Symbol = ZC_GRAM_BACKEND_DEFAULT[],
-        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[])
+        zc_gram_workers::Int = ZC_GRAM_THREADED_WORKERS_DEFAULT[],
+        profiled_layout = nothing)   # restricted-inner-endtoend task (2026-08-01): mirrors
+        # build_cm_bin_ctx's own kwarg -- `nothing` (every existing caller) preserves this function
+        # byte-for-byte.
     n_eta_total = aug.obj_cm.outer_constr_index - aug.ncore_econ
     core_cf_ref = hasproperty(aug, :core_cf_ref) ? aug.core_cf_ref : Ref{Any}(nothing)
     # port/shared-inner-fg-operator-and-verification-2026-07-26: build the ZC restriction operator
@@ -1752,6 +1775,7 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
         hzz_zc_layout = nothing
         hzz_zc_ws = nothing
     end
+    profiled_theta_ref = hasproperty(aug, :theta_ref) ? aug.theta_ref : Ref{Any}(nothing)
     return OriginZCCoreHessCtx(aug.ncore_econ, n_eta_total, core_cf_ref, nothing, nothing,
         core_hessian_backend, core_hessian_workers, core_hessian_storage,
         fg_backend, fg_zc_op, fg_layout, nothing,
@@ -1760,7 +1784,9 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
         hasproperty(aug, Symbol("moments_skip!")) ? aug.moments_skip! : nothing,
         cross_hessian_threaded, cross_hessian_workers,
         zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: lazily built on first H_ZZ call
-        ctx)   # econ_ctx: true no-H operator bundle continuation
+        ctx,   # econ_ctx: true no-H operator bundle continuation
+        profiled_layout, profiled_theta_ref, nothing, nothing, Float64[],
+        nothing, nothing, nothing, Matrix{Float64}(undef, 0, 0))
 end
 
 """
@@ -1846,7 +1872,101 @@ function archA_partitioned_hess_cb_builder(octx::OriginZCCoreHessCtx)
             ddPsi!(arg2, arg0)
             NCORE = octx.NCORE; n_eta_total = octx.n_eta; n = NCORE + n_eta_total
             cf = octx.core_cf_ref[]   # a CompressedFactual (success) OR a Symbol fallback reason
-            if cf isa CompressedFactual && octx.core_hessian_backend !== :dense_reference
+            if octx.profiled_layout !== nothing
+                # Restricted-inner-endtoend task (2026-08-01), §8: ZC-only's profiled/reduced-
+                # economic-layout branch -- mirrors hessian_cm_structured!'s own profiled branch
+                # (cm_hessian_architectures.jl) exactly: H_EE via the family-independent reduced
+                # homogeneous kernel (SAME one _fill_cm_HEE! uses -- H_EE has nothing to do with the
+                # restriction type), H_EZ (HER) via the SAME "gather at assembly" design H_EC/H_EF
+                # already use (full-width wctx/ws, use_profiled_correction=true, gather retained
+                # rows). H_ZZ (HRR) is UNCHANGED, copied verbatim from the branch below -- it reads
+                # only octx.hzz_zc_op/octx.nu_ref (restriction-only state, independent of the
+                # economic block width), confirmed by direct read, matching this task's own
+                # "unchanged H_ZZ" instruction for the ZC-only family.
+                cf isa CompressedFactual || error("archA_partitioned_hess_cb_builder: profiled_layout set but core_cf_ref[] is not a CompressedFactual (got $(typeof(cf))) -- the compressed-core fallback path is not supported for the reduced economic layout.")
+                layout = octx.profiled_layout
+                θ_full = octx.profiled_theta_ref[]
+                θ_full === nothing && error("archA_partitioned_hess_cb_builder: profiled_layout set but profiled_theta_ref[] is nothing -- theta was never published for this outer point (moments! closure not yet called before this Hessian callback?).")
+                # ---- H_EE ----
+                if octx.profiled_reduced_wctx === nothing || octx.profiled_reduced_wctx_for !== cf
+                    octx.profiled_reduced_wctx = build_reduced_homogeneous_winner_pair_ctx(cf, octx.econ_ctx, θ_full, layout)
+                    octx.profiled_reduced_wctx_for = cf
+                end
+                wctx_r = octx.profiled_reduced_wctx
+                n_ee = 1 + wctx_r.ncolI
+                n_ee == NCORE || error("archA_partitioned_hess_cb_builder: reduced width n_ee=$n_ee (1+layout.total_reduced_economic_moments) != octx.NCORE=$NCORE -- OriginZCCoreHessCtx built inconsistently with this layout.")
+                npacked = n_ee * (n_ee + 1) ÷ 2
+                length(octx.profiled_hee_packed) == npacked || (octx.profiled_hee_packed = Vector{Float64}(undef, npacked))
+                reduced_homogeneous_winner_pair_hessian!(octx.profiled_hee_packed, obj, wctx_r)
+                HEE = @view ∂∂f_∂∂x[1:NCORE, 1:NCORE]
+                packed = octx.profiled_hee_packed
+                k = 1
+                @inbounds for i in 1:n_ee
+                    for j in i:n_ee
+                        v = packed[k]; k += 1
+                        HEE[i, j] = v
+                        HEE[j, i] = v
+                    end
+                end
+                # ---- H_EZ (HER), profiled: gather from full-width wctx_full/ws_full ----
+                if n_eta_total > 0
+                    has_france = layout.france_ratio_reduced_j > 0
+                    bi_slot = has_france ? dest_slot(octx.econ_ctx, octx.econ_ctx.bi) : 0
+                    gpσ = has_france ? θ_full[3 + octx.econ_ctx.D]^θ_full[2] : 0.0
+                    denom_cf = has_france ? gpσ * octx.econ_ctx.γ.LPrime[octx.econ_ctx.bi] : 0.0
+                    if octx.profiled_full_wctx === nothing || octx.profiled_full_wctx_for !== cf
+                        octx.profiled_full_wctx = build_winner_pair_ctx(cf; bi_slot = bi_slot, gpσ = gpσ, denom_cf = denom_cf)
+                        octx.profiled_full_wctx_for = cf
+                    end
+                    wctx_full = octx.profiled_full_wctx
+                    ws_full = octx.profiled_full_ws
+                    if ws_full === nothing || ws_full.W != wctx_full.W || ws_full.max_nx < n_eta_total || ws_full.Ddest != wctx_full.Ddest
+                        ws_full = WinnerZCCrossScratch(wctx_full.W, n_eta_total, wctx_full.Ddest)
+                        octx.profiled_full_ws = ws_full
+                    end
+                    record_winner_cross_hessian_call!()
+                    winner_pair_cross_hessian_zc_prep!(ws_full, wctx_full, arg2)
+                    op = octx.hzz_zc_op
+                    refresh_zc_targets!(octx.hzz_zc_ws, op, octx.hzz_zc_layout, octx.nu_ref[])
+                    octx.hzz_centered = ensure_zc_centered_scratch!(octx.hzz_centered, op, size(arg2, 1))
+                    refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2; fill_S = false)
+                    nx = n_restriction(op)
+                    Z = @view octx.hzz_centered.Zc[:, 1:nx]
+                    if size(octx.profiled_her_full) != (wctx_full.ncolI + 1, n_eta_total)
+                        octx.profiled_her_full = Matrix{Float64}(undef, wctx_full.ncolI + 1, n_eta_total)
+                    end
+                    HER_full = octx.profiled_her_full
+                    winner_pair_cross_hessian_zc_block!(HER_full, wctx_full, ws_full, arg2, Z, M; use_profiled_correction = true)
+                    n_bilateral = length(layout.retained_full_factual_j)
+                    HER = @view ∂∂f_∂∂x[1:NCORE, NCORE+1:n]
+                    @views HER[1, :] .= HER_full[1, :]
+                    @inbounds for kk in 1:n_bilateral
+                        j_full = layout.retained_full_factual_j[kk]
+                        @views HER[1 + kk, :] .= HER_full[1 + j_full, :]
+                    end
+                    has_france && (@views HER[NCORE, :] .= HER_full[1 + wctx_full.ncolI, :])
+                    # ---- H_ZZ (HRR) -- UNCHANGED, copied verbatim from the non-profiled branch below ----
+                    HRR = @view ∂∂f_∂∂x[NCORE+1:n, NCORE+1:n]
+                    if octx.zc_cross_hessian_backend === :winner_bin && octx.hzz_zc_op !== nothing
+                        record_winner_cross_hessian_call!()
+                        refresh_zc_targets!(octx.hzz_zc_ws, op, octx.hzz_zc_layout, octx.nu_ref[])
+                        octx.hzz_centered = ensure_zc_centered_scratch!(octx.hzz_centered, op, M)
+                        refresh_zc_centered!(octx.hzz_centered, op, octx.hzz_zc_ws, arg2; fill_S = octx.zc_gram_backend === :reference)
+                        if octx.zc_gram_backend === :reference
+                            zc_restriction_gram!(HRR, octx.hzz_centered, op, M)
+                        else
+                            octx.raw_zc_ws = ensure_zc_raw_weighted_workspace!(octx.raw_zc_ws, op, M)
+                            refresh_zc_raw_target_vector!(octx.raw_zc_ws, octx.hzz_zc_ws, op)
+                            zc_gram_dispatch!(HRR, octx.zc_gram_backend, nothing, op, octx.raw_zc_ws, arg2, M; workers = octx.zc_gram_workers)
+                        end
+                    else
+                        record_dense_cross_hessian_call!()
+                        H_copy === nothing && error("archA_partitioned_hess_cb_builder: profiled branch reached the dense H_ZZ (HRR) fallback for an operator-mode bundle with no H_copy field -- provably unreachable in production; indicates a real configuration bug.")
+                        HC_eta = @view H_copy[:, 2+NCORE:1+n]
+                        BLAS.gemm!('T', 'N', 1 / M, HC_eta, HC_eta, 0.0, HRR)
+                    end
+                end
+            elseif cf isa CompressedFactual && octx.core_hessian_backend !== :dense_reference
                 if octx.core_ws === nothing || octx.core_ws_for !== cf
                     octx.core_ws = build_core_exact_hessian_workspace(cf)
                     octx.core_ws_for = cf
