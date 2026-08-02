@@ -10,13 +10,15 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
           "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "threaded_cross_hessian.jl",
           "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
-          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_threaded.jl",
-          "zc_restriction_operator.jl", "zc_gram_blas_candidates.jl", "hcz_drawchunk_candidate_2026-07-29.jl",
-          "cm_hessian_architectures.jl",
-          "cm_production_bundle.jl", "cm_outer_driver.jl",
-          "cm_originzc_target_layout.jl", "cm_meanzc_moments.jl", "cm_meanzc_production.jl",
-          "cm_originzc_moments.jl", "cm_originzc_production.jl",
-          "cm_config.jl", "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl"]
+          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "hcz_drawchunk_candidate_2026-07-29.jl",
+          "zc_restriction_operator.jl", "zc_gram_blas_candidates.jl",
+          "cm_hessian_architectures.jl", "cm_hessian_threaded.jl", "cm_production_bundle.jl",
+          "cm_outer_driver.jl", "cm_screen_bridge.jl", "gradient_workspace.jl", "lfix_factorized.jl",
+          "lfix_factorized_workspace.jl", "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_config.jl",
+          "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
+          "cm_originzc_target_layout.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl",
+          "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
+          "cm_frechet_lookup_kernels.jl", "cm_frechet_lookup_production.jl", "cm_checkpoint.jl"]
     include(joinpath(D4X, f))
 end
 using Printf, LinearAlgebra, Random
@@ -105,7 +107,19 @@ cctx_fr = pcx_fr.cctx
 level_targets_fr = pcx_fr.aug.level_targets
 obj_fr = pcx_fr.ctx_cm.obj
 θ_full0_fr = CS.reconstruct_full(x_free_calib, pcx_fr.ctx_cm.m)
-K_fr, x_sol_fr, nStatus_fr, n_fg_fr, n_hess_fr = inner_loop_internal_archgeneric(obj_fr, θ_full0_fr; hess_cb_builder = pcx_fr.hess_cb_builder)
+# OBSOLETE-HARNESS FIX (Claude Code task 2026-08-01, §1): this section previously called
+# `inner_loop_internal_archgeneric`, the LEGACY dense-reference-only generic driver (it reads
+# `obj.moments!`/`obj.H` directly -- see its own header comment: "every operator-FG family
+# dispatches through a DIFFERENT top-level function instead"). `build_cm_production_context_v2`
+# constructs `obj_fr` as an `OperatorPsiBundle` for common Fréchet (the modern, no-dense-G default),
+# which genuinely has no `moments!` field by design -- calling the legacy driver on it threw
+# `FieldError: type OperatorPsiBundle has no field moments!` (confirmed pre-existing at the fork
+# point of this whole profiled-cross-block lineage, not introduced by any commit in it). The fix is
+# NOT to restore `moments!`/`H`/`G` -- it is to call the correct production operator-FG driver for
+# this family, `inner_loop_internal_cmfrechetlookup_production` (cm_frechet_lookup_production.jl),
+# which already dispatches on `obj isa OperatorPsiBundle` internally (calling `prime_operator!`)
+# vs. the legacy dense-H branch -- exactly the migration this task instructs.
+K_fr, x_sol_fr, nStatus_fr, n_fg_fr, n_hess_fr = inner_loop_internal_cmfrechetlookup_production(obj_fr, θ_full0_fr, cctx_fr, level_targets_fr; hess_cb_builder = pcx_fr.hess_cb_builder)
 check("common_frechet: inner solve feasible (nStatus=$nStatus_fr)", nStatus_fr in (0, -100, -101, -102, -103, -400, -401, -402))
 n_fr = cctx_fr.NCORE + cctx_fr.ncm
 println("common_frechet: cf type after solve = ", typeof(cctx_fr.core_cf_ref[]),
@@ -113,13 +127,22 @@ println("common_frechet: cf type after solve = ", typeof(cctx_fr.core_cf_ref[]),
 
 for (plabel, x) in (("calib", collect(x_sol_fr)),
                      ("perturbed", vcat(x_sol_fr[1] + 0.01, x_sol_fr[2:end] .+ 0.02 .* randn(length(x_sol_fr) - 1))))
-    _archC_prep_for_hessian!(obj_fr, x)
+    # OBSOLETE-HARNESS FIX (same task/section as above): `_archC_prep_for_hessian!` is ALSO the
+    # `:dense_reference`-only prep step (own docstring: "retained, byte-identical, purely for
+    # moment_representation=:dense_reference reference gates" -- it `@unpack`s `obj.H`, which
+    # `OperatorPsiBundle` genuinely does not have). `_prep_dual_index_for_archC!(cctx, obj, x)` is
+    # the production dispatcher that calls the dense-G-free `operator_prep_for_hessian!` whenever
+    # `cctx.cmlookup_st !== nothing && cctx.inner_fg_backend !== :dense_reference` (true here, since
+    # `inner_loop_internal_cmfrechetlookup_production` above populated `cctx_fr.cmlookup_st`), falling
+    # back to the legacy call only for genuine `:dense_reference` contexts -- so this one swap covers
+    # both bundle types correctly, not just OperatorPsiBundle.
+    _prep_dual_index_for_archC!(cctx_fr, obj_fr, x)
     h_serial = Vector{Float64}(undef, n_fr * (n_fr + 1) ÷ 2)
     cctx_fr.cross_hessian_threaded = false
     hessian_cm_frechet_structured_v2!(h_serial, obj_fr, cctx_fr, level_targets_fr; threaded_bins = true, tls = cctx_fr.tls)
     H_serial = unpack_packed(h_serial, n_fr)
     for workers in (1, 2, 4)
-        _archC_prep_for_hessian!(obj_fr, x)
+        _prep_dual_index_for_archC!(cctx_fr, obj_fr, x)
         h_th = Vector{Float64}(undef, n_fr * (n_fr + 1) ÷ 2)
         cctx_fr.cross_hessian_threaded = true
         cctx_fr.cross_hessian_workers = workers
