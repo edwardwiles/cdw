@@ -29,6 +29,7 @@ for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "
           "reduced_homogeneous_contraction_2026-08-01.jl",
           "profiled_restricted_family_base_2026-08-01.jl",
           "recover_full_a_2026-07-31.jl", "reduced_recovery_from_lfd_2026-08-01.jl",
+          "profiled_reduced_lookup_kernels_2026-08-02.jl",
           "profiled_reduced_meanzc_lookup_kernels_2026-08-02.jl"]
     include(joinpath(D4X, f))
 end
@@ -80,11 +81,17 @@ t_solve = @elapsed base = reduced_meanzc_base_state(x_free_calib, νvec0, ctx, l
     t_solve, base.inner_status, base.ζstar, base.n_fg, base.n_hess)
 flush(stdout)
 
+# Snapshot as PLAIN INTEGERS/booleans immediately after the solve -- NO_DENSE_G_COUNTERS[] returns
+# the live mutable counters struct (not a copy), and brute_force_verify below deliberately calls
+# the dense obj.moments! directly for an independent cross-check, which would legitimately bump
+# these same counters if re-read afterward -- snapshotting now isolates the SOLVE's own claim.
 c_disp = NO_DENSE_G_COUNTERS[]
 check_disp = c_disp.winner_cross_hessian_calls > 0 && c_disp.dense_cross_hessian_calls == 0
+n_dense_econ_after_solve = c_disp.dense_economic_G_materializations
+n_dense_cm_after_solve = c_disp.dense_CM_G_materializations
 @printf("winner_cross_hessian_calls=%d  dense_cross_hessian_calls=%d  dense_economic_G_materializations=%d  dense_CM_G_materializations=%d\n",
     c_disp.winner_cross_hessian_calls, c_disp.dense_cross_hessian_calls,
-    c_disp.dense_economic_G_materializations, c_disp.dense_CM_G_materializations)
+    n_dense_econ_after_solve, n_dense_cm_after_solve)
 flush(stdout)
 
 function brute_force_verify(obj, ζ::Float64, λ::AbstractVector{Float64}, θ_ext, U, W)
@@ -107,7 +114,7 @@ t_verify = @elapsed ov = brute_force_verify(aug_reduced.obj_cm, base.ζstar, bas
 flush(stdout)
 
 ok = base.inner_status == 0 && ov.kkt_resid < 1e-3 && check_disp &&
-     c_disp.dense_economic_G_materializations == 0 && c_disp.dense_CM_G_materializations == 0
+     n_dense_econ_after_solve == 0 && n_dense_cm_after_solve == 0
 @printf("\nTOTAL WALL: %.2fs\n", time() - t0_total)
 println("CMZC_W100K_COLD_SOLVE_RESULT: ", ok ? "PASS" : "FAIL")
 ok || exit(1)

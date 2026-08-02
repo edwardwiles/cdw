@@ -29,6 +29,7 @@ for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "
           "reduced_homogeneous_contraction_2026-08-01.jl",
           "profiled_restricted_family_base_2026-08-01.jl",
           "operator_verification.jl",
+          "profiled_reduced_lookup_kernels_2026-08-02.jl",
           "profiled_reduced_originzc_lookup_kernels_2026-08-02.jl",
           "reduced_originzc_verification_2026-08-02.jl"]
     include(joinpath(D4X, f))
@@ -63,7 +64,15 @@ end
 flush(stdout)
 
 layout_o = OriginByPowerLayout(D, K_MEAN, K_PAIR)
-νfull0 = fill(1.0, D)
+
+# BUG FIX (found live this session): OriginByPowerLayout's target_index(o,k) = (k-1)*D + o requires
+# νfull to have length K_MEAN*D (one value per origin PER level k=1:K_MEAN), not just D -- confirmed
+# by test_cm_originzc_checkpoint.jl's own `eta0 = randn(K_mean * D)` construction. The K_mean=1
+# D20 gates (this repo's existing test_zc_lane_originzc_recover_resolve_d20_2026-08-02.jl) never
+# exposed this because at K_mean=1, K_MEAN*D == D coincidentally. At this task's mandated K_mean=3,
+# passing length-D caused a BoundsError (mean_targets indexing νfull[(k-1)*D+o] for k=2,3 reads past
+# the end of a length-D vector) inside refresh_zc_targets! -> reduced_originzc_base_state.
+νfull0 = fill(1.0, K_MEAN * D)
 
 t_build = @elapsed begin
     aug_reduced = build_originzc_augmented_obj(ctx, CS, layout_o; base_obj = reduced_obj0, profiled_layout = layout)

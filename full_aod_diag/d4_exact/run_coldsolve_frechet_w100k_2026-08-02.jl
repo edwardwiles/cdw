@@ -76,9 +76,15 @@ t_solve = @elapsed base = reduced_frechet_base_state(x_free_calib, ctx, layout, 
     t_solve, base.inner_status, base.ζstar, base.n_fg, base.n_hess)
 flush(stdout)
 
+# Snapshot as PLAIN INTEGERS immediately after the solve -- NO_DENSE_G_COUNTERS[] returns the
+# live mutable counters struct (not a copy), and brute_force_verify below deliberately calls the
+# dense obj.moments! directly for an independent cross-check, which would legitimately bump these
+# same counters if re-read afterward -- snapshotting now isolates the SOLVE's own dense-free claim.
 c_disp = NO_DENSE_G_COUNTERS[]
+n_dense_econ_after_solve = c_disp.dense_economic_G_materializations
+n_dense_cm_after_solve = c_disp.dense_CM_G_materializations
 @printf("dense_economic_G_materializations=%d  dense_CM_G_materializations=%d (0 expected)\n",
-    c_disp.dense_economic_G_materializations, c_disp.dense_CM_G_materializations)
+    n_dense_econ_after_solve, n_dense_cm_after_solve)
 flush(stdout)
 
 # NOTE (bug found+fixed this session, see test_frechet_recover_resolve_d20_2026-08-02.jl for the
@@ -104,7 +110,7 @@ t_verify = @elapsed ov = brute_force_verify(aug_reduced.obj_cm, base.ζstar, bas
 flush(stdout)
 
 ok = base.inner_status == 0 && ov.kkt_resid < 1e-3 &&
-     c_disp.dense_economic_G_materializations == 0 && c_disp.dense_CM_G_materializations == 0
+     n_dense_econ_after_solve == 0 && n_dense_cm_after_solve == 0
 @printf("\nTOTAL WALL: %.2fs\n", time() - t0_total)
 println("FRECHET_W100K_COLD_SOLVE_RESULT: ", ok ? "PASS" : "FAIL")
 ok || exit(1)
