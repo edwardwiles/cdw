@@ -218,6 +218,15 @@ fake_res = (hess = h,)
 res.cb(nothing, nothing, fake_req, fake_res, res.userParams)
 h_warm = copy(h)
 
+# backend-dispatch NEGATIVE-counter proof (task brief §13): CORE_HESSIAN_COUNTERS is the ONE
+# existing runtime call counter in production code that proves which H_EE core backend actually
+# RAN (not just which was configured) -- reset here, read after the repeat loop below. No
+# equivalent runtime counter exists yet for the ZC-specific H_ZZ/H_EZ/H_CZ backend dispatchers
+# (zc_gram_dispatch!/hez fill/hcz prep) -- confirmed by grep, not assumed; see
+# PRODUCTION_HESSIAN_BACKEND_DISPATCH_GATE_2026-08-02.csv's own notes and
+# PRODUCTION_HESSIAN_AUDIT_MASTER's §20 recommendation to add them.
+reset_core_hessian_counters!()
+
 # ONE frozen-state callback, timed + allocation-profiled
 t_single = @elapsed res.cb(nothing, nothing, fake_req, fake_res, res.userParams)
 b_single = @allocated res.cb(nothing, nothing, fake_req, fake_res, res.userParams)
@@ -240,6 +249,13 @@ lp(">> [FROZEN_STATE_CALLBACK x", N_REPEAT, "] mean_t=", @sprintf("%.6f", mean(t
    "  max|h drift across repeats|=", max_drift)
 max_drift < 1e-8 || lp("WARNING: repeated frozen-state callback outputs drifted by ", max_drift,
     " -- callback is NOT purely a function of (x_state, userParams); investigate before trusting repeat timing as directly comparable across calls.")
+
+chc = CORE_HESSIAN_COUNTERS[]
+lp(">> [BACKEND_COUNTER core_H_EE] winner_pair_hessian_calls=", chc.winner_pair_hessian_calls,
+   " winner_pair_serial_calls=", chc.winner_pair_serial_calls,
+   " winner_pair_parallel_calls=", chc.winner_pair_parallel_calls,
+   " dense_core_fallback_calls=", chc.dense_core_fallback_calls,
+   " (expected: parallel_calls=", N_REPEAT + 1, ", serial_calls=0, dense_fallback_calls=0)")
 
 # ---- write result row ----
 outfile = joinpath(OUTDIR, "$(FAMILY)_W$(W)_audit_harness_pid$(getpid()).csv")
