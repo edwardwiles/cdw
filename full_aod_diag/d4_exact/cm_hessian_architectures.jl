@@ -923,7 +923,27 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                 BLAS.gemm!('T', 'N', 1 / M, EC, EM, 0.0, HEM)
                 BLAS.gemm!('T', 'N', 1 / M, EM, EM, 0.0, HMM)
             end
-            @views HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)
+            # production Hessian allocation audit (2026-08-02): was `@views HEE[ncore+1:NCORE,
+            # 1:ncore] .= transpose(HEM)`. HEM is itself a view of HEE (`@view HEE[1:ncore,
+            # ncore+1:NCORE]`, set above) -- broadcasting into a view of the SAME parent array as
+            # the source, even at genuinely disjoint index ranges, hits Julia's broadcast
+            # aliasing-defensive-copy path (`Base.mightalias`/`Broadcast.unalias`), which
+            # materializes a full temporary the size of the destination before copying it in.
+            # Confirmed live: isolated repro measured 1,683,472 bytes for a 700x300 case
+            # (expected temp size 1,680,000 bytes, i.e. essentially the whole allocation), zero
+            # bytes for the identical broadcast between two INDEPENDENT arrays, and zero bytes for
+            # this same explicit loop against the same-parent-array views. This one line accounted
+            # for 1,925,280 of cm_meanzc's 1,993,488 measured bytes/callback (96.6%,
+            # Profile.Allocs, W=20,000) -- the only family/size combination where `ncore < NCORE`
+            # (this branch) is ever reached; flexible_cm/common_frechet always have ncore==NCORE
+            # and never execute this code at all. Mathematically identical assignment (a plain
+            # elementwise copy of HEM's transpose into HEE's lower-left corner); see
+            # PRODUCTION_HESSIAN_AUDIT_MASTER_2026-08-02.md's accepted-optimization list for the
+            # correctness gate (D4 dense-truth + D20 fixed-state packed-Hessian bit-identity).
+            ncore_wid = NCORE - ncore
+            @inbounds for i in 1:ncore, j in 1:ncore_wid
+                HEE[ncore + j, i] = HEM[i, j]
+            end
         end
     else
         # No-moments/no-composite-G task (2026-07-28): `E` constructed lazily, only here.
