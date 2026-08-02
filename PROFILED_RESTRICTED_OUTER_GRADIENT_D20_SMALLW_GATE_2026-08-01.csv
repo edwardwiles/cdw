@@ -1,0 +1,7 @@
+family,point,D,Ddest,W,destination_sample,gate,status,max_abs_err,max_rel_err,cos_sim,t_pre_refactor_s,t_shared_engine_s,h_used_bit_identical,switch_mass_bit_identical,q0_bit_identical
+unrestricted,calibration,20,19,20000,exclude_row,shared_engine_vs_pre_refactor_incremental,PASS,0.0,0.0,1.0,8.573091983795166,7.975133895874023,true,true,true
+unrestricted,small_perturbation,20,19,20000,exclude_row,shared_engine_vs_pre_refactor_incremental,PASS,0.0,0.0,1.0,6.555976867675781,7.2935850620269775,true,true,true
+flexible_CM,calibration,20,19,20000,exclude_row,live_inner_D20_context,BLOCKED_PENDING_INNER,,,,,,,,
+common_Frechet,calibration,20,19,20000,exclude_row,live_inner_D20_context,BLOCKED_PENDING_INNER,,,,,,,,
+ZC_only,calibration,20,19,20000,exclude_row,live_inner_D20_context,BLOCKED_PENDING_INNER,,,,,,,,
+CM_plus_ZC,calibration,20,19,20000,exclude_row,live_inner_D20_context,BLOCKED_PENDING_INNER,,,,,,,,
