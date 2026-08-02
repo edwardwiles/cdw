@@ -227,6 +227,19 @@ h_warm = copy(h)
 # PRODUCTION_HESSIAN_AUDIT_MASTER's §20 recommendation to add them.
 reset_core_hessian_counters!()
 
+# Block-timing map (task brief §6), opt-in via AUDIT_BLOCK_TIMING=1: enables the existing
+# @cmhess_prof sub-block instrumentation (cm_hessian_subblock_profiling.jl -- already wired for
+# flexible_cm/common_frechet/cm_meanzc/origin_zc; NOT wired for unrestricted, a real, confirmed
+# gap -- see PRODUCTION_HESSIAN_BLOCK_TIMING_MAP's own note) for exactly the calls below (cold
+# solve's own block timings are NOT included -- profiling is enabled AFTER the cold solve, so the
+# captured labels reflect only the single + repeated frozen-state callbacks that follow).
+const BLOCK_TIMING = get(ENV, "AUDIT_BLOCK_TIMING", "0") == "1"
+if BLOCK_TIMING
+    empty!(PROF_TIMES); empty!(PROF_ALLOCS); empty!(PROF_GCTIME); empty!(PROF_COUNTS)
+    CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] = true
+    lp(">> [BLOCK_TIMING] enabled CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED; PROF buffers cleared")
+end
+
 # ONE frozen-state callback, timed + allocation-profiled
 t_single = @elapsed res.cb(nothing, nothing, fake_req, fake_res, res.userParams)
 b_single = @allocated res.cb(nothing, nothing, fake_req, fake_res, res.userParams)
@@ -269,5 +282,31 @@ open(outfile, "w") do io
         "$bytes_repeat_total,$(bytes_repeat_total/N_REPEAT),$max_drift,\"$(res.backend_info)\",$(now())")
 end
 lp(">> wrote ", outfile)
+
+if BLOCK_TIMING
+    rows = prof_summary()
+    coarse_labels = filter(r -> startswith(r.label, "inner_dual_hessian_callback"), rows)
+    fine_labels = filter(r -> !startswith(r.label, "inner_dual_hessian_callback") &&
+                               !startswith(r.label, "inner_knitro_dual_solve") &&
+                               !startswith(r.label, "inner_moment_build"), rows)
+    total_coarse = sum(r -> r.total_alloc_bytes >= 0 ? sum(PROF_TIMES[r.label]) : 0.0, coarse_labels; init = 0.0)
+    total_fine = sum(r -> sum(PROF_TIMES[r.label]), fine_labels; init = 0.0)
+    coverage = total_coarse > 0 ? total_fine / total_coarse : NaN
+    lp(">> [BLOCK_TIMING] coarse callback label(s): ", [r.label for r in coarse_labels],
+       "  total_coarse_s=", total_coarse)
+    lp(">> [BLOCK_TIMING] fine sub-block labels: ", length(fine_labels), "  total_fine_s=", total_fine)
+    lp(">> [BLOCK_TIMING] coverage (sum(sub-block)/total callback) = ", round(coverage, digits = 4),
+       "  (task requires >= 0.99)")
+    blockfile = joinpath(OUTDIR, "$(FAMILY)_W$(W)_block_timing_pid$(getpid()).csv")
+    open(blockfile, "w") do io
+        println(io, "family,W,label,n,mean_s,median_s,min_s,max_s,p90_s,p95_s,total_s,mean_alloc_bytes,total_alloc_bytes,mean_gc_s,total_gc_s,coverage_vs_coarse")
+        for r in rows
+            total_s = sum(PROF_TIMES[r.label])
+            println(io, "$FAMILY,$W,$(r.label),$(r.n),$(r.mean_s),$(r.median_s),$(r.min_s),$(r.max_s),$(r.p90_s),$(r.p95_s),",
+                "$total_s,$(r.mean_alloc_bytes),$(r.total_alloc_bytes),$(r.mean_gc_s),$(r.total_gc_s),$coverage")
+        end
+    end
+    lp(">> wrote ", blockfile)
+end
 lp("PRODUCTION ALL-HESSIAN AUDIT HARNESS COMPLETE -- family=", FAMILY)
 lp("="^100)
