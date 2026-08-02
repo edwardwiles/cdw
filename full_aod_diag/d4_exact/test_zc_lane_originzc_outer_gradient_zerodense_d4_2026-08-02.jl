@@ -144,8 +144,14 @@ m_weights = copy(st_reduced.arg1)
 mean_m = sum(m_weights) / W
 cf_reduced = octx_reduced.core_cf_ref[]
 cf_reduced isa CompressedFactual || error("core_cf_ref[] is not a CompressedFactual after solve")
+# Performance closeout task (2026-08-02): see the identical fix/comment in
+# test_zc_lane_cmzc_outer_gradient_zerodense_d4_2026-08-02.jl -- this mock ev needs `decoded` to
+# match evaluate_profiled_originzc_point's own real return shape now that the shared gradient
+# engine's build_price_winner_base_cache reads ev.decoded.xf.
+decoded_calib = decode_outer_profiled(w_profiled_calib, ctx, pe)
 ev = (result = (beta = β_full, zeta = base_reduced.ζstar), st = (cf = cf_reduced, layout = layout),
-      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0)
+      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0,
+      decoded = decoded_calib)
 
 g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev)
 g_eta = d_delta_dual_d_eta_origin_vec(β_full, aug_reduced, νvec0; mean_m = mean_m)
@@ -207,7 +213,8 @@ st_pert(x_full_pert, g_buf_pert)
 mw2 = copy(st_pert.arg1)
 cf_pert = octx_reduced2.core_cf_ref[]
 ev2 = (result = (beta = β_pert, zeta = base_pert.ζstar), st = (cf = cf_pert, layout = layout),
-       theta_full = θ_full_pert, obj = (M = W,), m_weights = mw2, nu_full = νvec_pert)
+       theta_full = θ_full_pert, obj = (M = W,), m_weights = mw2, nu_full = νvec_pert,
+       decoded = decoded_pert)
 g_Agp2, meta2 = shared_family_outer_gradient(w_profiled_pert, ctx, fctx2, ev2)
 after_counters = NO_DENSE_G_COUNTERS[]
 

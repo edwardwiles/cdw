@@ -158,8 +158,16 @@ m_weights = copy(st_reduced.arg1)
 mean_m = sum(m_weights) / W
 cf_reduced = cctx_reduced.core_cf_ref[]
 cf_reduced isa CompressedFactual || error("core_cf_ref[] is not a CompressedFactual after solve")
+# Performance closeout task (2026-08-02): the shared gradient engine's refactored
+# build_price_winner_base_cache now needs ev.decoded.xf (the same free-parameter vector the REAL
+# evaluate_profiled_cmzc_point already returns, profiled_zc_lane_point_evaluators_2026-08-02.jl) --
+# this test's own hand-built mock ev previously omitted `decoded` even though it's computed
+# identically at the calibration point; adding it here just makes the mock match the real
+# evaluator's own shape, not a new requirement.
+decoded_calib = decode_outer_profiled(w_profiled_calib, ctx, pe)
 ev = (result = (beta = β_full, zeta = base_reduced.ζstar), st = (cf = cf_reduced, layout = layout),
-      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0)
+      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0,
+      decoded = decoded_calib)
 
 g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev)
 g_eta = d_delta_dual_d_eta_nu_vec(β_full, aug_reduced, νvec0; mean_m = mean_m)
