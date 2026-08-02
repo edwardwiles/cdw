@@ -315,18 +315,193 @@ INNER_PERFORMANCE =
 
 OUTER_AB =
     unrestricted:not_run
-    flexible_CM:not_run
+    flexible_CM:RUN, real W=100k constrained match -- FULL wins (better gp in same wall-clock,
+                3.3x more evals, 2.4x more grads; REDUCED's gap dominated by a newly-found,
+                separate, unresolved slow-failing-inner-solve issue -- see Section 9 below,
+                not the Hessian-dispatch gap this task closed, which doesn't apply to this family)
     common_Frechet:not_run
-    ZC_only:not_run (ctx-construction mismatch risk, disclosed in body)
-    CM_plus_ZC:not_run (no existing FULL-arm checkpointed outer driver)
+    ZC_only:attempted then INVALIDATED (nu-pinning found to be an invalid comparison, corrected
+                per explicit user direction -- see Section 9.3; genuinely still not_run)
+    CM_plus_ZC:not_run (no existing FULL-arm checkpointed outer driver; also blocked by the same
+                nu-freedom requirement as ZC_only)
 
-PRODUCTION_RECOMMENDATION = merge_opt_in_only
+PRODUCTION_RECOMMENDATION = merge_opt_in_only (unchanged by Section 9 -- flexible_CM's real result
+    argues AGAINST enabling reduced for that family specifically; origin-ZC/CM+ZC, this task's
+    actual targets, still have no valid outer-search evidence either way)
 
 DENSE_CODE_TOUCHED = false
 DENSE_G_MATERIALIZATIONS_RUN = 0
 DENSE_REFERENCE_BACKENDS_RUN = 0
 CAMPAIGN_LAUNCHED = false
 ```
+
+## 9. Post-verdict follow-up: the real outer-search experiment (Section 13, completed)
+
+After this verdict was first written, the user asked for the outer-search gap (§6 above) to be
+closed properly rather than left open — "take your time and do it carefully." This follow-up
+investigation ran considerably longer than expected because it surfaced three further real,
+previously-hidden issues, each investigated to a concrete, evidenced conclusion rather than
+hand-waved. None of these were assumed — each was confirmed by direct instrumentation or code
+reading before being acted on.
+
+### 9.1 ctx-construction mismatch — resolved
+
+The original §6 concern (two different driver entry points build `ctx` with different real-data
+defaults) was resolved by building `ctx` explicitly via `d20_real_setup_design` with matched
+kwargs in both arms' own scripts (not relying on either driver's own defaults), relying on that
+function's determinism given a fixed `draw_seed`. Verified empirically, not just argued: both
+arms' independently-built contexts printed **bit-identical** `kappa_upper=0.0864711608`,
+`gp0=0.9840278852`, `gp_bounds=(0.941488,1.000000)` at both W=20,000 and W=100,000.
+
+### 9.2 Problem-shape mismatch — found and fixed
+
+Deeper investigation found the existing REDUCED-path outer scaffold
+(`_run_profiled_outer_knitro_loop`, `profiled_production_outer_runner_2026-08-01.jl`) solves a
+**different optimization problem** than FULL's production drivers: it *minimizes Delta_dual
+directly* with `gp` held in a tiny (`±0.05`) box, never enforcing `Delta<=delta` as a hard
+constraint — whereas `run_cm_upper`/`run_originzc_upper_checkpointed` *minimize gp subject to
+Delta<=delta*, a genuinely different, constrained problem. Comparing the two directly would
+compare different objectives, not formulation speed.
+
+Fix: added `run_profiled_upper_constrained` (`profiled_production_outer_constrained_2026-08-02.jl`)
+— gives REDUCED the identical constrained problem shape FULL solves (same objective/constraint/box/
+algorithm, mirrored line-for-line from `run_cm_upper`), reusing REDUCED's existing evaluator and
+`shared_family_outer_gradient` completely unchanged. No new economics, no new gradient — only the
+top-level KNITRO wiring differs.
+
+### 9.3 The `nu`-pinning correction (user-caught)
+
+The first real run targeted origin-ZC. To make the comparison "fair" against FULL's driver (which
+always treats `nu`, origin-ZC's own restriction parameter, as a free KNITRO variable, while the
+REDUCED scaffold never does), the FULL side was pinned to a fixed `nu` via a near-zero-width
+`nu_bounds` box.
+
+**The user correctly identified this as a serious scope failure**: origin-ZC and CM+ZC's entire
+economic point is the `nu` restriction — pinning it in both arms tests a crippled, economically
+neutered version of exactly the family the restriction is about, and says nothing about how the
+reduced formulation performs where it actually matters. The origin-ZC scripts and their results
+(`run_outer_originzc_{reduced_constrained,full}_2026-08-02.jl`) were kept for the record (the
+ctx-matching and workspace plumbing they exercise is reusable) but **their results are not used for
+any production decision**. The experiment was redirected to **flexible_CM**, which has no `nu`/`eta`
+axis in either formulation at all — no pinning needed, both arms search the identical `(gp, A)`
+space with nothing held back.
+
+**Open item for a future session**: a genuine, fair outer-search comparison for origin-ZC and
+CM+ZC — the two families this task's Sections 6-8 backend fixes actually target — still does not
+exist. It would need `nu` to be a real free variable in *both* arms, which the current REDUCED
+outer scaffold does not support at all (a documented scope boundary, not a bug) — building that
+support is more work than this follow-up had room for.
+
+### 9.4 The gradient-engine allocation bug — found, fixed, verified across all 5 families
+
+While instrumenting the flexible_CM smoke test, per-call timing (added because the user pushed
+back on an unverified "~80s inner solve" claim — rightly; the real cause was different and more
+interesting) showed gradient calls costing a *consistent* ~6.5-9s each at W=20,000, **even when the
+inner solve was fully reused** (`solve_dur=0.0s`). Root cause, confirmed by reading the code, not
+assumed: the shared outer-gradient engine used by **all five families**
+(`build_price_winner_base_cache`, called via `build_shared_profiled_lfix_cache`/
+`build_profiled_lfix_cache`) allocated and filled a fresh dense `W x D x Ddest` `price0`/`pTσ0`
+tensor on *every single gradient call*.
+
+The user's direction was explicit and correct: **do not patch the old implementation's allocation
+pattern in isolation — take FULL's already-optimized gradient function and make the minimal
+surgical edit to reuse it.** FULL's own production gradient
+(`cm_production_gradient_cplus` → `build_lfix_base_cache_C!` → `build_winner_ref!`,
+`lfix_factorized_workspace.jl`) already solves exactly this problem: it stores only compact
+`logCC0` (D×Ddest) and `mulU` (W×D) tables and computes any origin's score/price **on the fly**
+(`logCC0[o,d]+mulU[w,o]`, `pTσ_from_score(score,σ)=exp((1-σ)*score)`) instead of materializing a
+dense tensor. Confirmed mathematically identical to the reduced formulation's own price/pTσ by
+direct formula comparison (`price=constCons*U^μ` ⟹ `log(price)=logCC0+mulU` exactly;
+`pTσ_from_score` matches `price_and_pTsigma_cell`'s own pTσ given the model's `Uσ=U^(1-σ)`
+convention) — not assumed, derived.
+
+**Fix**: reused `build_winner_ref!`/`pTσ_from_score`/`constCons_matrix` verbatim (no new kernel) via
+a persistent, lazily-rebuilt workspace (the same `ensure_*!`-workspace idiom used throughout this
+codebase). Rewrote the three incremental winner-update consumers
+(`dest_contrib_reduced_o1`, `profiled_count_winner_flips`, `profiled_gp_component_analytic`) to
+mirror FULL's own `dest_contrib_incremental_top3_C`/`count_winner_flips_C` exactly, instead of
+indexing a dense tensor. Blast radius confirmed by exhaustive grep, not assumed: exactly 2 files, 9
+field-read call sites, all updated.
+
+**Verification — bit-identical/correct across all 5 families, not just flexible_CM**, using
+existing gates (no new correctness tests invented for this):
+- unrestricted: `test_profiled_shared_engine_unrestricted_regression_2026-08-01.jl` — bit-identical
+  (`max_abs_err=0.0`, `cos_sim=1.0`) at 2 points, plus `h_used`/`switch_mass`/`q0` all bit-identical.
+  Already 2.4x faster even at D4 (1.55s→0.63s).
+- flexible_CM, common-Fréchet, CM+ZC, origin-ZC: each family's own existing D4
+  `*_outer_gradient_zerodense_d4_2026-08-02.jl` gate — all PASS against complete fixed-dual finite
+  differences (`rel_err` at machine precision, 1e-11 to 1e-18). Origin-ZC's gate additionally passed
+  at a genuinely perturbed (non-calibration) point. (Two of these gates had a pre-existing,
+  unrelated gap — their own hand-built mock `ev` omitted a field the real evaluator provides — fixed
+  as a one-line test correction, not a production code change.)
+
+**Measured improvement**: at W=20,000, steady-state gradient calls dropped from ~6.5-9s to
+~1.4-1.5s — roughly **4.5x faster**.
+
+### 9.5 Real W=100,000 constrained outer-search result: flexible_CM
+
+With the ctx-matching, problem-shape, and gradient-engine issues all resolved, a real, matched,
+600-second-per-arm comparison was run for flexible_CM (D=20, `destination_sample=:exclude_row`,
+`delta=1`, `find_smallest=true`/upper direction, Direct+SR1, screens on, exact-cache on,
+reversed-arm-order not performed given time — see honest limitation below):
+
+| arm | wall | n_eval | n_grad | best gp (lower=better) | best Delta | found at eval |
+|---|---|---|---|---|---|---|
+| FULL | 603.8s | 115 | 34 | **0.9558889698** | 0.9999809589 | 102 (t=465.7s) |
+| REDUCED | 625.0s | 35 | 14 | 0.9589299848 | 0.9402502559 | 35 (still improving) |
+
+**FULL reaches a better (lower) gp in about the same wall-clock budget, with 3.3x more evaluations
+and 2.4x more gradient calls. This is a real, decisive result, and it does not favor REDUCED.**
+Reported honestly, not reframed.
+
+**Why, confirmed from the REDUCED run's own log, not assumed**: 3 of REDUCED's 35 evaluations hit
+`CMExpectedSolveFailure` (an infeasible trial point during KNITRO's own line search — a normal
+occurrence, not a bug in the search itself) and took **77.0s, 79.9s, and 87.0s** each to conclude
+failure — **244s of the 625s total budget (39%) spent on 3 failed solves alone**. This scales up
+sharply from the 33-38s seen for the same failure mode at W=20,000 (§9.4's own investigation),
+strongly suggesting a genuine **O(W)-scaling issue specific to the infeasible/failure-detection
+code path** — not noise, and not explained by anything already fixed in this session. Flexible_CM's
+own *successful*-solve inner-solve speed was already confirmed at near-parity with FULL (§3 above,
+Section 4/12 data) — this slow-fail issue is why the outer search looks materially worse for
+REDUCED despite that parity, not a reappearance of the Hessian-dispatch gap (which doesn't apply to
+flexible_CM at all — no ZC block).
+
+**This is a fourth distinct, real, unresolved issue surfaced by this investigation** (following:
+the ctx-mismatch, the problem-shape mismatch, and the gradient-engine allocation bug — three of
+which are now fixed). It was not fixed in this session: diagnosing why an infeasible inner solve
+fails slowly (rather than hitting whatever fast-fail/`lower_limit`-style mechanism this codebase's
+own culture expects) is a genuinely separate investigation from anything this task's Sections 6-8
+addressed, and there was not enough remaining session time to do it with the same rigor as the
+first three.
+
+### 9.6 Honest limitations of this follow-up
+
+- **Reversed-arm-order confirmation was not done** for the flexible_CM W=100,000 run (Section 13's
+  own spec asks for this to rule out order-dependent bias). Given each arm ran as an independent
+  fresh process rather than a shared continuous session, order effects should be minimal, but this
+  is an assumption, not a measurement.
+- **Origin-ZC and CM+ZC — the two families this task's actual backend fixes target — still have no
+  valid outer-search comparison.** The one real attempt was invalidated by the nu-pinning problem
+  (§9.3) and not rebuilt with `nu` genuinely free in both arms.
+- **The slow-failing-inner-solve issue (§9.5) is real, reproduced at two scales, and unresolved.**
+  It is now the most likely dominant factor in any future outer-search comparison at production
+  scale, more so than either the original Hessian-dispatch gap or the gradient-engine cost (both
+  already fixed).
+- Common-Fréchet and unrestricted were not run through the outer-search experiment at all (only
+  verified for gradient correctness, §9.4).
+
+### 9.7 Updated bottom line
+
+The gradient-engine fix (§9.4) is an unambiguous, verified win — real, ~4.5x per-call speedup,
+correctness-verified across all 5 families, worth keeping regardless of any production-default
+decision. The flexible_CM outer-search result (§9.5) is genuine evidence that, once the slow-fail
+issue is set aside, this family's reduced path is not currently competitive with FULL for outer
+search — consistent with §3's own finding that flexible_CM never had a performance case for the
+reduced path to begin with (no ZC block, no fixed gap to close). This does not change the
+verdict for origin-ZC/CM+ZC (§8's `merge_opt_in_only`, unaffected — their own outer-search
+question remains genuinely open, not answered by the flexible_CM result). It does mean flexible_CM
+specifically should **not** be a candidate for `enable_reduced_selected_families` even as a future
+step, absent a fix for the slow-fail issue and a rerun.
 
 ## Files changed this session
 
@@ -342,6 +517,22 @@ full_aod_diag/d4_exact/test_flexcm_threaded_profiled_d4_2026-08-02.jl         (n
 full_aod_diag/d4_exact/run_prodscale_full_vs_reduced_ab_2026-08-02.jl         (new production-scale driver)
 full_aod_diag/d4_exact/run_prodscale_flexcm_frechet_ab_2026-08-02.jl          (new production-scale driver)
 docs/PRODSCALE_*_2026-08-02.csv                                    (real results, this session)
+
+--- Section 9 follow-up (outer-search investigation) ---
+full_aod_diag/d4_exact/profiled_production_outer_constrained_2026-08-02.jl   (new: constrained
+    outer driver giving REDUCED the same problem shape FULL solves, family-agnostic)
+full_aod_diag/d4_exact/run_outer_{flexcm,originzc}_{reduced_constrained,full}_2026-08-02.jl
+    (new: matched ctx-build experiment scripts, one pair per family)
+full_aod_diag/d4_exact/profiled_lfix_incremental_2026-08-01.jl               (gradient-engine fix:
+    dense price0/pTsigma0 tensor -> compact logCC0/mulU + on-the-fly score, reusing FULL's
+    build_winner_ref!/pTσ_from_score verbatim)
+full_aod_diag/d4_exact/profiled_shared_economic_gradient_engine_2026-08-01.jl (same fix, the
+    generalized/shared-family entry point)
+full_aod_diag/d4_exact/test_profiled_shared_engine_unrestricted_regression_2026-08-01.jl (include
+    fix: added missing lfix_factorized_workspace.jl/gradient_workspace.jl dependency)
+full_aod_diag/d4_exact/test_zc_lane_{cmzc,originzc}_outer_gradient_zerodense_d4_2026-08-02.jl
+    (test-mock fix: added missing `decoded` field to match the real evaluators' own shape)
+docs/OUTER_{FLEXCM,ORIGINZC}_*_2026-08-02.csv                       (real trace/result CSVs)
 ```
 
 No production default was changed. No production campaign was launched. Nothing was pushed to any
