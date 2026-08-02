@@ -33,14 +33,15 @@
 
 isdefined(Main, :update_winner_o1) || error("profiled_lfix_incremental_2026-08-01.jl requires lfix_incremental.jl to be included first.")
 isdefined(Main, :evaluate_profiled_point) || error("profiled_lfix_incremental_2026-08-01.jl requires profiled_outer_evaluator_2026-08-01.jl to be included first.")
+isdefined(Main, :LFixFactorizedWorkspace) || error("profiled_lfix_incremental_2026-08-01.jl requires lfix_factorized_workspace.jl to be included first (Section 13 gradient-engine allocation fix, 2026-08-02: reuses FULL's own build_winner_ref!/pTσ_from_score instead of a separate dense price0/pTσ0 tensor).")
 
 struct ProfiledLFixCache
     D::Int; Ddest::Int; W::Int; μ::Float64; σ::Float64
     SW::Vector{Float64}
-    price0::Array{Float64,3}        # W x D x Ddest
-    pTσ0::Array{Float64,3}          # W x D x Ddest  (== wval at that (draw,origin,dest))
+    logCC0::Matrix{Float64}         # D x Ddest -- log(constCons0[o,d]), FULL's own compact score table (lfix_factorized_workspace.jl)
+    mulU::Matrix{Float64}           # W x D -- μ*log(U[w,o]), FULL's own compact score table
     winner0::Matrix{Int}
-    winner_price0::Matrix{Float64}
+    winner_price0::Matrix{Float64}  # now stores the WINNER's SCORE (log-price), not price -- see note below
     runnerup0::Matrix{Int}
     runnerup_price0::Matrix{Float64}
     third0::Matrix{Int}
@@ -62,52 +63,68 @@ struct ProfiledLFixCache
     layout::ProfiledEconomicMomentLayout
 end
 
-"""
-    build_price_winner_base_cache(ctx, θ_full, cf) -> NamedTuple
+# Performance closeout task (2026-08-02), Section 13 follow-up: the gradient-engine cost
+# investigation (real timing evidence: ~6.5-9s/call at W=20,000, dominated by allocation of fresh
+# W x D x Ddest price0/pTσ0 arrays on EVERY gradient call) found that FULL's OWN production
+# gradient (cm_production_gradient_cplus -> build_lfix_base_cache_C! -> build_winner_ref!,
+# lfix_factorized_workspace.jl) already solves this exact problem: it stores only the COMPACT
+# logCC0 (D x Ddest) and mulU (W x D) tables (mirroring exactly what constCons_matrix/price
+# formulas need), and computes any origin's score/price ON THE FLY wherever needed
+# (`logCC0[o,d]+mulU[w,o]`, `pTσ_from_score(score,σ)=exp((1-σ)*score)`) instead of materializing a
+# dense W x D x Ddest tensor. Confirmed mathematically identical to the REDUCED formulation's own
+# price/pTσ (price = constCons_od*U^μ, so log(price) = log(constCons_od)+μ*log(U) = logCC0+mulU
+# exactly; pTσ_from_score(log(price),σ) = price^(1-σ), matching price_and_pTsigma_cell's own pTσ
+# formula given the model's Uσ=U^(1-σ) convention) -- verified by cross-reading both formulas
+# line-by-line, not assumed. This section REUSES build_winner_ref!/pTσ_from_score verbatim (no new
+# kernel, no re-derivation) via a persistent, lazily-(re)built workspace, exactly the same
+# ensure_*!-workspace idiom used throughout this codebase.
+"Persistent, lazily-(re)built workspace backing every profiled/reduced family's shared gradient engine -- built ONCE per (D,Ddest,W), refilled (never reallocated) on every subsequent call, mirroring cm_production_gradient_cplus's own LFixFactorizedWorkspace exactly. Module-level Ref (same discipline as NO_DENSE_G_COUNTERS/ZC_EZ_BACKEND_DEFAULT): only one family's outer search is ever active per process."
+const SHARED_PROFILED_LFIX_WS_REF = Ref{Union{Nothing,LFixFactorizedWorkspace}}(nothing)
 
-EXTRACTED (2026-08-01, parallel outer-gradient-layer task, unchanged logic --
-pure code motion, no formula change) from `build_profiled_lfix_cache`'s first
-half: the dense `(W x D x Ddest)` price/pTsigma cache and the per-draw
-winner/runnerup/third top-3 cache, identical for EVERY family (task §4: "the
-shared base cache must remain usable by both" formulations/families -- this
-is the "SAME `LFixBaseCache`-style" one-time `O(W*D*Ddest)` build the
-mission's shared-engine section describes). `build_profiled_lfix_cache` below
-is unchanged in behavior; it now simply calls this helper instead of
-inlining the same code, so the identical winner-update MECHANISM
-(`price_and_pTsigma_cell`/`min_secondthirdmin_with_idx`, both reused
-unmodified) is available to a restricted-family cache builder without a
-second implementation of it anywhere (task §4: "Do not write another
-winner-update algorithm").
+"Nullable-ref-safe wrapper around `ensure_lfix_factorized_workspace!` (which requires an already-built, non-nullable `Base.RefValue{LFixFactorizedWorkspace}`) -- builds fresh on first use or a genuine (D,Ddest,W) change, otherwise returns the existing persistent workspace unchanged."
+function ensure_shared_profiled_lfix_ws!(D::Int, Ddest::Int, W::Int)
+    ws = SHARED_PROFILED_LFIX_WS_REF[]
+    if ws === nothing || ws.D != D || ws.Ddest != Ddest || ws.W != W
+        ws = build_lfix_factorized_workspace(D, Ddest, W)
+        SHARED_PROFILED_LFIX_WS_REF[] = ws
+    end
+    return ws
+end
+
 """
-function build_price_winner_base_cache(ctx, θ_full::AbstractVector, cf)
+    build_price_winner_base_cache(ctx, x_free0, θ_full, cf) -> NamedTuple
+
+Performance closeout task (2026-08-02): REPLACES the former dense-tensor implementation (which
+allocated fresh `W x D x Ddest` price0/pTσ0 arrays on every call -- the confirmed root cause of the
+~6.5-9s/call gradient-engine cost measured during the Section 13 outer-search investigation) with a
+direct call to FULL's own already-optimized, already-validated `build_winner_ref!`
+(lfix_factorized_workspace.jl) against a persistent workspace -- same top3_scan winner-finding
+algorithm, same score formula, only the STORAGE differs (compact logCC0/mulU instead of a dense
+tensor). `x_free0` is the free-parameter vector `build_winner_ref!` itself needs (it does its own
+`CS.reconstruct_full` internally); callers already have this as `ev.decoded.xf`. Retains the
+former's live cross-check (`winner0 == cf.winner`) as a correctness safeguard.
+"""
+function build_price_winner_base_cache(ctx, x_free0::AbstractVector, θ_full::AbstractVector, cf)
     D = cf.D; Ddest = cf.D_dest; W = cf.W
+    σ = θ_full[2]
 
-    price0 = Array{Float64}(undef, W, D, Ddest)
-    pTσ0 = Array{Float64}(undef, W, D, Ddest)
-    for d in 1:Ddest, o in 1:D
-        p, ps = price_and_pTsigma_cell(θ_full, ctx, o, d)
-        price0[:, o, d] .= p; pTσ0[:, o, d] .= ps
-    end
+    ws = ensure_shared_profiled_lfix_ws!(D, Ddest, W)
+    ref = build_winner_ref!(ws, x_free0, ctx)
 
-    winner0 = Matrix{Int}(undef, W, Ddest); winner_price0 = Matrix{Float64}(undef, W, Ddest)
-    runnerup0 = Matrix{Int}(undef, W, Ddest); runnerup_price0 = Matrix{Float64}(undef, W, Ddest)
-    third0 = Matrix{Int}(undef, W, Ddest); third_price0 = Matrix{Float64}(undef, W, Ddest)
-    @inbounds for d in 1:Ddest, ω in 1:W
-        m1, idx1, m2, idx2, m3, idx3 = min_secondthirdmin_with_idx(@view(price0[ω, :, d]))
-        winner0[ω, d] = idx1; winner_price0[ω, d] = m1
-        runnerup0[ω, d] = idx2; runnerup_price0[ω, d] = m2
-        third0[ω, d] = idx3; third_price0[ω, d] = m3
-    end
+    ref.winner == cf.winner || error("build_price_winner_base_cache: rebuilt winner (via build_winner_ref!) disagrees with cf.winner -- constCons_matrix/build_compressed_factual formulas have diverged")
+
+    # third_pTσ0 -- the only quantity build_winner_ref! doesn't already provide directly (it keeps
+    # third's SCORE in ref.st3 but the downstream contrib formula needs third's pTσ specifically at
+    # the France/cf row) -- one O(W*Ddest) pTσ_from_score call, cheap (no tensor materialization).
     third_pTσ0 = Matrix{Float64}(undef, W, Ddest)
     @inbounds for d in 1:Ddest, ω in 1:W
-        t = third0[ω, d]
-        third_pTσ0[ω, d] = t == 0 ? Inf : pTσ0[ω, t, d]
+        t = ref.third[ω, d]
+        third_pTσ0[ω, d] = t == 0 ? Inf : pTσ_from_score(ref.st3[ω, d], σ)
     end
-    winner0 == cf.winner || error("build_price_winner_base_cache: rebuilt winner0 disagrees with cf.winner -- price_and_pTsigma_cell/build_compressed_factual formulas have diverged")
 
-    return (price0 = price0, pTσ0 = pTσ0, winner0 = winner0, winner_price0 = winner_price0,
-        runnerup0 = runnerup0, runnerup_price0 = runnerup_price0, third0 = third0,
-        third_price0 = third_price0, third_pTσ0 = third_pTσ0)
+    return (logCC0 = ref.logCC0, mulU = ref.mulU, winner0 = ref.winner, winner_price0 = ref.sw,
+        runnerup0 = ref.runnerup, runnerup_price0 = ref.sr, third0 = ref.third, third_price0 = ref.st3,
+        third_pTσ0 = third_pTσ0)
 end
 
 function build_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, ctx, spec::AnchorSpec,
@@ -117,8 +134,8 @@ function build_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, ctx, spe
     μ = θ_full[1]; σ = θ_full[2]
     SW = cf.SW
 
-    base = build_price_winner_base_cache(ctx, θ_full, cf)
-    price0 = base.price0; pTσ0 = base.pTσ0
+    base = build_price_winner_base_cache(ctx, ev.decoded.xf, θ_full, cf)
+    logCC0 = base.logCC0; mulU = base.mulU
     winner0 = base.winner0; winner_price0 = base.winner_price0
     runnerup0 = base.runnerup0; runnerup_price0 = base.runnerup_price0
     third0 = base.third0; third_price0 = base.third_price0; third_pTσ0 = base.third_pTσ0
@@ -166,7 +183,11 @@ function build_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, ctx, spe
     contrib0 = Matrix{Float64}(undef, W, Ddest)
     @inbounds for d in 1:Ddest, ω in 1:W
         wo = winner0[ω, d]
-        contrib0[ω, d] = (κ[wo, d] - Cbar_eff[d]) * pTσ0[ω, wo, d]
+        # winner_price0[ω,d] IS the winner's own SCORE (== logCC0[wo,d]+mulU[ω,wo] by construction,
+        # from build_winner_ref!) -- pTσ_from_score converts it to pTσ directly, on the fly, no
+        # dense tensor lookup (mirrors build_lfix_base_cache_C!'s own contrib0 loop exactly,
+        # lfix_factorized_workspace.jl:173-179).
+        contrib0[ω, d] = (κ[wo, d] - Cbar_eff[d]) * pTσ_from_score(winner_price0[ω, d], σ)
     end
 
     const_part = const_cf - pmmterm
@@ -177,7 +198,7 @@ function build_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, ctx, spe
         q0[w] = -ev.result.zeta - t0
     end
 
-    return ProfiledLFixCache(D, Ddest, W, μ, σ, SW, price0, pTσ0, winner0, winner_price0, runnerup0,
+    return ProfiledLFixCache(D, Ddest, W, μ, σ, SW, logCC0, mulU, winner0, winner_price0, runnerup0,
         runnerup_price0, third0, third_price0, third_pTσ0, κ, Cbar_eff, contrib0, const_part, cf_raw_κcf,
         κ_cf, gpσ, bi_slot, has_france, ev.result.zeta, ev.obj.M, q0, spec, layout)
 end
@@ -192,63 +213,52 @@ end
 """
     dest_contrib_reduced_o1(cache, ctx, θ_full, d, changed_origins) -> Vector{Float64} (length W)
 
-O(1)-per-draw winner update (1 changed origin: `update_winner_o1`; 2 changed
-origins in the same destination: exact top-3-cache update, mirroring
-`dest_contrib_incremental_top3`), producing `(kappa[wo,d]-Cbar_eff[d])*pTsigma[wo]`
-per draw.
+O(1)-per-draw winner update (top-3-cache, at most 2 changed origins in one destination -- direct+
+pivot never touches more), producing `(kappa[wo,d]-Cbar_eff[d])*pTsigma[wo]` per draw.
+
+Performance closeout task (2026-08-02): mirrors FULL's own `dest_contrib_incremental_top3_C`
+(lfix_factorized.jl) exactly -- same on-the-fly score computation (`logCC_new[o,d]+cache.mulU[ω,o]`,
+`constCons_matrix`/`pTσ_from_score` both reused unmodified), same top-3-cache-then-rescan structure,
+same exact-tie convention (lowest origin index wins). No dense price0/pTσ0 tensor read anywhere --
+only the FINAL contribution formula differs from FULL's (REDUCED's own kappa/Cbar_eff dual-based
+formula, not FULL's lambda-star one).
 """
 function dest_contrib_reduced_o1(cache::ProfiledLFixCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
-    D = cache.D; W = cache.W
+    length(changed_origins) <= 2 || error("dest_contrib_reduced_o1: >2 changed origins in one destination is unreachable for a single profiled coordinate (direct+pivot only)")
+    D = cache.D; W = cache.W; σ = cache.σ
     κd = @view cache.κ[:, d]; Cd = cache.Cbar_eff[d]
-    if length(changed_origins) == 1
-        o = changed_origins[1]
-        new_price, new_pTσ = price_and_pTsigma_cell(θ_full, ctx, o, d)
-        contrib = Vector{Float64}(undef, W)
-        @inbounds for ω in 1:W
-            wo, _, _, _, _ = update_winner_o1(cache.winner_price0[ω, d], cache.winner0[ω, d],
-                cache.runnerup_price0[ω, d], cache.runnerup0[ω, d], o, new_price[ω])
-            pTσ_wo = wo == o ? new_pTσ[ω] : cache.pTσ0[ω, wo, d]
-            contrib[ω] = (κd[wo] - Cd) * pTσ_wo
+    Cd_set = changed_origins
+    _, logCC_new, _ = constCons_matrix(θ_full, ctx)
+    contrib = Vector{Float64}(undef, W)
+    @inbounds for ω in 1:W
+        r1 = cache.winner0[ω, d]; r2 = cache.runnerup0[ω, d]; r3 = cache.third0[ω, d]
+        best_o = 0; best_s = Inf
+        if !(r1 in Cd_set)
+            best_o = r1; best_s = cache.winner_price0[ω, d]
+        elseif !(r2 in Cd_set)
+            best_o = r2; best_s = cache.runnerup_price0[ω, d]
+        elseif r3 != 0 && !(r3 in Cd_set)
+            best_o = r3; best_s = cache.third_price0[ω, d]
         end
-        return contrib
-    else
-        length(changed_origins) <= 2 || error("dest_contrib_reduced_o1: >2 changed origins in one destination is unreachable for a single profiled coordinate (direct+pivot only)")
-        Cd_set = changed_origins
-        new_price = Dict{Int,Vector{Float64}}(); new_pTσ = Dict{Int,Vector{Float64}}()
+        bo = best_o; bs = best_s
         for o in Cd_set
-            p, ps = price_and_pTsigma_cell(θ_full, ctx, o, d)
-            new_price[o] = p; new_pTσ[o] = ps
+            v = logCC_new[o, d] + cache.mulU[ω, o]
+            if v < bs || (v == bs && o < bo)
+                bs = v; bo = o
+            end
         end
-        contrib = Vector{Float64}(undef, W)
-        @inbounds for ω in 1:W
-            r1 = cache.winner0[ω, d]; r2 = cache.runnerup0[ω, d]; r3 = cache.third0[ω, d]
-            best_o = 0; best_p = Inf; best_pTσ = Inf
-            if !(r1 in Cd_set)
-                best_o = r1; best_p = cache.winner_price0[ω, d]; best_pTσ = cache.pTσ0[ω, r1, d]
-            elseif !(r2 in Cd_set)
-                best_o = r2; best_p = cache.runnerup_price0[ω, d]; best_pTσ = cache.pTσ0[ω, r2, d]
-            elseif r3 != 0 && !(r3 in Cd_set)
-                best_o = r3; best_p = cache.third_price0[ω, d]; best_pTσ = cache.third_pTσ0[ω, d]
+        if bo == 0
+            # extremely defensive: all of top-3 were changed (D<=3 & |Cd_set|>=3) -- unreachable for
+            # |Cd_set|<=2 with D>=3, same defensive fallback dest_contrib_incremental_top3_C has.
+            bo = 1; bs = logCC_new[1, d] + cache.mulU[ω, 1]
+            for o in 2:D
+                v = logCC_new[o, d] + cache.mulU[ω, o]
+                v < bs && (bs = v; bo = o)
             end
-            bo = best_o; bp = best_p; bpTσ = best_pTσ
-            for o in Cd_set
-                v = new_price[o][ω]
-                if v < bp || (v == bp && o < bo)
-                    bp = v; bo = o; bpTσ = new_pTσ[o][ω]
-                end
-            end
-            if bo == 0
-                col = Vector{Float64}(undef, D)
-                for o in 1:D
-                    col[o] = haskey(new_price, o) ? new_price[o][ω] : cache.price0[ω, o, d]
-                end
-                _, bo, _ = min_and_secondmin(col)
-                bpTσ = haskey(new_pTσ, bo) ? new_pTσ[bo][ω] : cache.pTσ0[ω, bo, d]
-            end
-            contrib[ω] = (κd[bo] - Cd) * bpTσ
         end
-        return contrib
+        contrib[ω] = (κd[bo] - Cd) * pTσ_from_score(bs, σ)
     end
+    return contrib
 end
 
 """
@@ -329,7 +339,7 @@ function profiled_gp_component_analytic(cache::ProfiledLFixCache, w_profiled::Ab
     m_weights = ev.m_weights
     Tslot_bi = 0.0
     @inbounds for ω in 1:cache.W
-        Tslot_bi += cache.SW[ω] * m_weights[ω] * cache.pTσ0[ω, cache.winner0[ω, cache.bi_slot], cache.bi_slot]
+        Tslot_bi += cache.SW[ω] * m_weights[ω] * pTσ_from_score(cache.winner_price0[ω, cache.bi_slot], cache.σ)
     end
     gp = w_profiled[1]
     return -cache.κ_cf * cache.σ * gp^(cache.σ - 1) * Tslot_bi / cache.M
@@ -346,54 +356,40 @@ already validated in `dest_contrib_reduced_o1`. Needed so
 production's own selector does.
 """
 function profiled_count_winner_flips(cache::ProfiledLFixCache, ctx, θ_full::AbstractVector, d::Int, changed_origins::AbstractVector{Int})
+    length(changed_origins) <= 2 || error("profiled_count_winner_flips: >2 changed origins unreachable for a single profiled coordinate")
     D = cache.D; W = cache.W
-    if length(changed_origins) == 1
-        o = changed_origins[1]
-        new_price, _ = price_and_pTsigma_cell(θ_full, ctx, o, d)
-        flips = 0
-        @inbounds for ω in 1:W
-            wo, _, _, _, _ = update_winner_o1(cache.winner_price0[ω, d], cache.winner0[ω, d],
-                cache.runnerup_price0[ω, d], cache.runnerup0[ω, d], o, new_price[ω])
-            flips += (wo != cache.winner0[ω, d])
+    Cd = changed_origins
+    # Performance closeout task (2026-08-02): mirrors FULL's own count_winner_flips_C
+    # (lfix_factorized.jl) exactly -- same on-the-fly score computation, no dense price0 tensor.
+    _, logCC_new, _ = constCons_matrix(θ_full, ctx)
+    flips = 0
+    @inbounds for ω in 1:W
+        r1 = cache.winner0[ω, d]; r2 = cache.runnerup0[ω, d]; r3 = cache.third0[ω, d]
+        best_o = 0; best_s = Inf
+        if !(r1 in Cd)
+            best_o = r1; best_s = cache.winner_price0[ω, d]
+        elseif !(r2 in Cd)
+            best_o = r2; best_s = cache.runnerup_price0[ω, d]
+        elseif r3 != 0 && !(r3 in Cd)
+            best_o = r3; best_s = cache.third_price0[ω, d]
         end
-        return flips
-    else
-        length(changed_origins) <= 2 || error("profiled_count_winner_flips: >2 changed origins unreachable for a single profiled coordinate")
-        Cd = changed_origins
-        new_price = Dict{Int,Vector{Float64}}()
+        bo = best_o; bs = best_s
         for o in Cd
-            p, _ = price_and_pTsigma_cell(θ_full, ctx, o, d)
-            new_price[o] = p
+            v = logCC_new[o, d] + cache.mulU[ω, o]
+            if v < bs || (v == bs && o < bo)
+                bs = v; bo = o
+            end
         end
-        flips = 0
-        @inbounds for ω in 1:W
-            r1 = cache.winner0[ω, d]; r2 = cache.runnerup0[ω, d]; r3 = cache.third0[ω, d]
-            best_o = 0; best_p = Inf
-            if !(r1 in Cd)
-                best_o = r1; best_p = cache.winner_price0[ω, d]
-            elseif !(r2 in Cd)
-                best_o = r2; best_p = cache.runnerup_price0[ω, d]
-            elseif r3 != 0 && !(r3 in Cd)
-                best_o = r3; best_p = cache.third_price0[ω, d]
+        if bo == 0
+            bo = 1; bs = logCC_new[1, d] + cache.mulU[ω, 1]
+            for o in 2:D
+                v = logCC_new[o, d] + cache.mulU[ω, o]
+                v < bs && (bs = v; bo = o)
             end
-            bo = best_o; bp = best_p
-            for o in Cd
-                v = new_price[o][ω]
-                if v < bp || (v == bp && o < bo)
-                    bp = v; bo = o
-                end
-            end
-            if bo == 0
-                col = Vector{Float64}(undef, D)
-                for o in 1:D
-                    col[o] = haskey(new_price, o) ? new_price[o][ω] : cache.price0[ω, o, d]
-                end
-                _, bo, _ = min_and_secondmin(col)
-            end
-            flips += (bo != r1)
         end
-        return flips
+        flips += (bo != r1)
     end
+    return flips
 end
 
 """

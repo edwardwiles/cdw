@@ -64,8 +64,8 @@ function build_shared_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, f
     μ = θ_full[1]; σ = θ_full[2]
     SW = cf.SW
 
-    base = build_price_winner_base_cache(ctx, θ_full, cf)
-    price0 = base.price0; pTσ0 = base.pTσ0
+    base = build_price_winner_base_cache(ctx, ev.decoded.xf, θ_full, cf)
+    logCC0 = base.logCC0; mulU = base.mulU
     winner0 = base.winner0; winner_price0 = base.winner_price0
     runnerup0 = base.runnerup0; runnerup_price0 = base.runnerup_price0
     third0 = base.third0; third_price0 = base.third_price0; third_pTσ0 = base.third_pTσ0
@@ -116,7 +116,9 @@ function build_shared_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, f
     contrib0 = Matrix{Float64}(undef, W, Ddest)
     @inbounds for d in 1:Ddest, ω in 1:W
         wo = winner0[ω, d]
-        contrib0[ω, d] = (κ[wo, d] - Cbar_eff[d]) * pTσ0[ω, wo, d]
+        # winner_price0[ω,d] IS the winner's own SCORE (== logCC0[wo,d]+mulU[ω,wo]) -- on the fly,
+        # no dense tensor lookup. See build_price_winner_base_cache's own docstring (2026-08-02).
+        contrib0[ω, d] = (κ[wo, d] - Cbar_eff[d]) * pTσ_from_score(winner_price0[ω, d], σ)
     end
 
     const_part = const_cf - pmmterm
@@ -130,7 +132,7 @@ function build_shared_profiled_lfix_cache(w_profiled::AbstractVector{Float64}, f
         q0[w] = -ev.result.zeta - t0
     end
 
-    return ProfiledLFixCache(D, Ddest, W, μ, σ, SW, price0, pTσ0, winner0, winner_price0, runnerup0,
+    return ProfiledLFixCache(D, Ddest, W, μ, σ, SW, logCC0, mulU, winner0, winner_price0, runnerup0,
         runnerup_price0, third0, third_price0, third_pTσ0, κ, Cbar_eff, contrib0, const_part, cf_raw_κcf,
         κ_cf, gpσ, bi_slot, has_france, ev.result.zeta, ev.obj.M, q0, v.spec, layout)
 end
