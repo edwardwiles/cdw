@@ -149,8 +149,18 @@ function hcz_prep_dispatch!(bin_zc_ws::BinZCrossScratch, backend::Symbol,
     elseif backend === :draw_chunk_thread_local
         cctx.bin_zc_drawchunk = ensure_bin_zc_drawchunk_scratch!(cctx.bin_zc_drawchunk, bin_zc_ws.D, bin_zc_ws.L, bin_zc_ws.nz, workers)
         bin_zc_cross_hessian_fill_drawchunk!(bin_zc_ws, cctx.bin_zc_drawchunk, Bidx, ZcS; workers = workers)
+    elseif backend === :draw_chunk_reordered
+        # ZC Hessian backend production integration (2026-08-01): cache-access-pattern candidate,
+        # hcz_reordered_candidate_2026-08-01.jl -- reuses the SAME BinZCrossDrawChunkScratch as
+        # :draw_chunk_thread_local. This branch was missing from the initial port (only the
+        # docstring/default Ref were ported, not this dispatch arm) -- found live via Gate 3's own
+        # real-KNITRO-driver run throwing KN_RC_CALLBACK_ERR("hcz_prep_dispatch!: unknown backend
+        # :draw_chunk_reordered"), which Gate 2's direct (non-threaded_bins) call path had not
+        # exercised. Fixed before merge.
+        cctx.bin_zc_drawchunk = ensure_bin_zc_drawchunk_scratch!(cctx.bin_zc_drawchunk, bin_zc_ws.D, bin_zc_ws.L, bin_zc_ws.nz, workers)
+        bin_zc_cross_hessian_fill_drawchunk_reordered!(bin_zc_ws, cctx.bin_zc_drawchunk, Bidx, ZcS; workers = workers)
     else
-        error("hcz_prep_dispatch!: unknown backend :$backend (must be :origin_owned|:draw_chunk_thread_local)")
+        error("hcz_prep_dispatch!: unknown backend :$backend (must be :origin_owned|:draw_chunk_thread_local|:draw_chunk_reordered)")
     end
     return bin_zc_ws
 end

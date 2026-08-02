@@ -62,6 +62,24 @@ lp("cctx defaults (no kwargs passed): zc_gram_backend=", cctx.zc_gram_backend, "
 check("cm_meanzc cctx defaults to blas_syrk/draw_chunk_reordered/drawmajor_v2 with zero kwargs",
       cctx.zc_gram_backend === :blas_syrk && cctx.hcz_prep_backend === :draw_chunk_reordered && cctx.zc_ez_backend === :drawmajor_v2)
 
+# CRITICAL FIX (found live via Gate 3's real-KNITRO crash, then confirmed by inspection): this
+# gate's FIRST draft never called obj_cm.moments! at a real economic point, so cctx.core_cf_ref[]
+# was never populated with a real CompressedFactual -- `use_direct_hcz`/the analogous H_ZZ/H_EZ
+# gates in cm_hessian_threaded.jl all require a real `cf`, so EVERY comparison silently fell back
+# to the DENSE reference path for BOTH arms (a trivial dense-vs-dense pass, never exercising the
+# bin/threaded backend dispatch this gate is supposed to test). Priming with a real moments! call
+# at the calibration point (same idiom as hcz_hez_candidates_gate_and_benchmark_k3_2026-08-01.jl)
+# fixes this -- confirmed below to actually reach the winner-pair/bin-structured path this time.
+x_free_calib = ctx.θ0_up[ctx.free_idx]
+θ_econ_calib = CS.reconstruct_full(x_free_calib, ctx.m)
+θ_ext_calib = vcat(θ_econ_calib, ones(K_mean))
+Kbuf = Vector{Float64}(undef, size(ctx.U, 1))
+Gbuf = Matrix{Float64}(undef, size(ctx.U, 1), n + 64)
+obj_cm.moments!(Kbuf, Gbuf, θ_ext_calib, ctx.U, obj_cm)
+cctx.nu_ref[] = ones(K_mean)
+check("cm_meanzc cctx.core_cf_ref[] is a real CompressedFactual after priming (not dense fallback)",
+      cctx.core_cf_ref[] isa CompressedFactual)
+
 for trial in 1:3
     Random.seed!(3000 + trial)
     x_fake = 0.1 .* randn(n)
@@ -69,8 +87,13 @@ for trial in 1:3
     href = Vector{Float64}(undef, n * (n + 1) ÷ 2)
     cctx.zc_gram_backend = :reference; cctx.hcz_prep_backend = :draw_chunk_thread_local; cctx.zc_ez_backend = :winner_bin
     _archC_prep_for_hessian!(obj_cm, x_fake)
+    winner_calls_before = NO_DENSE_G_COUNTERS[].winner_cross_hessian_calls
     hessian_cm_structured_v2!(href, obj_cm, cctx; threaded_bins = cctx.use_threaded_bins, tls = tls, use_syrk = true)
     Href = unpack_packed(href, n)
+    if trial == 1
+        check("cm_meanzc reference call genuinely reaches the winner-pair/bin-structured path (not dense fallback)",
+              NO_DENSE_G_COUNTERS[].winner_cross_hessian_calls > winner_calls_before)
+    end
 
     cctx.zc_gram_backend = :blas_syrk; cctx.hcz_prep_backend = :draw_chunk_reordered; cctx.zc_ez_backend = :drawmajor_v2
     h = Vector{Float64}(undef, n * (n + 1) ÷ 2)

@@ -879,6 +879,20 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
                     nbilateral = wctx.has_cf ? wctx.ncolI - 1 : wctx.ncolI
                     cctx.zc_drawmajor = ensure_winner_zc_drawmajor_scratch!(cctx.zc_drawmajor, wctx.W, wctx.Ddest, nbilateral, nx, cctx.cross_hessian_workers)
                     winner_pair_cross_hessian_zc_block_drawmajor!(HEM, wctx, cctx.zc_cross_scratch, cctx.zc_drawmajor, w, Z, M; workers = cctx.cross_hessian_workers)
+                elseif cctx.zc_ez_backend === :drawmajor_v2
+                    # ZC Hessian backend production integration (2026-08-01): this branch was
+                    # missing from BOTH the original genuine-cold-zc-hessian-k3 session's port AND
+                    # this integration's own first pass -- cm_meanzc's H_ER dispatch only ever
+                    # recognized :drawmajor (v1), never :drawmajor_v2, silently falling through to
+                    # the :cross_hessian_threaded branch (byte-identical to :winner_bin) for any
+                    # cctx with zc_ez_backend=:drawmajor_v2 set. origin-ZC's own octx dispatch
+                    # (below) already had this branch; cm_meanzc's cctx dispatch did not. Found live
+                    # via Gate 3's real-KNITRO-driver run (the isolated-kernel benchmark in Section 6
+                    # called winner_pair_cross_hessian_zc_block_drawmajor_v2! directly, bypassing
+                    # this dispatch entirely, so it never caught the gap). Fixed before merge.
+                    nbilateral = wctx.has_cf ? wctx.ncolI - 1 : wctx.ncolI
+                    cctx.zc_drawmajor = ensure_winner_zc_drawmajor_v2_scratch!(cctx.zc_drawmajor, wctx.W, wctx.Ddest, nbilateral, nx, cctx.cross_hessian_workers)
+                    winner_pair_cross_hessian_zc_block_drawmajor_v2!(HEM, wctx, cctx.zc_cross_scratch, cctx.zc_drawmajor, w, Z, M; workers = cctx.cross_hessian_workers)
                 elseif cctx.cross_hessian_threaded
                     winner_pair_cross_hessian_zc_block_threaded!(HEM, wctx, cctx.zc_cross_scratch, w, Z, M; workers = cctx.cross_hessian_workers)
                 else
