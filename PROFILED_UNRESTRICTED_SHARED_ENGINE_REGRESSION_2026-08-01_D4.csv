@@ -1,3 +1,3 @@
 label,t_pre,t_shared,max_abs_err,max_rel_err,cos_sim,h_used_bit_identical,switch_mass_bit_identical,q0_bit_identical
-calibration,1.9657118320465088,0.8414120674133301,0.0,0.0,0.9999999999999999,true,true,true
-small_perturbation,0.070404052734375,0.08172392845153809,0.0,0.0,1.0,true,true,true
+calibration,2.1412079334259033,0.7089729309082031,0.0,0.0,0.9999999999999999,true,true,true
+small_perturbation,0.15376782417297363,0.08238410949707031,0.0,0.0,1.0,true,true,true
