@@ -116,8 +116,19 @@ isolated-kernel speedup. Also gated bit-identical (max|Δ|=0.0, 3 random states)
 complete packed Hessian callback (`hcz_wired_complete_hessian_gate_2026-07-29.jl`) and 56/56
 correctness rows at D=4 (rectangular/square, K variants) and real D=20
 (`docs/PART_C_HCZ_CANDIDATE_RESULTS_2026-07-29.md`).
+
+Flipped again to `:draw_chunk_reordered` (2026-08-01, ZC Hessian backend production integration):
+`hcz_reordered_candidate_2026-08-01.jl`'s memory-access-pattern fix (contiguous `ZcS`/`Bidx` column
+reads instead of `:draw_chunk_thread_local`'s stride-W inner loop) is 2.65x faster in isolation at
+real K=3/W=100,000 production width, EXACT correctness (`max|Δ|=0.0`) at every tested
+(workers,jtile) combination, and part of a validated 22-26% real single-inner-solve speedup
+(genuine-cold, JIT-warm, `julia -t 10`, matched against an independent cross-session baseline) at
+both W=100,000 and W=500,000 -- see `ZC_HESSIAN_BACKEND_CLOSEOUT_MASTER_2026-08-01.md` and
+`ZC_COMPILE_FREE_BACKEND_AB_2026-08-01.csv`. `:draw_chunk_thread_local` remains available as a
+selectable diagnostic fallback (unchanged behavior, not removed). Applies to CM+ZC only -- origin-ZC
+has no CM-grid block, hence no H_CZ.
 """
-const HCZ_PREP_BACKEND_DEFAULT = Ref{Symbol}(:draw_chunk_thread_local)
+const HCZ_PREP_BACKEND_DEFAULT = Ref{Symbol}(:draw_chunk_reordered)
 const HCZ_PREP_DRAWCHUNK_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
 
 """

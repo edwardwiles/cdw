@@ -242,9 +242,24 @@ threading). Kept at the safe default rather than ship an unresolved slowdown ris
 `docs/HZZ_REALISTIC_RESOURCE_GATE_2026-07-28.md` for the full writeup and the concrete follow-up
 items (diagnose the slowdown, re-test per-family BLAS-thread recommendations, complete the
 concurrent-process gate) for whoever revisits this.
+
+Flipped to `:blas_syrk` (2026-08-01, ZC Hessian backend production integration): the 2026-07-28
+oversubscription concern above is now resolved -- a real ten-by-ten resource gate (10 concurrent
+processes x 10 Julia threads, `BLAS_THREADS=8`) completed in 165s wall with all `nStatus=0`, no
+throughput collapse, no swap pressure (`ZC_SELECTED_BACKENDS_TEN_BY_TEN_RESOURCE_GATE_2026-08-01.md`),
+and the historical slowdown did not reproduce. `:blas_syrk` is EXACT (`max|Δ|=0.0`, 9/9) against the
+complete packed Hessian for cm_meanzc and (`~2e-8` absolute, 3/3, tolerance-level) for origin-ZC,
+part of a validated 22-44% real single-inner-solve speedup at W=100,000/500,000 for both families --
+see `ZC_HESSIAN_BACKEND_CLOSEOUT_MASTER_2026-08-01.md`. Full-workspace `:blas_syrk` (not
+`hzz_chunked_syrk_candidate_2026-08-01.jl`'s memory-efficient chunked variant) is the initial
+W=500,000 production default; chunked SYRK remains available as a diagnostic alternative only,
+pending its own separate gate/integration. `:reference` remains available as a selectable
+diagnostic fallback (unchanged behavior, not removed). Shared by CM+ZC and origin-ZC (never a
+separate per-family implementation).
 """
-const ZC_GRAM_BACKEND_DEFAULT = Ref{Symbol}(:reference)
+const ZC_GRAM_BACKEND_DEFAULT = Ref{Symbol}(:blas_syrk)
 const ZC_GRAM_THREADED_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
+const ZC_GRAM_BLAS_THREADS_DEFAULT = Ref{Int}(8)
 
 """
     zc_gram_dispatch!(HZZ, backend, cs, raw_ws, S, M; workers) -> HZZ

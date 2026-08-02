@@ -947,7 +947,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
     family_tag = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
     dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)
-    blas_threads !== nothing && BLAS.set_num_threads(blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
+    # ZC Hessian backend production integration (2026-08-01): cm_meanzc's own validated production
+    # BLAS-thread recommendation (8, see ZC_GRAM_BACKEND_DEFAULT's docstring) is applied here ONLY
+    # when the caller passed no explicit `blas_threads` AND this run is actually cm_meanzc --
+    # `run_cm_upper_checkpointed` is SHARED by flexible_cm/common_frechet/cm_meanzc, and neither
+    # sibling family was part of this optimization's validation, so their existing zero-behavior-
+    # change default (`nothing` -> ambient thread count untouched) is deliberately left alone.
+    effective_blas_threads = blas_threads !== nothing ? blas_threads :
+        (family_tag === :cm_meanzc ? ZC_GRAM_BLAS_THREADS_DEFAULT[] : nothing)
+    effective_blas_threads !== nothing && BLAS.set_num_threads(effective_blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, mode_label)
     print_screen_startup_banner(mode_label)
     th = pcx.ctx_cm.obj.threshold_state
@@ -966,9 +974,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         lp("[", label, "] core_hessian_backend=", pcx.cctx === nothing ? "dense_reference" : "exact_winner_pair_parallel (Architecture C)")
         lp("[backend-manifest]   bundle_type=", real_bundle_type)
     else
-        print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = blas_threads,
+        print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = effective_blas_threads,
             cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair,
-            bundle_type = real_bundle_type))   # allocation/Hessian port task §2
+            bundle_type = real_bundle_type))   # allocation/Hessian port task §2; effective_blas_threads
+            # (not the raw kwarg) so the manifest records what was ACTUALLY applied, including
+            # cm_meanzc's own ZC_GRAM_BLAS_THREADS_DEFAULT[] auto-selection above.
     end
     write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))   # architecture/production-operator-bundle-hardening-2026-07-30 (task §7): live manifest, replaces the static prints above as the source of truth
 
