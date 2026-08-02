@@ -454,13 +454,16 @@ const CM_CHECKPOINT_SCHEMA_V11 = 11
     CMCheckpointV11
 
 `CMCheckpointV9` plus the profiled/reduced-basis versioning fields (task Phase 12 item 3):
-  - `economic_parameterization::Symbol` -- `:full_gamma_normalized` (dense) or
-    `:profiled_destination_scales` (reduced); mirrors `VALID_ECONOMIC_PARAMETERIZATIONS`
-    (profiled_ab_comparability_and_plumbing_2026-08-01.jl).
+  - `economic_parameterization::Symbol` -- `:full_gamma_normalized` (FULL: full economic width,
+    structured/operator Hessian, zero dense-G materializations same as REDUCED -- "full" refers to
+    economic basis width, not to any dense-G materialization) or `:profiled_destination_scales`
+    (REDUCED: profiled/reduced destination-scale economic basis); mirrors
+    `VALID_ECONOMIC_PARAMETERIZATIONS` (profiled_ab_comparability_and_plumbing_2026-08-01.jl).
   - `outer_layout_digest::String` -- `stable_layout_digest(fctx)` (profiled_stable_layout_digest_2026-08-01.jl),
     empty string for a `:full_gamma_normalized` checkpoint (no profiled outer layout to digest).
   - `inner_layout_digest::String` -- family-specific inner reduced-FG layout fingerprint
-    (`profiled_inner_layout_digest`, profiled_checkpoint_versioning_2026-08-02.jl); "" for dense.
+    (`profiled_inner_layout_digest`, profiled_checkpoint_versioning_2026-08-02.jl); "" for
+    `:full_gamma_normalized` (no reduced layout to fingerprint).
   - `h_zz_backend`/`h_cz_backend`/`h_ez_backend::Symbol` -- which Hessian dispatch backend was
     active (`:blas_syrk`/`:draw_chunk_reordered`/`:drawmajor_v2`/etc, or `:not_applicable` for a
     family/block that doesn't use that backend, or `:unknown_legacy_dense` for an upgraded
