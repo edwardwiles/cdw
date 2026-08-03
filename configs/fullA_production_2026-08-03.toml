@@ -1,0 +1,39 @@
+# Canonical EK/Ricardo full-A_od FULL production scientific manifest.
+# Generated 2026-08-03 during the repository cleanup task. Values below are grounded directly
+# in the live codebase as of this date, not invented -- see
+# scientific_manifest/ScientificManifest.jl's docstring for exactly where each came from.
+#
+# KNOWN GAP (flag, do not silently fix here): campaign_cm_family_runner.jl -- the actual driver
+# behind the live FULL W100k 10x10 campaign running at the time this file was written -- does
+# NOT pass sigma explicitly to its run_*_checkpointed calls, so it inherits whatever
+# d20_real_setup/build_ad_context_real_d20 default to internally (nothing -> 2.5), NOT the
+# sigma=3.0 recorded below (which is what campaign_unrestricted_runner.jl and the 2026-08-01
+# Brazil-Korea-flip drivers use explicitly). This file records the INTENDED production value;
+# it does not change what the live campaign is actually running with. Reconciling that is a
+# real follow-up, not something to paper over.
+
+schema_version = 1
+dataset_version = "real_d20_france_focal_noah_D20"
+dataset_checksum = "faa4609499a6e51c0a1f7b6bc7425b4fa49b9f55fd30aee88145658f3530b0df"  # sha256_of_directory(real_data/noah_D20), per ScientificManifest.jl's own function
+country_order = ["aus", "fra", "bra", "can", "che", "chn", "deu", "esp", "gbr", "idn",
+                  "ind", "ita", "jpn", "kor", "mex", "nld", "rus", "tur", "usa", "row"]
+focal_country = "fra"
+sigma = 3.0
+exclude_diagonal_gravity = true
+gravity_exclude_cells = [[3, 14]]  # (Brazil global-index, Korea dest-slot) per
+                                    # default_gravity_exclude_cells_brazil_korea() at
+                                    # destination_sample=:exclude_row -- Brazil is country_order[3],
+                                    # Korea's dest-slot resolves to 14 once "row" (index 20) is
+                                    # dropped from the destination list. Re-derive, don't hand-edit,
+                                    # if country_order ever changes.
+destination_sample = "exclude_row"
+draw_design = "sobol_randomized"
+draw_seed = 20260719
+W = 100000
+L = 50
+K_mean = 1
+K_pair = 1
+julia_threads = 10
+blas_threads = 8
+inner_opt_checksum = "d13d9deb11ba065958d7069b1bfcd7fc8c9b2dc6ca22004d152cdb9b8c33d297"  # sha256(full_aod_diag/ek_inner.opt)
+outer_opt_checksum = "17d1901ceeb517a4c34b5620729e004ca9d1af54f63cc5356e522621d9a96a8f"  # sha256(full_aod_diag/csw_outer_25.opt)
