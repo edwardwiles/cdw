@@ -113,6 +113,7 @@ function build_reduced_originzc_operator_bundle(ctx, θ_full::AbstractVector{Flo
         δ = ref_obj.δ, find_smallest = ref_obj.find_smallest, γ = ref_obj.γ, l = ref_obj.l,
         inequality_index = Int[], U = ref_obj.U, outer_constr_index = n,
         inner_loop_opt = ref_obj.inner_loop_opt, Psi! = ref_obj.Psi!, dPsi! = ref_obj.dPsi!, ddPsi! = ref_obj.ddPsi!,
+        lower_limit = ref_obj.lower_limit,
     )
     st = ReducedOriginZCOperatorState(obj, ctx, layout, collect(Float64, θ_full), op, zc_layout; core_cf_ref = octx.core_cf_ref)
     return obj, st

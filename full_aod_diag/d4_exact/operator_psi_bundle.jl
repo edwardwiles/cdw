@@ -72,7 +72,13 @@ using Parameters: @with_kw
     N                   ::Int64          = M
     outer_constr_index  ::Int64
     inner_loop_opt      ::String
-    lower_limit         ::Float64        = -KNITRO.KN_INFINITY
+    # No default: a struct-level default here (formerly -KNITRO.KN_INFINITY) is exactly the
+    # anti-pattern this repo's CLAUDE.md forbids for scientific/settings parameters -- it let 5
+    # REDUCED bundle-construction functions silently omit this kwarg and get a value for which
+    # `f <= lower_limit` can never fire, instead of the UndefKeywordError that would have caught
+    # the gap the moment each was written (found live 2026-08-03, see
+    # docs/audits/profiled-inner-readiness-2026-08-03/).
+    lower_limit         ::Float64
     use_cached_x        ::Bool           = false
     # Qualified `CS.Psi!`/`CS.dPsi!`/`CS.ddPsi!` (not bare `Psi!`): unlike `PsiObjectiveBundleImplicit`
     # (defined INSIDE the `CS` module, cc_algo/PsiObjectiveBundle.jl, where a bare `Psi!` default

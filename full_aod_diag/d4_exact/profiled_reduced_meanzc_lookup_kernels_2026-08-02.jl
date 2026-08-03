@@ -194,6 +194,7 @@ function build_reduced_meanzc_operator_bundle(ctx, θ_full::AbstractVector{Float
         δ = ref_obj.δ, find_smallest = ref_obj.find_smallest, γ = ref_obj.γ, l = ref_obj.l,
         inequality_index = Int[], U = ref_obj.U, outer_constr_index = n,
         inner_loop_opt = ref_obj.inner_loop_opt, Psi! = ref_obj.Psi!, dPsi! = ref_obj.dPsi!, ddPsi! = ref_obj.ddPsi!,
+        lower_limit = ref_obj.lower_limit,
     )
     bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
     st = ReducedCMMeanZCOperatorState(obj, ctx, layout, collect(Float64, θ_full), cctx.hzz_zc_op, cctx.hzz_zc_layout,

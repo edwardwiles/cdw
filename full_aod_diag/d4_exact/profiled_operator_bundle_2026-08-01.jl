@@ -58,20 +58,33 @@ function build_profiled_operator_bundle(ctx, θ_full::AbstractVector{Float64}, s
         δ = ref_obj.δ, find_smallest = ref_obj.find_smallest, γ = ref_obj.γ, l = ref_obj.l,
         inequality_index = Int[], U = ref_obj.U, outer_constr_index = n,
         inner_loop_opt = ref_obj.inner_loop_opt, Psi! = ref_obj.Psi!, dPsi! = ref_obj.dPsi!, ddPsi! = ref_obj.ddPsi!,
+        lower_limit = ref_obj.lower_limit,
     )
     st = ProfiledCBState(obj, ctx, cf, layout, collect(Float64, θ_full))
     return obj, st
 end
 
 """
-    _callbackEvalFG_inner_profiled!(kc, cb, evalRequest, evalResult, userParams)
+    _callbackEvalFG_inner_profiled!(kc, cb, evalRequest, evalResult, userParams::ProfiledCBState)
 
 Reduced-dimension sibling of `_callbackEvalFG_inner_compressed!`: objective +
 gradient w.r.t. `(zeta, beta_reduced)` from `reduced_homogeneous_dual_contraction`/
 `reduced_homogeneous_transpose_contraction!` (task §6/§7 kernels), never
 touching a full/anchor-inclusive dual vector at all.
+
+`userParams` is type-annotated `::ProfiledCBState` (found live 2026-08-03, see
+docs/audits/profiled-inner-readiness-2026-08-03/): this function previously shared an
+identical, fully-untyped 5-arg signature with `oracle_fast.jl`'s unrelated
+`_callbackEvalFG_inner_profiled!(kc, cb, evalRequest, evalResult, userParams)` (whose
+`userParams` is one of the legacy callable `PsiObjectiveBundle*` types, never a
+`ProfiledCBState`) -- a genuine Julia method-table collision where whichever file was
+`include`d last silently replaced the other process-globally, not two independently
+dispatched methods. Annotating this one is sufficient and safe: `ProfiledCBState` is
+defined only in this file and is never passed to oracle_fast.jl's own driver, so this
+creates two non-overlapping methods rather than changing which one runs for any existing
+caller.
 """
-function _callbackEvalFG_inner_profiled!(kc, cb, evalRequest, evalResult, userParams)
+function _callbackEvalFG_inner_profiled!(kc, cb, evalRequest, evalResult, userParams::ProfiledCBState)
     st = userParams
     obj = st.obj
     x = evalRequest.x
@@ -85,7 +98,16 @@ function _callbackEvalFG_inner_profiled!(kc, cb, evalRequest, evalResult, userPa
     obj.Psi!(Psi_q, q)
     obj.dPsi!(dPsi_q, q)
     M = obj.M
-    evalResult.obj[1] = sum(Psi_q) / M + ζ
+    f = sum(Psi_q) / M + ζ
+    # lower_limit fast-fail clamp (found missing live 2026-08-03): every other production FG
+    # callback in this codebase (_callbackEvalFG_inner_cmlookup!, cm_lookup_live_knitro.jl:21-27;
+    # the ZC/CM+ZC equivalents; compressed_live.jl:224 for FULL) reports -KN_INFINITY the instant
+    # f<=obj.lower_limit, forcing KNITRO's own native KN_RC_UNBOUNDED=-300 exit immediately rather
+    # than burning the full iteration budget on a trajectory that is certainly diverging (see
+    # CLAUDE.md's "lower_limit=-50 ... a deliberate, load-bearing performance cutoff" note). This
+    # callback computed the unclamped `f` unconditionally, so a genuinely-unbounded unrestricted
+    # trial point ran to a slow nStatus=-400 timeout instead of a fast nStatus=-300 exit.
+    evalResult.obj[1] = f <= obj.lower_limit ? -KNITRO.KN_INFINITY : f
     evalResult.objGrad[1] = 1.0 - sum(dPsi_q) / M
     gβ = @view evalResult.objGrad[2:end]
     reduced_homogeneous_transpose_contraction!(gβ, dPsi_q, st.cf, st.ctx, st.θ_full, st.layout, st.B, st.Tslot)
@@ -96,7 +118,7 @@ function _callbackEvalFG_inner_profiled!(kc, cb, evalRequest, evalResult, userPa
 end
 
 """
-    _callbackEvalH_inner_profiled!(kc, cb, evalRequest, evalResult, userParams)
+    _callbackEvalH_inner_profiled!(kc, cb, evalRequest, evalResult, userParams::ProfiledCBState)
 
 Reduced-dimension sibling of `_callbackEvalH_inner_compressed!`'s
 `:exact_winner_pair_serial` branch: builds (lazily, once per inner solve) a
@@ -104,8 +126,10 @@ Reduced-dimension sibling of `_callbackEvalH_inner_compressed!`'s
 `reduced_homogeneous_winner_pair_hessian!` directly on `evalResult.hess` --
 KNITRO's own packed dense-row-major upper triangle, no dense round-trip, no
 legacy `obj.H` read (there is none: `OperatorPsiBundle` has no such field).
+
+`userParams` type-annotated for the same method-collision reason as the FG callback above.
 """
-function _callbackEvalH_inner_profiled!(kc, cb, evalRequest, evalResult, userParams)
+function _callbackEvalH_inner_profiled!(kc, cb, evalRequest, evalResult, userParams::ProfiledCBState)
     st = userParams
     obj = st.obj
     if st.wctx === nothing
