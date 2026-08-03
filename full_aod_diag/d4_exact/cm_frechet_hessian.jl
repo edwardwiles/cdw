@@ -328,7 +328,13 @@ function _fill_frechet_level_blocks_profiled!(Hfull, cctx::CMBinHessCtx, w, wctx
             end
             cm_rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
             col = level_off + lp
-            block_cmlevel = cctx.R === nothing ? Hraw_cmlevel : cctx.R' * Hraw_cmlevel
+            # production Hessian allocation audit (2026-08-02) fix, ported into the profiled branch
+            # 2026-08-03 (see docs/audits/profiled-inner-readiness-2026-08-03/): was
+            # `cctx.R' * Hraw_cmlevel`, allocating a fresh length-nO vector on every one of this
+            # loop's L*L iterations, identical to the defect already fixed in
+            # `_fill_frechet_level_blocks!` above (line 197) -- this profiled sibling had not
+            # received the same fix despite the block being otherwise byte-identical.
+            block_cmlevel = cctx.R === nothing ? Hraw_cmlevel : mul!(ext.block_cmlevel, cctx.R', Hraw_cmlevel)
             @views Hfull[cm_rows, col] .= block_cmlevel
             @views Hfull[col, cm_rows] .= block_cmlevel
         end
