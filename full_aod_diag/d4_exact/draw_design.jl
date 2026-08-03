@@ -129,7 +129,10 @@ copy of this wiring exists (in `d20_real_setup`), not one per draw design, which
 this whole file exists to enforce.
 """
 function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
-        draw_design::Symbol = :pseudorandom, draw_seed::Int = 20260719,
+        # draw_design, draw_seed: REQUIRED, no default (2026-08-03 hardening) -- which draws you
+        # get is a scientific choice (:pseudorandom vs :sobol_randomized change the answer's
+        # Monte Carlo noise structure), not an execution detail.
+        draw_design::Symbol, draw_seed::Int,
         outer_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "csw_outer_25.opt"),
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
         needs_outer_moment_jacobian::Bool = false, build_screen::Bool = true,
@@ -141,23 +144,13 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         # implement artifact loading (no such loader exists anywhere in this codebase today --
         # see reachability audit).
         artifact_path::Union{Nothing,AbstractString} = nothing,
-        # Part A (2026-07-23): passthrough to d20_real_setup's own destination_sample kwarg
-        # (default :exclude_row, matching that function's new default). CM/originZC checkpoint
-        # callers (cm_checkpoint.jl, cm_originzc_checkpoint.jl) explicitly pass :all_legacy here
-        # since their moment/pivot-elimination layers are not rectangularized in this release.
-        destination_sample::Symbol = :exclude_row,
-        # exclude_diagonal_gravity (2026-07-30, user-directed fix): passthrough to d20_real_setup's/
-        # d20_real_setup_qmc's own kwarg of the same name. `false` default reproduces every
-        # pre-existing caller's behavior bit-exactly.
-        exclude_diagonal_gravity::Bool = false,
-        # gravity_exclude_cells (2026-07-31, Brazil-Korea gravity-exclusion task): passthrough to
-        # d20_real_setup's own kwarg of the same name. Empty default reproduces every pre-existing
-        # caller bit-exactly.
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
-        # σHat passthrough (2026-07-30, sigma=3 campaign prep) to d20_real_setup's/
-        # d20_real_setup_qmc's own kwarg of the same name. `nothing` default reproduces
-        # AD_PARAMS.σHat=2.5 unchanged for every pre-existing caller.
-        σHat::Union{Nothing,Float64} = nothing)
+        # destination_sample, exclude_diagonal_gravity, gravity_exclude_cells, σHat: REQUIRED, no
+        # default (2026-08-03 hardening) -- passthrough to d20_real_setup's own kwargs of the same
+        # names, which are themselves now required; see that function's docstring.
+        destination_sample::Symbol,
+        exclude_diagonal_gravity::Bool,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}},
+        σHat::Float64)
     draw_design in VALID_DRAW_DESIGNS ||
         error("d20_real_setup_design: draw_design must be one of $(VALID_DRAW_DESIGNS), got :$(draw_design)")
 

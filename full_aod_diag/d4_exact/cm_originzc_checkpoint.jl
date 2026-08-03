@@ -468,7 +468,9 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # the real larger-kappa branch), false="lower" (maximize gp) -- see direction_bounds.jl's own
         # audit for the evidenced find_smallest<->upper/lower mapping. Default true preserves every
         # pre-existing caller's exact behavior byte-for-byte.
-        W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
+        # W, draw_design, draw_seed: REQUIRED, no default (2026-08-03 hardening) -- see
+        # run_cm_upper_checkpointed's identical comment.
+        W::Int, delta::Float64 = 1.0, draw_design::Symbol, draw_seed::Int,
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "originzc_upper",
@@ -486,16 +488,16 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         cm_gradient_backend::Symbol = :cplus,
         allow_backend_switch::Bool = false,
         distribution_restriction::Symbol,   # REQUIRED, no default -- explicit opt-in (task brief Section 12)
-        K_mean::Int, K_pair::Int = 0,
+        K_mean::Int, K_pair::Int,   # K_pair also REQUIRED, no default (2026-08-03 hardening --
+        # was =0, silently. Pass K_pair=0 explicitly if that's genuinely intended.)
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
         nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
-        # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
-        # the same name. DEFAULT FLIPPED 2026-08-01 (user-directed) -- see
-        # c10_d20_production_driver_unified.jl's own identical comment for the full rationale and
-        # the audit that scoped this change to only the 3 real production driver functions.
-        exclude_diagonal_gravity::Bool = true,
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
-        σHat::Union{Nothing,Float64} = 3.0,
+        # exclude_diagonal_gravity, gravity_exclude_cells, σHat: REQUIRED, no default (2026-08-03
+        # hardening, superseding the 2026-08-01 "flip the default at this layer only" approach)
+        # -- passthrough to d20_real_setup_design's own kwargs of the same names.
+        exclude_diagonal_gravity::Bool,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}},
+        σHat::Float64,
         # sigma3 campaign prep (2026-07-30): this driver had NO outer-algorithm-pinning mechanism
         # at all before this (unlike run_cm_upper_checkpointed/run_polish_checkpointed_unified) --
         # opt_file above leaves algorithm=auto, which knitro_outer_algorithm.jl's own 2026-07-25
@@ -503,9 +505,9 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # algorithm=Direct+hessopt=SR1(3)/BFGS(6) via set_outer_algorithm_direct!. `nothing`
         # (default): zero behavior change.
         outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
-        destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
-        # (2026-07-24): same option/semantics/production-default as run_cm_upper_checkpointed's
-        # own destination_sample kwarg.
+        destination_sample::Symbol,   # REQUIRED, no default (2026-08-03 hardening) --
+        # exclude-ROW-destination production release (2026-07-24): same option/semantics as
+        # run_cm_upper_checkpointed's own destination_sample kwarg.
         blas_threads::Union{Nothing,Int} = ZC_GRAM_BLAS_THREADS_DEFAULT[],   # allocation/Hessian
         # port task §6.3/§7: set once right after ctx build (see blas_thread_policy.jl). ZC Hessian
         # backend production integration (2026-08-01): defaults to 8 (ZC_GRAM_BLAS_THREADS_DEFAULT[],

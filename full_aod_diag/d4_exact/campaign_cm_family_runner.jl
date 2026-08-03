@@ -63,12 +63,39 @@ DIRECTION in ("upper", "lower") || error("campaign_cm_family_runner: direction m
 const FIND_SMALLEST = DIRECTION == "upper"
 
 const DELTAS = DELTAS_OVERRIDE === nothing ? [0.01, 0.1, 0.5, 1.0, 2.0] : DELTAS_OVERRIDE
-const W = 100_000
-const DRAW_DESIGN = :sobol_randomized
-const DRAW_SEED = 20260719
-const CM_L = 50
-const MEANZC_K = 1
-const ORIGINZC_K = 1
+
+# ScientificManifest wiring (2026-08-03 hardening): every scientific setting below is now
+# REQUIRED at every function this script calls (run_cm_upper/lower_checkpointed,
+# run_originzc_upper/lower_checkpointed) -- there is no more "leave it at the function default"
+# option anywhere in that call chain. This script's own single source of truth for those values
+# is the ScientificManifest TOML file, not locally hardcoded consts (which is what allowed the
+# earlier sigma confusion: this script and the functions it called each had their own separate
+# idea of what the default should be). Override the manifest path via
+# SCIENTIFIC_MANIFEST_TOML=/path/to/other.toml; there is no silent fallback if it's missing.
+include(joinpath(_D4E, "..", "..", "scientific_manifest", "ScientificManifest.jl"))
+using .ScientificManifestMod
+const SCI_MANIFEST_PATH = get(ENV, "SCIENTIFIC_MANIFEST_TOML",
+    joinpath(_D4E, "..", "..", "configs", "fullA_production_2026-08-03.toml"))
+isfile(SCI_MANIFEST_PATH) ||
+    error("campaign_cm_family_runner: ScientificManifest not found at $SCI_MANIFEST_PATH -- " *
+          "this script refuses to run without one (set SCIENTIFIC_MANIFEST_TOML to override).")
+const SCI = read_manifest_toml(SCI_MANIFEST_PATH)
+let problems = validate_manifest(SCI)
+    isempty(problems) || error("campaign_cm_family_runner: ScientificManifest at $SCI_MANIFEST_PATH " *
+        "failed validation:\n  " * join(problems, "\n  "))
+end
+lp("ScientificManifest loaded: ", SCI_MANIFEST_PATH, "  sigma=", SCI.sigma, " W=", SCI.W,
+   " draw_design=", SCI.draw_design, " draw_seed=", SCI.draw_seed,
+   " destination_sample=", SCI.destination_sample, " exclude_diagonal_gravity=", SCI.exclude_diagonal_gravity,
+   " gravity_exclude_cells=", SCI.gravity_exclude_cells)
+
+const W = SCI.W
+const DRAW_DESIGN = SCI.draw_design
+const DRAW_SEED = SCI.draw_seed
+const CM_L = SCI.L
+const MEANZC_K = SCI.K_mean   # NOTE: the manifest currently has one shared K_mean/K_pair pair
+const ORIGINZC_K = SCI.K_pair # for both families -- true today (both =1 in production) but would
+                               # need separate per-family fields if that ever changes.
 
 lp("="^100)
 lp("CAMPAIGN CM-FAMILY RUNNER -- ", Dates.now(), "  family=", FAMILY, " direction=", DIRECTION,
@@ -190,6 +217,9 @@ for delta in DELTAS, st in starts
             result = fn(w0; W = W, delta = delta, draw_design = DRAW_DESIGN, draw_seed = DRAW_SEED,
                 distribution_restriction = :origin_specific_moments_zero_covariance,
                 K_mean = ORIGINZC_K, K_pair = ORIGINZC_K,
+                exclude_diagonal_gravity = SCI.exclude_diagonal_gravity,
+                gravity_exclude_cells = SCI.gravity_exclude_cells, σHat = SCI.sigma,
+                destination_sample = SCI.destination_sample,
                 ckpt_dir = ckdir, run_id = label, label = label,
                 checkpoint_interval_s = 3600.0, maxtime_real = MAXTIME, verbose = true)
         else
@@ -199,6 +229,9 @@ for delta in DELTAS, st in starts
                     NamedTuple()
             result = fn(w0; W = W, delta = delta, draw_design = DRAW_DESIGN, draw_seed = DRAW_SEED,
                 L = CM_L, contrasts = :orthonormal, probs = PROBS_L50,
+                exclude_diagonal_gravity = SCI.exclude_diagonal_gravity,
+                gravity_exclude_cells = SCI.gravity_exclude_cells, σHat = SCI.sigma,
+                destination_sample = SCI.destination_sample,
                 ckpt_dir = ckdir, run_id = label, label = label,
                 checkpoint_interval_s = 3600.0, maxtime_real = MAXTIME, verbose = true, extra...)
         end
@@ -210,6 +243,10 @@ for delta in DELTAS, st in starts
     wall = time() - t0
     cfg = Dict{String,Any}("family" => FAMILY, "direction" => DIRECTION, "delta" => delta, "start_id" => start_idx,
         "W" => W, "draw_design" => string(DRAW_DESIGN), "draw_seed" => DRAW_SEED, "cm_L" => CM_L,
+        "scientific_manifest_path" => SCI_MANIFEST_PATH, "sigma" => SCI.sigma,
+        "destination_sample" => string(SCI.destination_sample),
+        "exclude_diagonal_gravity" => SCI.exclude_diagonal_gravity,
+        "gravity_exclude_cells" => SCI.gravity_exclude_cells,
         "maxtime_real" => MAXTIME, "checksum_w_hash" => st["checksum_w_hash"], "run_id" => label,
         "attempt" => prior_attempts + 1, "outer_initialized_from_prior_solution" => false,
         "outer_initialized_from_prior_delta_solution" => false, "outer_initialized_from_prior_direction_solution" => false,

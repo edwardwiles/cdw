@@ -37,9 +37,30 @@ const FIND_SMALLEST = DIRECTION == "upper"
 const FAMILY = "unrestricted"
 
 const DELTAS = DELTAS_OVERRIDE === nothing ? [0.01, 0.1, 0.5, 1.0, 2.0] : DELTAS_OVERRIDE
-const W = 100_000
-const DRAW_DESIGN = :sobol_randomized
-const DRAW_SEED = 20260719
+
+# ScientificManifest wiring (2026-08-03 hardening): see campaign_cm_family_runner.jl's identical
+# block for the rationale. Every scientific setting run_polish_checkpointed_unified needs is now
+# a required kwarg with no default; this is this script's single source of truth for them.
+include(joinpath(_D4E, "..", "..", "scientific_manifest", "ScientificManifest.jl"))
+using .ScientificManifestMod
+const SCI_MANIFEST_PATH = get(ENV, "SCIENTIFIC_MANIFEST_TOML",
+    joinpath(_D4E, "..", "..", "configs", "fullA_production_2026-08-03.toml"))
+isfile(SCI_MANIFEST_PATH) ||
+    error("campaign_unrestricted_runner: ScientificManifest not found at $SCI_MANIFEST_PATH -- " *
+          "this script refuses to run without one (set SCIENTIFIC_MANIFEST_TOML to override).")
+const SCI = read_manifest_toml(SCI_MANIFEST_PATH)
+let problems = validate_manifest(SCI)
+    isempty(problems) || error("campaign_unrestricted_runner: ScientificManifest at $SCI_MANIFEST_PATH " *
+        "failed validation:\n  " * join(problems, "\n  "))
+end
+lp("ScientificManifest loaded: ", SCI_MANIFEST_PATH, "  sigma=", SCI.sigma, " W=", SCI.W,
+   " draw_design=", SCI.draw_design, " draw_seed=", SCI.draw_seed,
+   " destination_sample=", SCI.destination_sample, " exclude_diagonal_gravity=", SCI.exclude_diagonal_gravity,
+   " gravity_exclude_cells=", SCI.gravity_exclude_cells)
+
+const W = SCI.W
+const DRAW_DESIGN = SCI.draw_design
+const DRAW_SEED = SCI.draw_seed
 # theta=fixed, A_coordinate_mode=powered_aspace, gp_coordinate_mode=raw -- matches the other 4
 # families' own production defaults (confirmed live in their own smoke-test log lines) and the
 # task's science config ("theta = fixed", "transformed-A production coordinates = true").
@@ -169,7 +190,9 @@ for delta in DELTAS, st in starts
             layout = LAYOUT, theta_lo = NaN, theta_hi = NaN,
             maxtime_real = MAXTIME, W_in = W, delta_in = delta, draw_seed_in = DRAW_SEED,
             draw_design_in = DRAW_DESIGN, ckpt_dir = ckdir, checkpoint_interval_s = 3600.0,
-            resume_from = nothing, destination_sample = :exclude_row)
+            resume_from = nothing, destination_sample = SCI.destination_sample,
+            exclude_diagonal_gravity = SCI.exclude_diagonal_gravity,
+            gravity_exclude_cells = SCI.gravity_exclude_cells, σHat = SCI.sigma)
     catch e
         errored = true
         errmsg = sprint(showerror, e)
@@ -178,6 +201,10 @@ for delta in DELTAS, st in starts
     wall = time() - t0
     cfg = Dict{String,Any}("family" => FAMILY, "direction" => DIRECTION, "delta" => delta, "start_id" => start_idx,
         "W" => W, "draw_design" => string(DRAW_DESIGN), "draw_seed" => DRAW_SEED,
+        "scientific_manifest_path" => SCI_MANIFEST_PATH, "sigma" => SCI.sigma,
+        "destination_sample" => string(SCI.destination_sample),
+        "exclude_diagonal_gravity" => SCI.exclude_diagonal_gravity,
+        "gravity_exclude_cells" => SCI.gravity_exclude_cells,
         "maxtime_real" => MAXTIME, "checksum_w_hash" => st["checksum_w_hash"], "run_id" => label,
         "public_driver" => "run_polish_checkpointed_unified", "attempt" => prior_attempts + 1,
         "outer_initialized_from_prior_solution" => false, "outer_initialized_from_prior_delta_solution" => false,

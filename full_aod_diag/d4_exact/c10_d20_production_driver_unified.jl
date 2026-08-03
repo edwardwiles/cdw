@@ -133,8 +133,11 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         theta_lo::Float64 = NaN, theta_hi::Float64 = NaN,   # required iff layout.trade_elasticity_mode==:flexible
         gp_scale::Union{Nothing,GpScale} = nothing,          # required iff layout.gp_coordinate_mode==:scaled_log
         maxtime_real::Float64 = 600.0, hessopt_tag::String = "sr1",
-        W_in::Int = 80000, delta_in::Float64 = 1.0, draw_seed_in::Int = 20260719,
-        draw_design_in::Union{Nothing,Symbol} = nothing,
+        # W_in, draw_seed_in, draw_design_in: REQUIRED, no default (2026-08-03 hardening) -- was
+        # W_in=80000, draw_seed_in=20260719, draw_design_in=nothing (silently resolving to
+        # :pseudorandom below). These determine what economic problem is solved.
+        W_in::Int, delta_in::Float64 = 1.0, draw_seed_in::Int,
+        draw_design_in::Symbol,
         ckpt_dir::AbstractString, checkpoint_interval_s::Float64 = 90.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
         logio::Union{Nothing,IO} = nothing,
@@ -146,27 +149,20 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         h_theta::Float64 = 1e-3, a_halfwidth::Float64 = 30.0,
         skip_cold_retry::Bool = true,
         use_neg_cache::Bool = false, neg_cache_code_version::String = "unified_v1",
-        # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
-        # the same name.
-        # DEFAULT FLIPPED 2026-08-01 (user-directed): this is a REAL production entry point --
-        # every real campaign run goes through this function (directly or via
-        # campaign_unrestricted_runner_sigma3.jl, which already passed these explicitly and is
-        # unaffected). Defaults now match the Brazil-Korea-excluded, sigma=3 release
-        # (exclude-brazil-korea-gravity-release-2026-07-31) rather than the pre-release regime --
-        # a caller that passes nothing now gets theta*=7.4894, not theta*=4.7293. Explicit
-        # overrides still work exactly as before. `gravity_exclude_cells`'s default is DERIVED
-        # (default_gravity_exclude_cells_brazil_korea, country_resolve.jl), not a hardcoded
-        # `[(3,14)]` literal, and assumes `destination_sample` is left at ITS OWN default
-        # (:exclude_row, below) -- if you override destination_sample, override
-        # gravity_exclude_cells explicitly too. The shared low-level context builders
-        # (d20_real_setup/d20_real_setup_design/build_ad_context_real_d20) were deliberately NOT
-        # touched by this flip -- ~200 unrelated diagnostic/benchmark scripts depend on their old
-        # defaults; only the 3 real production driver functions were changed. See
-        # WHAT_ACTUALLY_HAPPENED_2026-08-01.md / this branch's own commit message for the audit.
-        exclude_diagonal_gravity::Bool = true,
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
-        σHat::Union{Nothing,Float64} = 3.0,
-        destination_sample::Symbol = :exclude_row,
+        # exclude_diagonal_gravity, gravity_exclude_cells, σHat, destination_sample: REQUIRED, no
+        # default (2026-08-03 hardening). Supersedes the 2026-08-01 "flip the default at this
+        # layer only" fix, which left the deeper d20_real_setup/d20_real_setup_design/
+        # build_ad_context_real_d20 layer silently different (and left ~200 diagnostic/benchmark
+        # scripts depending on THAT layer's own old defaults -- those scripts now get
+        # UndefKeywordError instead of a silently wrong sigma/exclusion set; that is intended, not
+        # a regression to paper over. See WHAT_ACTUALLY_HAPPENED_2026-08-01.md for the prior
+        # history.) A caller must now derive these from a ScientificManifest
+        # (scientific_manifest/ScientificManifest.jl) or otherwise decide them explicitly --
+        # there is no longer a "leave it at the default" option at any layer of this call chain.
+        exclude_diagonal_gravity::Bool,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}},
+        σHat::Float64,
+        destination_sample::Symbol,
         blas_threads::Union{Nothing,Int} = nothing,   # reconciliation (task §1/Phase 1): same
         # kwarg/semantics as run_polish_checkpointed's -- process-scoped BLAS thread count, set
         # once right after ctx build, nothing (default) leaves the ambient count untouched.
@@ -200,7 +196,7 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
 
     w0 = copy(w_start_in)
     W = W_in; delta = delta_in; draw_seed = draw_seed_in
-    draw_design = draw_design_in === nothing ? :pseudorandom : draw_design_in
+    draw_design = draw_design_in
     find_smallest = find_smallest_in
     bandwidth_cache = Dict{Int,Float64}()
     if resumed !== nothing

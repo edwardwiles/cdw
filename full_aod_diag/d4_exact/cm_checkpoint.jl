@@ -595,8 +595,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # the real larger-kappa branch), false="lower" (maximize gp) -- see direction_bounds.jl's own
         # audit for the evidenced find_smallest<->upper/lower mapping. Default true preserves every
         # pre-existing caller's exact behavior byte-for-byte.
-        W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
-        L::Int = 10, contrasts::Symbol = :anchored, probs::Union{Nothing,AbstractVector{Float64}} = nothing,
+        # W, draw_design, draw_seed, L: REQUIRED, no default (2026-08-03 hardening) -- these
+        # determine what economic problem is solved (draw count/design/seed) and the CM basis
+        # dimension (L); a caller must get them from a ScientificManifest, not an implicit
+        # fallback.
+        W::Int, delta::Float64 = 1.0, draw_design::Symbol, draw_seed::Int,
+        L::Int, contrasts::Symbol = :anchored, probs::Union{Nothing,AbstractVector{Float64}} = nothing,
         cm_hessian_backend::Symbol = :structured, cm_grid_rule::Symbol = :equal,
         threaded_bins::Bool = true,   # allocation/Hessian port task §6: pass-through to
         # build_cm_production_context/build_cm_bin_ctx -- true (production default) selects the
@@ -686,14 +690,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,   # only consulted when cm_extension=:cm_plus_moments
         meanzc_basis::Symbol = :direct,
         meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
-        # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
-        # the same name. DEFAULT FLIPPED 2026-08-01 (user-directed) -- see
-        # c10_d20_production_driver_unified.jl's own identical comment for the full rationale and
-        # the audit that scoped this change to only the 3 real production driver functions.
-        exclude_diagonal_gravity::Bool = true,
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = default_gravity_exclude_cells_brazil_korea(),
-        σHat::Union{Nothing,Float64} = 3.0,
-        destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
+        # exclude_diagonal_gravity, gravity_exclude_cells, σHat, destination_sample: REQUIRED, no
+        # default (2026-08-03 hardening, superseding the 2026-08-01 "flip the default at this
+        # layer only" approach -- that left the deeper d20_real_setup/d20_real_setup_design/
+        # build_ad_context_real_d20 layer with a silently-different default, which is exactly the
+        # kind of gap this hardening pass closes). Passthrough to d20_real_setup_design's own
+        # kwargs of the same names, which are themselves now required.
+        exclude_diagonal_gravity::Bool,
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}},
+        σHat::Float64,
+        destination_sample::Symbol,   # exclude-ROW-destination production release
         # (2026-07-24): :exclude_row (PRODUCTION DEFAULT -- true D_origin/D_dest dimension shrink,
         # ROW dropped as a destination only; validated real D=20/W=80000 both cm_gradient_backend
         # values, see lfix_cplus_exclude_row_validation.jl) | :all_legacy (square D x D, explicit

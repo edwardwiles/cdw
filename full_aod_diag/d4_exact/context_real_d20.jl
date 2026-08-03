@@ -63,22 +63,22 @@ from production/fullA-exact) are unrelated to draw design -- unchanged, opt-in p
 """
 function build_ad_context_real_d20(; W::Int, row_idx::Union{Nothing,Int} = nothing,
         U::Union{Nothing,AbstractMatrix{Float64}} = nothing,
-        exclude_diagonal_gravity::Bool = false,
-        # gravity_exclude_cells (2026-07-31, Brazil-Korea gravity-exclusion task): additional
+        # exclude_diagonal_gravity, gravity_exclude_cells, σHat: REQUIRED, no default (2026-08-03
+        # hardening -- these determine what economic problem is actually solved and must never be
+        # silently substituted; a caller that omits one gets an UndefKeywordError, not a guess).
+        # σHat is a concrete Float64, not Union{Nothing,Float64} -- there is no "nothing means
+        # whatever AD_PARAMS.σHat happens to be" escape hatch anymore. Every real caller must
+        # decide sigma explicitly, typically by reading it from a ScientificManifest
+        # (scientific_manifest/ScientificManifest.jl).
+        exclude_diagonal_gravity::Bool,
         # (origin, dest-slot) cells dropped from the gravity-identification sample (regression AND
         # pivot) on top of the existing ROW/diagonal exclusions -- see gravity_sample_mask,
-        # full_aod_diag/gravity_tariff.jl. Empty (default) reproduces every pre-existing caller
-        # bit-exactly.
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
-        # σHat override (2026-07-30, sigma=3 campaign prep): AD_PARAMS.σHat=2.5 is this repo's
-        # single source of truth for sigma on the real D20 path (audited -- no CES/gravity formula
-        # anywhere hardcodes 2.5 directly; every consumer reads ctx.σ/σHat as a variable). `nothing`
-        # (default) reproduces AD_PARAMS's own σHat unchanged, bit-exact with every pre-existing
-        # caller -- this is opt-in, not a change to the historical default.
-        σHat::Union{Nothing,Float64} = nothing)
-    σ_override = σHat === nothing ? NamedTuple() : (σHat = σHat,)
+        # full_aod_diag/gravity_tariff.jl. Pass Tuple{Int,Int}[] explicitly for "no extra exclusions."
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}},
+        σHat::Float64)
     params = merge(AD_PARAMS, (fakeData = 3, DFake = D20_REAL, W = W, Jac_W = W, row_idx = row_idx,
-        exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells), σ_override)
+        exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells,
+        σHat = σHat))
     so = master_setup(params)
     @assert so.D == D20_REAL "master_setup returned D=$(so.D), expected $(D20_REAL) -- real_data/noah_D20 CSVs may be malformed"
     up = (; params..., D = so.D, EK_moments! = EK_moments!, EK_moments_Jacobian! = EK_moments_Jacobian!)
@@ -111,28 +111,31 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
         needs_outer_moment_jacobian::Bool = false,
         build_screen::Bool = true,
-        # Part A (2026-07-23 release): omit-ROW-destination as the new production default.
-        # :exclude_row -- true dimension shrink (origins stay all 20, destinations become the 19
-        # named countries, ROW=country 20 dropped as destination/kept as origin; theta
+        # destination_sample, exclude_diagonal_gravity, gravity_exclude_cells, σHat: REQUIRED,
+        # no default (2026-08-03 hardening) -- these determine what economic problem is actually
+        # solved. :exclude_row -- true dimension shrink (origins stay all 20, destinations become
+        # the 19 named countries, ROW=country 20 dropped as destination/kept as origin; theta
         # re-estimated on the rectangular sample). :all_legacy -- exact pre-Part-A square D x D
         # behavior, bit-for-bit (regression-safety opt-out). No third option, no silent fallback.
-        destination_sample::Symbol = :exclude_row,
+        destination_sample::Symbol,
         # Draw-design injection point (unify-random-draw-production-pipeline, 2026-07-30): nothing
         # keeps today's internal pseudorandom draw; a caller-supplied W x D Exp(1) matrix routes
-        # every other draw design through this exact same setup function.
+        # every other draw design through this exact same setup function. (Not a scientific
+        # parameter in the same sense -- it's how the draws get INTO this function, not what they
+        # mean -- so it keeps its default; the draw DESIGN itself is chosen one layer up, in
+        # d20_real_setup_design, where draw_design/draw_seed are required.)
         U::Union{Nothing,AbstractMatrix{Float64}} = nothing,
-        # exclude_diagonal_gravity (2026-07-30, user-directed fix): ALSO drop own-trade (o==d)
-        # cells from the theta-identification regression and the outer gravity constraint's
-        # coefficient vector, matching the Stata side's `sum_{o!=d,d!=ROW}` restriction. `false`
-        # is the default and reproduces every pre-existing caller's behavior bit-exactly -- this
-        # is opt-in, not a change to d20_real_setup's historical default.
-        exclude_diagonal_gravity::Bool = false,
-        # gravity_exclude_cells passthrough (2026-07-31) -- see build_ad_context_real_d20's kwarg
-        # of the same name. Dest-slot indexed (1:Ddest space), not global country index.
-        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
-        # σHat passthrough to build_ad_context_real_d20's own kwarg of the same name (2026-07-30).
-        # `nothing` default reproduces AD_PARAMS.σHat=2.5 unchanged.
-        σHat::Union{Nothing,Float64} = nothing)
+        # exclude_diagonal_gravity: ALSO drop own-trade (o==d) cells from the theta-identification
+        # regression and the outer gravity constraint's coefficient vector, matching the Stata
+        # side's `sum_{o!=d,d!=ROW}` restriction.
+        exclude_diagonal_gravity::Bool,
+        # gravity_exclude_cells -- see build_ad_context_real_d20's kwarg of the same name.
+        # Dest-slot indexed (1:Ddest space), not global country index. Pass Tuple{Int,Int}[]
+        # explicitly for "no extra exclusions."
+        gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}},
+        # σHat -- see build_ad_context_real_d20's kwarg of the same name. Concrete Float64, no
+        # "nothing means 2.5" escape hatch.
+        σHat::Float64)
     destination_sample in (:exclude_row, :all_legacy) ||
         error("d20_real_setup: destination_sample must be :exclude_row or :all_legacy, got :$destination_sample")
     row_idx = destination_sample == :exclude_row ? D20_REAL : nothing
