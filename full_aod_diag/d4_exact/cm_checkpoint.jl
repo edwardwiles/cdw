@@ -579,9 +579,12 @@ function migrate_cm_checkpoint_v1_candidate(path::AbstractString)
 end
 
 """
-    run_cm_upper_checkpointed(ctx, w0; L, contrasts=:anchored, probs, delta=1.0,
+    run_cm_upper_checkpointed(ctx, w0; L, contrasts, probs, delta=1.0,
         maxtime_real=180.0, ckpt_dir, run_id, label, checkpoint_interval_s=90.0,
         resume_from=nothing, cm_hessian_backend=:structured, kwargs...) -> NamedTuple
+
+`contrasts`/`probs` are REQUIRED (2026-08-03 hardening) -- they determine the actual CM basis/
+exact cutpoints used, i.e. what moments get computed.
 
 Checkpointed CM outer loop, same objective/constraint/gradient path as `run_cm_upper`
 (cm_outer_driver.jl, UNCHANGED, reused not reimplemented) but with `D20Checkpoint`-grade
@@ -600,7 +603,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # dimension (L); a caller must get them from a ScientificManifest, not an implicit
         # fallback.
         W::Int, delta::Float64 = 1.0, draw_design::Symbol, draw_seed::Int,
-        L::Int, contrasts::Symbol = :anchored, probs::Union{Nothing,AbstractVector{Float64}} = nothing,
+        # contrasts, probs: REQUIRED, no default (2026-08-03 hardening, tightening pass 2) --
+        # these determine the actual CM basis/exact cutpoints used, i.e. what moments get
+        # computed; recorded in the checkpoint schema alongside W/L/draw_design/draw_seed and
+        # already hard-checked on resume for exactly that reason (see this file's own header
+        # comment). `probs` was already effectively required via a runtime
+        # `probs === nothing && error(...)` check further down (removed below, now redundant);
+        # `contrasts` previously had a genuinely-unprotected default of :anchored with no
+        # equivalent check anywhere -- that was a real gap, now closed.
+        L::Int, contrasts::Symbol, probs::AbstractVector{Float64},
         cm_hessian_backend::Symbol = :structured, cm_grid_rule::Symbol = :equal,
         threaded_bins::Bool = true,   # allocation/Hessian port task §6: pass-through to
         # build_cm_production_context/build_cm_bin_ctx -- true (production default) selects the
@@ -923,7 +934,6 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                            "A_nonpivot_native in whichever coordinate A_coordinate_mode selects (see cm_w0_from_calibration)" : ""))
     end
 
-    probs === nothing && error("run_cm_upper_checkpointed($label): probs required (exact cutpoints, not re-derived from L)")
     is_frechet = marginal_restriction === :common_frechet   # guarded mutually exclusive with is_meanzc above
     mode_label = is_meanzc ? "cm_plus_meanzc" : (is_frechet ? "cm_common_frechet" : "cm_flexible")
     # architecture/production-operator-bundle-hardening-2026-07-30 (task §4): the ONLY call in this
