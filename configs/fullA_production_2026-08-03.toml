@@ -3,14 +3,12 @@
 # in the live codebase as of this date, not invented -- see
 # scientific_manifest/ScientificManifest.jl's docstring for exactly where each came from.
 #
-# KNOWN GAP (flag, do not silently fix here): campaign_cm_family_runner.jl -- the actual driver
-# behind the live FULL W100k 10x10 campaign running at the time this file was written -- does
-# NOT pass sigma explicitly to its run_*_checkpointed calls, so it inherits whatever
-# d20_real_setup/build_ad_context_real_d20 default to internally (nothing -> 2.5), NOT the
-# sigma=3.0 recorded below (which is what campaign_unrestricted_runner.jl and the 2026-08-01
-# Brazil-Korea-flip drivers use explicitly). This file records the INTENDED production value;
-# it does not change what the live campaign is actually running with. Reconciling that is a
-# real follow-up, not something to paper over.
+# sigma=3.0 CONFIRMED as what the live FULL W100k 10x10 campaign actually runs with (verified
+# 2026-08-03, corrected after an initial mis-check): campaign_cm_family_runner.jl and
+# campaign_unrestricted_runner.jl don't pass sigma explicitly, but every checkpointed function
+# they call (run_cm_upper_checkpointed, run_originzc_upper_checkpointed,
+# run_polish_checkpointed_unified) has its OWN sigma default of 3.0, one layer above
+# d20_real_setup's deeper nothing->2.5 default. No live-campaign gap here.
 
 schema_version = 1
 dataset_version = "real_d20_france_focal_noah_D20"

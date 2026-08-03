@@ -29,15 +29,20 @@ setting that determines what economic problem a FULL or REDUCED run actually sol
 Field grounding (2026-08-03, all read directly from the live codebase, not guessed):
   - `focal_country`, `country_order`: `real_data/noah_D20/countries.csv` (20 countries,
     3-letter lowercase codes, "row" = rest-of-world, always last).
-  - `sigma`: the production default was silently 2.5 (`AD_PARAMS.σHat`,
-    `full_aod_diag/d4_exact/context_real_d20.jl`'s `σHat::Union{Nothing,Float64}=nothing` kwarg)
-    until the 2026-08-01 Brazil-Korea defaults flip explicitly set it to 3.0 in three real
-    drivers. `d20_real_setup`/`build_ad_context_real_d20` THEMSELVES still default to `nothing`
-    (-> 2.5) unless a caller passes `σHat` explicitly -- confirmed live during this session that
-    `campaign_cm_family_runner.jl` (the runner behind the live FULL W100k 10x10 campaign) does
-    NOT pass `σHat` at its `run_*_checkpointed` call sites. This is exactly the silent-default
-    risk this manifest type exists to close; do not assume every current caller already gets
-    sigma=3.0 without independently checking that call site.
+  - `sigma`: `d20_real_setup`/`build_ad_context_real_d20` THEMSELVES default `σHat` to `nothing`
+    (-> `AD_PARAMS.σHat`=2.5) unless a caller passes it explicitly. But every real production
+    entry point sits one layer above that and overrides it: `run_cm_upper_checkpointed`,
+    `run_originzc_upper_checkpointed`, and `run_polish_checkpointed_unified` each default their
+    OWN `σHat` kwarg to `3.0` (set in the 2026-08-01 Brazil-Korea defaults flip), and
+    `campaign_cm_family_runner.jl`/`campaign_unrestricted_runner.jl` (the runners behind the live
+    FULL W100k 10x10 campaign) call those functions without overriding it -- so the live campaign
+    genuinely runs at sigma=3.0 in all five families, confirmed by reading each function's actual
+    default (2026-08-03; an earlier pass through this codebase incorrectly flagged this as a live
+    gap by checking only `d20_real_setup`'s own default and the campaign script's call site,
+    skipping the middle layer that actually governs behavior -- corrected same day). The lesson
+    generalizes: a "does this kwarg get passed explicitly at THIS call site" check is not
+    sufficient when there's an intermediate function with its own non-`nothing` default; always
+    trace to the function actually being called.
   - `exclude_diagonal_gravity`, `gravity_exclude_cells`: `default_gravity_exclude_cells_brazil_korea`
     (`country_resolve.jl`) resolves Brazil/Korea from the real country list; only defined/valid
     for `destination_sample=:exclude_row`.
