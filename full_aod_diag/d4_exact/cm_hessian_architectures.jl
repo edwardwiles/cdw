@@ -1077,7 +1077,20 @@ function _fill_cm_HEE!(HEE::AbstractMatrix, w::AbstractVector{Float64}, obj, cct
             # (mean/pair-row x economic-col) was left at its initial zero, so the average silently
             # halved every H_EM entry -- confirmed exactly (ratio 2.0 across the whole block, ForwardDiff
             # vs production) before this fix.
-            @views HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)
+            #
+            # production Hessian allocation audit (2026-08-02) fix, ported into this profiled branch
+            # 2026-08-03 (see docs/audits/profiled-inner-readiness-2026-08-03/): was `@views
+            # HEE[ncore+1:NCORE, 1:ncore] .= transpose(HEM)`. HEM is itself a view of HEE
+            # (`@view HEE[1:ncore, ncore+1:NCORE]`), so broadcasting into a disjoint-range view of
+            # the SAME parent array as the source hits Julia's broadcast aliasing-defensive-copy
+            # path (`Base.mightalias`/`Broadcast.unalias`), materializing a full temporary the size
+            # of the destination before copying it in -- the identical defect already fixed via an
+            # explicit loop in the non-profiled `ncore<NCORE` branch below (line ~1224-1226, which
+            # this profiled branch had not received). Mathematically identical elementwise copy.
+            ncore_wid = NCORE - ncore
+            @inbounds for i in 1:ncore, j in 1:ncore_wid
+                HEE[ncore + j, i] = HEM[i, j]
+            end
             # ---- H_MM -- UNCHANGED, copied verbatim from the non-profiled ncore<NCORE branch below ----
             if cctx.zc_gram_backend === :reference
                 zc_restriction_gram!(HMM, cctx.hzz_centered, op, M)
