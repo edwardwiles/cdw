@@ -18,6 +18,10 @@ isdefined(Main, :build_reduced_cm_operator_bundle) || error("profiled_restricted
 isdefined(Main, :build_reduced_frechet_operator_bundle) || error("profiled_restricted_family_adapters_2026-08-02.jl requires profiled_reduced_frechet_lookup_kernels_2026-08-02.jl to be included first.")
 isdefined(Main, :restriction_contrib0_flexcm!) || error("profiled_restricted_family_adapters_2026-08-02.jl requires profiled_restriction_contrib0_operators_2026-08-01.jl to be included first.")
 isdefined(Main, :decode_outer_profiled) || error("profiled_restricted_family_adapters_2026-08-02.jl requires outer_coordinate_layout_profiled_2026-07-31.jl to be included first.")
+# profiled-inner-readiness-2026-08-03, task §7: independent verification, auto-included (not an
+# error-guard) so every existing caller of this file's evaluators picks it up transitively without
+# needing its own include list edited.
+isdefined(Main, :verify_inner_solution_reduced_cm!) || include(joinpath(@__DIR__, "reduced_restricted_family_verification_2026-08-03.jl"))
 
 # ----------------------------------------------------------------------------
 # Flexible CM
@@ -99,10 +103,19 @@ function evaluate_profiled_flexcm_point(w_profiled::AbstractVector{Float64}, fct
     r = reduced_cm_base_state(decoded.xf, ctx, fctx.layout, fctx.cctx)
     θ_full = CS.reconstruct_full(decoded.xf, ctx.m)
 
-    m_weights = similar(r.obj.arg0)
-    r.obj.dPsi!(m_weights, r.obj.arg0)
+    # Independent verification (profiled-inner-readiness-2026-08-03, task §7): recomputes r/f/
+    # g_lambda from fresh scratch via verify_inner_solution_reduced_cm!, never reading the live
+    # FG callback's own st.arg0/cm_contrib/etc. m_weights below comes from the INDEPENDENTLY
+    # recomputed dual residual (ov.r), not r.obj.arg0 -- the whole point of independent
+    # verification is that a bug corrupting the live callback's own cached state would not be
+    # silently reproduced here.
+    cctx = fctx.cctx
+    bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+    ov = verify_inner_solution_reduced_cm!(r.ζstar, r.λstar, r.st.cf, ctx, θ_full, fctx.layout,
+        cctx.L, length(cctx.origins), cctx.origins, cctx.refIndex1, bins_u, cctx.R, r.obj, r.st.cf.W)
+    m_weights, verify = verify_namedtuple_from_operator(ov, r.obj, r.st.cf.W, r.inner_status)
 
-    result = (inner_status = r.inner_status, zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess)
+    result = merge(verify, (zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess))
     return (result = result, obj = r.obj, st = r.st, m_weights = m_weights, theta_full = θ_full, decoded = decoded)
 end
 
@@ -175,9 +188,15 @@ function evaluate_profiled_frechet_point(w_profiled::AbstractVector{Float64}, fc
     r = reduced_frechet_base_state(decoded.xf, ctx, fctx.layout, fctx.cctx, fctx.level_targets)
     θ_full = CS.reconstruct_full(decoded.xf, ctx.m)
 
-    m_weights = similar(r.obj.arg0)
-    r.obj.dPsi!(m_weights, r.obj.arg0)
+    # Independent verification (profiled-inner-readiness-2026-08-03, task §7), same rationale as
+    # flexible_CM's evaluator above.
+    cctx = fctx.cctx
+    bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+    ov = verify_inner_solution_reduced_cm_frechet!(r.ζstar, r.λstar, r.st.cf, ctx, θ_full, fctx.layout,
+        cctx.L, length(cctx.origins), cctx.origins, cctx.refIndex1, bins_u, cctx.R, fctx.level_targets,
+        r.obj, r.st.cf.W)
+    m_weights, verify = verify_namedtuple_from_operator(ov, r.obj, r.st.cf.W, r.inner_status)
 
-    result = (inner_status = r.inner_status, zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess)
+    result = merge(verify, (zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess))
     return (result = result, obj = r.obj, st = r.st, m_weights = m_weights, theta_full = θ_full, decoded = decoded)
 end

@@ -32,6 +32,14 @@ isdefined(Main, :OriginZCFamilyCtx) ||
     error("profiled_zc_lane_point_evaluators_2026-08-02.jl requires profiled_originzc_family_adapter_2026-08-02.jl to be included first.")
 isdefined(Main, :CMZCFamilyCtx) ||
     error("profiled_zc_lane_point_evaluators_2026-08-02.jl requires profiled_cmzc_family_adapter_2026-08-02.jl to be included first.")
+# profiled-inner-readiness-2026-08-03, task §7: independent verification, auto-included (not an
+# error-guard) so every existing caller of this file's evaluators picks it up transitively.
+# reduced_originzc_verification_2026-08-02.jl already existed but was never included by ANY test
+# or driver in this tree (confirmed live: test_phase13_production_runner_d4_gate_2026-08-02.jl
+# itself threw UndefVarError for verify_inner_solution_reduced_originzc! before this fix) -- i.e.
+# it was written and gated in isolation but never actually reachable from a real evaluator call.
+isdefined(Main, :verify_inner_solution_reduced_originzc!) || include(joinpath(@__DIR__, "reduced_originzc_verification_2026-08-02.jl"))
+isdefined(Main, :verify_inner_solution_reduced_cmzc!) || include(joinpath(@__DIR__, "reduced_restricted_family_verification_2026-08-03.jl"))
 
 """
     OriginZCPointEvalState
@@ -66,8 +74,20 @@ function evaluate_profiled_originzc_point(w_profiled::AbstractVector{Float64}, f
     r = reduced_originzc_base_state(decoded.xf, ctx, fctx.layout, pes.octx, pes.nu_full)
     θ_full = CS.reconstruct_full(decoded.xf, ctx.m)
 
-    m_weights = similar(r.obj.arg0)
-    r.obj.dPsi!(m_weights, r.obj.arg0)
+    # Independent verification (profiled-inner-readiness-2026-08-03, task §7): wires the ALREADY-
+    # EXISTING verify_inner_solution_reduced_originzc! (reduced_originzc_verification_2026-08-02.jl)
+    # into this evaluator -- that function was already written and gated but never actually called
+    # from here (confirmed by grep before this fix: zero callers). m_weights below comes from the
+    # INDEPENDENTLY recomputed dual residual (ov.r), not r.obj.arg0.
+    cf_solved = r.st.core_cf_ref[]
+    n_econ = fctx.layout.total_reduced_economic_moments
+    op = r.st.op
+    β_econ = @view r.λstar[1:n_econ]
+    λ_mean = @view r.λstar[n_econ+1:n_econ+n_mean(op)]
+    λ_pair = @view r.λstar[n_econ+n_mean(op)+1:n_econ+n_mean(op)+n_pair(op)]
+    ov = verify_inner_solution_reduced_originzc!(r.ζstar, β_econ, λ_mean, λ_pair,
+        cf_solved, ctx, θ_full, fctx.layout, op, r.st.zc_layout, pes.nu_full, r.obj, cf_solved.W)
+    m_weights, verify = verify_namedtuple_from_operator(ov, r.obj, cf_solved.W, r.inner_status)
 
     # BUGFIX (found live 2026-08-02, this branch): `r.st` is a `ReducedOriginZCOperatorState`,
     # which carries the solved CompressedFactual as `core_cf_ref::Ref{Any}`, NOT a `.cf` field
@@ -87,7 +107,7 @@ function evaluate_profiled_originzc_point(w_profiled::AbstractVector{Float64}, f
     # (not this file's job to add a getproperty override there) -- purely a fix in THIS adapter.
     st_for_gradient = (cf = r.st.core_cf_ref[], layout = fctx.layout)
 
-    result = (inner_status = r.inner_status, zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess)
+    result = merge(verify, (zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess))
     return (result = result, obj = r.obj, st = st_for_gradient, m_weights = m_weights, theta_full = θ_full,
             decoded = decoded, nu_full = pes.nu_full)
 end
@@ -119,10 +139,19 @@ function evaluate_profiled_cmzc_point(w_profiled::AbstractVector{Float64}, fctx:
     r = reduced_meanzc_base_state(decoded.xf, pes.nu_full, ctx, fctx.layout, pes.cctx)
     θ_full = CS.reconstruct_full(decoded.xf, ctx.m)
 
-    m_weights = similar(r.obj.arg0)
-    r.obj.dPsi!(m_weights, r.obj.arg0)
+    # Independent verification (profiled-inner-readiness-2026-08-03, task §7): reduced-economic +
+    # ZC mean/pair + CM-grid, via the new verify_inner_solution_reduced_cmzc! (this family has no
+    # analogue among the pre-existing verifiers -- unlike origin_ZC, whose reduced verifier already
+    # existed unwired). m_weights below comes from the INDEPENDENTLY recomputed dual residual
+    # (ov.r), not r.obj.arg0.
+    cctx = pes.cctx
+    bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+    ov = verify_inner_solution_reduced_cmzc!(r.ζstar, r.λstar, r.st.cf, ctx, θ_full, fctx.layout,
+        r.st.zc_op, r.st.zc_layout, pes.nu_full, cctx.L, length(cctx.origins), cctx.origins,
+        cctx.refIndex1, bins_u, cctx.R, r.obj, r.st.cf.W)
+    m_weights, verify = verify_namedtuple_from_operator(ov, r.obj, r.st.cf.W, r.inner_status)
 
-    result = (inner_status = r.inner_status, zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess)
+    result = merge(verify, (zeta = r.ζstar, beta = r.λstar, n_fg_calls = r.n_fg, n_hess_calls = r.n_hess))
     return (result = result, obj = r.obj, st = r.st, m_weights = m_weights, theta_full = θ_full,
             decoded = decoded, nu_full = pes.nu_full)
 end
