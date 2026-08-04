@@ -470,9 +470,26 @@ running a different economic problem than every other family this runner dispatc
 `_run_full` error message now states this precisely (file/line/constant names), rather than the
 prior session's more generic "no recorded canonical value."
 
+**D20/W=20,000 CLI smoke — PASSED after 4 real bugs found and fixed** (all in this new code, not
+pre-existing): (1) include-order (`outer_coordinate_layout.jl` needs `flexible_theta_aspace_
+production.jl` first), (2) a missing `flexible_theta.jl` dependency, (3) my own hand-rolled include
+list was missing several transitive dependencies (`CrossDeltaExactCache` etc.) — fixed by
+replacing it with `unrestricted_stage_runner.jl`'s own proven 5-file include list
+(`c10_d20_production_driver.jl` first, which transitively brings in everything else) rather than
+re-enumerating by hand, (4) `w_start::Vector{Float64}` as a bare statement is not a valid Julia
+local-variable declaration (needs `local w_start::Vector{Float64}`) — without `local`, Julia parses
+it as a type-assertion on an undefined variable and throws immediately.
+
+Real result: genuine D20/W=20,000 outer solve through `run_polish_checkpointed_unified`, 3
+evaluations, real feasible incumbents (`gp=0.9840278851786317` → `0.9651832909626661` →
+`0.9647390588023711`), `nStatus=-401` (time-limit, expected given `--diagnostic-budget 15`),
+`kappa=0.05242238460198423`. Real checkpoint files written
+(`cli_unrestricted_unified_latest.jls` + 2 `new_best_*` + `stage_complete_*`) and
+`run_manifest.json` confirmed with `A_coordinate_mode:"powered_aspace"` recorded correctly.
+
 ```
 FULL_CLI_ADAPTER =
-    unrestricted: implemented, D20/W=20,000 smoke = <see final verdict block>
+    unrestricted: PASS (real D20/W=20,000 smoke, 3 evals, feasible incumbents, checkpoint+manifest written)
     origin_zc: deliberately blocked (K_mean/K_pair conflict, documented precisely in the runner's
         own error message -- not attempted-without-reason)
 ```

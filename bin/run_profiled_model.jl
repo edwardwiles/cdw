@@ -301,27 +301,14 @@ A-coordinate system is a third, distinct formula -- not FULL's `:powered_aspace`
 """
 function _run_full_unrestricted(sci, cli, delta::Float64, find_smallest::Bool,
         maxtime_real::Float64, resume_from, outdir_base::String)
-    for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "oracle.jl",
-              "common_marginals_moments.jl", "common_marginals_interval.jl",
-              "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
-              "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
-              "compressed_factual_buffer_reuse.jl", "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "threaded_cross_hessian.jl",
-              "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
-              "no_dense_g_counters.jl", "economic_operator.jl",
-              "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "hcz_drawchunk_candidate_2026-07-29.jl",
-              "cm_hessian_architectures.jl", "cm_hessian_threaded.jl", "cm_production_bundle.jl",
-              "cm_outer_driver.jl", "cm_screen_bridge.jl", "gradient_workspace.jl", "lfix_factorized.jl",
-              "lfix_factorized_workspace.jl", "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_config.jl",
-              "zc_restriction_operator.jl", "zc_gram_blas_candidates.jl",
-              "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
-              "cm_originzc_target_layout.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl",
-              "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
-              "cm_frechet_lookup_kernels.jl", "cm_frechet_lookup_production.jl", "cm_checkpoint.jl",
-              "operator_hessian_weights.jl", "operator_psi_bundle.jl", "cm_lookup_live_knitro.jl", "cm_lookup_production.jl",
-              "country_resolve.jl", "cm_exact_cache_production.jl", "blas_thread_policy.jl", "knitro_outer_algorithm.jl",
-              "production_backend_manifest.jl", "incumbent_logic.jl",
-              "outer_coordinate_layout.jl", "flexible_theta_aspace_production.jl",
-              "c10_d20_production_driver_unified.jl"]
+    # Mirrors unrestricted_stage_runner.jl's own include list EXACTLY (5 files) rather than a
+    # hand-rolled enumeration -- c10_d20_production_driver.jl already transitively includes every
+    # shared dependency (context/oracle/gravity_elimination/cross_delta_cache/etc.) that a
+    # hand-copied list kept missing piecemeal (UndefVarError: CrossDeltaExactCache and others,
+    # found live 2026-08-04); duplicating that enumeration here risks exactly the double-include
+    # struct-redefinition errors this pattern avoids.
+    for f in ["c10_d20_production_driver.jl", "flexible_theta.jl", "flexible_theta_aspace_production.jl",
+              "outer_coordinate_layout.jl", "c10_d20_production_driver_unified.jl"]
         Base.include(Main, joinpath(D4X, f))
     end
 
@@ -341,7 +328,7 @@ function _run_full_unrestricted(sci, cli, delta::Float64, find_smallest::Bool,
     RunManifestMod.write_run_manifest_json(joinpath(manifest_dir, "run_manifest.json"), rm_)
     println("[run_profiled_model] wrote $(joinpath(manifest_dir, "run_manifest.json"))"); flush(stdout)
 
-    w_start::Vector{Float64}
+    local w_start::Vector{Float64}
     if resume_from === nothing
         ctx0 = Base.invokelatest(Main.d20_real_setup_design, W = sci.W, δ = delta, find_smallest = find_smallest,
             draw_design = sci.draw_design, draw_seed = sci.draw_seed, destination_sample = sci.destination_sample,
