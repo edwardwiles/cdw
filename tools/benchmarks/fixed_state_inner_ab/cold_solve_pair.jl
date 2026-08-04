@@ -35,7 +35,7 @@ for f in ["context.jl", "c10_d20_production_driver.jl", "context_real_d20.jl", "
           "cm_frechet_lookup_kernels.jl", "cm_frechet_lookup_production.jl",
           "blas_thread_policy.jl", "knitro_outer_algorithm.jl", "production_backend_manifest.jl",
           "incumbent_logic.jl", "cm_hessian_subblock_profiling.jl", "production_bundle_api.jl", "country_resolve.jl",
-          "cm_exact_cache_production.jl", "cm_checkpoint.jl",
+          "cm_exact_cache_production.jl", "cm_checkpoint.jl", "lfix_cm_cplus.jl", "cm_originzc_checkpoint.jl",
           "operator_hessian_weights.jl", "operator_psi_bundle.jl", "cm_lookup_live_knitro.jl", "cm_lookup_production.jl",
           "relative_a_coordinate_2026-07-31.jl", "profiled_economic_moment_layout_2026-08-01.jl",
           "homogeneous_contraction_2026-07-31.jl",
@@ -233,7 +233,7 @@ function full_cold_solve(family::Symbol, gp::Float64, z_full::AbstractMatrix{Flo
             outer_direct_hessopt = :sr1, maxtime_real = maxtime_real, ckpt_dir = ckpt_dir, run_id = "full_cold",
             label = "full_cold", checkpoint_interval_s = 60.0, resume_from = nothing, cm_gradient_backend = :cplus, verbose = false)
         return (knitro_status = result.knitro_status, n_eval = result.n_eval, n_grad = result.n_grad,
-            wall = result.wall, best = result.best_feasible)
+            wall = result.wall, best = result.best)
     else
         marginal_restriction = family == :common_frechet ? :common_frechet : :common_flexible
         cm_extension = family == :cm_meanzc ? :cm_plus_moments : :cm_only
@@ -249,6 +249,6 @@ function full_cold_solve(family::Symbol, gp::Float64, z_full::AbstractMatrix{Flo
             exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
             destination_sample = sci.destination_sample)
         return (knitro_status = result.knitro_status, n_eval = result.n_eval, n_grad = result.n_grad,
-            wall = result.wall, best = result.best_feasible)
+            wall = result.wall, best = result.best)
     end
 end
