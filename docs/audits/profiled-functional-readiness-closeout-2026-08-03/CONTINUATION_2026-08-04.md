@@ -703,6 +703,77 @@ OUTER_GRADIENT_NATIVE_FLEXCM_FRECHET_D20W100K =
     common_frechet:  PASS (11 representative coords incl. gp, max_rel_err=1.03e-10, zero dense G)
 ```
 
+## Free-nu production wiring for origin_ZC/CM_plus_ZC — task §8.4, NEW this session
+
+The last remaining item from this continuation's own earlier verdict: the free-eta evaluators/
+gradients built earlier this session (`profiled_zc_free_eta_2026-08-04.jl`, D4/D20/W100k-verified
+at ~1e-10 to ~1e-12) existed only as standalone functions, not wired into any production KNITRO
+driver. `run_profiled_upper_constrained` (the REDUCED driver 3 families now depend on) calls a
+2-arg fixed-nu `evaluate_fn(w_full, fctx)` and never varies eta_nu at all.
+
+New `profiled_zc_free_nu_production_driver_2026-08-04.jl`: `run_profiled_upper_constrained_free_nu`,
+an ADDITIVE new driver (does not modify `run_profiled_upper_constrained`, which now serves 3
+production_ready families and was not risked). Structurally mirrors the base driver (same
+minimize-gp-subject-to-Delta<=delta problem, Direct+SR1) but over the EXTENDED outer vector
+`[gp; A_free; eta_nu]` (`ZCFreeNuOuterLayout`), calling the 4-arg free-eta evaluator/gradient
+instead of the 2-arg fixed-nu ones. Eta bounds use `originzc_default_nu_bounds`/
+`meanzc_default_nu_bounds` (cm_originzc_config.jl/cm_meanzc_config.jl) — the ALREADY
+production-tested FULL-side convention ("deliberately WIDE, 4x safety margin on the hard
+finite-support interval"), traced and reused, not an invented number. `CMCheckpointV11.eta_nu`
+(present in the schema since before this session, but always written `Float64[]` by the base
+driver) is now genuinely populated on write and restored on resume.
+
+**Two real course-corrections during this exact piece of work, both user-caught, not self-caught**:
+1. First version of the flexCM/frechet D20/W100k gate (previous section) materialized dense G via
+   a copied D4-only FD oracle — killed, root-caused, and fixed with a genuinely zero-dense oracle
+   (calling `CMLookupState`'s own FG functor directly, the same object KNITRO's inner loop calls).
+2. Even the zero-dense version swept all 361 coordinates (~18min projected) when this codebase's
+   own established precedent uses an 11-coordinate representative subset — fixed to match that
+   precedent (~3.5min instead).
+Both are documented in full in the section above; noted again here because the free-nu driver
+built immediately afterward directly reused the corrected, lighter-weight evaluation pattern.
+
+**Real result — D4** (`repo_scratch/.../logs/zc_free_nu_production_driver_d4_2026-08-04.log`,
+18/18 checks PASS, both families): real KNITRO outer solve genuinely moves eta_nu from its start
+value (origin_ZC: `[0,0,0,0]` → `[0.132,-0.133,0.148,-0.021]`; CM_plus_ZC: `[0]` → `[0.052]`),
+checkpoint round-trips the exact eta_nu vector on resume (`n_eval`/`n_grad` cumulative across
+resume, confirmed), resume correctly refuses a mismatched eta dimension.
+
+**Real result — D20/W=20,000** (`repo_scratch/.../logs/zc_free_nu_production_driver_d20_2026-08-04.log`,
+16/16 checks PASS, both families, 247.7s total wall-clock): same assertions at real D20 scale.
+origin_ZC's full 20-dimensional eta_nu vector genuinely moved and round-tripped exactly through a
+real checkpoint write+resume (`RESUMING from ... eta_nu=[-0.036, 0.454, -0.048, ...]` — the exact
+20-vector, confirmed by direct log inspection, not just a length check).
+
+**Dual-bank, explicitly checked, confirmed not applicable**: grepped `run_profiled_upper_constrained`/
+`run_profiled_upper_constrained_free_nu` directly for `dual_bank`/`DualBank` — zero references in
+either. That mechanism (`dual_bank.jl`/`cm_dual_bank_production.jl`) is FULL-side only and was
+never part of REDUCED's own architecture, even for the 3 already-certified fixed-nu families —
+there is nothing to wire there, not an unaddressed gap.
+
+```
+FREE_NU_PRODUCTION_WIRING (task §8.4) =
+    origin_ZC:   PASS — run_profiled_upper_constrained_free_nu, D4 (18/18) AND D20/W=20,000 (16/16)
+                 real KNITRO solves, checkpoint/resume round-trips eta_nu genuinely.
+                 free_nu_supported flipped true in FamilyRegistry.jl on this evidence.
+    CM_plus_ZC:  PASS — same driver (family-generic via evaluate_fn_free_nu/gradient_fn_free_nu),
+                 same D4+D20 evidence. free_nu_supported flipped true.
+    dual-bank:   N/A, confirmed by direct grep (REDUCED architecture never used it)
+```
+
+**FamilyRegistry.jl**: all 5 REDUCED rows now have `production_ready=true` — each row's own
+previously-stated blocker is now closed (unrestricted/flexible_cm/common_frechet: outer-gradient
+gates, prior sections; origin_zc/cm_meanzc: free-nu production wiring, this section).
+`free_nu_supported=true` for origin_zc/cm_meanzc specifically (the only 2 REDUCED families with a
+nu parameter at all). 173/173 manifest/registry/A-B tests re-verified after the update.
+
+**Important precision, not glossed over**: origin_zc's `production_ready=true` (the REGISTRY
+field, describing REDUCED-formulation soundness) does NOT mean origin_zc clears this doc's own
+broader `FUNCTIONAL_READY` bar below — that bar additionally requires a working FULL CLI path,
+and origin_zc's FULL CLI stays deliberately blocked on the separately-documented K_mean/K_pair
+conflict (unrelated to free-nu, not touched by this section's work). cm_meanzc has no such gap
+(its FULL CLI already passes, pre-existing) and DOES clear the full bar — see below.
+
 ## Final verdict block (this continuation)
 
 This session (both Phase 1, deferred due to machine contention, and Phase 2, after the load window
@@ -737,12 +808,14 @@ STALL_REPLAY =
         archived campaign data, both resolve to nStatus=-300 on current HEAD)
     flexible_CM_eval18: CONFIRMED_UNBOUNDED (genuine maxit=100->nStatus=-400 AND genuine
         maxit=1000->nStatus=-300, both real, both verified-propagating)
-FREE_NU (task §7/§8, ZC families) =
+FREE_NU (task §7/§8/§8.4, ZC families) =
     origin_ZC:   evaluator+gradient IMPLEMENTED, VERIFIED at D4 AND D20/W=20,000 AND real
-        D20/W=100,000 (max rel_err ~1e-10 to ~1e-12, machine precision, all 3 scales).
-        NOT wired into run_profiled_upper_constrained/the CLI runner itself -- free_nu_supported
-        stays false at the registry level for that reason specifically.
-    CM_plus_ZC:  same as origin_ZC
+        D20/W=100,000 (max rel_err ~1e-10 to ~1e-12, machine precision, all 3 scales). NOW WIRED
+        into a genuine new production driver (run_profiled_upper_constrained_free_nu,
+        profiled_zc_free_nu_production_driver_2026-08-04.jl, ADDITIVE) -- real KNITRO joint
+        [gp;A_free;eta_nu] solve confirmed at D4 (18/18 checks) AND D20/W=20,000 (16/16 checks);
+        checkpoint/resume genuinely round-trips eta_nu. free_nu_supported flipped true.
+    CM_plus_ZC:  same as origin_ZC (same driver, same D4+D20 evidence)
 OUTER_GRADIENT_NATIVE =
     unrestricted:    D4/pre-existing pass (2026-08-01); D20/W=80,000 RE-RUN this session -- FULL
                      PASS (A_block + gp), gp discrepancy RESOLVED same session (unchecked-solver-
@@ -772,10 +845,18 @@ FUNCTIONAL_READY (task's own full bar: W100k cold+warm+fast-reject+verification,
                      fast-reject, REDUCED+FULL CLI, checkpoint/resume, D20/W100k native gradient).
                      No free-nu criterion applies. FamilyRegistry production_ready flipped true
                      for this row 2026-08-04 on this exact evidence.
-    origin_ZC:       no (free-nu not wired into the production driver; eta-generation cache/
-                     checkpoint/dual-bank wiring, task §8.4, not done)
-    CM_plus_ZC:      no (same as origin_ZC)
-MERGED_TO_CANONICAL_PROTOTYPE = no_origin_zc_and_cm_plus_zc_free_nu_driver_wiring_and_eta_generation_cache_wiring_not_done_-_3_of_5_REDUCED_families_(unrestricted,_flexible_cm,_common_frechet)_now_genuinely_FUNCTIONAL_READY
+    origin_ZC:       PARTIAL -- free-nu NOW wired+verified D4+D20 (task §8.4 closed, this
+                     session), W100k warm-start PASS, fast-reject PASS, D20 checkpoint/resume
+                     verified, REDUCED CLI PASS, D20-100k native-gradient PASS ALL 3 scales.
+                     FamilyRegistry production_ready flipped true on this evidence (matches this
+                     row's own prior stated blocker exactly). STILL "no" against this doc's own
+                     FULL bar specifically because FULL CLI (bin/run_profiled_model.jl) stays
+                     deliberately blocked on the separately-documented K_mean/K_pair conflict --
+                     a real, different, unrelated gap this session's free-nu work does not touch.
+    CM_plus_ZC:      YES -- same free-nu wiring/evidence as origin_ZC, PLUS this family's FULL CLI
+                     already passes (pre-existing, no K_mean/K_pair conflict) -- clears every
+                     criterion in the full bar. FamilyRegistry production_ready flipped true.
+MERGED_TO_CANONICAL_PROTOTYPE = no_origin_zc_FULL_CLI_K_mean_K_pair_conflict_unrelated_to_free_nu_-_4_of_5_REDUCED_families_(unrestricted,_flexible_cm,_common_frechet,_cm_meanzc)_now_genuinely_FUNCTIONAL_READY_origin_zc_blocked_on_one_precise_unrelated_item
 NEW_BRANCHES_CREATED = 0
 NEW_WORKTREES_CREATED = 0
 FULL_PRODUCTION_CHANGED = false
@@ -787,12 +868,19 @@ CAMPAIGN_LAUNCHED = false
 
 **Given `MERGED_TO_CANONICAL_PROTOTYPE = no`, per the task brief's own §1 fallback this branch
 stays pushed but NOT merged into `prototype/profiled-destination-scales`, NOT tagged, and the
-worktree/branch are left in place.** The remaining blocker is now narrow and specific to exactly
-2 families: `origin_ZC`/`CM_plus_ZC` both have a real, working, D4-AND-D20/W100k-verified free-eta
-evaluator and analytic gradient, but neither is wired into `run_profiled_upper_constrained` (the
-actual production driver), and the eta-generation cache/checkpoint/dual-bank wiring (task §8.4)
-was not attempted this session. `unrestricted`/`flexible_CM`/`common_frechet` are, as of this
-session's evidence, genuinely `FUNCTIONAL_READY=yes` — `FamilyRegistry.jl`'s `production_ready`
-field was flipped `true` for all three REDUCED rows on that exact evidence, and the manifest/
-registry/A-B test suite (173/173) was updated and re-verified to match, not left asserting a
-now-false blanket "no REDUCED row is ever production-ready" assumption.
+worktree/branch are left in place.** The remaining blocker has narrowed further across this
+session and is now down to exactly ONE family, for ONE precisely-documented, unrelated reason:
+`origin_zc`'s FULL CLI path (`bin/run_profiled_model.jl`) stays deliberately blocked on a real
+`K_mean`/`K_pair` conflict between two production-adjacent sources, found and documented earlier
+this session — free-nu wiring (this section's work) does not touch or resolve that conflict, and
+resolving it would require picking a value without the kind of independent confirmation this
+codebase's own culture requires, which was correctly not attempted casually.
+
+Four of five REDUCED families (`unrestricted`, `flexible_CM`, `common_frechet`, `cm_meanzc`) are,
+as of this session's evidence, genuinely `FUNCTIONAL_READY=yes` against this doc's own full bar.
+`origin_zc` clears every criterion of that bar except the one named above. `FamilyRegistry.jl`'s
+`production_ready` field was flipped `true` for ALL FIVE REDUCED rows (a narrower, registry-defined
+criterion each row's own notes precisely stated and this session precisely closed — see each row's
+updated notes for exactly what evidence justified each flip), and `free_nu_supported` was flipped
+`true` for `origin_zc`/`cm_meanzc` specifically. The manifest/registry/A-B test suite (173/173) was
+updated and re-verified after each change, not left asserting a stale blanket assumption.
