@@ -48,6 +48,19 @@ const TARGET_DELTA = parse(Float64, ARGS[3])
 const OUTPUT_DIR = ARGS[4]
 const EXPLORE_BUDGET_S = length(ARGS) >= 5 ? parse(Float64, ARGS[5]) : 1500.0
 const POLISH_BUDGET_S = length(ARGS) >= 6 ? parse(Float64, ARGS[6]) : 1500.0
+# Cross-family relaxation seed (optional): unrestricted is a strict relaxation of every restricted
+# family (same (gp,A) -> Delta* map, just fewer/no extra moment restrictions), so a restricted
+# family's own best point at the SAME delta is, by construction, already Delta*-feasible for
+# unrestricted -- confirmed by direct code read that every restricted family's w0 is
+# [w_a; optional_extra_tail] with w_a the IDENTICAL 380-length [gp;A_nonpivot] vector unrestricted
+# uses directly (campaign_cm_family_runner.jl's own w0 construction). Passing
+# <cross_seed_family> <cross_seed_delta> loads that family's report at that delta and offers its
+# w[1:380] as an extra seed candidate -- used to fix cross-family monotonicity violations
+# (unrestricted must weakly dominate every restricted family at fixed delta/direction; found and
+# confirmed live 2026-08-04: origin_zc's own upper bound exceeded unrestricted's own at
+# delta=0.01/0.1/0.5/1.0, a logical impossibility this seed resolves by construction).
+const CROSS_SEED_FAMILY = length(ARGS) >= 7 ? ARGS[7] : nothing
+const CROSS_SEED_DELTA = length(ARGS) >= 8 ? parse(Float64, ARGS[8]) : nothing
 
 isdir(OUTPUT_DIR) || mkpath(OUTPUT_DIR)
 isdir(CAMPAIGN_RESULTS_ROOT) || mkpath(CAMPAIGN_RESULTS_ROOT)
@@ -67,9 +80,14 @@ lp("Loaded baseline envelope: ", length(env.rows), " rows.")
 
 # 2. Layer in any already-completed CAMPAIGN cell reports for this exact family/direction at a
 #    smaller delta (supports the lower delta=0.5->1->2 continuation chain: delta=2's env must see
-#    delta=1's NEW result if it improved on delta=0.5's original one).
-for prior_delta in (0.01, 0.1, 0.5, 1.0, 1.5)
-    prior_delta >= TARGET_DELTA && continue
+#    delta=1's NEW result if it improved on delta=0.5's original one) -- AND at the SAME target
+#    delta, from a prior refinement round on this exact cell (a "round 2" push: re-running the same
+#    (family,direction,delta) seeds from its own best-so-far result to squeeze further, since many
+#    cells hit their time budget while still improving). The never-regress rule makes repeated
+#    rounds on the same cell always safe -- a round that finds nothing new just re-exports the
+#    current incumbent.
+for prior_delta in (0.01, 0.1, 0.5, 1.0, 1.5, TARGET_DELTA)
+    prior_delta > TARGET_DELTA && continue
     prior_path = campaign_report_path_for(FAMILY, DIRECTION, prior_delta)
     isfile(prior_path) || continue
     prior_report = load_run_state(prior_path).report
@@ -104,6 +122,21 @@ lp("Loaded ", length(seeds), " raw seed candidates from the original manifest.")
 if inherited_before !== nothing
     push!(seeds, Seed(FAMILY, DIRECTION, "F_current_envelope_incumbent", inherited_before.source_delta,
                        0, inherited_before.GT, inherited_before.Delta_star, inherited_before.w, "", ""))
+end
+
+if CROSS_SEED_FAMILY !== nothing
+    FAMILY == "unrestricted" ||
+        error("cross-family seeding is only meaningful feeding INTO unrestricted (the strict relaxation of every other family) -- got FAMILY=$FAMILY")
+    cross_path = campaign_report_path_for(CROSS_SEED_FAMILY, DIRECTION, CROSS_SEED_DELTA)
+    isfile(cross_path) || error("cross-family seed report not found: $cross_path")
+    cross_report = load_run_state(cross_path).report
+    length(cross_report.final_w) >= 380 ||
+        error("cross-family seed w too short ($(length(cross_report.final_w))) -- expected >=380 ([gp;A_nonpivot] block)")
+    w_cross = cross_report.final_w[1:380]
+    push!(seeds, Seed(FAMILY, DIRECTION, "G_cross_family_$(CROSS_SEED_FAMILY)_delta_$(CROSS_SEED_DELTA)",
+                       CROSS_SEED_DELTA, 0, cross_report.final_GT, cross_report.final_Delta_star, w_cross, "", cross_path))
+    lp("Cross-family seed loaded: ", CROSS_SEED_FAMILY, "@delta=", CROSS_SEED_DELTA, " GT=", cross_report.final_GT,
+       " Delta*=", cross_report.final_Delta_star, " (sliced to first 380 components)")
 end
 
 isempty(seeds) && inherited_before === nothing &&
