@@ -215,18 +215,40 @@ Sobol draw realizations entirely, an internal scale mismatch, not a K issue.
   ```
   Every genuine convergence/KKT check passes by many orders of magnitude — this is an extremely
   well-converged point, not an approximate one (`inner_status=0` is KNITRO's own clean-optimal code).
-  The **only** failing check is `oracle.jl`'s `mmin > tol.m_min_floor` with `m_min_floor=0.0`: one
-  recovered dual weight is exactly `0.0`, a legitimate corner-solution value, and the gate uses a
-  strict inequality against a floor of exactly zero. Nothing downstream actually broke because of
-  it — `Delta_dual` and `Delta_primal` agree to 12 significant figures using the same m-vector that
-  includes this zero. **This is very likely an overly strict verification-gate edge case, not
-  evidence of an incorrect K=3 solve** — but it is also not confirmed to be harmless in general: this
-  exact gate (`is_verified_success`) is what `run_cm_upper_checkpointed`'s own `cb_F!` uses to decide
-  whether a point may become the published incumbent (`is_new_best = feasible && verified && ...`),
-  so as this gate currently stands, a genuinely excellent cm_meanzc K=3 point sitting on this same
-  `m_min=0` boundary would be silently discarded by a real Wave run, not just by this smoke test. Not
-  confirmed whether this boundary case ever occurs in the existing, trusted K=1 production results
-  (not checked this session) — genuinely unresolved, flagged rather than guessed at.
+  The **only** failing check is `oracle.jl`'s `mmin > tol.m_min_floor` with `m_min_floor=0.0`.
+
+  **Root cause, fully confirmed (not left as a guess) — a second, more targeted diagnostic print
+  added at `verify_namedtuple_from_operator` (`operator_verification.jl`, gated the same way, off by
+  default) traced the exact zero weight to its source:**
+  ```
+  m_weights[2184]=0.0 exactly -- underlying r[2184]=-999.4002615604248
+  r range across all W=100,000 draws = [-1078.28, 139.62]
+  ```
+  `m_weights` is not a KNITRO decision variable — it is recomputed independently, post-solve, as
+  `m[i] = dPsi(r[i])` for every draw, where `r` is built from KNITRO's own converged duals
+  (`cc_algo/Psi.jl`'s hybrid divergence conjugate: `dPsi!(r) = exp(r)` for `r<=1`, `e*r` for `r>1`).
+  `exp(r)` is mathematically strictly positive for any finite `r` — it can only equal exactly `0.0`
+  in `Float64` via underflow (roughly `r < -745`, since `exp(-745)` is already below the smallest
+  representable positive double, `~5e-324`). `r[2184]=-999.4` is comfortably past that threshold:
+  `exp(-999.4) ~ 1e-434`, a real, finite, positive number in exact arithmetic, ~100 orders of
+  magnitude smaller than `Float64` can hold. **`m>0` genuinely holds at the true optimum here — the
+  "0.0" is a floating-point representation artifact of one far-tail Monte Carlo draw (out of
+  100,000) whose reweighted probability is astronomically small, not evidence of an invalid KNITRO
+  solution or a bug in the solve.** This also explains why every aggregate residual stayed tiny: one
+  underflowed-to-zero draw among 100,000 has a negligible effect on `mean_m_resid`/`Delta_dual`/KKT.
+
+  **Consequence: the fix is a one-character change, not a design question.** `oracle.jl`'s
+  `classify_inner_result` should use `mmin >= tol.m_min_floor` (non-strict), not `mmin >
+  tol.m_min_floor` (strict) — `m_min==0.0` from float underflow of a genuinely-positive true weight
+  is an expected, benign occurrence at realistic W (more draws = more chance some draw sits deep
+  enough in the tail to underflow), not something the gate should reject. **This is very likely NOT
+  K=3-specific** — the same underflow can occur at K=1 or any family, at any large-enough W; it may
+  simply never have been hit/noticed in the existing K=1 production results, or may already be
+  silently present in some of them without anyone checking `m_min` explicitly (not verified either
+  way this session). Not yet applied to `oracle.jl` itself — flagged as the concrete recommended fix
+  for a follow-up session, since changing a shared verification-gate tolerance is exactly the kind of
+  change that should get a deliberate look (e.g. a quick check of whether it changes any existing K=1
+  campaign result) rather than being made reflexively mid-investigation.
 
 `D4 derivative tests`: **not run** this session — this repo's D4 derivative-test harnesses are
 hand-built per family for the K=1 shapes already in production; extending them to K=3 is real work
@@ -235,11 +257,11 @@ not attempted here, given the session's time budget. Disclosed gap, not silently
 `K3_PREFLIGHT`:
 ```
 origin_zc:  pass (clean, matched-W, real-K1-seed-extended test — see Attempt 3 above)
-cm_meanzc:  pass_with_caveat (solve quality genuinely excellent; the automated verify gate has a
-            real, unresolved m_min=0 boundary issue that could suppress good Wave-1 incumbents --
-            recommend loosening VerifiedSuccessTolerances.m_min_floor, e.g. to a small negative
-            epsilon, or confirming K=1 never hits this same boundary, before trusting Wave 1's
-            cm_meanzc results at face value)
+cm_meanzc:  pass_root_caused (solve quality genuinely excellent; verify-gate rejection fully traced
+            to a benign Float64 underflow of one far-tail Monte Carlo draw's dPsi(r)=exp(r) weight,
+            r=-999.4, not a solve defect -- fix identified (oracle.jl classify_inner_result: mmin
+            >= tol.m_min_floor, not strict >), not yet applied pending a deliberate look since it's
+            a shared cross-family gate change)
 ```
 
 ## 8. K=3 seed banks, Wave 1, Wave 2
@@ -289,8 +311,8 @@ K3_PREFLIGHT =
 K3_WAVE1 =
     origin_ZC_upper:not_started (preflight passed; not launched this session, time budget)
     origin_ZC_lower:not_started (preflight passed; not launched this session, time budget)
-    CM_plus_ZC_upper:not_started (blocked on resolving the m_min=0 verify-gate question)
-    CM_plus_ZC_lower:not_started (blocked on resolving the m_min=0 verify-gate question)
+    CM_plus_ZC_upper:not_started (root cause identified and fix scoped, not yet applied -- see §7)
+    CM_plus_ZC_lower:not_started (root cause identified and fix scoped, not yet applied -- see §7)
 
 K3_WAVE2 = not_started (blocked on Wave 1)
 
@@ -315,11 +337,13 @@ CAMPAIGN_LAUNCHED_OUTSIDE_SCOPE = false
    the **same W** as the economic block (W=100,000 for the real campaign, not a smaller smoke-test
    W) — see `k3_preflight_smoke_v2.jl` / the `/tmp/w_match_test_k3.jl` diagnostic (not committed;
    recreate from Section 7's Attempt 3 description if needed) for the exact working pattern.
-3. Before launching `cm_meanzc` K=3 Wave 1: decide what to do about the `m_min=0` verify-gate
-   boundary case (Section 7). Options: (a) loosen `VerifiedSuccessTolerances.m_min_floor` (e.g. a
-   small negative epsilon) in `oracle.jl`, if a real economic justification for m=0 being an
-   acceptable corner solution is confirmed; (b) check whether real K=1 production incumbents ever
-   land on this same boundary (if never, that's itself informative about whether K=3 changes the
+3. Before launching `cm_meanzc` K=3 Wave 1: apply the identified fix in `oracle.jl`'s
+   `classify_inner_result` (`mmin >= tol.m_min_floor`, not strict `>` — Section 7 fully traced
+   `m_min=0.0` to a benign Float64 underflow of `exp(r)` for a far-tail draw, `r=-999.4`, not a solve
+   defect), then re-run a handful of existing K=1 cases to confirm the change never flips a
+   previously-`verified=false` K=1 point that SHOULD have stayed rejected for a different reason
+   (i.e. confirm this specific check was the only one it was failing) before trusting it at K=3
+   scale. (b) separately worth checking whether real K=1 production incumbents ever land on this same
    likelihood); (c) at minimum, re-run the `CDW_DIAG_VERIFY=1`-gated diagnostic (now committed in
    `cm_checkpoint.jl`) across a few more K=3 cm_meanzc points to see how often this recurs before
    trusting a full Wave run's "no improvement" results at face value.

@@ -344,6 +344,13 @@ included oracle.jl, matching its existing include-discipline for CS.select_G_fro
 function verify_namedtuple_from_operator(ov, obj, W::Int, nStatus::Integer)
     m_weights = similar(ov.r)
     obj.dPsi!(m_weights, ov.r)
+    if get(ENV, "CDW_DIAG_VERIFY", "0") == "1" && minimum(m_weights) == 0.0
+        i0 = argmin(m_weights)
+        println("  [CDW_DIAG_VERIFY] m_weights[", i0, "]=0.0 exactly -- underlying r[", i0, "]=", ov.r[i0],
+                " (dPsi! r<=1 branch is exp(r); exp underflows to exact 0.0 for r roughly < -745) ",
+                " r range=[", extrema(ov.r), "]")
+        flush(stdout)
+    end
     s_m_weights = sum(m_weights)
     Delta_dual = -ov.f
     Delta_primal = primal_divergence(m_weights)
