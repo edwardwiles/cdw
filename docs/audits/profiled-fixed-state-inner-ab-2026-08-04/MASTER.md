@@ -233,3 +233,61 @@ nothing further to numerically verify here beyond confirming (already true by th
 manifest arguments. Step 3 is complete for all 5 families on this basis; the remaining
 family-specific work is in the point bank (step 4): finding/constructing real nontrivial `nu` and
 restriction-affected points to populate it with, not re-deriving a second equivalence check.
+
+## Step 4: sentinel point bank -- real evidence, honest gaps
+
+`tools/benchmarks/fixed_state_inner_ab/build_point_bank.jl`. Assembles points from REAL sources
+only, decoded through step 3's own verified round trip (never a raw two-basis comparison):
+
+- **P0 (calibration)**: `ctx.θ0_up`, shared by all 5 families (same object, per step 3).
+- **P1 (ordinary feasible)**: real `CMCheckpointV11` checkpoints already written by the
+  outer-completion session's own canonical-CLI runs, `results/canonical_runner/reduced_<family>_W<W>_delta1.0/checkpoint.jls`
+  -- read-only, never mutated. Found and loaded successfully for **all 5 families, both W=20,000
+  and W=100,000** (10/10 cells, zero gaps).
+- **P3 (infeasible/stall)**: real archived points only. `unrestricted` gets 2 (idx=2, idx=17 of a
+  genuine W=100,000 forensic campaign's own JLD2 dict, machine-local at
+  `/bbkinghome/edav/repo_scratch/profiled-functional-readiness-closeout-2026-08-03/`, outside git
+  -- per this repo's own CLAUDE.md guidance on `.zip`/scratch artifacts living outside the repo).
+  `flexible_cm` gets the real, in-repo, extensively-forensically-verified
+  `eval18_captured_point_2026-08-02.txt`. **Honest gap, not filled with a synthetic point**:
+  `common_frechet`/`origin_zc`/`cm_meanzc` have NO real persisted P3 anywhere in this repo --
+  confirmed by a repo-wide search; only unsaved, logged shift-probe numbers exist for those three
+  (`CONTINUATION_2026-08-04.md`), which do not meet "an exact saved point." Constructing and
+  persisting real P3 points for these 3 families (via the same documented additive-log-A-shift
+  methodology, with a live KNITRO classification run, not just a citation) is open follow-up work,
+  not done in this pass.
+- **P2 (difficult feasible)**: only `flexible_cm` -- reconstructed exactly from the task's own
+  documented `k=0.3`/`k=0.6` interpolation between the real calibration point and the real eval18
+  point (`w_calib + k*(w_eval18 - w_calib)`), which CONTINUATION_2026-08-04.md already ran as real
+  KNITRO solves (feasible, near the eval18 infeasibility boundary) but never saved to a file --
+  reconstructed here from the two real endpoints, not re-copied from a log number. No other family
+  has any real P2 candidate anywhere in the repo (confirmed gap, not filled).
+
+**Sanity check on every point**: gravity residual is ~1e-19 for all 15 distinct points at both
+modes (30 rows total, P0/P1/P3 shared or independently decoded per mode) -- i.e. every REAL
+checkpoint this script loaded really does live on the gravity-feasible manifold once decoded
+through the SAME `(ctx, pe)`, not just the constructed calibration point. This is a live
+confirmation (not assumed) that the checkpoints are genuine points from this exact economic
+setup, not stale/mismatched artifacts.
+
+**Outputs** (per this task's storage rule -- large/binary outputs only under `repo_scratch`, not
+git): `/bbkinghome/edav/repo_scratch/profiled-fixed-state-inner-ab-2026-08-04/FIXED_STATE_POINT_BANK.jld2`
+(30 `SentinelPoint` records) and `.../FIXED_STATE_POINT_MANIFEST.csv` (human-readable summary:
+family, point_id, point_type, mode, W, gp, gravity_residual, eta_nu_norm, source, verification_status).
+
+**What "verification_status" means at this stage**: every point's status field cites its REAL
+prior evidence (checkpoint's own `n_eval`/`n_grad`/`checkpoint_reason`/`best_feasible`, or the
+forensic doc's documented KNITRO status) but explicitly says re-classification is deferred to
+step 6 -- i.e. this bank records provenance, and step 6's own cold-solve run is where each point
+gets independently re-verified live under this task's own controlled solver settings, not
+silently assumed from the citation alone.
+
+**Point coverage summary**:
+
+| family | P0 | P1 (both W) | P2 | P3 |
+|---|---|---|---|---|
+| unrestricted | yes | yes | none (gap) | 2 real archived points |
+| flexible_cm | yes | yes | 2 (reconstructed from real endpoints) | 1 real (eval18) |
+| common_frechet | yes | yes | none (gap) | none (gap -- no real file exists) |
+| origin_zc | yes | yes | none (gap) | none (gap -- no real file exists) |
+| cm_meanzc | yes | yes | none (gap) | none (gap -- no real file exists) |
