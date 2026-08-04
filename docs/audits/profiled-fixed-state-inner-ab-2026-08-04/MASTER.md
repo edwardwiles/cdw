@@ -190,3 +190,46 @@ arms"), not a second independently-rederived digest checked for bit-exact equali
   points) is open.
 - Points other than the single calibration point P0 -- P1/P2/P3 (ordinary feasible, difficult
   feasible, infeasible/unbounded) require the sentinel point bank (step 4), not yet built.
+
+## Step 3 continued: nu and restriction-target equivalence -- resolved by construction, not by round trip
+
+Researched (read-only, no files edited) whether `nu` (ZC families) and each restricted family's
+own restriction target need a SEPARATE coordinate-transform round-trip check, the way `gp`/full
+`A_od` did above. Real finding, confirmed by direct source read with file:line citations:
+
+- **`FamilyRegistry.jl`'s own `context_constructor` field is `"d20_real_setup_design"` for ALL 10
+  rows (5 families x 2 formulations)** -- the field's own comment states outright "both
+  formulations share this." FULL and REDUCED are not two independently-built contexts that
+  happen to agree; for the same manifest arguments they are the literal same deterministic
+  function call, so anything derived from `ctx.U`/`ctx` (nu's target functions, the CM/Fréchet
+  restriction targets) starts from a shared object, not two objects that could drift.
+- **`nu` itself**: on both sides, `nu` is a plain untransformed `Float64` (post `nu=exp(eta)`,
+  symmetric on both sides) fed into the literal SAME `mean_targets`/`pair_targets` functions
+  (`cm_originzc_target_layout.jl:85-99`). FULL calls them from `wrap_moments_with_originzc`
+  (`cm_originzc_moments.jl:167-178`); REDUCED calls the same functions from `refresh_zc_targets!`
+  (`zc_restriction_operator.jl:130-142`) on `aug.Zraw_all`/`aug.Zpairraw_all` -- the SAME object,
+  not a re-derived copy (`cm_hessian_architectures.jl:2004,2017`). The free-nu wrapper
+  (`profiled_zc_free_eta_2026-08-04.jl:110-113`) does `nu_full = exp.(eta_nu)` then passes it
+  straight through, unchanged, into the same target machinery. There is no second,
+  formulation-specific nu transform to round-trip.
+- **flexible_cm/common_frechet restriction targets**: theta-independent by construction (built
+  once from raw `ctx.U` at fixed quantile thresholds, `common_marginals_moments.jl:50-97`;
+  Fréchet's own level-anchor block likewise, `cm_frechet_level.jl:42-54`, explicit comment "no
+  dependency on theta_star/sigma/scale"). REDUCED's `FlexCMFamilyCtx`/`FrechetFamilyCtx`
+  (`profiled_restricted_family_adapters_2026-08-02.jl:40-53,127-138`) hold the SAME `cctx`/
+  `level_targets` object threaded in from the FULL side's own construction, not recomputed
+  independently.
+- **No existing test computes a restriction target or nu under both formulations at the same
+  point and diffs them numerically** -- confirmed absent, not just unfound: there is no second
+  independently-derived value to diff against in the first place, per the shared-object findings
+  above. The closest adjacent machinery (`test_zc_free_eta_evaluator_d4_2026-08-04.jl`) gates
+  REDUCED's own analytic gradient against FD, not a FULL-vs-REDUCED value comparison.
+
+**Conclusion**: unlike `gp`/full `A_od` (which genuinely differ in representation between the two
+formulations and required the round-trip check above), `nu` and every restriction target are
+equivalent by shared construction, not by a transform that could introduce error -- there is
+nothing further to numerically verify here beyond confirming (already true by the
+`context_constructor` finding) that both arms of any future A/B pair are built from IDENTICAL
+manifest arguments. Step 3 is complete for all 5 families on this basis; the remaining
+family-specific work is in the point bank (step 4): finding/constructing real nontrivial `nu` and
+restriction-affected points to populate it with, not re-deriving a second equivalence check.
