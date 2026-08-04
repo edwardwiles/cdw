@@ -454,9 +454,9 @@ per-coordinate `select_bandwidth` call inside its `for k in 2:D2` loop) --
 no fixed global `h` anymore.
 """
 function profiled_composite_gradient_at_incremental(w_profiled::AbstractVector{Float64}, ctx, spec::AnchorSpec,
-        pe::PivotGravityElimOnRetained, ev)
+        pe::PivotGravityElimOnRetained, ev; threaded::Bool = false)
     cache = build_profiled_lfix_cache(w_profiled, ctx, spec, pe, ev)
-    return profiled_composite_gradient_from_cache(cache, ctx, spec, pe, w_profiled, ev)
+    return profiled_composite_gradient_from_cache(cache, ctx, spec, pe, w_profiled, ev; threaded = threaded)
 end
 
 """
@@ -481,18 +481,50 @@ winner-update mechanism it drives are defined in exactly one place (task §8:
 shared method").
 """
 function profiled_composite_gradient_from_cache(cache::ProfiledLFixCache, ctx, spec::AnchorSpec,
-        pe::PivotGravityElimOnRetained, w_profiled::AbstractVector{Float64}, ev)
+        pe::PivotGravityElimOnRetained, w_profiled::AbstractVector{Float64}, ev;
+        threaded::Bool = false)
     n_total = outer_dim_profiled(pe)
     g = zeros(n_total)
     g[1] = profiled_gp_component_analytic(cache, w_profiled, ev, ctx)
 
     h_used = zeros(n_total); switch_mass = zeros(n_total)
-    @inbounds for coord_idx in 2:n_total
+
+    # task §6 (profiled-outer-ab-readiness-2026-08-04): port of FULL's own
+    # composite_gradient_fast.jl::do_coord!/Threads.@threads structure. Each coordinate's work
+    # writes ONLY to its own index `coord_idx` of `g`/`h_used`/`switch_mass` (pre-allocated,
+    # thread-safe by construction -- no shared mutable state). `cache`/`w_profiled`/`ctx`/`spec`/
+    # `pe` are read-only for the duration of the loop (`profiled_lfix_incremental_at`/
+    # `profiled_select_bandwidth` each build their own local `w = copy(w0)` and fresh allocations
+    # internally -- confirmed by direct read, not assumed). No cross-coordinate cache/dict is
+    # touched here (unlike FULL's h_mode=:cached path, which needs its own lock) -- REDUCED's
+    # bandwidth selection has no analogous shared cache yet (task §7).
+    function do_coord!(coord_idx::Int)
         h, m, _selmeta = profiled_select_bandwidth(cache, ctx, spec, pe, w_profiled, coord_idx)
         h_used[coord_idx] = h; switch_mass[coord_idx] = m
         Lp = profiled_lfix_incremental_at(cache, ctx, spec, pe, w_profiled, coord_idx, w_profiled[coord_idx] + h)
         Lm = profiled_lfix_incremental_at(cache, ctx, spec, pe, w_profiled, coord_idx, w_profiled[coord_idx] - h)
         g[coord_idx] = (Lp - Lm) / (2h)
+        return nothing
     end
-    return g, (cache = cache, w0 = collect(Float64, w_profiled), h_used = h_used, switch_mass = switch_mass)
+
+    if threaded
+        # Same mutual-exclusion invariant FULL's own threaded coordinate pool enforces
+        # (parallelism_guards.jl, injected into CS by context.jl -- already loaded by every
+        # REDUCED include list, no new include needed): errors loudly if an inner KNITRO solve is
+        # somehow still active when this pool launches, rather than silently racing.
+        Main.CS.guard_enter_coord_pool!()
+        try
+            Threads.@threads for coord_idx in 2:n_total
+                do_coord!(coord_idx)
+            end
+        finally
+            Main.CS.guard_exit_coord_pool!()
+        end
+    else
+        @inbounds for coord_idx in 2:n_total
+            do_coord!(coord_idx)
+        end
+    end
+    return g, (cache = cache, w0 = collect(Float64, w_profiled), h_used = h_used, switch_mass = switch_mass,
+        threaded = threaded)
 end

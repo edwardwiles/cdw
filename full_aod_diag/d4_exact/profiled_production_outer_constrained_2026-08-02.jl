@@ -135,7 +135,8 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
         verbose::Bool = true,
         checkpoint_path::Union{Nothing,AbstractString} = nothing,
         checkpoint_interval_s::Float64 = 60.0,
-        resume_from::Union{Nothing,AbstractString} = nothing)
+        resume_from::Union{Nothing,AbstractString} = nothing,
+        threaded_gradient::Bool = false)
     lp(xs...) = (println(xs...); flush(stdout))
     fam = family_kind(fctx)
     config = build_profiled_production_config(fctx; economic_parameterization = :profiled_destination_scales)
@@ -315,7 +316,7 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
             end
         end
         t_solve_done = time()
-        g, meta = shared_family_outer_gradient(collect(Float64, w), ctx, fctx, ev)
+        g, meta = shared_family_outer_gradient(collect(Float64, w), ctx, fctx, ev; threaded = threaded_gradient)
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
         evalResult.jac .= g

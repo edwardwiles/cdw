@@ -236,9 +236,15 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
     # that field was true of the DRIVER, not of what this CLI actually called. Fixed here so a FULL
     # vs REDUCED origin_zc/cm_meanzc A/B through this canonical runner compares two genuinely
     # free-nu arms, matching the fix applied to `_run_full_originzc` above.
+    # task §6: --threaded-gradient is a script-execution knob (which coordinate-loop code path
+    # runs), not a scientific parameter -- CLAUDE.md's no-silent-default rule is about what
+    # economic problem is solved, not this. Defaults false (serial), matching this driver's
+    # pre-threading behavior byte-for-byte; opt in explicitly to compare.
+    threaded_gradient = haskey(cli, "threaded-gradient") && cli["threaded-gradient"] == "true"
+
     if family in (:origin_zc, :cm_meanzc)
         return _run_reduced_zc_free_nu(family, sci, ctx, spec, pe, layout, reduced_obj0, w0, gp0, z_calib,
-            delta, maxtime_real, resume_from, outdir_base, D)
+            delta, maxtime_real, resume_from, outdir_base, D, threaded_gradient)
     end
 
     fctx, evaluate_fn = if family == :unrestricted
@@ -280,7 +286,8 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
     ckpt_path = joinpath(manifest_dir, "checkpoint.jls")
     result = Base.invokelatest(Main.run_profiled_upper_constrained, "cli_$(family)", w0; fctx, evaluate_fn,
         ctx = ctx, pe = pe, delta = delta, maxtime_real = maxtime_real, hessopt_tag = "sr1",
-        checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = true)
+        checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = true,
+        threaded_gradient = threaded_gradient)
     println("[run_profiled_model] n_eval=$(result.n_eval) n_grad=$(result.n_grad) wall=$(round(result.wall, digits=1))s " *
         "best=$(result.best === nothing ? "none" : "gp=$(result.best.gp) Delta=$(result.best.Delta)")")
     flush(stdout)
@@ -297,7 +304,7 @@ end
 # ----------------------------------------------------------------------------
 function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, reduced_obj0, w0::Vector{Float64},
         gp0::Float64, z_calib::Matrix{Float64}, delta::Float64, maxtime_real::Float64, resume_from,
-        outdir_base::String, D::Int)
+        outdir_base::String, D::Int, threaded_gradient::Bool = false)
     if family == :origin_zc
         layout_o = Base.invokelatest(Main.OriginByPowerLayout, D, 1, 0)
         νvec0 = fill(1.0, D)
@@ -308,7 +315,10 @@ function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, red
         fctx = Base.invokelatest(Main.build_originzc_family_ctx, ctx, spec, pe, layout, aug)
         pes = Base.invokelatest(Main.OriginZCPointEvalState, octx, νvec0)
         evaluate_fn_free_nu = (w, eta, ff, p) -> Base.invokelatest(Main.evaluate_profiled_originzc_point, w, eta, ff, p)
-        gradient_fn_free_nu = (w, eta, c, ff, ev) -> Base.invokelatest(Main.reduced_originzc_outer_gradient_with_eta, w, eta, c, ff, ev)
+        # threaded_gradient closed over here (gradient_fn_free_nu's own call signature is fixed at
+        # 5 positional args by run_profiled_upper_constrained_free_nu's own cb_G!, task §6's
+        # threading kwarg is passed via closure capture rather than widening that driver's contract).
+        gradient_fn_free_nu = (w, eta, c, ff, ev) -> Base.invokelatest(Main.reduced_originzc_outer_gradient_with_eta, w, eta, c, ff, ev; threaded = threaded_gradient)
     else # :cm_meanzc
         K_MEAN, K_PAIR = sci.K_mean, sci.K_pair
         νvec0 = fill(1.0, max(K_MEAN, 1))
@@ -321,7 +331,7 @@ function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, red
         fctx = Base.invokelatest(Main.build_cmzc_family_ctx, ctx, spec, pe, layout, aug, cctx, bins_u32)
         pes = Base.invokelatest(Main.CMZCPointEvalState, cctx, νvec0)
         evaluate_fn_free_nu = (w, eta, ff, p) -> Base.invokelatest(Main.evaluate_profiled_cmzc_point, w, eta, ff, p)
-        gradient_fn_free_nu = (w, eta, c, ff, ev) -> Base.invokelatest(Main.reduced_cmzc_outer_gradient_with_eta, w, eta, c, ff, ev)
+        gradient_fn_free_nu = (w, eta, c, ff, ev) -> Base.invokelatest(Main.reduced_cmzc_outer_gradient_with_eta, w, eta, c, ff, ev; threaded = threaded_gradient)
     end
 
     # `originzc_default_nu_bounds` dispatches correctly on `fctx.zc_layout`'s own type
