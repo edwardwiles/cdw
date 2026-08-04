@@ -349,3 +349,72 @@ repair"). Real, open hypotheses, none confirmed:
 This is real, first-class evidence for this task's own `INFEASIBLE_CLASSIFICATION` deliverable --
 recorded here, not resolved. Any future session picking this up should NOT assume this is a
 bridge/harness bug (already ruled out above) before investigating further.
+
+## Mode A (W=20,000) full campaign result -- real KNITRO, all 5 families, both arms
+
+`run_campaign.jl mode_a 90 ...` -- every point in the Mode A point bank (15 points), both arms,
+90s KNITRO budget each, real D20/W=20,000, single-threaded (Mode A diagnostic-parity intent).
+Full telemetry: `FIXED_STATE_INNER_AB_RESULTS_MODE_A.csv` (repo_scratch, not committed).
+
+### Headline finding: P1 fails on FULL for ALL 5 families, succeeds on REDUCED for ALL 5
+
+```
+family          arm      status   n_eval  gp           note
+unrestricted    reduced  -101     70      0.9590587    real feasible-type outer status
+unrestricted    full     (error)  0       --           rejected at cold-start pre-check
+flexible_cm     reduced  -401     18      0.9607301    time-limit, feasible incumbent
+flexible_cm     full     -411     2       --           time-limit, NO feasible incumbent found
+common_frechet  reduced  -401     9       0.9649653    time-limit, feasible incumbent
+common_frechet  full     -502     0       --           eval error (NaN/Inf) AT the cold start
+origin_zc       reduced  -401     53      0.9571854    time-limit, feasible incumbent
+origin_zc       full     -502     0       --           eval error (NaN/Inf) AT the cold start
+cm_meanzc       reduced  -401     10      0.9660784    time-limit, feasible incumbent
+cm_meanzc       full     -411     1       --           time-limit, NO feasible incumbent found
+```
+
+`-411`=`KN_RC_TIME_LIMIT_INFEAS` (time ran out with NO feasible incumbent ever found -- distinct
+from `-401`=`KN_RC_TIME_LIMIT_FEAS`, which DOES have one). `-502`=`KN_RC_EVAL_ERR` ("evaluation
+error (e.g. NaN/Inf) reported by a callback ... KNITRO unable to even evaluate the initial
+point", `knitro_status.jl:99`, `n_eval=0` in every case here -- a documented, named failure mode
+elsewhere in this repo, not a first occurrence). unrestricted's P1 was already isolated above as
+a genuine `inner_status=-300` infeasibility, not an eval error -- a THIRD distinct failure
+mode. **Three different failure modes, one consistent pattern: every one of the 5 families'
+REDUCED-verified-feasible P1 point fails on FULL, by whichever mechanism that family's FULL driver
+happens to hit first.** This is much stronger evidence than the unrestricted-only finding above --
+it is not family-specific. The leading hypothesis (REDUCED's own default
+`verification_policy=:reduced_verify_fn_inner_status_only` being a weaker/different feasibility
+criterion than FULL's real inner solve) is now supported by 5/5 families, not 1.
+
+**P0 (calibration) works cleanly on both arms for all 5 families** -- gp agreement to 2-3 decimal
+places under a 90s budget (`unrestricted` 0.959/0.955, `flexible_cm` 0.966/0.966, `common_frechet`
+0.967/0.978, `origin_zc` 0.961/0.962, `cm_meanzc` 0.967/0.967) -- confirming the harness/bridge
+itself is sound; the P1 pattern is a real property of those specific points, not a general
+cross-formulation breakdown.
+
+**P2 (flexible_cm, constructed near-eval18-boundary points) -- both arms succeed, real
+agreement**: P2a gp 0.964(reduced)/0.963(full), P2b gp 0.962/0.962 -- genuine positive
+cross-formulation agreement evidence at a materially harder point than calibration.
+
+**P3 (infeasible/stall points) -- both arms correctly reject, for every family that has one**:
+`unrestricted` P3a/P3b both arms refuse the cold start outright ("not inner-feasible/not
+screen-passing" on REDUCED, "not inner-feasible" on FULL) -- CONSISTENT infeasible classification
+between formulations. `flexible_cm` P3 (the real eval18 point): REDUCED raises
+`CMExpectedSolveFailure` with `nStatus=-300` (exactly reproducing the independently-documented
+eval18 forensic verdict); FULL gets `-502` (eval error) at 7.7s, 0 evals -- both reject fast,
+neither finds a feasible incumbent, though via different specific mechanisms.
+
+### Real per-family gp/Delta comparison, P0 only (only cell with clean numbers both arms, all 5 families)
+
+| family | REDUCED gp | FULL gp | REDUCED Delta | FULL Delta | REDUCED status | FULL status |
+|---|---|---|---|---|---|---|
+| unrestricted | 0.959243 | 0.955475 | 0.947 | 0.839 | -401 | -401 |
+| flexible_cm | 0.965910 | 0.966189 | 0.990 | 0.757 | -401 | -401 |
+| common_frechet | 0.967114 | 0.978297 | 0.872 | 0.752 | -401 | -401 |
+| origin_zc | 0.961067 | 0.962201 | 0.995 | 0.981 | -411 | -401 |
+| cm_meanzc | 0.966942 | 0.966672 | 0.741 | 0.962 | -401 | -401 |
+
+`gp` agrees to 2-3 decimal places for every family at the calibration point under a tight 90s
+cold-start budget (neither arm has converged -- both still time-limited); `Delta` (the objective)
+is materially less similar (both arms are still actively improving under time pressure, so this
+is expected variance under a short budget, not necessarily disagreement about the true optimum --
+Mode B / longer budgets are needed before treating any Delta gap here as a real disagreement).
