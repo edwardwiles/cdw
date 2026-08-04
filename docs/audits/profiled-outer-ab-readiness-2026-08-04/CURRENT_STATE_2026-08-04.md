@@ -38,21 +38,38 @@ corrected a stale module-docstring claim that it was "deliberately still false" 
 pair — the actual capability-row booleans were already correct; only the prose describing them was
 stale. See the docstring edit in this session's commit 1.).
 
-## Known remaining outer-performance gaps (this task's actual mission, sections 3-13 below)
+## Progress this session (Sections 1-4 closed; see companion docs)
 
-These are NOT closed by the functional-readiness work above — that work proved the REDUCED
-evaluators/gradients are *correct*; it did not address fair-comparison *performance* infrastructure:
+1. **Canonical-runner free-nu parity (task §3) — CLOSED, both origin_zc and cm_meanzc.** Traced
+   `bin/run_profiled_model.jl`'s dispatch end to end (task §3.1) and found BOTH arms were
+   fixed-nu, not just FULL: REDUCED's `_run_reduced` called the 3-arg fixed-nu `evaluate_fn` for
+   origin_zc/cm_meanzc (nu pinned at `pes` construction, never re-searched) despite
+   `FamilyRegistry.free_nu_supported=true`; FULL's `_run_full_originzc` explicitly pinned
+   `nu_bounds` to a ~1e-8-wide box, copied from a diagnostic script. Fixed both (commit
+   `b40de6f`): REDUCED now dispatches origin_zc/cm_meanzc through
+   `run_profiled_upper_constrained_free_nu` (new `_run_reduced_zc_free_nu` function); FULL now
+   uses `run_originzc_upper_checkpointed`'s own genuine `originzc_default_nu_bounds` default
+   instead of pinning. Verified live, real D20/W=20,000 CLI smokes for origin_zc (both
+   formulations) and cm_meanzc (REDUCED): both origin_zc arms wrote `nu_policy="free"` with
+   IDENTICAL `nu_bounds` summary `[-15.222177262685872, 3.9134314695358654]` in their
+   `run_manifest.json` (same draw_seed/K_mean/K_pair, as expected), and `eta_nu` genuinely moved
+   across outer KNITRO evaluations in both logs (not held at its start value). `ABComparability.jl`
+   already hard-fails on a `nu_policy`/`nu_bounds` mismatch between arms (lines 122-123,
+   pre-existing, unmodified) — task §3.3's "must hard-fail if one arm is fixed/other free"
+   requirement was already met by existing infrastructure, no fix needed there.
+2. **Powered profiled-relative A coordinates (task §4) — derivation done, mode implemented,
+   NOT wired as default.** See
+   `POWERED_PROFILED_COORDINATE_DERIVATION_2026-08-04.md` (this directory) for the full
+   derivation: `:profiled_powered_relative_A` is a per-coordinate affine reparametrization of
+   REDUCED's existing native `r_free`, using the SAME `(logX,logY,theta)` constants FULL's own
+   `:powered_aspace` mode already uses, and is a provable bijection (composition of invertible
+   affine maps). Implemented in `full_aod_diag/d4_exact/profiled_powered_relative_a_2026-08-04.jl`
+   (commit `6af41f1`), additive only, native mode remains every family's default. Verified via a
+   synthetic round-trip + FD gradient chain-rule check (not yet a full production-context D4/D20
+   gate — see that file's own commit message for exactly what was and wasn't checked).
 
-1. **Canonical-runner free-nu parity (task §3)**: not yet independently verified that
-   `bin/run_profiled_model.jl`'s FULL origin-ZC path dispatches to a genuine free-nu production
-   path rather than a fixed-nu-near-one diagnostic wrapper, side by side with REDUCED's
-   `run_profiled_upper_constrained_free_nu`. `FamilyCapability` rows record the drivers by name but
-   nothing in the registry certifies the two arms of an A/B use *matched* nu policy.
-2. **Powered profiled-relative A coordinates (task §4)**: REDUCED's only coordinate mode is native
-   `:profiled_pivot_anchor_relative` (`coordinate_modes` field, all 5 REDUCED rows). FULL uses
-   `:powered_aspace`. `:profiled_powered_relative_A` does not exist anywhere in the tree —
-   confirmed by the registry's own docstring (line ~150, unedited this session, still accurate) and
-   a repo grep. No derivation of the transform exists yet.
+## Known remaining outer-performance gaps (sections 5-13, NOT started this session)
+
 3. **Matched gradient instrumentation (task §5)**: `threaded_outer_gradient=false` and
    `bandwidth_cache=false` for every REDUCED row in the registry — there is no REDUCED-side timer
    breakdown to compare against FULL's at all yet, let alone a matched one.
@@ -61,10 +78,11 @@ evaluators/gradients are *correct*; it did not address fair-comparison *performa
 5. **REDUCED bandwidth-search reuse (task §7)**: `bandwidth_cache=false` for all 5 REDUCED rows.
    No cache exists to key/invalidate.
 6. **Decoded-state / short outer-search A/Bs (task §8-10)**: not run this session as of this
-   snapshot — blocked behind items 1-5 above per the task's own gate ordering (§10 "run only after
+   snapshot — blocked behind items 3-5 above per the task's own gate ordering (§10 "run only after
    all preceding gates pass").
-7. **Coordinate-mode tournament (task §11)**: blocked on item 2 (nothing to tournament against
-   native REDUCED yet).
+7. **Coordinate-mode tournament (task §11)**: `:profiled_powered_relative_A` exists (item 2 above)
+   but has not cleared the full production-context gate list, so a tournament against native
+   REDUCED is not yet appropriate to run.
 
 ## Relationship to the parallel fixed-state inner A/B task
 
