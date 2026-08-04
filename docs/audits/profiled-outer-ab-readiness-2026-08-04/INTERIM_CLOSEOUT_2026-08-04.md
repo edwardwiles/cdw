@@ -103,9 +103,14 @@ OPT_IN_PRODUCTION_READY =
 ## Relationship to the parallel fixed-state inner A/B task
 
 Per task §12, this session did not rerun or duplicate `benchmark/profiled-fixed-state-inner-ab-2026-08-04`
-(a separate Claude's ownership). Checked live at session end (`git branch -a`/`git ls-remote`
-grepped for `fixed-state-inner-ab`): that branch does not exist locally or on `origin` yet. No
-outer conclusion in this doc depends on it.
+(a separate Claude's ownership). That branch did not exist at session start; it appeared on
+`origin` partway through this session (`9aa3b40`, from the same canonical `395dec3` start point) —
+its own record states it deliberately stopped after step 2/13 ("manifest freeze only") specifically
+because it observed this worktree actively committing in real time and its own task brief's
+contingency says to stop rather than race a concurrent outer-readiness session. It has produced no
+scientific-equivalence results yet (only a frozen `ScientificManifest` + a `MASTER.md` skeleton) —
+nothing for this task to consume or be consistent with yet. No outer conclusion in this doc depends
+on it.
 
 ## Final verdict block
 
