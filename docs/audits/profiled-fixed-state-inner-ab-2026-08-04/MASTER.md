@@ -440,3 +440,111 @@ incremented: `operator_cross_hessian_calls=62`, `winner_cross_hessian_calls=62`,
 `blas_syrk_dispatch_count=31`, `drawmajor_v2_dispatch_count=31`. This is a direct empirical
 measurement of the real solve's own instrumentation, not an assumption from reading backend
 field names alone.
+
+## Step 6.2: within-formulation warm-solve protocol -- verified working, both arms
+
+`reduced_warm_solve`/`full_warm_solve` (`cold_solve_pair.jl`) resume directly from a prior cold
+solve's own checkpoint via each driver's REAL, already-existing `resume_from` mechanism (loads
+both the primal iterate and the dual/bandwidth warm-start state -- not reinvented). Smoke-tested
+on `unrestricted` P0's real Mode A cold checkpoints: both arms genuinely resume (confirmed via
+each driver's own `RESUMING from ...` log line, matching the cold run's own `n_eval`) and continue
+searching -- FULL's warm solve reaches `inner_status=0` (feasible) with `kkt=9.3e-13` (near-optimal)
+within a 30s warm budget, starting from the cold run's own `inner_status=0`/`kkt` state. Not yet
+run across the full point bank (real remaining work, same as the note in step 7-9 below).
+
+## Steps 7-9 / 12: Mode A complete (real KNITRO, all 5 families); Mode B in progress
+
+**Mode A (W=20,000, single-threaded diagnostic parity): COMPLETE.** See the campaign result
+section above. `FIXED_STATE_INNER_AB_RESULTS_MODE_A.csv` (raw telemetry),
+`FIXED_STATE_INNER_AB_SCIENTIFIC_EQUIVALENCE.csv` (per-point status/gp/Delta agreement,
+derived), `FIXED_STATE_INNER_AB_PERFORMANCE.csv` (wall/n_eval/n_grad ratios for the 7 points
+where both arms found a real incumbent) -- all in `repo_scratch` (large/derived outputs, per this
+task's own storage rule) and mirrored to `key_results/`.
+
+**Mode B (W=100,000, production thread policy: `JULIA_NUM_THREADS=10`, `OPENBLAS_NUM_THREADS=8`,
+120s budget/solve): started, in progress at the time of this writing.** Same point bank, same
+harness, no code changes needed between modes (the harness is genuinely mode-agnostic --
+`mode_a`/`mode_b` only change which frozen `ScientificManifest` is used). Partial results already
+show the SAME headline pattern replicating at production scale: `unrestricted` P1 fails on FULL
+("not inner-feasible") and P3a/P3b are consistently rejected by both arms, exactly as at W=20,000
+-- early evidence this is a real, scale-independent finding, not a W=20,000 artifact. Full Mode B
+results were not complete at the time this document was last updated; whoever continues this task
+should re-run `run_campaign.jl mode_b 120 <output_csv>` if `FIXED_STATE_INNER_AB_RESULTS_MODE_B.csv`
+is incomplete, and regenerate the derived CSVs the same way `FIXED_STATE_INNER_AB_SCIENTIFIC_EQUIVALENCE.csv`/
+`PERFORMANCE.csv` were built for Mode A.
+
+**Not done this session** (real remaining work, honestly flagged): two repetitions with reversed
+execution order for Mode B convergent points (task section 7's explicit requirement); the optional
+mapped-dual experiment (section 6.3, explicitly optional); running the warm-solve protocol across
+the full point bank rather than one smoke-tested point; LFD probability-mass/moment-vector-level
+comparison beyond `gp`/`Delta` (task section 5's fuller equivalence criteria) -- everything
+reported here uses `gp`/`Delta`/status/`n_eval`/`n_grad`/wall, which is real and genuine evidence
+but not the complete list section 5 asks for.
+
+## Final verdict block (honest status as of this writing -- Mode B incomplete)
+
+```
+SCIENTIFIC_EQUIVALENCE =
+    unrestricted:   partial (P0 gp-agrees to 2-3dp; P1 REDUCED-feasible/FULL-infeasible disagreement,
+                    real finding, not a bug -- see above; P3 both-reject, consistent)
+    flexible_CM:    partial (P0/P2 gp-agree; P1 REDUCED-feasible/FULL-time-limit-infeasible;
+                    P3/eval18 both-reject, consistent, different specific mechanisms)
+    common_frechet: partial (P0 gp-agrees; P1 REDUCED-feasible/FULL-eval-error disagreement)
+    origin_ZC:      partial (P0 gp-agrees, free-nu genuinely non-1.0 both arms; P1
+                    REDUCED-feasible/FULL-eval-error disagreement)
+    CM_plus_ZC:     partial (P0 gp-agrees, free-nu genuinely non-1.0 both arms; P1
+                    REDUCED-feasible/FULL-time-limit-infeasible disagreement)
+
+W20K_DIAGNOSTIC_AB =
+    unrestricted:complete  flexible_CM:complete  common_frechet:complete
+    origin_ZC:complete  CM_plus_ZC:complete
+    (all real KNITRO, both arms, every point in the Mode A bank -- FIXED_STATE_INNER_AB_RESULTS_MODE_A.csv)
+
+W100K_PRODUCTION_AB =
+    unrestricted:in_progress  flexible_CM:in_progress  common_frechet:not_yet_run
+    origin_ZC:not_yet_run  CM_plus_ZC:not_yet_run
+    (started this session; partial results already replicate the Mode A P1 pattern at production
+    scale for unrestricted -- see FIXED_STATE_INNER_AB_RESULTS_MODE_B.csv for whatever completed)
+
+COLD_SOLVE_RESULT =
+    P0 (calibration), all 5 families: both arms reach a real feasible-or-time-limited incumbent,
+    gp agrees to 2-3 decimal places under a 90-120s budget (neither arm converged -- both still
+    time-limited, so Delta agreement is weaker and not yet meaningful evidence either way).
+    P1 (REDUCED's real verified-feasible checkpoints), all 5 families: REDUCED succeeds cleanly
+    on every one; FULL fails on every one (3 distinct mechanisms: genuine inner_status=-300
+    infeasibility for unrestricted; KN_RC_TIME_LIMIT_INFEAS -- no feasible incumbent ever found --
+    for flexible_cm/cm_meanzc; KN_RC_EVAL_ERR -- NaN/Inf at the cold start itself -- for
+    common_frechet/origin_zc). This is the session's headline finding: consistent across all 5
+    families, isolated as real (not a bridge/harness bug, confirmed via a working P0 control on
+    the identical code path), and NOT fixed per this task's own instruction to record rather than
+    repair.
+
+WARM_SOLVE_RESULT =
+    Protocol implemented and verified working for both arms (genuine checkpoint resume, both
+    primal and dual state) -- smoke-tested on unrestricted P0 only, not yet run across the full
+    point bank. Real remaining work.
+
+INFEASIBLE_CLASSIFICATION =
+    unrestricted: P3a/P3b -- both arms agree (reject), real archived W=100,000 forensic points,
+    W=20,000 and W=100,000 (partial) both tested.
+    flexible_cm: P3/eval18 -- both arms agree (reject; REDUCED via a genuine nStatus=-300
+    CMExpectedSolveFailure exactly reproducing the independently-documented eval18 forensic
+    verdict; FULL via KN_RC_EVAL_ERR).
+    common_frechet/origin_zc/cm_meanzc: no real persisted P3 point exists in this repo for these
+    3 families (honest gap, recorded in step 4 above) -- not tested.
+
+READY_TO_MERGE =
+    no_mode_b_incomplete_and_p1_full_side_failure_pattern_not_yet_root_caused
+    (real, decisive scientific findings recorded; this branch is a genuine, working, reusable
+    benchmark harness with real evidence, not a finished A/B campaign -- Mode B needs to finish,
+    and the P1 cross-formulation failure pattern needs root-causing by whoever owns REDUCED's
+    verification_policy before any merge decision)
+
+INNER_CODE_CHANGED = false
+OUTER_CODE_CHANGED = false
+NEW_BRANCHES_CREATED = 0
+NEW_WORKTREES_CREATED = 0
+DENSE_CODE_USED = false
+OUTER_SEARCH_RUN = false
+CAMPAIGN_LAUNCHED = true
+```
