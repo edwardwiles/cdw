@@ -39,10 +39,20 @@ end
 Extracts the actual best-VERIFIED outer vector from a checkpoint file -- `checkpoint.best_feasible.w`,
 NOT `checkpoint.zfree`/`checkpoint.g` (the last, possibly-unverified probe point). See
 CHECKPOINT_CONTENTS_VERIFICATION_2026-08-03.md. Requires the caller to have already `include`-d the
-real driver chain (`load_checkpoint_unified`/`load_cm_checkpoint` must already be defined).
+real driver chain (`load_checkpoint_unified`/`load_cm_checkpoint`/`load_cm_checkpoint_v10` must
+already be defined).
+
+`origin_zc` checkpoints are `CMCheckpointV10` (`cm_originzc_checkpoint.jl`), a DIFFERENT schema
+from the other 3 CM-family drivers' `CMCheckpointV9` (`cm_checkpoint.jl`) -- `run_originzc_upper_checkpointed`
+writes/reads via its own `load_cm_checkpoint_v10`, not `cm_checkpoint.jl`'s `load_cm_checkpoint`
+(confirmed the hard way: `load_cm_checkpoint` on a real origin_zc file throws through its entire
+V9/V8/V6/V4/V3/legacy fallback chain via `TypeError`s before finally erroring "not a recognized CM
+checkpoint" -- it never tries V10 at all).
 """
 function load_checkpoint_w(path::AbstractString, family::String)
-    ckpt = family == "unrestricted" ? load_checkpoint_unified(path) : load_cm_checkpoint(path)
+    ckpt = family == "unrestricted" ? load_checkpoint_unified(path) :
+           family == "origin_zc"    ? load_cm_checkpoint_v10(path) :
+                                       load_cm_checkpoint(path)
     ckpt.best_feasible === nothing &&
         error("load_checkpoint_w($path): checkpoint has no best_feasible point (no verified incumbent found in that cell) -- not usable as a seed.")
     return ckpt.best_feasible.w
