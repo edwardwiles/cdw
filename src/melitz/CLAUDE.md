@@ -36,3 +36,33 @@ Concretely:
 Do not run a thread-count optimization study — 20 threads (or all available, with a warning,
 if fewer) is the fixed default; the question to check is only "did the parallel path actually
 get entered," not "what is the optimal thread count."
+
+## Never infer invalidity from materialized zero LFD weights
+
+A recovered LFD weight materializing as Float64 `0.0` is NOT by itself evidence of an invalid
+or divergent inner solve. `dPsi!`/`melitz_cc_dPsi!` (the divergence's conjugate derivative)
+compute `exp(arg0)` directly; for an extreme-tail QMC draw `arg0` can be around -800 to -1100,
+which underflows to the literal bit pattern `0.0` in Float64 while still being mathematically a
+genuinely tiny POSITIVE density ratio (confirmed live via BigFloat, 2026-08-04: every such
+weight is strictly positive at arbitrary precision, with true mass below `1e-300`, i.e. this is
+unavoidable post-normalization underflow, not an avoidable common-offset/normalization bug —
+see `test/melitz/test_primal_divergence_underflow_2026-08-04.jl`). Since
+`lim_{m->0+} m*log(m) - m + 1 = 1`, the correct contribution of an underflowed-to-zero weight to
+`melitz_primal_divergence` is the finite limit value `1.0`, not `Inf`.
+
+`melitz_primal_divergence` (`src/melitz/delta_star.jl`) used to return `Inf` for the WHOLE
+divergence sum the instant even one of `W` recovered weights underflowed to exactly `0.0`
+(commit before `1d97e4c`), which silently failed `lfd_ok` on otherwise-perfectly-good points —
+and this got MORE likely, not less, exactly at the extreme boundary-pushing points an outer
+search cares about most. Fixed 2026-08-04 (commit `1d97e4c`); see
+`docs/melitz_verification_gate_false_rejection_fix_2026-08-04.md` for the full
+find/fix/validation writeup. This is the same false-rejection bug class independently found on
+the Ricardian side the same day (`full_aod_diag/d4_exact/oracle.jl`'s `m_min_floor` check).
+
+**Use the central `melitz_primal_divergence`/`melitz_recover_lfd`/`melitz_recover_lfd_from_solution`
+gate (`src/melitz/delta_star.jl`, shared by both the dense `PsiObjectiveBundleDelta`/`Implicit`
+path and the matrix-free `MelitzCCBundle` path via `cc_bundle.jl`) and its typed `lfd_ok`
+result. Do not add a separate strict `weight > 0`/`minimum(weights) > 0` check anywhere else in
+the Melitz tree** — a genuinely invalid recovery is still (correctly) caught by this same gate
+via negative/non-finite weights, `s<=0` on the raw pre-normalization sum, normalization
+residual, moment residual, or `isfinite(primal_dual_gap)` — never by a materialized-zero check.
