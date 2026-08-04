@@ -10,7 +10,14 @@
 
 const CONTPOLISH_DRAW_DESIGN = :sobol_randomized
 const CONTPOLISH_DRAW_SEED = 20260719
-const CONTPOLISH_W = 100_000
+# W is a scientific parameter (per this repo's own rule: no function may silently default a
+# parameter that changes what economic problem is being solved) -- required via CAMPAIGN_W env var,
+# no fallback. All of this campaign's original W=100k runs set it explicitly; a later W=250k
+# extension (2026-08-04, user-requested, testing whether W=100k's Monte Carlo draw count is itself
+# limiting how far delta=2 upper bounds can be pushed) sets CAMPAIGN_W=250000.
+const CONTPOLISH_W = parse(Int, get(ENV, "CAMPAIGN_W") do
+    error("continuation_polish_run_fn.jl requires CAMPAIGN_W to be set in the environment (e.g. `export CAMPAIGN_W=100000`) -- no default, per this repo's scientific-parameter rule.")
+end)
 const CONTPOLISH_CM_L = 50
 const CONTPOLISH_MEANZC_K = 1
 const CONTPOLISH_ORIGINZC_K = 1
