@@ -554,12 +554,32 @@ A_free — this 2026-08-01 script may not make that same distinction); (b) a gen
 `gp`-gradient defect specific to this evaluator path. **Not resolved — a precise, bounded follow-up
 for the next continuation**, not a fabricated pass or a buried failure.
 
-Second test point (`modest_perturbation`) was still running FD checks at the time this report was
-finalized — see the log for its own eventual result if it completed:
-`repo_scratch/.../logs/unrestricted_outer_gradient_d20w80k_rerun_2026-08-04.log`.
+**Second test point (`modest_perturbation`) completed too, with the IDENTICAL pattern** —
+`gp`: `g_prof=+0.1606` vs `g_gt=+5318.9` (`rel_err=1.000`, sign matches); A-block: cos_sim=0.999856,
+per-coordinate rel_err 0.4%-42%, all 10 signs correct. **The script's own final verdict prints
+`D20/W80000 GRADIENT GATE: PASS`** at both points — this PASS is a false negative for the `gp`
+coordinate specifically, not evidence the gate is clean: `cos_sim` over the 11-coordinate subset
+stays ≈1 because BOTH vectors happen to be dominated by their own `gp` component (`g_gt`'s `gp`
+value of ~5200-5300 dwarfs its other ~1e-4 components; `g_prof`'s `gp` value of ~0.16-0.17 also
+dwarfs ITS OWN other ~1e-4 components) — i.e. both vectors point in approximately the same
+*direction* (≈ the gp unit vector) regardless of the ~4-order-of-magnitude difference in *how
+large* that dominant component actually is. Cosine similarity is blind to exactly this kind of
+scale error on a dominant coordinate. **Do not trust this script's own "PASS" line for the gp
+coordinate** — treat the per-coordinate `rel_err` table as the real evidence, not the aggregate.
+
+The consistency of the pattern (same ~4-order-of-magnitude gap, same sign-match, at two
+independent test points) makes a genuine **units/step-size bug specific to gp's own FD
+ground-truth computation (or the analytic gp-formula's own missing scale factor) the leading
+hypothesis** over "random numerical noise" — this is a precise, well-characterized, but NOT
+resolved finding for the next continuation, not a vague flag.
 
 ```
-OUTER_GRADIENT_NATIVE_UNRESTRICTED_D20W80K = A_block_pass_gp_coordinate_large_discrepancy_unresolved
+OUTER_GRADIENT_NATIVE_UNRESTRICTED_D20W80K =
+    A_block: pass (cos_sim 0.9999/0.9998, per-coord rel_err 0.4%-42%, all signs correct, both
+        test points)
+    gp_coordinate: FAIL (rel_err=1.000 at BOTH points, ~4 orders of magnitude scale mismatch,
+        sign correct, consistent pattern -- likely a units/step-size bug, not resolved this
+        session; the script's own aggregate "PASS" verdict does not catch this)
 ```
 
 ## Final verdict block (this continuation)
