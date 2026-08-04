@@ -387,6 +387,23 @@ ALL PASS, total wall 231.3s
 
 (log: `repo_scratch/.../logs/zc_free_eta_d20w20k_2026-08-04.log`)
 
+### D20/W=100,000 free-eta outer-gradient gate — ALL PASS (task §9 scale progression COMPLETE)
+
+Same script (`test_zc_free_eta_evaluator_d20_2026-08-04.jl`), `W_VAL=100000`. Real result:
+
+```
+origin-ZC:  inner solve converges (19.88s). econ[1,2,3,180,361] + ALL 20 eta coords:
+            max rel_err ~2.5e-12 (machine precision)
+CM+ZC:      inner solve feasible/optimal (18.37s). econ[1,2,3,180,361] + eta[1]:
+            max rel_err ~7.0e-13
+ALL PASS, total wall 535.8s
+```
+
+(log: `repo_scratch/.../logs/zc_free_eta_d20w100k_2026-08-04.log`). **The free eta_nu outer-gradient
+is now verified at all three scales the task requires (D4, D20/W=20,000, D20/W=100,000) for both
+origin_ZC and CM+ZC** — `OUTER_GRADIENT_NATIVE` for these two families is genuinely complete, not
+D4-only.
+
 ## Final verdict block (this continuation)
 
 Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed
