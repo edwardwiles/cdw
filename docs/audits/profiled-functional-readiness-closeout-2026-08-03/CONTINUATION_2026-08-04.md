@@ -224,6 +224,90 @@ wiring remain open):
 9. `FamilyRegistry.jl` capabilities update — still deliberately not edited pending the above gates
    landing for real (same reasoning the prior session gave).
 
+## Phase 2 (same session, load window opened after other users' jobs finished)
+
+`uptime` dropped from 241-270 to ~107 across 104 physical cores (~1.03/core, under the task's own
+1.5/core deferral threshold) once `chsiegm`'s large `sweep_stacked.py` jobs completed — confirmed
+live via `ps`/`uptime`, not assumed. Resumed the deferred heavy items.
+
+### D20/W=20,000 canonical CLI smokes — all 4 remaining REDUCED families now confirmed (closes
+    blocker item 6 above)
+
+Only `unrestricted` had been CLI-smoke-confirmed before this phase (prior session). Ran
+`bin/run_profiled_model.jl --config configs/smoke_w20k_2026-08-03.toml --family <X> --formulation
+reduced --direction upper --delta 1.0 --diagnostic-budget 15` for the other 4 — each a real D20/
+W=20,000 KNITRO outer solve, now running in ~40-90s wall (vs. the ~45 minutes the exact same class
+of run took under Phase 1's contention — direct confirmation the load window is real, not assumed):
+
+```
+flexible_cm:     PASS  status=-401 (time-limit, expected) wall=62.6s  best: gp=0.9767958864585219 Delta=0.05497330
+common_frechet:  PASS  status=-401                        wall=85.7s  best: gp=0.9746430740140182 Delta=0.10990155
+origin_zc:       PASS  status=-401                        wall=42.5s  best: gp=0.9652292135031784 Delta=0.73818994
+cm_meanzc:       PASS  status=-401                        wall=89.3s  best: gp=0.9781193894488888 Delta=0.03772924
+```
+
+All 4 wrote real `run_manifest.json` + `checkpoint.jls` under `results/canonical_runner/reduced_
+<family>_W20000_delta1.0/` (NOT committed — generated artifacts, per the task's own instruction;
+`flexible_cm`'s manifest spot-checked directly: real `W=20000`, `draw_seed=20260719`,
+`A_coordinate_mode=profiled_pivot_anchor_relative`, `source_sha=abdf35a...` matching this
+continuation's own HEAD at launch time). `CANONICAL_RUNNER` (task §6) is now
+`pass_all_5_REDUCED_families_D20_W20000_smoke_confirmed` — closes the "4 REDUCED families not
+independently smoke tested" gap the original MASTER.md's own §6 left open.
+
+(logs: `repo_scratch/.../logs/cli_smoke_{flexible_cm,common_frechet,origin_zc,cm_meanzc}_2026-08-04.log`)
+
+### W=100,000 warm-start gate (task §4.1) — see result below
+
+New `test_warmstart_w100k_2026-08-04.jl`: additive `_warm` variants of
+`reduced_cm_base_state`/`reduced_originzc_base_state`/`reduced_meanzc_base_state` (flexible_CM,
+origin_ZC, CM+ZC) that inject a converged `(ζ*,λ*)` into a FRESH bundle's `.x` field before the
+inner KNITRO solve, rather than modifying the production functions. Mechanism confirmed live by
+reading `operator_psi_bundle.jl`: `OperatorPsiBundle.x` defaults to `NaN .* ones(...)` on every
+fresh construction (genuinely cold every time) and `CS.inner_loop_initial_values(obj) =
+obj.use_cached_x && norm(obj.x)<1e6 ? obj.x : zeros(...)` — `use_cached_x=true` is already threaded
+from the base context, so setting `.x` on a freshly-built bundle before solving IS a genuine warm
+start, not a no-op. For each family: solve cold at the real calibration point (D20/W=100,000, known
+feasible — reused throughout this session's D4/D20 gates), extract the converged dual, build a
+SECOND independent bundle/context at the identical outer point, inject the dual, solve again, and
+require EXACT status + Delta-star agreement (not "close enough" — per CLAUDE.md's own standing
+finding that warm/cold start affects only speed, never convergence/the answer).
+
+**Real result (`repo_scratch/.../logs/warmstart_w100k_take2_2026-08-04.log`, first attempt hit an
+unrelated missing-include bug — `profiled_reduced_frechet_lookup_kernels_2026-08-02.jl` — fixed):**
+
+```
+context build: 146.99s (shared across all 3 families)
+flexible_CM:  cold status=0 Delta=0.0004912889 n_fg=5 n_hess=4 (29.01s)
+              warm status=0 Delta=0.0004912889 n_fg=5 n_hess=4 (7.38s)   -- EXACT match, PASS
+origin-ZC:    cold status=0 Delta=0.0004779438 n_fg=5 n_hess=4 (9.13s)
+              warm status=0 Delta=0.0004779438 n_fg=5 n_hess=4 (2.05s)   -- EXACT match, PASS
+CM+ZC:        cold status=0 Delta=0.0004796468 n_fg=5 n_hess=4 (4.26s)
+              warm status=0 Delta=0.0004796468 n_fg=5 n_hess=4 (4.00s)   -- EXACT match, PASS
+ALL PASS
+```
+
+**Decisive**: `Delta-star` bit-identical (`|Δ|=0.0`, not merely "close") between cold and warm for
+all 3 families, genuine `nStatus=0` convergence in both arms, at real D20/W=100,000, warm start via
+a genuinely FRESH bundle+context (not the same object reused) with the converged dual injected
+into `.x` before solving. Directly confirms this repo's own standing finding
+([[feedback-user-knitro-convergence-not-start-dependent]]) at real production scale for 3 REDUCED
+families that had never been warm-start-tested before (only the FULL-side Brazil-Korea point had
+this property confirmed previously). Wall-clock dropped substantially for flexible_CM (29.0s→7.4s)
+and origin-ZC (9.1s→2.1s) even though `n_fg`/`n_hess` call counts were identical — consistent with
+the warm start letting KNITRO's own internal barrier iterations converge faster per call, or with
+JIT/compilation amortization from being the second call of that method path in the same process
+(both real, not mutually exclusive; not disentangled further here, not needed to answer the
+task's own question).
+
+```
+W100K_WARM_START =
+    unrestricted:    not_attempted_this_session
+    flexible_CM:     PASS (exact status+Delta-star match, real D20/W=100,000)
+    common_frechet:  not_attempted_this_session
+    origin_ZC:       PASS (exact status+Delta-star match, real D20/W=100,000)
+    CM_plus_ZC:      PASS (exact status+Delta-star match, real D20/W=100,000)
+```
+
 ## Final verdict block (this continuation)
 
 Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed
