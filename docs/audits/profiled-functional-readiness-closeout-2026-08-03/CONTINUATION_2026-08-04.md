@@ -774,6 +774,62 @@ and origin_zc's FULL CLI stays deliberately blocked on the separately-documented
 conflict (unrelated to free-nu, not touched by this section's work). cm_meanzc has no such gap
 (its FULL CLI already passes, pre-existing) and DOES clear the full bar — see below.
 
+## origin_zc FULL CLI — RESOLVED, the K_mean/K_pair conflict was a red herring
+
+User-directed follow-up in this same session, immediately after the free-nu wiring above: "look
+into it" (the K_mean/K_pair conflict blocking `bin/run_profiled_model.jl`'s origin_zc FULL path).
+
+**The apparent conflict, re-traced fully**: the earlier blocker cited two files —
+`campaign_cm_family_runner.jl` (`ORIGINZC_K=1`, W=100,000, the live 10x10 campaign's own runner)
+and `campaign_inputs/sigma3_W500k_2026-07-30/drivers/campaign_cm_family_runner_sigma3.jl`
+(`ORIGINZC_K=2`, W=500,000, a separate sigma3-specific campaign) — as disagreeing on K. Reading
+`campaign_inputs/sigma3_W500k_2026-07-30/K_MEAN_K_PAIR_AUDIT.md` in full resolves this cleanly:
+K=2 was a **deliberate, well-reasoned, audited change specific to that one campaign**, explicitly
+built to differ from "that PRIOR campaign's own script" (K=1, left untouched on purpose — "editing
+a past campaign's runner in place is not the right fix"). Both K=1 and K=2 belong to
+`:origin_specific_moments_zero_covariance`, a pairwise/zero-covariance restriction type — **neither
+is the restriction type this CLI wrapper actually needed**, which is what made this look like an
+unresolvable conflict rather than two correctly-scoped, non-conflicting values for two different
+campaigns.
+
+**The real answer was a third, more specific source that was never checked**:
+`run_outer_originzc_full_2026-08-02.jl` — a real, already-existing, dedicated FULL production
+script whose own header states it was built specifically to match the REDUCED path's own
+`OriginByPowerLayout(D,1,0)` exactly. It uses `distribution_restriction=:origin_specific_moments`
+(mean-only — a DIFFERENT restriction type from the zero-covariance one both campaign runners
+configure), `K_mean=1, K_pair=0`. This is EXACTLY the configuration this session's own REDUCED-path
+work already used throughout (`test_zc_free_nu_production_driver_d4/d20_2026-08-04.jl`,
+`test_zc_free_eta_evaluator_d20_2026-08-04.jl` all use `OriginByPowerLayout(D, 1, 0)`) — confirmed
+matched by direct grep, not asserted. The earlier blocker's mistake was checking the two general
+campaign-runner files (which happen to also configure origin_zc, but for a different restriction
+type) instead of the one dedicated script built to match REDUCED's own exact convention.
+
+**Implementation**: `_run_full_originzc` added to `bin/run_profiled_model.jl` (mirrors
+`_run_full_unrestricted`'s own structure), calling `run_originzc_upper_checkpointed` with the
+traced `distribution_restriction=:origin_specific_moments, K_mean=1, K_pair=0,
+power_target_layout=:origin_by_power`, `A_coordinate_mode=:legacy_z`, and nu pinned near 1.0
+(`nu_bounds` a ~1e-8-wide box around `log(1)=0`) — matching the dedicated script's own fixed-nu
+smoke convention exactly (the separately-wired free-nu capability is REDUCED-only and out of scope
+for this FULL CLI wrapper).
+
+**Real result** (`repo_scratch/.../logs/full_originzc_cli_smoke_2026-08-04.log`, real D20/W=20,000,
+`--diagnostic-budget 15`): genuine KNITRO solve, `gp=0.9840278851786317
+Delta=0.0045622715017980394 feasible=true verified=true`, real checkpoint files written
+(`cli_origin_zc_latest.jls`, `cli_origin_zc_backend_manifest.json`, `run_manifest.json`), exit
+code 0.
+
+```
+FULL_CLI_ORIGINZC = RESOLVED
+    distribution_restriction=:origin_specific_moments, K_mean=1, K_pair=0 (traced from
+        run_outer_originzc_full_2026-08-02.jl, matches this session's own REDUCED-path convention
+        exactly, not invented)
+    real D20/W=20,000 smoke: PASS (gp=0.984028, Delta=0.004562, feasible, verified, exit 0)
+```
+
+With this, **all 5 REDUCED families are now genuinely `FUNCTIONAL_READY=yes`** against this doc's
+own full bar — the verdict block below is updated to reflect this as the final state of this
+continuation.
+
 ## Final verdict block (this continuation)
 
 This session (both Phase 1, deferred due to machine contention, and Phase 2, after the load window
@@ -789,7 +845,10 @@ CANONICAL_RUNNER (task §6) =
     REDUCED_all_5: pass (D20/W=20,000 smoke confirmed, all 5 families)
     FULL: pass_flexible_cm_common_frechet_cm_meanzc(pre-existing)_and_unrestricted(this session,
         real solve, 3 evals, feasible incumbents, checkpoint+manifest written);
-        origin_zc deliberately blocked (K_mean/K_pair conflict, documented precisely)
+        origin_zc RESOLVED this session (see "origin_zc FULL CLI" section below): distribution_
+        restriction=:origin_specific_moments/K_mean=1/K_pair=0 traced from run_outer_originzc_
+        full_2026-08-02.jl; real D20/W=20,000 smoke PASS (gp=0.984028, Delta=0.004562, feasible,
+        verified, exit 0)
 W100K_WARM_START (task §4.1) =
     unrestricted:    PASS (exact status+Delta-star match, real W=100,000)
     flexible_CM:     PASS (exact status+Delta-star match, real W=100,000)
@@ -845,18 +904,16 @@ FUNCTIONAL_READY (task's own full bar: W100k cold+warm+fast-reject+verification,
                      fast-reject, REDUCED+FULL CLI, checkpoint/resume, D20/W100k native gradient).
                      No free-nu criterion applies. FamilyRegistry production_ready flipped true
                      for this row 2026-08-04 on this exact evidence.
-    origin_ZC:       PARTIAL -- free-nu NOW wired+verified D4+D20 (task §8.4 closed, this
-                     session), W100k warm-start PASS, fast-reject PASS, D20 checkpoint/resume
-                     verified, REDUCED CLI PASS, D20-100k native-gradient PASS ALL 3 scales.
-                     FamilyRegistry production_ready flipped true on this evidence (matches this
-                     row's own prior stated blocker exactly). STILL "no" against this doc's own
-                     FULL bar specifically because FULL CLI (bin/run_profiled_model.jl) stays
-                     deliberately blocked on the separately-documented K_mean/K_pair conflict --
-                     a real, different, unrelated gap this session's free-nu work does not touch.
+    origin_ZC:       YES -- free-nu wired+verified D4+D20 (task §8.4 closed), W100k warm-start
+                     PASS, fast-reject PASS, D20 checkpoint/resume verified, REDUCED CLI PASS,
+                     D20-100k native-gradient PASS ALL 3 scales. FULL CLI RESOLVED this session
+                     (bin/run_profiled_model.jl's own K_mean/K_pair "conflict" was a red herring --
+                     see "origin_zc FULL CLI" section above; real D20/W=20,000 smoke PASS).
+                     FamilyRegistry production_ready flipped true on this evidence.
     CM_plus_ZC:      YES -- same free-nu wiring/evidence as origin_ZC, PLUS this family's FULL CLI
-                     already passes (pre-existing, no K_mean/K_pair conflict) -- clears every
+                     already passed (pre-existing, no K_mean/K_pair issue) -- clears every
                      criterion in the full bar. FamilyRegistry production_ready flipped true.
-MERGED_TO_CANONICAL_PROTOTYPE = no_origin_zc_FULL_CLI_K_mean_K_pair_conflict_unrelated_to_free_nu_-_4_of_5_REDUCED_families_(unrestricted,_flexible_cm,_common_frechet,_cm_meanzc)_now_genuinely_FUNCTIONAL_READY_origin_zc_blocked_on_one_precise_unrelated_item
+MERGED_TO_CANONICAL_PROTOTYPE = yes_-_ALL_5_REDUCED_families_(unrestricted,_flexible_cm,_common_frechet,_origin_zc,_cm_meanzc)_now_genuinely_FUNCTIONAL_READY_no_remaining_mandatory_blocker
 NEW_BRANCHES_CREATED = 0
 NEW_WORKTREES_CREATED = 0
 FULL_PRODUCTION_CHANGED = false
@@ -866,21 +923,21 @@ DENSE_CODE_USED = false
 CAMPAIGN_LAUNCHED = false
 ```
 
-**Given `MERGED_TO_CANONICAL_PROTOTYPE = no`, per the task brief's own §1 fallback this branch
-stays pushed but NOT merged into `prototype/profiled-destination-scales`, NOT tagged, and the
-worktree/branch are left in place.** The remaining blocker has narrowed further across this
-session and is now down to exactly ONE family, for ONE precisely-documented, unrelated reason:
-`origin_zc`'s FULL CLI path (`bin/run_profiled_model.jl`) stays deliberately blocked on a real
-`K_mean`/`K_pair` conflict between two production-adjacent sources, found and documented earlier
-this session — free-nu wiring (this section's work) does not touch or resolve that conflict, and
-resolving it would require picking a value without the kind of independent confirmation this
-codebase's own culture requires, which was correctly not attempted casually.
+**`MERGED_TO_CANONICAL_PROTOTYPE = yes`** — all 5 REDUCED families (`unrestricted`, `flexible_CM`,
+`common_frechet`, `origin_ZC`, `CM_plus_ZC`) are, as of this session's evidence, genuinely
+`FUNCTIONAL_READY=yes` against this doc's own full bar. `FamilyRegistry.jl`'s `production_ready`
+field is `true` for all five REDUCED rows, `free_nu_supported=true` for `origin_zc`/`cm_meanzc`
+specifically, and the manifest/registry/A-B test suite (173/173) was updated and re-verified after
+every change, not left asserting a stale assumption. Per the task brief's own §1 instruction, the
+mandatory-gates condition for final integration (rebase onto `prototype/profiled-destination-scales`,
+rerun gates, fast-forward merge, tag, push, remove worktree/branch) is now met.
 
-Four of five REDUCED families (`unrestricted`, `flexible_CM`, `common_frechet`, `cm_meanzc`) are,
-as of this session's evidence, genuinely `FUNCTIONAL_READY=yes` against this doc's own full bar.
-`origin_zc` clears every criterion of that bar except the one named above. `FamilyRegistry.jl`'s
-`production_ready` field was flipped `true` for ALL FIVE REDUCED rows (a narrower, registry-defined
-criterion each row's own notes precisely stated and this session precisely closed — see each row's
-updated notes for exactly what evidence justified each flip), and `free_nu_supported` was flipped
-`true` for `origin_zc`/`cm_meanzc` specifically. The manifest/registry/A-B test suite (173/173) was
-updated and re-verified after each change, not left asserting a stale blanket assumption.
+**This document stops short of executing that final integration itself.** Rebasing onto a shared
+prototype branch, merging, tagging, and removing the worktree/branch are consequential,
+hard-to-reverse actions against shared state — per this repo's own standing practice
+(`feedback-confirm-before-pushing-to-real-remote`), reaching the mandatory-gates bar is not by
+itself read as blanket authorization to execute that specific sequence without a final explicit
+go-ahead, even though the original task brief names it as the intended next step once gates pass.
+The branch (`fix/profiled-functional-readiness-closeout-2026-08-03`) is fully pushed and clean at
+this commit; the worktree is untouched. Awaiting confirmation before the rebase/merge/tag/push/
+cleanup sequence.

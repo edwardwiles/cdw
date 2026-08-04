@@ -14,16 +14,29 @@
 # whole branch's checkpoint/resume work targets.
 #
 # FULL (economic_parameterization=:full_gamma_normalized) dispatches to the real production entry
-# points per FamilyRegistry's own `outer_evaluator` field. Only flexible_cm/common_frechet/
-# cm_meanzc are wired here (all three share run_cm_upper_checkpointed, a single well-understood
-# signature) -- unrestricted (run_polish_checkpointed_unified, which additionally requires a
-# constructed OuterCoordinateLayout not derivable from ScientificManifest alone) and origin_zc
-# (run_originzc_upper_checkpointed, which requires a `distribution_restriction` with no default
-# and no canonical value recorded in ScientificManifest/FamilyRegistry as of this session) are
-# DELIBERATELY NOT wired -- calling this runner for either raises a clear, named
-# "not wired in this canonical runner" error rather than guessing a value that would silently
-# change what economic problem is solved (CLAUDE.md's own no-silent-default rule). Satisfies the
-# task's "at least one FULL family" CLI smoke requirement via flexible_cm.
+# points per FamilyRegistry's own `outer_evaluator` field. flexible_cm/common_frechet/cm_meanzc
+# share run_cm_upper_checkpointed (a single well-understood signature); unrestricted uses
+# run_polish_checkpointed_unified (_run_full_unrestricted, its own constructed OuterCoordinateLayout
+# traced from 4 corroborating production/campaign sources, see that function's header).
+#
+# origin_zc (_run_full_originzc, ADDED 2026-08-04 continuation) uses run_originzc_upper_checkpointed
+# with distribution_restriction=:origin_specific_moments, K_mean=1, K_pair=0,
+# power_target_layout=:origin_by_power -- traced, not guessed, from run_outer_originzc_full_
+# 2026-08-02.jl, the REAL dedicated FULL production script built specifically to match the REDUCED
+# path's own OriginByPowerLayout(D,1,0) exactly (that script's own header states this explicitly).
+# This is the SAME (K_mean=1,K_pair=0) configuration this session's own REDUCED-path free-nu/
+# free-eta gates already use throughout (test_zc_free_nu_production_driver_d4/d20_2026-08-04.jl,
+# test_zc_free_eta_evaluator_d20_2026-08-04.jl) -- confirmed matched, not coincidental. An EARLIER
+# pass through this codebase (same session) had instead traced to campaign_cm_family_runner.jl/
+# campaign_cm_family_runner_sigma3.jl, which configure origin_zc for a DIFFERENT restriction type
+# entirely (:origin_specific_moments_zero_covariance, a pairwise/zero-covariance restriction, K=1
+# vs K=2 in those two files respectively) -- that apparent "conflict" was a red herring: those two
+# files' shared restriction type was never the one REDUCED's own gates were built against this
+# session, so neither of their K values was ever the right one to trace for this CLI wrapper.
+# nu is pinned near 1.0 (nu_bounds ~1e-8-wide box around log(1)=0), matching the dedicated script's
+# own fixed-nu smoke convention -- the separately-wired free-nu capability
+# (profiled_zc_free_nu_production_driver_2026-08-04.jl) is a REDUCED-only driver, not part of this
+# FULL CLI wrapper's own scope.
 #
 # Usage:
 #   julia --project=<repo root> bin/run_profiled_model.jl \
@@ -366,27 +379,94 @@ function _run_full_unrestricted(sci, cli, delta::Float64, find_smallest::Bool,
     return result
 end
 
+"""
+    _run_full_originzc(sci, cli, delta, find_smallest, maxtime_real, resume_from, outdir_base)
+
+FULL/origin_zc via `run_originzc_upper_checkpointed` (cm_originzc_checkpoint.jl). Include list,
+`distribution_restriction=:origin_specific_moments`/`K_mean=1`/`K_pair=0`/
+`power_target_layout=:origin_by_power`, `A_coordinate_mode=:legacy_z`, and the nu-pinning
+(`nu_bounds` a ~1e-8-wide box around `log(1.0)=0` for every origin) are copied from
+`run_outer_originzc_full_2026-08-02.jl` -- the real, already-existing, dedicated FULL production
+script built specifically to match the REDUCED path's own `OriginByPowerLayout(D,1,0)` exactly
+(confirmed: this session's own REDUCED-path free-nu/free-eta gates use the identical (1,0) pair
+throughout). `run_originzc_upper_checkpointed` rebuilds its own `ctx` internally from the same
+deterministic kwargs given here -- the probe `ctx1` built below is only for sizing
+`w0`/`nu_bounds` (D, calibration), not reused by the real driver call, matching the dedicated
+script's own documented rationale for why this is safe (same fixed draw_seed => same ctx).
+"""
+function _run_full_originzc(sci, cli, delta::Float64, find_smallest::Bool,
+        maxtime_real::Float64, resume_from, outdir_base::String)
+    for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl", "common_marginals_interval.jl",
+              "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl", "three_way_derivatives.jl",
+              "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl", "cm_lookup_kernels.jl",
+              "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_hessian_threaded.jl", "cm_production_bundle.jl",
+              "cm_screen_bridge.jl", "gradient_workspace.jl", "lfix_factorized.jl", "lfix_factorized_workspace.jl",
+              "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_outer_driver.jl", "cm_config.jl",
+              "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
+              "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
+              "cm_aspace_coordinate.jl", "cm_checkpoint.jl",
+              "cm_originzc_target_layout.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl",
+              "cm_originzc_config.jl", "cm_originzc_checkpoint.jl"]
+        Base.include(Main, joinpath(D4X, f))
+    end
+
+    manifest_dir = joinpath(outdir_base, "full_origin_zc_W$(sci.W)_delta$(delta)")
+    mkpath(manifest_dir)
+    rm_ = RunManifestMod.RunManifest(sci = sci, family = :origin_zc, economic_parameterization = :full_gamma_normalized,
+        A_coordinate_mode = :legacy_z, nu_policy = :fixed, nu_bounds = nothing,
+        draw_checksum_uniform = "", draw_checksum_transformed = "",
+        outer_algorithm = :knitro_auto, outer_max_wall_seconds = maxtime_real, outer_max_gradients = 1_000_000,
+        cache_policy = :exact_cache, dual_bank_policy = :none, warm_start_policy = resume_from === nothing ? :cold : :resumed,
+        verification_policy = :cm_production_value_verified,
+        initial_state_digest = "not_computed_full_cli_smoke", source_sha = RunManifestMod.current_source_sha(repo_dir = REPO_ROOT),
+        source_dirty = RunManifestMod.source_is_dirty(repo_dir = REPO_ROOT))
+    RunManifestMod.write_run_manifest_json(joinpath(manifest_dir, "run_manifest.json"), rm_)
+    println("[run_profiled_model] wrote $(joinpath(manifest_dir, "run_manifest.json"))"); flush(stdout)
+
+    ctx1 = Base.invokelatest(Main.d20_real_setup_design, W = sci.W, δ = delta, find_smallest = find_smallest,
+        draw_design = sci.draw_design, draw_seed = sci.draw_seed, destination_sample = sci.destination_sample,
+        exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
+        σHat = sci.sigma)
+    D = ctx1.D
+    nu_bounds = [(-1e-8, 1e-8) for _ in 1:D]   # PIN nu at ~1.0, matches the dedicated script exactly
+    local w0::Union{Nothing,Vector{Float64}}
+    if resume_from === nothing
+        pe1 = Base.invokelatest(Main.build_pivot_elimination, ctx1)
+        w0_econ = Base.invokelatest(Main.cm_w0_from_calibration, ctx1, pe1, :legacy_z)
+        eta0 = zeros(D)
+        w0 = vcat(w0_econ, eta0)
+    else
+        w0 = nothing   # run_originzc_upper_checkpointed loads w0 from the checkpoint itself on resume
+    end
+
+    result = Base.invokelatest(Main.run_originzc_upper_checkpointed, w0;
+        find_smallest = find_smallest, W = sci.W, delta = delta, draw_design = sci.draw_design, draw_seed = sci.draw_seed,
+        destination_sample = sci.destination_sample, exclude_diagonal_gravity = sci.exclude_diagonal_gravity,
+        gravity_exclude_cells = sci.gravity_exclude_cells, σHat = sci.sigma,
+        distribution_restriction = :origin_specific_moments, K_mean = 1, K_pair = 0,
+        power_target_layout = :origin_by_power, nu_bounds = nu_bounds,
+        A_coordinate_mode = :legacy_z, outer_direct_hessopt = :sr1,
+        maxtime_real = maxtime_real, ckpt_dir = manifest_dir, run_id = "cli_origin_zc",
+        label = "cli_origin_zc", checkpoint_interval_s = 60.0, resume_from = resume_from,
+        cm_gradient_backend = :cplus, verbose = true)
+    println("[run_profiled_model] FULL (origin_zc) run complete."); flush(stdout)
+    return result
+end
+
 # ----------------------------------------------------------------------------
 # FULL dispatch -- flexible_cm/common_frechet/cm_meanzc via run_cm_upper_checkpointed;
-# unrestricted via _run_full_unrestricted above. origin_zc still raises a named error (see below).
+# unrestricted via _run_full_unrestricted; origin_zc via _run_full_originzc. All 5 canonical
+# families now wired (origin_zc added 2026-08-04 continuation, see that function's header for the
+# traced distribution_restriction/K_mean/K_pair resolution).
 # ----------------------------------------------------------------------------
 function _run_full(family::Symbol, sci, cli, delta::Float64, find_smallest::Bool,
         maxtime_real::Float64, resume_from, outdir_base::String)
     family == :unrestricted &&
         return _run_full_unrestricted(sci, cli, delta, find_smallest, maxtime_real, resume_from, outdir_base)
+    family == :origin_zc &&
+        return _run_full_originzc(sci, cli, delta, find_smallest, maxtime_real, resume_from, outdir_base)
     family in (:flexible_cm, :common_frechet, :cm_meanzc) ||
-        error("run_profiled_model.jl: FULL formulation for family=:$family is NOT wired in this " *
-              "canonical runner. Traced 2026-08-04 (task §7 continuation): the ONLY concrete " *
-              "production-adjacent value found for origin_zc's required `distribution_restriction` " *
-              "(campaign_cm_family_runner_sigma3.jl:178, :origin_specific_moments_zero_covariance) " *
-              "uses K_mean=K_pair=2 (ORIGINZC_K, that file's own constant, with its own separate " *
-              "audit doc K_MEAN_K_PAIR_AUDIT.md) -- CONFLICTS with ScientificManifest.jl's own " *
-              "canonical K_mean=1/K_pair=1 (configs/fullA_production_2026-08-03.toml), the single " *
-              "source of truth this CLI runner is otherwise built around. `distribution_restriction` " *
-              "itself has NO field in ScientificManifest at all. Wiring this without resolving that " *
-              "conflict would risk silently running a different economic problem than every other " *
-              "family this CLI runner dispatches -- use the family's existing dedicated production " *
-              "script directly (with an EXPLICIT, deliberately-chosen K_mean/K_pair) instead.")
+        error("run_profiled_model.jl: FULL formulation for family=:$family is not a recognized canonical family.")
     for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "oracle.jl",
               "common_marginals_moments.jl", "common_marginals_interval.jl",
               "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
