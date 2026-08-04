@@ -418,3 +418,25 @@ cold-start budget (neither arm has converged -- both still time-limited); `Delta
 is materially less similar (both arms are still actively improving under time pressure, so this
 is expected variance under a short budget, not necessarily disagreement about the true optimum --
 Mode B / longer budgets are needed before treating any Delta gap here as a real disagreement).
+
+## Step 10: backend/allocation checks -- real, direct confirmation
+
+**Structured backends** (task's own required list) confirmed directly from the real production
+checkpoints (both W scales, both ZC families -- `CMCheckpointV11`'s own recorded
+`h_zz_backend`/`h_cz_backend`/`h_ez_backend` fields, not re-derived): `H_EZ`/`H_EM
+=drawmajor_v2`, `H_CZ=draw_chunk_reordered`, `H_ZZ=blas_syrk` for both `origin_zc` and
+`cm_meanzc` at both W=20,000 and W=100,000.
+
+**Zero dense/reference fallback, confirmed empirically, not just from documentation**: ran a real
+cold `origin_zc` REDUCED solve (calibration point, 15s budget) and diffed
+`NO_DENSE_G_COUNTERS[]` before/after. Every fallback/dense counter this repo's own
+`no_dense_g_counters.jl` tracks stayed at exactly 0 throughout a real solve --
+`dense_economic_G_materializations`, `dense_CM_G_materializations`, `dense_ZC_G_materializations`,
+`dense_Frechet_G_materializations`, `generic_dense_FG_calls`, `dense_reference_verification_calls`,
+`dense_cross_hessian_calls`, `blas_syrk_fallback_count`, `draw_chunk_reordered_fallback_count`,
+`hessian_weight_dense_recomputes` all `=0`. Only the intended structured-backend counters
+incremented: `operator_cross_hessian_calls=62`, `winner_cross_hessian_calls=62`,
+`hessian_weight_cache_hits=31`, `zc_centered_rebuilds=4`, `zc_centered_cache_hits=58`,
+`blas_syrk_dispatch_count=31`, `drawmajor_v2_dispatch_count=31`. This is a direct empirical
+measurement of the real solve's own instrumentation, not an assumption from reading backend
+field names alone.
