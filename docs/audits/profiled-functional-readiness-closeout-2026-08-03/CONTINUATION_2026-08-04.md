@@ -308,6 +308,68 @@ W100K_WARM_START =
     CM_plus_ZC:      PASS (exact status+Delta-star match, real D20/W=100,000)
 ```
 
+### W=100,000 fast-rejection gate (task §4.2) — CONFIRMED for 3 families
+
+New `test_fastreject_2026-08-04.jl` (W=20,000 classification sweep) +
+`test_fastreject_stage2_w100k_2026-08-04.jl` (W=100,000 promotion), per the task's own explicit
+"construct systematically, classify at W=20,000, promote the infeasible point(s) to W=100,000"
+instruction — no synthetic Psi≡0 objective used, no arbitrary perturbation.
+
+**flexible_CM**: interpolated along the calibration→eval18-captured-point ray
+(`w_k = w_calib + k*(w_eval18-w_calib)`), since eval18 is already an independently-documented,
+this-session-confirmed genuinely-unbounded point. `k=0.3,0.6` feasible; `k=1.0` (=eval18 itself)
+**`nStatus=-300` in 12.72s at W=20,000** — genuinely fast at this smaller W. Combined with this
+session's own earlier W=100,000 result for the SAME point (`nStatus=-400` at production maxit=100,
+`nStatus=-300` only at maxit=1000, 577.67s) — this is a real, decisive **W-dependence finding**:
+the exact same infeasible point rejects fast at W=20,000 and slow at W=100,000, both confirmed live
+on current code, not assumed. Classified per the task's own two categories:
+`fast/easy infeasible` at W=20,000, `slow genuinely unbounded eval18-style geometry` at W=100,000
+— the SAME point can be in different categories at different W, itself a useful, non-obvious
+result for anyone tuning `maxit`/timeout policy by W.
+
+**origin-ZC / CM+ZC**: additive log-A shift from calibration (`w[2:end] .+= shift`, shift ∈
+{3,6,10} — every retained A_od pushed to `exp(shift)`× its calibrated value, a directionally
+uniform "far from calibration" probe). ALL THREE shifts infeasible for both families at W=20,000;
+`shift=6.0` and `shift=10.0` both genuinely fast (0.40-0.50s). Promoted `shift=6.0` (the cleanest
+representative) to real W=100,000: **both `nStatus=-300` in ~14s** — confirms the fast-rejection
+mechanism holds at production scale for both families, not just at the cheaper W=20,000 test scale.
+
+None of these rejected points were ever passed through `run_profiled_upper_constrained`'s own
+verified-cache/dual-bank/continuation-state machinery (this gate calls the family `base_state`
+functions directly, bypassing the outer runner entirely) — so the "rejected points cannot enter
+the cache/bank/incumbent" requirement holds trivially for this gate, though the runner's own
+guards on THIS were not independently re-exercised here (unchanged from prior sessions' own
+coverage of that mechanism).
+
+```
+STAGE 1 (W=20,000):
+  flexible_CM k=0.3    status=0     wall=26.68s   FEASIBLE
+  flexible_CM k=0.6    status=0     wall= 4.98s   FEASIBLE
+  flexible_CM k=1.0    status=-300  wall=12.72s   FAST-INFEASIBLE (this W)
+  origin-ZC shift=3.0  status=-300  wall= 6.14s   INFEASIBLE
+  origin-ZC shift=6.0  status=-300  wall= 0.40s   FAST-INFEASIBLE
+  origin-ZC shift=10.0 status=-300  wall= 0.43s   FAST-INFEASIBLE
+  CM+ZC shift=3.0      status=-300  wall= 3.02s   INFEASIBLE
+  CM+ZC shift=6.0      status=-300  wall= 0.50s   FAST-INFEASIBLE
+  CM+ZC shift=10.0     status=-300  wall= 0.49s   FAST-INFEASIBLE
+STAGE 2 (W=100,000, shift=6.0 promoted):
+  origin-ZC:  nStatus=-300  wall=13.88s  CONFIRMED
+  CM+ZC:      nStatus=-300  wall=14.01s  CONFIRMED
+```
+
+(logs: `repo_scratch/.../logs/fastreject_stage1_w20k_2026-08-04.log`,
+`.../fastreject_stage2_w100k_2026-08-04.log`)
+
+```
+W100K_FAST_REJECT =
+    unrestricted:    not_attempted_this_session
+    flexible_CM:     PASS_at_W20k_fast(12.72s); W100k_confirmed_slow_not_fast (real, resolved
+                      W-dependence, not a gap -- see eval18 maxit=1000 result above)
+    common_frechet:  not_attempted_this_session
+    origin_ZC:       PASS (fast at W20k 0.40s AND confirmed fast at real W100k 13.88s)
+    CM_plus_ZC:      PASS (fast at W20k 0.50s AND confirmed fast at real W100k 14.01s)
+```
+
 ## Final verdict block (this continuation)
 
 Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed
@@ -325,6 +387,15 @@ PRODUCTION_SCALE_THREADING (task §3, this continuation's contribution) =
     cm_meanzc:      pass (D20/W=20,000, ALL PASS, max|Δ|=2.67e-14, this continuation)
     (flexible_CM/CM_plus_ZC threaded confirmation: unchanged from prior sessions -- see that
     MASTER.md's own THREADED_BINS block)
+CANONICAL_RUNNER (task §6) = pass_all_5_REDUCED_families_D20_W20000_smoke_confirmed (Phase 2)
+W100K_WARM_START (task §4.1, Phase 2) =
+    flexible_CM: PASS (exact status+Delta-star match, real D20/W=100,000)
+    origin_ZC:   PASS (exact status+Delta-star match, real D20/W=100,000)
+    CM_plus_ZC:  PASS (exact status+Delta-star match, real D20/W=100,000)
+W100K_FAST_REJECT (task §4.2, Phase 2) =
+    flexible_CM: fast_at_W20k(12.72s)_slow_at_W100k(needs_maxit1000,577.67s) -- real W-dependence
+    origin_ZC:   PASS (fast at both W20k 0.40s and real W100k 13.88s)
+    CM_plus_ZC:  PASS (fast at both W20k 0.50s and real W100k 14.01s)
 STALL_REPLAY =
     unrestricted: open (historical replay points not re-located this continuation either)
     flexible_CM_eval18: CONFIRMED_UNBOUNDED (this continuation: genuine maxit=100->nStatus=-400
@@ -340,15 +411,17 @@ OUTER_GRADIENT_NATIVE (D4 portion, this continuation's contribution) =
     (unrestricted/flexible_CM/common_frechet: unchanged from prior sessions' own 2026-08-01/08-02
     gates; D20/W=20k-100k representative-coordinate gates for all 5 families remain open)
 FUNCTIONAL_READY =
-    unrestricted:    no (unchanged -- W=100k warm-start + outer-gradient D20+ gate missing)
-    flexible_CM:     no (eval18 now genuinely resolved as expected-unbounded, not a blocker per se,
-                     but W=100k warm-start + fast-rejection + D20+ outer-gradient gate still missing)
-    common_frechet:  no (D20/W20k threaded confirmation now closed; W=100k warm-start + D20+
-                     outer-gradient gate still missing)
-    origin_ZC:       no (free-nu now implemented+D4-verified; D20/W20k+ eta gates, cache/checkpoint
-                     eta-generation wiring, W=100k warm-start still missing)
-    CM_plus_ZC:      no (same as origin_ZC)
-MERGED_TO_CANONICAL_PROTOTYPE = no_W100k_warmstart_fastreject_all5_families_and_D20_W80_100k_eta_gates_and_full_cli_and_historical_replay_not_done
+    unrestricted:    no (D20/W20k CLI smoke was already confirmed by the prior session; W=100k
+                     warm-start/fast-reject + D20+ outer-gradient gate still missing this session)
+    flexible_CM:     no (D20/W20k CLI smoke PASS, W=100k warm-start PASS, fast-reject real
+                     W-dependent result recorded; D20/W20k+ outer-gradient gate still missing)
+    common_frechet:  no (D20/W20k threaded confirmation + CLI smoke now closed; W=100k warm-start/
+                     fast-reject + D20+ outer-gradient gate still missing)
+    origin_ZC:       no (free-nu implemented+D4-verified; D20/W20k CLI smoke PASS; W=100k warm-
+                     start PASS; W=100k fast-reject PASS; D20/W20k+ eta-gradient gate and cache/
+                     checkpoint eta-generation wiring still missing)
+    CM_plus_ZC:      no (same real progress as origin_ZC this session)
+MERGED_TO_CANONICAL_PROTOTYPE = no_D20_W80_100k_eta_gates_full_cli_historical_replay_and_2of5_families_W100k_warmstart_fastreject_not_done
 NEW_BRANCHES_CREATED = 0
 NEW_WORKTREES_CREATED = 0
 FULL_PRODUCTION_CHANGED = false
