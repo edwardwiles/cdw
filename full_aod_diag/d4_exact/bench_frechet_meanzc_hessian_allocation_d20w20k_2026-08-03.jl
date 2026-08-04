@@ -95,7 +95,7 @@ cctx_cz = build_cm_meanzc_bin_ctx(ctx, aug_cz; core_hessian_backend = :exact_win
     profiled_layout = layout)
 cctx_cz.nu_ref[] = collect(νvec0_cm)
 K_probe2 = Vector{Float64}(undef, W); G_probe2 = Matrix{Float64}(undef, W, aug_cz.obj_cm.d)
-aug_cz.obj_cm.moments!(K_probe2, G_probe2, collect(θ_full_calib), ctx.U, aug_cz.obj_cm)
+aug_cz.obj_cm.moments!(K_probe2, G_probe2, vcat(collect(θ_full_calib), νvec0_cm), ctx.U, aug_cz.obj_cm)
 h_len_cz = (cctx_cz.NCORE + cctx_cz.ncm) * (cctx_cz.NCORE + cctx_cz.ncm + 1) ÷ 2
 x0_cz = zeros(aug_cz.obj_cm.outer_constr_index)
 push!(rows, bench_hessian!("cm_meanzc (serial)", cctx_cz, aug_cz.obj_cm,
