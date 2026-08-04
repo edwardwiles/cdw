@@ -352,6 +352,57 @@ function classify_inner_result(result; tol::VerifiedSuccessTolerances = DEFAULT_
     return ok ? VerifiedSolved : ApproximateSolved
 end
 
+"""
+    verification_rejection_reasons(result; tol=DEFAULT_VERIFIED_SUCCESS_TOL) -> Vector{Symbol}
+
+Diagnostic companion to `classify_inner_result`: itemizes WHICH specific acceptance predicate(s)
+failed, rather than just returning the aggregate `ApproximateSolved`/`ConfirmedNumericalNegative`
+classification. Empty iff `classify_inner_result(result; tol) == VerifiedSolved`. Purely additive
+diagnostic information -- does not change accept/reject behavior, which remains
+`classify_inner_result`'s sole responsibility (this function must never be substituted for it).
+"""
+function verification_rejection_reasons(result; tol::VerifiedSuccessTolerances = DEFAULT_VERIFIED_SUCCESS_TOL)::Vector{Symbol}
+    reasons = Symbol[]
+    s = get(result, :inner_status, -300)
+    s <= -9000 && return reasons   # ExactInfeasible: a certificate, not a rejection
+    if !(s in (0, -100, -101, -103))
+        push!(reasons, :inner_status_not_feasible)
+        return reasons
+    end
+
+    Δ = get(result, :Delta_dual, NaN)
+    gap = get(result, :primal_dual_gap, NaN)
+    mmr = get(result, :mean_m_resid, NaN)
+    kkt = get(result, :max_abs_moment_kkt_resid, NaN)
+    mmin = get(result, :m_min, NaN)
+    m_finite_ok = get(result, :m_weights_all_finite, true)
+
+    isfinite(Δ) || push!(reasons, :delta_dual_nonfinite)
+    if !isfinite(mmin)
+        push!(reasons, :m_min_nonfinite)
+    elseif mmin < tol.m_min_floor
+        push!(reasons, :m_min_below_floor)
+    end
+    m_finite_ok || push!(reasons, :m_weights_not_all_finite)
+    if !isfinite(gap)
+        push!(reasons, :primal_dual_gap_nonfinite)
+    elseif gap > tol.primal_dual_gap_tol
+        push!(reasons, :primal_dual_gap_exceeds_tol)
+    end
+    if !isfinite(mmr)
+        push!(reasons, :mean_m_resid_nonfinite)
+    elseif mmr > tol.mean_m_resid_tol
+        push!(reasons, :mean_m_resid_exceeds_tol)
+    end
+    if !isfinite(kkt)
+        push!(reasons, :max_abs_moment_kkt_resid_nonfinite)
+    elseif kkt > tol.max_abs_moment_kkt_resid_tol
+        push!(reasons, :max_abs_moment_kkt_resid_exceeds_tol)
+    end
+
+    return reasons
+end
+
 "Convenience predicate: classify_inner_result(result) == VerifiedSolved."
 is_verified_success(result; tol::VerifiedSuccessTolerances = DEFAULT_VERIFIED_SUCCESS_TOL) =
     classify_inner_result(result; tol = tol) == VerifiedSolved
