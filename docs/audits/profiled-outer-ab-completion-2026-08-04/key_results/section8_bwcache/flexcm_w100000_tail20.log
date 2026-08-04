@@ -1,0 +1,20 @@
+δ_grid = [1]
+δ_grid_filtered = [1]
+calibration inner_status=0 Delta_dual=0.000491288893987582
+
+=== Warmup (untimed, excludes JIT compilation from the measurement) ===
+
+=== Order A: cache OFF then ON ===
+  OFF: wall=40.45324719s  alloc=19678507232 bytes
+  ON:  wall=30.053702194s  alloc=19070964720 bytes  hits=1800 misses=1080 stale_evictions=720
+
+=== Order B: cache ON then OFF (reversed execution order) ===
+  ON:  wall=31.402422703s  alloc=19070985840 bytes  hits=1800 misses=1080 stale_evictions=720
+  OFF: wall=39.405172414s  alloc=19678558112 bytes
+
+speedup (OFF/ON wall time), order A = 1.346032077142103
+speedup (OFF/ON wall time), order B = 1.2548449776212798
+alloc reduction, order A = 0.030873404412101513
+alloc reduction, order B = 0.030874836893130975
+
+BANDWIDTH_CACHE_BENEFIT_W100000_flexible_cm: speedup_A=1.35x  speedup_B=1.25x
