@@ -291,3 +291,61 @@ silently assumed from the citation alone.
 | common_frechet | yes | yes | none (gap) | none (gap -- no real file exists) |
 | origin_zc | yes | yes | none (gap) | none (gap -- no real file exists) |
 | cm_meanzc | yes | yes | none (gap) | none (gap -- no real file exists) |
+
+## Real bug found and fixed: point bank used the wrong checkpoint field for P1/best-feasible points
+
+`load_reduced_checkpoint_point` originally built each P1 point from `cp.g`/`cp.zfree` -- the
+checkpoint's raw CURRENT outer iterate at whatever wall-clock instant it fired
+(`checkpoint_reason=:wall_interval` for every real checkpoint here), not necessarily feasible at
+all (KNITRO legitimately visits infeasible points between feasible ones during search). The
+actual verified feasible incumbent lives in a SEPARATE field, `cp.best_feasible` -- confirmed by
+direct inspection: for the real unrestricted W=20,000 checkpoint, `cp.g=0.9590607665008352` vs
+`cp.best_feasible.w[1]=0.9590607598370081` -- close but NOT identical, two genuinely different
+points, not the same value read two ways. Free-nu families' `best_feasible` uses different field
+names (`w_econ`/`eta_nu` as separate fields, not a combined `w`) -- handled explicitly, not
+assumed uniform. Fixed in `build_point_bank.jl`; point bank rebuilt (still 30 points, same
+structure, corrected `w` for every P1 cell).
+
+## Real finding: REDUCED's "verified feasible" P1 incumbent is genuinely infeasible under FULL
+
+Even after the fix above, `unrestricted` P1's real `best_feasible` point (`gp=0.9590607598370081`,
+`Delta=0.999`, REDUCED's own verified feasible incumbent) still fails FULL's cold-start
+pre-check (`run_polish_checkpointed_unified`'s `r0.inner_status in FEASIBLE_CODES` gate) with
+"start point not inner-feasible."
+
+**Isolated and confirmed real, not a bridge bug**: called `screened_eval` directly (the exact
+function `run_polish_checkpointed_unified` itself calls) on both P0 and P1 after bridging through
+the identical `full_coordinate_bridge.jl` machinery:
+```
+P0: inner_status=0    Delta_dual=0.0045438486  gravity=8.4e-18   (feasible)
+P1: inner_status=-300 Delta_dual=NaN            gravity=NaN       (genuinely infeasible)
+```
+`gp` round-trips to the input exactly in both cases (confirming the bridge itself is not at
+fault -- P0's own success on the identical code path is the control). `-300` is this repo's own
+established, dual-convexity-certified infeasibility code (not "unbounded", not a solver-option
+artifact -- see this repo's CLAUDE.md and memory `feedback-knitro-300-confirmed-infeasible-not-unbounded`).
+
+**What this means, stated carefully**: a point REDUCED's own real production search found and
+recorded as its verified `best_feasible` incumbent is genuinely infeasible once the identical
+decoded economic state (`gp`, full log-A) is evaluated through FULL's own inner solve. For
+`unrestricted` specifically there is no restriction-specific machinery on either side -- both
+formulations' inner problems should, in principle, be checking the same feasibility LP over the
+same draws, which makes this a genuinely puzzling, not merely expected, disagreement.
+
+**Deliberately NOT investigated further this session** (per the task's own explicit instruction:
+"do not fix any defect discovered by the benchmark -- record it as a blocker for a separate
+repair"). Real, open hypotheses, none confirmed:
+- REDUCED's own default `verification_policy` for this checkpoint is
+  `reduced_verify_fn_inner_status_only` (its own `run_manifest.json`) -- i.e. "feasible" here means
+  "REDUCED's own inner status was one of its feasible codes at write time," not an independent
+  cross-formulation feasibility certificate. That is exactly the kind of gap this whole task exists
+  to surface.
+- The checkpoint is a `wall_interval` snapshot from an interrupted, not-fully-converged search --
+  its `best_feasible` might reflect a genuinely fragile/boundary point that a longer REDUCED search
+  would have moved away from, independent of any formulation question.
+- Some genuine, real difference between the two formulations' inner feasibility screens exists for
+  reasons not yet traced.
+
+This is real, first-class evidence for this task's own `INFEASIBLE_CLASSIFICATION` deliverable --
+recorded here, not resolved. Any future session picking this up should NOT assume this is a
+bridge/harness bug (already ruled out above) before investigating further.

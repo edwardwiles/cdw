@@ -128,8 +128,40 @@ function load_reduced_checkpoint_point(family::Symbol, W::Int)
     path = joinpath(dir, "checkpoint.jls")
     isfile(path) || return nothing
     cp = load_cm_checkpoint_v11(path)
-    w = vcat(cp.g, cp.zfree)
-    return (w = w, eta_nu = cp.eta_nu, n_eval = cp.n_eval, n_grad = cp.n_grad,
+    # Real bug, caught live during this task's own step 6/campaign smoke test: cp.g/cp.zfree are
+    # the CURRENT outer iterate at whatever wall-clock instant the checkpoint fired
+    # (cp.checkpoint_reason=:wall_interval for every one of these real checkpoints) -- NOT
+    # necessarily feasible at all, since KNITRO's own search legitimately visits infeasible
+    # points between feasible ones. cp.best_feasible (a separate field) is the actual verified
+    # feasible incumbent's own w -- confirmed by direct inspection: for the real unrestricted
+    # W=20,000 checkpoint, cp.g=0.9590607665008352 vs cp.best_feasible.w[1]=0.9590607598370081 --
+    # close but NOT identical, confirming these are genuinely two different points, not the same
+    # value read two ways. Using cp.g/cp.zfree here silently built a P1 "ordinary feasible" point
+    # bank entry that was NOT actually verified feasible -- it happened to still pass REDUCED's
+    # own screen at Mode A scale (screens can be permissive), but failed FULL's stricter
+    # inner-feasibility pre-check once bridged, which is what surfaced this. Use the real
+    # verified-feasible point when the checkpoint has one; only fall back to the raw iterate (with
+    # a loud warning, not silently) if best_feasible is nothing.
+    # Free-nu families' best_feasible NamedTuple uses w_econ/eta_nu (separate fields), not a
+    # single w -- confirmed live (FieldError surfaced this immediately): fields
+    # (gp, w_econ, eta_nu, Delta, n_eval, t_elapsed) for origin_zc/cm_meanzc vs (gp, w, Delta,
+    # n_eval, t_elapsed) for the fixed-nu families. Use best_feasible's OWN eta_nu in the free-nu
+    # case (the eta at the verified feasible point), not cp.eta_nu (the top-level, current-iterate
+    # field -- same current-vs-incumbent distinction as the w/zfree fix above).
+    if cp.best_feasible !== nothing
+        if hasproperty(cp.best_feasible, :w_econ)
+            w = cp.best_feasible.w_econ
+            eta_nu = cp.best_feasible.eta_nu
+        else
+            w = cp.best_feasible.w
+            eta_nu = cp.eta_nu
+        end
+    else
+        @warn "load_reduced_checkpoint_point($family, W=$W): checkpoint has no best_feasible incumbent -- falling back to the raw (possibly infeasible) current iterate cp.g/cp.zfree"
+        w = vcat(cp.g, cp.zfree)
+        eta_nu = cp.eta_nu
+    end
+    return (w = w, eta_nu = eta_nu, n_eval = cp.n_eval, n_grad = cp.n_grad,
         wall_elapsed = cp.wall_elapsed, checkpoint_reason = cp.checkpoint_reason,
         best_feasible = cp.best_feasible, source_path = path)
 end
