@@ -1,0 +1,40 @@
+      22    8.971944e-01   0.000e+00   4.927e-03   8.908e-04        1
+      23    8.971918e-01   0.000e+00   4.925e-03   1.949e-04        6
+      24    8.971913e-01   0.000e+00   4.924e-03   4.267e-05        1
+      25    8.971910e-01   0.000e+00   4.875e-03   1.867e-05        1
+      26    8.971909e-01   0.000e+00   4.875e-03   8.170e-06        1
+      27    8.971909e-01   0.000e+00   4.875e-03   2.234e-07        1
+      28    8.971909e-01   0.000e+00   4.875e-03   3.910e-07        1
+      29    8.971909e-01   0.000e+00   4.875e-03   8.552e-08        1
+      30    8.971909e-01   0.000e+00   4.875e-03   1.871e-08        1
+      31    8.971909e-01   0.000e+00   4.875e-03   2.046e-09        1
+      32    8.971909e-01   0.000e+00   4.875e-03   1.790e-09        1
+      33    8.971909e-01   0.000e+00   4.875e-03   4.896e-11        1
+      34    8.971909e-01   0.000e+00   4.875e-03   2.796e-13        0
+
+EXIT: Time limit reached. Current point is feasible.
+
+Final Statistics
+----------------
+Final objective value               =   8.97190893533887e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   4.87e-03 / 4.87e-03
+# of iterations                     =         34 
+# of CG iterations                  =         50 
+# of function evaluations           =        273
+# of gradient evaluations           =         35
+Total program time (secs)           =       8.01753 (    10.628 CPU time)
+Time spent in evaluations (secs)    =       7.42031
+
+===============================================================================
+
+[gate_oz_powered] DONE: status=-401 wall=8.0s n_eval=273 n_grad=35
+  best: gp=0.8971896485308444 eta_nu=[0.06301024546107681, -0.0609281093253185, 0.05492049325414577, -0.008363100703659027] Delta=0.9997068524868298 found_at_eval=99 t=3.40179705619812s
+  n_eval=273 n_grad=35 status=-401 eta_nu_final=[0.06301024546107681, -0.0609281093253185, 0.05492049325414577, -0.008363100703659027]
+
+=== 3. Checkpoint mode-mismatch refusal ===
+  resume under different mode correctly refused: ErrorException("assert_checkpoint_compatible: checkpoint namespace mismatch -- loaded=\"profiled_destination_scales__ZC_only__2c76a93c75659748__profil
+
+ALL_RESULTS: Dict{Symbol, Bool}(:powered_eta_moves => 1, :native_completes => 1, :checkpoint_mode_mismatch_refused => 1, :native_eta_moves => 1, :powered_completes => 1)
+
+POWERED_COORDINATE_ZC_FREE_NU_GATE (D4, origin_ZC): PASS

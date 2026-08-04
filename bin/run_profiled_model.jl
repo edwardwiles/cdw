@@ -262,10 +262,15 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
     # "true"/"false") -- per this repo's own no-defaults-on-any-setting rule, not just a
     # scientific-parameter concern; see parse_cli's own comment for the live bug this caused.
     threaded_gradient = cli["threaded-gradient"] == "true"
+    # task §6.1 (2026-08-04): --a-coordinate-mode is REQUIRED for --formulation reduced
+    # (parse_cli already enforced this and validated the value). Moved up here (was previously
+    # computed further below, after the ZC early-return) so BOTH the ZC free-nu dispatch and the
+    # generic (unrestricted/flexible_cm/common_frechet) dispatch see it.
+    a_coordinate_mode = Symbol(cli["a-coordinate-mode"])
 
     if family in (:origin_zc, :cm_meanzc)
         return _run_reduced_zc_free_nu(family, sci, ctx, spec, pe, layout, reduced_obj0, w0, gp0, z_calib,
-            delta, maxtime_real, resume_from, outdir_base, D, threaded_gradient)
+            delta, maxtime_real, resume_from, outdir_base, D, threaded_gradient, a_coordinate_mode)
     end
 
     fctx, evaluate_fn = if family == :unrestricted
@@ -289,14 +294,11 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
         (f, (w, ff) -> Base.invokelatest(Main.evaluate_profiled_frechet_point, w, ff))
     end
 
-    # task §6.1 (2026-08-04): --a-coordinate-mode is REQUIRED for --formulation reduced
-    # (parse_cli already enforced this and validated the value). Powered mode is fixed-theta only
-    # (POWERED_PROFILED_COORDINATE_DERIVATION_2026-08-04.md §3d) and does not apply to
-    # :unrestricted (theta jointly searched there) -- run_profiled_upper_constrained's own
-    # validate_mode_family_compatibility raises a clear, immediate error on that combination
-    # rather than silently falling back to native.
-    a_coordinate_mode = Symbol(cli["a-coordinate-mode"])
-
+    # a_coordinate_mode already computed above (before the ZC early-return). Powered mode is
+    # fixed-theta only (POWERED_PROFILED_COORDINATE_DERIVATION_2026-08-04.md §3d) and does not
+    # apply to :unrestricted (theta jointly searched there) -- run_profiled_upper_constrained's own
+    # validate_mode_family_compatibility raises a clear, immediate error on that combination rather
+    # than silently falling back to native.
     manifest_dir = joinpath(outdir_base, "reduced_$(family)_W$(sci.W)_delta$(delta)")
     mkpath(manifest_dir)
     initial_digest = RunManifestMod.digest_economic_state([gp0], z_calib, [1.0])
@@ -334,7 +336,7 @@ end
 # ----------------------------------------------------------------------------
 function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, reduced_obj0, w0::Vector{Float64},
         gp0::Float64, z_calib::Matrix{Float64}, delta::Float64, maxtime_real::Float64, resume_from,
-        outdir_base::String, D::Int, threaded_gradient::Bool)
+        outdir_base::String, D::Int, threaded_gradient::Bool, a_coordinate_mode::Symbol)
     if family == :origin_zc
         layout_o = Base.invokelatest(Main.OriginByPowerLayout, D, 1, 0)
         νvec0 = fill(1.0, D)
@@ -378,7 +380,7 @@ function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, red
     mkpath(manifest_dir)
     initial_digest = RunManifestMod.digest_economic_state([gp0], z_calib, [1.0])
     rm_ = RunManifestMod.RunManifest(sci = sci, family = family, economic_parameterization = :profiled_destination_scales,
-        A_coordinate_mode = :profiled_pivot_anchor_relative, nu_policy = :free, nu_bounds = eta_bounds_summary,
+        A_coordinate_mode = a_coordinate_mode, nu_policy = :free, nu_bounds = eta_bounds_summary,
         draw_checksum_uniform = hasproperty(ctx, :draw_meta) && ctx.draw_meta !== nothing ? ctx.draw_meta.checksum_uniform : "",
         draw_checksum_transformed = hasproperty(ctx, :draw_meta) && ctx.draw_meta !== nothing ? ctx.draw_meta.checksum_transformed : "",
         outer_algorithm = :knitro_direct_sr1, outer_max_wall_seconds = maxtime_real, outer_max_gradients = 1_000_000,
@@ -393,6 +395,7 @@ function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, red
     result = Base.invokelatest(Main.run_profiled_upper_constrained_free_nu, "cli_$(family)", w0, eta_nu0;
         fctx = fctx, evaluate_fn_free_nu = evaluate_fn_free_nu, gradient_fn_free_nu = gradient_fn_free_nu, pes = pes,
         ctx = ctx, pe = pe, eta_bounds = eta_bounds, delta = delta, maxtime_real = maxtime_real, hessopt_tag = "sr1",
+        a_coordinate_mode = a_coordinate_mode,
         checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = true)
     println("[run_profiled_model] n_eval=$(result.n_eval) n_grad=$(result.n_grad) wall=$(round(result.wall, digits=1))s " *
         "best=$(result.best === nothing ? "none" : "gp=$(result.best.gp) eta_nu=$(result.best.eta_nu) Delta=$(result.best.Delta)")")

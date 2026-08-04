@@ -29,6 +29,8 @@ isdefined(Main, :run_profiled_upper_constrained) ||
     error("profiled_zc_free_nu_production_driver_2026-08-04.jl requires profiled_production_outer_constrained_2026-08-02.jl to be included first.")
 isdefined(Main, :ZCFreeNuOuterLayout) ||
     error("profiled_zc_free_nu_production_driver_2026-08-04.jl requires profiled_zc_free_eta_2026-08-04.jl to be included first.")
+isdefined(Main, :decode_w_mode_to_native) ||
+    error("profiled_zc_free_nu_production_driver_2026-08-04.jl requires profiled_coordinate_mode_dispatch_2026-08-04.jl to be included first (task §6.1 continuation, powered A-coordinate mode for origin_zc/cm_meanzc).")
 using KNITRO
 
 """
@@ -115,10 +117,15 @@ function run_profiled_upper_constrained_free_nu(label::String, w0_econ::Vector{F
         verbose::Bool = true,
         checkpoint_path::Union{Nothing,AbstractString} = nothing,
         checkpoint_interval_s::Float64 = 60.0,
-        resume_from::Union{Nothing,AbstractString} = nothing)
+        resume_from::Union{Nothing,AbstractString} = nothing,
+        a_coordinate_mode::Symbol = :profiled_pivot_anchor_relative)
     lp(xs...) = (println(xs...); flush(stdout))
     fam = family_kind(fctx)
-    config = build_profiled_production_config(fctx; economic_parameterization = :profiled_destination_scales)
+    validate_mode_family_compatibility(a_coordinate_mode, fam)
+    theta = a_coordinate_mode == :profiled_powered_relative_A ? cm_fixed_theta(ctx) : NaN
+    xy = a_coordinate_mode == :profiled_powered_relative_A ? precompute_cm_aspace_xy(ctx) : nothing
+    config = build_profiled_production_config(fctx; economic_parameterization = :profiled_destination_scales,
+        a_coordinate_mode = a_coordinate_mode)
     n_eta = length(eta_nu0)
     length(eta_bounds) == n_eta ||
         error("run_profiled_upper_constrained_free_nu($label): length(eta_bounds)=$(length(eta_bounds)) != length(eta_nu0)=$n_eta")
@@ -167,10 +174,20 @@ function run_profiled_upper_constrained_free_nu(label::String, w0_econ::Vector{F
     end
 
     layout = ZCFreeNuOuterLayout(length(w0_econ), n_eta)
-    w0 = pack_free_nu_outer(w0_econ, eta_nu0)
+    # task §6.1 continuation (2026-08-04): same boundary-only mode-awareness as
+    # run_profiled_upper_constrained -- w0_econ here is the function's OWN parameter (always native,
+    # unchanged contract) UNLESS it was just overwritten by the resume branch above, in which case
+    # it is already in a_coordinate_mode units (checkpoints store KNITRO's raw econ block; the
+    # namespace check already confirmed this call's mode matches the checkpoint's).
+    w0_econ_mode = resume_from === nothing ? encode_w_native_to_mode(w0_econ, pe, a_coordinate_mode, theta, xy) : w0_econ
+    w0_econ_native_for_bounds = decode_w_mode_to_native(w0_econ_mode, pe, a_coordinate_mode, theta, xy)
+    r_lo_native = w0_econ_native_for_bounds[2:end] .- z_halfwidth
+    r_hi_native = w0_econ_native_for_bounds[2:end] .+ z_halfwidth
+    r_lo_mode, r_hi_mode = mode_bounds(r_lo_native, r_hi_native, pe, a_coordinate_mode, theta, xy)
+    w0 = pack_free_nu_outer(w0_econ_mode, eta_nu0)
     D2 = length(w0)
-    w_lo = vcat(gp_lo, w0_econ[2:end] .- z_halfwidth, [b[1] for b in eta_bounds])
-    w_hi = vcat(gp_hi, w0_econ[2:end] .+ z_halfwidth, [b[2] for b in eta_bounds])
+    w_lo = vcat(gp_lo, r_lo_mode, [b[1] for b in eta_bounds])
+    w_hi = vcat(gp_hi, r_hi_mode, [b[2] for b in eta_bounds])
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
@@ -191,8 +208,10 @@ function run_profiled_upper_constrained_free_nu(label::String, w0_econ::Vector{F
     t_start = time()
     t_last_ckpt = Ref(t_start)
 
-    function solve_at(w_full::Vector{Float64})
-        w_econ, eta_nu = split_free_nu_outer(w_full, layout)
+    function solve_at(w_full_mode::Vector{Float64})
+        w_econ_mode, eta_nu = split_free_nu_outer(w_full_mode, layout)
+        w_econ = decode_w_mode_to_native(collect(Float64, w_econ_mode), pe, a_coordinate_mode, theta, xy)
+        w_full = vcat(w_econ, eta_nu)
         if use_screen
             try
                 profiled_cm_screen_precheck!(collect(Float64, w_econ), ctx, pe; use_witness = false)
@@ -280,10 +299,17 @@ function run_profiled_upper_constrained_free_nu(label::String, w0_econ::Vector{F
             end
         end
         t_solve_done = time()
-        w_econ_i, eta_nu_i = split_free_nu_outer(collect(Float64, w), layout)
-        g, meta = gradient_fn_free_nu(w_econ_i, eta_nu_i, ctx, fctx, ev)
-        length(g) == D2 ||
-            error("run_profiled_upper_constrained_free_nu($label): gradient_fn_free_nu returned length $(length(g)) but D2=$D2 -- combined-gradient shape must match [gp;A_free;eta_nu]")
+        w_econ_i_mode, eta_nu_i = split_free_nu_outer(collect(Float64, w), layout)
+        # task §6.1 continuation fix: decode the econ block to native before calling
+        # gradient_fn_free_nu (which perturbs r_free directly, same as shared_family_outer_gradient),
+        # then rescale only the returned A-block portion (g[2:n_econ]) back to mode units -- gp
+        # (g[1]) and the eta_nu block (g[n_econ+1:end]) are coordinate-mode-independent.
+        w_econ_i = decode_w_mode_to_native(w_econ_i_mode, pe, a_coordinate_mode, theta, xy)
+        g_native, meta = gradient_fn_free_nu(w_econ_i, eta_nu_i, ctx, fctx, ev)
+        length(g_native) == D2 ||
+            error("run_profiled_upper_constrained_free_nu($label): gradient_fn_free_nu returned length $(length(g_native)) but D2=$D2 -- combined-gradient shape must match [gp;A_free;eta_nu]")
+        n_econ = length(w_econ_i_mode)
+        g = vcat(g_native[1], rescale_gradient_for_mode(g_native[2:n_econ], a_coordinate_mode, theta), g_native[n_econ+1:end])
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
         evalResult.jac .= g
