@@ -5,20 +5,50 @@
 clean at session start, `origin` matched local HEAD at `59351eb`). `NEW_BRANCHES_CREATED=0`,
 `EXTRA_WORKTREES_CREATED=0`.
 
-This report covers real, in-progress work; two sections (5, 6) are long real-KNITRO background jobs
-still running at the time this report was written and are documented with their live status, not a
-fabricated final result. K=3 Waves 1/2 (Sections 9-10) were **not launched** this session — Section
-7's preflight went through three real attempts (documented precisely, including two mistakes on this
-session's own part) before landing on a decisive, matched-scale test: `origin_zc` K=3 passes cleanly;
-`cm_meanzc` K=3's underlying solve is genuinely excellent but exposed a real, unresolved edge case in
-the automated verification gate (see Section 7). Waves were not launched primarily because that
-investigation consumed the remaining session time, not because of an unresolved blocker on
-`origin_zc`, which is ready to go.
+**SESSION ENDED BY USER DIRECTIVE, mid-verification, 2026-08-04 ~14:15 EDT** — the discovery below
+was judged large enough to require rethinking the whole campaign's trajectory rather than continuing
+to patch individual cells. All background jobs were deliberately killed (`kill -9`, confirmed clean
+termination) at the user's explicit instruction; nothing below Section 7 should be read as a
+completed deliverable. This report's job is to preserve exactly what was found and verified so the
+next session does not have to re-derive it.
 
-**Correction note:** an earlier version of this report claimed `K3_PREFLIGHT = fail_seed_construction`
-for both families based on an under-tested first attempt, and separately mischaracterized
-`cm_meanzc`'s `verified=false` flag as if it cast doubt on the K=3 solve itself. Both were corrected
-live in this session after direct user pushback — see Section 7 for the full, precise account.
+## 0. Headline finding: the completed K=1 W=100k campaign's own published bounds
+(`FINAL_BOUNDS_2026-08-04.md`) are very likely understated, for a real, root-caused, fixed reason
+
+Section 7 (below) found and fixed a bug in the shared post-solve verification gate
+(`oracle.jl::classify_inner_result`, used by all 5 families): it rejected a mathematically valid,
+extremely well-converged point (`inner_status=0`, every real residual passing tolerance by 8-9 orders
+of magnitude) whenever one recovered dual weight underflowed to exactly `0.0` in `Float64` — which
+happens routinely at W=100,000 draws, and turns out to happen **specifically at the divergence-budget
+boundary** — i.e. exactly where the true tightest gains-from-trade bound for each cell lives, because
+pushing `gp` to its most extreme feasible value is what concentrates the reweighting into the tails.
+This never threw an error; `verified=false` just silently failed the incumbent-admission check in
+`cb_F!`, the driver logged one line, and the search moved on as if the point were invalid.
+
+**This was checked against the real, already-published campaign, not just a smoke test.** Grepping
+the actual completed campaign's own stdout logs (`/bbkinghome/edav/repo_scratch/
+fullA-continuation-polish-2026-08-03/campaign_logs/*.log`) for the literal pattern
+`feasible=true verified=false` found **224 occurrences vs. only 110 `verified=true` occurrences**,
+and sampling showed the SAME signature — `gp` frozen at a stable value, `Delta` sitting almost exactly
+at the cell's own delta budget, `verified=false` repeated many times in a row — across essentially
+every restricted-family lower-direction cell checked (`origin_zc`, `common_frechet`, `cm_meanzc`,
+`flexible_cm`, both δ=1 and δ=2).
+
+**Directly confirmed on one real cell.** `origin_zc lower δ=1.0`'s own real checkpoint
+(`campaign_output/origin_zc/lower/delta_1.0/origin_zc_lower_EXPLORE_DIRECT_SR1_latest.jls`) has a
+last outer iterate at `g=0.99946`, right in that stuck cluster, while its **published**
+`best_feasible` is a far more conservative `gp=0.998132, Delta=0.372`. Re-running this exact cell
+fresh from its own real seed, under the now-fixed gate, found and repeatedly re-confirmed a genuinely
+feasible, verified boundary point at `gp=0.999481, Delta≈0.995-1.005` — corresponding to
+**GT≈0.000779 vs. the published GT=0.002801, roughly a 3.5x tighter lower bound**. This run was
+killed mid-polish (user directive, not a failure) after ~1170s of explore, having already converged
+cleanly to this improved point multiple times independently.
+
+**Consequence:** `FINAL_BOUNDS_2026-08-04.md`'s numbers (the entire prior session's headline
+deliverable) cannot be trusted as the true tightest bounds without re-running under the fixed gate.
+The scale of the effect (a systemic pattern across most/all restricted-family lower-direction cells,
+not an isolated glitch) is why the user judged this worth stopping to rethink the whole campaign
+plan rather than continuing the originally-scoped Section 5/6/8-10 work as if nothing had changed.
 
 ## 1. Prerequisite reading + state verification
 
@@ -115,14 +145,18 @@ CAMPAIGN_W=100000 julia --project=. -t 20 continuation_campaign_cell_driver.jl \
   unrestricted upper 0.01 <outdir> 3600 3600
 ```
 Direct+SR1 explore (3600s budget) then Direct+BFGS polish (3600s budget), never-regress rule active
-throughout. **Status at report time: RUNNING** (explore stage, ~450 outer evals in ~620s,
-gp≈0.9777, Δ oscillating 0.01-0.5 as the search explores). This job was not complete when this
-report was written; see `campaign_output/unrestricted/upper/delta_0.01/report.jls` (canonical path)
-for the eventual final result once it finishes — **not backfilled into this document**, since doing
-so without re-reading the actual finished file would risk exactly the kind of unverified claim this
-campaign's own methodology (independent verification before publication) exists to prevent.
+throughout. **This job DID run to completion** (`final_GT=0.03288167840901757 == inherited_GT`,
+`knitro_status=-201`, 4 explore-stage seed attempts + 1 polish attempt, ~6990s total wall,
+`result_source=solved` but with `new_GT==inherited_GT`, i.e. no improvement found) — see
+`campaign_output/unrestricted/upper/delta_0.01/report.jls`. **But this entire run executed under the
+OLD, pre-fix verification gate** (launched ~11:49, the `oracle.jl` fix was applied ~13:0x — editing a
+`.jl` file on disk has no effect on an already-running Julia process, confirmed by checking the fix's
+edit time against the process start time). Given δ=0.01 is an extremely tight, narrow feasible
+region, and Section 0's finding shows this exact gate systematically rejects genuinely-good boundary
+points, **this "no improvement" conclusion cannot be trusted as-is** and needs re-running under the
+fixed gate before it means anything.
 
-`UNRESTRICTED_UPPER_DELTA_0_01 = in_progress_at_report_time` (see live process/log for current state).
+`UNRESTRICTED_UPPER_DELTA_0_01 = converged_no_improvement_UNDER_OLD_GATE — needs re-run, not trustworthy as published`.
 
 ## 6. Common-Fréchet upper δ=1 targeted repair
 
@@ -148,10 +182,13 @@ CAMPAIGN_W=100000 julia --project=. -t 20 continuation_campaign_cell_driver.jl \
   "extra_seed:<frozen δ=2.0 W100k path>:S3_from_delta2"
 ```
 Direct+SR1 explore then SQP polish (per the pilot tournament's own per-family verdict for CM-family
-drivers). **Status at report time: RUNNING** (explore stage, early evals, gp≈0.951, Δ climbing
-through the 0.5-0.9 range as it explores away from the S1/S2 seeds toward the S3 basin).
+drivers). **Killed mid-run (user directive, Section 0), never completed.** Last confirmed state
+before termination: `eval 140 t=1496.8s gp=0.9508243298023435 Delta=1.0058679567171454 feasible=false
+verified=true` — i.e. still exploring, essentially at the end of its explore budget, right at the
+δ=1.0 boundary. No usable final result. Ran under the OLD verify gate for its entire lifetime (same
+timing issue as Section 5) — must be relaunched from scratch under the fixed gate, not resumed.
 
-`COMMON_FRECHET_UPPER_DELTA_1 = in_progress_at_report_time`.
+`COMMON_FRECHET_UPPER_DELTA_1 = killed_incomplete_UNDER_OLD_GATE — must be relaunched, not resumed`.
 
 ## 7. K=3 implementation preflight
 
@@ -237,18 +274,28 @@ Sobol draw realizations entirely, an internal scale mismatch, not a K issue.
   solution or a bug in the solve.** This also explains why every aggregate residual stayed tiny: one
   underflowed-to-zero draw among 100,000 has a negligible effect on `mean_m_resid`/`Delta_dual`/KKT.
 
-  **Consequence: the fix is a one-character change, not a design question.** `oracle.jl`'s
-  `classify_inner_result` should use `mmin >= tol.m_min_floor` (non-strict), not `mmin >
-  tol.m_min_floor` (strict) — `m_min==0.0` from float underflow of a genuinely-positive true weight
-  is an expected, benign occurrence at realistic W (more draws = more chance some draw sits deep
-  enough in the tail to underflow), not something the gate should reject. **This is very likely NOT
-  K=3-specific** — the same underflow can occur at K=1 or any family, at any large-enough W; it may
-  simply never have been hit/noticed in the existing K=1 production results, or may already be
-  silently present in some of them without anyone checking `m_min` explicitly (not verified either
-  way this session). Not yet applied to `oracle.jl` itself — flagged as the concrete recommended fix
-  for a follow-up session, since changing a shared verification-gate tolerance is exactly the kind of
-  change that should get a deliberate look (e.g. a quick check of whether it changes any existing K=1
-  campaign result) rather than being made reflexively mid-investigation.
+  **Fix applied and verified live (not left as a recommendation)** — per direct user instruction:
+  relax the boundary AND add an explicit finiteness safeguard, since `mmin>=0` alone does no real
+  protective work (`m_weights` is mathematically nonnegative by construction on both branches of
+  `dPsi!`, so the boundary check was never the thing actually catching a genuine optimization
+  failure). Two changes, both committed:
+  1. `verify_namedtuple_from_operator` (`operator_verification.jl`, the shared `:operator`-backend
+     builder used by all 5 families, the default backend for all 5) now computes
+     `m_weights_all_finite = all(isfinite, m_weights)` directly from the full weight vector — this
+     is the real safeguard: it catches an actual NaN/Inf anywhere in the recovered weights (a
+     genuine sign of a diverged/pathological solve) directly, not indirectly through whichever
+     aggregate statistic happens to blow up.
+  2. `oracle.jl`'s `classify_inner_result`: `mmin > tol.m_min_floor` → `mmin >= tol.m_min_floor`,
+     with the new `m_finite_ok = get(result, :m_weights_all_finite, true)` added to the `ok` gate.
+     `:dense_reference` backend results (non-default, no families use it by default) don't populate
+     the new field and fall back to `true` — behavior on that explicit opt-in path is unchanged, not
+     regressed.
+  **Verified live, both directions:**
+  - The exact previously-rejected `cm_meanzc` K=3 point now returns `verified=true`
+    (`gp=0.9514357371433328 Delta=1.3726200122634187`, identical numbers, only the classification
+    changed).
+  - A known-good `origin_zc` K=1 point re-run after the fix gives **bit-identical** output to before
+    (`kappa=0.03288167840901757`, `Delta=0.010270108273628202`, `verified=true`) — no regression.
 
 `D4 derivative tests`: **not run** this session — this repo's D4 derivative-test harnesses are
 hand-built per family for the K=1 shapes already in production; extending them to K=3 is real work
@@ -257,24 +304,20 @@ not attempted here, given the session's time budget. Disclosed gap, not silently
 `K3_PREFLIGHT`:
 ```
 origin_zc:  pass (clean, matched-W, real-K1-seed-extended test — see Attempt 3 above)
-cm_meanzc:  pass_root_caused (solve quality genuinely excellent; verify-gate rejection fully traced
-            to a benign Float64 underflow of one far-tail Monte Carlo draw's dPsi(r)=exp(r) weight,
-            r=-999.4, not a solve defect -- fix identified (oracle.jl classify_inner_result: mmin
-            >= tol.m_min_floor, not strict >), not yet applied pending a deliberate look since it's
-            a shared cross-family gate change)
+cm_meanzc:  pass (verify-gate fix applied to oracle.jl/operator_verification.jl and verified live:
+            the previously-rejected point now returns verified=true; a known-good K=1 point is
+            confirmed bit-identical/unregressed after the change)
 ```
 
 ## 8. K=3 seed banks, Wave 1, Wave 2
 
-**Not attempted this session** — not because of an unresolved blocker on `origin_zc` (its preflight
-is a clean pass), but because the preflight investigation itself (Section 7, including diagnosing
-and correcting two of this session's own mistakes) consumed the remaining time budget. `origin_zc`
-Wave 1 is ready to launch in a follow-up session using the same matched-W, real-K1-seed-extended
-seed construction validated in Section 7's Attempt 3. `cm_meanzc` Wave 1 should not launch until the
-`m_min=0` verify-gate question is resolved (Section 7) — launching now risks a wave that silently
-discards genuinely good incumbents as "no feasible point found," producing misleading "no
-improvement" results that are actually a gate artifact. `K3_WAVE1` / `K3_WAVE2`: all four chains
-(`origin_zc upper/lower`, `CM_plus_ZC upper/lower`) = `not_started`.
+**Not attempted this session** — purely a time-budget matter now, not an unresolved blocker on either
+family. Both `origin_zc` and `cm_meanzc` K=3 preflight are clean passes (Section 7): `origin_zc` via
+the matched-W, real-K1-seed-extended seed construction validated in Attempt 3; `cm_meanzc` via that
+same construction plus the verify-gate fix (`oracle.jl`/`operator_verification.jl`, applied and
+verified live to cause no regression). Both are ready to launch Wave 1 in a follow-up session.
+`K3_WAVE1` / `K3_WAVE2`: all four chains (`origin_zc upper/lower`, `CM_plus_ZC upper/lower`) =
+`not_started`.
 
 ## 9. Nesting audits
 
@@ -293,26 +336,38 @@ K=3 wave launched.
 ## Verdict block
 
 ```
-UNRESTRICTED_UPPER_DELTA_0_01 = in_progress_at_report_time (real background job, explore stage)
-COMMON_FRECHET_UPPER_DELTA_1  = in_progress_at_report_time (real background job, explore stage)
+VERIFY_GATE_BUG = found_root_caused_fixed_verified (oracle.jl/operator_verification.jl -- see §0/§7)
+VERIFY_GATE_BUG_REAL_WORLD_IMPACT = confirmed (224 verified=false vs 110 verified=true in the real
+    completed campaign's own logs; direct re-run of origin_zc lower delta=1.0 found a ~3.5x tighter
+    verified boundary point the original run had repeatedly hit and rejected -- see §0)
+SESSION_STOPPED_BY_USER = true (2026-08-04 ~14:15 EDT, to rethink campaign trajectory given the
+    above -- all background jobs killed cleanly, not a crash or silent failure)
+
+UNRESTRICTED_UPPER_DELTA_0_01 = converged_no_improvement_UNDER_OLD_GATE -- ran to completion but
+    entirely under the pre-fix verify gate; not trustworthy as published, needs re-run
+COMMON_FRECHET_UPPER_DELTA_1  = killed_incomplete_UNDER_OLD_GATE -- must be relaunched from scratch
 
 K3_PREFLIGHT =
   origin_zc:  pass (dimension/layout by direct code read; matched-W W=100k real-K1-seed-extended
                     smoke: feasible+verified on eval 1, genuine outer progress confirmed on a
                     follow-up 2-eval run, kappa 0.0329->0.0469)
-  cm_meanzc:  pass_with_caveat (dimension/layout pass; smoke solve quality genuinely excellent --
+  cm_meanzc:  pass (dimension/layout pass; smoke solve quality genuinely excellent throughout --
                     primal_dual_gap/mean_m_resid/max_abs_moment_kkt_resid all pass tolerance by
-                    8-9 orders of magnitude, inner_status=0 -- but the point is rejected by
-                    is_verified_success's m_min>0.0 strict-boundary check, m_min=0.0 exactly;
-                    UNRESOLVED whether this is a harmless gate quirk or something that needs fixing
-                    before trusting Wave 1 cm_meanzc results)
+                    8-9 orders of magnitude, inner_status=0; the verify-gate rejection was a real
+                    bug (strict m_min>0 against a mathematically-nonnegative-by-construction
+                    quantity, tripped by benign Float64 underflow of one far-tail draw's weight,
+                    r=-999.4) -- FIXED live in oracle.jl/operator_verification.jl (relaxed to >=,
+                    paired with an explicit m_weights-all-finite safeguard so genuine NaN/Inf
+                    failures are still caught directly rather than only via aggregate residuals);
+                    verified to flip the previously-rejected point to verified=true AND to leave a
+                    known-good K=1 case bit-identical/unregressed)
   d4_derivative_tests: not_run (disclosed gap, out of session budget)
 
 K3_WAVE1 =
     origin_ZC_upper:not_started (preflight passed; not launched this session, time budget)
     origin_ZC_lower:not_started (preflight passed; not launched this session, time budget)
-    CM_plus_ZC_upper:not_started (root cause identified and fix scoped, not yet applied -- see §7)
-    CM_plus_ZC_lower:not_started (root cause identified and fix scoped, not yet applied -- see §7)
+    CM_plus_ZC_upper:not_started (preflight passed after verify-gate fix; not launched, time budget)
+    CM_plus_ZC_lower:not_started (preflight passed after verify-gate fix; not launched, time budget)
 
 K3_WAVE2 = not_started (blocked on Wave 1)
 
@@ -328,24 +383,32 @@ CAMPAIGN_LAUNCHED_OUTSIDE_SCOPE = false
 
 ## What a follow-up session should do first
 
-1. Check `campaign_output/unrestricted/upper/delta_0.01/report.jls` and
-   `campaign_output/common_frechet/upper/delta_1.0/report.jls` for Sections 5/6's actual finished
-   results (both were genuinely running, not stalled, as of this report) and append the real numbers
-   here — do not re-derive or guess them.
-2. Launch `origin_zc` K=3 Wave 1 using the validated seed construction: real K=1 economic block from
-   the immutable registry (`final_w[1:380]`) + a fresh `OriginByPowerLayout(D,3,3)` eta tail built at
-   the **same W** as the economic block (W=100,000 for the real campaign, not a smaller smoke-test
-   W) — see `k3_preflight_smoke_v2.jl` / the `/tmp/w_match_test_k3.jl` diagnostic (not committed;
-   recreate from Section 7's Attempt 3 description if needed) for the exact working pattern.
-3. Before launching `cm_meanzc` K=3 Wave 1: apply the identified fix in `oracle.jl`'s
-   `classify_inner_result` (`mmin >= tol.m_min_floor`, not strict `>` — Section 7 fully traced
-   `m_min=0.0` to a benign Float64 underflow of `exp(r)` for a far-tail draw, `r=-999.4`, not a solve
-   defect), then re-run a handful of existing K=1 cases to confirm the change never flips a
-   previously-`verified=false` K=1 point that SHOULD have stayed rejected for a different reason
-   (i.e. confirm this specific check was the only one it was failing) before trusting it at K=3
-   scale. (b) separately worth checking whether real K=1 production incumbents ever land on this same
-   likelihood); (c) at minimum, re-run the `CDW_DIAG_VERIFY=1`-gated diagnostic (now committed in
-   `cm_checkpoint.jl`) across a few more K=3 cm_meanzc points to see how often this recurs before
-   trusting a full Wave run's "no improvement" results at face value.
+**Superseded by Section 0.** The K=3-specific next-steps this list originally contained (launch
+`origin_zc`/`cm_meanzc` K=3 Wave 1, extend D4 tests to K=3) are still correct in isolation, but they
+are no longer the right *priority* — they're downstream of a question that now needs answering first:
+how much of the existing, published K=1 W=100k campaign (`FINAL_BOUNDS_2026-08-04.md`) needs to be
+re-run under the fixed verify gate, and by how much do the bounds actually move. Concretely, in
+priority order:
+
+1. **Decide the re-verification strategy for the completed K=1 campaign.** Section 0 found the
+   `feasible=true verified=false`-near-a-delta-boundary pattern in 224 real log lines across
+   essentially every restricted-family lower-direction cell. Before re-running everything at full
+   budget, consider a cheap triage pass: for each cell, load its own `EXPLORE_*_latest.jls` /
+   `POLISH_*_latest.jls` checkpoint(s), reconstruct the last iterate (see the working pattern in
+   Section 0's `origin_zc lower δ=1.0` re-run — seed from `continuation_campaign_cell_driver.jl`
+   using the cell's own `best_feasible.w` as primary seed, NOT the fragile z-space
+   `checkpoint.zfree`/`cm_a_from_z` reconstruction path, which hit an unrelated evaluation-error bug
+   this session and was abandoned in favor of a real re-run instead) and re-run each cell for real
+   under the fixed gate, comparing the new incumbent against the currently-published one.
+2. **Re-run Sections 5/6 from scratch** (`unrestricted upper δ=0.01`, `common_frechet upper δ=1.0`)
+   under the fixed gate — both of this session's own runs executed entirely under the pre-fix code
+   and their conclusions (`converged_no_improvement` / incomplete) are not trustworthy as-is.
+3. Once the K=1 re-verification picture is clear, launch `origin_zc` K=3 Wave 1 (preflight already
+   passed — real K=1 economic block from the immutable registry + a fresh `OriginByPowerLayout(D,3,3)`
+   eta tail built at the SAME W as the economic block, W=100,000 for the real campaign) and
+   `cm_meanzc` K=3 Wave 1 (preflight now also passes after the verify-gate fix).
 4. Extend (or explicitly scope out) a K=3 D4 derivative test before trusting any K=3 Hessian/gradient
    path at W=100k scale.
+5. Consider whether the verify-gate fix (`oracle.jl`/`operator_verification.jl`, already committed to
+   this branch) should be evaluated for merge into `production/fullA-exact` on its own, ahead of and
+   independent of any K=3 work, given its real-world impact on already-published K=1 results.

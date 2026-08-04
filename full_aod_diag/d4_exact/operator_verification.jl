@@ -344,13 +344,23 @@ included oracle.jl, matching its existing include-discipline for CS.select_G_fro
 function verify_namedtuple_from_operator(ov, obj, W::Int, nStatus::Integer)
     m_weights = similar(ov.r)
     obj.dPsi!(m_weights, ov.r)
-    if get(ENV, "CDW_DIAG_VERIFY", "0") == "1" && minimum(m_weights) == 0.0
-        i0 = argmin(m_weights)
-        println("  [CDW_DIAG_VERIFY] m_weights[", i0, "]=0.0 exactly -- underlying r[", i0, "]=", ov.r[i0],
-                " (dPsi! r<=1 branch is exp(r); exp underflows to exact 0.0 for r roughly < -745) ",
-                " r range=[", extrema(ov.r), "]")
-        flush(stdout)
-    end
+    # m_weights_all_finite (task TARGETED_K3_EXTENSIONS_2026-08-04, Section 7): cc_algo/Psi.jl's
+    # dPsi! is exp(r) for r<=1 and e*r for r>1 -- BOTH branches are mathematically strictly
+    # positive for any finite r (the r>1 branch only fires when r>1, so e*r>e>0 there always), so
+    # m_weights[i]==0.0 exactly can ONLY happen via Float64 underflow of exp(r) for a very negative
+    # r (roughly r<-745, since exp(-745) is already below the smallest representable positive
+    # double) -- confirmed live: a real K=3 cm_meanzc point had m_weights[2184]=0.0 from
+    # r[2184]=-999.4 (a single far-tail Monte Carlo draw out of W=100,000 with an astronomically
+    # small, but genuinely positive, reweighted probability), everything else about that solve
+    # (KNITRO inner_status=0, primal_dual_gap/mean_m_resid/max_abs_moment_kkt_resid all passing
+    # tolerance by 8-9 orders of magnitude) was excellent. `classify_inner_result`'s old strict
+    # `mmin > tol.m_min_floor` rejected this as if m<=0 were itself a sign of a bad solve -- it
+    # isn't; m is provably >=0 by construction here, so relaxing that to `>=` does essentially no
+    # protective work on its own. THIS field is the real safeguard the relaxation needs: any
+    # genuine optimization failure (a NaN/Inf leaking into r from a diverged/pathological solve,
+    # not a benign far-tail underflow) shows up as a non-finite entry in m_weights, caught here
+    # directly rather than only indirectly through whichever aggregate statistic happens to blow up.
+    m_weights_all_finite = all(isfinite, m_weights)
     s_m_weights = sum(m_weights)
     Delta_dual = -ov.f
     Delta_primal = primal_divergence(m_weights)
@@ -359,6 +369,7 @@ function verify_namedtuple_from_operator(ov, obj, W::Int, nStatus::Integer)
               primal_dual_gap = abs(Delta_dual - Delta_primal),
               weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = ov.kkt_resid,
+              m_weights_all_finite = m_weights_all_finite,
               m_mean = s_m_weights / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
     return (m_weights, verify)
 end

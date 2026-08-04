@@ -326,9 +326,26 @@ function classify_inner_result(result; tol::VerifiedSuccessTolerances = DEFAULT_
     mmr = get(result, :mean_m_resid, NaN)
     kkt = get(result, :max_abs_moment_kkt_resid, NaN)
     mmin = get(result, :m_min, NaN)
+    # m_weights_all_finite (TARGETED_K3_EXTENSIONS_2026-08-04, Section 7, user-directed fix):
+    # dPsi! (cc_algo/Psi.jl) is strictly positive on both its branches for any finite r, so
+    # m_min==0.0 exactly can only be Float64 underflow of exp(r) for a very negative r (a benign,
+    # expected occurrence at realistic W -- confirmed live: a real point had m_min=0.0 from one
+    # far-tail draw's r=-999.4 out of W=100,000, with every other residual passing tolerance by
+    # 8-9 orders of magnitude). The old strict `mmin > tol.m_min_floor` rejected that as if m<=0
+    # were itself a failure signal; it isn't, since m is provably nonnegative here by construction.
+    # Relaxed to `>=`, but that alone does no real gating (m is never negative by construction) --
+    # `m_weights_all_finite` is the real safeguard: it is computed directly from whether ANY entry
+    # of the full weight vector is NaN/Inf (a genuine sign of a diverged/pathological solve, not a
+    # benign tail underflow), not inferred indirectly from an aggregate statistic. Only populated
+    # by the `:operator` verification backend (verify_namedtuple_from_operator,
+    # operator_verification.jl) -- the default for all 5 families; the non-default
+    # `:dense_reference` backend's own *_verified_state tails don't compute it, so `get(...,true)`
+    # here means dense_reference keeps exactly its prior (mmin>=floor-only) behavior, not a
+    # regression, just no extra safeguard on that explicit, non-default opt-in path.
+    m_finite_ok = get(result, :m_weights_all_finite, true)
 
     ok = isfinite(Δ) && isfinite(gap) && isfinite(mmr) && isfinite(kkt) &&
-         isfinite(mmin) && mmin > tol.m_min_floor &&
+         isfinite(mmin) && mmin >= tol.m_min_floor && m_finite_ok &&
          gap <= tol.primal_dual_gap_tol &&
          mmr <= tol.mean_m_resid_tol && kkt <= tol.max_abs_moment_kkt_resid_tol
 
