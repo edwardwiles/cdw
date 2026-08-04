@@ -19,14 +19,18 @@ using Printf
 
 const _PDU_REPO = joinpath(@__DIR__, "..", "..")
 const _PDU_MELITZ = joinpath(_PDU_REPO, "src", "melitz")
-# Minimal prefix of include_melitz.jl's own load order needed to define
-# melitz_primal_divergence (delta_star.jl) without pulling in cc_algo/KNITRO at all --
-# melitz_primal_divergence is a pure function of a weights vector and does not touch KNITRO.
-for f in ("profiling.jl", "knitro_compat.jl", "backend_config.jl", "run_diagnostics.jl",
-          "types.jl", "gravity_sample.jl", "bounded_cache.jl", "inner_solve_policy.jl",
-          "pareto.jl", "firm_quantities.jl", "equilibrium.jl", "moments.jl", "sorted_tail.jl",
-          "sorted_dual_argument.jl", "moment_operator.jl", "delta_star.jl")
-    include(joinpath(_PDU_MELITZ, f))
+# Minimal prefix of include_melitz.jl's OWN load order (read live from that file, not
+# hardcoded, so this test stays correct across branches where the aggregator's file list
+# differs) needed to define melitz_primal_divergence (delta_star.jl) without pulling in
+# cc_algo/KNITRO at all -- melitz_primal_divergence is a pure function of a weights vector and
+# does not touch KNITRO. Includes every listed file up to and including delta_star.jl.
+let
+    agg = read(joinpath(_PDU_MELITZ, "include_melitz.jl"), String)
+    for m in eachmatch(r"^include\(\"([^\"]+)\"\)"m, agg)
+        fname = m.captures[1]
+        include(joinpath(_PDU_MELITZ, fname))
+        fname == "delta_star.jl" && break
+    end
 end
 
 # --- The OLD (buggy) formula, reproduced verbatim from before commit 1d97e4c, for comparison ---
