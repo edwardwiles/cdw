@@ -176,7 +176,8 @@ Genuine cold solve (`resume_from = nothing`, fresh checkpoint path under `ckpt_d
 `bin/run_profiled_model.jl` calls it.
 """
 function reduced_cold_solve(setup, w0::Vector{Float64}; eta_nu0::Union{Nothing,Vector{Float64}} = nothing,
-        delta::Float64, maxtime_real::Float64, threaded_gradient::Bool, ckpt_dir::String, run_id::String)
+        delta::Float64, maxtime_real::Float64, threaded_gradient::Bool, ckpt_dir::String, run_id::String,
+        resume_from::Union{Nothing,String} = nothing)
     mkpath(ckpt_dir)
     ckpt_path = joinpath(ckpt_dir, "checkpoint.jls")
     if setup.is_free_nu
@@ -187,15 +188,34 @@ function reduced_cold_solve(setup, w0::Vector{Float64}; eta_nu0::Union{Nothing,V
             pes = setup.pes, ctx = setup.ctx, pe = setup.pe, eta_bounds = setup.eta_bounds,
             delta = delta, maxtime_real = maxtime_real, hessopt_tag = "sr1",
             a_coordinate_mode = :profiled_pivot_anchor_relative,
-            checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = nothing, verbose = false)
+            checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = false)
     else
         result = run_profiled_upper_constrained(run_id, w0; fctx = setup.fctx, evaluate_fn = setup.evaluate_fn,
             ctx = setup.ctx, pe = setup.pe, delta = delta, maxtime_real = maxtime_real, hessopt_tag = "sr1",
             a_coordinate_mode = :profiled_pivot_anchor_relative,
-            checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = nothing, verbose = false,
+            checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = false,
             threaded_gradient = threaded_gradient)
     end
     return result
+end
+
+"""
+    reduced_warm_solve(setup, cold_ckpt_dir; delta, maxtime_real, threaded_gradient, ckpt_dir, run_id)
+
+Task section 6.2: within-formulation warm start, from REDUCED's OWN verified dual -- resumes
+directly from the cold solve's own checkpoint (`resume_from`), which loads both the primal
+iterate AND the dual/bandwidth-cache warm-start state the production resume path already
+implements (`load_cm_checkpoint_v11`). `w0` is still required syntactically but is overridden by
+the loaded checkpoint state when `resume_from` is given (confirmed by reading
+`run_profiled_upper_constrained`'s own resume branch) -- passed as a placeholder, not read.
+"""
+function reduced_warm_solve(setup, cold_ckpt_dir::String; delta::Float64, maxtime_real::Float64,
+        threaded_gradient::Bool, ckpt_dir::String, run_id::String)
+    cold_ckpt_path = joinpath(cold_ckpt_dir, "checkpoint.jls")
+    isfile(cold_ckpt_path) || error("reduced_warm_solve: no cold checkpoint found at $cold_ckpt_path")
+    placeholder_w0 = setup.is_free_nu ? zeros(length(setup.pe.other_pos) + 1) : zeros(length(setup.pe.other_pos) + 1)
+    return reduced_cold_solve(setup, placeholder_w0; delta = delta, maxtime_real = maxtime_real,
+        threaded_gradient = threaded_gradient, ckpt_dir = ckpt_dir, run_id = run_id, resume_from = cold_ckpt_path)
 end
 
 """
@@ -208,7 +228,7 @@ called exactly as `bin/run_profiled_model.jl` calls it (same kwargs, same layout
 """
 function full_cold_solve(family::Symbol, gp::Float64, z_full::AbstractMatrix{Float64}, ctx;
         eta_nu::Union{Nothing,Vector{Float64}} = nothing, delta::Float64, maxtime_real::Float64,
-        ckpt_dir::String, sci, meanzc_K_mean::Int = 1)
+        ckpt_dir::String, sci, meanzc_K_mean::Int = 1, resume_from::Union{Nothing,String} = nothing)
     mkpath(ckpt_dir)
     w0_econ = full_w0_from_state(family, gp, z_full, ctx)
 
@@ -218,7 +238,7 @@ function full_cold_solve(family::Symbol, gp::Float64, z_full::AbstractMatrix{Flo
             W_in = sci.W, delta_in = delta, draw_design_in = sci.draw_design, draw_seed_in = sci.draw_seed,
             destination_sample = sci.destination_sample, exclude_diagonal_gravity = sci.exclude_diagonal_gravity,
             gravity_exclude_cells = sci.gravity_exclude_cells, σHat = sci.sigma,
-            maxtime_real = maxtime_real, resume_from = nothing)
+            maxtime_real = maxtime_real, resume_from = resume_from)
         return (knitro_status = result.knitro_status, n_eval = result.n_eval, n_grad = result.n_grad_calls,
             wall = result.wall_ext, best = result.best_feasible)
     elseif family === :origin_zc
@@ -231,7 +251,7 @@ function full_cold_solve(family::Symbol, gp::Float64, z_full::AbstractMatrix{Flo
             σHat = sci.sigma, distribution_restriction = :origin_specific_moments, K_mean = 1, K_pair = 0,
             power_target_layout = :origin_by_power, nu_bounds = nu_bounds, A_coordinate_mode = :legacy_z,
             outer_direct_hessopt = :sr1, maxtime_real = maxtime_real, ckpt_dir = ckpt_dir, run_id = "full_cold",
-            label = "full_cold", checkpoint_interval_s = 60.0, resume_from = nothing, cm_gradient_backend = :cplus, verbose = false)
+            label = "full_cold", checkpoint_interval_s = 60.0, resume_from = resume_from, cm_gradient_backend = :cplus, verbose = false)
         return (knitro_status = result.knitro_status, n_eval = result.n_eval, n_grad = result.n_grad,
             wall = result.wall, best = result.best)
     else
@@ -245,10 +265,33 @@ function full_cold_solve(family::Symbol, gp::Float64, z_full::AbstractMatrix{Flo
             draw_design = sci.draw_design, draw_seed = sci.draw_seed, L = sci.L, contrasts = :anchored, probs = probs,
             marginal_restriction = marginal_restriction, cm_extension = cm_extension,
             meanzc_K_mean = mzc_K_mean, meanzc_K_pair = mzc_K_pair, maxtime_real = maxtime_real,
-            ckpt_dir = ckpt_dir, label = "full_cold", resume_from = nothing, σHat = sci.sigma,
+            ckpt_dir = ckpt_dir, label = "full_cold", resume_from = resume_from, σHat = sci.sigma,
             exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
             destination_sample = sci.destination_sample)
         return (knitro_status = result.knitro_status, n_eval = result.n_eval, n_grad = result.n_grad,
             wall = result.wall, best = result.best)
     end
+end
+
+"""
+    full_warm_solve(family, ctx, cold_ckpt_dir; delta, maxtime_real, ckpt_dir, sci, meanzc_K_mean)
+
+Task section 6.2: within-formulation warm start, from FULL's OWN verified dual -- resumes
+directly from the FULL cold solve's own checkpoint. `gp`/`z_full` are placeholders (needed only
+to build a syntactically-valid `w0_econ` before the resume branch overrides it from the loaded
+checkpoint) -- not read when resuming, mirroring `reduced_warm_solve`'s same convention.
+"""
+function full_warm_solve(family::Symbol, ctx, cold_ckpt_dir::String; delta::Float64, maxtime_real::Float64,
+        ckpt_dir::String, sci, meanzc_K_mean::Int = 1)
+    cold_ckpt_path = family === :unrestricted ? joinpath(cold_ckpt_dir, "full_cold_stage_complete_neval0.jls") :
+                      joinpath(cold_ckpt_dir, "checkpoint.jls")
+    if family === :unrestricted
+        candidates = filter(f -> occursin("latest", f) || occursin("stage_complete", f), readdir(cold_ckpt_dir))
+        isempty(candidates) && error("full_warm_solve: no unified checkpoint found in $cold_ckpt_dir")
+        cold_ckpt_path = joinpath(cold_ckpt_dir, first(sort(candidates, by = f -> occursin("latest", f) ? 0 : 1)))
+    end
+    isfile(cold_ckpt_path) || error("full_warm_solve: no cold checkpoint found at $cold_ckpt_path")
+    placeholder_gp, placeholder_z = ctx.θ0_up[3+ctx.D], log.(reshape(ctx.θ0_up[ctx.Aod_offset+1:ctx.Aod_offset+ctx.D*ctx.D_dest], ctx.D, ctx.D_dest))
+    return full_cold_solve(family, placeholder_gp, placeholder_z, ctx; delta = delta, maxtime_real = maxtime_real,
+        ckpt_dir = ckpt_dir, sci = sci, meanzc_K_mean = meanzc_K_mean, resume_from = cold_ckpt_path)
 end
