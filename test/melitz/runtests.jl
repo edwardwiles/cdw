@@ -8383,3 +8383,142 @@ end
 println("\n" * "="^70)
 println("Melitz Delta-star test suite (active minimal-moment closure) complete.")
 println("="^70)
+
+# 2026-08-04: melitz_primal_divergence false-rejection fix (commit 1d97e4c) -- BigFloat
+# ground-truth validation that Float64 underflow-to-zero LFD weights are unavoidable, not an
+# avoidable normalization bug, and that the fix agrees with BigFloat while still rejecting
+# genuinely invalid (negative/NaN/Inf) weights.
+@testset "Primal divergence underflow false-rejection fix include" begin
+    include(joinpath(@__DIR__, "test_primal_divergence_underflow_2026-08-04.jl"))
+end
+#=
+# 2026-07-31 revised gravity sample task: excludes destination==ROW, the diagonal, and the
+# Brazil->Korea bilateral outlier from the theta* regression and both gravity restrictions.
+# @testset here (not a bare include) so a failure inside it is reported in the SAME summary
+# as everything above, without short-circuiting -- the whole point of "one failed testset
+# should not hide later results."
+@testset "Revised gravity sample include" begin
+    include(joinpath(@__DIR__, "test_revised_gravity_sample_2026-07-31.jl"))
+end
+
+# 2026-08-01 final revised-gravity + interval-basis integration, Part III: interval-basis
+# production-wiring regression tests (adjoint/Hessian identities, 1/W scaling guard,
+# :interval-default/:raw-override dispatcher). Real KNITRO (D=20, W=80,000) -- ~35s.
+@testset "Interval-basis production wiring include" begin
+    include(joinpath(@__DIR__, "test_interval_basis_production_wiring_2026-08-01.jl"))
+end
+
+# Closeout production session (2026-08-02), governing prompt Phase 2: typed handling of
+# MelitzIntervalExactInfeasibility via the consolidated public classified inner API.
+@testset "Typed interval-infeasibility certificate include" begin
+    include(joinpath(@__DIR__, "test_interval_infeasibility_certificate_2026-08-02.jl"))
+end
+
+# Revised-gravity interval-basis production pilot (2026-08-02), governing prompt Phase 1:
+# verified-incumbent gate hardened into the REUSABLE melitz_middle_two_start_adaptive!
+# (previously only fixed in a throwaway closeout smoke script).
+@testset "Verified-incumbent gate include" begin
+    include(joinpath(@__DIR__, "test_verified_incumbent_gate_2026-08-02.jl"))
+end
+
+# Revised-gravity interval-basis production pilot (2026-08-02), governing prompt Phase 3:
+# automatic nested-W handling of interval exact infeasibility.
+@testset "Nested-W escalation include" begin
+    include(joinpath(@__DIR__, "test_nested_w_escalation_2026-08-02.jl"))
+end
+
+# 2026-08-02 noncalibration lfd_ok forensic investigation: melitz_verify_middle_candidate must
+# resync obj.op to the candidate it is verifying, not trust whatever state
+# solve_melitz_fixed_q_A_profile_v2's own :terminal cold-reverify call last left it in. See
+# docs/melitz_noncalibration_lfd_verification_forensic_2026-08-02.md.
+@testset "Verify-middle-candidate stale-operator regression include" begin
+    include(joinpath(@__DIR__, "test_verify_middle_candidate_stale_operator_2026-08-02.jl"))
+end
+
+# Exact suffix-group A parameterization (2026-08-02), Phase 1: standalone group-layout typed
+# object (src/melitz/suffix_group_layout.jl). See
+# docs/melitz_suffix_group_phase0_equivalence_proof_2026-08-02.md for the formal derivation.
+@testset "Suffix group layout Phase 1 include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_layout_2026-08-02.jl"))
+end
+
+# Exact suffix-group A parameterization (2026-08-02), Phase 2: real D4 (synthetic FIXTURE)
+# and real D20 (2018 gravity calibration) algebraic reconstruction + Jacobian/adjoint
+# validation. Uses the D=4 `FIXTURE` constant defined in Section 5 above.
+@testset "Suffix group Phase 2 reconstruction include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase2_reconstruction_2026-08-02.jl"))
+end
+
+# Exact suffix-group A parameterization (2026-08-02), Phase 3: real KNITRO full-vs-group
+# middle equivalence, using the D=4 `FIXTURE` constant defined in Section 5 above.
+@testset "Suffix group Phase 3 equivalence include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase3_equivalence_2026-08-02.jl"))
+end
+
+# Exact suffix-group A parameterization (2026-08-02), Phase 4: middle starts (continuation
+# projection, LFD-compensated start) + verification, using the D=4 `FIXTURE` constant
+# defined in Section 5 above.
+@testset "Suffix group Phase 4 starts+verification include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase4_starts_verification_2026-08-02.jl"))
+end
+
+# Exact suffix-group A parameterization (2026-08-02), Phase 4b: production-controller (v2)
+# wiring -- solve_melitz_group_fixed_q_A_profile_v2 / melitz_middle_group_two_start_adaptive!,
+# built as NEW parallel functions, never modifying the real per-cell production controller.
+@testset "Suffix group Phase 4b production v2 include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase4b_production_v2_2026-08-02.jl"))
+end
+
+# Exact suffix-group A parameterization (2026-08-02), Phase 5: cutoff-poll regression across
+# positive/negative q movements at a known zero-draw-interval scenario.
+@testset "Suffix group Phase 5 cutoff-poll regression include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase5_cutoff_poll_regression_2026-08-02.jl"))
+end
+
+# Production integration (2026-08-02), Phase 3/10: checkpoint version/fingerprint plumbing +
+# migration cold_reverify helper for the suffix-group parameterization.
+@testset "Suffix group checkpoint fingerprint + migration include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_checkpoint_fingerprint_2026-08-02.jl"))
+end
+
+# Production integration (2026-08-02), Phase 4: the live merge/split warm-start integration
+# test the feature branch never ran (D4 controlled fixture leg).
+@testset "Suffix group Phase 4 live merge/split (D4) include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase4_live_merge_split_2026-08-02.jl"))
+end
+
+# Production integration (2026-08-02), Phase 4: live merge/split warm-start integration test
+# (real D20 cutoff transition leg).
+@testset "Suffix group Phase 4 live merge/split (real D20) include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase4_live_merge_split_realD20_2026-08-02.jl"))
+end
+
+# Production integration (2026-08-02), Phase 5: strict gravity/reconstruction gate
+# (|c'logA|<1e-10, |c'logf|<1e-9) at real D20 points.
+@testset "Suffix group Phase 5 strict gravity gate include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase5_strict_gravity_gate_2026-08-02.jl"))
+end
+
+# Production integration (2026-08-02), Phase 7: duplicate-state comparison (group vs. per-cell).
+@testset "Suffix group Phase 7 duplicate-state comparison include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase7_duplicate_state_comparison_2026-08-02.jl"))
+end
+
+# Production integration (2026-08-02), Phase 8: canonical production dispatcher.
+@testset "Suffix group Phase 8 production dispatcher include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase8_production_dispatcher_2026-08-02.jl"))
+end
+
+# Production integration (2026-08-02), Phase 10: checkpoint/resume after the dispatcher switch.
+@testset "Suffix group Phase 10 checkpoint migration include" begin
+    include(joinpath(@__DIR__, "test_suffix_group_phase10_checkpoint_migration_2026-08-02.jl"))
+end
+
+# 2026-08-04: melitz_primal_divergence false-rejection fix (commit 1d97e4c) -- BigFloat
+# ground-truth validation that Float64 underflow-to-zero LFD weights are unavoidable, not an
+# avoidable normalization bug, and that the fix agrees with BigFloat while still rejecting
+# genuinely invalid (negative/NaN/Inf) weights.
+@testset "Primal divergence underflow false-rejection fix include" begin
+    include(joinpath(@__DIR__, "test_primal_divergence_underflow_2026-08-04.jl"))
+end
+=#
