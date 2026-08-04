@@ -156,8 +156,10 @@ obj_reduced.moments!(K_v, G_v, vcat(collect(θ_full_calib), νvec0), ctx.U, obj_
 r_v = fill(-base_reduced.ζstar, W) .- G_v * β_full
 m_weights = similar(r_v); obj_reduced.dPsi!(m_weights, r_v)
 mean_m = sum(m_weights) / W
+decoded_calib = decode_outer_profiled(w_profiled_calib, ctx, pe)
 ev = (result = (beta = β_full, zeta = base_reduced.ζstar), st = (cf = cf_reduced, layout = layout),
-      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0)
+      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0,
+      decoded = decoded_calib)
 
 cache_diag = build_shared_profiled_lfix_cache(w_profiled_calib, fctx, ctx, ev)
 q_true = r_v   # = -zeta* .- G*beta, already computed above (r_v), the REAL solved q at calibration
@@ -237,7 +239,8 @@ obj_reduced2.moments!(K_v2, G_v2, vcat(θ_full_pert, νvec_pert), ctx.U, obj_red
 r_v2 = fill(-base_pert.ζstar, W) .- G_v2 * β_pert
 mw2 = similar(r_v2); obj_reduced2.dPsi!(mw2, r_v2)
 ev2 = (result = (beta = β_pert, zeta = base_pert.ζstar), st = (cf = cf_pert, layout = layout),
-       theta_full = θ_full_pert, obj = (M = W,), m_weights = mw2, nu_full = νvec_pert)
+       theta_full = θ_full_pert, obj = (M = W,), m_weights = mw2, nu_full = νvec_pert,
+       decoded = decoded_pert)
 g_Agp2, meta2 = shared_family_outer_gradient(w_profiled_pert, ctx, fctx2, ev2)
 
 max_rel_err_A2 = 0.0

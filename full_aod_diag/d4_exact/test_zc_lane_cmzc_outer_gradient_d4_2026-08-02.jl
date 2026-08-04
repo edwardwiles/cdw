@@ -136,8 +136,10 @@ m_weights = similar(r_v); obj_reduced.dPsi!(m_weights, r_v)
 mean_m = sum(m_weights) / W
 cf_reduced = cctx_reduced.core_cf_ref[]
 cf_reduced isa CompressedFactual || error("core_cf_ref[] is not a CompressedFactual after solve")
+decoded_calib = decode_outer_profiled(w_profiled_calib, ctx, pe)
 ev = (result = (beta = β_full, zeta = base_reduced.ζstar), st = (cf = cf_reduced, layout = layout),
-      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0)
+      theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0,
+      decoded = decoded_calib)
 
 cache_diag = build_shared_profiled_lfix_cache(w_profiled_calib, fctx, ctx, ev)
 println("q0 vs q_true diagnostic: max|cache.q0 - q_true|=", maximum(abs.(cache_diag.q0 .- r_v)))
