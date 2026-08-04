@@ -32,6 +32,7 @@ isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, 
 isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__, "production_backend_manifest.jl"))   # allocation/Hessian port task §2: central production backend manifest
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26): exact-point cache for this driver's real pcx shape
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
+isdefined(Main, :quarantine_feasible_unverified!) || include(joinpath(@__DIR__, "quarantine.jl"))   # post-verifier-fix W=100k rerun + K=3 campaign task §2.5: structured feasible=true/verified=false false-negative quarantine records
 isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))   # D=20 profiling task (2026-07-28): opt-in live-pcx stash this function writes below, default off
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
@@ -1154,6 +1155,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # classify_inner_result(verify) == VerifiedSolved before this point may become the
         # incumbent -- see docs/fullA_independent_audit_remediation.md AUD-04.
         verified = is_verified_success(verify)
+        if feasible && !verified
+            quarantine_feasible_unverified!(label, delta, w, verify; checkpoint_source = ckpt_dir)
+        elseif verified
+            reset_quarantine_streak!(label, delta)
+        end
         if !verified && get(ENV, "CDW_DIAG_VERIFY", "0") == "1"
             println("  [CDW_DIAG_VERIFY] class=", classify_inner_result(verify), " inner_status=", get(verify, :inner_status, missing),
                     " Delta_dual=", get(verify, :Delta_dual, missing), " Delta_primal=", get(verify, :Delta_primal, missing),

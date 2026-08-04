@@ -25,6 +25,7 @@ isdefined(Main, :theta_fixed_dual_delta_pivot_A) || error("c10_d20_production_dr
 isdefined(Main, :print_production_backend_manifest) || error("c10_d20_production_driver_unified.jl requires production_backend_manifest.jl to already be included.")
 isdefined(Main, :set_production_outer_algorithm!) || error("c10_d20_production_driver_unified.jl requires knitro_outer_algorithm.jl to already be included.")
 isdefined(Main, :theta_cplus_secant) || include(joinpath(@__DIR__, "theta_cplus.jl"))
+isdefined(Main, :quarantine_feasible_unverified!) || include(joinpath(@__DIR__, "quarantine.jl"))   # post-verifier-fix W=100k rerun + K=3 campaign task §2.5: structured feasible=true/verified=false false-negative quarantine records
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 
 const CHECKPOINT_SCHEMA_UNIFIED = 1
@@ -404,7 +405,13 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         base = r.cache_hit ? (ctx.obj isa OperatorPsiBundle ? compressed_base_state(d.xf, ctx) : solve_base_state(d.xf, ctx)) :
             BaseDualState(collect(d.xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base, r = r, d = d)
-        is_new_best = feasible && is_verified_success(r) &&
+        r_verified = is_verified_success(r)
+        if feasible && !r_verified
+            quarantine_feasible_unverified!(label, delta, w, r; checkpoint_source = ckpt_dir)
+        elseif r_verified
+            reset_quarantine_streak!(label, delta)
+        end
+        is_new_best = feasible && r_verified &&
             is_better_polish(d.gp, best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
             best_feasible[] = (gp = d.gp, w = copy(w), Delta = Δ, gravity = r.gravity_value,

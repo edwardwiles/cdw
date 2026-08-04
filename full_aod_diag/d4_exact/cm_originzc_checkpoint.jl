@@ -21,6 +21,7 @@ isdefined(Main, :print_production_backend_manifest) || include(joinpath(@__DIR__
 isdefined(Main, :set_production_outer_algorithm!) || include(joinpath(@__DIR__, "knitro_outer_algorithm.jl"))   # sigma3 campaign prep (2026-07-30): this file previously had no outer-algorithm-pinning dependency at all; needed now for set_outer_algorithm_direct!/assert_outer_algorithm_direct! (outer_direct_hessopt kwarg)
 isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_cache_production.jl"))   # Phase C remediation (2026-07-26)
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
+isdefined(Main, :quarantine_feasible_unverified!) || include(joinpath(@__DIR__, "quarantine.jl"))   # post-verifier-fix W=100k rerun + K=3 campaign task §2.5: structured feasible=true/verified=false false-negative quarantine records
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 
@@ -777,6 +778,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         last_F_state[] = (w = copy(w), base = base, verify = verify)
         feasible = isfinite(Δ) && Δ <= delta + 1e-6
         verified = is_verified_success(verify)
+        if feasible && !verified
+            quarantine_feasible_unverified!(label, delta, w, verify; checkpoint_source = ckpt_dir)
+        elseif verified
+            reset_quarantine_streak!(label, delta)
+        end
         is_new_best = feasible && verified &&
             is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
