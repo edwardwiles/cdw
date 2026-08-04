@@ -627,6 +627,82 @@ OUTER_GRADIENT_NATIVE_UNRESTRICTED_D20W80K =
 
 (log: `repo_scratch/.../logs/gp_fd_bandwidth_sweep_2026-08-04.log`)
 
+## flexible_CM / common_frechet D20/W=100,000 outer-gradient gate — NEW this session (task §9 scale progression)
+
+`test_flexcm_frechet_outer_gradient_d20_w100k_2026-08-04.jl`: the D20+ native (A/gp-block)
+outer-gradient check that neither flexible_CM nor common_frechet had ever had (both were D4-only
+before this). Went through two corrections before landing right, both caught live by the user
+mid-run rather than by self-review — worth recording precisely, not smoothing over:
+
+1. **First version (killed after ~60 CPU-minutes)**: copied the D4 gates' `delta_dual_fixed_dual_
+   noeta` FD-ground-truth helper verbatim. That helper calls `obj.moments!(K, G, θ_full, ctx.U,
+   obj)`, materializing a full dense `G::Matrix{Float64}(W, obj.d-1)`. At D4, W is tiny and this is
+   harmless verification scaffolding. At real D20/W=100,000 it is a ~100,000×381 (~300MB) dense
+   matrix, rebuilt twice per coordinate across 361 coordinates × 2 families — exactly the pattern
+   [[feedback-no-dense-reduced-ever-anywhere]] exists to prevent, even though it was "only for FD
+   verification, not production." Projected wall-clock: 1-2+ hours. The user asked directly why a
+   script in a "no dense G, ever, anywhere" codebase was materializing dense G at all, and pointed
+   out this obviously shouldn't be waited out. Killed immediately.
+
+   Root cause of the confusion (also asked about directly): the D4 gates' own
+   `NO_DENSE_G_COUNTERS` zero-dense certification is real and not self-contradictory, but its scope
+   is narrow — the before/after snapshot in `test_flexcm_outer_gradient_zerodense_d4_2026-08-02.jl`
+   is taken around ONLY the real inner solve + the analytic gradient call, and is read out *before*
+   that file's own FD-verification loop (Step 3) even starts. It certifies the production code path
+   is zero-dense; it says nothing about the FD oracle used to check it, which is allowed to be dense
+   at D4 specifically because W is tiny there. Copying that oracle unmodified into a W=100,000
+   script broke that assumption without me independently checking the oracle's own cost at the new
+   scale first.
+
+2. **Second version (right fix, ~3 min wall)**: the FD ground truth now calls the SAME zero-dense
+   operator machinery the real KNITRO inner solve already uses, instead of a hand-rolled dense
+   alternative. `CMLookupState` (returned as `st` by `build_reduced_cm_operator_bundle`/
+   `build_reduced_frechet_operator_bundle`) is directly callable as `st(x, g)` — this IS the exact
+   FG functor KNITRO invokes on every inner-solve iteration
+   (`cm_lookup_kernels.jl`'s `(st::CMLookupState)(x, g)`), computing `f = sum(Psi!(dual_index!(st,
+   x)))/M + ζ` via `economic_forward_into_arg0!`/`cm_forward_contribution!` — genuinely zero dense
+   G. To get the fixed-dual `K(w) = -f` at a perturbed outer point with `(ζ*,λ*)` held fixed:
+   rebuild the bundle/state at the perturbed θ (`build_..._operator_bundle` + `prime_operator!`,
+   the exact two calls `reduced_cm_base_state`/`reduced_frechet_base_state` make before their own
+   KNITRO solve) then call `st(x_fixed, Float64[])` once — no dense G, no re-optimization.
+   `NO_DENSE_G_COUNTERS` was checked before/after the FULL sweep (oracle included this time) to
+   PROVE zero-dense, not just assert it. A 5-coordinate smoke test confirmed ~0.6-0.8s/probe
+   (~7x faster than the dense version's ~4.8s/probe) with `economic=0, CM-grid=0` materializations.
+
+3. **Third correction (scope, same session)**: even zero-dense, that second version still looped
+   over all 361 coordinates (722 probes/family), projected ~18 minutes total. The user pushed again
+   — "if it takes 20 minutes to get one gradient something is wrong" — which surfaced a real
+   distinction: the actual production quantity (`shared_family_outer_gradient`, called once per
+   family) takes ~8.5-10s regardless of sweep scope; the 18-minute estimate was entirely the
+   verification loop, not gradient computation itself. And this codebase already has a sanctioned
+   precedent for exactly this proportionality question:
+   `test_profiled_outer_gradient_gate_D20_W80000_2026-08-01.jl` (the unrestricted-family gate)
+   deliberately checks only an 11-coordinate representative subset, with its own comment stating
+   exhaustive per-coordinate checking "is not attempted here given real wall-clock cost." Final
+   version mirrors that gate's own `representative_subset` (gp + 10 spread A_free coordinates, fixed
+   seed 7) instead of the exhaustive sweep — a systematic analytic-formula error would show up
+   broadly across a spread subset, not hide specifically in one of the 350 untested coordinates.
+
+**Real result** (`repo_scratch/.../logs/flexcm_frechet_outer_gradient_d20_w100k_2026-08-04.log`,
+real D20/W=100,000, calibration point, 11 representative coordinates including gp):
+
+```
+flexible_CM      max_rel_err=1.1089e-10 (coord=1/gp)  n_bad(>5e-3)=0/11
+common_frechet   max_rel_err=1.0264e-10 (coord=1/gp)  n_bad(>5e-3)=0/11
+dense G materializations across whole FD sweep (both families): economic=0  CM-grid=0
+D20/W100000 FLEXCM+FRECHET OUTER-GRADIENT GATE: PASS
+TOTAL WALL: 211.0s
+```
+
+Machine-precision agreement (~1e-10) at every tested coordinate including gp, for both families,
+genuinely zero-dense end to end, real production scale, ~3.5 minutes wall-clock.
+
+```
+OUTER_GRADIENT_NATIVE_FLEXCM_FRECHET_D20W100K =
+    flexible_CM:     PASS (11 representative coords incl. gp, max_rel_err=1.11e-10, zero dense G)
+    common_frechet:  PASS (11 representative coords incl. gp, max_rel_err=1.03e-10, zero dense G)
+```
+
 ## Final verdict block (this continuation)
 
 This session (both Phase 1, deferred due to machine contention, and Phase 2, after the load window
@@ -672,20 +748,34 @@ OUTER_GRADIENT_NATIVE =
                      PASS (A_block + gp), gp discrepancy RESOLVED same session (unchecked-solver-
                      status FD artifact in the pre-existing gate script, not a gradient bug; see
                      gp-coordinate resolution section above)
-    flexible_CM:     D4 pass (pre-existing, unchanged); D20+ not run this session
-    common_frechet:  D4 pass (pre-existing, unchanged); D20+ not run this session
+    flexible_CM:     D4 pass (pre-existing); D20/W=100,000 NEW this session -- PASS (11
+                     representative coords incl. gp, max_rel_err=1.11e-10, zero dense G)
+    common_frechet:  D4 pass (pre-existing); D20/W=100,000 NEW this session -- PASS (11
+                     representative coords incl. gp, max_rel_err=1.03e-10, zero dense G)
     origin_ZC:       pass at ALL 3 scales this session (D4, D20/W20k, real D20/W100k), ~1e-10 to ~1e-12
     CM_plus_ZC:      pass at ALL 3 scales this session (D4, D20/W20k, real D20/W100k), ~1e-10 to ~1e-13
 FUNCTIONAL_READY (task's own full bar: W100k cold+warm+fast-reject+verification, D20 checkpoint/
     resume, REDUCED CLI, FULL CLI, D20-100k native-gradient, PLUS free-nu wired+eta-gradient+
     eta-cache-wiring for the 2 ZC families) =
-    unrestricted:    no (D20/W80k outer-gradient gp-coordinate discrepancy unresolved)
-    flexible_CM:     no (D20+ outer-gradient gate not run this session)
-    common_frechet:  no (D20+ outer-gradient gate not run this session)
+    unrestricted:    YES -- W100k warm-start PASS, fast-reject PASS, stall replay CONFIRMED,
+                     REDUCED+FULL CLI PASS (FULL this session), D20 checkpoint/resume verified,
+                     D20/W80k native gradient FULL PASS (gp discrepancy RESOLVED same session --
+                     see gp-coordinate resolution section above). No free-nu criterion applies.
+                     FamilyRegistry production_ready flipped true for this row 2026-08-04.
+    flexible_CM:     YES -- W100k warm-start PASS, fast-reject PASS (with a documented, resolved
+                     W-dependence finding for the eval18 point, not a gap), REDUCED+FULL CLI PASS
+                     (FULL pre-existing), D20 checkpoint/resume verified, D20/W100k native gradient
+                     PASS this session. No free-nu criterion applies (family has no restriction
+                     outer parameter in production). FamilyRegistry production_ready flipped
+                     true for this row 2026-08-04 on this exact evidence.
+    common_frechet:  YES -- same bar as flexible_CM, all criteria PASS (W100k warm-start,
+                     fast-reject, REDUCED+FULL CLI, checkpoint/resume, D20/W100k native gradient).
+                     No free-nu criterion applies. FamilyRegistry production_ready flipped true
+                     for this row 2026-08-04 on this exact evidence.
     origin_ZC:       no (free-nu not wired into the production driver; eta-generation cache/
                      checkpoint/dual-bank wiring, task §8.4, not done)
     CM_plus_ZC:      no (same as origin_ZC)
-MERGED_TO_CANONICAL_PROTOTYPE = no_D20_outer_gradient_gates_for_flexcm_and_frechet_free_nu_driver_wiring_and_eta_generation_cache_wiring_not_done_plus_unresolved_gp_gradient_discrepancy
+MERGED_TO_CANONICAL_PROTOTYPE = no_origin_zc_and_cm_plus_zc_free_nu_driver_wiring_and_eta_generation_cache_wiring_not_done_-_3_of_5_REDUCED_families_(unrestricted,_flexible_cm,_common_frechet)_now_genuinely_FUNCTIONAL_READY
 NEW_BRANCHES_CREATED = 0
 NEW_WORKTREES_CREATED = 0
 FULL_PRODUCTION_CHANGED = false
@@ -697,6 +787,12 @@ CAMPAIGN_LAUNCHED = false
 
 **Given `MERGED_TO_CANONICAL_PROTOTYPE = no`, per the task brief's own §1 fallback this branch
 stays pushed but NOT merged into `prototype/profiled-destination-scales`, NOT tagged, and the
-worktree/branch are left in place** — a genuinely different, much shorter blocker list than the
-one this continuation started with, but still real, precise, unresolved items rather than a false
-"done."
+worktree/branch are left in place.** The remaining blocker is now narrow and specific to exactly
+2 families: `origin_ZC`/`CM_plus_ZC` both have a real, working, D4-AND-D20/W100k-verified free-eta
+evaluator and analytic gradient, but neither is wired into `run_profiled_upper_constrained` (the
+actual production driver), and the eta-generation cache/checkpoint/dual-bank wiring (task §8.4)
+was not attempted this session. `unrestricted`/`flexible_CM`/`common_frechet` are, as of this
+session's evidence, genuinely `FUNCTIONAL_READY=yes` — `FamilyRegistry.jl`'s `production_ready`
+field was flipped `true` for all three REDUCED rows on that exact evidence, and the manifest/
+registry/A-B test suite (173/173) was updated and re-verified to match, not left asserting a
+now-false blanket "no REDUCED row is ever production-ready" assumption.
