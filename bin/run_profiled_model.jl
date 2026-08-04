@@ -584,7 +584,15 @@ function _run_full(family::Symbol, sci, cli, delta::Float64, find_smallest::Bool
               "cm_frechet_lookup_kernels.jl", "cm_frechet_lookup_production.jl", "cm_checkpoint.jl",
               "operator_hessian_weights.jl", "operator_psi_bundle.jl", "cm_lookup_live_knitro.jl", "cm_lookup_production.jl",
               "country_resolve.jl", "cm_exact_cache_production.jl", "blas_thread_policy.jl", "knitro_outer_algorithm.jl",
-              "production_backend_manifest.jl", "incumbent_logic.jl"]
+              "production_backend_manifest.jl", "incumbent_logic.jl",
+              # pre-existing gap found live 2026-08-04 (profiled-outer-ab-readiness task): FULL
+              # flexible_cm/common_frechet/cm_meanzc crashed with "A_coordinate_mode=:powered_aspace
+              # requires cm_aspace_coordinate.jl to be included" the first time this CLI path was
+              # actually exercised for these 3 families -- run_cm_upper_checkpointed defaults to
+              # :powered_aspace and needs this file for the a<->z conversion (already correctly
+              # included in _run_full_originzc's own list above; this branch's list was simply
+              # missing it, not a new requirement this session introduced).
+              "cm_aspace_coordinate.jl"]
         Base.include(Main, joinpath(D4X, f))
     end
 
