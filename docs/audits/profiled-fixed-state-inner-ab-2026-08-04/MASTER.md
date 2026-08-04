@@ -1,9 +1,33 @@
 # Fixed-state FULL-vs-REDUCED inner A/B -- status, 2026-08-04
 
-**Stopped after step 2 per the task's own instruction: "If the outer task has not completed,
-stop after step 2. Do not wait by launching background work."** Steps 3-12 (decoded-state
-equivalence, sentinel panel, cold/warm protocols, Mode A/B execution, telemetry, results) were
-NOT started. No KNITRO solve was run. No point bank was built.
+**UPDATE (same day, later): unblocked and resumed.** Originally stopped after step 2 per the
+task's own instruction ("if the outer task has not completed, stop after step 2"). The outer
+task (`performance/profiled-outer-ab-readiness-2026-08-04`, later continued on
+`performance/profiled-outer-ab-completion-2026-08-04`) subsequently finished its own scope and
+explicitly declared, for all 5 families, `OUTER_STATUS = OUTER_READY_FOR_INNER_AB` (see that
+branch's own `docs/audits/profiled-outer-ab-completion-2026-08-04/MASTER.md`). This branch was
+rebased onto that completion branch's tip (`c59add8`) and force-pushed; see "Rebase" section
+below. Step 3 (decoded-state equivalence) is now genuinely started, with real passing evidence
+at D20/W=20,000 and D20/W=100,000 -- see its own section below. Steps 4-12 remain open.
+
+## Rebase (2026-08-04, after unblock)
+
+Rebased `benchmark/profiled-fixed-state-inner-ab-2026-08-04` (previously based on
+`origin/prototype/profiled-destination-scales`@`395dec3`) onto
+`origin/performance/profiled-outer-ab-completion-2026-08-04`@`c59add8` -- the fullest available
+state (coordinate-mode tournament, bandwidth cache, threaded REDUCED gradient, corrected
+`FamilyRegistry.jl` all wired in), NOT the partially-landed canonical prototype tip (`36aacb2`,
+which only cherry-picked 2 small verifier-fix commits from the completion branch and does not yet
+include its bulk). This was a deliberate user decision (asked directly, given the fork between
+"build on the unmerged-but-more-complete completion branch" vs. "wait for an actual
+fast-forward into canonical prototype") -- not a default I chose unilaterally. `frozen_manifest.jl`
+re-verified working (both mode_a/mode_b construct correctly) on the new base.
+
+## Original stop-after-step-2 record (preserved below for provenance)
+
+Steps 3-12 (decoded-state equivalence, sentinel panel, cold/warm protocols, Mode A/B execution,
+telemetry, results) were NOT started as of the original stop. No KNITRO solve was run. No point
+bank was built.
 
 ## Provenance
 
@@ -109,3 +133,60 @@ Re-run this task's own step 1 checks against `performance/profiled-outer-ab-read
 (or whatever branch canonical prototype has advanced to by then). Only proceed past step 2 once
 that concurrent work has genuinely landed on `prototype/profiled-destination-scales` with no
 worktree still actively committing to it.
+
+## Step 3: decoded-state equivalence -- real evidence, real D20, both scales
+
+`tools/benchmarks/fixed_state_inner_ab/decoded_state_equivalence.jl`. Modeled on the pre-existing
+D4-only gate (`full_aod_diag/d4_exact/test_profiled_coordinate_mode_roundtrip_2026-08-03.jl`) --
+same primitives (`reduce_to_w_profiled`/`decode_outer_profiled`/`gravity_from_logz`, all
+`include`d unmodified), same properties, but run against the REAL production context
+(`d20_real_setup_design`, every argument taken from `frozen_manifest.jl`'s frozen
+`ScientificManifest` -- no function default relied on) at real D20 scale, which the pre-existing
+gate never did.
+
+**What it checks**: takes the canonical decoded FULL calibration state (`ctx.θ0_up`'s own full
+`gp0`/`z_calib` -- NOT the `A_od≡1`/`zfree=0` reparameterization-offset trap this repo's own
+CLAUDE.md warns about repeatedly; this is the real calibrated block spanning several orders of
+magnitude), encodes it into REDUCED's native `:profiled_pivot_anchor_relative` coordinates
+(`reduce_to_w_profiled`), recovers the full FULL A matrix back out (`decode_outer_profiled`), and
+compares the recovered object against the original -- not two raw vectors in different coordinate
+systems, the same reconstructed economic object both ways, per the task's own explicit
+instruction.
+
+**Real results, D20/W=20,000 (Mode A scale) and D20/W=100,000 (Mode B scale), both `ALL PASS`**:
+
+```
+gp: decoded == original (exact)
+max|logA_decoded - logA_original| = 4.441e-15 (relative 1.332e-15)
+max relative |A_decoded - A_original| = 4.437e-15   (real A spans ~5.9 orders of magnitude here)
+gravity residual: original=-1.833e-19  decoded=8.553e-20   (both endpoints exactly feasible)
+decoded_state_digest = 9f4ab049ee88c6185a2d79d2480d8c0851fb207e82af34b67230dedce1b70aa5
+  (IDENTICAL between W=20,000 and W=100,000 -- confirms the calibration point, θ0_up's own
+  gp/A_od block, is genuinely W-independent, as expected: gravity/theta estimation runs on real
+  trade data, not the Monte Carlo draws, which are the only thing that varies with W)
+```
+
+Full logs: `key_results/dse_mode_a.log`, `key_results/dse_mode_b.log` (this doc's own
+`repo_scratch` mirror; not committed to git, per this task's storage-location rules).
+
+**One deliberate correction made mid-run**: the script's first draft additionally re-derived a
+second `digest_economic_state` from the *decoded* state and required bit-exact equality against
+the original's digest -- this FAILED, but was a flaw in the check, not a real problem:
+`digest_economic_state` is an exact byte-level digest by its own docstring ("two states that
+print identically digest identically, full stop"), and the round trip legitimately introduces
+~1e-15 floating-point noise (log/exp/encode/decode) even though every real numerical check above
+passes at machine precision. Fixed by computing exactly ONE digest, from the canonical original
+state, that both arms' `RunManifest.initial_state_digest` should cite going forward -- which is
+what the task's own section 3 actually asks for ("record a decoded-state digest shared by both
+arms"), not a second independently-rederived digest checked for bit-exact equality.
+
+**What this does NOT yet cover** (real remaining work, not silently skipped):
+- Family-specific restriction targets (only the common `gp`/`A_od` calibration state was
+  checked here -- restriction moments are family-specific and require each family's own
+  context/layout, step 4's point-bank work).
+- `nu` for the ZC families (`origin_zc`/`cm_meanzc`) -- this script passes `nu=Float64[]`
+  throughout since the calibration point has no restriction active; extending to a real ZC point
+  with genuinely nontrivial free `nu` (task section 4's explicit requirement for ZC sentinel
+  points) is open.
+- Points other than the single calibration point P0 -- P1/P2/P3 (ordinary feasible, difficult
+  feasible, infeasible/unbounded) require the sentinel point bank (step 4), not yet built.
