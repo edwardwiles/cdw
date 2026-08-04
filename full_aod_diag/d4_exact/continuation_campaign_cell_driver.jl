@@ -86,7 +86,7 @@ lp("Loaded baseline envelope: ", length(env.rows), " rows.")
 #    cells hit their time budget while still improving). The never-regress rule makes repeated
 #    rounds on the same cell always safe -- a round that finds nothing new just re-exports the
 #    current incumbent.
-for prior_delta in (0.01, 0.1, 0.5, 1.0, 1.5, TARGET_DELTA)
+for prior_delta in (0.01, 0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, TARGET_DELTA)
     prior_delta > TARGET_DELTA && continue
     prior_path = campaign_report_path_for(FAMILY, DIRECTION, prior_delta)
     isfile(prior_path) || continue
