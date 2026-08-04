@@ -477,6 +477,26 @@ FULL_CLI_ADAPTER =
         own error message -- not attempted-without-reason)
 ```
 
+### Unrestricted historical stall replay — CONFIRMED (task §5.2)
+
+The exact 361-dim outer points (real W=100,000 campaign data, not reconstructed) recovered from
+`STAGE1A_UNRESTRICTED_REPRO_W100000_2026-08-02.jld2`'s own `all_w::Dict{Int,Vector{Float64}}`,
+gp values confirmed matching the archived documentation's own BEFORE/AFTER table exactly. Replayed
+2 of the 6 documented points (idx=2, idx=17 — the two with the clearest/largest documented
+speedups) through the real, unmodified `evaluate_profiled_point` on current HEAD:
+
+```
+idx=2:  nStatus=-300, wall=9.77s,  n_fg=36, n_hess=11  (documented AFTER: -300, 3 iters, 0.89s)
+idx=17: nStatus=-300, wall=1.41s,  n_fg=3,  n_hess=2   (documented AFTER: -300, 1 iter, 0.28s)
+UNRESTRICTED_HISTORICAL_REPLAY_CONFIRMED
+```
+
+(log: `repo_scratch/.../logs/unrestricted_historical_replay_take2_2026-08-04.log`). Both points
+correctly resolve to the fast, native `nStatus=-300` — the `lower_limit` clamp fix documented in
+`profiled-inner-readiness-2026-08-03` still holds on the exact original slow-failure points, on
+this session's own current HEAD. Task §5.2 is now genuinely satisfied with real historical data,
+not a synthetic sentinel.
+
 ## Final verdict block (this continuation)
 
 Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed

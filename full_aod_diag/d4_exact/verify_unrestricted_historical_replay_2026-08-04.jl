@@ -42,6 +42,7 @@ for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "
           "reduced_operator_verification_2026-08-01.jl",
           "recover_full_a_2026-07-31.jl",
           "profiled_reduced_lookup_kernels_2026-08-02.jl",
+          "profiled_reduced_frechet_lookup_kernels_2026-08-02.jl",
           "profiled_outer_gradient_layout_contract_2026-08-01.jl",
           "profiled_stable_layout_digest_2026-08-01.jl",
           "profiled_operator_bundle_2026-08-01.jl",
