@@ -128,14 +128,19 @@ REDUCED rows verified against `profiled_production_outer_constrained_2026-08-02.
 resume_from parameter as of this branch's HEAD before this session's own commit adding it -- see
 that commit's message for exactly what changed), `profiled_zc_lane_point_evaluators_2026-08-02.jl`
 (evaluators), `reduced_operator_verification_2026-08-01.jl` (verifier). `free_nu_supported=false`
-for every REDUCED row: as of 2026-08-03, confirmed that no `CMZCFreeNuAdapter` or equivalent
-existed anywhere in the tree. UPDATE 2026-08-04: `profiled_zc_free_eta_2026-08-04.jl` now provides
-a genuine free-eta_nu evaluator + analytic gradient for origin_zc/cm_meanzc (D4-verified, ~1e-10 vs
-fixed-dual FD) -- `free_nu_supported` is DELIBERATELY still `false` in both rows, because this field
-describes what the production driver (`run_profiled_upper_constrained`) supports, and that
-evaluator is not yet wired into it. See each row's own notes and
+for every non-ZC REDUCED row (unrestricted/flexible_cm/common_frechet -- these families have no
+restriction outer parameter, so the field does not apply and is left `false`). For origin_zc/
+cm_meanzc REDUCED: as of 2026-08-03, confirmed that no `CMZCFreeNuAdapter` or equivalent existed
+anywhere in the tree, so `free_nu_supported=false` was correct at that time. UPDATE 2026-08-04
+(same continuation, later): `profiled_zc_free_eta_2026-08-04.jl` provided the free-eta_nu
+evaluator + analytic gradient, and a further same-day commit wired it into a genuine new
+production driver, `run_profiled_upper_constrained_free_nu`
+(`profiled_zc_free_nu_production_driver_2026-08-04.jl`, additive -- `run_profiled_upper_constrained`
+itself remains the fixed-nu entry point). With that driver in place, `free_nu_supported` now
+correctly reads `true` for both origin_zc and cm_meanzc REDUCED rows below -- this is not a stale
+value; see each row's own notes and
 docs/audits/profiled-functional-readiness-closeout-2026-08-03/CONTINUATION_2026-08-04.md for the
-real implementation/verification detail.
+real implementation/verification detail (D4 + D20/W20k + D20/W100k gates, 18/18 and 16/16 checks).
 `coordinate_modes=[:profiled_pivot_anchor_relative]` for REDUCED rows: the mode REDUCED's
 `gravity_pivot_on_retained.jl`/`relative_a_coordinate_2026-07-31.jl` machinery actually
 implements has no formal Symbol anywhere in the codebase (zero `A_coordinate_mode=` grep hits in

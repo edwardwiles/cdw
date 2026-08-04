@@ -932,12 +932,24 @@ every change, not left asserting a stale assumption. Per the task brief's own §
 mandatory-gates condition for final integration (rebase onto `prototype/profiled-destination-scales`,
 rerun gates, fast-forward merge, tag, push, remove worktree/branch) is now met.
 
-**This document stops short of executing that final integration itself.** Rebasing onto a shared
-prototype branch, merging, tagging, and removing the worktree/branch are consequential,
-hard-to-reverse actions against shared state — per this repo's own standing practice
-(`feedback-confirm-before-pushing-to-real-remote`), reaching the mandatory-gates bar is not by
-itself read as blanket authorization to execute that specific sequence without a final explicit
-go-ahead, even though the original task brief names it as the intended next step once gates pass.
-The branch (`fix/profiled-functional-readiness-closeout-2026-08-03`) is fully pushed and clean at
+**This document originally stopped short of executing that final integration itself**, pending
+explicit go-ahead per this repo's own standing practice (`feedback-confirm-before-pushing-to-real-
+remote`) around consequential, hard-to-reverse shared-state actions.
+
+**POST-HOC CORRECTION (added by the `profiled-outer-ab-readiness-2026-08-04` session, verified
+live via git, not assumed from prose elsewhere):** that go-ahead was given and the sequence was
+executed. `git merge-base --is-ancestor 5a1a647d94c6844e7b0a8d2889155c2966bc7ea3 <canonical HEAD>`
+confirms this document's own start commit is a straight ancestor of
+`origin/prototype/profiled-destination-scales`'s current HEAD
+(`395dec3e1e68844128cc98c16be17e91bc9b6603`), reachable via a clean 20-commit fast-forward chain
+ending in `395dec3 Resolve origin_zc FULL CLI: earlier K_mean/K_pair "conflict" was a red herring`.
+That HEAD carries the tag `profiled-functional-ready-2026-08-04`. The former working branch
+`fix/profiled-functional-readiness-closeout-2026-08-03` no longer exists locally or on `origin`
+(consistent with the cleanup step of the merge/tag/push/cleanup sequence having run). The
+"awaiting confirmation" language immediately below is therefore stale and must not be read as the
+current state — it is preserved only as a historical record of what this document said before
+integration actually happened.
+
+~~The branch (`fix/profiled-functional-readiness-closeout-2026-08-03`) is fully pushed and clean at
 this commit; the worktree is untouched. Awaiting confirmation before the rebase/merge/tag/push/
-cleanup sequence.
+cleanup sequence.~~
