@@ -32,7 +32,7 @@ export RunManifest, RUN_MANIFEST_SCHEMA_VERSION, VALID_FAMILIES, VALID_ECONOMIC_
     write_run_manifest_json, validate_manifest, current_source_sha, source_is_dirty, refuse_if_dirty,
     digest_economic_state
 
-const RUN_MANIFEST_SCHEMA_VERSION = 1
+const RUN_MANIFEST_SCHEMA_VERSION = 2   # v2 (2026-08-03, task2 section10): added verification_policy
 
 """
 Real family symbols as used throughout `full_aod_diag/d4_exact/production_backend_manifest.jl`
@@ -84,6 +84,13 @@ Field notes:
   - `cache_policy`/`dual_bank_policy`/`warm_start_policy::Symbol`: free-form identifiers for
     which cache/bank/warm-start behavior a run used; not yet cross-checked against any real
     cache implementation (REDUCED currently has none per task §9's own premise).
+  - `verification_policy::Symbol` (added schema v2, task §10's "verification policy" field):
+    free-form identifier for which independent-verification discipline a run used -- e.g.
+    `:cm_production_value_verified` (FULL's real verifier) or `:reduced_verify_fn_inner_status_only`
+    (the weaker default classification `run_profiled_upper_constrained`/
+    `_run_profiled_outer_knitro_loop` fall back to when no `verify_fn` is supplied -- see
+    FamilyRegistry's own `inner_verifier` field for the per-family real function names this
+    should normally match).
   - `initial_state_digest::String`: caller-supplied digest of the decoded initial economic
     state (gp/A/nu) the run started from -- see `digest_economic_state` below for the one
     canonical way to compute it, so two manifests can be compared for "same starting point"
@@ -107,6 +114,7 @@ struct RunManifest
     cache_policy::Symbol
     dual_bank_policy::Symbol
     warm_start_policy::Symbol
+    verification_policy::Symbol
     initial_state_digest::String
     source_sha::String
     source_dirty::Bool
@@ -118,12 +126,13 @@ function RunManifest(; schema_version::Int = RUN_MANIFEST_SCHEMA_VERSION, sci::S
         draw_checksum_uniform::AbstractString, draw_checksum_transformed::AbstractString,
         outer_algorithm::Symbol, outer_max_wall_seconds::Real, outer_max_gradients::Int,
         cache_policy::Symbol, dual_bank_policy::Symbol, warm_start_policy::Symbol,
+        verification_policy::Symbol,
         initial_state_digest::AbstractString, source_sha::AbstractString, source_dirty::Bool)
     nb = nu_bounds === nothing ? nothing : (Float64(nu_bounds[1]), Float64(nu_bounds[2]))
     RunManifest(schema_version, sci, family, economic_parameterization, A_coordinate_mode,
         nu_policy, nb, String(draw_checksum_uniform), String(draw_checksum_transformed),
         outer_algorithm, Float64(outer_max_wall_seconds), outer_max_gradients,
-        cache_policy, dual_bank_policy, warm_start_policy, String(initial_state_digest),
+        cache_policy, dual_bank_policy, warm_start_policy, verification_policy, String(initial_state_digest),
         String(source_sha), source_dirty)
 end
 
@@ -199,6 +208,7 @@ function to_toml_dict(m::RunManifest)
         "cache_policy" => String(m.cache_policy),
         "dual_bank_policy" => String(m.dual_bank_policy),
         "warm_start_policy" => String(m.warm_start_policy),
+        "verification_policy" => String(m.verification_policy),
         "initial_state_digest" => m.initial_state_digest,
         "source_sha" => m.source_sha,
         "source_dirty" => m.source_dirty,
@@ -228,6 +238,7 @@ function from_toml_dict(d::AbstractDict)
         cache_policy = Symbol(req("cache_policy")),
         dual_bank_policy = Symbol(req("dual_bank_policy")),
         warm_start_policy = Symbol(req("warm_start_policy")),
+        verification_policy = Symbol(req("verification_policy")),
         initial_state_digest = req("initial_state_digest"),
         source_sha = req("source_sha"),
         source_dirty = Bool(req("source_dirty")),

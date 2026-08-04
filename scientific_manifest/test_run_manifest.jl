@@ -31,7 +31,8 @@ function make_run(; family = :unrestricted, economic_parameterization = :full_ga
         draw_checksum_uniform = "unif123", draw_checksum_transformed = "trans456",
         outer_algorithm = :knitro_active_set, outer_max_wall_seconds = 3600.0,
         outer_max_gradients = 5, cache_policy = :none, dual_bank_policy = :none,
-        warm_start_policy = :cold, initial_state_digest = "digest789",
+        warm_start_policy = :cold, verification_policy = :cm_production_value_verified,
+        initial_state_digest = "digest789",
         source_sha = "a" ^ 40, source_dirty = false)
 end
 
@@ -59,6 +60,7 @@ end
             @test m2.cache_policy == m.cache_policy
             @test m2.dual_bank_policy == m.dual_bank_policy
             @test m2.warm_start_policy == m.warm_start_policy
+            @test m2.verification_policy == m.verification_policy
             @test m2.initial_state_digest == m.initial_state_digest
             @test m2.source_sha == m.source_sha
             @test m2.source_dirty == m.source_dirty
@@ -110,6 +112,7 @@ end
             outer_algorithm = base.outer_algorithm, outer_max_wall_seconds = base.outer_max_wall_seconds,
             outer_max_gradients = base.outer_max_gradients, cache_policy = base.cache_policy,
             dual_bank_policy = base.dual_bank_policy, warm_start_policy = base.warm_start_policy,
+            verification_policy = base.verification_policy,
             initial_state_digest = base.initial_state_digest, source_sha = base.source_sha,
             source_dirty = base.source_dirty)
         @test any(occursin("family", p) for p in validate_manifest(bad_family))
@@ -135,6 +138,7 @@ end
             outer_algorithm = neg_budget.outer_algorithm, outer_max_wall_seconds = -1.0,
             outer_max_gradients = neg_budget.outer_max_gradients, cache_policy = neg_budget.cache_policy,
             dual_bank_policy = neg_budget.dual_bank_policy, warm_start_policy = neg_budget.warm_start_policy,
+            verification_policy = neg_budget.verification_policy,
             initial_state_digest = neg_budget.initial_state_digest, source_sha = neg_budget.source_sha,
             source_dirty = neg_budget.source_dirty)
         @test any(occursin("outer_max_wall_seconds", p) for p in validate_manifest(neg_budget2))
