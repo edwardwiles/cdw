@@ -195,7 +195,9 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
               "dual_bank.jl", "cm_dual_bank_production.jl",
               "profiled_production_outer_runner_2026-08-01.jl",
               "profiled_ab_comparability_and_plumbing_2026-08-01.jl",
-              "profiled_production_outer_constrained_2026-08-02.jl"]
+              "profiled_production_outer_constrained_2026-08-02.jl",
+              "profiled_zc_free_eta_2026-08-04.jl",
+              "profiled_zc_free_nu_production_driver_2026-08-04.jl"]
         Base.include(Main, joinpath(D4X, f))
     end
 
@@ -224,6 +226,21 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
     layout = Base.invokelatest(Main.build_profiled_economic_moment_layout, ctx, spec; has_france_ratio = has_france)
     reduced_obj0 = Base.invokelatest(Main.build_reduced_base_obj_for_family, ctx, layout, Main.CS)
 
+    # task §3.1/§3.2 fix (profiled-outer-ab-readiness-2026-08-04): origin_zc/cm_meanzc now dispatch
+    # to the genuine free-nu production driver (run_profiled_upper_constrained_free_nu,
+    # profiled_zc_free_nu_production_driver_2026-08-04.jl) instead of run_profiled_upper_constrained
+    # with the fixed-nu 3-arg evaluate_fn -- the earlier version of this dispatch pinned nu at the
+    # pes construction (`evaluate_profiled_originzc_point(w, ff, pes)`, pes.nu_full fixed at
+    # construction time, never re-searched) even though FamilyRegistry.jl already recorded
+    # free_nu_supported=true for these two rows on the strength of the free-nu driver existing --
+    # that field was true of the DRIVER, not of what this CLI actually called. Fixed here so a FULL
+    # vs REDUCED origin_zc/cm_meanzc A/B through this canonical runner compares two genuinely
+    # free-nu arms, matching the fix applied to `_run_full_originzc` above.
+    if family in (:origin_zc, :cm_meanzc)
+        return _run_reduced_zc_free_nu(family, sci, ctx, spec, pe, layout, reduced_obj0, w0, gp0, z_calib,
+            delta, maxtime_real, resume_from, outdir_base, D)
+    end
+
     fctx, evaluate_fn = if family == :unrestricted
         ev0 = Base.invokelatest(Main.evaluate_profiled_point, w0, ctx, spec, pe)
         f = Base.invokelatest(Main.build_unrestricted_family_ctx, ctx, spec, pe, ev0)
@@ -235,7 +252,7 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
             inner_fg_backend = :dense_reference, threaded_bins = true)
         f = Base.invokelatest(Main.build_flexcm_family_ctx, ctx, spec, pe, layout, cctx)
         (f, (w, ff) -> Base.invokelatest(Main.evaluate_profiled_flexcm_point, w, ff))
-    elseif family == :common_frechet
+    else # :common_frechet
         aug = Base.invokelatest(Main.build_cm_frechet_augmented_obj_archB, ctx, Main.CS; L = sci.L, contrasts = :anchored,
             base_obj = reduced_obj0, profiled_layout = layout)
         cctx = Base.invokelatest(Main.build_cm_bin_ctx, ctx, aug; profiled_layout = layout,
@@ -243,28 +260,6 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
             core_hessian_backend = :dense_reference, cm_cross_hessian_backend = :winner_bin)
         f = Base.invokelatest(Main.build_frechet_family_ctx, ctx, spec, pe, layout, cctx, aug.level_targets)
         (f, (w, ff) -> Base.invokelatest(Main.evaluate_profiled_frechet_point, w, ff))
-    elseif family == :origin_zc
-        layout_o = Base.invokelatest(Main.OriginByPowerLayout, D, 1, 0)
-        νvec0 = fill(1.0, D)
-        aug = Base.invokelatest(Main.build_originzc_augmented_obj, ctx, Main.CS, layout_o;
-            base_obj = reduced_obj0, profiled_layout = layout)
-        octx = Base.invokelatest(Main.build_originzc_core_hess_ctx, aug, ctx; core_hessian_backend = :exact_winner_pair_parallel,
-            zc_cross_hessian_backend = :winner_bin, profiled_layout = layout)
-        f = Base.invokelatest(Main.build_originzc_family_ctx, ctx, spec, pe, layout, aug)
-        pes = Base.invokelatest(Main.OriginZCPointEvalState, octx, νvec0)
-        (f, (w, ff) -> Base.invokelatest(Main.evaluate_profiled_originzc_point, w, ff, pes))
-    else # :cm_meanzc
-        K_MEAN, K_PAIR = sci.K_mean, sci.K_pair
-        νvec0 = fill(1.0, max(K_MEAN, 1))
-        aug = Base.invokelatest(Main.build_cm_meanzc_augmented_obj, ctx, Main.CS; L = sci.L, K_mean = K_MEAN, K_pair = K_PAIR,
-            base_obj = reduced_obj0, profiled_layout = layout)
-        cctx = Base.invokelatest(Main.build_cm_meanzc_bin_ctx, ctx, aug; core_hessian_backend = :exact_winner_pair_parallel,
-            zc_cross_hessian_backend = :winner_bin, threaded_bins = false, inner_fg_backend = :dense_reference,
-            profiled_layout = layout)
-        bins_u32 = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
-        f = Base.invokelatest(Main.build_cmzc_family_ctx, ctx, spec, pe, layout, aug, cctx, bins_u32)
-        pes = Base.invokelatest(Main.CMZCPointEvalState, cctx, νvec0)
-        (f, (w, ff) -> Base.invokelatest(Main.evaluate_profiled_cmzc_point, w, ff, pes))
     end
 
     manifest_dir = joinpath(outdir_base, "reduced_$(family)_W$(sci.W)_delta$(delta)")
@@ -288,6 +283,79 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
         checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = true)
     println("[run_profiled_model] n_eval=$(result.n_eval) n_grad=$(result.n_grad) wall=$(round(result.wall, digits=1))s " *
         "best=$(result.best === nothing ? "none" : "gp=$(result.best.gp) Delta=$(result.best.Delta)")")
+    flush(stdout)
+    return result
+end
+
+# ----------------------------------------------------------------------------
+# REDUCED origin_zc/cm_meanzc -- genuine free-nu dispatch (task §3.1/§3.2). Separate function
+# rather than folding into `_run_reduced`'s own big if/elseif: the free-nu driver has a materially
+# different call shape (extended [gp;A_free;eta_nu] outer vector, 4-arg evaluate_fn_free_nu/
+# gradient_fn_free_nu, required eta_bounds, its own checkpoint writer) -- forcing it into the same
+# tuple-returning branch structure as the 2-arg families would obscure exactly the parity property
+# this fix exists to make visible.
+# ----------------------------------------------------------------------------
+function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, reduced_obj0, w0::Vector{Float64},
+        gp0::Float64, z_calib::Matrix{Float64}, delta::Float64, maxtime_real::Float64, resume_from,
+        outdir_base::String, D::Int)
+    if family == :origin_zc
+        layout_o = Base.invokelatest(Main.OriginByPowerLayout, D, 1, 0)
+        νvec0 = fill(1.0, D)
+        aug = Base.invokelatest(Main.build_originzc_augmented_obj, ctx, Main.CS, layout_o;
+            base_obj = reduced_obj0, profiled_layout = layout)
+        octx = Base.invokelatest(Main.build_originzc_core_hess_ctx, aug, ctx; core_hessian_backend = :exact_winner_pair_parallel,
+            zc_cross_hessian_backend = :winner_bin, profiled_layout = layout)
+        fctx = Base.invokelatest(Main.build_originzc_family_ctx, ctx, spec, pe, layout, aug)
+        pes = Base.invokelatest(Main.OriginZCPointEvalState, octx, νvec0)
+        evaluate_fn_free_nu = (w, eta, ff, p) -> Base.invokelatest(Main.evaluate_profiled_originzc_point, w, eta, ff, p)
+        gradient_fn_free_nu = (w, eta, c, ff, ev) -> Base.invokelatest(Main.reduced_originzc_outer_gradient_with_eta, w, eta, c, ff, ev)
+    else # :cm_meanzc
+        K_MEAN, K_PAIR = sci.K_mean, sci.K_pair
+        νvec0 = fill(1.0, max(K_MEAN, 1))
+        aug = Base.invokelatest(Main.build_cm_meanzc_augmented_obj, ctx, Main.CS; L = sci.L, K_mean = K_MEAN, K_pair = K_PAIR,
+            base_obj = reduced_obj0, profiled_layout = layout)
+        cctx = Base.invokelatest(Main.build_cm_meanzc_bin_ctx, ctx, aug; core_hessian_backend = :exact_winner_pair_parallel,
+            zc_cross_hessian_backend = :winner_bin, threaded_bins = false, inner_fg_backend = :dense_reference,
+            profiled_layout = layout)
+        bins_u32 = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        fctx = Base.invokelatest(Main.build_cmzc_family_ctx, ctx, spec, pe, layout, aug, cctx, bins_u32)
+        pes = Base.invokelatest(Main.CMZCPointEvalState, cctx, νvec0)
+        evaluate_fn_free_nu = (w, eta, ff, p) -> Base.invokelatest(Main.evaluate_profiled_cmzc_point, w, eta, ff, p)
+        gradient_fn_free_nu = (w, eta, c, ff, ev) -> Base.invokelatest(Main.reduced_cmzc_outer_gradient_with_eta, w, eta, c, ff, ev)
+    end
+
+    # `originzc_default_nu_bounds` dispatches correctly on `fctx.zc_layout`'s own type
+    # (OriginByPowerLayout for origin_zc, SharedByPowerLayout for cm_meanzc -- the latter via that
+    # function's own SharedByPowerLayout method, which forwards to meanzc_default_nu_bounds) --
+    # ONE call site correctly serves both families, matching the FULL-side wrapper's own bounds
+    # convention exactly (see `_run_full_originzc`'s header comment above).
+    eta_bounds = Base.invokelatest(Main.originzc_default_nu_bounds, ctx, fctx.zc_layout)
+    n_eta = length(eta_bounds)
+    eta_nu0 = zeros(n_eta)   # neutral nu=1 start, matching the FULL-side wrapper's own eta0 = zeros(D)
+    eta_bounds_summary = (minimum(b[1] for b in eta_bounds), maximum(b[2] for b in eta_bounds))
+
+    manifest_dir = joinpath(outdir_base, "reduced_$(family)_W$(sci.W)_delta$(delta)")
+    mkpath(manifest_dir)
+    initial_digest = RunManifestMod.digest_economic_state([gp0], z_calib, [1.0])
+    rm_ = RunManifestMod.RunManifest(sci = sci, family = family, economic_parameterization = :profiled_destination_scales,
+        A_coordinate_mode = :profiled_pivot_anchor_relative, nu_policy = :free, nu_bounds = eta_bounds_summary,
+        draw_checksum_uniform = hasproperty(ctx, :draw_meta) && ctx.draw_meta !== nothing ? ctx.draw_meta.checksum_uniform : "",
+        draw_checksum_transformed = hasproperty(ctx, :draw_meta) && ctx.draw_meta !== nothing ? ctx.draw_meta.checksum_transformed : "",
+        outer_algorithm = :knitro_direct_sr1, outer_max_wall_seconds = maxtime_real, outer_max_gradients = 1_000_000,
+        cache_policy = :none, dual_bank_policy = :none, warm_start_policy = resume_from === nothing ? :cold : :resumed,
+        verification_policy = :reduced_verify_fn_inner_status_only,
+        initial_state_digest = initial_digest, source_sha = RunManifestMod.current_source_sha(repo_dir = REPO_ROOT),
+        source_dirty = RunManifestMod.source_is_dirty(repo_dir = REPO_ROOT))
+    RunManifestMod.write_run_manifest_json(joinpath(manifest_dir, "run_manifest.json"), rm_)
+    println("[run_profiled_model] wrote $(joinpath(manifest_dir, "run_manifest.json"))"); flush(stdout)
+
+    ckpt_path = joinpath(manifest_dir, "checkpoint.jls")
+    result = Base.invokelatest(Main.run_profiled_upper_constrained_free_nu, "cli_$(family)", w0, eta_nu0;
+        fctx = fctx, evaluate_fn_free_nu = evaluate_fn_free_nu, gradient_fn_free_nu = gradient_fn_free_nu, pes = pes,
+        ctx = ctx, pe = pe, eta_bounds = eta_bounds, delta = delta, maxtime_real = maxtime_real, hessopt_tag = "sr1",
+        checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = true)
+    println("[run_profiled_model] n_eval=$(result.n_eval) n_grad=$(result.n_grad) wall=$(round(result.wall, digits=1))s " *
+        "best=$(result.best === nothing ? "none" : "gp=$(result.best.gp) eta_nu=$(result.best.eta_nu) Delta=$(result.best.Delta)")")
     flush(stdout)
     return result
 end
@@ -384,15 +452,27 @@ end
 
 FULL/origin_zc via `run_originzc_upper_checkpointed` (cm_originzc_checkpoint.jl). Include list,
 `distribution_restriction=:origin_specific_moments`/`K_mean=1`/`K_pair=0`/
-`power_target_layout=:origin_by_power`, `A_coordinate_mode=:legacy_z`, and the nu-pinning
-(`nu_bounds` a ~1e-8-wide box around `log(1.0)=0` for every origin) are copied from
+`power_target_layout=:origin_by_power`, `A_coordinate_mode=:legacy_z` are copied from
 `run_outer_originzc_full_2026-08-02.jl` -- the real, already-existing, dedicated FULL production
 script built specifically to match the REDUCED path's own `OriginByPowerLayout(D,1,0)` exactly
 (confirmed: this session's own REDUCED-path free-nu/free-eta gates use the identical (1,0) pair
 throughout). `run_originzc_upper_checkpointed` rebuilds its own `ctx` internally from the same
-deterministic kwargs given here -- the probe `ctx1` built below is only for sizing
-`w0`/`nu_bounds` (D, calibration), not reused by the real driver call, matching the dedicated
-script's own documented rationale for why this is safe (same fixed draw_seed => same ctx).
+deterministic kwargs given here -- the probe `ctx1` built below is only for sizing `w0` (D,
+calibration), not reused by the real driver call, matching the dedicated script's own documented
+rationale for why this is safe (same fixed draw_seed => same ctx).
+
+task §3.2 fix (profiled-outer-ab-readiness-2026-08-04): `run_outer_originzc_full_2026-08-02.jl`
+ALSO pins `nu_bounds` to a ~1e-8-wide box around `log(1.0)=0` for every origin -- that script is a
+fixed-nu-near-one DIAGNOSTIC convention, not FULL's actual free-nu production path, even though it
+is the file this CLI wrapper's earlier construction otherwise mirrors. `run_originzc_upper_checkpointed`
+itself already supports genuine free-nu search: its own `nu_bounds=nothing` default resolves to
+`originzc_default_nu_bounds(ctx, layout)` (cm_originzc_checkpoint.jl, confirmed by direct read) --
+the real, already-production-tested "4x safety margin on the hard finite-support interval from the
+actual draws" policy, i.e. the SAME data-driven convention the REDUCED-side free-nu driver
+(`run_profiled_upper_constrained_free_nu`, `profiled_zc_free_nu_production_driver_2026-08-04.jl`)
+uses via the identical function. This wrapper now omits `nu_bounds` entirely (leaves it at that
+default) instead of pinning it, so a canonical-runner A/B between FULL and REDUCED origin_zc
+compares two arms that both genuinely search nu, not one pinned diagnostic vs one free search.
 """
 function _run_full_originzc(sci, cli, delta::Float64, find_smallest::Bool,
         maxtime_real::Float64, resume_from, outdir_base::String)
@@ -410,10 +490,25 @@ function _run_full_originzc(sci, cli, delta::Float64, find_smallest::Bool,
         Base.include(Main, joinpath(D4X, f))
     end
 
+    ctx1 = Base.invokelatest(Main.d20_real_setup_design, W = sci.W, δ = delta, find_smallest = find_smallest,
+        draw_design = sci.draw_design, draw_seed = sci.draw_seed, destination_sample = sci.destination_sample,
+        exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
+        σHat = sci.sigma)
+    D = ctx1.D
+    # task §3.2 fix: genuine data-driven per-origin bounds (4x safety margin on the real
+    # finite-support interval), NOT the pinned ~1e-8-wide box around log(1)=0 the earlier version
+    # copied from the fixed-nu diagnostic script -- see this function's own header comment.
+    layout_o1 = Base.invokelatest(Main.OriginByPowerLayout, D, 1, 0)
+    nu_bounds = Base.invokelatest(Main.originzc_default_nu_bounds, ctx1, layout_o1)
+    # manifest schema only records a single scalar (lo,hi) summary (RunManifest.nu_bounds ::
+    # Union{Nothing,Tuple{Float64,Float64}}) -- the real per-origin box KNITRO actually searches
+    # is the `nu_bounds` vector passed to run_originzc_upper_checkpointed below, unabbreviated.
+    nu_bounds_summary = (minimum(b[1] for b in nu_bounds), maximum(b[2] for b in nu_bounds))
+
     manifest_dir = joinpath(outdir_base, "full_origin_zc_W$(sci.W)_delta$(delta)")
     mkpath(manifest_dir)
     rm_ = RunManifestMod.RunManifest(sci = sci, family = :origin_zc, economic_parameterization = :full_gamma_normalized,
-        A_coordinate_mode = :legacy_z, nu_policy = :fixed, nu_bounds = nothing,
+        A_coordinate_mode = :legacy_z, nu_policy = :free, nu_bounds = nu_bounds_summary,
         draw_checksum_uniform = "", draw_checksum_transformed = "",
         outer_algorithm = :knitro_auto, outer_max_wall_seconds = maxtime_real, outer_max_gradients = 1_000_000,
         cache_policy = :exact_cache, dual_bank_policy = :none, warm_start_policy = resume_from === nothing ? :cold : :resumed,
@@ -423,17 +518,11 @@ function _run_full_originzc(sci, cli, delta::Float64, find_smallest::Bool,
     RunManifestMod.write_run_manifest_json(joinpath(manifest_dir, "run_manifest.json"), rm_)
     println("[run_profiled_model] wrote $(joinpath(manifest_dir, "run_manifest.json"))"); flush(stdout)
 
-    ctx1 = Base.invokelatest(Main.d20_real_setup_design, W = sci.W, δ = delta, find_smallest = find_smallest,
-        draw_design = sci.draw_design, draw_seed = sci.draw_seed, destination_sample = sci.destination_sample,
-        exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
-        σHat = sci.sigma)
-    D = ctx1.D
-    nu_bounds = [(-1e-8, 1e-8) for _ in 1:D]   # PIN nu at ~1.0, matches the dedicated script exactly
     local w0::Union{Nothing,Vector{Float64}}
     if resume_from === nothing
         pe1 = Base.invokelatest(Main.build_pivot_elimination, ctx1)
         w0_econ = Base.invokelatest(Main.cm_w0_from_calibration, ctx1, pe1, :legacy_z)
-        eta0 = zeros(D)
+        eta0 = zeros(D)   # neutral nu=1 start; the SEARCH range is now the real data-driven `nu_bounds` above, not a pinned box
         w0 = vcat(w0_econ, eta0)
     else
         w0 = nothing   # run_originzc_upper_checkpointed loads w0 from the checkpoint itself on resume
