@@ -1,0 +1,15 @@
+----------------
+Final objective value               =   9.53892438715240e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.23e-02 / 1.23e-02
+# of iterations                     =         20 
+# of CG iterations                  =         33 
+# of function evaluations           =        118
+# of gradient evaluations           =         21
+Total program time (secs)           =      94.04163 (   177.356 CPU time)
+Time spent in evaluations (secs)    =      87.43349
+
+===============================================================================
+
+[cli_unrestricted] UNIFIED POLISH DONE: status=-401 (KN_RC_TIME_LIMIT_FEAS/limit_feasible) wall_ext=94.1s n_eval=26 kappa=0.06835789201445941 n_grad_calls=21
+[run_profiled_model] FULL (unrestricted) run complete.

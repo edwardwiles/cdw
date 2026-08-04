@@ -1,0 +1,15 @@
+Final objective value               =   9.66902688030619e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   3.90e-03 / 3.90e-03
+# of iterations                     =          8 
+# of CG iterations                  =          2 
+# of function evaluations           =         17
+# of gradient evaluations           =          9
+Total program time (secs)           =     104.15834 (   123.384 CPU time)
+Time spent in evaluations (secs)    =      96.68622
+
+===============================================================================
+
+[cli_common_frechet] DONE: status=-401 wall=122.0s n_eval=17 n_grad=9
+  best: gp=0.9669026880306187 Delta=0.9429922056303914 found_at_eval=15 t=101.29150819778442s
+[run_profiled_model] n_eval=17 n_grad=9 wall=122.0s best=gp=0.9669026880306187 Delta=0.9429922056303914

@@ -1,0 +1,40 @@
+Number of nonzeros in Hessian:                        0 (       72771)
+
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+  Iter      Objective      FeasError   OptError    ||Step||    CGits 
+--------  --------------  ----------  ----------  ----------  -------
+       0    9.840279e-01   0.000e+00
+       1    9.730109e-01   0.000e+00   1.757e-02   1.213e-02        0
+       2    9.657132e-01   0.000e+00   4.169e-02   1.472e-02        0
+       3    9.626835e-01   4.306e-02   4.471e-02   3.786e-02        0
+       4    9.624739e-01   2.800e-02   6.335e-02   9.016e-03        0
+       5    9.610312e-01   0.000e+00   1.528e-02   2.170e-01        4
+       6    9.601508e-01   0.000e+00   9.366e-03   1.481e-02        0
+       7    9.595453e-01   0.000e+00   1.102e-02   3.324e-02        0
+       8    9.586490e-01   0.000e+00   7.600e-03   9.687e-02        1
+       9    9.583095e-01   0.000e+00   7.190e-03   1.864e-02        1
+      10    9.574320e-01   0.000e+00   8.698e-03   1.003e-01        1
+
+EXIT: Time limit reached. Current point is feasible.
+
+Final Statistics
+----------------
+Final objective value               =   9.57432041067040e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   8.70e-03 / 8.70e-03
+# of iterations                     =         10 
+# of CG iterations                  =          7 
+# of function evaluations           =         38
+# of gradient evaluations           =         11
+Total program time (secs)           =      60.61178 (    60.280 CPU time)
+Time spent in evaluations (secs)    =      56.03648
+
+===============================================================================
+
+[algparity_originzc] DONE: status=-401 wall=65.4s n_eval=38 n_grad=11
+  best: gp=0.9574320410670399 eta_nu=[-0.006265515812803267, 0.04091143747101565, -0.010357140722171039, -0.0073032207691111255, -0.0018917478324022839, -0.007804740131781639, 0.000531159332935234, -0.0007408217007819579, -0.001923177140244866, -0.0038497283232780924, -0.003497903590148802, -0.0036030622124356452, -0.005343133602587459, -0.0024207109349663708, -0.005372511270362928, 0.00031673649378169, -0.004250360845005968, -0.0038032733920091875, -0.011811013511599893, 0.00729188462839577] Delta=0.9319830800113409 found_at_eval=38 t=63.36073899269104s
+  n_eval=38 n_grad=11 wall=65.42930006980896 best=gp=0.9574320410670399 Delta=0.9319830800113409 status=-401
+
+ALL_RESULTS: Dict{Symbol, Bool}(:flexible_cm => 1, :origin_zc => 1)
+ALGORITHMIC_PARITY_REDUCED_SIDE_CONFIRMATION: PASS
