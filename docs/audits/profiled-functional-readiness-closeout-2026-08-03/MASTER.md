@@ -1,5 +1,16 @@
 # REDUCED functional-readiness closeout — MASTER report — 2026-08-03
 
+**See `CONTINUATION_2026-08-04.md` (this directory) for a same-branch, same-worktree continuation**
+that closed the eval18 maxit=1000 question (real result: `nStatus=-300`, confirms this file's own
+§4 forensic verdict — the earlier "not independently re-run" gap below is now closed), closed the
+D20/W=20,000 threaded-bin confirmation this file's §3.2 left open, fixed two real bugs in this
+session's own scripts (the eval18 try/catch handler, and both pre-existing ZC-lane D4
+outer-gradient math gates, which were silently broken on HEAD due to API drift), and implemented +
+D4-verified genuine free eta_nu for origin_ZC/CM_plus_ZC (§7 below) — that continuation's own final
+verdict block supersedes this file's for those items specifically; the rest of this file's status
+(§3.3 W=100k warm-start, §5.2 unrestricted historical replay, FULL CLI, D20/W=80-100k gates,
+registry updates) is still current and unchanged.
+
 This is an **honest, partial-completion report**, in the same spirit as the two prior sessions'
 own MASTER.md files. Real, independently-verified progress was made on the audit (§2 of the task
 brief), inner-fix revalidation (§3, code-level claims), the checkpoint/resume gate for all five
