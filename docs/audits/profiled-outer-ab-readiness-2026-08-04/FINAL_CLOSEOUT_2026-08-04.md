@@ -118,14 +118,14 @@ faster-than-FULL one; the dominant remaining cost on both sides is the inner sol
 this task's scope (task explicitly excludes inner-kernel changes).
 
 **Execution order**: full-first run above covers all 5 families. A reduced-first spot check
-(flexible_cm only, both directions of launch order) was run as a partial check — see the verdict
-block for its specific result; extending to all 5 families in reduced-first order was not attempted
-given session time constraints (each family pair takes ~5-6 minutes; a full second order would add
-~30 more minutes on top of an already very long session). Given each run is an independent, fresh
-Julia process writing to its own manifest directory, order-dependent contamination between
-formulations was never a plausible failure mode here (unlike, say, a shared in-process cache) — the
-spot check exists to confirm this reasoning empirically, not because a different mechanism was
-suspected.
+(flexible_cm only) was run and completed: **33 function evals / 13 gradient evals (REDUCED),
+27/10 (FULL)** — identical to the full-first order's own flexible_cm numbers (33/13 and 27/10
+respectively) to the last digit. Confirms empirically what was expected structurally (each run is
+an independent, fresh Julia process writing to its own manifest directory — no shared in-process
+state between formulations that launch order could plausibly perturb). Extending to all 5 families
+in reduced-first order was not attempted given session time constraints (each family pair takes
+~5-6 minutes; a full second order would add ~30 more minutes on top of an already very long
+session) — reported honestly as a 1-of-5-family spot check, not full coverage.
 
 ## Section 11 (coordinate-mode tournament) — NOT ATTEMPTED
 
