@@ -19,8 +19,16 @@ const CONTPOLISH_W = parse(Int, get(ENV, "CAMPAIGN_W") do
     error("continuation_polish_run_fn.jl requires CAMPAIGN_W to be set in the environment (e.g. `export CAMPAIGN_W=100000`) -- no default, per this repo's scientific-parameter rule.")
 end)
 const CONTPOLISH_CM_L = 50
-const CONTPOLISH_MEANZC_K = 1
-const CONTPOLISH_ORIGINZC_K = 1
+# K_mean/K_pair for the ZC families are themselves scientific parameters that change what economic
+# problem is being solved (K=1 vs K=3 moment blocks) -- per this repo's own rule, required via env
+# vars, no default. The completed K=1 campaign set these to 1; the fresh K=3 campaign
+# (post-verifier-fix W=100k rerun + K=3 task, 2026-08-04) sets CAMPAIGN_MEANZC_K=CAMPAIGN_ORIGINZC_K=3.
+const CONTPOLISH_MEANZC_K = parse(Int, get(ENV, "CAMPAIGN_MEANZC_K") do
+    error("continuation_polish_run_fn.jl requires CAMPAIGN_MEANZC_K to be set in the environment (e.g. `export CAMPAIGN_MEANZC_K=3`) -- no default, per this repo's scientific-parameter rule.")
+end)
+const CONTPOLISH_ORIGINZC_K = parse(Int, get(ENV, "CAMPAIGN_ORIGINZC_K") do
+    error("continuation_polish_run_fn.jl requires CAMPAIGN_ORIGINZC_K to be set in the environment (e.g. `export CAMPAIGN_ORIGINZC_K=3`) -- no default, per this repo's scientific-parameter rule.")
+end)
 const CONTPOLISH_SNAPS = nested_grid_sequence([10, 20, 50])
 const CONTPOLISH_PROBS_L50 = CONTPOLISH_SNAPS[CONTPOLISH_CM_L]
 const CONTPOLISH_UNRESTRICTED_LAYOUT = make_layout(trade_elasticity_mode = :fixed, A_coordinate_mode = :powered_aspace, gp_coordinate_mode = :raw)

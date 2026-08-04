@@ -14,9 +14,15 @@ const D4E = "/bbkinghome/edav/cdw_worktrees/fullA-continuation-polish-2026-08-03
 const CAMPAIGN_OUT = "/bbkinghome/edav/gravity_robustness/worktrees/campaign-fullA-W100k-10x10-2026-08-02/results/campaign_output_2026-08-02"
 const ORIGINAL_ENVELOPE_CSV = "/bbkinghome/edav/gravity_robustness/worktrees/campaign-fullA-W100k-10x10-2026-08-02/MONOTONE_INCUMBENT_ENVELOPE_2026-08-03.csv"
 const ORIGINAL_SEED_MANIFEST_CSV = "/bbkinghome/edav/gravity_robustness/worktrees/campaign-fullA-W100k-10x10-2026-08-02/CONTINUATION_SEED_MANIFEST_2026-08-03.csv"
-const CAMPAIGN_RESULTS_ROOT = "/bbkinghome/edav/repo_scratch/fullA-continuation-polish-2026-08-03/campaign_output"
+# post-verifier-fix W=100k rerun + K=3 campaign task (2026-08-04): redirected from the original
+# campaign_output/ to a namespaced POST_VERIFY_FIX/ directory so the fresh, fixed-gate rerun never
+# overwrites the archived PRE_FIX_VERIFIER results (task's own explicit "do not overwrite" rule) --
+# ORIGINAL_ENVELOPE_CSV/ORIGINAL_SEED_MANIFEST_CSV above still correctly point at the old,
+# read-only K1 baseline (reused as S1 seed input, never written to).
+const CAMPAIGN_RESULTS_ROOT = "/bbkinghome/edav/repo_scratch/fullA-continuation-polish-2026-08-03/POST_VERIFY_FIX/campaign_output"
 
 include(joinpath(D4E, "full_chain_include.jl"))
+isdefined(Main, :MANIFEST_K3_HASH) || include(joinpath(D4E, "w100k_manifest.jl"))
 
 lp(xs...) = (println(xs...); flush(stdout))
 
@@ -29,6 +35,13 @@ const POSITIONAL_ARGS = [a for a in ARGS if !startswith(a, "extra_seed:")]
 
 const FAMILY = POSITIONAL_ARGS[1]
 const DIRECTION = Symbol(POSITIONAL_ARGS[2])
+
+# Stamp every quarantine record this process writes (quarantine.jl, task §2.5) with the manifest
+# hash that actually governs this cell -- MANIFEST_K3_HASH for the two ZC families (K_mean=K_pair=3
+# this campaign), MANIFEST_K1_HASH otherwise (the K fields are inert/unused for the three non-ZC
+# families, but every other scientific field is identical between the two manifests, so K1's hash
+# is the correct shared identity for them, not a mismatch).
+ACTIVE_CAMPAIGN_MANIFEST_HASH[] = FAMILY in ("origin_zc", "cm_meanzc") ? MANIFEST_K3_HASH : MANIFEST_K1_HASH
 const TARGET_DELTA = parse(Float64, POSITIONAL_ARGS[3])
 const OUTPUT_DIR = POSITIONAL_ARGS[4]
 const EXPLORE_BUDGET_S = length(POSITIONAL_ARGS) >= 5 ? parse(Float64, POSITIONAL_ARGS[5]) : 1500.0
