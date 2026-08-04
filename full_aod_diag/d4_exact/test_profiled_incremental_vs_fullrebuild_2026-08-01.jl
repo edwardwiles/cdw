@@ -91,7 +91,7 @@ function compare_at(label::String, w::Vector{Float64}, rows)
     println("full-rebuild gradient computed in $(t_full)s"); flush(stdout)
 
     t2 = time()
-    g_inc, meta_inc = profiled_composite_gradient_at_incremental(w, ctx, spec, pe, ev)
+    g_inc, meta_inc = profiled_composite_gradient_at_incremental(w, ctx, spec, pe, ev; threaded = false)
     t_inc = time() - t2
     println("incremental gradient computed in $(t_inc)s (speedup=$(round(t_full/t_inc,digits=1))x)"); flush(stdout)
 

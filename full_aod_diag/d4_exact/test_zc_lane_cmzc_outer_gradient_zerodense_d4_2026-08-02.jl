@@ -169,7 +169,7 @@ ev = (result = (beta = β_full, zeta = base_reduced.ζstar), st = (cf = cf_reduc
       theta_full = collect(θ_full_calib), obj = (M = W,), m_weights = m_weights, nu_full = νvec0,
       decoded = decoded_calib)
 
-g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev)
+g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev; threaded = false)
 g_eta = d_delta_dual_d_eta_nu_vec(β_full, aug_reduced, νvec0; mean_m = mean_m)
 after_counters = NO_DENSE_G_COUNTERS[]
 println("g_Agp: length=$(length(g_Agp))  g_Agp[1](dK/dgp)=$(g_Agp[1])")

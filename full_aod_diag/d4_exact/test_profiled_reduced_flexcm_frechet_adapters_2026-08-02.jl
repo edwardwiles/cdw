@@ -4,7 +4,7 @@
 # wired to the GENUINE dense-G-free reduced operator FG. For each family:
 #   1. validate_family_layout_contract(fctx) succeeds (real accessors, real checksum).
 #   2. evaluate_profiled_{flexcm,frechet}_point at the reduced calibration point reaches nStatus=0.
-#   3. shared_family_outer_gradient(w, ctx, fctx, ev) -- the SAME shared A/gp engine the unrestricted
+#   3. shared_family_outer_gradient(w, ctx, fctx, ev; threaded = false) -- the SAME shared A/gp engine the unrestricted
 #      family uses, completely unmodified -- matches the independent, non-incremental
 #      diag_profiled_full_rebuild_gradient reference (profiled_restricted_full_rebuild_gradient_
 #      reference_2026-08-01.jl) to machine precision, at MATCHED (adaptive) per-coordinate
@@ -98,7 +98,7 @@ println("  inner_status=$(ev_cm.result.inner_status)  zeta*=$(ev_cm.result.zeta)
 check("flexCM: real KNITRO solve reaches nStatus=0", ev_cm.result.inner_status == 0)
 check("flexCM: zero dense economic G materialization across the whole evaluator call", dense_g_after == dense_g_before)
 
-g_shared_cm, meta_cm = shared_family_outer_gradient(w_calib, ctx, fctx_cm, ev_cm)
+g_shared_cm, meta_cm = shared_family_outer_gradient(w_calib, ctx, fctx_cm, ev_cm; threaded = false)
 h_matched_cm = copy(meta_cm.h_used); h_matched_cm[1] = 0.01
 g_full_cm, _ = diag_profiled_full_rebuild_gradient(w_calib, ctx, fctx_cm, ev_cm; h = h_matched_cm)
 diff_cm = g_shared_cm[2:end] .- g_full_cm[2:end]
@@ -132,7 +132,7 @@ println("  inner_status=$(ev_f.result.inner_status)  zeta*=$(ev_f.result.zeta)")
 check("Frechet: real KNITRO solve reaches nStatus=0", ev_f.result.inner_status == 0)
 check("Frechet: zero dense economic G materialization across the whole evaluator call", dense_g_after_f == dense_g_before_f)
 
-g_shared_f, meta_f = shared_family_outer_gradient(w_calib, ctx, fctx_f, ev_f)
+g_shared_f, meta_f = shared_family_outer_gradient(w_calib, ctx, fctx_f, ev_f; threaded = false)
 h_matched_f = copy(meta_f.h_used); h_matched_f[1] = 0.01
 g_full_f, _ = diag_profiled_full_rebuild_gradient(w_calib, ctx, fctx_f, ev_f; h = h_matched_f)
 diff_f = g_shared_f[2:end] .- g_full_f[2:end]

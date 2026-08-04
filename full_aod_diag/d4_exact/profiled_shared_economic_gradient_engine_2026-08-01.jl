@@ -148,7 +148,7 @@ so the A/gp portion is provably one concrete method, not five parallel
 implementations.
 """
 function shared_family_outer_gradient(w_profiled::AbstractVector{Float64}, ctx, fctx, ev;
-        threaded::Bool = false)
+        threaded::Bool)
     v = validate_family_layout_contract(fctx)
     cache = build_shared_profiled_lfix_cache(w_profiled, fctx, ctx, ev)
     return profiled_composite_gradient_from_cache(cache, ctx, v.spec, v.pe, w_profiled, ev; threaded = threaded)

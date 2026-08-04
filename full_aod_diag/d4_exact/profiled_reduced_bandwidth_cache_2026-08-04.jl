@@ -42,14 +42,15 @@ mutable struct ReducedBandwidthCacheEntry
 end
 
 """
-    ReducedBandwidthCache(validity_radius=0.02)
+    ReducedBandwidthCache(validity_radius)
 
-`validity_radius`: L-infinity distance (in outer-coordinate units) a NEW `w_profiled` may be from
-a cache entry's own `w_at_accept` before that entry is treated as stale. Default `0.02` is a
-conservative starting point (an order of magnitude tighter than `profiled_select_bandwidth`'s own
-default `h_ceil=0.1`) -- NOT claimed optimal, deliberately left tunable per task §7's own "do not
-copy FULL's rule untested" instruction; the gate tests below measure whether it is safe and
-whether it provides material gain at this value, rather than asserting it does.
+`validity_radius` (REQUIRED -- no default, per this repo's own standing rule that no function may
+default any input or setting, not just scientific parameters: `feedback-no-defaults-on-any-input-
+or-setting`): L-infinity distance (in outer-coordinate units) a NEW `w_profiled` may be from a
+cache entry's own `w_at_accept` before that entry is treated as stale. `0.02` is what this task's
+own gates use (an order of magnitude tighter than `profiled_select_bandwidth`'s own default
+`h_ceil=0.1`) -- NOT claimed optimal, deliberately left for the caller to state explicitly rather
+than silently assumed, per task §7's own "do not copy FULL's rule untested" instruction.
 """
 mutable struct ReducedBandwidthCache
     entries::Dict{ReducedBandwidthCacheKey,ReducedBandwidthCacheEntry}
@@ -59,7 +60,7 @@ mutable struct ReducedBandwidthCache
     stale_evictions::Int
     lk::ReentrantLock
 end
-ReducedBandwidthCache(validity_radius::Float64 = 0.02) =
+ReducedBandwidthCache(validity_radius::Float64) =
     ReducedBandwidthCache(Dict{ReducedBandwidthCacheKey,ReducedBandwidthCacheEntry}(), validity_radius, 0, 0, 0, ReentrantLock())
 
 "content hash of a ScientificManifest -- in-process only (not claimed cross-process-stable; this cache is never persisted, unlike CMCheckpointV11/stable_layout_digest)."
@@ -136,7 +137,7 @@ own `h_mode=:cached` path composes with `threaded=true` (composite_gradient_fast
 """
 function profiled_composite_gradient_from_cache_bwcache(plfix::ProfiledLFixCache, ctx, spec::AnchorSpec,
         pe::PivotGravityElimOnRetained, w_profiled::AbstractVector{Float64}, ev, bwcache::ReducedBandwidthCache,
-        cache_ctx; threaded::Bool = false)
+        cache_ctx; threaded::Bool)
     n_total = outer_dim_profiled(pe)
     g = zeros(n_total)
     g[1] = profiled_gp_component_analytic(plfix, w_profiled, ev, ctx)

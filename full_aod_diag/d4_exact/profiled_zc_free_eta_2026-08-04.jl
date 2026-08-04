@@ -144,7 +144,7 @@ envelope-theorem eta sensitivity, un-rederived) evaluated at `ev`'s solved dual,
 `ev.st.n_econ`, `ev.nu_full`, `ev.result.beta`, `ev.result.m_mean`).
 """
 function reduced_originzc_outer_gradient_with_eta(w_econ::AbstractVector{Float64}, eta_nu::AbstractVector{Float64},
-        ctx, fctx::OriginZCFamilyCtx, ev; threaded::Bool = false)
+        ctx, fctx::OriginZCFamilyCtx, ev; threaded::Bool)
     g_econ, meta = shared_family_outer_gradient(w_econ, ctx, fctx, ev; threaded = threaded)
     # aug.ncore_econ in d_delta_dual_d_eta_origin_vec's own convention (cm_originzc_moments.jl:257,
     # `ncore_econ = obj0.d`) is `n_econ_duals + 1`, NOT n_econ_duals itself -- confirmed live
@@ -200,7 +200,7 @@ end
 Same convention as `reduced_originzc_outer_gradient_with_eta`.
 """
 function reduced_cmzc_outer_gradient_with_eta(w_econ::AbstractVector{Float64}, eta_nu::AbstractVector{Float64},
-        ctx, fctx::CMZCFamilyCtx, ev; threaded::Bool = false)
+        ctx, fctx::CMZCFamilyCtx, ev; threaded::Bool)
     g_econ, meta = shared_family_outer_gradient(w_econ, ctx, fctx, ev; threaded = threaded)
     # aug.ncore_econ in d_delta_dual_d_eta_origin_vec's own convention (cm_originzc_moments.jl:257,
     # `ncore_econ = obj0.d`) is `n_econ_duals + 1`, NOT n_econ_duals itself -- confirmed live

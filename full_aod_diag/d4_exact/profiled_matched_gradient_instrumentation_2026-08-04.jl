@@ -122,7 +122,7 @@ via direct comparison against `shared_family_outer_gradient`'s own output at the
 this function exists ONLY to add timing, not to compute anything differently.
 """
 function instrumented_shared_family_outer_gradient(w_profiled::AbstractVector{Float64}, ctx, fctx, ev;
-        threaded::Bool = false)
+        threaded::Bool)
     fam = family_kind(fctx)
     t_wrapper0 = time_ns()
     gcstats0 = Base.gc_num()
@@ -208,7 +208,7 @@ observable from outside. Gradient VALUES match `composite_gradient_at_fast(...; 
 only, no new computation. `x_free0` is FULL's own full free-parameter vector (`[gp; Aod_levels]`),
 matching `composite_gradient_at_fast`'s own signature.
 """
-function instrumented_composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe; threaded::Bool = false)
+function instrumented_composite_gradient_at_fast(x_free0::AbstractVector, ctx, pe; threaded::Bool)
     t_wrapper0 = time_ns()
     gcstats0 = Base.gc_num()
 

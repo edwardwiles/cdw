@@ -129,7 +129,8 @@ lp("="^100)
 result = run_profiled_upper_constrained("originzc_reduced_w$(W_VAL)", w_profiled_calib;
     fctx = fctx_oz, evaluate_fn = (w, f) -> evaluate_profiled_originzc_point(w, f, pes_oz),
     ctx = ctx, pe = pe, delta = DELTA, maxtime_real = MAXT, hessopt_tag = "sr1",
-    use_screen = true, cache = cache_oz, trace_csv = trace_csv, verbose = true)
+    use_screen = true, cache = cache_oz, trace_csv = trace_csv, verbose = true,
+    threaded_gradient = false)
 
 lp("="^100)
 @printf("REDUCED RESULT: knitro_status=%d wall=%.1fs n_eval=%d n_grad=%d\n",

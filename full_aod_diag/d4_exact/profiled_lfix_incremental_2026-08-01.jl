@@ -454,7 +454,7 @@ per-coordinate `select_bandwidth` call inside its `for k in 2:D2` loop) --
 no fixed global `h` anymore.
 """
 function profiled_composite_gradient_at_incremental(w_profiled::AbstractVector{Float64}, ctx, spec::AnchorSpec,
-        pe::PivotGravityElimOnRetained, ev; threaded::Bool = false)
+        pe::PivotGravityElimOnRetained, ev; threaded::Bool)
     cache = build_profiled_lfix_cache(w_profiled, ctx, spec, pe, ev)
     return profiled_composite_gradient_from_cache(cache, ctx, spec, pe, w_profiled, ev; threaded = threaded)
 end
@@ -482,7 +482,7 @@ shared method").
 """
 function profiled_composite_gradient_from_cache(cache::ProfiledLFixCache, ctx, spec::AnchorSpec,
         pe::PivotGravityElimOnRetained, w_profiled::AbstractVector{Float64}, ev;
-        threaded::Bool = false)
+        threaded::Bool)
     n_total = outer_dim_profiled(pe)
     g = zeros(n_total)
     g[1] = profiled_gp_component_analytic(cache, w_profiled, ev, ctx)

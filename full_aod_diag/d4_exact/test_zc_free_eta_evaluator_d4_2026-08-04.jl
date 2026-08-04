@@ -167,7 +167,7 @@ ev_oz = evaluate_profiled_originzc_point(w_profiled_calib, eta0_oz, fctx_oz, pes
 check("origin-ZC free-eta: inner solve converges at calibration", ev_oz.result.inner_status == 0)
 check("origin-ZC free-eta: eta_nu round-trips in ev", ev_oz.eta_nu == eta0_oz)
 check("origin-ZC free-eta: nu_full == exp.(eta_nu)", ev_oz.nu_full ≈ exp.(eta0_oz))
-g_ext_oz, meta_oz = reduced_originzc_outer_gradient_with_eta(w_profiled_calib, eta0_oz, ctx, fctx_oz, ev_oz)
+g_ext_oz, meta_oz = reduced_originzc_outer_gradient_with_eta(w_profiled_calib, eta0_oz, ctx, fctx_oz, ev_oz; threaded = false)
 @printf("origin-ZC: n_econ=%d n_eta=%d length(g_ext)=%d\n", length(w_profiled_calib), D, length(g_ext_oz))
 gate_family("origin-ZC@calib", obj_fd_oz, w_profiled_calib, eta0_oz, ev_oz, g_ext_oz, ctx, pe, W, meta_oz.h_used)
 
@@ -180,7 +180,7 @@ octx_reduced_oz2 = build_originzc_core_hess_ctx(aug_reduced_oz, ctx; core_hessia
 pes_oz2 = OriginZCPointEvalState(octx_reduced_oz2, fill(1.0, D))
 ev_oz2 = evaluate_profiled_originzc_point(w_pert, eta_pert, fctx_oz, pes_oz2)
 check("origin-ZC free-eta: inner solve converges at perturbed point", ev_oz2.result.inner_status == 0)
-g_ext_oz2, meta_oz2 = reduced_originzc_outer_gradient_with_eta(w_pert, eta_pert, ctx, fctx_oz, ev_oz2)
+g_ext_oz2, meta_oz2 = reduced_originzc_outer_gradient_with_eta(w_pert, eta_pert, ctx, fctx_oz, ev_oz2; threaded = false)
 gate_family("origin-ZC@pert", obj_fd_oz, w_pert, eta_pert, ev_oz2, g_ext_oz2, ctx, pe, W, meta_oz2.h_used)
 
 println("\n" * "="^90); println("FAMILY CM+ZC: free-eta evaluator D4 gate"); println("="^90)
@@ -198,7 +198,7 @@ pes_cz = CMZCPointEvalState(cctx_reduced_cz, fill(1.0, K_MEAN))
 eta0_cz = zeros(K_MEAN)
 ev_cz = evaluate_profiled_cmzc_point(w_profiled_calib, eta0_cz, fctx_cz, pes_cz)
 check("CM+ZC free-eta: inner solve feasible/optimal at calibration", ev_cz.result.inner_status in (0, -100, -101, -103))
-g_ext_cz, meta_cz = reduced_cmzc_outer_gradient_with_eta(w_profiled_calib, eta0_cz, ctx, fctx_cz, ev_cz)
+g_ext_cz, meta_cz = reduced_cmzc_outer_gradient_with_eta(w_profiled_calib, eta0_cz, ctx, fctx_cz, ev_cz; threaded = false)
 @printf("CM+ZC: n_econ=%d n_eta=%d length(g_ext)=%d\n", length(w_profiled_calib), K_MEAN, length(g_ext_cz))
 gate_family("CM+ZC@calib", obj_fd_cz, w_profiled_calib, eta0_cz, ev_cz, g_ext_cz, ctx, pe, W, meta_cz.h_used)
 

@@ -85,8 +85,8 @@ for fam in families
     ev1 = ev_with_beta(ev, beta1)
     ev2 = ev_with_beta(ev, beta2)
 
-    g1, _ = shared_family_outer_gradient(w_calib, ctx, mfctx, ev1)
-    g2, _ = shared_family_outer_gradient(w_calib, ctx, mfctx, ev2)
+    g1, _ = shared_family_outer_gradient(w_calib, ctx, mfctx, ev1; threaded = false)
+    g2, _ = shared_family_outer_gradient(w_calib, ctx, mfctx, ev2; threaded = false)
     bit_identical = g1 == g2
     println(rpad(string(fam), 16), " no-coupling bit_identical=", bit_identical); flush(stdout)
     push!(rows, (family = fam, test = "A_no_coupling_bit_identical", pass = bit_identical,
@@ -114,7 +114,7 @@ for fam in families
     ev_ext = ev_with_beta(ev, beta_ext)
 
     t1 = time()
-    g_shared, meta_shared = shared_family_outer_gradient(w_calib, ctx, mfctx, ev_ext)
+    g_shared, meta_shared = shared_family_outer_gradient(w_calib, ctx, mfctx, ev_ext; threaded = false)
     t_shared = time() - t1
 
     h_matched = copy(meta_shared.h_used); h_matched[1] = 0.01  # gp: any nonzero placeholder, excluded from the gate below
@@ -143,8 +143,8 @@ mfctx0 = build_mock_restricted_family_ctx(ufctx, :flexible_CM; n_restriction = 5
 mfctx1 = build_mock_restricted_family_ctx(ufctx, :flexible_CM; n_restriction = 5, rc0_fn = (f, e) -> fill(0.05, W))
 beta_ext = mock_extended_beta(ev, 5)
 ev_ext = ev_with_beta(ev, beta_ext)
-g0, _ = shared_family_outer_gradient(w_calib, ctx, mfctx0, ev_ext)
-g1, _ = shared_family_outer_gradient(w_calib, ctx, mfctx1, ev_ext)
+g0, _ = shared_family_outer_gradient(w_calib, ctx, mfctx0, ev_ext; threaded = false)
+g1, _ = shared_family_outer_gradient(w_calib, ctx, mfctx1, ev_ext; threaded = false)
 differs = g0 != g1
 println("zero-rc0 vs nonzero-rc0 gradients differ (expected): $differs"); flush(stdout)
 push!(rows, (family = :flexible_CM, test = "sanity_rc0_magnitude_perturbs_baseline", pass = differs,

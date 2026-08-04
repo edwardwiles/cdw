@@ -66,12 +66,12 @@ function compare_at(label::String, w::Vector{Float64}, rows)
     println("base Delta_dual=$(ev.result.Delta_dual)  inner_status=$(ev.result.inner_status)"); flush(stdout)
 
     t1 = time()
-    g_pre, meta_pre = profiled_composite_gradient_at_incremental(w, ctx, spec, pe, ev)
+    g_pre, meta_pre = profiled_composite_gradient_at_incremental(w, ctx, spec, pe, ev; threaded = false)
     t_pre = time() - t1
 
     ufctx = build_unrestricted_family_ctx(ctx, spec, pe, ev)
     t2 = time()
-    g_shared, meta_shared = shared_family_outer_gradient(w, ctx, ufctx, ev)
+    g_shared, meta_shared = shared_family_outer_gradient(w, ctx, ufctx, ev; threaded = false)
     t_shared = time() - t2
 
     diff = g_pre .- g_shared

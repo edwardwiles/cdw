@@ -168,7 +168,7 @@ println("q0 vs q_true diagnostic: max|cache.q0 - q_true|=", maximum(abs.(cache_d
 println("  q0[1:3]=", cache_diag.q0[1:3], "  q_true[1:3]=", q_true[1:3])
 println("  const_part=", cache_diag.const_part, "  sum(contrib0[1,:])=", sum(cache_diag.contrib0[1, :]))
 
-g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev)
+g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev; threaded = false)
 g_eta = d_delta_dual_d_eta_origin_vec(β_full, aug_reduced, νvec0; mean_m = mean_m)
 println("g_Agp: length=$(length(g_Agp))  g_Agp[1](dK/dgp)=$(g_Agp[1])")
 println("g_eta: length=$(length(g_eta))  g_eta[1:3]=$(g_eta[1:min(3,end)])")
@@ -241,7 +241,7 @@ mw2 = similar(r_v2); obj_reduced2.dPsi!(mw2, r_v2)
 ev2 = (result = (beta = β_pert, zeta = base_pert.ζstar), st = (cf = cf_pert, layout = layout),
        theta_full = θ_full_pert, obj = (M = W,), m_weights = mw2, nu_full = νvec_pert,
        decoded = decoded_pert)
-g_Agp2, meta2 = shared_family_outer_gradient(w_profiled_pert, ctx, fctx2, ev2)
+g_Agp2, meta2 = shared_family_outer_gradient(w_profiled_pert, ctx, fctx2, ev2; threaded = false)
 
 max_rel_err_A2 = 0.0
 test_coords = unique(vcat(1, 2, pe.pivot_pos == 2 ? 3 : 2, rand(2:n_total, min(4, n_total - 1))))

@@ -122,7 +122,8 @@ lp("="^100)
 result = run_profiled_upper_constrained("flexcm_reduced_w$(W_VAL)", w_profiled_calib;
     fctx = fctx_flexcm, evaluate_fn = (w, f) -> evaluate_profiled_flexcm_point(w, f),
     ctx = ctx, pe = pe, delta = DELTA, maxtime_real = MAXT, hessopt_tag = "sr1",
-    use_screen = true, cache = cache_flexcm, trace_csv = trace_csv, verbose = true)
+    use_screen = true, cache = cache_flexcm, trace_csv = trace_csv, verbose = true,
+    threaded_gradient = false)
 
 lp("="^100)
 @printf("REDUCED RESULT: knitro_status=%d wall=%.1fs n_eval=%d n_grad=%d\n",

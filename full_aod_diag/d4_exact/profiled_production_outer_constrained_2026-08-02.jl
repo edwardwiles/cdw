@@ -136,7 +136,7 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
         checkpoint_path::Union{Nothing,AbstractString} = nothing,
         checkpoint_interval_s::Float64 = 60.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
-        threaded_gradient::Bool = false)
+        threaded_gradient::Bool)
     lp(xs...) = (println(xs...); flush(stdout))
     fam = family_kind(fctx)
     config = build_profiled_production_config(fctx; economic_parameterization = :profiled_destination_scales)

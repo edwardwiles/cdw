@@ -144,7 +144,7 @@ ev = (result = (beta = β_full, zeta = base_reduced.ζstar), st = (cf = cf_reduc
 cache_diag = build_shared_profiled_lfix_cache(w_profiled_calib, fctx, ctx, ev)
 println("q0 vs q_true diagnostic: max|cache.q0 - q_true|=", maximum(abs.(cache_diag.q0 .- r_v)))
 
-g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev)
+g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev; threaded = false)
 g_eta = d_delta_dual_d_eta_nu_vec(β_full, aug_reduced, νvec0; mean_m = mean_m)
 println("g_Agp: length=$(length(g_Agp))  g_Agp[1](dK/dgp)=$(g_Agp[1])")
 println("g_eta: length=$(length(g_eta))  g_eta=$(g_eta)")

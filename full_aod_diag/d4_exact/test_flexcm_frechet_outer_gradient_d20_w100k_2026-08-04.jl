@@ -124,7 +124,7 @@ function gate_family(label::String, w_profiled_calib::Vector{Float64}, ctx, pe, 
     println("\n" * "="^90); println("D20/W100000: $label outer-gradient gate (zero-dense fixed-dual FD, representative subset)"); println("="^90); flush(stdout)
     n_total = length(w_profiled_calib)
     t1 = time()
-    g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev)
+    g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev; threaded = false)
     @printf("analytic gradient computed in %.2fs, gp_component=%.6e, norm(A-block)=%.6e\n", time() - t1, g_Agp[1], norm(g_Agp[2:end])); flush(stdout)
 
     coords = representative_subset(n_total)

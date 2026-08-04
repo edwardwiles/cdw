@@ -107,7 +107,7 @@ ckpt_path = joinpath(ckpt_dir, "originzc_constrained_d4.jls")
 println("\n" * "="^90); println("Part 1: short run writes a real CMCheckpointV11"); println("="^90)
 result1 = run_profiled_upper_constrained("d4_ckpt_part1", w_profiled_calib; fctx = fctx_oz, evaluate_fn,
     ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 2.0, hessopt_tag = "sr1",
-    checkpoint_path = ckpt_path, checkpoint_interval_s = 1000.0, verbose = false)
+    checkpoint_path = ckpt_path, checkpoint_interval_s = 1000.0, verbose = false, threaded_gradient = false)
 
 check("part1: at least one eval ran", result1.n_eval > 0)
 check("part1: checkpoint file was written", isfile(ckpt_path))
@@ -124,7 +124,7 @@ println("\n" * "="^90); println("Part 2: resume_from a FRESH call, cumulative n_
 result2 = run_profiled_upper_constrained("d4_ckpt_part2", w_profiled_calib; fctx = fctx_oz, evaluate_fn,
     ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 2.0, hessopt_tag = "sr1",
     checkpoint_path = ckpt_path, checkpoint_interval_s = 1000.0, verbose = false,
-    resume_from = ckpt_path)
+    resume_from = ckpt_path, threaded_gradient = false)
 
 check("part2: resumed n_eval >= part1's n_eval (cumulative, not reset)", result2.n_eval >= result1.n_eval)
 check("part2: resumed n_grad >= part1's n_grad (cumulative, not reset)", result2.n_grad >= result1.n_grad)
@@ -167,30 +167,30 @@ check("refuses resume: different family (cross-namespace via cm_meanzc fctx)", r
     pes_cz = CMZCPointEvalState(cctx_reduced_cz, νvec0_cm)
     run_profiled_upper_constrained("d4_ckpt_wrongfamily", vcat(w_profiled_calib, zeros(0)); fctx = fctx_cz,
         evaluate_fn = (w, f) -> evaluate_profiled_cmzc_point(w, f, pes_cz),
-        ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false)
+        ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false, threaded_gradient = false)
 end)
 
 check("refuses resume: different W", refuses() do
     ctx_wrongW = merge(ctx, (W = 999999,))
     run_profiled_upper_constrained("d4_ckpt_wrongW", w_profiled_calib; fctx = fctx_oz, evaluate_fn,
-        ctx = ctx_wrongW, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false)
+        ctx = ctx_wrongW, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false, threaded_gradient = false)
 end)
 
 check("refuses resume: different delta", refuses() do
     run_profiled_upper_constrained("d4_ckpt_wrongdelta", w_profiled_calib; fctx = fctx_oz, evaluate_fn,
-        ctx = ctx, pe = pe, delta = 2.5, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false)
+        ctx = ctx, pe = pe, delta = 2.5, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false, threaded_gradient = false)
 end)
 
 check("refuses resume: different draw_design (D20-shaped ctx claiming draws where checkpoint has none)", refuses() do
     ctx_fake_draws = merge(ctx, (draw_meta = (checksum_uniform = "fake", checksum_transformed = "fake"),
         draw_design = :sobol_randomized, draw_seed = 1, W = hasproperty(ctx, :W) ? ctx.W : 0))
     run_profiled_upper_constrained("d4_ckpt_wrongdraws", w_profiled_calib; fctx = fctx_oz, evaluate_fn,
-        ctx = ctx_fake_draws, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false)
+        ctx = ctx_fake_draws, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false, threaded_gradient = false)
 end)
 
 check("refuses resume: different outer-vector length", refuses() do
     run_profiled_upper_constrained("d4_ckpt_wronglen", vcat(w_profiled_calib, 0.0); fctx = fctx_oz, evaluate_fn,
-        ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false)
+        ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false, threaded_gradient = false)
 end)
 
 println()

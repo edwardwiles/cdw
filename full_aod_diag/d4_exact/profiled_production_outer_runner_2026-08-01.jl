@@ -279,7 +279,7 @@ function _run_profiled_outer_knitro_loop(label::String, w_start::Vector{Float64}
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         w_full = to_full(evalRequest.x)
         ev = (last_w[] !== nothing && last_w[] == w_full) ? last_ev[] : solve_at(w_full)
-        g, meta = shared_family_outer_gradient(w_full, ctx, fctx, ev)
+        g, meta = shared_family_outer_gradient(w_full, ctx, fctx, ev; threaded = false)
         n_grad_calls[] += 1
         evalResult.objGrad .= gp_free ? g : g[2:end]
         return 0

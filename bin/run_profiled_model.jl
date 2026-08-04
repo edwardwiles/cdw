@@ -68,13 +68,21 @@ function parse_cli(args::Vector{String})
         d[key] = args[i+1]
         i += 2
     end
-    for req in ("config", "family", "formulation", "direction", "delta")
+    # task §6 fix (profiled-outer-ab-readiness-2026-08-04, live user challenge): --threaded-gradient
+    # was originally optional-with-a-default -- exactly the trap this repo's own standing rule
+    # exists to prevent (feedback-no-defaults-on-any-input-or-setting: no function/setting may
+    # default, including non-scientific execution flags like this one). Required here, same as
+    # every other real flag below, so a caller who forgets it gets an immediate, loud error instead
+    # of a silently-serial REDUCED run -- exactly the bug this omission caused live this session.
+    for req in ("config", "family", "formulation", "direction", "delta", "threaded-gradient")
         haskey(d, req) || error("run_profiled_model.jl: missing required --$req")
     end
     d["formulation"] in ("full", "reduced") ||
         error("run_profiled_model.jl: --formulation must be \"full\" or \"reduced\", got \"$(d["formulation"])\"")
     d["direction"] in ("upper", "lower") ||
         error("run_profiled_model.jl: --direction must be \"upper\" or \"lower\", got \"$(d["direction"])\"")
+    d["threaded-gradient"] in ("true", "false") ||
+        error("run_profiled_model.jl: --threaded-gradient must be \"true\" or \"false\", got \"$(d["threaded-gradient"])\"")
     return d
 end
 
@@ -236,11 +244,10 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
     # that field was true of the DRIVER, not of what this CLI actually called. Fixed here so a FULL
     # vs REDUCED origin_zc/cm_meanzc A/B through this canonical runner compares two genuinely
     # free-nu arms, matching the fix applied to `_run_full_originzc` above.
-    # task §6: --threaded-gradient is a script-execution knob (which coordinate-loop code path
-    # runs), not a scientific parameter -- CLAUDE.md's no-silent-default rule is about what
-    # economic problem is solved, not this. Defaults false (serial), matching this driver's
-    # pre-threading behavior byte-for-byte; opt in explicitly to compare.
-    threaded_gradient = haskey(cli, "threaded-gradient") && cli["threaded-gradient"] == "true"
+    # --threaded-gradient is REQUIRED (parse_cli already enforced this and validated it's
+    # "true"/"false") -- per this repo's own no-defaults-on-any-setting rule, not just a
+    # scientific-parameter concern; see parse_cli's own comment for the live bug this caused.
+    threaded_gradient = cli["threaded-gradient"] == "true"
 
     if family in (:origin_zc, :cm_meanzc)
         return _run_reduced_zc_free_nu(family, sci, ctx, spec, pe, layout, reduced_obj0, w0, gp0, z_calib,
@@ -304,7 +311,7 @@ end
 # ----------------------------------------------------------------------------
 function _run_reduced_zc_free_nu(family::Symbol, sci, ctx, spec, pe, layout, reduced_obj0, w0::Vector{Float64},
         gp0::Float64, z_calib::Matrix{Float64}, delta::Float64, maxtime_real::Float64, resume_from,
-        outdir_base::String, D::Int, threaded_gradient::Bool = false)
+        outdir_base::String, D::Int, threaded_gradient::Bool)
     if family == :origin_zc
         layout_o = Base.invokelatest(Main.OriginByPowerLayout, D, 1, 0)
         νvec0 = fill(1.0, D)
@@ -601,10 +608,36 @@ function _run_full(family::Symbol, sci, cli, delta::Float64, find_smallest::Bool
     meanzc_K_mean = family == :cm_meanzc ? max(sci.K_mean, 1) : 0
     meanzc_K_pair = family == :cm_meanzc ? sci.K_pair : 0
 
+    # task §9-10 fix (profiled-outer-ab-readiness-2026-08-04): this branch never actually
+    # constructed w0/probs for a fresh (non-resumed) run before -- confirmed live, the first real
+    # attempt at this exact CLI path for these 3 families crashed with "w0 required for a fresh
+    # (non-resumed) run" and (separately) "probs required (exact cutpoints, not re-derived from
+    # L)". Both pre-existing gaps in this branch, not introduced by this task. Fixed by mirroring
+    # the real production pattern (cm_production_stage_runner.jl's own MODE=="calibration" branch):
+    # probs from nested_grid_sequence at this run's own L; w0 from cm_w0_from_calibration
+    # (cm_aspace_coordinate.jl, just added to the include list above) at :powered_aspace --
+    # run_cm_upper_checkpointed's own real default (confirmed by direct read, cm_checkpoint.jl:871)
+    # -- appending a neutral eta_nu0=zeros(K_mean) start for cm_meanzc (matching this same script's
+    # own _run_full_originzc `eta0 = zeros(D)` convention, not the campaign script's own
+    # multi-chain-diversity factorial formula, which answers a different question).
+    probs = Base.invokelatest(Main.nested_grid_sequence, [sci.L])[sci.L]
+    local w0::Union{Nothing,Vector{Float64}}
+    if resume_from === nothing
+        ctx0 = Base.invokelatest(Main.d20_real_setup_design, W = sci.W, δ = delta, find_smallest = find_smallest,
+            draw_design = sci.draw_design, draw_seed = sci.draw_seed, destination_sample = sci.destination_sample,
+            exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
+            σHat = sci.sigma)
+        pe0 = Base.invokelatest(Main.build_pivot_elimination, ctx0)
+        w0 = Base.invokelatest(Main.cm_w0_from_calibration, ctx0, pe0, :powered_aspace)
+        family == :cm_meanzc && (w0 = vcat(w0, zeros(meanzc_K_mean)))
+    else
+        w0 = nothing   # run_cm_upper_checkpointed loads w0 from the checkpoint itself on resume
+    end
+
     manifest_dir = joinpath(outdir_base, "full_$(family)_W$(sci.W)_delta$(delta)")
     mkpath(manifest_dir)
     rm_ = RunManifestMod.RunManifest(sci = sci, family = family, economic_parameterization = :full_gamma_normalized,
-        A_coordinate_mode = :legacy_z, nu_policy = :fixed, nu_bounds = nothing,
+        A_coordinate_mode = :powered_aspace, nu_policy = :fixed, nu_bounds = nothing,
         draw_checksum_uniform = "", draw_checksum_transformed = "",
         outer_algorithm = :knitro_auto, outer_max_wall_seconds = maxtime_real, outer_max_gradients = 1_000_000,
         cache_policy = :exact_cache, dual_bank_policy = :none, warm_start_policy = resume_from === nothing ? :cold : :resumed,
@@ -614,8 +647,9 @@ function _run_full(family::Symbol, sci, cli, delta::Float64, find_smallest::Bool
     RunManifestMod.write_run_manifest_json(joinpath(manifest_dir, "run_manifest.json"), rm_)
     println("[run_profiled_model] wrote $(joinpath(manifest_dir, "run_manifest.json"))"); flush(stdout)
 
-    result = Base.invokelatest(Main.run_cm_upper_checkpointed, nothing;
+    result = Base.invokelatest(Main.run_cm_upper_checkpointed, w0;
         find_smallest = find_smallest, W = sci.W, delta = delta, draw_design = sci.draw_design, draw_seed = sci.draw_seed,
+        L = sci.L, contrasts = :anchored, probs = probs,
         marginal_restriction = marginal_restriction, cm_extension = cm_extension,
         meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair,
         maxtime_real = maxtime_real, ckpt_dir = manifest_dir, label = "cli_$(family)",

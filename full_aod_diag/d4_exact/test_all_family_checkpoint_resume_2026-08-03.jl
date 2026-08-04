@@ -106,7 +106,7 @@ function run_family_checkpoint_gate(fam_name::String, fctx, evaluate_fn::Functio
 
     result1 = run_profiled_upper_constrained("d4_ckpt_$(fam_name)_p1", w_profiled_calib; fctx, evaluate_fn,
         ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 2.0, hessopt_tag = "sr1",
-        checkpoint_path = ckpt_path, checkpoint_interval_s = 1000.0, verbose = false)
+        checkpoint_path = ckpt_path, checkpoint_interval_s = 1000.0, verbose = false, threaded_gradient = false)
     check("$fam_name: part1 at least one eval ran", result1.n_eval > 0)
     check("$fam_name: part1 checkpoint file was written", isfile(ckpt_path))
     loaded1 = load_cm_checkpoint_v11(ckpt_path)
@@ -120,7 +120,7 @@ function run_family_checkpoint_gate(fam_name::String, fctx, evaluate_fn::Functio
     result2 = run_profiled_upper_constrained("d4_ckpt_$(fam_name)_p2", w_profiled_calib; fctx, evaluate_fn,
         ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 2.0, hessopt_tag = "sr1",
         checkpoint_path = ckpt_path, checkpoint_interval_s = 1000.0, verbose = false,
-        resume_from = ckpt_path)
+        resume_from = ckpt_path, threaded_gradient = false)
     check("$fam_name: part2 resumed n_eval >= part1's (cumulative)", result2.n_eval >= result1.n_eval)
     check("$fam_name: part2 resumed n_grad >= part1's (cumulative)", result2.n_grad >= result1.n_grad)
     check("$fam_name: part2 resumed wall >= part1's (cumulative)", result2.wall >= result1.wall)
@@ -136,12 +136,12 @@ function run_family_checkpoint_gate(fam_name::String, fctx, evaluate_fn::Functio
     check("$fam_name: refuses resume from a different family's checkpoint", refuses() do
         run_profiled_upper_constrained("d4_ckpt_$(fam_name)_wrongfamily", w_profiled_calib; fctx = fctx_alt,
             evaluate_fn = evaluate_fn_alt, ctx = ctx, pe = pe, delta = 1.0, maxtime_real = 1.0,
-            resume_from = ckpt_path, verbose = false)
+            resume_from = ckpt_path, verbose = false, threaded_gradient = false)
     end)
     check("$fam_name: refuses resume with a different W", refuses() do
         ctx_wrongW = merge(ctx, (W = 999999,))
         run_profiled_upper_constrained("d4_ckpt_$(fam_name)_wrongW", w_profiled_calib; fctx, evaluate_fn,
-            ctx = ctx_wrongW, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false)
+            ctx = ctx_wrongW, pe = pe, delta = 1.0, maxtime_real = 1.0, resume_from = ckpt_path, verbose = false, threaded_gradient = false)
     end)
 end
 

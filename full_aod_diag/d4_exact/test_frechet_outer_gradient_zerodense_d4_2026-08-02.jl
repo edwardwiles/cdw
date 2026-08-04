@@ -126,7 +126,7 @@ check("Frechet: real KNITRO solve reaches nStatus in {0,-100,-101,-103}", ev.res
     ev.result.inner_status, ev.result.zeta, length(ev.result.beta), ev.result.n_fg_calls)
 
 println("\n" * "="^78); println("STEP 2: analytic combined (A/gp-only) gradient at calibration (zero-dense throughout)"); println("="^78)
-g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev)
+g_Agp, meta = shared_family_outer_gradient(w_profiled_calib, ctx, fctx, ev; threaded = false)
 after_counters = NO_DENSE_G_COUNTERS[]
 println("g_Agp: length=$(length(g_Agp))  g_Agp[1](dK/dgp)=$(g_Agp[1])")
 
