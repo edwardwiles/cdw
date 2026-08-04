@@ -743,8 +743,25 @@ function melitz_primal_divergence(weights::AbstractVector, W::Int)
     acc = 0.0
     @inbounds for p in weights
         m = p * W
-        if !(m > 0) || !isfinite(m)
+        if !isfinite(m) || m < 0
             return Inf
+        elseif m == 0.0
+            # A weight can underflow to literal 0.0 for an extreme-tail draw (e.g. dPsi!'s
+            # exp(arg0) with arg0 around -800 to -1100) while still being mathematically a
+            # genuinely tiny POSITIVE density ratio, not a divergent one. Since
+            # lim_{m->0+} m*log(m) - m + 1 = 1 (not -Inf or Inf, since m*log(m) -> 0), the
+            # correct contribution for an underflowed-to-zero weight is this limit value, not
+            # Inf. The previous check (`!(m > 0)`, a strict inequality against exactly zero)
+            # treated ANY underflow the same as a genuinely diverged/invalid weight, silently
+            # rejecting otherwise-perfectly-good points whenever ANY of the W draws
+            # underflows -- which becomes increasingly likely exactly at the extreme,
+            # boundary-pushing points the outer search cares about most (the same false-
+            # rejection bug class independently found and fixed on the Ricardian side,
+            # oracle.jl's m_min_floor check). Confirmed live 2026-08-04: a point with
+            # nStatus=0, normalization_residual=2.7e-15, max_moment_residual=3.2e-13 (all
+            # excellent) was rejected (lfd_ok=false) purely because 5,495/100,000 weights had
+            # underflowed to exactly 0.0, making the OLD code return Inf for the whole sum.
+            acc += 1.0
         elseif m <= e
             acc += m * log(m) - m + 1
         else
