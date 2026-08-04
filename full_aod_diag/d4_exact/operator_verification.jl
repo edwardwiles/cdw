@@ -385,6 +385,30 @@ included oracle.jl, matching its existing include-discipline for CS.select_G_fro
 function verify_namedtuple_from_operator(ov, obj, W::Int, nStatus::Integer)
     m_weights = similar(ov.r)
     obj.dPsi!(m_weights, ov.r)
+    # m_weights_all_finite (verifier-underflow-fix-2026-08-04, ported from campaign branch commits
+    # 5eb8c99/6ade48d): cc_algo/Psi.jl's dPsi! is exp(r) for r<=1 and e*r for r>1 -- BOTH branches
+    # are mathematically strictly positive for any finite r (the r>1 branch only fires when r>1, so
+    # e*r>e>0 there always), so m_weights[i]==0.0 exactly can ONLY happen via Float64 underflow of
+    # exp(r) for a very negative r (roughly r<-745, since exp(-745) is already below the smallest
+    # representable positive double) -- confirmed live: a real K=3 cm_meanzc point had
+    # m_weights[2184]=0.0 from r[2184]=-999.4 (a single far-tail Monte Carlo draw out of W=100,000
+    # with an astronomically small, but genuinely positive, reweighted probability), everything else
+    # about that solve (KNITRO inner_status=0, primal_dual_gap/mean_m_resid/max_abs_moment_kkt_resid
+    # all passing tolerance by 8-9 orders of magnitude) was excellent. `classify_inner_result`'s old
+    # strict `mmin > tol.m_min_floor` rejected this as if m<=0 were itself a sign of a bad solve --
+    # it isn't; m is provably >=0 by construction here, so relaxing that to `>=` does essentially no
+    # protective work on its own. THIS field is the real safeguard the relaxation needs: any genuine
+    # optimization failure (a NaN/Inf leaking into r from a diverged/pathological solve, not a benign
+    # far-tail underflow) shows up as a non-finite entry in m_weights, caught here directly rather
+    # than only indirectly through whichever aggregate statistic happens to blow up.
+    m_weights_all_finite = all(isfinite, m_weights)
+    # m_weights_all_nonnegative/underflow_zero_count/r_min/r_max (post-verifier-fix W=100k rerun +
+    # K=3 campaign task, §2.2): diagnostic-only fields so a campaign report can show whether/how
+    # often the previously-rejected extreme (far-tail-underflow) region is actually being visited by
+    # the fixed gate, without re-deriving m_weights or r from scratch downstream.
+    m_weights_all_nonnegative = all(m -> m >= 0.0, m_weights)
+    underflow_zero_count = count(==(0.0), m_weights)
+    r_min, r_max = extrema(ov.r)
     s_m_weights = sum(m_weights)
     Delta_dual = -ov.f
     Delta_primal = primal_divergence(m_weights)
@@ -393,6 +417,10 @@ function verify_namedtuple_from_operator(ov, obj, W::Int, nStatus::Integer)
               primal_dual_gap = abs(Delta_dual - Delta_primal),
               weight_norm_resid = abs(sum(x -> x / s_m_weights, m_weights) - 1.0),
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = ov.kkt_resid,
+              m_weights_all_finite = m_weights_all_finite,
+              m_weights_all_nonnegative = m_weights_all_nonnegative,
+              underflow_zero_count = underflow_zero_count,
+              r_min = r_min, r_max = r_max,
               m_mean = s_m_weights / W, m_min = minimum(m_weights), m_max = maximum(m_weights))
     return (m_weights, verify)
 end

@@ -619,6 +619,7 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
     ζstar = inner_x[1]; λstar = inner_x[2:end]
 
     local m_weights, Delta_dual, Delta_primal, mean_m_resid, max_abs_moment_kkt_resid, weight_norm_resid_val
+    local m_weights_all_finite, m_weights_all_nonnegative, underflow_zero_count, r_min, r_max
     if verification_backend === :operator
         cf = st.cf
         cf isa CompressedFactual || error("evaluate_fullA_fast_compressed: verification_backend=:operator requires st.cf to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
@@ -629,6 +630,16 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
         mean_m_resid = verify_op.mean_m_resid
         max_abs_moment_kkt_resid = verify_op.max_abs_moment_kkt_resid
         weight_norm_resid_val = verify_op.weight_norm_resid
+        # verifier-underflow-fix-2026-08-04: this family builds its own `result` NamedTuple by hand
+        # below (unlike the 4 restricted families, which return `verify` wholesale) -- previously
+        # dropped `m_weights_all_finite` here entirely, so `classify_inner_result`'s
+        # `get(result, :m_weights_all_finite, true)` silently defaulted to `true` and the new NaN/
+        # Inf safeguard was inert on this family's path. Propagate all 5 new diagnostic fields.
+        m_weights_all_finite = verify_op.m_weights_all_finite
+        m_weights_all_nonnegative = verify_op.m_weights_all_nonnegative
+        underflow_zero_count = verify_op.underflow_zero_count
+        r_min = verify_op.r_min
+        r_max = verify_op.r_max
     elseif verification_backend === :dense_reference
         Delta_dual = cbuf[1] / 1e10
         m_weights = copy(obj.arg1)
@@ -641,6 +652,14 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
         # see docs/fullA_D20_blas_audit_report.md, ~2.1-2.2x.
         max_abs_moment_kkt_resid = @prof "kkt_residual_compute_compressed" kkt_residual_blas(G, m_weights, nkkt, W)
         weight_norm_resid_val = abs(sum(p_weights) - 1.0)
+        # dense_reference has no independent r-based NaN/Inf safeguard (matches oracle.jl's own
+        # documented get(...,true) convention for this explicit, non-default opt-in path -- not a
+        # regression); m_weights itself IS on hand here though, so the weight-level diagnostics are
+        # computed genuinely rather than defaulted.
+        m_weights_all_finite = true
+        m_weights_all_nonnegative = all(m -> m >= 0.0, m_weights)
+        underflow_zero_count = count(==(0.0), m_weights)
+        r_min = NaN; r_max = NaN
         record_dense_reference_verification!()
     else
         error("evaluate_fullA_fast_compressed: unknown verification_backend=:$verification_backend (expected :operator or :dense_reference)")
@@ -679,6 +698,9 @@ function evaluate_fullA_fast_compressed(x_free::AbstractVector{Float64}, ctx;
               benchmark_unweighted_moment_mean = benchmark_unweighted_moment_mean, max_abs_moment_resid = max_abs_moment_resid,
               zeta = ζstar, lambda = collect(λstar),
               m_mean = sum(m_weights)/W, m_min = minimum(m_weights), m_max = maximum(m_weights),
+              m_weights_all_finite = m_weights_all_finite,
+              m_weights_all_nonnegative = m_weights_all_nonnegative,
+              underflow_zero_count = underflow_zero_count, r_min = r_min, r_max = r_max,
               weight_norm_resid = weight_norm_resid_val,
               mean_m_resid = mean_m_resid, max_abs_moment_kkt_resid = max_abs_moment_kkt_resid,
               winner_hash = winner_hash, inner_status = nStatus, inner_iters = inner_iters,
