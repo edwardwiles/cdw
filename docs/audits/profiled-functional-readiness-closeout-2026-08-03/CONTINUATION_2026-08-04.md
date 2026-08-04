@@ -370,6 +370,23 @@ W100K_FAST_REJECT =
     CM_plus_ZC:      PASS (fast at W20k 0.50s AND confirmed fast at real W100k 14.01s)
 ```
 
+### D20/W=20,000 free-eta outer-gradient gate — ALL PASS (task §9 scale progression)
+
+New `test_zc_free_eta_evaluator_d20_2026-08-04.jl` (parametrized by `W_VAL`, same real-evaluator-
+surface + separate-dense-reference-FD-ground-truth methodology as the D4 gate, `gp` + 3 spread
+A_free coordinates + ALL eta coordinates tested per the task's own "selected coordinates from
+every block" D20 instruction). Real D20/W=20,000 result:
+
+```
+origin-ZC:  inner solve converges (20.01s). econ[1,2,3,180,361] + ALL 20 eta coords (D=20,
+            K_mean=1, OriginByPowerLayout): max rel_err ~6.9e-12 (machine precision)
+CM+ZC:      inner solve feasible/optimal (17.25s). econ[1,2,3,180,361] + eta[1] (K_mean=1,
+            SharedByPowerLayout): max rel_err ~2.4e-10
+ALL PASS, total wall 231.3s
+```
+
+(log: `repo_scratch/.../logs/zc_free_eta_d20w20k_2026-08-04.log`)
+
 ## Final verdict block (this continuation)
 
 Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed
