@@ -78,15 +78,46 @@ end
 # line-by-line, not assumed. This section REUSES build_winner_ref!/pTσ_from_score verbatim (no new
 # kernel, no re-derivation) via a persistent, lazily-(re)built workspace, exactly the same
 # ensure_*!-workspace idiom used throughout this codebase.
-"Persistent, lazily-(re)built workspace backing every profiled/reduced family's shared gradient engine -- built ONCE per (D,Ddest,W), refilled (never reallocated) on every subsequent call, mirroring cm_production_gradient_cplus's own LFixFactorizedWorkspace exactly. Module-level Ref (same discipline as NO_DENSE_G_COUNTERS/ZC_EZ_BACKEND_DEFAULT): only one family's outer search is ever active per process."
-const SHARED_PROFILED_LFIX_WS_REF = Ref{Union{Nothing,LFixFactorizedWorkspace}}(nothing)
+"""
+Task §5 (profiled-outer-ab-completion-2026-08-04): PER-THREAD pool of persistent, lazily-(re)built
+workspaces backing every profiled/reduced family's shared gradient engine -- built ONCE per
+(threadid,D,Ddest,W), refilled (never reallocated) on every subsequent call on that SAME thread,
+mirroring cm_production_gradient_cplus's own LFixFactorizedWorkspace pooling discipline
+(lfix_base_workspace_pooled.jl's `pool.slots[tid]` idiom, reused here rather than re-invented).
 
-"Nullable-ref-safe wrapper around `ensure_lfix_factorized_workspace!` (which requires an already-built, non-nullable `Base.RefValue{LFixFactorizedWorkspace}`) -- builds fresh on first use or a genuine (D,Ddest,W) change, otherwise returns the existing persistent workspace unchanged."
+REPLACES the single module-level `Ref{Union{Nothing,LFixFactorizedWorkspace}}` this file used
+before 2026-08-04: that singleton was safe ONLY under the undocumented assumption "only one
+family's outer search is ever active per process" -- true for the real single-threaded-per-call
+production access pattern, but violated by two genuine patterns this continuation's own task
+requires: (a) `Threads.@threads`-parallel gradient calls (profiled_shared_economic_gradient_engine's
+own `threaded=true` coordinate loop calls back into family adapters, and diagnostic/A-B code now
+runs concurrent gradient calls on different threads), which would otherwise have every thread
+mutating the SAME `ws.logCC0`/`ws.winner`/etc arrays in place -- a genuine data race, not just an
+aliasing risk; and (b) any code holding two `ProfiledLFixCache` objects with overlapping lifetimes
+on the SAME thread (e.g. an xA -> xB -> xA comparison), which would otherwise see cache A's fields
+silently mutate out from under it when cache B's build overwrites the single shared workspace's
+arrays (see `build_price_winner_base_cache`'s own copy-out fix below for the second half of that
+fix -- thread-indexing alone only prevents CROSS-thread corruption, not same-thread reuse).
+"""
+const SHARED_PROFILED_LFIX_WS_POOL = Vector{Ref{Union{Nothing,LFixFactorizedWorkspace}}}()
+
+"Grows the per-thread pool (if needed) to cover `Threads.maxthreadid()` slots -- called lazily so a process that never threads never allocates more than 1 slot."
+function _ensure_shared_profiled_lfix_ws_pool_size!()
+    nT = Threads.maxthreadid()
+    while length(SHARED_PROFILED_LFIX_WS_POOL) < nT
+        push!(SHARED_PROFILED_LFIX_WS_POOL, Ref{Union{Nothing,LFixFactorizedWorkspace}}(nothing))
+    end
+    return SHARED_PROFILED_LFIX_WS_POOL
+end
+
+"Nullable-ref-safe wrapper around `ensure_lfix_factorized_workspace!`, now indexed by `Threads.threadid()` (task §5 fix, 2026-08-04) so concurrent callers on different threads never share a mutable workspace: builds fresh on first use on THIS thread or a genuine (D,Ddest,W) change, otherwise returns the existing thread-local persistent workspace unchanged."
 function ensure_shared_profiled_lfix_ws!(D::Int, Ddest::Int, W::Int)
-    ws = SHARED_PROFILED_LFIX_WS_REF[]
+    pool = _ensure_shared_profiled_lfix_ws_pool_size!()
+    slot = pool[Threads.threadid()]
+    ws = slot[]
     if ws === nothing || ws.D != D || ws.Ddest != Ddest || ws.W != W
         ws = build_lfix_factorized_workspace(D, Ddest, W)
-        SHARED_PROFILED_LFIX_WS_REF[] = ws
+        slot[] = ws
     end
     return ws
 end
@@ -122,8 +153,20 @@ function build_price_winner_base_cache(ctx, x_free0::AbstractVector, θ_full::Ab
         third_pTσ0[ω, d] = t == 0 ? Inf : pTσ_from_score(ref.st3[ω, d], σ)
     end
 
-    return (logCC0 = ref.logCC0, mulU = ref.mulU, winner0 = ref.winner, winner_price0 = ref.sw,
-        runnerup0 = ref.runnerup, runnerup_price0 = ref.sr, third0 = ref.third, third_price0 = ref.st3,
+    # Task §5 fix (2026-08-04): COPY out of the (thread-local, but still reused-across-calls-on-
+    # this-thread) persistent workspace rather than aliasing `ref`'s fields directly. `ref`'s own
+    # docstring (lfix_factorized_workspace.jl) states plainly "Returns a WinnerRefCache whose array
+    # fields alias ws's buffers" -- true and fine for `ws` itself (an internal implementation
+    # detail this function never exposes), but every caller of THIS function receives the result
+    # as part of a `ProfiledLFixCache` that may legitimately outlive the next call on this same
+    # thread (an xA -> xB -> xA comparison, a two-cache A/B harness). Without the copy, cache A's
+    # winner0/logCC0/etc would silently become cache B's data the moment cache B is built. These
+    # are compact D x Ddest / W x D tables (NOT the W x D x Ddest dense tensor this same 2026-08-02
+    # performance closeout eliminated), so the copy cost here is negligible relative to the O(W*D*
+    # Ddest) top3 winner scan that already dominates `build_winner_ref!` -- it does not reintroduce
+    # the original dense-tensor-allocation problem.
+    return (logCC0 = copy(ref.logCC0), mulU = copy(ref.mulU), winner0 = copy(ref.winner), winner_price0 = copy(ref.sw),
+        runnerup0 = copy(ref.runnerup), runnerup_price0 = copy(ref.sr), third0 = copy(ref.third), third_price0 = copy(ref.st3),
         third_pTσ0 = third_pTσ0)
 end
 
