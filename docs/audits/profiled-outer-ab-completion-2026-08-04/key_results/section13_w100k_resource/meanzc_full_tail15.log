@@ -1,0 +1,15 @@
+----------------
+Final objective value               =   9.74734629451597e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.71e+00 / 1.71e+00
+# of iterations                     =          1 
+# of CG iterations                  =          0 
+# of function evaluations           =          4
+# of gradient evaluations           =          2
+Total program time (secs)           =      75.25153 (   320.920 CPU time)
+Time spent in evaluations (secs)    =      36.29252
+
+===============================================================================
+
+[screen-summary] cli_cm_meanzc calls=5 pairwise_hits=0 hard_winner_hits=0 witness_hits=0 points_passed=5 inner_solves_avoided=0 screen_wall_s=2.5521
+[run_profiled_model] FULL run complete.

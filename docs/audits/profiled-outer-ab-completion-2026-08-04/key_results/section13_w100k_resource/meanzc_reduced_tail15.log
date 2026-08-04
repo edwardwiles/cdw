@@ -1,0 +1,15 @@
+Final objective value               =   9.65779578349452e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.88e-02 / 1.88e-02
+# of iterations                     =          3 
+# of CG iterations                  =          0 
+# of function evaluations           =          4
+# of gradient evaluations           =          4
+Total program time (secs)           =      73.89314 (   155.708 CPU time)
+Time spent in evaluations (secs)    =      56.03634
+
+===============================================================================
+
+[cli_cm_meanzc] DONE: status=-401 wall=97.9s n_eval=4 n_grad=4
+  best: gp=0.9654296150456633 eta_nu=[-0.007783351355939219] Delta=0.8498705733816657 found_at_eval=2 t=62.62860178947449s
+[run_profiled_model] n_eval=4 n_grad=4 wall=97.9s best=gp=0.9654296150456633 eta_nu=[-0.007783351355939219] Delta=0.8498705733816657
