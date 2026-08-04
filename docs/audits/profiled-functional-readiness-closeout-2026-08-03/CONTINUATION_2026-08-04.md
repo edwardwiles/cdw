@@ -69,8 +69,38 @@ context with `inner_loop_opt` pointed at the maxit=1000 file and asserts
 verifies its own override actually propagated, not just that the file exists). Result: see
 `EVAL18_REAL_MAXIT1000_RESULT` below.
 
+**Real result (`verify_eval18_real_maxit1000_2026-08-04.jl`, second attempt — first attempt hit an
+unrelated bug in the script's own pre-solve assertion, `cctx_reduced` has no `.obj` field, fixed by
+reading `aug_reduced.obj_cm.inner_loop_opt` instead)**:
+
 ```
-EVAL18_REAL_MAXIT1000_RESULT = <see final verdict block>
+aug_reduced.obj_cm.inner_loop_opt = .../ek_inner_maxit1000_2026-08-04.opt  (propagation confirmed live, assertion passed)
+[maxit=1000 REAL] wall=577.67s  nStatus=-300  n_fg=-1  n_hess=-1  zeta=NaN
+EVAL18_REAL_MAXIT1000_RESULT: CONFIRMS 2026-08-02 verdict -- genuinely unbounded, correct
+    lower_limit clamp fires once given a real wider budget
+```
+
+(log: `repo_scratch/.../logs/eval18_real_maxit1000_take2_2026-08-04.log`). **This is the decisive
+result task §5.1 asks for** — `nStatus=-300` (`KN_RC_UNBOUNDED`, the correct `lower_limit=-50`
+clamp firing) at a genuine maxit=1000, on the exact captured eval18 point, at real D20/W=100,000,
+on this session's own current HEAD — the FIRST time maxit has actually been varied for this point
+on this branch (neither this session's own first attempt nor the prior session's original script
+ever exercised a real wider budget, per the dead-`maxit_override` finding above). Confirms the
+2026-08-02 forensic verdict's own claim (unbounded, clamp fires ~iteration 299) rather than
+contradicting it — the earlier apparent "DIVERGES" signal was entirely an artifact of the dead
+kwarg, not a real regression. Wall time (577.67s) was ~3-10x archived reference timings due to this
+session's own sustained machine contention (`uptime` 241-270 for the whole session) — noted for
+completeness, not treated as evidence about anything (the terminal status code, not the wall clock,
+is what answers the question).
+
+```
+STALL_STATUS (updated) =
+    unrestricted: fix_confirmed_by_code_not_by_historical_replay (unchanged, §5.2 below)
+    flexible_CM (eval18): CONFIRMED genuinely unbounded -- real maxit=100 -> nStatus=-400 (this
+        session's earlier run) AND real maxit=1000 -> nStatus=-300 (this run), both on the exact
+        captured point at real D20/W=100,000 on current HEAD, via a verified-propagating
+        inner_loop_opt override (not the dead maxit_override kwarg). Matches the 2026-08-02
+        forensic package's own two-part signature exactly. RESOLVED, not open.
 ```
 
 ## 3. Free eta_nu for origin-ZC and CM+ZC — IMPLEMENTED and D4-VERIFIED (task §7/§8, ZC portion)
@@ -193,3 +223,53 @@ wiring remain open):
    for the two ZC families is the only piece genuinely new this session.
 9. `FamilyRegistry.jl` capabilities update — still deliberately not edited pending the above gates
    landing for real (same reasoning the prior session gave).
+
+## Final verdict block (this continuation)
+
+Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed
+branch and one worktree with one precise blocker") — items 1 (W=100k warm-start/fast-reject, all 5
+families), most of item 4 (D20/W=80-100k eta gates, cache/checkpoint eta-generation wiring), item
+5 (unrestricted historical replay), item 6 (D20 CLI smokes for 4/5 REDUCED families), item 7 (FULL
+CLI for unrestricted/origin_zc), and item 8 (full D20/W=80-100k outer-gradient matrix) remain
+genuinely open — this branch stays **pushed but NOT merged into `prototype/profiled-destination-
+scales`, NOT tagged**, worktree and branch left in place, exactly as the prior session's own ending
+did.
+
+```
+PRODUCTION_SCALE_THREADING (task §3, this continuation's contribution) =
+    common_frechet: pass (D20/W=20,000, ALL PASS, max|Δ|=2.84e-14, this continuation)
+    cm_meanzc:      pass (D20/W=20,000, ALL PASS, max|Δ|=2.67e-14, this continuation)
+    (flexible_CM/CM_plus_ZC threaded confirmation: unchanged from prior sessions -- see that
+    MASTER.md's own THREADED_BINS block)
+STALL_REPLAY =
+    unrestricted: open (historical replay points not re-located this continuation either)
+    flexible_CM_eval18: CONFIRMED_UNBOUNDED (this continuation: genuine maxit=100->nStatus=-400
+        AND genuine maxit=1000->nStatus=-300, both real, both verified-propagating, on current
+        HEAD -- resolves the prior continuation's own "DIVERGES" false alarm, which was an
+        artifact of a dead maxit_override kwarg, not a real regression)
+FREE_NU (task §7/§8, ZC families) =
+    origin_ZC:   evaluator_and_gradient_implemented_D4_verified (D20/W20k+ not yet run)
+    CM_plus_ZC:  evaluator_and_gradient_implemented_D4_verified (D20/W20k+ not yet run)
+OUTER_GRADIENT_NATIVE (D4 portion, this continuation's contribution) =
+    origin_ZC:   pass_D4 (new, this continuation, ~1e-10 to shared+FULL-borrowed analytic formula)
+    CM_plus_ZC:  pass_D4 (new, this continuation, ~1e-10)
+    (unrestricted/flexible_CM/common_frechet: unchanged from prior sessions' own 2026-08-01/08-02
+    gates; D20/W=20k-100k representative-coordinate gates for all 5 families remain open)
+FUNCTIONAL_READY =
+    unrestricted:    no (unchanged -- W=100k warm-start + outer-gradient D20+ gate missing)
+    flexible_CM:     no (eval18 now genuinely resolved as expected-unbounded, not a blocker per se,
+                     but W=100k warm-start + fast-rejection + D20+ outer-gradient gate still missing)
+    common_frechet:  no (D20/W20k threaded confirmation now closed; W=100k warm-start + D20+
+                     outer-gradient gate still missing)
+    origin_ZC:       no (free-nu now implemented+D4-verified; D20/W20k+ eta gates, cache/checkpoint
+                     eta-generation wiring, W=100k warm-start still missing)
+    CM_plus_ZC:      no (same as origin_ZC)
+MERGED_TO_CANONICAL_PROTOTYPE = no_W100k_warmstart_fastreject_all5_families_and_D20_W80_100k_eta_gates_and_full_cli_and_historical_replay_not_done
+NEW_BRANCHES_CREATED = 0
+NEW_WORKTREES_CREATED = 0
+FULL_PRODUCTION_CHANGED = false
+POWERED_COORDINATES_IMPLEMENTED = false
+PERFORMANCE_AB_RUN = false
+DENSE_CODE_USED = false
+CAMPAIGN_LAUNCHED = false
+```

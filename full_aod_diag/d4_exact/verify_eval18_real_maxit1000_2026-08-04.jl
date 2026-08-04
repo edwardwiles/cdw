@@ -93,9 +93,9 @@ pe = build_pivot_elimination_on_retained(ctx, spec, gauge)
 aug_reduced = build_cm_augmented_obj_archB(ctx, CS; L = 50, contrasts = :anchored, base_obj = reduced_obj0, profiled_layout = layout)
 cctx_reduced = build_cm_bin_ctx(ctx, aug_reduced; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = true)
 fctx_cm = build_flexcm_family_ctx(ctx, spec, pe, layout, cctx_reduced)
-@printf("obj.inner_loop_opt actually wired to solve = %s (must equal the maxit=1000 file above)\n", cctx_reduced.obj.inner_loop_opt)
+@printf("aug_reduced.obj_cm.inner_loop_opt actually wired to solve = %s (must equal the maxit=1000 file above)\n", aug_reduced.obj_cm.inner_loop_opt)
 flush(stdout)
-@assert cctx_reduced.obj.inner_loop_opt == opt_maxit1000 "inner_loop_opt did not propagate to the solved bundle -- override is not reaching KNITRO, investigate further before trusting this run"
+@assert aug_reduced.obj_cm.inner_loop_opt == opt_maxit1000 "inner_loop_opt did not propagate to the augmented bundle -- override is not reaching KNITRO, investigate further before trusting this run"
 
 w0_str = read(joinpath(D4X, "eval18_captured_point_2026-08-02.txt"), String)
 w0 = Vector{Float64}(eval(Meta.parse(w0_str)))
