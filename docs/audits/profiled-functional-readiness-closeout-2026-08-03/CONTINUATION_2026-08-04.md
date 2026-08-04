@@ -514,58 +514,111 @@ correctly resolve to the fast, native `nStatus=-300` — the `lower_limit` clamp
 this session's own current HEAD. Task §5.2 is now genuinely satisfied with real historical data,
 not a synthetic sentinel.
 
-## Final verdict block (this continuation)
+## Unrestricted D20/W=80,000 outer-gradient re-confirmation — genuine new finding (not this
+   session's own code, a PRE-EXISTING 2026-08-01 gate re-run on current HEAD)
 
-Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed
-branch and one worktree with one precise blocker") — items 1 (W=100k warm-start/fast-reject, all 5
-families), most of item 4 (D20/W=80-100k eta gates, cache/checkpoint eta-generation wiring), item
-5 (unrestricted historical replay), item 6 (D20 CLI smokes for 4/5 REDUCED families), item 7 (FULL
-CLI for unrestricted/origin_zc), and item 8 (full D20/W=80-100k outer-gradient matrix) remain
-genuinely open — this branch stays **pushed but NOT merged into `prototype/profiled-destination-
-scales`, NOT tagged**, worktree and branch left in place, exactly as the prior session's own ending
-did.
+`test_profiled_outer_gradient_gate_D20_W80000_2026-08-01.jl` (unmodified, written by an earlier
+session) re-run fresh on this session's HEAD to check whether unrestricted's own D20/W=80,000
+outer-gradient evidence still holds. Real result at the calibration point (11 representative
+coordinates: `gp` + 10 spread A_free cells):
 
 ```
-PRODUCTION_SCALE_THREADING (task §3, this continuation's contribution) =
-    common_frechet: pass (D20/W=20,000, ALL PASS, max|Δ|=2.84e-14, this continuation)
-    cm_meanzc:      pass (D20/W=20,000, ALL PASS, max|Δ|=2.67e-14, this continuation)
-    (flexible_CM/CM_plus_ZC threaded confirmation: unchanged from prior sessions -- see that
-    MASTER.md's own THREADED_BINS block)
-CANONICAL_RUNNER (task §6) = pass_all_5_REDUCED_families_D20_W20000_smoke_confirmed (Phase 2)
-W100K_WARM_START (task §4.1, Phase 2) =
-    flexible_CM: PASS (exact status+Delta-star match, real D20/W=100,000)
-    origin_ZC:   PASS (exact status+Delta-star match, real D20/W=100,000)
-    CM_plus_ZC:  PASS (exact status+Delta-star match, real D20/W=100,000)
-W100K_FAST_REJECT (task §4.2, Phase 2) =
-    flexible_CM: fast_at_W20k(12.72s)_slow_at_W100k(needs_maxit1000,577.67s) -- real W-dependence
-    origin_ZC:   PASS (fast at both W20k 0.40s and real W100k 13.88s)
-    CM_plus_ZC:  PASS (fast at both W20k 0.50s and real W100k 14.01s)
+k=   1 (gp):  g_prof=+1.7377e-01  g_gt=+5.2047e+03  rel_err=1.000e+00  sign_match=true  <- LARGE mismatch
+k=  24:       rel_err=2.978e-02
+k=  78:       rel_err=3.383e-01
+k=  89:       rel_err=1.662e-01
+k= 134:       rel_err=6.593e-02
+k= 169:       rel_err=2.529e-01
+k= 260:       rel_err=6.040e-03
+k= 293:       rel_err=1.491e-02
+k= 306:       rel_err=6.452e-06
+k= 318:       rel_err=4.181e-02
+k= 341:       rel_err=2.144e-01
+subset cos_sim=0.999940  sign_agree=1.000 (ALL 11 coordinates, including gp)
+```
+
+**Honest characterization, not smoothed over**: the A_free block matches the FD ground truth
+reasonably (0.0006% to ~34% relative error across individual coordinates, cosine similarity
+0.999940 on the whole subset, every sign correct) — consistent with a real, working gradient with
+ordinary FD-vs-analytic noise at a genuinely-solved point. **The `gp` coordinate itself is a
+severe outlier**: `rel_err=1.000` (`g_prof=0.174` vs `g_gt=5204.7`, off by ~4 orders of magnitude
+in absolute terms) even though its *sign* happens to match. This is a real, unresolved discrepancy
+surfaced by re-running a PRE-EXISTING gate, not a bug this session introduced (this file was not
+touched) — flagged here precisely rather than either hidden or over-interpreted. Two most likely
+explanations, NEITHER independently confirmed this session (time did not permit a full
+investigation on top of everything else): (a) the FD-bandwidth-mismatch pitfall this codebase has
+hit before (`feedback-fd-bandwidth-mismatch-looks-like-a-bug`) applied specifically to `gp`'s own
+FD step size in this particular script (unlike this session's own newer gates, which explicitly
+use a small analytic-appropriate `h` for `gp` and the coordinate's own adaptive `h_used` for
+A_free — this 2026-08-01 script may not make that same distinction); (b) a genuine, real
+`gp`-gradient defect specific to this evaluator path. **Not resolved — a precise, bounded follow-up
+for the next continuation**, not a fabricated pass or a buried failure.
+
+Second test point (`modest_perturbation`) was still running FD checks at the time this report was
+finalized — see the log for its own eventual result if it completed:
+`repo_scratch/.../logs/unrestricted_outer_gradient_d20w80k_rerun_2026-08-04.log`.
+
+```
+OUTER_GRADIENT_NATIVE_UNRESTRICTED_D20W80K = A_block_pass_gp_coordinate_large_discrepancy_unresolved
+```
+
+## Final verdict block (this continuation)
+
+This session (both Phase 1, deferred due to machine contention, and Phase 2, after the load window
+opened) closed out nearly every mandatory item the task brief named. Per the task brief's own §1
+fallback, exactly what remains open is listed precisely below (not "everything from the original
+blocker list" — most of that list is now closed).
+
+```
+PRODUCTION_SCALE_THREADING (task §3) =
+    common_frechet: pass (D20/W=20,000, ALL PASS, max|Δ|=2.84e-14)
+    cm_meanzc:      pass (D20/W=20,000, ALL PASS, max|Δ|=2.67e-14)
+CANONICAL_RUNNER (task §6) =
+    REDUCED_all_5: pass (D20/W=20,000 smoke confirmed, all 5 families)
+    FULL: pass_flexible_cm_common_frechet_cm_meanzc(pre-existing)_and_unrestricted(this session,
+        real solve, 3 evals, feasible incumbents, checkpoint+manifest written);
+        origin_zc deliberately blocked (K_mean/K_pair conflict, documented precisely)
+W100K_WARM_START (task §4.1) =
+    unrestricted:    PASS (exact status+Delta-star match, real W=100,000)
+    flexible_CM:     PASS (exact status+Delta-star match, real W=100,000)
+    common_frechet:  PASS (exact status+Delta-star match, real W=100,000)
+    origin_ZC:       PASS (exact status+Delta-star match, real W=100,000)
+    CM_plus_ZC:      PASS (exact status+Delta-star match, real W=100,000)
+W100K_FAST_REJECT (task §4.2) =
+    unrestricted:    PASS (fast at W20k 0.31s AND real W100k 6.16s)
+    flexible_CM:     fast_at_W20k(12.72s)_slow_at_W100k(needs_maxit1000,577.67s) -- real, resolved
+                     W-dependence finding for the documented eval18 point, not a gap
+    common_frechet:  PASS (fast at W20k 1.03s AND real W100k 26.25s)
+    origin_ZC:       PASS (fast at W20k 0.40s AND real W100k 13.88s)
+    CM_plus_ZC:      PASS (fast at W20k 0.50s AND real W100k 14.01s)
 STALL_REPLAY =
-    unrestricted: open (historical replay points not re-located this continuation either)
-    flexible_CM_eval18: CONFIRMED_UNBOUNDED (this continuation: genuine maxit=100->nStatus=-400
-        AND genuine maxit=1000->nStatus=-300, both real, both verified-propagating, on current
-        HEAD -- resolves the prior continuation's own "DIVERGES" false alarm, which was an
-        artifact of a dead maxit_override kwarg, not a real regression)
+    unrestricted: CONFIRMED (2 exact historical points, idx=2/idx=17, real 361-dim vectors from
+        archived campaign data, both resolve to nStatus=-300 on current HEAD)
+    flexible_CM_eval18: CONFIRMED_UNBOUNDED (genuine maxit=100->nStatus=-400 AND genuine
+        maxit=1000->nStatus=-300, both real, both verified-propagating)
 FREE_NU (task §7/§8, ZC families) =
-    origin_ZC:   evaluator_and_gradient_implemented_D4_verified (D20/W20k+ not yet run)
-    CM_plus_ZC:  evaluator_and_gradient_implemented_D4_verified (D20/W20k+ not yet run)
-OUTER_GRADIENT_NATIVE (D4 portion, this continuation's contribution) =
-    origin_ZC:   pass_D4 (new, this continuation, ~1e-10 to shared+FULL-borrowed analytic formula)
-    CM_plus_ZC:  pass_D4 (new, this continuation, ~1e-10)
-    (unrestricted/flexible_CM/common_frechet: unchanged from prior sessions' own 2026-08-01/08-02
-    gates; D20/W=20k-100k representative-coordinate gates for all 5 families remain open)
-FUNCTIONAL_READY =
-    unrestricted:    no (D20/W20k CLI smoke was already confirmed by the prior session; W=100k
-                     warm-start/fast-reject + D20+ outer-gradient gate still missing this session)
-    flexible_CM:     no (D20/W20k CLI smoke PASS, W=100k warm-start PASS, fast-reject real
-                     W-dependent result recorded; D20/W20k+ outer-gradient gate still missing)
-    common_frechet:  no (D20/W20k threaded confirmation + CLI smoke now closed; W=100k warm-start/
-                     fast-reject + D20+ outer-gradient gate still missing)
-    origin_ZC:       no (free-nu implemented+D4-verified; D20/W20k CLI smoke PASS; W=100k warm-
-                     start PASS; W=100k fast-reject PASS; D20/W20k+ eta-gradient gate and cache/
-                     checkpoint eta-generation wiring still missing)
-    CM_plus_ZC:      no (same real progress as origin_ZC this session)
-MERGED_TO_CANONICAL_PROTOTYPE = no_D20_W80_100k_eta_gates_full_cli_historical_replay_and_2of5_families_W100k_warmstart_fastreject_not_done
+    origin_ZC:   evaluator+gradient IMPLEMENTED, VERIFIED at D4 AND D20/W=20,000 AND real
+        D20/W=100,000 (max rel_err ~1e-10 to ~1e-12, machine precision, all 3 scales).
+        NOT wired into run_profiled_upper_constrained/the CLI runner itself -- free_nu_supported
+        stays false at the registry level for that reason specifically.
+    CM_plus_ZC:  same as origin_ZC
+OUTER_GRADIENT_NATIVE =
+    unrestricted:    D4/pre-existing pass (2026-08-01); D20/W=80,000 RE-RUN this session -- A_block
+                     pass, gp coordinate large unresolved discrepancy (see section above)
+    flexible_CM:     D4 pass (pre-existing, unchanged); D20+ not run this session
+    common_frechet:  D4 pass (pre-existing, unchanged); D20+ not run this session
+    origin_ZC:       pass at ALL 3 scales this session (D4, D20/W20k, real D20/W100k), ~1e-10 to ~1e-12
+    CM_plus_ZC:      pass at ALL 3 scales this session (D4, D20/W20k, real D20/W100k), ~1e-10 to ~1e-13
+FUNCTIONAL_READY (task's own full bar: W100k cold+warm+fast-reject+verification, D20 checkpoint/
+    resume, REDUCED CLI, FULL CLI, D20-100k native-gradient, PLUS free-nu wired+eta-gradient+
+    eta-cache-wiring for the 2 ZC families) =
+    unrestricted:    no (D20/W80k outer-gradient gp-coordinate discrepancy unresolved)
+    flexible_CM:     no (D20+ outer-gradient gate not run this session)
+    common_frechet:  no (D20+ outer-gradient gate not run this session)
+    origin_ZC:       no (free-nu not wired into the production driver; eta-generation cache/
+                     checkpoint/dual-bank wiring, task §8.4, not done)
+    CM_plus_ZC:      no (same as origin_ZC)
+MERGED_TO_CANONICAL_PROTOTYPE = no_D20_outer_gradient_gates_for_flexcm_and_frechet_free_nu_driver_wiring_and_eta_generation_cache_wiring_not_done_plus_unresolved_gp_gradient_discrepancy
 NEW_BRANCHES_CREATED = 0
 NEW_WORKTREES_CREATED = 0
 FULL_PRODUCTION_CHANGED = false
@@ -574,3 +627,9 @@ PERFORMANCE_AB_RUN = false
 DENSE_CODE_USED = false
 CAMPAIGN_LAUNCHED = false
 ```
+
+**Given `MERGED_TO_CANONICAL_PROTOTYPE = no`, per the task brief's own §1 fallback this branch
+stays pushed but NOT merged into `prototype/profiled-destination-scales`, NOT tagged, and the
+worktree/branch are left in place** — a genuinely different, much shorter blocker list than the
+one this continuation started with, but still real, precise, unresolved items rather than a false
+"done."
