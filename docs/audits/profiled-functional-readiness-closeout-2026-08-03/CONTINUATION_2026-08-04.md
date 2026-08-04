@@ -582,6 +582,51 @@ OUTER_GRADIENT_NATIVE_UNRESTRICTED_D20W80K =
         session; the script's own aggregate "PASS" verdict does not catch this)
 ```
 
+### gp-coordinate discrepancy — RESOLVED (same-session follow-up, `investigate_gp_fd_bandwidth_2026-08-04.jl`)
+
+Neither of the two candidate explanations above was right. The real cause: **the original gate's
+`ground_truth_fd` uses a single fixed `h=0.01` for every coordinate including `gp`, and at `gp`
+specifically that step is large enough that the `+h` probe lands in a genuinely infeasible region**
+(`nStatus=-300`, this codebase's own confirmed-infeasible status per
+`feedback-knitro-300-confirmed-infeasible-not-unbounded`) **while `-h` still converges normally**
+(`nStatus=0`). The gate's own FD helper never checks solver status before differencing — it
+silently used KNITRO's bogus post-clamp "Delta" value from the infeasible `+h` side as if it were
+a genuine converged objective, which is what produced the huge, meaningless slope. This has nothing
+to do with `gp`'s units or a formula bug; it is an unchecked-status FD artifact.
+
+Confirmed by sweeping `h` on a full re-solve central FD at the calibration point:
+
+```
+h=1.0e-02  Delta(+h)=104.4325  (status=-300, INFEASIBLE)  Delta(-h)=0.3378  (status=0)  FD=+5.2047e+03
+h=3.0e-03  Delta(+h)=0.03815   (status=0)                 Delta(-h)=0.02499 (status=0)  FD=+2.1931e+00
+h=1.0e-03  Delta(+h)=0.005554  (status=0)                 Delta(-h)=0.004696(status=0)  FD=+4.2933e-01
+h=3.0e-04  Delta(+h)=0.002448  (status=0)                 Delta(-h)=0.002329(status=0)  FD=+1.9749e-01
+h=1.0e-04  Delta(+h)=0.002167  (status=0)                 Delta(-h)=0.002131(status=0)  FD=+1.7641e-01
+h=3.0e-05  Delta(+h)=0.002127  (status=0)                 Delta(-h)=0.002117(status=0)  FD=+1.7401e-01
+h=1.0e-05  Delta(+h)=0.002121  (status=0)                 Delta(-h)=0.002118(status=0)  FD=+1.7380e-01
+h=3.0e-06  Delta(+h)=0.0021198 (status=0)                 Delta(-h)=0.0021187(status=0) FD=+1.7377e-01
+h=1.0e-06  Delta(+h)=0.0021194 (status=0)                 Delta(-h)=0.0021191(status=0) FD=+1.7377e-01
+
+analytic gp gradient = 0.17377084545539576
+```
+
+Once `h` is small enough that both sides stay feasible (`h≤3e-3`), the FD slope **monotonically
+converges** toward the analytic value, matching it to 6 significant figures at `h=1e-6`
+(`FD=0.1737711` vs `analytic=0.1737708`). This is a textbook clean convergence, not noise — the
+`gp` analytic gradient is correct. `OUTER_GRADIENT_NATIVE` for unrestricted at D20/W80,000 is now
+genuinely **fully PASS** (A_block + gp), not partial.
+
+```
+OUTER_GRADIENT_NATIVE_UNRESTRICTED_D20W80K =
+    A_block: pass (unchanged from above)
+    gp_coordinate: PASS (RESOLVED -- root cause was an unchecked-solver-status FD artifact in the
+        pre-existing gate script's fixed h=0.01 step, not a gradient bug; FD converges cleanly to
+        the analytic value as h shrinks and both sides stay feasible, matching to 6 sig figs by
+        h=1e-6)
+```
+
+(log: `repo_scratch/.../logs/gp_fd_bandwidth_sweep_2026-08-04.log`)
+
 ## Final verdict block (this continuation)
 
 This session (both Phase 1, deferred due to machine contention, and Phase 2, after the load window
@@ -623,8 +668,10 @@ FREE_NU (task §7/§8, ZC families) =
         stays false at the registry level for that reason specifically.
     CM_plus_ZC:  same as origin_ZC
 OUTER_GRADIENT_NATIVE =
-    unrestricted:    D4/pre-existing pass (2026-08-01); D20/W=80,000 RE-RUN this session -- A_block
-                     pass, gp coordinate large unresolved discrepancy (see section above)
+    unrestricted:    D4/pre-existing pass (2026-08-01); D20/W=80,000 RE-RUN this session -- FULL
+                     PASS (A_block + gp), gp discrepancy RESOLVED same session (unchecked-solver-
+                     status FD artifact in the pre-existing gate script, not a gradient bug; see
+                     gp-coordinate resolution section above)
     flexible_CM:     D4 pass (pre-existing, unchanged); D20+ not run this session
     common_frechet:  D4 pass (pre-existing, unchanged); D20+ not run this session
     origin_ZC:       pass at ALL 3 scales this session (D4, D20/W20k, real D20/W100k), ~1e-10 to ~1e-12
