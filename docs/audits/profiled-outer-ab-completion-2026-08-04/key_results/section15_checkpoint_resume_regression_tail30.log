@@ -1,0 +1,30 @@
+      15    9.007797e-01   0.000e+00   1.102e-02   3.413e-02        0
+
+EXIT: Time limit reached. Current point is feasible.
+
+Final Statistics
+----------------
+Final objective value               =   9.00779724806960e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   1.10e-02 / 1.10e-02
+# of iterations                     =         15 
+# of CG iterations                  =          0 
+# of function evaluations           =         40
+# of gradient evaluations           =         16
+Total program time (secs)           =       2.13277 (     3.385 CPU time)
+Time spent in evaluations (secs)    =       2.04880
+
+===============================================================================
+
+[d4_ckpt_CM_plus_ZC_p2] DONE: status=-401 wall=6.3s n_eval=53 n_grad=23
+  best: gp=0.9007797248069604 Delta=0.9975235804348002 found_at_eval=48 t=1.9565439224243164s
+PASS  CM_plus_ZC: part2 resumed n_eval >= part1's (cumulative)
+PASS  CM_plus_ZC: part2 resumed n_grad >= part1's (cumulative)
+PASS  CM_plus_ZC: part2 resumed wall >= part1's (cumulative)
+PASS  CM_plus_ZC: part2 resumed best_feasible.gp never regresses
+PASS  CM_plus_ZC: part2 resumed best_feasible remains feasible
+CM_plus_ZC part2: n_eval=53 n_grad=23 wall=6.33s
+PASS  CM_plus_ZC: refuses resume from a different family's checkpoint
+PASS  CM_plus_ZC: refuses resume with a different W
+
+ALL PASS
