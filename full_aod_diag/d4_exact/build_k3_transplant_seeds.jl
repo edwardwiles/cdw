@@ -49,7 +49,15 @@ function build_seed(family::String, k1_seed_path::String, D2_econ::Int, nu0::Vec
 end
 
 lp("Building shared W=100,000 real D=20 context (draws only, for D/D2_econ)...")
-ctx = d20_real_setup(W = 100_000, δ = 1.0, find_smallest = true, destination_sample = :exclude_row)
+# Must match the PRODUCTION gravity mask (exclude_diagonal_gravity=true,
+# gravity_exclude_cells=Brazil-Korea) -- these are the ACTUAL DRIVER functions' own defaults
+# (run_originzc_upper_checkpointed/run_cm_upper_checkpointed), but the lower-level d20_real_setup
+# called directly here still defaults to false/empty (deliberately left there, per this repo's own
+# documented CLAUDE.md history -- only the 3 real production driver functions were flipped). Using
+# d20_real_setup's own default silently builds a differently-masked context than the real solve
+# uses, which is exactly the dimension-mismatch bug this fix addresses.
+ctx = d20_real_setup(W = 100_000, δ = 1.0, find_smallest = true, destination_sample = :exclude_row,
+    exclude_diagonal_gravity = true, gravity_exclude_cells = default_gravity_exclude_cells_brazil_korea())
 D = ctx.D
 D2_econ = D * (hasproperty(ctx, :D_dest) ? ctx.D_dest : D)
 lp("  D=", D, " D2_econ=", D2_econ)

@@ -97,6 +97,22 @@ lp("explore_budget_s=", EXPLORE_BUDGET_S, " polish_budget_s=", POLISH_BUDGET_S, 
 env = load_envelope_csv(ORIGINAL_ENVELOPE_CSV)
 lp("Loaded baseline envelope: ", length(env.rows), " rows.")
 
+# post-verifier-fix K=3 campaign (2026-08-04): the baseline envelope's origin_zc/cm_meanzc rows are
+# K=1-shaped outer vectors (a shorter eta_nu tail than K=3's own layout -- 1/D elements vs 3/3*D).
+# Feeding one of these as a raw inherited incumbent or seed candidate under a K=3 run corrupts the
+# outer vector shape -- confirmed live: a DimensionMismatch crash inside cm_z_from_a the first time
+# this was tried. K=1 remains a legitimate SEED CANDIDATE for K=3 (task §9), just not as a raw,
+# unreshaped envelope/manifest row -- that reshaping is exactly what the explicit
+# extra_seed:<path>:K1_to_K3_transplant mechanism (build_k3_transplant_seeds.jl) does correctly.
+const RUNNING_K3_ZC = FAMILY in ("origin_zc", "cm_meanzc") &&
+    (FAMILY == "origin_zc" ? CONTPOLISH_ORIGINZC_K : CONTPOLISH_MEANZC_K) != 1
+if RUNNING_K3_ZC
+    n_before = length(env.rows)
+    filter!(kv -> kv[1][1] != FAMILY, env.rows)
+    lp("K=3 ZC run: dropped ", n_before - length(env.rows), " K=1-shaped baseline envelope row(s) for ",
+       FAMILY, " (incompatible outer-vector shape -- use extra_seed: for a proper K=1->K=3 transplant instead).")
+end
+
 # 2. Layer in any already-completed CAMPAIGN cell reports for this exact family/direction at a
 #    smaller delta (supports the lower delta=0.5->1->2 continuation chain: delta=2's env must see
 #    delta=1's NEW result if it improved on delta=0.5's original one) -- AND at the SAME target
@@ -122,8 +138,9 @@ inherited_before = envelope_at(env, FAMILY, DIRECTION, TARGET_DELTA)
 lp("Inherited incumbent for this target: ", inherited_before === nothing ? "none" : inherited_before.GT)
 
 # 3. Seed candidates: every "available" row in the original seed manifest for this family/direction
-#    (up to 4 roles: A/B/C/D per task Section 6), deduplicated.
-all_seed_rows = csv_rows_as_namedtuples(ORIGINAL_SEED_MANIFEST_CSV)
+#    (up to 4 roles: A/B/C/D per task Section 6), deduplicated. Skipped for a K=3 ZC run (RUNNING_K3_ZC
+#    above) -- these rows are K=1-shaped outer vectors, incompatible with K=3's own layout.
+all_seed_rows = RUNNING_K3_ZC ? NamedTuple[] : csv_rows_as_namedtuples(ORIGINAL_SEED_MANIFEST_CSV)
 seeds = Seed[]
 for r in all_seed_rows
     String(r.family) == FAMILY && Symbol(r.direction) == DIRECTION || continue
@@ -133,7 +150,7 @@ for r in all_seed_rows
                        parse(Float64, r.GT), parse(Float64, r.Delta_star), w, String(r.outer_vector_sha256),
                        String(r.outer_vector_path)))
 end
-lp("Loaded ", length(seeds), " raw seed candidates from the original manifest.")
+lp("Loaded ", length(seeds), " raw seed candidates from the original manifest.", RUNNING_K3_ZC ? " (skipped -- K=3 ZC run)" : "")
 
 # Also offer the just-layered-in campaign incumbent (if any, and if better than every manifest seed)
 # as an explicit additional seed candidate -- dedup_seeds will drop it if it's a near-duplicate of
