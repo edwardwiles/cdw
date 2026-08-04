@@ -7,8 +7,18 @@ clean at session start, `origin` matched local HEAD at `59351eb`). `NEW_BRANCHES
 
 This report covers real, in-progress work; two sections (5, 6) are long real-KNITRO background jobs
 still running at the time this report was written and are documented with their live status, not a
-fabricated final result. K=3 Waves 1/2 (Sections 9-10) were **not launched** — gated by a genuine
-Section-7 preflight failure, explained below, not skipped.
+fabricated final result. K=3 Waves 1/2 (Sections 9-10) were **not launched** this session — Section
+7's preflight went through three real attempts (documented precisely, including two mistakes on this
+session's own part) before landing on a decisive, matched-scale test: `origin_zc` K=3 passes cleanly;
+`cm_meanzc` K=3's underlying solve is genuinely excellent but exposed a real, unresolved edge case in
+the automated verification gate (see Section 7). Waves were not launched primarily because that
+investigation consumed the remaining session time, not because of an unresolved blocker on
+`origin_zc`, which is ready to go.
+
+**Correction note:** an earlier version of this report claimed `K3_PREFLIGHT = fail_seed_construction`
+for both families based on an under-tested first attempt, and separately mischaracterized
+`cm_meanzc`'s `verified=false` flag as if it cast doubt on the K=3 solve itself. Both were corrected
+live in this session after direct user pushback — see Section 7 for the full, precise account.
 
 ## 1. Prerequisite reading + state verification
 
@@ -162,35 +172,87 @@ through the 0.5-0.9 range as it explores away from the S1/S2 seeds toward the S3
   distinct from the K=1 namespace (`continuation_polish_run_fn_k3.jl` is a wholly separate file with
   its own `label`/`ckpt_dir` construction, `_K3_` embedded in the label).
 
-**D20/W=5,000 cold+warm smoke execution — FAIL**, root cause isolated (not left as an unknown):
-both `origin_zc` and `cm_meanzc` K=3 smokes hit `"Could not evaluate objective or constraints at the
-initial point"` inside KNITRO. Diagnosed via two sweeps (`k3_preflight_diag_k_sweep.jl`,
-`k3_preflight_diag_w_sweep.jl`), both committed:
-- K=1, K=2, K=3 all fail **identically** under `:origin_specific_moments_zero_covariance` with this
-  preflight script's own `nu0 = mean(U[:,o].^k)` construction — **this rules out a K=3-specific
-  production bug.**
-- W=5,000 and W=80,000 (the W the repo's own known-working origin-ZC test file uses) both fail
-  identically at K=1 — **rules out a W-scale artifact.**
-- Conclusion: the preflight script's naive raw-empirical-moment seed is simply not a valid,
-  KNITRO-evaluable starting point for the **zero-covariance** restriction variant specifically (the
-  repo's own working K=1 example, `test_backend_manifest_cm_originzc.jl`, only exercises the
-  non-zero-covariance `:origin_specific_moments` variant with the same formula — never actually
-  validated against `_zero_covariance`). The fix is to build the K=3 preflight's cold-start seed the
-  same way `d20_originzc_shakedown.jl` (this tree's own working zero-covariance example, referenced
-  but not yet read in this session) does, not with this session's naive formula.
+**Smoke execution — the honest sequence of what was tried, corrected live during this session after
+direct user pushback on an earlier imprecise claim (see below):**
+
+*Attempt 1 (wrong):* the first preflight script hand-built its own "calibration point" ([gp;A]
+economic block via `ctx.θ0_up[ctx.free_idx]` + `pivot_reduce`) rather than reusing a real one, and
+combined it with a raw-moment `nu0 = mean(U[:,o].^k)` tail. This failed identically at K=1, K=2, K=3
+and at W=5,000/W=80,000 — which correctly rules out a K=3-specific bug, but was a materially weaker
+test than it was first written up as: it never actually confirmed a real K=1 point working, only
+that this script's own from-scratch reconstruction was broken at every K. Separately running the
+repo's own pre-existing `d20_originzc_shakedown.jl` (referenced but not actually executed in the
+original writeup) also failed, identically at K=1 and K=3 — but this was traced to a *different*,
+pre-existing staleness bug in that script's own economic-block reconstruction (it reshapes a
+`D×D=400`-element raw `θ0_up` slice, but the current context builder returns `D×D_dest=380`
+elements under `destination_sample=:exclude_row`, a change that postdates this diagnostic script) —
+again nothing K=3-specific, but also not yet a real test of K=3.
+
+*Attempt 2 (correct):* took the REAL, already-converged K=1 `origin_zc` economic block straight from
+the immutable frozen registry (`.../W100k/origin_zc/upper/delta_0.01/cdb537b72ace59c1.jls`,
+`final_w[1:380]`) and extended only the K=3-specific eta tail — no reconstruction of gp/A at all.
+This still failed at first, traced to a *third* confound: the nu0 tail was computed from a context
+built at **W=5,000** while the economic block itself was converged at **W=100,000** — different
+Sobol draw realizations entirely, an internal scale mismatch, not a K issue.
+
+*Attempt 3 (decisive) — matching W=100,000 on both pieces:*
+- **`origin_zc` K=3: clean PASS.** `eval 1 t=22.5s gp=0.9779569571197733 Delta=0.012236391949125854
+  feasible=true verified=true` — feasible and independently verified on the very first evaluation,
+  reproducing the K=1 seed's own gp/Δ almost exactly. A slightly longer follow-up run (2 evals in
+  ~37s) showed genuine outer progress: κ improved from the K=1 seed's 0.0329 to 0.0469.
+- **`cm_meanzc` K=3: the underlying solve is genuinely excellent; the automated verify gate rejects
+  it on a boundary edge case, not a real defect.** `eval 1` came back `feasible=true verified=false`.
+  Rather than accept that flag at face value (a user challenge caught this — see below), a temporary
+  `CDW_DIAG_VERIFY=1`-gated diagnostic print was added at the verification call site in
+  `cm_checkpoint.jl` (small, reversible, off by default, left in the codebase as a reusable
+  diagnostic) to print the actual residuals behind `is_verified_success`:
+  ```
+  inner_status=0  Delta_dual=1.3726200122634187  Delta_primal=1.3726200122600565
+  primal_dual_gap=3.4e-12   (tol 1e-3)   -- passes by ~8 orders of magnitude
+  mean_m_resid=1.7e-14      (tol 1e-6)   -- passes by ~8 orders of magnitude
+  max_abs_moment_kkt_resid=7.2e-13 (tol 1e-3) -- passes by ~9 orders of magnitude
+  m_min=0.0
+  ```
+  Every genuine convergence/KKT check passes by many orders of magnitude — this is an extremely
+  well-converged point, not an approximate one (`inner_status=0` is KNITRO's own clean-optimal code).
+  The **only** failing check is `oracle.jl`'s `mmin > tol.m_min_floor` with `m_min_floor=0.0`: one
+  recovered dual weight is exactly `0.0`, a legitimate corner-solution value, and the gate uses a
+  strict inequality against a floor of exactly zero. Nothing downstream actually broke because of
+  it — `Delta_dual` and `Delta_primal` agree to 12 significant figures using the same m-vector that
+  includes this zero. **This is very likely an overly strict verification-gate edge case, not
+  evidence of an incorrect K=3 solve** — but it is also not confirmed to be harmless in general: this
+  exact gate (`is_verified_success`) is what `run_cm_upper_checkpointed`'s own `cb_F!` uses to decide
+  whether a point may become the published incumbent (`is_new_best = feasible && verified && ...`),
+  so as this gate currently stands, a genuinely excellent cm_meanzc K=3 point sitting on this same
+  `m_min=0` boundary would be silently discarded by a real Wave run, not just by this smoke test. Not
+  confirmed whether this boundary case ever occurs in the existing, trusted K=1 production results
+  (not checked this session) — genuinely unresolved, flagged rather than guessed at.
 
 `D4 derivative tests`: **not run** this session — this repo's D4 derivative-test harnesses are
 hand-built per family for the K=1 shapes already in production; extending them to K=3 is real work
 not attempted here, given the session's time budget. Disclosed gap, not silently skipped.
 
-`K3_PREFLIGHT = fail_seed_construction` — a real, disclosed, root-caused blocker on Sections 8-10,
-not a mystery and not a K=3 production-code defect as far as this session's evidence goes.
+`K3_PREFLIGHT`:
+```
+origin_zc:  pass (clean, matched-W, real-K1-seed-extended test — see Attempt 3 above)
+cm_meanzc:  pass_with_caveat (solve quality genuinely excellent; the automated verify gate has a
+            real, unresolved m_min=0 boundary issue that could suppress good Wave-1 incumbents --
+            recommend loosening VerifiedSuccessTolerances.m_min_floor, e.g. to a small negative
+            epsilon, or confirming K=1 never hits this same boundary, before trusting Wave 1's
+            cm_meanzc results at face value)
+```
 
 ## 8. K=3 seed banks, Wave 1, Wave 2
 
-**Not attempted.** Per the task's own explicit instruction ("Do not launch W=100k until these pass"),
-Section 7's preflight failure blocks Sections 8-10 entirely. `K3_WAVE1` / `K3_WAVE2`: all four
-chains (`origin_zc upper/lower`, `CM_plus_ZC upper/lower`) = `not_started`.
+**Not attempted this session** — not because of an unresolved blocker on `origin_zc` (its preflight
+is a clean pass), but because the preflight investigation itself (Section 7, including diagnosing
+and correcting two of this session's own mistakes) consumed the remaining time budget. `origin_zc`
+Wave 1 is ready to launch in a follow-up session using the same matched-W, real-K1-seed-extended
+seed construction validated in Section 7's Attempt 3. `cm_meanzc` Wave 1 should not launch until the
+`m_min=0` verify-gate question is resolved (Section 7) — launching now risks a wave that silently
+discards genuinely good incumbents as "no feasible point found," producing misleading "no
+improvement" results that are actually a gate artifact. `K3_WAVE1` / `K3_WAVE2`: all four chains
+(`origin_zc upper/lower`, `CM_plus_ZC upper/lower`) = `not_started`.
 
 ## 9. Nesting audits
 
@@ -212,19 +274,23 @@ K=3 wave launched.
 UNRESTRICTED_UPPER_DELTA_0_01 = in_progress_at_report_time (real background job, explore stage)
 COMMON_FRECHET_UPPER_DELTA_1  = in_progress_at_report_time (real background job, explore stage)
 
-K3_PREFLIGHT = fail_seed_construction
-  dimension_layout_check: pass (both families, by direct code read + live construction)
-  d20_w5000_smoke: fail (KNITRO "could not evaluate at initial point"; root-caused to preflight's
-                          own naive nu0 construction under :origin_specific_moments_zero_covariance,
-                          NOT a K=3-specific or W-specific production defect -- confirmed via K=1/2/3
-                          and W=5k/80k sweeps, both failing identically)
+K3_PREFLIGHT =
+  origin_zc:  pass (dimension/layout by direct code read; matched-W W=100k real-K1-seed-extended
+                    smoke: feasible+verified on eval 1, genuine outer progress confirmed on a
+                    follow-up 2-eval run, kappa 0.0329->0.0469)
+  cm_meanzc:  pass_with_caveat (dimension/layout pass; smoke solve quality genuinely excellent --
+                    primal_dual_gap/mean_m_resid/max_abs_moment_kkt_resid all pass tolerance by
+                    8-9 orders of magnitude, inner_status=0 -- but the point is rejected by
+                    is_verified_success's m_min>0.0 strict-boundary check, m_min=0.0 exactly;
+                    UNRESOLVED whether this is a harmless gate quirk or something that needs fixing
+                    before trusting Wave 1 cm_meanzc results)
   d4_derivative_tests: not_run (disclosed gap, out of session budget)
 
 K3_WAVE1 =
-    origin_ZC_upper:not_started (blocked on K3_PREFLIGHT)
-    origin_ZC_lower:not_started (blocked on K3_PREFLIGHT)
-    CM_plus_ZC_upper:not_started (blocked on K3_PREFLIGHT)
-    CM_plus_ZC_lower:not_started (blocked on K3_PREFLIGHT)
+    origin_ZC_upper:not_started (preflight passed; not launched this session, time budget)
+    origin_ZC_lower:not_started (preflight passed; not launched this session, time budget)
+    CM_plus_ZC_upper:not_started (blocked on resolving the m_min=0 verify-gate question)
+    CM_plus_ZC_lower:not_started (blocked on resolving the m_min=0 verify-gate question)
 
 K3_WAVE2 = not_started (blocked on Wave 1)
 
@@ -244,8 +310,18 @@ CAMPAIGN_LAUNCHED_OUTSIDE_SCOPE = false
    `campaign_output/common_frechet/upper/delta_1.0/report.jls` for Sections 5/6's actual finished
    results (both were genuinely running, not stalled, as of this report) and append the real numbers
    here — do not re-derive or guess them.
-2. Read `d20_originzc_shakedown.jl` for its own known-good `:origin_specific_moments_zero_covariance`
-   K=1 cold-start construction, generalize it to K=3, and re-run `k3_preflight_smoke.jl`. Only launch
-   Wave 1 after that passes.
-3. Extend (or explicitly scope out) a K=3 D4 derivative test before trusting any K=3 Hessian/gradient
+2. Launch `origin_zc` K=3 Wave 1 using the validated seed construction: real K=1 economic block from
+   the immutable registry (`final_w[1:380]`) + a fresh `OriginByPowerLayout(D,3,3)` eta tail built at
+   the **same W** as the economic block (W=100,000 for the real campaign, not a smaller smoke-test
+   W) — see `k3_preflight_smoke_v2.jl` / the `/tmp/w_match_test_k3.jl` diagnostic (not committed;
+   recreate from Section 7's Attempt 3 description if needed) for the exact working pattern.
+3. Before launching `cm_meanzc` K=3 Wave 1: decide what to do about the `m_min=0` verify-gate
+   boundary case (Section 7). Options: (a) loosen `VerifiedSuccessTolerances.m_min_floor` (e.g. a
+   small negative epsilon) in `oracle.jl`, if a real economic justification for m=0 being an
+   acceptable corner solution is confirmed; (b) check whether real K=1 production incumbents ever
+   land on this same boundary (if never, that's itself informative about whether K=3 changes the
+   likelihood); (c) at minimum, re-run the `CDW_DIAG_VERIFY=1`-gated diagnostic (now committed in
+   `cm_checkpoint.jl`) across a few more K=3 cm_meanzc points to see how often this recurs before
+   trusting a full Wave run's "no improvement" results at face value.
+4. Extend (or explicitly scope out) a K=3 D4 derivative test before trusting any K=3 Hessian/gradient
    path at W=100k scale.

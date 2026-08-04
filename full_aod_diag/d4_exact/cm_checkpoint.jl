@@ -1154,6 +1154,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # classify_inner_result(verify) == VerifiedSolved before this point may become the
         # incumbent -- see docs/fullA_independent_audit_remediation.md AUD-04.
         verified = is_verified_success(verify)
+        if !verified && get(ENV, "CDW_DIAG_VERIFY", "0") == "1"
+            println("  [CDW_DIAG_VERIFY] class=", classify_inner_result(verify), " inner_status=", get(verify, :inner_status, missing),
+                    " Delta_dual=", get(verify, :Delta_dual, missing), " Delta_primal=", get(verify, :Delta_primal, missing),
+                    " primal_dual_gap=", get(verify, :primal_dual_gap, missing), " (tol=", DEFAULT_VERIFIED_SUCCESS_TOL.primal_dual_gap_tol, ")",
+                    " mean_m_resid=", get(verify, :mean_m_resid, missing), " (tol=", DEFAULT_VERIFIED_SUCCESS_TOL.mean_m_resid_tol, ")",
+                    " max_abs_moment_kkt_resid=", get(verify, :max_abs_moment_kkt_resid, missing), " (tol=", DEFAULT_VERIFIED_SUCCESS_TOL.max_abs_moment_kkt_resid_tol, ")",
+                    " m_min=", get(verify, :m_min, missing))
+            flush(stdout)
+        end
         is_new_best = feasible && verified &&
             is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
         if is_new_best
