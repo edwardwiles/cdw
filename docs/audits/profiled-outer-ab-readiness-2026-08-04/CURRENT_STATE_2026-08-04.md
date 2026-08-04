@@ -1,5 +1,11 @@
 # profiled-outer-ab-readiness-2026-08-04 — current-state snapshot
 
+> **Superseded 2026-08-04**: see `docs/audits/profiled-outer-ab-completion-2026-08-04/CURRENT_STATE_MATRIX.md`
+> and `MASTER.md` (branch `performance/profiled-outer-ab-completion-2026-08-04`) for the
+> up-to-date, gate-verified status. This file's own final section ("Known remaining outer-
+> performance gaps") is accurate as a historical snapshot but is not a substitute for the
+> superseding document's real gates.
+
 Written at session start, before any Section 3+ work, to give the next continuation (or the user)
 a single trustworthy pointer instead of having to re-derive state from prose scattered across the
 prior closeout docs.

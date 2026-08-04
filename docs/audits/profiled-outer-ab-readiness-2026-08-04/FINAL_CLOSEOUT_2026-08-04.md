@@ -1,5 +1,19 @@
 # profiled-outer-ab-readiness-2026-08-04 — final closeout
 
+> ## ⚠️ POST-HOC STATUS CORRECTION (added 2026-08-04 by the completion continuation)
+> The tag `profiled-outer-ab-ready-2026-08-04` this document's own session pushed is a **historical
+> partial-infrastructure milestone**, not evidence sufficient for production or serious A/B
+> conclusions. In particular: the "winner"/"inconclusive" labels this document assigns in its own
+> §9-10 (`SHORT_OUTER_AB_PRODUCTION_PARITY`) were judged from KNITRO evaluation/gradient counts and
+> wall time on a **single, unrepeated run per arm**, not verified objective progress — treat those
+> runs as construction smokes only, not A/B evidence. `DECODED_STATE_GRADIENT_AB` below covers only
+> one family (flexible_CM), one point (calibration), one direction — not the full 5-family matrix.
+> Sections 11 (coordinate tournament) and 12 (algorithmic-parity mode) were not attempted at all.
+> No family may be treated as outer-ready, and no `OPT_IN_PRODUCTION_READY` claim from this document
+> should be relied upon, until `docs/audits/profiled-outer-ab-completion-2026-08-04/MASTER.md`
+> (branch `performance/profiled-outer-ab-completion-2026-08-04`) supersedes it with real gates. This
+> tag and document are preserved unmodified below for history; do not rewrite/delete either.
+
 Supersedes `INTERIM_CLOSEOUT_2026-08-04.md` (sections 1-4 only). This document covers the full
 session: sections 1-10 completed and gated with real evidence; sections 11/12 explicitly not
 attempted (reasons below); section 13 synthesized from what is genuinely gated.
