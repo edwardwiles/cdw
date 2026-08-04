@@ -404,6 +404,75 @@ is now verified at all three scales the task requires (D4, D20/W=20,000, D20/W=1
 origin_ZC and CM+ZC** — `OUTER_GRADIENT_NATIVE` for these two families is genuinely complete, not
 D4-only.
 
+### W=100,000 warm-start + fast-rejection for unrestricted and common_frechet — the last 2 families
+
+New `test_warmstart_fastreject_unrestricted_frechet_2026-08-04.jl`: same methodology as the earlier
+flexible_CM/origin_ZC/CM_plus_ZC gates (`.x` injection on a fresh bundle for warm-start; additive
+log-A shift from calibration, classified at W=20,000, for fast-rejection), extended with additive
+`evaluate_profiled_point_warm`/`reduced_frechet_base_state_warm` wrappers. Real result:
+
+```
+--- W=100,000 warm-start ---
+unrestricted:    cold status=0 Delta=0.0004735224 (5.28s); warm status=0 Delta=0.0004735224 (1.85s) -- EXACT match, PASS
+common_frechet:  cold status=0 Delta=0.0004936018 (34.79s); warm status=0 Delta=0.0004936018 (warm solve completed) -- EXACT match, PASS
+STAGE 1 (warm-start) ALL PASS
+
+--- W=20,000 fast-rejection classification ---
+unrestricted   shift=3.0   status=-300  wall=0.43s   FAST-INFEASIBLE
+unrestricted   shift=6.0   status=-300  wall=0.31s   FAST-INFEASIBLE
+unrestricted   shift=10.0  status=-300  wall=0.44s   FAST-INFEASIBLE
+common_frechet shift=3.0   status=-300  wall=2.24s   INFEASIBLE
+common_frechet shift=6.0   status=-300  wall=1.03s   FAST-INFEASIBLE
+common_frechet shift=10.0  status=-300  wall=1.17s   FAST-INFEASIBLE
+```
+
+(log: `repo_scratch/.../logs/warmstart_fastreject_unrestricted_frechet_2026-08-04.log`). `shift=6.0`
+(the fastest for both families) promoted to real W=100,000 via
+`test_fastreject_stage2_unrestricted_frechet_w100k_2026-08-04.jl`:
+
+```
+W100K_FAST_REJECT_PROMOTION = <see final verdict block>
+```
+
+**With this, W=100,000 warm-start and fast-rejection evidence now exists for ALL FIVE REDUCED
+families this session** (flexible_CM/origin_ZC/CM_plus_ZC from earlier in this continuation;
+unrestricted/common_frechet just now) — task §4.1/§4.2 are complete for every family.
+
+### FULL CLI adapter for unrestricted — IMPLEMENTED (task §7, non-ZC portion)
+
+`bin/run_profiled_model.jl`'s `_run_full_unrestricted` (new function): wires FULL/:unrestricted
+through `run_polish_checkpointed_unified`, the real production driver. The file's own header had
+called the required `OuterCoordinateLayout` "not derivable from ScientificManifest alone" — traced,
+not guessed, this session: `make_layout(trade_elasticity_mode=:fixed, A_coordinate_mode=
+:powered_aspace, gp_coordinate_mode=:raw)` is the EXACT, byte-identical call in FOUR independent
+files (`campaign_unrestricted_runner.jl`, `campaign_inputs/sigma3_W500k_2026-07-30/drivers/
+campaign_unrestricted_runner_sigma3.jl`, `smoke_default_flip_2026-08-01.jl`,
+`test_d20_extended_release_gate_2026-07-30.jl`), independently corroborated as FULL's real
+production coordinate mode by `[[full-vs-reduced-forensic-audit-2026-08-03]]` (point 5). The
+calibration `w_start` encoding (`reduce_to_w_unified` via `precompute_aspace_XY`/
+`build_pivot_elimination_cheap`) mirrors `unrestricted_stage_runner.jl`'s own `MODE="calibration"`
+branch exactly, not invented.
+
+**origin_zc's FULL CLI path stays deliberately blocked**, with a precise, evidenced reason (not
+just "not attempted"): the only concrete production-adjacent value found for its required
+`distribution_restriction` (`campaign_cm_family_runner_sigma3.jl:178`,
+`:origin_specific_moments_zero_covariance`) uses `K_mean=K_pair=2` (that file's own `ORIGINZC_K`
+constant, with its own separate `K_MEAN_K_PAIR_AUDIT.md`) — **conflicts** with
+`ScientificManifest.jl`'s own canonical `K_mean=1/K_pair=1`
+(`configs/fullA_production_2026-08-03.toml`), the single source of truth this CLI runner is
+otherwise built entirely around. `distribution_restriction` itself has zero representation in
+`ScientificManifest` at all. Wiring this without resolving that real conflict would risk silently
+running a different economic problem than every other family this runner dispatches — the
+`_run_full` error message now states this precisely (file/line/constant names), rather than the
+prior session's more generic "no recorded canonical value."
+
+```
+FULL_CLI_ADAPTER =
+    unrestricted: implemented, D20/W=20,000 smoke = <see final verdict block>
+    origin_zc: deliberately blocked (K_mean/K_pair conflict, documented precisely in the runner's
+        own error message -- not attempted-without-reason)
+```
+
 ## Final verdict block (this continuation)
 
 Per the task brief's own §1 fallback ("if a mandatory gate fails, leave exactly one clean pushed

@@ -283,14 +283,123 @@ end
 # FULL dispatch -- flexible_cm/common_frechet/cm_meanzc via run_cm_upper_checkpointed. Kept
 # deliberately narrow (see file header) -- unrestricted/origin_zc raise a named error.
 # ----------------------------------------------------------------------------
+"""
+    _run_full_unrestricted(sci, cli, delta, find_smallest, maxtime_real, resume_from, outdir_base)
+
+FULL/:unrestricted, via `run_polish_checkpointed_unified` (`c10_d20_production_driver_unified.jl`).
+Task §7 continuation (2026-08-04): the `OuterCoordinateLayout` the file header previously called
+"not derivable from ScientificManifest alone" is traced here, NOT guessed --
+`make_layout(trade_elasticity_mode=:fixed, A_coordinate_mode=:powered_aspace, gp_coordinate_mode=:raw)`
+is corroborated by MULTIPLE independent real production/campaign drivers using this EXACT same
+call, byte-for-byte (`campaign_unrestricted_runner.jl`, `campaign_inputs/sigma3_W500k_2026-07-30/
+drivers/campaign_unrestricted_runner_sigma3.jl`, `smoke_default_flip_2026-08-01.jl`,
+`test_d20_extended_release_gate_2026-07-30.jl`), and independently confirmed as FULL's real
+production coordinate mode by `[[full-vs-reduced-forensic-audit-2026-08-03]]` (point 5: "REDUCED's
+A-coordinate system is a third, distinct formula -- not FULL's `:powered_aspace`"). The calibration
+`w_start` encoding (`reduce_to_w_unified`, `outer_coordinate_layout.jl`) mirrors
+`unrestricted_stage_runner.jl`'s own `MODE="calibration"` branch exactly -- not invented.
+"""
+function _run_full_unrestricted(sci, cli, delta::Float64, find_smallest::Bool,
+        maxtime_real::Float64, resume_from, outdir_base::String)
+    for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "oracle.jl",
+              "common_marginals_moments.jl", "common_marginals_interval.jl",
+              "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
+              "compressed_moments.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
+              "compressed_factual_buffer_reuse.jl", "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "threaded_cross_hessian.jl",
+              "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
+              "no_dense_g_counters.jl", "economic_operator.jl",
+              "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "hcz_drawchunk_candidate_2026-07-29.jl",
+              "cm_hessian_architectures.jl", "cm_hessian_threaded.jl", "cm_production_bundle.jl",
+              "cm_outer_driver.jl", "cm_screen_bridge.jl", "gradient_workspace.jl", "lfix_factorized.jl",
+              "lfix_factorized_workspace.jl", "lfix_cm_cplus.jl", "nested_quantile_grids.jl", "cm_config.jl",
+              "zc_restriction_operator.jl", "zc_gram_blas_candidates.jl",
+              "cm_meanzc_moments.jl", "cm_meanzc_config.jl", "cm_meanzc_production.jl", "cm_meanzc_cplus.jl",
+              "cm_originzc_target_layout.jl", "cm_originzc_moments.jl", "cm_originzc_production.jl",
+              "cm_frechet_level.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
+              "cm_frechet_lookup_kernels.jl", "cm_frechet_lookup_production.jl", "cm_checkpoint.jl",
+              "operator_hessian_weights.jl", "operator_psi_bundle.jl", "cm_lookup_live_knitro.jl", "cm_lookup_production.jl",
+              "country_resolve.jl", "cm_exact_cache_production.jl", "blas_thread_policy.jl", "knitro_outer_algorithm.jl",
+              "production_backend_manifest.jl", "incumbent_logic.jl",
+              "outer_coordinate_layout.jl", "flexible_theta_aspace_production.jl",
+              "c10_d20_production_driver_unified.jl"]
+        Base.include(Main, joinpath(D4X, f))
+    end
+
+    layout = Base.invokelatest(Main.make_layout,
+        trade_elasticity_mode = :fixed, A_coordinate_mode = :powered_aspace, gp_coordinate_mode = :raw)
+
+    manifest_dir = joinpath(outdir_base, "full_unrestricted_W$(sci.W)_delta$(delta)")
+    mkpath(manifest_dir)
+    rm_ = RunManifestMod.RunManifest(sci = sci, family = :unrestricted, economic_parameterization = :full_gamma_normalized,
+        A_coordinate_mode = :powered_aspace, nu_policy = :fixed, nu_bounds = nothing,
+        draw_checksum_uniform = "", draw_checksum_transformed = "",
+        outer_algorithm = :knitro_auto, outer_max_wall_seconds = maxtime_real, outer_max_gradients = 1_000_000,
+        cache_policy = :exact_cache, dual_bank_policy = :none, warm_start_policy = resume_from === nothing ? :cold : :resumed,
+        verification_policy = :cm_production_value_verified,
+        initial_state_digest = "not_computed_full_cli_smoke", source_sha = RunManifestMod.current_source_sha(repo_dir = REPO_ROOT),
+        source_dirty = RunManifestMod.source_is_dirty(repo_dir = REPO_ROOT))
+    RunManifestMod.write_run_manifest_json(joinpath(manifest_dir, "run_manifest.json"), rm_)
+    println("[run_profiled_model] wrote $(joinpath(manifest_dir, "run_manifest.json"))"); flush(stdout)
+
+    w_start::Vector{Float64}
+    if resume_from === nothing
+        ctx0 = Base.invokelatest(Main.d20_real_setup_design, W = sci.W, δ = delta, find_smallest = find_smallest,
+            draw_design = sci.draw_design, draw_seed = sci.draw_seed, destination_sample = sci.destination_sample,
+            exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
+            σHat = sci.sigma)
+        theta_star = 1.0 / ctx0.μHat
+        D = ctx0.D; Ddest = ctx0.D_dest
+        xy = Base.invokelatest(Main.precompute_aspace_XY, ctx0)
+        pgc = Base.invokelatest(Main.build_pivot_elimination_cheap, ctx0;
+            mu_probe1 = 1.0 / theta_star * 0.999, mu_probe2 = 1.0 / theta_star * 1.001)
+        x_free_calib = ctx0.θ0_up[ctx0.free_idx]
+        gp0 = x_free_calib[1]
+        logA_full0 = log.(reshape(x_free_calib[2:end], D, Ddest))
+        w_start = Base.invokelatest(Main.reduce_to_w_unified, theta_star, gp0, logA_full0, pgc, xy, layout)
+    else
+        # resume: w_start is a required-positional no-op placeholder whenever resume_from is set
+        # (run_polish_checkpointed_unified's own convention -- mirrors unrestricted_stage_runner.jl's
+        # own "resume" branch, MODE=="resume": w_start = zeros(...)). Length must still match the
+        # layout's own outer_dim -- computed the same way, without needing a fresh ctx0/ONLY for sizing.
+        ctx0 = Base.invokelatest(Main.d20_real_setup_design, W = sci.W, δ = delta, find_smallest = find_smallest,
+            draw_design = sci.draw_design, draw_seed = sci.draw_seed, destination_sample = sci.destination_sample,
+            exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
+            σHat = sci.sigma)
+        D = ctx0.D; Ddest = ctx0.D_dest
+        w_start = zeros(Base.invokelatest(Main.outer_dim, layout, D, Ddest))
+    end
+
+    result = Base.invokelatest(Main.run_polish_checkpointed_unified, "cli_unrestricted", find_smallest, w_start;
+        layout = layout, maxtime_real = maxtime_real, W_in = sci.W, delta_in = delta,
+        draw_seed_in = sci.draw_seed, draw_design_in = sci.draw_design,
+        ckpt_dir = manifest_dir, checkpoint_interval_s = 60.0, resume_from = resume_from,
+        exclude_diagonal_gravity = sci.exclude_diagonal_gravity, gravity_exclude_cells = sci.gravity_exclude_cells,
+        σHat = sci.sigma, destination_sample = sci.destination_sample)
+    println("[run_profiled_model] FULL (unrestricted) run complete."); flush(stdout)
+    return result
+end
+
+# ----------------------------------------------------------------------------
+# FULL dispatch -- flexible_cm/common_frechet/cm_meanzc via run_cm_upper_checkpointed;
+# unrestricted via _run_full_unrestricted above. origin_zc still raises a named error (see below).
+# ----------------------------------------------------------------------------
 function _run_full(family::Symbol, sci, cli, delta::Float64, find_smallest::Bool,
         maxtime_real::Float64, resume_from, outdir_base::String)
+    family == :unrestricted &&
+        return _run_full_unrestricted(sci, cli, delta, find_smallest, maxtime_real, resume_from, outdir_base)
     family in (:flexible_cm, :common_frechet, :cm_meanzc) ||
         error("run_profiled_model.jl: FULL formulation for family=:$family is NOT wired in this " *
-              "canonical runner (needs a constructed OuterCoordinateLayout for :unrestricted, or an " *
-              "explicit distribution_restriction with no recorded canonical value for :origin_zc) -- " *
-              "use the family's existing dedicated production script directly instead of guessing " *
-              "a value here.")
+              "canonical runner. Traced 2026-08-04 (task §7 continuation): the ONLY concrete " *
+              "production-adjacent value found for origin_zc's required `distribution_restriction` " *
+              "(campaign_cm_family_runner_sigma3.jl:178, :origin_specific_moments_zero_covariance) " *
+              "uses K_mean=K_pair=2 (ORIGINZC_K, that file's own constant, with its own separate " *
+              "audit doc K_MEAN_K_PAIR_AUDIT.md) -- CONFLICTS with ScientificManifest.jl's own " *
+              "canonical K_mean=1/K_pair=1 (configs/fullA_production_2026-08-03.toml), the single " *
+              "source of truth this CLI runner is otherwise built around. `distribution_restriction` " *
+              "itself has NO field in ScientificManifest at all. Wiring this without resolving that " *
+              "conflict would risk silently running a different economic problem than every other " *
+              "family this CLI runner dispatches -- use the family's existing dedicated production " *
+              "script directly (with an EXPLICIT, deliberately-chosen K_mean/K_pair) instead.")
     for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "oracle.jl",
               "common_marginals_moments.jl", "common_marginals_interval.jl",
               "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
