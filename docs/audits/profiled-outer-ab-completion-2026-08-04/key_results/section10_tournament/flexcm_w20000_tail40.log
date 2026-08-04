@@ -1,0 +1,40 @@
+Knitro using the Interior-Point/Barrier Direct algorithm.
+
+  Iter      Objective      FeasError   OptError    ||Step||    CGits 
+--------  --------------  ----------  ----------  ----------  -------
+       0    9.840279e-01   0.000e+00
+       1    9.767959e-01   0.000e+00   2.304e-01   7.501e-03        0
+       2    9.749947e-01   0.000e+00   2.794e-02   4.600e-03        0
+       3    9.666599e-01   0.000e+00   1.463e-02   2.227e-02        0
+       4    9.660712e-01   7.765e-03   1.386e-02   7.919e-03        0
+       5    9.660696e-01   0.000e+00   4.495e-03   5.097e-03        0
+       6    9.660019e-01   0.000e+00   3.711e-03   1.181e-02        0
+       7    9.659099e-01   0.000e+00   3.621e-03   2.372e-02        1
+
+EXIT: Time limit reached. Current point is feasible.
+
+Final Statistics
+----------------
+Final objective value               =   9.65909929570929e-01
+Final feasibility error (abs / rel) =   0.00e+00 / 0.00e+00
+Final optimality error  (abs / rel) =   3.62e-03 / 3.62e-03
+# of iterations                     =          7 
+# of CG iterations                  =          3 
+# of function evaluations           =         20
+# of gradient evaluations           =          8
+Total program time (secs)           =     106.82912 (   164.069 CPU time)
+Time spent in evaluations (secs)    =     104.57534
+
+===============================================================================
+
+[tourn_flexible_cm_B_native] DONE: status=-401 wall=108.5s n_eval=20 n_grad=8
+  best: gp=0.965909929570929 Delta=0.9904657774615141 found_at_eval=18 t=54.519644021987915s
+  native: (n_eval = 20, n_grad = 8, wall = 108.50957798957825, best_gp = 0.965909929570929, best_Delta = 0.9904657774615141, status = -401)
+
+=== Summary ===
+native  A: n_eval=20 n_grad=8 wall=118.84809017181396 best_gp=0.965909929570929 Delta=0.9904657774615141 status=-401
+powered A: n_eval=15 n_grad=6 wall=147.4882960319519 best_gp=0.960825858080404 Delta=0.9363563685536457 status=-401
+powered B: n_eval=15 n_grad=6 wall=153.98253989219666 best_gp=0.960825858080404 Delta=0.9363563685536457 status=-401
+native  B: n_eval=20 n_grad=8 wall=108.50957798957825 best_gp=0.965909929570929 Delta=0.9904657774615141 status=-401
+
+TOURNAMENT_flexible_cm_W20000: native_grad_per_s=0.07  powered_grad_per_s=0.04  native_best_gp_avg=0.965909929570929  powered_best_gp_avg=0.960825858080404
