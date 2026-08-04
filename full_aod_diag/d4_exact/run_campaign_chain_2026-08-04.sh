@@ -34,16 +34,27 @@ echo "[$CHAIN_LABEL] chain start $(date -Iseconds) cores=${CORE_START}-${CORE_EN
 echo "[$CHAIN_LABEL] CAMPAIGN_MEANZC_K=${CAMPAIGN_MEANZC_K:-unset} CAMPAIGN_ORIGINZC_K=${CAMPAIGN_ORIGINZC_K:-unset} CAMPAIGN_W=${CAMPAIGN_W:-unset}"
 
 fail_count=0
+first_delta=1
 for delta in "${DELTAS[@]}"; do
   OUTPUT_DIR="/bbkinghome/edav/repo_scratch/fullA-continuation-polish-2026-08-03/POST_VERIFY_FIX/campaign_output/${FAMILY}/${DIRECTION}/delta_${delta}"
   mkdir -p "$OUTPUT_DIR"
   logf="$LOG_ROOT/delta_${delta}.log"
   t0=$(date +%s)
   echo "[$CHAIN_LABEL] delta=$delta START $(date -Iseconds)"
+  extra_args=()
+  # EXTRA_SEED_TOKEN (env var, e.g. "extra_seed:/path/to/seed.jls:K1_to_K3_transplant") is only
+  # meaningful on the FIRST delta of a chain -- later deltas already inherit the prior delta's own
+  # finalized result as their incumbent via the driver's own envelope logic.
+  if [ -n "${EXTRA_SEED_TOKEN:-}" ] && [ "$first_delta" -eq 1 ]; then
+    extra_args+=("$EXTRA_SEED_TOKEN")
+    echo "[$CHAIN_LABEL] delta=$delta using EXTRA_SEED_TOKEN=$EXTRA_SEED_TOKEN"
+  fi
+  first_delta=0
   OPENBLAS_NUM_THREADS=$BLAS_THREADS OMP_NUM_THREADS=$BLAS_THREADS \
     taskset -c ${CORE_START}-${CORE_END} julia -t $NTHREADS --project=. \
       full_aod_diag/d4_exact/continuation_campaign_cell_driver.jl \
       "$FAMILY" "$DIRECTION" "$delta" "$OUTPUT_DIR" "$EXPLORE_BUDGET_S" "$POLISH_BUDGET_S" \
+      "${extra_args[@]}" \
       > "$logf" 2>&1
   rc=$?
   t1=$(date +%s)
