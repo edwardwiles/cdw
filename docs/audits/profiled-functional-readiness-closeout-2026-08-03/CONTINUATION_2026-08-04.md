@@ -431,8 +431,12 @@ common_frechet shift=10.0  status=-300  wall=1.17s   FAST-INFEASIBLE
 `test_fastreject_stage2_unrestricted_frechet_w100k_2026-08-04.jl`:
 
 ```
-W100K_FAST_REJECT_PROMOTION = <see final verdict block>
+W100K_FAST_REJECT_PROMOTION (real, confirmed) =
+    unrestricted:    nStatus=-300, wall=6.16s   CONFIRMED
+    common_frechet:  nStatus=-300, wall=26.25s  CONFIRMED
 ```
+
+(log: `repo_scratch/.../logs/fastreject_stage2_unrestricted_frechet_w100k_2026-08-04.log`)
 
 **With this, W=100,000 warm-start and fast-rejection evidence now exists for ALL FIVE REDUCED
 families this session** (flexible_CM/origin_ZC/CM_plus_ZC from earlier in this continuation;
