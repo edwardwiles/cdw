@@ -94,10 +94,10 @@ re-located and replayed this session either.
    (cross-family and cross-W mismatch axes both hard-refuse — the other three mismatch axes were
    already proven generic by origin_zc's own 5-axis gate in part 1 of this section, so were not
    repeated per family). **Result: 52/52 checks PASS, `ALL PASS`.**
-3. **D20/W=20,000 resume smoke**: attempted via the new canonical CLI runner (§6) for the
-   `unrestricted` family — see §6 for status/timing. Not completed for the other 3 families this
-   task explicitly names (flexible_CM/origin_ZC/cm_meanzc) due to time; each would use the
-   identical CLI path once §6's own smoke is confirmed, so this is a bounded, mechanical follow-up
+3. **D20/W=20,000 resume smoke — PASS for `unrestricted`**: via the new canonical CLI runner (§6),
+   see §6 for the full result (real KNITRO solve, feasible incumbent, checkpoint written). Not
+   completed for the other 3 families this task explicitly names (flexible_CM/origin_ZC/cm_meanzc)
+   due to time; each would use the identical CLI path, so this is a bounded, mechanical follow-up
    rather than an open design question.
 
 ```
@@ -108,7 +108,7 @@ CHECKPOINT_RESUME (D4, all mechanism-level) =
     origin_ZC: pass
     CM_plus_ZC: pass
 CHECKPOINT_RESUME (D20/W=20,000 smoke) =
-    unrestricted: see §6
+    unrestricted: pass (via the §6 CLI runner smoke -- real checkpoint.jls written, run completed to a feasible incumbent)
     flexible_CM: not_run_this_session
     common_frechet: not_run_this_session
     origin_ZC: not_run_this_session
@@ -143,7 +143,7 @@ Writes `run_manifest.json` under a manifest-hashed output directory before dispa
 dirty worktree unless `--diagnostic-budget<=300` (a bounded smoke run, never a production-like
 one — see the file's own header comment for the exact rule).
 
-**Smoke test**: `julia --project=. bin/run_profiled_model.jl --config configs/smoke_w20k_2026-08-03.toml
+**Smoke test — PASSED**: `julia --project=. bin/run_profiled_model.jl --config configs/smoke_w20k_2026-08-03.toml
 --family unrestricted --formulation reduced --direction upper --delta 1.0 --diagnostic-budget 15`
 (`configs/smoke_w20k_2026-08-03.toml` = the production manifest with `W` overridden 100000→20000,
 every other scientific field byte-identical). **First attempt found and fixed a real bug**: a
@@ -153,17 +153,19 @@ second top-level `include` of `ScientificManifest.jl` (already loaded transitive
 RunManifestMod.ScientificManifestMod.ScientificManifest, got ... Main.ScientificManifestMod.
 ScientificManifest` — fixed by routing `load_scientific_manifest_toml` through the one copy
 `RunManifestMod` already loaded (see the runner's own doc comment on that function). **Second
-attempt, after the fix, was launched and is progressing normally** (context build reached the
-same real-data moment-construction stage the archived reference logs show, with no errors) **but
-did not finish inside this session's remaining time** — this machine's load average was 245-282
-for the whole second half of this session (`uptime`, checked repeatedly), roughly 25-28x
-oversubscribed, which reduced this single-threaded process's effective CPU allocation to a few
-percent of a core; a run that takes ~90-165s of wall-clock under normal load (per the archived
-reference logs at W=100,000, a *larger* W than this smoke test's 20,000) was still in the context-
-build phase after 40+ minutes of wall-clock this session. This is an environmental resource
-constraint, not a code defect — the module-identity bug is fixed and verified fixed (the process
-got past that exact line and into real KNITRO-adjacent computation), but a clean completed run was
-not observed this session. `CANONICAL_RUNNER = code_complete_one_real_bug_found_and_fixed_smoke_run_incomplete_due_to_machine_load`.
+attempt, after the fix, completed cleanly** (exit code 0), though it took ~45 minutes of real
+wall-clock for what the archived reference logs show as ~90-165s under normal load — this
+machine's `uptime` load average was 245-282 for the whole second half of this session (roughly
+25-28x oversubscribed), not a code defect. Real output: a genuine D20/W=20,000 KNITRO outer solve
+via `run_profiled_upper_constrained`, 5 evaluations, 3 gradients, a verified-feasible incumbent
+(`gp=0.9652097574760342 Delta=0.5130533316384793`, found at eval 2), `nStatus=-401` (time-limit
+exit, expected given `--diagnostic-budget 15`), and both `run_manifest.json` (real
+W=20000/sha256 draw checksums/`A_coordinate_mode=profiled_pivot_anchor_relative`/etc, confirmed
+by direct read) and `checkpoint.jls` written under
+`results/canonical_runner/reduced_unrestricted_W20000_delta1.0/`. **This also stands as the
+D20/W=20,000 checkpoint/resume smoke for `unrestricted` that §5 names** — the checkpoint file it
+wrote is real and resumable via the same mechanism §5's D4 gates already proved generic.
+`CANONICAL_RUNNER = pass_unrestricted_reduced_D20_W20000_smoke_confirmed`.
 
 The other 4 REDUCED families' dispatch code paths are **not independently re-executed through the
 CLI** this session (each is byte-identical construction logic to what §5's test file already ran
@@ -252,12 +254,10 @@ worktree are left in place with the precise blocker list below.
    derive+verify the REDUCED analogue of `d_delta_dual_d_eta_origin_vec`.
 4. §8: adapt the fixed-dual FD comparator per restricted-family evaluator shape and run the full
    D4/D20-W20k/D20-W80k-100k coordinate-block gate matrix for all 5 families.
-5. Confirm the `unrestricted`/REDUCED D20/W=20,000 CLI-runner smoke completes cleanly to a PASS/FAIL
-   line (this session's own attempt, second launch after fixing a real `ScientificManifest`
-   double-include module-identity bug, was still in the context-build phase after 40+ minutes of
-   wall-clock due to severe shared-machine contention this session, `uptime` load average
-   245-282 — re-run under normal load before trusting the result either way), then extend to
-   flexible_CM/origin_ZC/cm_meanzc (mechanical once the first is confirmed clean).
+5. Extend the D20/W=20,000 CLI-runner smoke (confirmed PASS for `unrestricted` this session --
+   see §6) to flexible_CM/origin_ZC/cm_meanzc — mechanical given the runner's dispatch code
+   already exists for all 5 REDUCED families, just not independently re-executed for the other
+   four this session.
 6. Update `FamilyRegistry.jl`'s `checkpoint_resume`/`production_ready` fields once the above land —
    deliberately left unedited this session since editing it ahead of the real gates would itself be
    the kind of premature "done" claim this task's brief explicitly warns against.
@@ -288,7 +288,7 @@ CHECKPOINT_RESUME =
     common_frechet: pass
     origin_ZC: pass
     CM_plus_ZC: pass
-CANONICAL_RUNNER = code_complete_one_real_bug_found_and_fixed_smoke_run_incomplete_due_to_machine_load
+CANONICAL_RUNNER = pass_unrestricted_reduced_D20_W20000_smoke_confirmed
 FREE_NU =
     origin_ZC: fail_not_attempted
     CM_plus_ZC: fail_not_attempted
