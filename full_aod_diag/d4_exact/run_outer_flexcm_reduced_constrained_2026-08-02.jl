@@ -106,7 +106,9 @@ w_profiled_calib = reduce_to_w_profiled(gp0, z_calib, pe)
 flush(stdout)
 
 aug_reduced_flexcm = build_cm_augmented_obj_archB(ctx, CS; L = L_VAL, contrasts = :anchored, base_obj = reduced_obj0, profiled_layout = layout)
-cctx_reduced_flexcm = build_cm_bin_ctx(ctx, aug_reduced_flexcm; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = false)
+# threaded_bins=true (profiled-inner-readiness-2026-08-03): see run_coldsolve_flexcm_w100k_2026-08-02.jl's
+# own comment -- gate-proven at D4 to match serial to ~1e-14 at production's 10-thread policy.
+cctx_reduced_flexcm = build_cm_bin_ctx(ctx, aug_reduced_flexcm; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = true)
 fctx_flexcm = build_flexcm_family_ctx(ctx, spec, pe, layout, cctx_reduced_flexcm)
 
 cache_flexcm = profiled_cm_production_exact_cache()

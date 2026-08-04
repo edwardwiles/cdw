@@ -73,7 +73,10 @@ end
 
 t_reduced = @elapsed begin
     aug_reduced_flexcm = build_cm_augmented_obj_archB(ctx, CS; L = L_VAL, contrasts = :anchored, base_obj = reduced_obj0, profiled_layout = layout)
-    cctx_reduced_flexcm = build_cm_bin_ctx(ctx, aug_reduced_flexcm; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = false)
+    # threaded_bins=true for flexible_CM only (profiled-inner-readiness-2026-08-03): gate-proven
+    # at D4 to match serial to ~1e-14. common_frechet's own threaded_bins remains a SEPARATE,
+    # still-open ambiguity (no analogous gate exists) -- left at false on its own line below.
+    cctx_reduced_flexcm = build_cm_bin_ctx(ctx, aug_reduced_flexcm; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = true)
     aug_reduced_frechet = build_cm_frechet_augmented_obj_archB(ctx, CS; L = L_VAL, contrasts = :anchored, base_obj = reduced_obj0, profiled_layout = layout)
     cctx_reduced_frechet = build_cm_bin_ctx(ctx, aug_reduced_frechet; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = false,
         core_hessian_backend = :dense_reference, cm_cross_hessian_backend = :winner_bin)

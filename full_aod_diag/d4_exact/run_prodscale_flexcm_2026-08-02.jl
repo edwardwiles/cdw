@@ -65,7 +65,9 @@ flush(stdout)
 
 t_build = @elapsed begin
     aug_reduced = build_cm_augmented_obj_archB(ctx, CS; L = L_VAL, contrasts = :anchored, base_obj = reduced_obj0, profiled_layout = layout)
-    cctx_reduced = build_cm_bin_ctx(ctx, aug_reduced; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = false)
+    # threaded_bins=true (profiled-inner-readiness-2026-08-03): see run_coldsolve_flexcm_w100k_2026-08-02.jl's
+    # own comment -- gate-proven at D4 to match serial to ~1e-14 at production's 10-thread policy.
+    cctx_reduced = build_cm_bin_ctx(ctx, aug_reduced; profiled_layout = layout, inner_fg_backend = :dense_reference, threaded_bins = true)
 end
 @printf("reduced object/cctx build: %.2fs  NCORE=%d  ncm=%d\n", t_build, cctx_reduced.NCORE, cctx_reduced.ncm)
 flush(stdout)
