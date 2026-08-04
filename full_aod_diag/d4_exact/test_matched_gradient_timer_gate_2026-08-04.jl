@@ -90,8 +90,13 @@ lp("  instrumented(threaded) vs production shared_family_outer_gradient max abs 
 lp("  REDUCED serial   report: ", rep_ser)
 lp("  REDUCED threaded report: ", rep_thr)
 lp("  REDUCED serial   accounting_ratio = ", rep_ser.accounting_ratio, "  PASS(>=0.98)=", accounting_check(rep_ser))
-lp("  REDUCED threaded accounting_ratio = ", rep_thr.accounting_ratio, "  PASS(>=0.98)=", accounting_check(rep_thr))
-lp("  REDUCED threaded threads_used = ", rep_thr.threads_used, " (>1 required)")
+# task §7 fix (2026-08-04): the threaded report's own accounting_ratio (sum-of-coordinate-times /
+# wall) is legitimately >1 under real concurrency -- printed for visibility, NOT gated on
+# accounting_check any more (that would prove nothing about wall-time closure). The genuine
+# wall-time gate for a threaded report is wall_accounting_ratio (critical-path-based).
+lp("  REDUCED threaded accounting_ratio (aggregate-worker/wall, NOT a wall-time gate, informational) = ", rep_thr.accounting_ratio)
+lp("  REDUCED threaded wall_accounting_ratio = ", rep_thr.wall_accounting_ratio, "  PASS(0.90-1.15)=", wall_accounting_check(rep_thr))
+lp("  REDUCED threaded critical_path_coord_s = ", rep_thr.critical_path_coord_s, "  threads_used = ", rep_thr.threads_used, " (>1 required)")
 
 # ---- FULL side (unrestricted) ----
 lp("")
@@ -113,11 +118,12 @@ lp("  instrumented(threaded) vs production composite_gradient_at_fast max abs di
 lp("  FULL serial   report: ", repF_ser)
 lp("  FULL threaded report: ", repF_thr)
 lp("  FULL serial   accounting_ratio = ", repF_ser.accounting_ratio, "  PASS(>=0.98)=", accounting_check(repF_ser))
-lp("  FULL threaded accounting_ratio = ", repF_thr.accounting_ratio, "  PASS(>=0.98)=", accounting_check(repF_thr))
-lp("  FULL threaded threads_used = ", repF_thr.threads_used, " (>1 required)")
+lp("  FULL threaded accounting_ratio (aggregate-worker/wall, NOT a wall-time gate, informational) = ", repF_thr.accounting_ratio)
+lp("  FULL threaded wall_accounting_ratio = ", repF_thr.wall_accounting_ratio, "  PASS(0.90-1.15)=", wall_accounting_check(repF_thr))
+lp("  FULL threaded critical_path_coord_s = ", repF_thr.critical_path_coord_s, "  threads_used = ", repF_thr.threads_used, " (>1 required)")
 
 lp("")
-gate = (err_ser_vs_ref == 0.0) && (err_thr_vs_ref == 0.0) && accounting_check(rep_ser) && accounting_check(rep_thr) &&
-       (errF_ser_vs_ref == 0.0) && (errF_thr_vs_ref == 0.0) && accounting_check(repF_ser) && accounting_check(repF_thr) &&
+gate = (err_ser_vs_ref == 0.0) && (err_thr_vs_ref == 0.0) && accounting_check(rep_ser) && wall_accounting_check(rep_thr) &&
+       (errF_ser_vs_ref == 0.0) && (errF_thr_vs_ref == 0.0) && accounting_check(repF_ser) && wall_accounting_check(repF_thr) &&
        (rep_thr.threads_used > 1) && (repF_thr.threads_used > 1)
 lp("MATCHED_TIMER_GATE_W", W_VAL, ": ", gate ? "PASS" : "FAIL")

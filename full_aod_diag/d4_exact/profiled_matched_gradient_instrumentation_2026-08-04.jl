@@ -75,9 +75,24 @@ isdefined(Main, :PROF_ENABLED) ||
 """
     GradientTimingReport
 
-One row per instrumented gradient call. All times in seconds. `sub_time_total` is the sum of the
-five labeled sub-times; `accounting_ratio = sub_time_total / wrapper_total_s` is the task §5
-required `>=0.98` check.
+Task §7 (profiled-outer-ab-completion-2026-08-04) CORRECTED SCHEMA: the prior single
+`accounting_ratio` conflated two genuinely different quantities under `threaded=true` --
+`sub_time_total_s` (== `bandwidth_select_s+fd_eval_s`, the SUM of every coordinate's own wall time,
+an aggregate-CPU-like quantity that is DEFINITIONALLY > wrapper_total_s under real concurrency,
+often by roughly the thread count) was being divided by `wrapper_total_s` (the call's own actual
+wall time) as if the two should be close to 1 -- they should not, and a ratio like 4+ under
+threading is EXPECTED, not a bug (do not divide aggregate multi-thread time by gradient count and
+read it as wall seconds; see task's own explicit warning). Kept `sub_time_total_s`/`accounting_ratio`
+UNCHANGED below (still exactly the old sum-based quantity, still the correct SERIAL closure metric --
+serial has exactly one thread doing the summed work, so sum==wall there) but added
+`critical_path_coord_s`/`wall_accounting_ratio`, a genuine wall-time decomposition valid under
+EITHER threading regime: `critical_path_coord_s` = max over threads actually used of that thread's
+OWN summed (bandwidth+FD) time across the coordinates it was assigned -- the real wall-clock floor
+a fork-join parallel loop cannot beat, since the slowest thread determines when the loop returns.
+`wall_accounting_ratio = (cache_build_s+gp_component_s+critical_path_coord_s+verification_s) /
+wrapper_total_s` is close to 1 under BOTH serial (trivially, since critical_path==sub_time_total
+when only one thread ran) and threaded (genuinely, since it now accounts for the parallel
+work-sharing instead of assuming none happened).
 """
 struct GradientTimingReport
     formulation::Symbol            # :profiled_destination_scales | :full_gamma_normalized
@@ -88,8 +103,18 @@ struct GradientTimingReport
     fd_eval_s::Float64
     verification_s::Float64
     wrapper_total_s::Float64
-    sub_time_total_s::Float64
-    accounting_ratio::Float64
+    sub_time_total_s::Float64      # aggregate worker time (sum across ALL coordinates) -- a
+                                    # CPU-cost-like quantity, NOT expected to equal wall time under
+                                    # threading. See accounting_ratio's own doc.
+    accounting_ratio::Float64      # sub_time_total_s / wrapper_total_s -- valid SERIAL closure
+                                    # metric (>=0.98 expected); under threading this is legitimately
+                                    # > 1 (often ~= thread count) and is NOT a wall-time gate --
+                                    # use wall_accounting_ratio for that.
+    critical_path_coord_s::Float64 # max over threads used of that thread's own summed coordinate
+                                    # (bandwidth+FD) time -- the genuine wall-clock floor.
+    wall_accounting_ratio::Float64 # (cache_build_s+gp_component_s+critical_path_coord_s+verification_s)
+                                    # / wrapper_total_s -- the real wall-time closure metric, valid
+                                    # under BOTH serial and threaded.
     n_coordinates::Int
     n_bandwidth_trials::Int
     threads_used::Int
@@ -100,13 +125,35 @@ end
 
 function _gradient_timing_report(; formulation::Symbol, family::Symbol, cache_build_s::Float64,
         gp_component_s::Float64, bandwidth_select_s::Float64, fd_eval_s::Float64, verification_s::Float64,
-        wrapper_total_s::Float64, n_coordinates::Int, n_bandwidth_trials::Int, threads_used::Int,
-        threaded::Bool, alloc_bytes::Int, gc_s::Float64)
+        wrapper_total_s::Float64, critical_path_coord_s::Float64, n_coordinates::Int, n_bandwidth_trials::Int,
+        threads_used::Int, threaded::Bool, alloc_bytes::Int, gc_s::Float64)
     sub_total = cache_build_s + gp_component_s + bandwidth_select_s + fd_eval_s + verification_s
     ratio = wrapper_total_s > 0 ? sub_total / wrapper_total_s : NaN
+    wall_total = cache_build_s + gp_component_s + critical_path_coord_s + verification_s
+    wall_ratio = wrapper_total_s > 0 ? wall_total / wrapper_total_s : NaN
     return GradientTimingReport(formulation, family, cache_build_s, gp_component_s, bandwidth_select_s,
-        fd_eval_s, verification_s, wrapper_total_s, sub_total, ratio, n_coordinates, n_bandwidth_trials,
-        threads_used, threaded, alloc_bytes, gc_s)
+        fd_eval_s, verification_s, wrapper_total_s, sub_total, ratio, critical_path_coord_s, wall_ratio,
+        n_coordinates, n_bandwidth_trials, threads_used, threaded, alloc_bytes, gc_s)
+end
+
+"""
+    critical_path_from_threads(thread_ids, durations_ns, coord_range) -> Float64 (seconds)
+
+Task §7: max over threads actually used of that thread's own summed duration across the
+coordinates assigned to it (`thread_ids[k]==0` for any index outside `coord_range` is skipped).
+Under serial execution every coordinate has the SAME thread id, so this reduces to `sum(durations)`
+exactly (critical_path_coord_s == sub_time_total_s's own coordinate portion) -- no special-casing
+needed for the serial/threaded distinction.
+"""
+function critical_path_from_threads(thread_ids::Vector{Int}, durations_ns::Vector{UInt64}, coord_range)
+    per_thread = Dict{Int,UInt64}()
+    for k in coord_range
+        tid = thread_ids[k]
+        tid == 0 && continue
+        per_thread[tid] = get(per_thread, tid, UInt64(0)) + durations_ns[k]
+    end
+    isempty(per_thread) && return 0.0
+    return maximum(values(per_thread)) / 1e9
 end
 
 """
@@ -179,11 +226,14 @@ function instrumented_shared_family_outer_gradient(w_profiled::AbstractVector{Fl
     fd_eval_s = sum(fd_time_ns) / 1e9
     wrapper_total_s = (time_ns() - t_wrapper0) / 1e9
     gcdiff = Base.GC_Diff(Base.gc_num(), gcstats0)
+    coord_time_ns = bw_time_ns .+ fd_time_ns
+    critical_path_coord_s = critical_path_from_threads(thread_ids, coord_time_ns, 2:n_total)
 
     report = _gradient_timing_report(formulation = :profiled_destination_scales, family = fam,
         cache_build_s = cache_build_s, gp_component_s = gp_component_s,
         bandwidth_select_s = bandwidth_select_s, fd_eval_s = fd_eval_s, verification_s = 0.0,
-        wrapper_total_s = wrapper_total_s, n_coordinates = n_coord, n_bandwidth_trials = sum(bw_trials),
+        wrapper_total_s = wrapper_total_s, critical_path_coord_s = critical_path_coord_s,
+        n_coordinates = n_coord, n_bandwidth_trials = sum(bw_trials),
         threads_used = length(unique(filter(!=(0), thread_ids))), threaded = threaded,
         alloc_bytes = gcdiff.allocd, gc_s = gcdiff.total_time / 1e9)
 
@@ -264,11 +314,14 @@ function instrumented_composite_gradient_at_fast(x_free0::AbstractVector, ctx, p
     fd_eval_s = sum(fd_time_ns) / 1e9
     wrapper_total_s = (time_ns() - t_wrapper0) / 1e9
     gcdiff = Base.GC_Diff(Base.gc_num(), gcstats0)
+    coord_time_ns = bw_time_ns .+ fd_time_ns
+    critical_path_coord_s = critical_path_from_threads(thread_ids, coord_time_ns, 2:D2)
 
     report = _gradient_timing_report(formulation = :full_gamma_normalized, family = :unrestricted,
         cache_build_s = cache_build_s, gp_component_s = gp_component_s,
         bandwidth_select_s = bandwidth_select_s, fd_eval_s = fd_eval_s, verification_s = 0.0,
-        wrapper_total_s = wrapper_total_s, n_coordinates = D2 - 1, n_bandwidth_trials = sum(bw_trials),
+        wrapper_total_s = wrapper_total_s, critical_path_coord_s = critical_path_coord_s,
+        n_coordinates = D2 - 1, n_bandwidth_trials = sum(bw_trials),
         threads_used = length(unique(filter(!=(0), thread_ids))), threaded = threaded,
         alloc_bytes = gcdiff.allocd, gc_s = gcdiff.total_time / 1e9)
 
@@ -279,6 +332,30 @@ end
 """
     accounting_check(report::GradientTimingReport; threshold=0.98) -> Bool
 
-Task §5's own required check: `sub_time_total_s / wrapper_total_s >= threshold`.
+SERIAL closure metric: `sub_time_total_s / wrapper_total_s >= threshold`. Valid for `threaded=false`
+reports (sub_time_total_s == the single thread's own summed work there, so this genuinely bounds
+wall-time coverage). Task §7 (2026-08-04): do NOT apply this to a `threaded=true` report and treat
+a large ratio (e.g. >4, real ten-thread evidence) as informative either way -- under real
+concurrency `sub_time_total_s` is an aggregate-across-threads quantity, definitionally >=
+wrapper_total_s, and >=threshold passing there proves nothing about wall-time closure. Use
+`wall_accounting_check` for threaded reports.
 """
 accounting_check(report::GradientTimingReport; threshold::Float64 = 0.98) = report.accounting_ratio >= threshold
+
+"""
+    wall_accounting_check(report::GradientTimingReport; lo=0.90, hi=1.15) -> Bool
+
+Task §7's own genuine wall-time closure metric, valid under EITHER `threaded` value:
+`wall_accounting_ratio = (cache_build_s+gp_component_s+critical_path_coord_s+verification_s) /
+wrapper_total_s` must fall in `[lo, hi]`. Serial gate uses the tighter, task-specified `[0.98, Inf)`
+via `accounting_check` instead (identical quantity there, since critical_path_coord_s ==
+sub_time_total_s's own coordinate portion when only one thread ran) -- this function's wider
+default band exists for the THREADED case, where real scheduling overhead/GC pauses/thread
+launch latency mean the critical-path estimate is a lower bound on wall time, not an exact one; a
+ratio materially below 1 (large unaccounted gap) or implausibly above 1 (critical path estimate
+exceeding measured wall time, which should be structurally impossible for a max-based estimate
+unless something else is being double-counted) are both real signal, not noise.
+"""
+function wall_accounting_check(report::GradientTimingReport; lo::Float64 = 0.90, hi::Float64 = 1.15)
+    return lo <= report.wall_accounting_ratio <= hi
+end
