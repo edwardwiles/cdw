@@ -139,6 +139,9 @@ struct ProfiledProductionConfig
     checkpoint_schema_version::String
     full_a_recovery_convention::Symbol
     checkpoint_namespace::String
+    a_coordinate_mode::Symbol   # task §6.1, 2026-08-04: folded into checkpoint_namespace below so a
+                                # checkpoint written under one A-coordinate mode is refused, not
+                                # silently misinterpreted, on resume under a different mode.
 end
 
 """
@@ -167,19 +170,25 @@ function build_profiled_production_config(fctx;
         economic_parameterization::Symbol = :profiled_destination_scales,
         inner_dual_layout_digest = :unknown_pending_inner,
         dual_bank_policy::Symbol = :not_yet_wired,
-        restriction_outer_param_names::Vector{Symbol} = Symbol[])
+        restriction_outer_param_names::Vector{Symbol} = Symbol[],
+        a_coordinate_mode::Symbol = :profiled_pivot_anchor_relative)
     economic_parameterization in VALID_ECONOMIC_PARAMETERIZATIONS ||
         error("build_profiled_production_config: economic_parameterization=:$economic_parameterization not in $VALID_ECONOMIC_PARAMETERIZATIONS")
+    isdefined(Main, :validate_profiled_a_coordinate_mode) && validate_profiled_a_coordinate_mode(a_coordinate_mode)
 
     digest = stable_layout_digest(fctx; restriction_outer_param_names = restriction_outer_param_names)
     names = _combined_names_fallback(profiled_outer_coordinate_layout(fctx))
     idld = inner_dual_layout_digest isa AbstractString ? inner_dual_layout_digest : string(inner_dual_layout_digest)
     hess = (H_ZZ = :blas_syrk, H_CZ = :draw_chunk_reordered, H_EZ = :drawmajor_v2, source = "zc-hessian-backend-closeout-2026-08-01, committed@1807ef5, not merged/tagged")
 
-    namespace = "$(economic_parameterization)__$(family_kind(fctx))__$(digest[1:16])"
+    # task §6.1 fix (2026-08-04): a_coordinate_mode folded into the namespace, exactly like
+    # economic_parameterization/family_kind/digest already are -- a checkpoint written under one
+    # A-coordinate mode now gets a genuinely different namespace string, so assert_checkpoint_
+    # compatible refuses a mismatched-mode resume automatically, no bespoke new check needed.
+    namespace = "$(economic_parameterization)__$(family_kind(fctx))__$(digest[1:16])__$(a_coordinate_mode)"
 
     return ProfiledProductionConfig(economic_parameterization, digest, names, idld, hess,
-        dual_bank_policy, "1.1.0", :profiled_pivot_recovery, namespace)
+        dual_bank_policy, "1.2.0", :profiled_pivot_recovery, namespace, a_coordinate_mode)
 end
 
 """

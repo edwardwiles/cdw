@@ -83,6 +83,18 @@ function parse_cli(args::Vector{String})
         error("run_profiled_model.jl: --direction must be \"upper\" or \"lower\", got \"$(d["direction"])\"")
     d["threaded-gradient"] in ("true", "false") ||
         error("run_profiled_model.jl: --threaded-gradient must be \"true\" or \"false\", got \"$(d["threaded-gradient"])\"")
+    # task §6.1 (profiled-outer-ab-completion-2026-08-04): explicit required A-coordinate-mode
+    # selection for the REDUCED path, same no-silent-default discipline as --threaded-gradient
+    # above. Only meaningful for --formulation reduced (FULL's own A_coordinate_mode is chosen by
+    # its existing family-specific dispatch, unrelated to this REDUCED-only mode) -- required only
+    # in that case, not forced on FULL callers.
+    if d["formulation"] == "reduced"
+        haskey(d, "a-coordinate-mode") || error("run_profiled_model.jl: --formulation reduced requires --a-coordinate-mode " *
+            "(one of \"profiled_pivot_anchor_relative\"|\"profiled_powered_relative_A\") -- no silent default.")
+        d["a-coordinate-mode"] in ("profiled_pivot_anchor_relative", "profiled_powered_relative_A") ||
+            error("run_profiled_model.jl: --a-coordinate-mode must be \"profiled_pivot_anchor_relative\" or " *
+                  "\"profiled_powered_relative_A\", got \"$(d["a-coordinate-mode"])\"")
+    end
     return d
 end
 
@@ -205,7 +217,9 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
               "profiled_ab_comparability_and_plumbing_2026-08-01.jl",
               "profiled_production_outer_constrained_2026-08-02.jl",
               "profiled_zc_free_eta_2026-08-04.jl",
-              "profiled_zc_free_nu_production_driver_2026-08-04.jl"]
+              "profiled_zc_free_nu_production_driver_2026-08-04.jl",
+              "cm_aspace_coordinate.jl", "profiled_powered_relative_a_2026-08-04.jl",
+              "profiled_coordinate_mode_dispatch_2026-08-04.jl"]
         Base.include(Main, joinpath(D4X, f))
     end
 
@@ -275,11 +289,19 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
         (f, (w, ff) -> Base.invokelatest(Main.evaluate_profiled_frechet_point, w, ff))
     end
 
+    # task §6.1 (2026-08-04): --a-coordinate-mode is REQUIRED for --formulation reduced
+    # (parse_cli already enforced this and validated the value). Powered mode is fixed-theta only
+    # (POWERED_PROFILED_COORDINATE_DERIVATION_2026-08-04.md §3d) and does not apply to
+    # :unrestricted (theta jointly searched there) -- run_profiled_upper_constrained's own
+    # validate_mode_family_compatibility raises a clear, immediate error on that combination
+    # rather than silently falling back to native.
+    a_coordinate_mode = Symbol(cli["a-coordinate-mode"])
+
     manifest_dir = joinpath(outdir_base, "reduced_$(family)_W$(sci.W)_delta$(delta)")
     mkpath(manifest_dir)
     initial_digest = RunManifestMod.digest_economic_state([gp0], z_calib, [1.0])
     rm_ = RunManifestMod.RunManifest(sci = sci, family = family, economic_parameterization = :profiled_destination_scales,
-        A_coordinate_mode = :profiled_pivot_anchor_relative, nu_policy = :fixed, nu_bounds = nothing,
+        A_coordinate_mode = a_coordinate_mode, nu_policy = :fixed, nu_bounds = nothing,
         draw_checksum_uniform = hasproperty(ctx, :draw_meta) && ctx.draw_meta !== nothing ? ctx.draw_meta.checksum_uniform : "",
         draw_checksum_transformed = hasproperty(ctx, :draw_meta) && ctx.draw_meta !== nothing ? ctx.draw_meta.checksum_transformed : "",
         outer_algorithm = :knitro_direct_sr1, outer_max_wall_seconds = maxtime_real, outer_max_gradients = 1_000_000,
@@ -293,6 +315,7 @@ function _run_reduced(family::Symbol, sci, cli, delta::Float64, find_smallest::B
     ckpt_path = joinpath(manifest_dir, "checkpoint.jls")
     result = Base.invokelatest(Main.run_profiled_upper_constrained, "cli_$(family)", w0; fctx, evaluate_fn,
         ctx = ctx, pe = pe, delta = delta, maxtime_real = maxtime_real, hessopt_tag = "sr1",
+        a_coordinate_mode = a_coordinate_mode,
         checkpoint_path = ckpt_path, checkpoint_interval_s = 60.0, resume_from = resume_from, verbose = true,
         threaded_gradient = threaded_gradient)
     println("[run_profiled_model] n_eval=$(result.n_eval) n_grad=$(result.n_grad) wall=$(round(result.wall, digits=1))s " *

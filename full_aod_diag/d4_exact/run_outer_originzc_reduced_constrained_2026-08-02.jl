@@ -70,6 +70,8 @@ for f in ["context.jl", "context_real_d20.jl", "draw_design.jl", "winners.jl", "
           "dual_bank.jl", "cm_dual_bank_production.jl",
           "profiled_production_outer_runner_2026-08-01.jl",
           "profiled_ab_comparability_and_plumbing_2026-08-01.jl",
+          "cm_aspace_coordinate.jl", "profiled_powered_relative_a_2026-08-04.jl",
+          "profiled_coordinate_mode_dispatch_2026-08-04.jl",
           "profiled_production_outer_constrained_2026-08-02.jl"]
     include(joinpath(D4X, f))
 end

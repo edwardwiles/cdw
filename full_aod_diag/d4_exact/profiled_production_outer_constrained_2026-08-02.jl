@@ -36,6 +36,10 @@ isdefined(Main, :CMCheckpointV11) ||
     error("profiled_production_outer_constrained_2026-08-02.jl requires cm_checkpoint.jl to be included first (checkpoint/resume, task 2 section 5).")
 isdefined(Main, :build_profiled_production_config) ||
     error("profiled_production_outer_constrained_2026-08-02.jl requires profiled_ab_comparability_and_plumbing_2026-08-01.jl to be included first (checkpoint namespace, task 2 section 5).")
+isdefined(Main, :decode_w_mode_to_native) ||
+    error("profiled_production_outer_constrained_2026-08-02.jl requires profiled_coordinate_mode_dispatch_2026-08-04.jl to be included first (task §6.1, A-coordinate mode wiring).")
+isdefined(Main, :cm_fixed_theta) ||
+    error("profiled_production_outer_constrained_2026-08-02.jl requires cm_aspace_coordinate.jl to be included first (cm_fixed_theta/precompute_cm_aspace_xy, needed by the powered A-coordinate mode).")
 using KNITRO
 
 """
@@ -136,10 +140,23 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
         checkpoint_path::Union{Nothing,AbstractString} = nothing,
         checkpoint_interval_s::Float64 = 60.0,
         resume_from::Union{Nothing,AbstractString} = nothing,
-        threaded_gradient::Bool)
+        threaded_gradient::Bool,
+        a_coordinate_mode::Symbol = :profiled_pivot_anchor_relative)
     lp(xs...) = (println(xs...); flush(stdout))
     fam = family_kind(fctx)
-    config = build_profiled_production_config(fctx; economic_parameterization = :profiled_destination_scales)
+    validate_mode_family_compatibility(a_coordinate_mode, fam)
+    # task §6.1 (2026-08-04): `w0`/bounds passed to KNITRO are ALWAYS in the outer vector's own
+    # native r_free space (as this function's contract always documented) -- `w0` itself is never
+    # re-expressed here. Instead, KNITRO's own search vector is re-expressed in `a_coordinate_mode`
+    # units at the two genuine boundary points below (initial value + bounds), and every raw `w`
+    # KNITRO hands back to `solve_at`/`cb_G!` is decoded back to native BEFORE calling `evaluate_fn`/
+    # `shared_family_outer_gradient` -- so those two functions, and everything they call
+    # (evaluate_profiled_point, the whole ~15-call-site native decode_outer_profiled chain), remain
+    # completely unaware a second coordinate mode exists.
+    theta = a_coordinate_mode == :profiled_powered_relative_A ? cm_fixed_theta(ctx) : NaN
+    xy = a_coordinate_mode == :profiled_powered_relative_A ? precompute_cm_aspace_xy(ctx) : nothing
+    config = build_profiled_production_config(fctx; economic_parameterization = :profiled_destination_scales,
+        a_coordinate_mode = a_coordinate_mode)
 
     n_eval_seed = 0; n_grad_seed = 0; best_feasible_seed = nothing; prior_wall = 0.0
     if resume_from !== nothing
@@ -179,17 +196,34 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
         end
         length(vcat(resumed.g, resumed.zfree)) == length(w0) ||
             error("run_profiled_upper_constrained($label): checkpoint outer-vector length=$(length(vcat(resumed.g, resumed.zfree))) != this call's w0 length=$(length(w0)) -- refusing to resume across a different layout.")
+        # resumed.zfree is in `a_coordinate_mode` units (checkpoints write KNITRO's own raw
+        # iterate, see cb_F!/_write_profiled_constrained_checkpoint below) -- namespace already
+        # confirmed the resumed checkpoint's mode matches THIS call's a_coordinate_mode
+        # (assert_checkpoint_compatible above folds it in), so no re-encoding is needed here.
         w0 = vcat(resumed.g, resumed.zfree)
         n_eval_seed = resumed.n_eval; n_grad_seed = resumed.n_grad
         best_feasible_seed = resumed.best_feasible
         prior_wall = resumed.wall_elapsed
         lp("[$label] RESUMING from $resume_from (n_eval=$(resumed.n_eval) n_grad=$(resumed.n_grad) " *
            "wall_elapsed=$(round(resumed.wall_elapsed,digits=1))s gp=$(w0[1]))")
+        w0_mode = w0
+    else
+        # Fresh start: this function's OWN `w0` parameter is always native r_free space (unchanged
+        # contract) -- encode to `a_coordinate_mode` units ONLY for KNITRO's own search vector.
+        w0_mode = encode_w_native_to_mode(w0, pe, a_coordinate_mode, theta, xy)
     end
 
-    D2 = length(w0)
-    w_lo = vcat(gp_lo, w0[2:end] .- z_halfwidth)
-    w_hi = vcat(gp_hi, w0[2:end] .+ z_halfwidth)
+    # Bounds: build the box in NATIVE units around whatever point is currently the start (fresh w0
+    # or the resumed w0, decoded back to native for this purpose only), THEN transform to
+    # `a_coordinate_mode` units -- identity under native mode (byte-for-byte the prior behavior),
+    # order-flip-aware under powered mode (`mode_bounds`/`powered_relative_bounds`).
+    w0_native_for_bounds = decode_w_mode_to_native(w0_mode, pe, a_coordinate_mode, theta, xy)
+    r_lo_native = w0_native_for_bounds[2:end] .- z_halfwidth
+    r_hi_native = w0_native_for_bounds[2:end] .+ z_halfwidth
+    r_lo_mode, r_hi_mode = mode_bounds(r_lo_native, r_hi_native, pe, a_coordinate_mode, theta, xy)
+    D2 = length(w0_mode)
+    w_lo = vcat(gp_lo, r_lo_mode)
+    w_hi = vcat(gp_hi, r_hi_mode)
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
@@ -201,7 +235,7 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
     xIndices = KNITRO.KN_add_vars(kc, D2)
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
     KNITRO.KN_set_var_upbnds_all(kc, w_hi)
-    KNITRO.KN_set_var_primal_init_values_all(kc, w0)
+    KNITRO.KN_set_var_primal_init_values_all(kc, w0_mode)
     cIndices = KNITRO.KN_add_cons(kc, 1)
     KNITRO.KN_set_con_upbnd(kc, cIndices[1], delta)
 
@@ -214,8 +248,12 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
 
     # solve_at: copied verbatim from _run_profiled_outer_knitro_loop's own screen/cache dispatch
     # (profiled_production_outer_runner_2026-08-01.jl) -- same screen precheck, same exact-cache
-    # keying, same evaluate_fn call. Not re-derived.
-    function solve_at(w_full::Vector{Float64})
+    # keying, same evaluate_fn call. Not re-derived. ONE addition (task §6.1, 2026-08-04):
+    # `w_full_mode` (KNITRO's own raw iterate, in `a_coordinate_mode` units) is decoded to native
+    # r_free space FIRST, so the screen precheck/cache-key/evaluate_fn below -- all of which assume
+    # native units, unchanged -- never see a mode-space vector.
+    function solve_at(w_full_mode::Vector{Float64})
+        w_full = decode_w_mode_to_native(w_full_mode, pe, a_coordinate_mode, theta, xy)
         if use_screen
             try
                 profiled_cm_screen_precheck!(w_full, ctx, pe; use_witness = false)
@@ -234,10 +272,10 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
         return evaluate_fn(w_full, fctx)
     end
 
-    ev0 = solve_at(w0)
+    ev0 = solve_at(w0_mode)
     ev0 !== nothing && ev0.result.inner_status in (0, -100, -101, -103) ||
         error("run_profiled_upper_constrained($label): start point not inner-feasible/not screen-passing")
-    lp("[$label] CONSTRAINED start: gp0=$(w0[1]) Delta0=$(-ev0.result.zeta) status=$(ev0.result.inner_status)")
+    lp("[$label] CONSTRAINED start: gp0=$(w0_mode[1]) Delta0=$(-ev0.result.zeta) status=$(ev0.result.inner_status)")
 
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
@@ -316,7 +354,15 @@ function run_profiled_upper_constrained(label::String, w0::Vector{Float64}; fctx
             end
         end
         t_solve_done = time()
-        g, meta = shared_family_outer_gradient(collect(Float64, w), ctx, fctx, ev; threaded = threaded_gradient)
+        # task §6.1 fix (2026-08-04): `w` here is KNITRO's own raw iterate, in `a_coordinate_mode`
+        # units -- decode to native r_free space before calling shared_family_outer_gradient
+        # (which perturbs coordinates directly in native r_free units, see
+        # profiled_lfix_incremental_at), then rescale the returned native-space A-block gradient
+        # back to `a_coordinate_mode` units via the derivation's own chain rule (identity under
+        # native mode -- byte-for-byte the prior behavior).
+        w_native = decode_w_mode_to_native(collect(Float64, w), pe, a_coordinate_mode, theta, xy)
+        g_native, meta = shared_family_outer_gradient(w_native, ctx, fctx, ev; threaded = threaded_gradient)
+        g = rescale_full_gradient_for_mode(g_native, a_coordinate_mode, theta)
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = 1.0
         evalResult.jac .= g
