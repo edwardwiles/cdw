@@ -75,7 +75,16 @@ function build_ctx_pe(mode::Symbol)
     Ddest = hasproperty(ctx, :D_dest) ? ctx.D_dest : ctx.D
     θ0 = ctx.θ0_up
     z_calib = log.(reshape(θ0[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], D, Ddest))
-    spec = build_anchor_spec_from_ctx(ctx)
+    # Korea/Brazil anchor-tie override -- the SAME hardcoded (korea_idx=14, brazil_idx=3) every
+    # real REDUCED production driver uses (bin/run_profiled_model.jl:236-239's own comment: "the
+    # SAME hardcoded ... every existing D20 REDUCED production driver in this directory uses").
+    # Omitting this (build_anchor_spec_from_ctx(ctx) with no override, caught live during this
+    # session) builds a DIFFERENT, mismatched pivot/anchor spec than the one real checkpoints were
+    # written under -- decoding their zfree through the wrong spec would silently produce a
+    # self-consistent-looking (still gravity-feasible by construction) but WRONG economic state,
+    # not an error. Must match production exactly, not use the function's own empty default.
+    korea_idx, brazil_idx = 14, 3
+    spec = build_anchor_spec_from_ctx(ctx; global_overrides = Dict(korea_idx => brazil_idx))
     gauge = build_anchor_gauge(z_calib, spec)
     pe = build_pivot_elimination_on_retained(ctx, spec, gauge)
     return (ctx = ctx, pe = pe, sci = sci, z_calib = z_calib, gp0 = θ0[3+D])

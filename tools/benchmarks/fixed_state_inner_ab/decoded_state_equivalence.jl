@@ -95,7 +95,11 @@ function run_decoded_state_equivalence(; mode::Symbol)
     z_calib = log.(reshape(θ0[ctx.Aod_offset+1:ctx.Aod_offset+D*Ddest], D, Ddest))
     gp0 = θ0[3+D]
 
-    spec = build_anchor_spec_from_ctx(ctx)
+    # Korea/Brazil anchor-tie override, matching every real REDUCED production driver
+    # (bin/run_profiled_model.jl) exactly -- see build_point_bank.jl's own comment on this same
+    # fix for the full explanation of why omitting it is a real (silent) bug, not a style choice.
+    korea_idx, brazil_idx = 14, 3
+    spec = build_anchor_spec_from_ctx(ctx; global_overrides = Dict(korea_idx => brazil_idx))
     gauge = build_anchor_gauge(z_calib, spec)
     pe = build_pivot_elimination_on_retained(ctx, spec, gauge)
 
