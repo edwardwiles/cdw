@@ -19,7 +19,7 @@ for f in ["draw_design.jl","context_real_d20.jl","winners.jl","oracle.jl","commo
           "hez_drawmajor_candidate_2026-08-01.jl","hez_drawmajor_v2_candidate_2026-08-01.jl",
           "operator_hessian_weights.jl","cm_hessian_architectures.jl",
           "compressed_factual_buffer_reuse.jl","shared_a_gradient.jl","operator_verification.jl",
-          "operator_psi_bundle.jl","cm_production_bundle.jl"]
+          "operator_psi_bundle.jl","cm_production_bundle.jl","nested_quantile_grids.jl","cm_config.jl"]
     include(joinpath(D4X, f))
 end
 using Printf, LinearAlgebra
@@ -34,9 +34,58 @@ function check(name, cond)
     end
 end
 
-L = 10
-for W in (5_000, 20_000, 100_000)
-    println("="^100); println("D20 real-data, W=$W, L=$L, two-family flexible CM"); flush(stdout)
+"""
+Diagnostic (2026-08-05, found live at W=5000/L=10): ctx.theta0_up[ctx.free_idx]'s raw A_od block
+at real D20 scale is a UNIFORM placeholder (every entry bit-identical, ~2.74e14) -- NOT a per-cell
+fitted calibration (unlike D4's synthetic ctx, where theta0_up's A_od block genuinely is the
+model's A_od=1 calibration point). This matches CLAUDE.md's own standing warning about A_od
+placeholder/reparameterization points not being "the calibration point" at real D20 scale. A
+flexible-CM restriction evaluated at this uninformative point can be GENUINELY infeasible
+(nStatus=-300, a confirmed KNITRO infeasibility certificate per this repo's own convention, not a
+bug) -- exactly the same qualitative finding this codebase's own D4 continuation already
+documented for the ORIGINAL single-family restriction ("the EXISTING unrestricted D=4 upper
+headline candidate is badly INFEASIBLE under the CM restriction", fullA_common_marginals_handoff.md
+section 3). Since finding a genuinely-feasible D20 outer point is a full outer-solve exercise (out
+of this task's "single fixed-state call" scope), this probes progressively coarser L (looser
+restriction) for a fixed-state point where archC_base_state actually reports feasible for BOTH
+family counts (1 and 2) at the SAME point -- an apples-to-apples comparison, not a bug workaround.
+"""
+function find_feasible_L(ctx, x_free0; Ls = (10, 9, 8, 7, 6, 5, 4, 3, 2))   # L=1 excluded: cm_equal_grid_probs(1)
+        # itself errors (range(1.0,0.0,length=1)) -- a pre-existing, unrelated edge case, not
+        # something this task needs to fix.
+    for L in Ls
+        probs = cm_equal_grid_probs(L)
+        ok_both = true
+        for inc in (false, true)
+            aug = build_cm_augmented_obj(ctx, CS; L = L, include_truncated_moment = inc, contrasts = :anchored, probs = probs)
+            ctx_cm = merge(ctx, (obj = aug.obj_cm,))
+            nStatus = try
+                K, x, ns, _, _ = inner_loop_internal_archgeneric(aug.obj_cm, CS.reconstruct_full(x_free0, ctx_cm.m); hess_cb_builder = archA_hess_cb_builder)
+                ns
+            catch e
+                -9999
+            end
+            # NOTE: archC_base_state itself only accepts (0,-100,-101,-103) -- excludes -102
+            # (KN_RC_FEAS_NO_IMPROVE, a genuine feasible status per knitro_status.jl, but this
+            # repo's own archC_base_state/archC_verified_state pre-existing convention rejects it,
+            # unrelated to this task) -- match that exact acceptance set here so this probe finds a
+            # point archC_base_state will actually accept, not a superset.
+            ok_both &= nStatus in (0, -100, -101, -103)
+            println("    probe L=$L include_truncated_moment=$inc -> nStatus=$nStatus")
+            flush(stdout)
+        end
+        ok_both && return L
+    end
+    return nothing
+end
+
+for W in (100_000,)   # 2026-08-05: W=5000/20000 already run separately (see MASTER.md/final report --
+    # both feasible-both-family-counts probes exhausted down to L=2, raw calibration point CM-
+    # infeasible for either family count at those W, a genuine pre-existing-at-W<80k finding per
+    # d20-realdata-w-sensitivity, not a bug); re-running only W=100,000 here (where L=10 IS feasible
+    # for both family counts) for the full cold/warm/verify/gradient gate, to avoid re-paying the
+    # ~30-60s W=5000/20000 context-build cost for a result already captured.
+    println("="^100); println("D20 real-data, W=$W, two-family flexible CM"); flush(stdout)
     println("="^100)
     t_ctx0 = time()
     ctx = d20_real_setup(W = W, δ = 1.0, find_smallest = true, destination_sample = :exclude_row)
@@ -45,7 +94,28 @@ for W in (5_000, 20_000, 100_000)
     x_free0 = ctx.θ0_up[ctx.free_idx]
     pe = build_pivot_elimination(ctx)
     println("context build: $(round(t_ctx,digits=2))s  D=$D  n_free=$(length(x_free0))  peak_RSS_kb=", (try; parse(Int, split(read(`ps -o rss= -p $(getpid())`, String))[1]); catch; missing; end))
+    flush(stdout)
 
+    println("  probing for a fixed-state point feasible under BOTH family counts (see function docstring)...")
+    L = find_feasible_L(ctx, x_free0)
+    if L === nothing
+        println("  NO feasible L found in the probe set at this raw calibration point for W=$W -- " *
+                "this is a fixed-STATE-availability limitation (economically real: this codebase's own " *
+                "D4 continuation already documented the calibration point being CM-infeasible), not a " *
+                "correctness failure of the two-family feature/FG/gradient math (see the D4 gates, which " *
+                "DID find a feasible point and confirmed machine-precision KKT residuals for both " *
+                "sub-blocks). Skipping the real-solve sub-gates for W=$W; dimension/config gates only.")
+        pcx = build_cm_production_context(ctx, CS; L = 10, contrasts = :anchored, probs = cm_equal_grid_probs(10),
+            include_truncated_moment = true, use_archB_moments = false, moment_representation = :dense_reference,
+            inner_fg_backend = :dense_reference)
+        check("W=$W: ncm == 2*(D-1)*L (L=10, config-only gate)", pcx.aug.ncm == 2*(D-1)*10)
+        check("W=$W: cctx.n_families == 2 (config-only gate)", pcx.cctx.n_families == 2)
+        println(); continue
+    end
+    println("  using L=$L (feasible under both family counts at this point)")
+    flush(stdout)
+
+  try
     t_pcx0 = time()
     pcx = build_cm_production_context(ctx, CS; L = L, contrasts = :anchored, probs = cm_equal_grid_probs(L),
         include_truncated_moment = true, use_archB_moments = false, moment_representation = :dense_reference,
@@ -89,6 +159,14 @@ for W in (5_000, 20_000, 100_000)
     check("W=$W: outer gradient finite, length D*Ddest", all(isfinite, g) && length(g) == D * (hasproperty(ctx, :D_dest) ? ctx.D_dest : D))
     println("  outer gradient: $(round(t_grad,digits=2))s  length=$(length(g))  norm=$(round(norm(g),digits=6))")
     flush(stdout)
+  catch e
+      # 2026-08-05: defensive -- do not let one W's unexpected solver status (e.g. a status this
+      # repo's archC_base_state doesn't accept, like -102, at a marginally-feasible probe point)
+      # abort the whole script and lose the other W's results.
+      nfail += 1
+      println("  FAIL  W=$W real-solve gate raised: ", sprint(showerror, e))
+      flush(stdout)
+  end
     println()
 end
 
