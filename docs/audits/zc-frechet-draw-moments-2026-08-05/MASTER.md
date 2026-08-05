@@ -175,16 +175,46 @@ directory's own `README_WHY_ARCHIVED.txt`); non-ZC families' directories and the
 seeds/settings; confirmed "Inherited incumbent for this target: none" for all 4 at start, i.e.
 a genuinely clean continuation chain from here.
 
-## 10. Campaign status at session handoff
+## 10. Campaign status at session handoff: PAUSED, blocked on a separate, pre-existing bug
 
-Launched (launch #5, the current one): `origin_zc` upper/lower, `cm_meanzc` upper/lower, all at
-W=100,000, K_mean=K_pair=3, deltas 0.1/0.5/1/2 (serial chain per family/direction), cores 100-139,
-budgets matching the prior session's own validated values (origin_zc: 4500s explore + 2700s
-polish; cm_meanzc: 6300s explore + 3600s polish, per delta — up to ~4-11 hours per chain across
-all 4 deltas). Logs: `POST_VERIFY_FIX/chain_logs/{originzc,cmmeanzc}_{upper,lower}_calib3_wrapper.log`
-and per-delta subdirs (launches #1-4's logs, suffixed `_wrapper`/`_calib2_wrapper`, are left in
-place for the record, not deleted). A persistent background monitor is watching for delta
-completions/failures on the calib3 logs.
+Launch #5 ran cleanly (no stale-incumbent contamination) and both `origin_zc` chains completed a
+genuine, uncontaminated delta=0.1 (`inherited_GT=nothing`, `new_GT=final_GT=0.0239` both
+directions, ~58-62 min wall each — a real duration, not a hollow fast-exit). **But the KNITRO
+iteration log for that solve shows a stall, not genuine convergence**:
+```
+  Iter      Objective      FeasError   OptError    ||Step||    CGits
+       0    9.840279e-01   0.000e+00
+       1    9.840279e-01   0.000e+00   1.581e-02   1.403e-14        7
+       2    9.840279e-01   0.000e+00   1.581e-02   1.227e-13        1
+       3    9.840279e-01   0.000e+00   1.581e-02   4.157e-14        2
+EXIT: ... relative change in solution estimate < xtol for 3 consecutive iterations.
+```
+`||Step||` is machine-precision noise every iteration; `OptError` stays at a nontrivial 0.0158,
+never shrinking — KNITRO gave up because it detected it *couldn't* move, not because it found a
+genuine KKT point, despite `Δ*=0.0039` having enormous slack against the `δ=0.1` budget (no
+legitimate feasibility reason to be stuck).
+
+**Root cause identified and reproduced** (see
+[[feedback-gp-perturbation-degenerate-a-od-decode-bug]], full detail + repro script at
+`/bbkinghome/edav/repo_scratch/zc-frechet-draw-moments-2026-08-05/gp_bug_repro/`): perturbing
+`w[1]=gp` in isolation (holding the `a`-space A_od coordinates fixed, exactly what a KNITRO line
+search does) decodes to an `A_od` block where **all 20 origins collapse to one identical repeated
+constant**, instead of the varied values the calibration point has — an economically degenerate,
+infeasible point whose inner solve hard-fails (`nStatus=-300`). Since `cm_z_from_a`/`pivot_expand`
+should be pure functions of `w[2:end]` (theta_cm/xy_cm/pe are all fixed, independent of gp), this
+looks like a genuine coordinate-decode bug in `cm_aspace_coordinate.jl` or the KNITRO
+objective/gradient callback wiring in `cm_originzc_checkpoint.jl`/`cm_checkpoint.jl` — **not** the
+ZC-basis fix (confirmed distinct from, though reminiscent of, a previously-documented but
+different gp-gradient-magnitude bug on the REDUCED formulation,
+[[profiled-functional-readiness-closeout-2026-08-04-phase2-status]]). This plausibly explains the
+whole-campaign stall: if any real step in `gp` produces a similarly degenerate point, KNITRO's
+barrier method has no way to make progress regardless of how much slack the true problem has.
+
+**All 4 chains killed and left paused** rather than continue burning compute on likely-non-convergent
+"results." This is a pre-existing bug outside the scope of the ZC-basis-fix task — flagged clearly
+for an explicit decision on priority rather than attempted blind. Logs from all 5 launch attempts
+preserved at `POST_VERIFY_FIX/chain_logs/*_wrapper.log` (suffixes: none, `_calib2`, `_calib3`) and
+per-delta subdirs, not deleted.
 
 ## 11. Deferred (per explicit user instruction, after FULL campaign launch)
 
