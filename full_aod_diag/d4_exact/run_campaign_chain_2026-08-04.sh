@@ -49,6 +49,21 @@ for delta in "${DELTAS[@]}"; do
     extra_args+=("$EXTRA_SEED_TOKEN")
     echo "[$CHAIN_LABEL] delta=$delta using EXTRA_SEED_TOKEN=$EXTRA_SEED_TOKEN"
   fi
+  # unrestricted-only: at EVERY delta (not just the first), look up the best already-completed
+  # restricted-family result at this delta or smaller (guaranteed feasible for unrestricted too,
+  # since it's a strict relaxation of every restricted family) and offer it via the pre-existing
+  # CROSS_SEED_FAMILY/CROSS_SEED_DELTA positional mechanism (continuation_campaign_cell_driver.jl).
+  # This is on top of, not instead of, the chain's own within-family delta continuation.
+  if [ "$FAMILY" = "unrestricted" ]; then
+    cross_result=$(julia --project=. full_aod_diag/d4_exact/best_cross_seed_for_unrestricted.jl "$DIRECTION" "$delta" 2>/dev/null | tail -1)
+    if [ "$cross_result" != "NONE" ] && [ -n "$cross_result" ]; then
+      cross_path=$(echo "$cross_result" | cut -f1)
+      cross_family=$(basename "$(dirname "$(dirname "$(dirname "$cross_path")")")")
+      cross_delta=$(basename "$(dirname "$cross_path")" | sed 's/^delta_//')
+      extra_args+=("$cross_family" "$cross_delta")
+      echo "[$CHAIN_LABEL] delta=$delta cross-seeding from $cross_result"
+    fi
+  fi
   first_delta=0
   OPENBLAS_NUM_THREADS=$BLAS_THREADS OMP_NUM_THREADS=$BLAS_THREADS \
     taskset -c ${CORE_START}-${CORE_END} julia -t $NTHREADS --project=. \
