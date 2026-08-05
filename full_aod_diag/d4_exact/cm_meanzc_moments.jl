@@ -126,7 +126,7 @@ function frechet_productivity_from_exponential(U::AbstractMatrix{Float64}, μ::F
 end
 
 """
-    frechet_power_feature(U::AbstractMatrix{Float64}, k::Int, μ::Float64) -> Q
+    frechet_power_feature(U::AbstractMatrix{Float64}, k::Real, μ::Float64) -> Q
 
 `Q_so = z_so^k = U_so^{-μk}`, i.e. the k-th power of the Fréchet productivity
 draw (`frechet_productivity_from_exponential`), NOT the k-th power of the raw
@@ -134,10 +134,14 @@ exponential draw `U`. Computed via the numerically stable
 `logQ = -μk*log(U); Q = exp(logQ)` form rather than `frechet_productivity_from_exponential(U,μ).^k`,
 to avoid a double power-transform / extra rounding pass. This is the SINGLE
 canonical feature builder for every ZC/meanZC restriction (origin-ZC,
-CM+ZC, FULL and REDUCED) -- do not reintroduce a second `U.^k`/`U.^(-μk)`
-formula anywhere else; call this function instead.
+CM+ZC, FULL and REDUCED) AND (2026-08-05 truncated-power task) the flexible-CM
+eq.36 truncated-power family (`common_marginals_moments.jl`, `k=1-σ`, generally
+non-integer -- hence `k::Real`, not `k::Int`; widened from the original
+ZC-fix's `k::Int` signature, same formula, same behavior for every existing
+integer-`k` caller) -- do not reintroduce a second `U.^k`/`U.^(-μk)` formula
+anywhere else; call this function instead.
 """
-function frechet_power_feature(U::AbstractMatrix{Float64}, k::Int, μ::Float64)
+function frechet_power_feature(U::AbstractMatrix{Float64}, k::Real, μ::Float64)
     Q = similar(U)
     @inbounds @. Q = exp(-μ * k * log(U))
     return Q
@@ -482,8 +486,9 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, include_tru
     # common_marginals_moments.jl::precalc_common_marginals_cdf's own docstring. Production CM+ZC
     # passes true (both eq.35+eq.36 families), matching plain flexible CM's own production spec.
     σHat = include_truncated_moment ? ctx.σ : nothing
+    μHat_cm = include_truncated_moment ? ctx.μHat : nothing
     CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; include_truncated_moment = include_truncated_moment,
-                                                   σHat = σHat, contrasts = contrasts, probs = probs)
+                                                   σHat = σHat, μHat = μHat_cm, contrasts = contrasts, probs = probs)
     ncm = size(CM, 2)
     @assert ncm == n_cm_moments(ctx.D, L; include_truncated_moment = include_truncated_moment)
     nO = length(origins)

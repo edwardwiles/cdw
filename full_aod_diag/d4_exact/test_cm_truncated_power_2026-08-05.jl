@@ -16,7 +16,8 @@
 using Test
 using LinearAlgebra: norm
 using Random
-using Statistics: quantile
+using Statistics: quantile, mean
+using SpecialFunctions: gamma
 
 include(joinpath(@__DIR__, "context.jl"))
 include(joinpath(@__DIR__, "winners.jl"))
@@ -28,15 +29,28 @@ println("Gate 1+2: direct feature construction + dimension gates (small hand D/W
 println("="^100)
 
 @testset "direct feature construction" begin
-    W, D, L = 200, 4, 5
+    # 2026-08-05 CORRECTED (redo after the raw-U-vs-Frechet-z bug was found and fixed): the
+    # ORIGINAL version of this gate used U ~ Uniform(0.1, 3.1) -- bounded away from 0 -- which
+    # could never have exposed the (1-sigma) exponent applied to the wrong variable (a
+    # Uniform(0.1,3.1)^(-1.5) is perfectly well-behaved regardless of sign/variable convention).
+    # Use real Exp(1) draws here instead (matching production's actual ctx.U, which CAN get
+    # arbitrarily close to 0), and build the hand reference INDEPENDENTLY from the
+    # z_o(omega)=U_o(omega)^(-mu) relation directly (not by calling frechet_power_feature or any
+    # other production code) -- this is the check the coordinator/user explicitly required: an
+    # independent re-derivation, not a self-consistency check against the (previously, equally
+    # wrong) formula.
+    W, D, L = 2000, 4, 5
     refIndex1 = 1
     σHat = 3.0
+    μHat = 0.15   # representative real-D20-scale value (real production ~0.13-0.20)
     Random.seed!(20260805)
-    U = rand(W, D) .* 3.0 .+ 0.1   # positive support, arbitrary (not Exp(1) -- doesn't matter for a pure feature-construction check)
+    U = -log.(rand(W, D))   # Exp(1) via inverse-CDF, independent of this repo's own genExpRands!
     probs = collect(range(1/L, (L-1)/L, length=L))
-    z_expect = quantile(U[:, refIndex1], probs)
+    # 2026-08-05 (user-directed): cutoffs are now THEORETICAL (closed-form -log(1-p)), not the
+    # empirical quantile(U[:,refIndex1],probs) -- see theoretical_u_threshold's own docstring.
+    z_expect = theoretical_u_threshold.(probs)
 
-    CM, z, origins = precalc_common_marginals_cdf(U, refIndex1, L; include_truncated_moment = true, σHat = σHat, contrasts = :anchored, probs = probs)
+    CM, z, origins = precalc_common_marginals_cdf(U, refIndex1, L; include_truncated_moment = true, σHat = σHat, μHat = μHat, contrasts = :anchored, probs = probs)
     nO = D - 1
     @test length(origins) == nO
     @test origins == [2, 3, 4]
@@ -57,21 +71,31 @@ println("="^100)
             @test CM[:, col1] == hand1
         end
     end
-    pw = 1 - σHat
+    # INDEPENDENT hand reference for eq.36: z_x(omega) = U_x(omega)^(-mu) computed directly here
+    # (not via frechet_power_feature), then z^(1-sigma) -- this is genuinely re-deriving the
+    # relation, not calling the same (potentially wrong) production helper twice.
+    zhand = U .^ (-μHat)
+    @test all(isfinite, zhand) && all(>(0), zhand)
     tm_offset = nO*L
     for (li, l) in enumerate(1:L)
         for (oi, o) in enumerate(origins)
             col2 = tm_offset + (l-1)*nO + oi
-            hand2 = [ (U[s,o]^pw) * Float64(U[s,o] <= z[l]) - (U[s,refIndex1]^pw) * Float64(U[s,refIndex1] <= z[l]) for s in 1:W]
+            hand2 = [ (zhand[s,o]^(1-σHat)) * Float64(U[s,o] <= z[l]) - (zhand[s,refIndex1]^(1-σHat)) * Float64(U[s,refIndex1] <= z[l]) for s in 1:W]
             @test CM[:, col2] ≈ hand2
         end
     end
     @test all(isfinite, CM)
     # Not accidentally using U's rank/quantile position (i.e. not the CDF/uniform-transformed
-    # draw) -- the power block must use the RAW z_o(omega)=U[:,o] values, not e.g. rank(U[:,o])/W.
+    # draw) -- the power block must use the RAW z_o(omega) values, not e.g. rank(U[:,o])/W.
     @test !all(CM[:, tm_offset+1] .== CM[:, 1])   # sanity: power block genuinely differs from CDF block
+    # The whole point of this fix: at REAL Exp(1) draws with a realistic (small, positive) exponent
+    # mu*(sigma-1), the power block must NOT be dominated by a single extreme draw the way the
+    # buggy U.^(1-sigma) formula was (see MASTER.md for the W=5,000/D20 real-data numbers: a single
+    # draw producing Pow~2e7 while the column mean was ~4487 -- a >99%-from-one-draw domination).
+    pow_col_means = [mean(CM[:, tm_offset + (l-1)*nO + oi]) for l in 1:L, oi in 1:nO]
+    @test maximum(abs, pow_col_means) < 10.0   # well-behaved order of magnitude, not 1e4-1e7
 
-    println("PASS: direct feature construction matches hand-built eq.35+eq.36 exactly; dims correct.")
+    println("PASS: direct feature construction matches an INDEPENDENTLY hand-built eq.35+eq.36 (z=U^(-mu)) exactly; well-behaved magnitudes; dims correct.")
 end
 
 println("="^100)
@@ -86,9 +110,21 @@ println("="^100)
 end
 
 println("="^100)
-println("Gate 3: CDF-block-preservation -- new CDF sub-block bit-identical to include_truncated_moment=false")
+println("Gate 3: CDF-block self-consistency -- standalone single-family build matches the CDF")
+println("sub-block of the combined two-family build, at the SAME (now theoretical-cutoff) context")
 println("="^100)
-@testset "CDF-block preservation" begin
+# 2026-08-05 REINTERPRETED (user-directed): since cutoffs are now the theoretical closed-form
+# Fréchet quantile (theoretical_u_threshold) rather than the empirical sample quantile, the CDF
+# family's own NUMERIC VALUES now legitimately differ from old (pre-2026-08-05) production -- this
+# is intentional, not a regression (see MASTER.md). This gate no longer means "bit-identical to
+# old production's empirical-cutoff CDF values" (that comparison is expected to differ and is not
+# tested here) -- it means "internally self-consistent": a standalone single-family
+# (include_truncated_moment=false) build and the CDF sub-block of the combined two-family build,
+# at the identical context/L/contrasts, must still agree exactly (both now use the SAME
+# theoretical cutoff formula, so of course they should -- this catches any accidental
+# cross-contamination between the two families' construction, which is the actual thing this gate
+# protects against).
+@testset "CDF-block self-consistency" begin
     ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
     L = 10
     aug_old = build_cm_augmented_obj(ctx, CS; L = L, include_truncated_moment = false, contrasts = :anchored)
@@ -98,11 +134,40 @@ println("="^100)
     @test aug_new.ncm_cdf == aug_old.ncm
     @test aug_new.n_families == 2
     @test aug_old.n_families == 1
-    # bit-identical CDF sub-block (raw feature matrix)
+    # bit-identical CDF sub-block (raw feature matrix) -- self-consistency, not old-production match
     @test aug_new.CM[:, 1:aug_new.ncm_cdf] == aug_old.CM
     @test aug_new.z == aug_old.z
     @test aug_new.origins == aug_old.origins
-    println("PASS: CDF sub-block of the two-family CM matrix is bit-identical to the CDF-only build.")
+    # z is now the theoretical closed form, not an empirical sample quantile of ctx.U
+    probs_expect = collect(range(1/L, (L-1)/L, length=L))
+    @test aug_new.z == theoretical_u_threshold.(probs_expect)
+    @test issorted(aug_new.z)   # required invariant for the (untouched) bin-index architecture
+    println("PASS: CDF sub-block is self-consistent between single- and two-family builds; cutoffs are the theoretical closed form and remain sorted ascending.")
+end
+
+println("="^100)
+println("Gate: theoretical Fréchet-quantile closed form -- Monte Carlo convergence + Γ(1-μk) reduction")
+println("(full derivation/validation in diag_theoretical_quantile_check_2026-08-05.jl; condensed here)")
+println("="^100)
+@testset "theoretical quantile closed form" begin
+    μHat2, σHat2 = 0.15, 2.5
+    k2 = 1 - σHat2
+    # reduces to the untruncated Gamma(1-mu*k) as z_l -> infinity
+    @test isapprox(eq36_theoretical_truncated_moment(1e12, k2, μHat2), gamma(1 - μHat2*k2, 0.0); atol=1e-9)
+    @test isapprox(eq36_theoretical_truncated_moment(1e12, k2, μHat2), gamma(1 - μHat2*k2); atol=1e-9)
+    # Monte Carlo convergence at a single (p, W) point (heavier convergence sweep is in the
+    # standalone diag script; this is a fast, single-point regression gate)
+    Random.seed!(778899)
+    Wbig = 3_000_000
+    Ubig = -log.(rand(Wbig))
+    p2 = 0.5
+    uthresh2 = theoretical_u_threshold(p2)
+    zbig = Ubig .^ (-μHat2)
+    zl2 = uthresh2^(-μHat2)
+    mc = mean((zbig .^ k2) .* (zbig .< zl2))
+    theo = eq36_theoretical_truncated_moment(zl2, k2, μHat2)
+    @test isapprox(mc, theo; atol = 5e-3)   # W=3e6 Monte Carlo noise, generous but real tolerance
+    println("PASS: closed form reduces to Γ(1-μk) as z_ℓ→∞; Monte Carlo average converges to it (|diff|=$(abs(mc-theo)) at W=$Wbig).")
 end
 
 println("="^100)

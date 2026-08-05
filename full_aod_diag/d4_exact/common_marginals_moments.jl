@@ -27,6 +27,17 @@
 
 using Statistics: quantile
 using LinearAlgebra: I
+using SpecialFunctions: gamma   # eq36_theoretical_truncated_moment's upper incomplete gamma (2-arg gamma(s,a))
+
+# 2026-08-05 truncated-power task (corrected): the eq.36 truncated-power feature needs the SAME
+# Fréchet-productivity-draw transform (`z_o(ω) = U_o(ω)^{-μ}`, `frechet_power_feature`) the
+# ZC/meanZC restrictions use -- reused via this self-include guard (this codebase's own established
+# idiom, e.g. cm_hessian_architectures.jl's many `isdefined(Main, :X) || include(...)` guards) so
+# every caller of THIS file gets it regardless of whether it separately includes
+# cm_meanzc_moments.jl. Do not reintroduce a second `U.^(-μk)` formula here -- call
+# `frechet_power_feature` (widened to `k::Real` specifically for this file's non-integer
+# `k=1-σ` use, same formula, same behavior for ZC's own integer-`k` callers).
+isdefined(Main, :frechet_power_feature) || include(joinpath(@__DIR__, "cm_meanzc_moments.jl"))
 
 # ---- ported verbatim from sequential_gravity/common_marginals_moments.jl (fix/cm-fixed-dual-gradient@8531a89) ----
 
@@ -38,6 +49,78 @@ end
 
 n_cm_moments(D::Int, L::Int; include_truncated_moment::Bool) =
     include_truncated_moment ? 2 * (D - 1) * L : (D - 1) * L
+
+"""
+    theoretical_u_threshold(p::Real) -> Float64
+
+2026-08-05 (user-directed): the CLOSED-FORM (not Monte-Carlo/order-statistic-estimated) `U`-space
+threshold to use for a common-marginals cutoff targeting Fréchet quantile PROBABILITY LEVEL `p`,
+i.e. the value `u_thresh` such that using it in the EXISTING `1{U_x <= u_thresh}` code structure
+(unchanged everywhere else -- forward/transpose kernels, bin-index/Hessian architecture, etc. all
+still just consume `z` as an opaque ascending cutoff array and compare it against `U` exactly as
+before) is mathematically equivalent to testing the LITERAL eq.35/36 statement
+`1{z_x(ω) < z_p}` on the true Fréchet productivity draw `z_x(ω) = U_x(ω)^{-μ}` at target
+probability `p`.
+
+Derivation (`T=1`, the confirmed convention -- see `frechet_productivity_from_exponential`,
+`cm_meanzc_moments.jl`; `θ = 1/μ` is the Fréchet shape):
+  - Closed-form Fréchet quantile at level `p`: solving `P(z<z_p)=p` for `z=U^{-μ}`, `U~Exp(1)`
+    gives `z_p = (-log(p))^{-μ}` (`= (T/(-ln p))^{1/θ}` with `T=1`).
+  - `1{z_x(ω) < z_p} = 1{U_x(ω) > z_p^{-1/μ}} = 1{U_x(ω) > -log(p)}` (the map `z=U^{-μ}` is
+    strictly DECREASING, so the inequality direction flips under it).
+  - `1{U_x > c} - 1{U_ref > c} = -(1{U_x <= c} - 1{U_ref <= c})` for any threshold `c` -- an
+    overall sign flip that does NOT change the restriction's feasible set (`E_F[X]=0 ⟺
+    E_F[-X]=0`), so the EXISTING `1{U_x<=c}-1{U_ref<=c}` code structure, with `c=-log(p)`, imposes
+    a restriction with the IDENTICAL feasible set as the literal `1{z_x<z_p}-1{z_ref<z_p}`
+    statement -- no inequality-direction rewrite needed anywhere downstream.
+  - Grid-symmetry check: this codebase's own equal-probability grid
+    (`range(1/L,(L-1)/L,length=L)`) is symmetric under `p -> 1-p` (i.e. `{1-probs[l]} ==
+    {probs[L+1-l]}` as a SET), so evaluating `theoretical_u_threshold` AT the grid's own `probs`
+    values (rather than at `1 .- probs`) tests the exact same SET of L Fréchet-quantile levels,
+    just re-indexed -- and, conveniently, `-log.(1 .- probs)` is monotonically INCREASING in
+    `probs` (required: the bin-index architecture needs `z` sorted ascending), which is exactly
+    `theoretical_u_threshold.(probs)` reduces to below.
+  - `theoretical_u_threshold(p) := -log(1-p)` (substituting the grid-symmetry relabeling
+    `p -> 1-p` into `c=-log(p)` above) -- which is ALSO, not coincidentally, exactly the ordinary
+    closed-form Exp(1) quantile of `U` at probability `p` (`P(U<=u_p)=p ⟺ u_p=-log(1-p)`): since
+    `U` is drawn EXACTLY Exp(1) by construction (not estimated), using its own known closed form
+    instead of an empirical/order-statistic estimate is precisely "switch from empirical to
+    theoretical," consistent with (and no more than) what the literal eq.35/36 Fréchet-quantile
+    statement already requires once the grid-symmetry relabeling above is accounted for.
+
+Empirically validated (not merely derived): `test_cm_truncated_power_2026-08-05.jl`'s theoretical-
+cutoff gates check that a large-`W` Monte Carlo average of the resulting features converges to
+`eq36_theoretical_truncated_moment` (below) as `W→∞`, which would fail under a sign/direction
+error in this derivation.
+"""
+theoretical_u_threshold(p::Real) = -log(1 - p)
+
+"""
+    eq36_theoretical_truncated_moment(z_ℓ::Real, k::Real, μHat::Real) -> Float64
+
+2026-08-05 (user-directed): closed-form population value of `E[z^k · 1{z<z_ℓ}]` for
+`z=U^{-μ}`, `U~Exp(1)` (`T=1`), via the upper incomplete gamma function
+`Γ(s,a) = ∫_a^∞ t^(s-1)e^(-t) dt`:
+
+    E[z^k · 1{z<z_ℓ}] = Γ(1 - μk, z_ℓ^(-1/μ))
+
+Derivation: `E[z^k·1{z<z_ℓ}] = E[U^{-μk}·1{U>z_ℓ^{-1/μ}}] = ∫_{z_ℓ^{-1/μ}}^∞ u^{-μk}e^{-u}du`,
+which is exactly `Γ(1-μk, a)` with `a=z_ℓ^{-1/μ}` and `s-1=-μk`. As `z_ℓ→∞`, `a→0` and
+`Γ(s,0)=Γ(s)` (for `s=1-μk>0`), recovering this codebase's own existing UNTRUNCATED
+`ν_k=Γ(1-μk)` convention (`cm_meanzc_moments.jl` -- confirmed, not assumed, by direct comparison
+in `test_cm_truncated_power_2026-08-05.jl`).
+
+**Verification/reference use ONLY** -- this closed form is never used inside the actual inner
+KNITRO dual solve (the restriction imposed there is always the empirical/reweighted-measure
+computation over the realized `W` draws, per the whole robust-optimization architecture -- there
+is no population-level substitute for optimizing over how those draws get reweighted). Use this
+only to check that a Monte-Carlo average of the corresponding raw feature converges to it as
+`W→∞`, or as a sanity target at a fixed `(z_ℓ,k,μ)`.
+"""
+function eq36_theoretical_truncated_moment(z_ℓ::Real, k::Real, μHat::Real)
+    a = z_ℓ^(-1 / μHat)
+    return gamma(1 - μHat * k, a)
+end
 
 """
     precalc_common_marginals_cdf(U, refIndex1, L; include_truncated_moment, σHat=nothing, contrasts=:anchored)
@@ -56,18 +139,39 @@ callers (`build_cm_augmented_obj`, `build_cm_meanzc_augmented_obj`) always pass 
 single-family carve-out (fixed Fréchet as CM+level anchor, a structurally different restriction)
 continues to pass `false` explicitly.
 
-`σHat` (the trade elasticity σ, required whenever `include_truncated_moment=true`, unused/`nothing`
-otherwise) is the ONLY parameter the eq.36 exponent depends on: for non-reference origin `o` and
-quantile cutoff `z_l`, eq.36's raw feature is `z_o(ω)^(1-σ) * 1{z_o(ω)<z_l}` (same `z_o(ω)==U[:,o]`
-draw and same cutoffs `z_l` eq.35 already uses -- NOT some other "underlying exponential draw",
-see docs/fullA_common_marginals_handoff.md section 2's own eq.35 statement, which is on this exact
-`U` array). NOTE: an earlier, never-wired-to-production version of this function used
-`pw = μHat*(1-σHat)` (an extra `μHat` factor) for this exponent -- that formula does not match
-CDW eq.36 and has been removed; `μHat` is no longer a parameter of this function.
+`σHat` and `μHat`, both required whenever `include_truncated_moment=true` (unused/`nothing`
+otherwise), together determine the eq.36 exponent. eq.35 (the CDF family, above) is a pure
+rank/indicator statistic, and is therefore invariant to whatever strictly-monotonic representation
+`U` happens to be in -- comparing `U[:,o] <= z_l` against a cutoff `z_l` ALSO derived as a quantile
+of `U[:,refIndex1]` never mixes representations, so it validly tests "common marginals across
+origins" regardless of whether `U` is the raw exponential draw or some monotonic transform of it.
+eq.36 is a POWER-WEIGHTED moment and has NO such invariance -- it must be built from the actual
+Fréchet productivity draw `z_o(ω) = U_o(ω)^{-μ}` (`μ = 1/θ`, `ctx.μHat`; confirmed via
+`fix/zc-frechet-draw-moments-2026-08-05`/`frechet_power_feature`, cm_meanzc_moments.jl, that
+`ctx.U` is genuinely the raw, untransformed `Exp(1)` draw in production), NOT from `U` directly.
+`z_o(ω)^(1-σ) = U_o(ω)^{-μ(1-σ)}`, computed via `frechet_power_feature(U, 1-σHat, μHat)` (the SAME
+canonical helper the ZC/meanZC restrictions use, widened to a real-valued exponent for this
+non-integer `k=1-σ` use -- not a second, independently-derived `U^power` formula).
+
+CONFIRMED BUG, FOUND AND FIXED WITHIN THIS SAME TASK (2026-08-05): an earlier version of this
+function used `Pow = U.^(1-σHat)` directly (treating the raw exponential draw as if it were
+already `z_o(ω)`, the same simplification that is harmless for eq.35 but not for a power moment).
+At real D=20 data (σHat=2.5), this diverges: `U~Exp(1)` has density bounded away from 0 at `U=0`,
+and exponent `1-σHat=-1.5<=-1` is non-integrable there, so `E[U^(1-σ)]` is genuinely infinite in
+population and a SINGLE near-zero draw dominates the entire sample mean (observed directly:
+`min(U[:,3])=1.3e-5` produced `Pow[:,3]≈2.1e7` at W=5,000, versus a well-behaved raw CDF moment
+of the same order as the other origins) -- this, not any solver or quantile-grid issue, is what
+made the two-family restriction spuriously infeasible (KNITRO nStatus=-300) at real D20 scale
+while D4's synthetic (non-Exp(1)) draws never exposed it. The corrected exponent
+`-μ(1-σ)=μ(σ-1)` is small and positive at realistic `(μHat,σHat)` (real D20 `μHat≈0.13-0.20`,
+giving exponent `≈0.13-0.30`), with finite Fréchet moments by construction (`E[z^k]=Γ(1-μk)`,
+finite for `μk<1`). See `docs/audits/cm-add-truncated-power-moments-2026-08-05/MASTER.md` for the
+full incident writeup.
 """
 function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int, L::Int;
                                        include_truncated_moment::Bool,
                                        σHat::Union{Nothing,Real} = nothing,
+                                       μHat::Union{Nothing,Real} = nothing,
                                        contrasts::Symbol = :anchored,
                                        probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     W, D = size(U)
@@ -76,6 +180,9 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
     @assert contrasts in (:anchored, :orthonormal) "contrasts must be :anchored or :orthonormal, got $contrasts"
     include_truncated_moment && @assert(σHat !== nothing,
         "include_truncated_moment=true requires σHat (the fixed baseline-calibrated trade elasticity)")
+    include_truncated_moment && @assert(μHat !== nothing,
+        "include_truncated_moment=true requires μHat (the fixed baseline-calibrated Frechet shape exponent, μ=1/θ) " *
+        "-- eq.36 is built from the Frechet productivity draw z=U^(-μ), not the raw exponential draw U directly")
     # Continuation 13, Section 6: `probs=` lets a caller supply an EXPLICIT probability grid (e.g.
     # nested_quantile_grids.jl's genuinely-nested Q_10/Q_20/Q_50) in place of the default grid --
     # the default path (`probs === nothing`) is byte-for-byte unchanged. Remediation task Part E
@@ -84,12 +191,18 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
     # 0.02..0.98 with spacing ~=0.0196 (not exactly 1/L), deliberately excluding p=0 and p=1.
     # This is correct/intended behavior (a CDF contrast at p=1 would be degenerate); only the
     # comment previously mislabeled it "the evenly-spaced k/L grid."
-    if probs === nothing
-        z = quantile(U[:, refIndex1], collect(range(1 / L, (L - 1) / L, length = L)))
-    else
-        @assert length(probs) == L "precalc_common_marginals_cdf: length(probs)=$(length(probs)) != L=$L"
-        z = quantile(U[:, refIndex1], probs)
-    end
+    # 2026-08-05 (user-directed, beyond the original task brief): cutoffs are now the THEORETICAL
+    # closed-form Fréchet quantile, not the empirical (order-statistic) sample quantile of the
+    # realized draws -- see `theoretical_u_threshold`'s own docstring for the full derivation
+    # (why this is exactly `-log(1-p)`, i.e. the closed-form Exp(1) quantile of `U` itself, even
+    # though the target quantile level is stated in terms of the FRÉCHET z=U^(-μ)). Applies to
+    # BOTH families (eq.35 and eq.36 must keep sharing the same cutoffs, per the task brief).
+    # DELIBERATE CONSEQUENCE (disclosed, not a bug): this changes eq.35's own numeric cutoff
+    # values relative to old production (which used the empirical `quantile(U[:,refIndex1],...)`)
+    # -- see MASTER.md for the full writeup of why this is intentional.
+    probs_used = probs === nothing ? collect(range(1 / L, (L - 1) / L, length = L)) : probs
+    @assert probs === nothing || length(probs) == L "precalc_common_marginals_cdf: length(probs)=$(length(probs)) != L=$L"
+    z = theoretical_u_threshold.(probs_used)
     origins = [o for o in 1:D if o != refIndex1]
     nO = length(origins)
     R = contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
@@ -117,11 +230,12 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
         # SAME way eq.35 is (subtract the reference origin's own power-weighted indicator, using
         # the reference's OWN power weight -- NOT the non-reference origin's -- since the power
         # weight is itself origin-and-draw-specific, unlike eq.35's weight-1 indicator).
-        pw = 1 - σHat
-        Pow = Matrix{Float64}(undef, W, D)   # z_x(ω)^(1-σ) for every origin x (incl. reference), precomputed once
-        @inbounds for x in 1:D
-            @. Pow[:, x] = U[:, x]^pw
-        end
+        # z_x(ω)^(1-σ) = U_x(ω)^(-μ(1-σ)) for every origin x (incl. reference), precomputed once,
+        # via the SAME frechet_power_feature the ZC/meanZC restrictions use (cm_meanzc_moments.jl)
+        # -- NOT a plain U.^(1-σHat) (that earlier, WRONG version treated the raw exponential draw
+        # as if it were already the Fréchet productivity level -- see this function's own docstring
+        # "CONFIRMED BUG" note for the full derivation and the divergence it caused at real scale).
+        Pow = frechet_power_feature(U, 1 - σHat, Float64(μHat))
         TM_ref = Matrix{Float64}(undef, W, L)
         @inbounds for l in 1:L
             @. TM_ref[:, l] = Pow[:, refIndex1] * CDF_ref[:, l]
@@ -238,8 +352,9 @@ function build_cm_augmented_obj(ctx, CS; L::Int, include_truncated_moment::Bool,
     obj0 = ctx.obj
     ncore = obj0.d
     σHat = include_truncated_moment ? ctx.σ : nothing
+    μHat = include_truncated_moment ? ctx.μHat : nothing
     CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L;
-        include_truncated_moment = include_truncated_moment, σHat = σHat,
+        include_truncated_moment = include_truncated_moment, σHat = σHat, μHat = μHat,
         contrasts = contrasts, probs = probs)
     ncm = size(CM, 2)
     @assert ncm == n_cm_moments(ctx.D, L; include_truncated_moment = include_truncated_moment)

@@ -79,12 +79,11 @@ function find_feasible_L(ctx, x_free0; Ls = (10, 9, 8, 7, 6, 5, 4, 3, 2))   # L=
     return nothing
 end
 
-for W in (100_000,)   # 2026-08-05: W=5000/20000 already run separately (see MASTER.md/final report --
-    # both feasible-both-family-counts probes exhausted down to L=2, raw calibration point CM-
-    # infeasible for either family count at those W, a genuine pre-existing-at-W<80k finding per
-    # d20-realdata-w-sensitivity, not a bug); re-running only W=100,000 here (where L=10 IS feasible
-    # for both family counts) for the full cold/warm/verify/gradient gate, to avoid re-paying the
-    # ~30-60s W=5000/20000 context-build cost for a result already captured.
+for W in (5_000, 20_000, 100_000)   # 2026-08-05: REDONE after fixing the raw-U-vs-Frechet-z bug in
+    # the eq.36 exponent (precalc_common_marginals_cdf now uses z=U^(-mu), not raw U^(1-sigma)) --
+    # the earlier -300/-400 infeasibility findings at W=5,000/20,000 were caused by that bug (a
+    # divergent power-moment magnitude), NOT a genuine W-sensitivity/feasibility-boundary finding;
+    # re-running the full W-grid now that the feature itself is fixed.
     println("="^100); println("D20 real-data, W=$W, two-family flexible CM"); flush(stdout)
     println("="^100)
     t_ctx0 = time()
@@ -130,8 +129,8 @@ for W in (100_000,)   # 2026-08-05: W=5000/20000 already run separately (see MAS
     t_cold0 = time()
     base_cold = archC_base_state(x_free0, pcx.ctx_cm, pcx.cctx)
     t_cold = time() - t_cold0
-    check("W=$W: cold solve feasible", base_cold.nStatus in (0, -100, -101, -102, -103))
-    println("  cold solve: $(round(t_cold,digits=2))s  nStatus=$(base_cold.nStatus)")
+    check("W=$W: cold solve feasible", base_cold.inner_status in (0, -100, -101, -102, -103))
+    println("  cold solve: $(round(t_cold,digits=2))s  nStatus=$(base_cold.inner_status)")
     flush(stdout)
 
     # warm solve (reuse obj.x from the cold solve -- the SAME converged iterate, matched-optimizer,
@@ -139,10 +138,10 @@ for W in (100_000,)   # 2026-08-05: W=5000/20000 already run separately (see MAS
     t_warm0 = time()
     base_warm = archC_base_state(x_free0, pcx.ctx_cm, pcx.cctx)
     t_warm = time() - t_warm0
-    check("W=$W: warm solve feasible", base_warm.nStatus in (0, -100, -101, -102, -103))
+    check("W=$W: warm solve feasible", base_warm.inner_status in (0, -100, -101, -102, -103))
     check("W=$W: warm solve reproduces cold Delta (same problem, same point)",
           isapprox(delta_dual_from_base(pcx.ctx_cm.obj, base_cold), delta_dual_from_base(pcx.ctx_cm.obj, base_warm); atol=1e-6, rtol=1e-6))
-    println("  warm solve: $(round(t_warm,digits=2))s  nStatus=$(base_warm.nStatus)  Delta_dual=$(round(delta_dual_from_base(pcx.ctx_cm.obj, base_warm),digits=6))")
+    println("  warm solve: $(round(t_warm,digits=2))s  nStatus=$(base_warm.inner_status)  Delta_dual=$(round(delta_dual_from_base(pcx.ctx_cm.obj, base_warm),digits=6))")
     flush(stdout)
 
     # verification
@@ -163,6 +162,7 @@ for W in (100_000,)   # 2026-08-05: W=5000/20000 already run separately (see MAS
       # 2026-08-05: defensive -- do not let one W's unexpected solver status (e.g. a status this
       # repo's archC_base_state doesn't accept, like -102, at a marginally-feasible probe point)
       # abort the whole script and lose the other W's results.
+      global nfail
       nfail += 1
       println("  FAIL  W=$W real-solve gate raised: ", sprint(showerror, e))
       flush(stdout)
