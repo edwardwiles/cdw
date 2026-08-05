@@ -194,27 +194,36 @@ never shrinking — KNITRO gave up because it detected it *couldn't* move, not b
 genuine KKT point, despite `Δ*=0.0039` having enormous slack against the `δ=0.1` budget (no
 legitimate feasibility reason to be stuck).
 
-**Root cause identified and reproduced** (see
-[[feedback-gp-perturbation-degenerate-a-od-decode-bug]], full detail + repro script at
-`/bbkinghome/edav/repo_scratch/zc-frechet-draw-moments-2026-08-05/gp_bug_repro/`): perturbing
-`w[1]=gp` in isolation (holding the `a`-space A_od coordinates fixed, exactly what a KNITRO line
-search does) decodes to an `A_od` block where **all 20 origins collapse to one identical repeated
-constant**, instead of the varied values the calibration point has — an economically degenerate,
-infeasible point whose inner solve hard-fails (`nStatus=-300`). Since `cm_z_from_a`/`pivot_expand`
-should be pure functions of `w[2:end]` (theta_cm/xy_cm/pe are all fixed, independent of gp), this
-looks like a genuine coordinate-decode bug in `cm_aspace_coordinate.jl` or the KNITRO
-objective/gradient callback wiring in `cm_originzc_checkpoint.jl`/`cm_checkpoint.jl` — **not** the
-ZC-basis fix (confirmed distinct from, though reminiscent of, a previously-documented but
-different gp-gradient-magnitude bug on the REDUCED formulation,
-[[profiled-functional-readiness-closeout-2026-08-04-phase2-status]]). This plausibly explains the
-whole-campaign stall: if any real step in `gp` produces a similarly degenerate point, KNITRO's
-barrier method has no way to make progress regardless of how much slack the true problem has.
+**Investigated (repro script + full detail: [[feedback-gp-perturbation-degenerate-a-od-decode-bug]],
+`/bbkinghome/edav/repo_scratch/zc-frechet-draw-moments-2026-08-05/gp_bug_repro/`). First hypothesis
+was WRONG and is retracted here**: initially looked like perturbing `w[1]=gp` in isolation decoded
+to a degenerate `A_od` (all 20 origins collapsed to one constant). Follow-up check disproved this
+— the *unperturbed* calibration point's own `A_od` (inspected properly: full min/max/std, not one
+column) spans `9.0` to `6.6e6`, genuinely varied; what looked like collapse was one destination
+column, and **every column is constant across origins but varies across destinations** — i.e.
+`θ0_up` (the pre-step starting point, not a converged solution) is genuinely **origin-symmetric**
+at this point, a real structural property, not a decode defect. `cm_z_from_a` is confirmed both
+mathematically (never takes `w[1]`) and empirically (`max abs diff`=`0.0` between perturbed/
+unperturbed decodes) to be correctly independent of `gp`.
+
+**The real, narrower, still-open finding**: with `A_od` held exactly fixed at this
+origin-symmetric value, shifting `gp` alone by `+1e-3` takes `origin_zc`'s K=3 inner problem from
+comfortably feasible (`Δ*=0.0095`) to hard-infeasible (`nStatus=-300`) — real and reproducible,
+but whether this is a genuine bug or an inherent extreme-sensitivity property of an
+origin-specific restriction evaluated near an origin-symmetric starting point is **not
+established**. Supporting evidence for the latter: `common_frechet` (a *non*-origin-specific
+restriction, same session, same `powered_aspace` encoding) moved `gp` freely with real step sizes
+from a presumably similarly-symmetric start — so the shared coordinate machinery is not globally
+broken. Next diagnostic steps (not yet done): check whether `cm_meanzc` (shared, non-origin-specific
+`ν_k`) also stalls; check whether a *joint* (gp,A) perturbation — not gp held-isolated — stays
+feasible, since that's what a real KNITRO step actually explores.
 
 **All 4 chains killed and left paused** rather than continue burning compute on likely-non-convergent
-"results." This is a pre-existing bug outside the scope of the ZC-basis-fix task — flagged clearly
-for an explicit decision on priority rather than attempted blind. Logs from all 5 launch attempts
-preserved at `POST_VERIFY_FIX/chain_logs/*_wrapper.log` (suffixes: none, `_calib2`, `_calib3`) and
-per-delta subdirs, not deleted.
+"results." This is a pre-existing property/possible-issue outside the scope of the ZC-basis-fix
+task — flagged clearly, with the correction above, for an explicit decision on priority rather
+than pursued further or fixed blind. Logs from all 5 launch attempts preserved at
+`POST_VERIFY_FIX/chain_logs/*_wrapper.log` (suffixes: none, `_calib2`, `_calib3`) and per-delta
+subdirs, not deleted.
 
 ## 11. Deferred (per explicit user instruction, after FULL campaign launch)
 
