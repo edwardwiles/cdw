@@ -1268,9 +1268,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # as before); only the ASSEMBLY of the final KNITRO-facing gradient vector changes, here.
         if is_meanzc && meanzc_profiled_level !== nothing
             k0 = meanzc_profiled_level
-            d_eta_k0 = gfull[D2_econ+k0]        # d(Delta)/d(eta_nu_k0), still correct as computed
-            dν_dgp = ctx.σ * νvec[k0] / w[1]     # nu_k0 = cf_denom/cf_num, cf_denom=gp^sigma*const
-            gfull[1] += d_eta_k0 * dν_dgp        # chain rule: nu_k0 now an implicit function of gp
+            # d_eta_k0 = d(Delta)/d(eta_nu_k0) = nu_k0 * d(Delta)/d(nu_k0) (eta=log(nu), still
+            # correct as computed -- d_delta_dual_d_eta_nu_vec = nu .* d_delta_dual_d_nu_vec).
+            # The needed correction is d(Delta)/d(nu_k0) * d(nu_k0)/d(gp), NOT d_eta_k0 *
+            # d(nu_k0)/d(gp) -- the two nu_k0 factors (one implicit in d_eta_k0, one in
+            # d(nu_k0)/d(gp)=sigma*nu_k0/gp) cancel exactly: d(Delta)/d(nu_k0) = d_eta_k0/nu_k0, so
+            # the correction is (d_eta_k0/nu_k0)*(sigma*nu_k0/gp) = d_eta_k0*sigma/gp.
+            d_eta_k0 = gfull[D2_econ+k0]
+            gfull[1] += d_eta_k0 * ctx.σ / w[1]  # chain rule: nu_k0 now an implicit function of gp
             gfull[D2_econ+k0] = 0.0              # w's own eta_nu_k0 coordinate has ZERO effect on
             # the objective now (nuvec[k0] no longer reads from it) -- its correct partial
             # derivative is exactly 0, not the d(Delta)/d(eta_nu_k0) quantity just consumed above.
