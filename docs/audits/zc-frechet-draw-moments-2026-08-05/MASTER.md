@@ -194,36 +194,52 @@ never shrinking — KNITRO gave up because it detected it *couldn't* move, not b
 genuine KKT point, despite `Δ*=0.0039` having enormous slack against the `δ=0.1` budget (no
 legitimate feasibility reason to be stuck).
 
-**Investigated (repro script + full detail: [[feedback-gp-perturbation-degenerate-a-od-decode-bug]],
-`/bbkinghome/edav/repo_scratch/zc-frechet-draw-moments-2026-08-05/gp_bug_repro/`). First hypothesis
-was WRONG and is retracted here**: initially looked like perturbing `w[1]=gp` in isolation decoded
-to a degenerate `A_od` (all 20 origins collapsed to one constant). Follow-up check disproved this
-— the *unperturbed* calibration point's own `A_od` (inspected properly: full min/max/std, not one
-column) spans `9.0` to `6.6e6`, genuinely varied; what looked like collapse was one destination
-column, and **every column is constant across origins but varies across destinations** — i.e.
-`θ0_up` (the pre-step starting point, not a converged solution) is genuinely **origin-symmetric**
-at this point, a real structural property, not a decode defect. `cm_z_from_a` is confirmed both
-mathematically (never takes `w[1]`) and empirically (`max abs diff`=`0.0` between perturbed/
-unperturbed decodes) to be correctly independent of `gp`.
+**Fully investigated and resolved (repro scripts + full detail:
+[[feedback-gp-perturbation-degenerate-a-od-decode-bug]],
+`/bbkinghome/edav/repo_scratch/zc-frechet-draw-moments-2026-08-05/gp_bug_repro/`). Two earlier
+hypotheses were wrong and are retracted (both superseded by the finding below):**
+1. First hypothesis (wrong): an isolated `w[1]=gp` perturbation decodes to a degenerate `A_od`.
+   Disproved — `cm_z_from_a` is confirmed both mathematically and empirically independent of
+   `gp`; the "collapse" was a single destination column, not the whole matrix.
+2. Second hypothesis (wrong, per direct user pushback and a decisive comparison against the
+   actual pre-fix run's own preserved log): "inherent extreme-sensitivity of an origin-specific
+   restriction near an origin-symmetric point." Disproved by two direct tests: (a) the same
+   `gp+1e-3` perturbation was tested against `δ` budgets spanning `0.1` to `50` (500×) — **every**
+   one hard-fails with `nStatus=-300`, ruling out a threshold-abort/budget artifact (`-300` in
+   this dual-convex setting is a confirmed genuine infeasibility certificate, this repo's own
+   established rule); (b) the actual pre-fix `origin_zc` campaign log (`chain_logs/origin_zc_upper/
+   delta_0.01.log`, timestamped before this session touched anything) shows **real, substantial**
+   `gp` movement (`||Step||` in the `1e-2`–`1e-4` range, not machine noise) — so the old
+   restriction did not have this problem from a comparable start.
 
-**The real, narrower, still-open finding**: with `A_od` held exactly fixed at this
-origin-symmetric value, shifting `gp` alone by `+1e-3` takes `origin_zc`'s K=3 inner problem from
-comfortably feasible (`Δ*=0.0095`) to hard-infeasible (`nStatus=-300`) — real and reproducible,
-but whether this is a genuine bug or an inherent extreme-sensitivity property of an
-origin-specific restriction evaluated near an origin-symmetric starting point is **not
-established**. Supporting evidence for the latter: `common_frechet` (a *non*-origin-specific
-restriction, same session, same `powered_aspace` encoding) moved `gp` freely with real step sizes
-from a presumably similarly-symmetric start — so the shared coordinate machinery is not globally
-broken. Next diagnostic steps (not yet done): check whether `cm_meanzc` (shared, non-origin-specific
-`ν_k`) also stalls; check whether a *joint* (gp,A) perturbation — not gp held-isolated — stays
-feasible, since that's what a real KNITRO step actually explores.
+**Root cause, confirmed decisively**: `θ0_up` (the *shared*, family-agnostic pre-step Fréchet
+calibration — built once via `master_prepare_cc`/`build_theta_gammanorm`, before any KNITRO call
+and before any family-specific code runs) has a genuinely **origin-symmetric `A_od` block**: for
+every destination, all 20 origins carry the *exact same* value (std ≈ `3e-11`, i.e. identical to
+machine precision), while destination-to-destination variation is real and large (`9.0` to
+`6.6e6`). Verified three independent ways: (1) direct index mapping via `ctx.Aod_free_pos`, not
+just a reshape assumption; (2) rebuilt via a genuinely minimal include path that never loads any
+origin_zc/cm_meanzc code at all — identical result to 15+ significant figures; (3) the pattern is
+present in the raw, unreshaped `θ0_up` vector itself, in exact `D`-sized (20-element) constant
+blocks. **This is not caused by, and has nothing to do with, the ZC-basis fix, the outer solver,
+or any code this session touched** — it is a pre-existing property of the shared calibration
+pipeline that the old campaign never actually started from (its own preserved log shows it was
+seeded from a real, previously-*solved* K=1 economic state via a `K1_to_K3_transplant` token, not
+from raw `θ0_up`). Per this session's own explicit user instruction to seed only from "the
+calibration point," this session's seeds used raw `θ0_up` directly — which turns out not to be a
+valid, origin-identified starting point for *any* origin-specific outer search, regardless of
+which restriction is layered on top. It also directly contradicts this repo's own established
+CLAUDE.md finding that `θ0_up`'s `A_od` spans ~11 orders of magnitude (implicitly, with real
+origin-level variation) — that tension is unresolved and is the single most important open item
+for a follow-up session, entirely upstream of and unrelated to the ZC-restriction fix.
 
-**All 4 chains killed and left paused** rather than continue burning compute on likely-non-convergent
-"results." This is a pre-existing property/possible-issue outside the scope of the ZC-basis-fix
-task — flagged clearly, with the correction above, for an explicit decision on priority rather
-than pursued further or fixed blind. Logs from all 5 launch attempts preserved at
-`POST_VERIFY_FIX/chain_logs/*_wrapper.log` (suffixes: none, `_calib2`, `_calib3`) and per-delta
-subdirs, not deleted.
+**All 4 chains killed and left paused.** This is a pre-existing calibration-pipeline issue,
+confirmed out of scope for the ZC-basis-fix task and not attempted this session. The correct path
+to actually run the K=3 campaign is to seed from a real, previously-converged economic (gp, A)
+state (valid regardless of which code produced it — warm-start reuse never affects correctness,
+this repo's own confirmed rule) combined with the corrected `ν=Γ(1-μk)` target — not raw `θ0_up`.
+Logs from all 5 launch attempts preserved at `POST_VERIFY_FIX/chain_logs/*_wrapper.log` (suffixes:
+none, `_calib2`, `_calib3`) and per-delta subdirs, not deleted.
 
 ## 11. Deferred (per explicit user instruction, after FULL campaign launch)
 
