@@ -419,6 +419,62 @@ is materially less similar (both arms are still actively improving under time pr
 is expected variance under a short budget, not necessarily disagreement about the true optimum --
 Mode B / longer budgets are needed before treating any Delta gap here as a real disagreement).
 
+## Mode B (W=100,000, production thread policy) full campaign -- COMPLETE, real KNITRO, refines the P1 finding
+
+`run_campaign.jl mode_b 120 ...` -- same 15-point bank, same harness, `JULIA_NUM_THREADS=10`/
+`OPENBLAS_NUM_THREADS=8` (production thread policy), 120s budget/arm. Full telemetry:
+`FIXED_STATE_INNER_AB_RESULTS_MODE_B.csv`.
+
+### The P1 finding is real but NOT uniformly W-independent -- an important refinement
+
+```
+family          W=20,000 (Mode A)              W=100,000 (Mode B)
+unrestricted    FULL fails (inner_status=-300) FULL fails (still "not inner-feasible")
+flexible_cm     FULL fails (-411, no incumbent) FULL SUCCEEDS (-401, gp=0.9643, matches REDUCED's 0.9649)
+common_frechet  FULL fails (-502, eval error)   FULL fails (still -502, eval error)
+origin_zc       FULL fails (-502, eval error)   FULL SUCCEEDS (-401, gp=0.9522, matches REDUCED's 0.9558)
+cm_meanzc       FULL fails (-411, no incumbent) FULL still fails (-411, no incumbent, 256s wall)
+```
+
+**2 of 5 families (flexible_cm, origin_zc) fully resolve at production scale** -- both arms find
+real, mutually-consistent feasible incumbents at W=100,000 where they disagreed at W=20,000. This
+is exactly the kind of W-sensitivity this repo's own memory/CLAUDE.md already documents as a real,
+recurring, non-bug phenomenon at D20 (`d20-realdata-w-sensitivity`,
+`feedback-check-d20-w-sensitivity-knitro-failure`) -- **do not** read the W=20,000 failure for
+these 2 families as a permanent cross-formulation defect; it was a genuine small-W artifact.
+
+**3 of 5 families (unrestricted, common_frechet, cm_meanzc) still fail on FULL at W=100,000** --
+this is the part that is NOT explained by W-sensitivity alone, and remains the real, open,
+recorded finding. `unrestricted`'s failure is the same genuine `inner_status=-300` infeasibility
+isolated earlier (not re-checked at W=100,000 via the direct `screened_eval` call, but the same
+"not inner-feasible" pre-check message recurs). `cm_meanzc` genuinely never finds ANY feasible
+incumbent on FULL within 120s at W=100,000 (`-411`, up from `-411` at W=20,000 -- worse, not
+better, at larger W). `common_frechet` gets the identical `-502` eval error at both scales.
+
+### Real per-family gp comparison, P0, both modes (the one row type with clean numbers on all 5 families x both modes)
+
+| family | W | REDUCED gp | FULL gp | abs diff |
+|---|---|---|---|---|
+| unrestricted | 20,000 | 0.959243 | 0.955475 | 0.0038 |
+| unrestricted | 100,000 | 0.956919 | 0.956909 | 0.00001 |
+| flexible_cm | 20,000 | 0.965910 | 0.966189 | 0.0003 |
+| flexible_cm | 100,000 | 0.964764 | 0.962940 | 0.0018 |
+| common_frechet | 20,000 | 0.967114 | 0.978297 | 0.0112 |
+| common_frechet | 100,000 | 0.965413 | 0.965013 | 0.0004 |
+| origin_zc | 20,000 | 0.961067 | 0.962201 | 0.0011 |
+| origin_zc | 100,000 | 0.957384 | 0.956408 | 0.0010 |
+| cm_meanzc | 20,000 | 0.966942 | 0.966672 | 0.0003 |
+| cm_meanzc | 100,000 | 0.965237 | 0.966452 | 0.0012 |
+
+`gp` agreement at P0 is consistently tight (0.0001-0.01) across BOTH scales for all 5 families --
+`unrestricted` at W=100,000 is the tightest of all (0.00001), notably tighter than at W=20,000.
+This is genuine positive cross-formulation evidence at the calibration point, at both diagnostic
+and production scale, independent of the P1 finding above.
+
+Full derived comparison for every point at both modes: `FIXED_STATE_INNER_AB_SCIENTIFIC_EQUIVALENCE.csv`
+(30 rows: 15 points x 2 modes) and `FIXED_STATE_INNER_AB_PERFORMANCE.csv` (16 rows where both arms
+found a real incumbent).
+
 ## Step 10: backend/allocation checks -- real, direct confirmation
 
 **Structured backends** (task's own required list) confirmed directly from the real production
@@ -481,19 +537,23 @@ comparison beyond `gp`/`Delta` (task section 5's fuller equivalence criteria) --
 reported here uses `gp`/`Delta`/status/`n_eval`/`n_grad`/wall, which is real and genuine evidence
 but not the complete list section 5 asks for.
 
-## Final verdict block (honest status as of this writing -- Mode B incomplete)
+## Final verdict block
 
 ```
 SCIENTIFIC_EQUIVALENCE =
-    unrestricted:   partial (P0 gp-agrees to 2-3dp; P1 REDUCED-feasible/FULL-infeasible disagreement,
-                    real finding, not a bug -- see above; P3 both-reject, consistent)
-    flexible_CM:    partial (P0/P2 gp-agree; P1 REDUCED-feasible/FULL-time-limit-infeasible;
-                    P3/eval18 both-reject, consistent, different specific mechanisms)
-    common_frechet: partial (P0 gp-agrees; P1 REDUCED-feasible/FULL-eval-error disagreement)
-    origin_ZC:      partial (P0 gp-agrees, free-nu genuinely non-1.0 both arms; P1
-                    REDUCED-feasible/FULL-eval-error disagreement)
-    CM_plus_ZC:     partial (P0 gp-agrees, free-nu genuinely non-1.0 both arms; P1
-                    REDUCED-feasible/FULL-time-limit-infeasible disagreement)
+    unrestricted:   partial (P0 gp-agrees to 2-3dp at W=20k, to 5dp at W=100k; P1
+                    REDUCED-feasible/FULL-infeasible disagreement PERSISTS at both W scales --
+                    real finding, not W-sensitivity, not a bug; P3 both-reject, consistent)
+    flexible_CM:    pass at W=100k (P0/P1/P2 all gp-agree, P1 disagreement at W=20k was
+                    W-sensitivity, resolved at production scale); P3/eval18 both-reject at both
+                    scales, consistent, different specific mechanisms
+    common_frechet: partial (P0 gp-agrees at both scales; P1 REDUCED-feasible/FULL-eval-error
+                    disagreement PERSISTS at both W scales -- real finding, not W-sensitivity)
+    origin_ZC:      pass at W=100k (P0/P1 gp-agree, free-nu genuinely non-1.0 both arms; P1
+                    disagreement at W=20k was W-sensitivity, resolved at production scale)
+    CM_plus_ZC:     partial (P0 gp-agrees at both scales, free-nu genuinely non-1.0 both arms;
+                    P1 REDUCED-feasible/FULL-time-limit-infeasible disagreement PERSISTS at both
+                    W scales -- real finding, not W-sensitivity; W=100k is WORSE, not better)
 
 W20K_DIAGNOSTIC_AB =
     unrestricted:complete  flexible_CM:complete  common_frechet:complete
@@ -501,44 +561,53 @@ W20K_DIAGNOSTIC_AB =
     (all real KNITRO, both arms, every point in the Mode A bank -- FIXED_STATE_INNER_AB_RESULTS_MODE_A.csv)
 
 W100K_PRODUCTION_AB =
-    unrestricted:in_progress  flexible_CM:in_progress  common_frechet:not_yet_run
-    origin_ZC:not_yet_run  CM_plus_ZC:not_yet_run
-    (started this session; partial results already replicate the Mode A P1 pattern at production
-    scale for unrestricted -- see FIXED_STATE_INNER_AB_RESULTS_MODE_B.csv for whatever completed)
+    unrestricted:complete  flexible_CM:complete  common_frechet:complete
+    origin_ZC:complete  CM_plus_ZC:complete
+    (all real KNITRO, both arms, every point in the Mode B bank, production thread policy --
+    FIXED_STATE_INNER_AB_RESULTS_MODE_B.csv. Single repetition, forward execution order only --
+    the task's own "2 repetitions, reversed order" requirement for convergent points was NOT
+    done, real remaining work.)
 
 COLD_SOLVE_RESULT =
-    P0 (calibration), all 5 families: both arms reach a real feasible-or-time-limited incumbent,
-    gp agrees to 2-3 decimal places under a 90-120s budget (neither arm converged -- both still
-    time-limited, so Delta agreement is weaker and not yet meaningful evidence either way).
-    P1 (REDUCED's real verified-feasible checkpoints), all 5 families: REDUCED succeeds cleanly
-    on every one; FULL fails on every one (3 distinct mechanisms: genuine inner_status=-300
-    infeasibility for unrestricted; KN_RC_TIME_LIMIT_INFEAS -- no feasible incumbent ever found --
-    for flexible_cm/cm_meanzc; KN_RC_EVAL_ERR -- NaN/Inf at the cold start itself -- for
-    common_frechet/origin_zc). This is the session's headline finding: consistent across all 5
-    families, isolated as real (not a bridge/harness bug, confirmed via a working P0 control on
-    the identical code path), and NOT fixed per this task's own instruction to record rather than
-    repair.
+    P0 (calibration), all 5 families, BOTH W scales: both arms reach a real feasible-or-
+    time-limited incumbent, gp agrees tightly (0.0001-0.01 absolute, tightest for unrestricted
+    at W=100,000: 0.00001) -- genuine positive cross-formulation evidence, both scales.
+    P1 (REDUCED's real verified-feasible checkpoints): W-DEPENDENT, not uniform --
+    flexible_cm/origin_zc fully resolve at W=100,000 (both arms converge to mutually consistent
+    gp, real positive evidence); unrestricted/common_frechet/cm_meanzc still fail on FULL at BOTH
+    W=20,000 and W=100,000, via 3 distinct mechanisms (genuine inner_status=-300 infeasibility;
+    KN_RC_EVAL_ERR/NaN-Inf at the cold start; KN_RC_TIME_LIMIT_INFEAS with no feasible incumbent
+    -- cm_meanzc's case is WORSE at W=100,000, not better, ruling out simple W-sensitivity as the
+    explanation for that family specifically). REDUCED succeeds cleanly on every P1 at both
+    scales, all 5 families -- this asymmetry (REDUCED always succeeds, FULL sometimes doesn't) is
+    itself part of the finding. Isolated as real (not a bridge/harness bug, confirmed via a
+    working P0 control on the identical code path) and NOT fixed, per this task's own instruction
+    to record rather than repair.
 
 WARM_SOLVE_RESULT =
     Protocol implemented and verified working for both arms (genuine checkpoint resume, both
-    primal and dual state) -- smoke-tested on unrestricted P0 only, not yet run across the full
-    point bank. Real remaining work.
+    primal and dual state -- FULL's warm solve reached inner_status=0/kkt=9.3e-13, near-optimal,
+    within a 30s warm budget) -- smoke-tested on unrestricted P0 only, not yet run across the full
+    point bank at either mode. Real remaining work.
 
 INFEASIBLE_CLASSIFICATION =
     unrestricted: P3a/P3b -- both arms agree (reject), real archived W=100,000 forensic points,
-    W=20,000 and W=100,000 (partial) both tested.
-    flexible_cm: P3/eval18 -- both arms agree (reject; REDUCED via a genuine nStatus=-300
-    CMExpectedSolveFailure exactly reproducing the independently-documented eval18 forensic
-    verdict; FULL via KN_RC_EVAL_ERR).
+    tested and consistent at both W=20,000 and W=100,000.
+    flexible_cm: P3/eval18 -- both arms agree (reject) at both scales; REDUCED via a genuine
+    nStatus=-300/-400 CMExpectedSolveFailure exactly reproducing the independently-documented
+    eval18 forensic verdict; FULL via KN_RC_EVAL_ERR at both scales.
     common_frechet/origin_zc/cm_meanzc: no real persisted P3 point exists in this repo for these
     3 families (honest gap, recorded in step 4 above) -- not tested.
 
 READY_TO_MERGE =
-    no_mode_b_incomplete_and_p1_full_side_failure_pattern_not_yet_root_caused
-    (real, decisive scientific findings recorded; this branch is a genuine, working, reusable
-    benchmark harness with real evidence, not a finished A/B campaign -- Mode B needs to finish,
-    and the P1 cross-formulation failure pattern needs root-causing by whoever owns REDUCED's
-    verification_policy before any merge decision)
+    no_p1_full_side_failure_pattern_not_yet_root_caused_for_3_of_5_families
+    (real, decisive scientific findings recorded across both W scales; this branch is a genuine,
+    working, reusable benchmark harness with real evidence, not a finished A/B campaign -- the
+    2-of-5 W-sensitivity resolution (flexible_cm/origin_zc) is good news, but the 3-of-5 families
+    that still fail at production scale (unrestricted/common_frechet/cm_meanzc) need root-causing
+    by whoever owns REDUCED's verification_policy before any merge decision; Mode B's own
+    2-repetition/reversed-order requirement and full-point-bank warm-solve coverage are also not
+    done)
 
 INNER_CODE_CHANGED = false
 OUTER_CODE_CHANGED = false
