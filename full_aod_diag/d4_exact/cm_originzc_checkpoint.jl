@@ -23,8 +23,27 @@ isdefined(Main, :CMProductionEvalKey) || include(joinpath(@__DIR__, "cm_exact_ca
 isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logic.jl"))   # 2026-07-28 lower-direction wiring: pure, KNITRO-free find_smallest-aware incumbent comparison, reused (not re-derived) from the unrestricted family's own validated helper
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
+isdefined(Main, :aod_pow_matrix) || include(joinpath(@__DIR__, "compressed_live.jl"))   # k=(sigma-1) narrow fix: aod_pow_matrix
+isdefined(Main, :autarky_cf_scalars) || include(joinpath(@__DIR__, "autarky_cf.jl"))   # k=(sigma-1) narrow fix: autarky_cf_scalars
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
+
+"""
+    originzc_profiled_nu_value(xf, ctx) -> Float64
+
+k=(sigma-1) exact-collinearity narrow fix, origin-ZC analog of
+`meanzc_profiled_nu_value` (cm_checkpoint.jl) -- identical formula (the autarky/
+counterfactual price-index moment's own target for country `bi=baseIndex`), given
+its own name here rather than reused across files to avoid any include-order
+dependency between cm_checkpoint.jl and this file.
+"""
+function originzc_profiled_nu_value(xf::AbstractVector{Float64}, ctx)
+    θ_full = CS.reconstruct_full(xf, ctx.m)
+    AodPow = aod_pow_matrix(θ_full, ctx)
+    γ_prime_bi = θ_full[3+ctx.D]
+    cf_num, cf_denom, _ = autarky_cf_scalars(ctx.obj, AodPow, ctx.σ, γ_prime_bi)
+    return cf_denom / cf_num
+end
 # Bumped 4 -> 5 (origin-specific-ZC integration, 2026-07-23): adds
 # distribution_restriction, power_target_layout, origin_D to the persisted
 # schema. `cm_extension`/`meanzc_K_mean`/`meanzc_K_pair`/`meanzc_basis`/
@@ -524,6 +543,26 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # block is entirely orthogonal to this choice (same as CM's own eta_nu), untouched either
         # way. :powered_aspace (fixed-theta only) | :legacy_z (byte-identical to every pre-existing
         # origin-ZC production run, explicit replication mode).
+        originzc_profiled_level::Union{Nothing,Int} = nothing,   # k=(sigma-1) exact-collinearity
+        # narrow fix, origin-ZC analog of run_cm_upper_checkpointed's meanzc_profiled_level (see
+        # that kwarg's own docstring for the shared mechanism/evidence, and
+        # docs/audits/cmzc-k2-singularity-2026-08-05/MASTER.md). UNLIKE cm_meanzc, origin-ZC has NO
+        # common marginals -- every origin o carries its OWN independent nu_{o,k}
+        # (OriginByPowerLayout, production default power_target_layout=:origin_by_power,
+        # target_index(layout,o,k)=(k-1)*D+o, cm_originzc_target_layout.jl). The autarky/
+        # counterfactual price-index moment is specific to ONE country (bi=baseIndex) -- only
+        # nu_{bi,k0} is exactly collinear with it; every OTHER origin's nu_{o,k0} (o!=bi) is a
+        # perfectly ordinary, independent, uncorrelated restriction and must NOT be touched.
+        # Default `nothing`: zero behavior change for every existing caller. When set to k0,
+        # exactly ONE entry of the length-K_mean*D `nuvec` is overridden --
+        # `nuvec[target_index(layout,ctx.bi,k0)]` -- at the single upstream point where the outer
+        # KNITRO guess is unpacked (cb_F!/cb_G!/backend-switch verify/final verify), exactly
+        # mirroring meanzc_profiled_level's own single-substitution contract. Same companion
+        # cb_G! consequence: d(Delta)/d(gp) += d_eta[idx]*sigma/gp (the two implicit nu_{bi,k0}
+        # factors cancel -- d_eta[idx]=nu_{bi,k0}*d(Delta)/d(nu_{bi,k0}), d(nu_{bi,k0})/d(gp)=
+        # sigma*nu_{bi,k0}/gp), and gfull[D2_econ+idx] is zeroed (that ONE w-coordinate now has
+        # zero effect on the objective; every other origin's eta_{o,k0} coordinate is untouched
+        # and remains genuinely free).
         )   # architecture/production-operator-bundle-hardening-2026-07-30: the
         # moment_representation kwarg that previously lived here is REMOVED, not defaulted --
         # production runners must not accept a representation choice at all (task §2). This
@@ -628,6 +667,17 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         cm_z_from_a(w_econ[2:end], theta_cm, xy_cm, pe) : w_econ[2:end]
     layout = originzc_make_layout(cfg, D)
     originzc_validate_bounds(cfg, layout)
+    originzc_profiled_idx = nothing
+    if originzc_profiled_level !== nothing
+        layout isa OriginByPowerLayout ||
+            error("run_originzc_upper_checkpointed($label): originzc_profiled_level requires power_target_layout=:origin_by_power, got layout=$(typeof(layout))")
+        1 <= originzc_profiled_level <= layout.K_mean ||
+            error("run_originzc_upper_checkpointed($label): originzc_profiled_level=$originzc_profiled_level out of range 1:$(layout.K_mean)")
+        originzc_profiled_idx = target_index(layout, ctx.bi, originzc_profiled_level)
+        lp("[", label, "] k=(sigma-1) narrow fix ACTIVE: originzc_profiled_level=", originzc_profiled_level,
+           " -- nu_{bi=", ctx.bi, ",", originzc_profiled_level, "} (index ", originzc_profiled_idx,
+           " of ", n_eta(layout), ") replaced by cf_denom/cf_num (autarky_cf.jl); every other origin's nu untouched.")
+    end
 
     if resumed !== nothing
         (power_target_layout != :origin_by_power || resumed.origin_D == D) ||
@@ -684,6 +734,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     if backend_switched && resumed.best_feasible !== nothing
         xf_switch = xf_from_w_econ(resumed.best_feasible.w[1:D2_econ])
         νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
+        originzc_profiled_idx === nothing || (νvec_switch[originzc_profiled_idx] = originzc_profiled_nu_value(xf_switch, ctx))
         (_, _, vs) = cm_originzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters)
         is_verified_success(vs) ||
             error("run_originzc_upper_checkpointed($label): backend switch on resume requested, but the resumed " *
@@ -753,6 +804,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         w = evalRequest.x
         xf = xf_from_w_econ(w[1:D2_econ])
         νvec = exp.(w[D2_econ+1:end])
+        originzc_profiled_idx === nothing || (νvec[originzc_profiled_idx] = originzc_profiled_nu_value(xf, ctx))
         local base, verify
         # L/contrasts have no meaning for origin-ZC (no CM grid) -- 0/:none sentinels; family_tag
         # (:origin_zc, fixed per driver) plus a FRESH per-call cache (never shared across driver
@@ -795,6 +847,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         w = evalRequest.x
         xf = xf_from_w_econ(w[1:D2_econ])
         νvec = exp.(w[D2_econ+1:end])
+        originzc_profiled_idx === nothing || (νvec[originzc_profiled_idx] = originzc_profiled_nu_value(xf, ctx))
         shared = last_F_state[]
         matched = shared !== nothing && shared.w == w
         base = matched ? shared.base : nothing
@@ -805,6 +858,16 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         else
             cm_originzc_production_gradient(xf, νvec, pcx, ctx, pe;
                 base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        end
+        # k=(sigma-1) narrow fix: same ONE necessary consequence as run_cm_upper_checkpointed's
+        # meanzc_profiled_level (see that kwarg's own docstring for the corrected derivation --
+        # the two implicit nu_{bi,k0} factors cancel, d(Delta)/d(gp) += d_eta[idx]*sigma/gp, NOT
+        # d_eta[idx]*sigma*nu_{bi,k0}/gp). Every OTHER origin's eta_{o,k0} coordinate (o!=bi) is
+        # completely untouched and remains a genuinely free, independent outer coordinate.
+        if originzc_profiled_idx !== nothing
+            d_eta_idx = gfull[D2_econ+originzc_profiled_idx]
+            gfull[1] += d_eta_idx * ctx.σ / w[1]
+            gfull[D2_econ+originzc_profiled_idx] = 0.0
         end
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
@@ -839,6 +902,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     local verify_final
     try
         νvec_final = exp.(xsol_v[D2_econ+1:end])
+        originzc_profiled_idx === nothing || (νvec_final[originzc_profiled_idx] = originzc_profiled_nu_value(xf_final, ctx))
         _, _, verify_final = cm_originzc_production_value_verified_screened(xf_final, νvec_final, pcx; counters = pcx.screen_counters)
     catch e
         e isa CMExpectedSolveFailure || rethrow()
