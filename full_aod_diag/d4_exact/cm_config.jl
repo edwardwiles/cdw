@@ -56,6 +56,15 @@ Base.@kwdef struct CMConfig
     cm_hessian_backend::Symbol = :structured
     contrasts::Symbol = :anchored
     marginal_restriction::Symbol = :common_flexible
+    # 2026-08-05 truncated-power task: which CM feature-family set `marginal_restriction=
+    # :common_flexible` imposes -- REQUIRED, no default (repo rule: never default a scientific
+    # parameter that changes which economic restriction is imposed; explicitly extended to this
+    # new feature-family metadata by the task brief). `1` = eq.35 (CDF) only, the pre-2026-08-05
+    # behavior; `2` = eq.35+eq.36 (CDF + truncated (1-σ)-power), the corrected production spec.
+    # Ignored for `marginal_restriction=:common_frechet` (that family's CM sub-block is a
+    # deliberate single-family carve-out, see cm_frechet_level.jl) -- still required so every
+    # caller states its intent explicitly, but ANY value is accepted in that branch.
+    cm_moment_families::Int
 end
 
 function _cm_validate(cfg::CMConfig)
@@ -70,6 +79,14 @@ function _cm_validate(cfg::CMConfig)
     if cfg.marginal_restriction === :common_frechet
         cfg.cm_basis === :cumulative ||
             error("CMConfig: marginal_restriction=:common_frechet only supports cm_basis=:cumulative so far")
+    end
+    cfg.cm_moment_families in (1, 2) ||
+        error("CMConfig: cm_moment_families must be 1 (eq.35 only) or 2 (eq.35+eq.36), got $(cfg.cm_moment_families)")
+    if cfg.marginal_restriction === :common_flexible && cfg.cm_moment_families == 2 && cfg.cm_hessian_backend === :structured
+        error("CMConfig: cm_moment_families=2 (the two-family eq.35+eq.36 spec) is incompatible with " *
+              "cm_hessian_backend=:structured -- the structured (Architecture C) bin-table Hessian assumes a " *
+              "pure-indicator single CM feature family and has not been extended to the weighted eq.36 family " *
+              "(see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2). Pass cm_hessian_backend=:dense_reference.")
     end
     if cfg.cm_grid_rule === :equal
         cfg.cm_grid_size >= 1 || error("CMConfig: cm_grid_size must be >= 1")
@@ -159,8 +176,10 @@ function build_cm_production_context_v2(ctx, CS, cfg::CMConfig; L::Int = cfg.cm_
     end
 
     if cfg.cm_basis === :cumulative
+        include_truncated_moment = cfg.cm_moment_families == 2
         pcx = build_cm_production_context(ctx, CS; L = L, contrasts = cfg.contrasts, probs = probs,
-                                           use_archB_moments = cfg.cm_hessian_backend === :structured)
+                                           include_truncated_moment = include_truncated_moment,
+                                           use_archB_moments = cfg.cm_hessian_backend === :structured && !include_truncated_moment)
         hess_cb_builder = cfg.cm_hessian_backend === :structured ?
             (_obj -> archC_hess_cb_builder(pcx.cctx)) : archA_hess_cb_builder
         return (ctx_cm = pcx.ctx_cm, aug = pcx.aug, hess_cb_builder = hess_cb_builder, cfg = cfg, L = L)
@@ -173,6 +192,14 @@ function build_cm_production_context_v2(ctx, CS, cfg::CMConfig; L::Int = cfg.cm_
         # through the dense build_cm_augmented_obj_interval path regardless of
         # cm_hessian_backend; only the HESSIAN callback (the expensive per-call
         # piece) actually varies with cm_hessian_backend for this basis.
+        # 2026-08-05 truncated-power task: the interval basis has NOT been extended to the
+        # two-family spec (out of scope, single-family only -- see common_marginals_interval.jl's
+        # own header) -- hard-refuse rather than silently build a CDF-only block under a
+        # caller-requested cm_moment_families=2.
+        cfg.cm_moment_families == 1 ||
+            error("build_cm_production_context_v2: cm_basis=:interval only supports cm_moment_families=1 " *
+                  "(the eq.36 truncated-power family has not been added to the interval basis) -- got " *
+                  "cm_moment_families=$(cfg.cm_moment_families). Use cm_basis=:cumulative for the two-family spec.")
         aug = build_cm_augmented_obj_interval(ctx, CS; L = L, contrasts = cfg.contrasts, probs = probs)
         ctx_cm = merge(ctx, (obj = aug.obj_cm,))
         hess_cb_builder = archA_hess_cb_builder

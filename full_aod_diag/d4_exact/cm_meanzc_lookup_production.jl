@@ -132,7 +132,12 @@ function _meanzc_fg_dispatch(cctx::CMBinHessCtx, obj, θ_ext::AbstractVector; sk
         return inner_loop_internal_meanzc_operator(obj, θ_ext, cctx; skip_fill = skip_fill)
     elseif cctx.inner_fg_backend === :dense_reference
         record_generic_dense_fg!()
-        return inner_loop_internal_archgeneric(obj, θ_ext; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+        # 2026-08-05 truncated-power task: same automatic Architecture-A selection for a two-family
+        # cctx as plain flexible CM's archC_base_state -- see that function's own comment and
+        # CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 (structured Hessian not extended to
+        # CM+ZC's widened NCORE + two-family CM-grid case either).
+        hess_builder = cctx.n_families == 2 ? (_obj -> archA_hess_cb_builder(_obj)) : (_obj -> archC_hess_cb_builder(cctx))
+        return inner_loop_internal_archgeneric(obj, θ_ext; hess_cb_builder = hess_builder)
     else
         error("_meanzc_fg_dispatch: cctx.inner_fg_backend must be :dense_reference or :operator, got :$(cctx.inner_fg_backend)")
     end

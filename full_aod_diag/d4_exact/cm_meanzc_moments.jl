@@ -462,7 +462,7 @@ callers must go through `cm_meanzc_production.jl`'s
 `archC_meanzc_base_state`/`archC_meanzc_verified_state`, not
 `inner_loop_internal_archgeneric` directly with a plain `θ_econ`.
 """
-function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int = 0,
+function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, include_truncated_moment::Bool, K_pair::Int = 0,
                                         contrasts::Symbol = :anchored, meanzc_basis::Symbol = :direct,
                                         probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                         refIndex1::Int = ctx.γ.refIndex1,
@@ -478,9 +478,18 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
 
     obj0 = ctx.obj
     ncore_econ = obj0.d
-    CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; contrasts = contrasts, probs = probs)
+    # 2026-08-05 truncated-power task: include_truncated_moment is REQUIRED (no default) -- see
+    # common_marginals_moments.jl::precalc_common_marginals_cdf's own docstring. Production CM+ZC
+    # passes true (both eq.35+eq.36 families), matching plain flexible CM's own production spec.
+    σHat = include_truncated_moment ? ctx.σ : nothing
+    CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; include_truncated_moment = include_truncated_moment,
+                                                   σHat = σHat, contrasts = contrasts, probs = probs)
     ncm = size(CM, 2)
-    @assert ncm == n_cm_moments(ctx.D, L)
+    @assert ncm == n_cm_moments(ctx.D, L; include_truncated_moment = include_truncated_moment)
+    nO = length(origins)
+    ncm_cdf = nO * L
+    ncm_pow = include_truncated_moment ? nO * L : 0
+    n_families = include_truncated_moment ? 2 : 1
 
     Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, K_pair; μ = ctx.μHat)
     D = ctx.D
@@ -531,7 +540,9 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
             L = L, contrasts = contrasts, refIndex1 = refIndex1,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, K_mean = K_mean, K_pair = K_pair,
             n_mean = n_mean, n_pair = n_pair, meanzc_basis = meanzc_basis,
-            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_meanzc_skip!)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_meanzc_skip!,
+            include_truncated_moment = include_truncated_moment, n_families = n_families,
+            ncm_cdf = ncm_cdf, ncm_pow = ncm_pow)
 end
 
 """

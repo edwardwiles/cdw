@@ -146,9 +146,14 @@ function build_cm_frechet_level_augmented_obj(ctx, CS; L::Int, contrasts::Symbol
                                                probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     obj0 = ctx.obj
     ncore = obj0.d
-    CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; contrasts = contrasts, probs = probs)
+    # Common-Fréchet's CM sub-block is a deliberate single-family (eq.35 only) carve-out -- see
+    # CLAUDE.md / CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md's "audit only, not rewired" note (2026-08-05
+    # truncated-power task): its own separate D*L level-anchor block is a structurally different
+    # (target-based) restriction, not a second flexible-CM feature family in the eq.35/36 sense.
+    CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; include_truncated_moment = false,
+                                                   contrasts = contrasts, probs = probs)
     ncm_cm = size(CM, 2)
-    @assert ncm_cm == n_cm_moments(ctx.D, L)
+    @assert ncm_cm == n_cm_moments(ctx.D, L; include_truncated_moment = false)
 
     level_probs = frechet_level_probs(L; probs = probs)
     level_targets = frechet_level_targets(ctx.D, L; probs = level_probs)

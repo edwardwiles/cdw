@@ -379,9 +379,13 @@ function build_cm_augmented_obj_archB(ctx, CS; L::Int, contrasts::Symbol = :anch
                                        refIndex1::Int = ctx.γ.refIndex1, chunk_size::Int = 2000)
     obj0 = ctx.obj
     ncore = obj0.d
-    _CM_throwaway, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; contrasts = contrasts)
+    # Architecture B's fill_cm_columns_from_bins! is a pure-indicator (single-family, eq.35-only)
+    # reconstruction (2026-08-05 truncated-power task: NOT extended to the weighted eq.36 family --
+    # see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md) -- explicit include_truncated_moment=false, not a
+    # silent single-family default.
+    _CM_throwaway, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; include_truncated_moment = false, contrasts = contrasts)
     ncm = L * length(origins)
-    @assert ncm == n_cm_moments(ctx.D, L)
+    @assert ncm == n_cm_moments(ctx.D, L; include_truncated_moment = false)
     R = contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
     Bidx = compute_bin_indices(ctx.U, z)
 
@@ -640,12 +644,30 @@ mutable struct CMBinHessCtx
     # yet the default pending a genuine-cold complete-solve gate).
     zc_ez_backend::Symbol
     zc_drawmajor::Any
+    # 2026-08-05 truncated-power task: CM feature-family count for THIS cctx's CM-grid block
+    # (`aug.n_families` -- `1` for every pre-existing single-family (eq.35-only) config, `2` for
+    # the new eq.35+eq.36 flexible-CM production spec). The bin-table Hessian machinery in this
+    # file (`build_bin_tables!`/`prefix_sum_tables!`/`fill_cm_HCC!`/the H_EC fill loop in
+    # `hessian_cm_structured!`, and every specialized backend layered on top -- winner_bin,
+    # threaded, drawmajor, CM+ZC's H_CZ/H_ZZ) assumes a PURE 0/1 cumulative-indicator CM column
+    # (see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2) and has NOT been extended to the
+    # weighted eq.36 family -- extending every one of those ~15 accumulated backends correctly
+    # was judged out of this task's time budget (disclosed limitation, not attempted silently).
+    # `n_families==2` therefore hard-refuses `archC_hess_cb_builder`/`hessian_cm_structured!`
+    # (see that function's own guard) -- production callers must select the fully-generic dense
+    # Architecture-A Hessian (`archA_hess_cb_builder`) instead, which needs zero new code for any
+    # CM content/width. `archC_base_state`/`archC_verified_state`/their cm_meanzc analogues switch
+    # on this field to make that selection automatically, not leave it to the caller to remember.
+    n_families::Int
 end
 
 "Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change."
 function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAULT[], bin_zc_drawchunk = nothing,
-        zc_ez_backend::Symbol = ZC_EZ_BACKEND_DEFAULT[], zc_drawmajor = nothing)
-    return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk, zc_ez_backend, zc_drawmajor)
+        zc_ez_backend::Symbol = ZC_EZ_BACKEND_DEFAULT[], zc_drawmajor = nothing,
+        n_families::Int = 1)   # 2026-08-05 truncated-power task: additive field, defaults to 1
+        # (byte-identical single-family behavior) for both pre-existing call sites
+        # (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) unless they pass it explicitly.
+    return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk, zc_ez_backend, zc_drawmajor, n_families)
 end
 
 """
@@ -698,7 +720,8 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cross_hessian_threaded, cross_hessian_workers,
         zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: plain CM has no ZC block, lazily unused
         ctx,   # econ_ctx: true no-H operator bundle continuation
-        nothing)   # frechet_ext_cache: harmonization task -- lazily built, nothing until first common-Fréchet Hessian call
+        nothing;   # frechet_ext_cache: harmonization task -- lazily built, nothing until first common-Fréchet Hessian call
+        n_families = hasproperty(aug, :n_families) ? aug.n_families : 1)   # 2026-08-05 truncated-power task
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -1146,6 +1169,18 @@ below). Writes the packed upper-triangular Hessian into `h`, matching
 `cc_algo/PsiObjectiveBundle.jl::hessian!`'s own packing exactly.
 """
 function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = nothing)
+    # 2026-08-05 truncated-power task: hard-refuse, not silently wrong. This structured (bin-table)
+    # Hessian assumes every CM column is a pure 0/1 cumulative indicator (weight 1) -- see
+    # CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for the full derivation of why the weighted
+    # eq.36 (truncated-power) family does not collapse to the same table identities without a
+    # materially new derivation, and why extending every specialized backend in this file
+    # (winner_bin/threaded/drawmajor/CM+ZC H_CZ/H_ZZ) was judged out of this task's scope. Use
+    # `archA_hess_cb_builder` (fully generic dense Architecture A -- needs zero new code for any
+    # CM content/width) for a two-family (`cctx.n_families==2`) context instead.
+    cctx.n_families == 1 || error("hessian_cm_structured!: the structured (Architecture C) CM Hessian " *
+        "only supports a single (eq.35-only) CM feature family (cctx.n_families=$(cctx.n_families) requested) -- " *
+        "use archA_hess_cb_builder (Architecture A, dense-generic) for the two-family eq.35+eq.36 spec. " *
+        "See CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for why this is a disclosed limitation, not a bug.")
     # Harmonization task (2026-07-28): `extension` is `nothing` for flexible CM/CM+ZC (every
     # existing call site, unchanged) or a `CMFrechetExtension` (cm_frechet_hessian.jl, included
     # after this file -- `Any`-typed here purely to avoid a forward reference, same reason

@@ -62,9 +62,10 @@ bin/scratch context (`build_cm_bin_ctx`), reused for every subsequent inner
 solve at this context (bin indices are fixed once the draws U are fixed --
 independent of theta).
 """
-function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :anchored,
+function build_cm_production_context(ctx, CS; L::Int, include_truncated_moment::Bool,
+                                      contrasts::Symbol = :anchored,
                                       probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                      use_archB_moments::Bool = true,
+                                      use_archB_moments::Bool = !include_truncated_moment,
                                       use_compressed_core::Bool = true,   # allocation/Hessian port task §5:
                                       # compressed winner-form core moments (default) vs the original
                                       # dense EK_moments_gammanorm_directgp! path (false, kept for
@@ -95,8 +96,28 @@ function build_cm_production_context(ctx, CS; L::Int, contrasts::Symbol = :ancho
     moment_representation === :operator && inner_fg_backend !== :cm_lookup &&
         error("build_cm_production_context: moment_representation=:operator requires inner_fg_backend=:cm_lookup " *
               "(OperatorPsiBundle is only primed by inner_loop_internal_cmlookup_production) -- got inner_fg_backend=:$inner_fg_backend")
+    # 2026-08-05 truncated-power task: hard-refuse every single-family-only fast path for the new
+    # two-family (eq.35+eq.36) spec, rather than let it silently compute only the CDF block. See
+    # CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for why each of these is single-family-only.
+    if include_truncated_moment
+        use_archB_moments &&
+            error("build_cm_production_context: include_truncated_moment=true (two-family CM) is incompatible with " *
+                  "use_archB_moments=true -- fill_cm_columns_from_bins! (Architecture B) is a pure-indicator, " *
+                  "single-family reconstruction; pass use_archB_moments=false (the default once " *
+                  "include_truncated_moment=true) to use the already-generic wrap_moments_with_cm path instead.")
+        inner_fg_backend === :cm_lookup &&
+            error("build_cm_production_context: include_truncated_moment=true (two-family CM) is incompatible with " *
+                  "inner_fg_backend=:cm_lookup -- CMLookupState's O(W*(D-1)) forward/backward kernels are a " *
+                  "single-family (pure cumulative-indicator) suffix-sum identity, not extended to the weighted " *
+                  "eq.36 family. Use inner_fg_backend=:dense_reference (with moment_representation=:dense_reference).")
+        moment_representation === :operator &&
+            error("build_cm_production_context: include_truncated_moment=true (two-family CM) requires " *
+                  "moment_representation=:dense_reference -- OperatorPsiBundle's no-dense-H path is primed " *
+                  "exclusively by the single-family :cm_lookup FG backend (see the :cm_lookup guard above), and " *
+                  "the structured (Architecture C) Hessian it pairs with also hard-refuses two-family contexts.")
+    end
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
-    aug = build_cm_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+    aug = build_cm_augmented_obj(ctx, CS; L = L, include_truncated_moment = include_truncated_moment, contrasts = contrasts, probs = probs)
     obj_cm = aug.obj_cm
     # 2026-07-25 continuation (task §2 runtime counters investigation): `build_cm_production_context`
     # -- the function `run_cm_upper_checkpointed` (the REAL production driver) actually calls --
@@ -262,11 +283,16 @@ function archC_base_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCtx;
     # required fill skipped out from under it.
     use_lookup = cctx.inner_fg_backend == :cm_lookup
     skip_fill_safe = use_lookup && MOMENT_REPRESENTATION[] == :operator && cctx.cm_cross_hessian_backend == :winner_bin && cctx.core_hessian_backend !== :dense_reference
+    # 2026-08-05 truncated-power task: cctx.n_families==2 (the eq.35+eq.36 two-family spec) hard-
+    # refuses the structured (Architecture C) Hessian at the source (hessian_cm_structured!'s own
+    # guard) -- select the fully-generic dense Architecture A callback instead, automatically, so
+    # a caller of archC_base_state never has to remember this itself. See
+    # CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for why Architecture C isn't extended.
+    hess_builder = cctx.n_families == 2 ? (_obj -> archA_hess_cb_builder(_obj)) : (_obj -> archC_hess_cb_builder(cctx))
     K, x, nStatus, n_fg, n_hess = use_lookup ?
-        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx),
+        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = hess_builder,
             skip_fill = skip_fill_safe) :
-        inner_loop_internal_archgeneric(obj, θ_full0;
-            hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+        inner_loop_internal_archgeneric(obj, θ_full0; hess_cb_builder = hess_builder)
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
         throw(CMExpectedSolveFailure("archC_base_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))
@@ -329,11 +355,13 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
     # docs/GOAL10_SKIP_CM_FILL_REF_REMOVAL_2026-07-27.md for the full corrected record.
     use_lookup_verify = cctx.inner_fg_backend == :cm_lookup
     skip_fill_verify = false   # ALWAYS false -- see HISTORY comment above
+    # 2026-08-05 truncated-power task: same automatic Architecture-A selection as archC_base_state
+    # above for a two-family cctx -- see that function's own comment for the full rationale.
+    hess_builder_verify = cctx.n_families == 2 ? (_obj -> archA_hess_cb_builder(_obj)) : (_obj -> archC_hess_cb_builder(cctx))
     K, inner_x, nStatus, n_fg, n_hess = cctx.inner_fg_backend == :cm_lookup ?
-        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = _obj -> archC_hess_cb_builder(cctx),
+        inner_loop_internal_cmlookup_production(obj, θ_full0, cctx; hess_cb_builder = hess_builder_verify,
             skip_fill = skip_fill_verify) :
-        inner_loop_internal_archgeneric(obj, θ_full0;
-            hess_cb_builder = _obj -> archC_hess_cb_builder(cctx))
+        inner_loop_internal_archgeneric(obj, θ_full0; hess_cb_builder = hess_builder_verify)
     if nStatus ∉ (0, -100, -101, -103)
         dual_bank !== nothing && warm_label != :neutral && (RESTRICTED_DUAL_BANK_COUNTERS[].warm_start_failures += 1)
         throw(CMExpectedSolveFailure("archC_verified_state: inner solve failed, nStatus=$nStatus (x_free0=$x_free0)"))

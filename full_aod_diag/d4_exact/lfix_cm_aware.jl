@@ -93,6 +93,40 @@ function cm_fixed_value_contribution(λ_cm::AbstractVector{Float64}, nO::Int, L:
 end
 
 """
+    cm_fixed_value_contribution_two_family(λ_cm, aug, bins, ctx) -> Vector{Float64}
+
+2026-08-05 truncated-power task: family-count-driven wrapper around `cm_fixed_value_contribution`.
+`λ_cm` is the FULL CM-block dual slice (width `aug.ncm`, both families if `aug.n_families==2`).
+The eq.35 (CDF) sub-block (the first `aug.ncm_cdf` entries, ALWAYS present) goes through the
+EXACT SAME suffix-sum lookup call as before -- byte-identical code path, so the CDF contribution
+is bit-for-bit unchanged whether or not a second family exists. When `aug.n_families==2`, the
+eq.36 (truncated-power) sub-block's contribution `λ_pow' * C_pow_s` is added via a direct BLAS
+matvec against `aug.CM`'s already-precomputed power sub-block -- a literal, unoptimized evaluation
+of the same dot-product definition the suffix-sum trick accelerates for the CDF block (no new
+formula; the power block's own weighted-indicator structure does not collapse to the same O(W*nO)
+suffix-sum identity without a materially new derivation, see
+CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 -- and at O(W*(D-1)*L), done ONCE per outer point
+(not per Newton iteration, not per-outer-coordinate-probe), this is cheap: no per-outer
+rematerialization, `aug.CM` was already built once at context-construction time).
+"""
+function cm_fixed_value_contribution_two_family(λ_cm::AbstractVector{Float64}, aug, bins::AbstractMatrix{<:Unsigned}, ctx)
+    nO = length(aug.origins); L = aug.L
+    ncm_cdf = aug.ncm_cdf
+    length(λ_cm) == aug.ncm || error("cm_fixed_value_contribution_two_family: length(λ_cm)=$(length(λ_cm)) != aug.ncm=$(aug.ncm)")
+    R = aug.contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
+    λ_cdf = @view λ_cm[1:ncm_cdf]
+    out = cm_fixed_value_contribution(λ_cdf, nO, L, aug.refIndex1, aug.origins, bins, R)
+    nf = hasproperty(aug, :n_families) ? aug.n_families : 1
+    if nf == 2
+        ncm_pow = aug.ncm_pow
+        λ_pow = @view λ_cm[ncm_cdf+1:ncm_cdf+ncm_pow]
+        CM_pow = @view aug.CM[:, ncm_cdf+1:ncm_cdf+ncm_pow]
+        out .+= CM_pow * λ_pow
+    end
+    return out
+end
+
+"""
     cm_fixed_contribution(base::BaseDualState, aug, bins) -> Vector{Float64}
 
 `out[s] = λ_C*' C_s` for every draw `s`, O(W*(D-1)) total (no loop over L),
@@ -107,12 +141,10 @@ sliced at `aug.ncore:aug.ncore-1+aug.ncm` -- the same layout
 identically (`λ_cm = x[2+ncore1:1+ncore1+ncm]`, `ncore1=ncore-1`).
 """
 function cm_fixed_contribution(base::BaseDualState, ctx, aug, bins::AbstractMatrix{<:Unsigned})
-    ncore = aug.ncore; ncm = aug.ncm; L = aug.L
-    nO = length(aug.origins)
+    ncore = aug.ncore; ncm = aug.ncm
     @assert length(base.λstar) >= ncore - 1 + ncm "base.λstar too short for aug's (ncore,ncm) -- was base solved against aug.obj_cm?"
     λ_cm = base.λstar[ncore:ncore-1+ncm]
-    R = aug.contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
-    return cm_fixed_value_contribution(λ_cm, nO, L, aug.refIndex1, aug.origins, bins, R)
+    return cm_fixed_value_contribution_two_family(λ_cm, aug, bins, ctx)
 end
 
 """

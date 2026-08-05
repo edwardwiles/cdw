@@ -130,7 +130,8 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         cross_hessian_threaded, cross_hessian_workers,
         zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: lazily built on first H_ZZ call
         ctx,   # econ_ctx: true no-H operator bundle continuation
-        nothing)   # frechet_ext_cache: harmonization task -- CM+ZC never populates this (no level block)
+        nothing;   # frechet_ext_cache: harmonization task -- CM+ZC never populates this (no level block)
+        n_families = hasproperty(aug, :n_families) ? aug.n_families : 1)   # 2026-08-05 truncated-power task
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -148,11 +149,11 @@ Zraw_all/Zpairraw_all precomputed ONCE, reused across every subsequent inner
 solve at this context, exactly matching the CM-only production context's own
 performance contract).
 """
-function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair::Int = 0,
+function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, include_truncated_moment::Bool, K_pair::Int = 0,
                                              contrasts::Symbol = :orthonormal, meanzc_basis::Symbol = :direct,
                                              probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                             inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
-                                             moment_representation::Symbol = :operator)   # true no-H
+                                             inner_fg_backend::Symbol = include_truncated_moment ? :dense_reference : CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
+                                             moment_representation::Symbol = include_truncated_moment ? :dense_reference : :operator)   # true no-H
                                              # operator bundle (2026-07-28 continuation, flipped
                                              # 2026-07-29 moment_representation threading task):
                                              # pass-through to build_cm_meanzc_augmented_obj --
@@ -174,12 +175,26 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, K_pair
                                              # inner_fg_backend=:operator when :operator is chosen).
     moment_representation === :operator && inner_fg_backend !== :operator &&
         error("build_cm_meanzc_production_context: moment_representation=:operator requires inner_fg_backend=:operator")
+    # 2026-08-05 truncated-power task: same hard-refuse discipline as build_cm_production_context
+    # (plain flexible CM) -- see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2. CM+ZC's
+    # `:operator` FG path has not been verified safe for a weighted (two-family) CM-grid block
+    # within this task's time budget, so it is conservatively refused rather than assumed fine.
+    if include_truncated_moment
+        moment_representation === :operator &&
+            error("build_cm_meanzc_production_context: include_truncated_moment=true (two-family CM) requires " *
+                  "moment_representation=:dense_reference -- the :operator FG path (CMMeanZCOperatorState) has " *
+                  "not been extended/verified for the weighted eq.36 family; use :dense_reference (wrap_moments_" *
+                  "with_cm_meanzc's dense fill is already generic in the CM block width).")
+        inner_fg_backend === :operator &&
+            error("build_cm_meanzc_production_context: include_truncated_moment=true (two-family CM) requires " *
+                  "inner_fg_backend=:dense_reference for the same reason as moment_representation above.")
+    end
     println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")
     println(stdout, "cm_internal_feature_storage [CM+mean/ZC] = bin_indices")
     println(stdout, "inner_fg_backend [CM+mean/ZC] = ", inner_fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
     flush(stdout)
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
-    aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, K_pair = K_pair,
+    aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, include_truncated_moment = include_truncated_moment, K_pair = K_pair,
         contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = moment_representation)
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))
     cctx = build_cm_meanzc_bin_ctx(ctx, aug; inner_fg_backend = inner_fg_backend)
@@ -363,20 +378,19 @@ CM-grid block's actual position under the
 `[economic | mean_1..mean_{K_mean} | pair_1..pair_{K_pair} | CM-grid | gravity]`
 layout (starts at `ncore_econ + n_mean + n_pair`, not `ncore_econ` as in the
 plain CM `aug`).
+
+2026-08-05 truncated-power task: delegates the actual (family-count-driven) computation to
+`cm_fixed_value_contribution_two_family` (lfix_cm_aware.jl) -- previously this function inlined
+its OWN verbatim copy of the eq.35-only suffix-sum computation (pre-existing duplication, not
+introduced by this task); sharing the one two-family-aware kernel here fixes both call sites at
+once and removes the duplication.
 """
 function cm_fixed_contribution_meanzc_layout(base::BaseDualState, ctx, aug, bins::AbstractMatrix{<:Unsigned})
-    ncore_econ = aug.ncore_econ; n_mean = aug.n_mean; n_pair = aug.n_pair; ncm = aug.ncm; L = aug.L
-    nO = length(aug.origins)
+    ncore_econ = aug.ncore_econ; n_mean = aug.n_mean; n_pair = aug.n_pair; ncm = aug.ncm
     cm_start = ncore_econ + n_mean + n_pair
     @assert length(base.λstar) >= cm_start - 1 + ncm "base.λstar too short for aug's (ncore_econ,n_mean,n_pair,ncm) -- was base solved against aug.obj_cm?"
     λ_cm = base.λstar[cm_start:cm_start-1+ncm]
-    λmat_stored = reshape(λ_cm, nO, L)
-    R = aug.contrasts == :orthonormal ? orthonormal_contrast_matrix(ctx.D) : nothing
-    λmat_block = apply_contrast(λmat_stored, R)
-    P = suffix_sums(λmat_block)
-    out = Vector{Float64}(undef, size(bins, 1))
-    cumulative_forward_contribution!(out, bins, aug.refIndex1, aug.origins, P)
-    return out
+    return cm_fixed_value_contribution_two_family(λ_cm, aug, bins, ctx)
 end
 
 """

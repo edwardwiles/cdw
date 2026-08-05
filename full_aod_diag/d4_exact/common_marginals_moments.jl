@@ -36,20 +36,37 @@ function orthonormal_contrast_matrix(D::Int)
     return Matrix{Float64}(I, n, n) .+ ((1 / sqrt(D) - 1) / (D - 1)) .* ones(n, n)
 end
 
-n_cm_moments(D::Int, L::Int; include_truncated_moment::Bool = false) =
+n_cm_moments(D::Int, L::Int; include_truncated_moment::Bool) =
     include_truncated_moment ? 2 * (D - 1) * L : (D - 1) * L
 
 """
-    precalc_common_marginals_cdf(U, refIndex1, L; include_truncated_moment=false, μHat=nothing, σHat=nothing, contrasts=:anchored)
+    precalc_common_marginals_cdf(U, refIndex1, L; include_truncated_moment, σHat=nothing, contrasts=:anchored)
 
 Precompute the (W x ncols) common-marginals moment matrix, the L quantile thresholds z_l
 (evenly-spaced-probability empirical quantiles of `U[:,refIndex1]`), and the ordered list of
-non-reference origins. Column layout: threshold-major, eq.35 block first (columns
-`1:(D-1)*L`), eq.36 companion (if requested) at offset `(D-1)*L`. See file header.
+non-reference origins. Column layout: threshold-major, eq.35 (CDF) block first (columns
+`1:(D-1)*L`), eq.36 (truncated `(1-σ)`-power) companion (if requested) at offset `(D-1)*L`. See
+file header.
+
+`include_truncated_moment` is a REQUIRED kwarg (no default) -- per this repo's standing rule
+(never default a scientific parameter that changes which economic restriction is imposed), every
+caller must say explicitly whether it wants eq.35 alone or eq.35+eq.36. Production flexible-CM
+callers (`build_cm_augmented_obj`, `build_cm_meanzc_augmented_obj`) always pass `true` --
+`common_marginals = false`/no-CM production is unaffected, and `cm_frechet_level.jl`'s deliberate
+single-family carve-out (fixed Fréchet as CM+level anchor, a structurally different restriction)
+continues to pass `false` explicitly.
+
+`σHat` (the trade elasticity σ, required whenever `include_truncated_moment=true`, unused/`nothing`
+otherwise) is the ONLY parameter the eq.36 exponent depends on: for non-reference origin `o` and
+quantile cutoff `z_l`, eq.36's raw feature is `z_o(ω)^(1-σ) * 1{z_o(ω)<z_l}` (same `z_o(ω)==U[:,o]`
+draw and same cutoffs `z_l` eq.35 already uses -- NOT some other "underlying exponential draw",
+see docs/fullA_common_marginals_handoff.md section 2's own eq.35 statement, which is on this exact
+`U` array). NOTE: an earlier, never-wired-to-production version of this function used
+`pw = μHat*(1-σHat)` (an extra `μHat` factor) for this exponent -- that formula does not match
+CDW eq.36 and has been removed; `μHat` is no longer a parameter of this function.
 """
 function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int, L::Int;
-                                       include_truncated_moment::Bool = false,
-                                       μHat::Union{Nothing,Real} = nothing,
+                                       include_truncated_moment::Bool,
                                        σHat::Union{Nothing,Real} = nothing,
                                        contrasts::Symbol = :anchored,
                                        probs::Union{Nothing,AbstractVector{Float64}} = nothing)
@@ -57,8 +74,8 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
     @assert 1 <= refIndex1 <= D
     @assert L >= 1
     @assert contrasts in (:anchored, :orthonormal) "contrasts must be :anchored or :orthonormal, got $contrasts"
-    include_truncated_moment && @assert(μHat !== nothing && σHat !== nothing,
-        "include_truncated_moment=true requires μHat and σHat (the fixed baseline-calibrated values)")
+    include_truncated_moment && @assert(σHat !== nothing,
+        "include_truncated_moment=true requires σHat (the fixed baseline-calibrated trade elasticity)")
     # Continuation 13, Section 6: `probs=` lets a caller supply an EXPLICIT probability grid (e.g.
     # nested_quantile_grids.jl's genuinely-nested Q_10/Q_20/Q_50) in place of the default grid --
     # the default path (`probs === nothing`) is byte-for-byte unchanged. Remediation task Part E
@@ -96,15 +113,23 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
         end
     end
     if include_truncated_moment
-        pw = μHat * (1 - σHat)
+        # CDW eq.36: E_F[ z_o'(ω)^(1-σ) · 1{z_o'(ω)<z_l} ], anchored to the reference origin the
+        # SAME way eq.35 is (subtract the reference origin's own power-weighted indicator, using
+        # the reference's OWN power weight -- NOT the non-reference origin's -- since the power
+        # weight is itself origin-and-draw-specific, unlike eq.35's weight-1 indicator).
+        pw = 1 - σHat
+        Pow = Matrix{Float64}(undef, W, D)   # z_x(ω)^(1-σ) for every origin x (incl. reference), precomputed once
+        @inbounds for x in 1:D
+            @. Pow[:, x] = U[:, x]^pw
+        end
         TM_ref = Matrix{Float64}(undef, W, L)
         @inbounds for l in 1:L
-            @. TM_ref[:, l] = U[:, refIndex1]^pw * CDF_ref[:, l]
+            @. TM_ref[:, l] = Pow[:, refIndex1] * CDF_ref[:, l]
         end
         tm_offset = nO * L
         @inbounds for l in 1:L
             for (oi, o) in enumerate(origins)
-                @. block[:, oi] = U[:, o]^pw * (U[:, o] <= z[l]) - TM_ref[:, l]
+                @. block[:, oi] = Pow[:, o] * (U[:, o] <= z[l]) - TM_ref[:, l]
             end
             cols = tm_offset + (l - 1) * nO + 1 : tm_offset + l * nO
             if R === nothing
@@ -180,11 +205,13 @@ function wrap_moments_with_cm(core_moments!::Function, ncore_full::Int, CM::Matr
 end
 
 """
-    build_cm_augmented_obj(ctx, CS; L, contrasts=:anchored, include_truncated_moment=false)
+    build_cm_augmented_obj(ctx, CS; L, include_truncated_moment, contrasts=:anchored)
 
 Given a `d4_exact_setup`/`d20_real_setup`-style context `ctx` (must have fields `obj`, `U`, `γ`,
-`D`), builds a NEW `PsiObjectiveBundleImplicit` with `(D-1)*L` (or `2*(D-1)*L` with the eq.36
-companion) extra common-marginals moment columns inserted as INNER (dual-reweighted) moments
+`D`, and -- whenever `include_truncated_moment=true` -- `σ`), builds a NEW
+`PsiObjectiveBundleImplicit` with `(D-1)*L` (`include_truncated_moment=false`, eq.35 only) or
+`2*(D-1)*L` (`include_truncated_moment=true`, eq.35+eq.36 -- the production flexible-CM spec as of
+2026-08-05) extra common-marginals moment columns inserted as INNER (dual-reweighted) moments
 BEFORE the existing gravity/orthogonality column (see `wrap_moments_with_cm`'s docstring for why
 this ordering matters), leaving `ctx.obj` untouched. `CS` is the `CounterfactualSensitivity`
 module (passed explicitly to avoid a hard dependency on how the caller's namespace names it).
@@ -192,21 +219,35 @@ refIndex1 is read from `ctx.γ.refIndex1` (this codebase's existing CDF-referenc
 convention, already used elsewhere) unless overridden. `outer_constr_index` grows by `ncm`
 along with `d`, keeping gravity as the sole outer-only suffix column at the new last position.
 
-Returns `(obj_cm, CM, z, origins, ncore, ncm)`.
+`include_truncated_moment` is REQUIRED (no default -- see `precalc_common_marginals_cdf`'s own
+docstring for the rationale): every caller must say explicitly whether it wants one or two
+feature families. Production flexible-CM callers pass `true`; `cm_frechet_level.jl`'s deliberate
+single-family carve-out passes `false`.
+
+Returns `(obj_cm, CM, z, origins, ncore, ncm, L, contrasts, include_truncated_moment, refIndex1,
+n_families, ncm_cdf, ncm_pow)` -- the last three are new dimension metadata (2026-08-05
+truncated-power task): `n_families` is `1` or `2`, `ncm_cdf = (D-1)*L` (the eq.35 sub-block width,
+ALWAYS `(D-1)*L` regardless of `n_families`), `ncm_pow` is `(D-1)*L` when `n_families==2` else `0`
+(`ncm_cdf + ncm_pow == ncm` always). Every downstream consumer that needs to slice the CM block by
+family should use these fields rather than re-deriving `(D-1)*L`/`2*(D-1)*L` locally.
 """
-function build_cm_augmented_obj(ctx, CS; L::Int, contrasts::Symbol = :anchored,
-                                 include_truncated_moment::Bool = false,
+function build_cm_augmented_obj(ctx, CS; L::Int, include_truncated_moment::Bool,
+                                 contrasts::Symbol = :anchored,
                                  refIndex1::Int = ctx.γ.refIndex1,
                                  probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     obj0 = ctx.obj
     ncore = obj0.d
-    μHat = include_truncated_moment ? ctx.μHat : nothing
     σHat = include_truncated_moment ? ctx.σ : nothing
     CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L;
-        include_truncated_moment = include_truncated_moment, μHat = μHat, σHat = σHat,
+        include_truncated_moment = include_truncated_moment, σHat = σHat,
         contrasts = contrasts, probs = probs)
     ncm = size(CM, 2)
     @assert ncm == n_cm_moments(ctx.D, L; include_truncated_moment = include_truncated_moment)
+    nO = length(origins)
+    ncm_cdf = nO * L
+    ncm_pow = include_truncated_moment ? nO * L : 0
+    n_families = include_truncated_moment ? 2 : 1
+    @assert ncm_cdf + ncm_pow == ncm
 
     d_new = ncore + ncm
     outer_constr_index_new = obj0.outer_constr_index + ncm
@@ -225,5 +266,5 @@ function build_cm_augmented_obj(ctx, CS; L::Int, contrasts::Symbol = :anchored,
 
     return (obj_cm = obj_cm, CM = CM, z = z, origins = origins, ncore = ncore, ncm = ncm,
             L = L, contrasts = contrasts, include_truncated_moment = include_truncated_moment,
-            refIndex1 = refIndex1)
+            refIndex1 = refIndex1, n_families = n_families, ncm_cdf = ncm_cdf, ncm_pow = ncm_pow)
 end
