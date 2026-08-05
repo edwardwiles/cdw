@@ -23,22 +23,27 @@ include(joinpath(@__DIR__, "cm_meanzc_production.jl"))
 include(joinpath(@__DIR__, "cm_originzc_target_layout.jl"))
 include(joinpath(@__DIR__, "cm_originzc_moments.jl"))
 include(joinpath(@__DIR__, "cm_originzc_production.jl"))
-using Test, Printf, LinearAlgebra, Random, Statistics, NLsolve
+using Test, Printf, LinearAlgebra, Random, Statistics, NLsolve, SpecialFunctions
 
 ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
 pe = build_pivot_elimination(ctx)
 x_free_calib = ctx.θ0_up[ctx.free_idx]
 D = ctx.D
+const MU_CTX = ctx.μHat
 
-# Draws are Exp(1) (genExpRands!): E[z^k] = k!.
-nu0_shared(K::Int) = [Float64(factorial(k)) for k in 1:K]
-nu0_origin(K::Int, D::Int) = vcat([fill(Float64(factorial(k)), D) for k in 1:K]...)
+# ctx.U stores the RAW Exp(1) draw (genExpRands!); the ZC restriction is on the Frechet
+# PRODUCTIVITY draw z_o(w) = U_o(w)^{-mu}, so the theoretical population moment is
+# E[z^k] = E[U^{-mu*k}] = Gamma(1 - mu*k), NOT k! (k! = E[U^k], the k-th moment of the raw
+# exponential draw itself -- using k! here was exactly the pre-fix bug, see
+# docs/audits/zc-frechet-draw-moments-2026-08-05/ZC_FEATURE_BASIS_SOURCE_AUDIT.md).
+nu0_shared(K::Int) = [gamma(1 - MU_CTX * k) for k in 1:K]
+nu0_origin(K::Int, D::Int) = vcat([fill(gamma(1 - MU_CTX * k), D) for k in 1:K]...)
 
 println("="^100)
 println("1) target-layout dimension/indexing sanity")
 println("="^100)
 @testset "target layout dims" begin
-    for (K_mean, K_pair) in [(1, 1), (2, 2)]
+    for (K_mean, K_pair) in [(1, 1), (2, 2), (3, 3)]
         shared = SharedByPowerLayout(K_mean, K_pair)
         orig = OriginByPowerLayout(D, K_mean, K_pair)
         @test n_eta(shared) == K_mean
@@ -54,7 +59,7 @@ println("="^100)
 println("2) origin-specific moment construction vs dense reference")
 println("="^100)
 @testset "moment column construction matches dense reference" begin
-    for (K_mean, K_pair) in [(1, 1), (2, 2)]
+    for (K_mean, K_pair) in [(1, 1), (2, 2), (3, 3)]
         layout = OriginByPowerLayout(D, K_mean, K_pair)
         aug = build_originzc_augmented_obj(ctx, CS, layout)
         @test aug.n_mean == K_mean * D
@@ -71,7 +76,7 @@ println("="^100)
         for k in 1:K_mean
             cols = pregrav+(k-1)*D+1 : pregrav+k*D
             νo_k = nu0_origin(K_mean, D)[(k-1)*D+1:k*D]
-            dense_ref = ctx.U .^ k .- νo_k'
+            dense_ref = frechet_power_feature(ctx.U, k, MU_CTX) .- νo_k'
             @test maximum(abs.(Gfull[:, cols] .- dense_ref)) < 1e-10
         end
         mean_end = pregrav + aug.n_mean
@@ -81,8 +86,9 @@ println("="^100)
             cols = mean_end+(k-1)*npair+1 : mean_end+k*npair
             νfull = nu0_origin(K_mean, D)
             dense_ref = Matrix{Float64}(undef, size(ctx.U, 1), npair)
+            Zk = frechet_power_feature(ctx.U, k, MU_CTX)
             for (j, (o, p)) in enumerate(pairs)
-                dense_ref[:, j] .= (ctx.U[:, o] .^ k) .* (ctx.U[:, p] .^ k) .- νfull[(k-1)*D+o] * νfull[(k-1)*D+p]
+                dense_ref[:, j] .= (Zk[:, o]) .* (Zk[:, p]) .- νfull[(k-1)*D+o] * νfull[(k-1)*D+p]
             end
             @test maximum(abs.(Gfull[:, cols] .- dense_ref)) < 1e-10
         end
@@ -95,7 +101,7 @@ println("3) inner solve + canonical Delta_dual (K=1, K=2)")
 println("="^100)
 results = Dict{Tuple{Int,Int},Any}()
 @testset "inner solve succeeds, Delta_dual finite and sane" begin
-    for (K_mean, K_pair) in [(1, 0), (1, 1), (2, 0), (2, 2)]
+    for (K_mean, K_pair) in [(1, 0), (1, 1), (2, 0), (2, 2), (3, 0), (3, 3)]
         layout = OriginByPowerLayout(D, K_mean, K_pair)
         pcx = build_originzc_production_context(ctx, CS, layout)
         νfull0 = nu0_origin(K_mean, D)
@@ -159,7 +165,7 @@ println("="^100)
 println("5) ZC nesting: Delta_unrestricted <= Delta_origin_ZC (K=1, K=2)")
 println("="^100)
 @testset "pairwise-ZC restriction weakly increases Delta relative to mean-only" begin
-    for K_mean in (1, 2)
+    for K_mean in (1, 2, 3)
         Δ_mean_only = results[(K_mean, 0)].verify.Delta_dual
         Δ_zc = results[(K_mean, K_mean)].verify.Delta_dual
         @printf "  K=%d  Delta_mean_only=%.8f  Delta_zc=%.8f  (zc - mean_only)=%.3e\n" K_mean Δ_mean_only Δ_zc (Δ_zc - Δ_mean_only)
@@ -171,7 +177,7 @@ println("="^100)
 println("6) analytic eta_{o,k} derivative vs reoptimized central finite differences")
 println("="^100)
 @testset "analytic d(Delta_dual)/d(eta_{o,k}) matches reoptimized FD" begin
-    for (K_mean, K_pair) in [(1, 1), (2, 2)]
+    for (K_mean, K_pair) in [(1, 1), (2, 2), (3, 3)]
         r = results[(K_mean, K_pair)]
         pcx = r.pcx; base = r.base; verify = r.verify; νfull0 = r.νfull0
         g_analytic = d_delta_dual_d_eta_origin_vec(base.λstar, pcx.aug, νfull0; mean_m = verify.m_mean)
@@ -181,13 +187,20 @@ println("="^100)
         cos1 = dot(g_analytic, g_fd1) / (norm(g_analytic) * norm(g_fd1) + 1e-300)
         @printf "  K_mean=%d K_pair=%d  n_eta=%d  h=%.0e  max|analytic-fd|=%.3e  cosine=%.8f\n" K_mean K_pair length(g_analytic) h1 maxdiff1 cos1
         ok = maxdiff1 < 1e-3 && cos1 > 0.999
-        if !ok
-            h2 = 1e-5
-            g_fd2 = d_delta_dual_d_eta_origin_fd(x_free_calib, νfull0, pcx.ctx_cm; h = h2)
-            maxdiff2 = maximum(abs.(g_analytic .- g_fd2))
-            cos2 = dot(g_analytic, g_fd2) / (norm(g_analytic) * norm(g_fd2) + 1e-300)
-            @printf "  (bandwidth check) h=%.0e  max|analytic-fd|=%.3e  cosine=%.8f\n" h2 maxdiff2 cos2
-            ok = maxdiff2 < 1e-3 && cos2 > 0.999
+        # K grows the curvature of z^K=U^(-mu*K) sharply (Zpair ~ z_o^K*z_p^K), so central-FD
+        # truncation error at a fixed h grows with K too -- shrink h until convergence rather than
+        # loosening the tolerance (repo rule: FD bandwidth mismatch looks like a bug, match h
+        # before hunting bugs -- feedback-fd-bandwidth-mismatch-looks-like-a-bug.md).
+        h_prev, maxdiff_prev = h1, maxdiff1
+        for h_try in (1e-5, 1e-6, 1e-7)
+            ok && break
+            g_fd_try = d_delta_dual_d_eta_origin_fd(x_free_calib, νfull0, pcx.ctx_cm; h = h_try)
+            maxdiff_try = maximum(abs.(g_analytic .- g_fd_try))
+            cos_try = dot(g_analytic, g_fd_try) / (norm(g_analytic) * norm(g_fd_try) + 1e-300)
+            shrink = maxdiff_prev / max(maxdiff_try, 1e-300)
+            @printf "  (bandwidth check) h=%.0e  max|analytic-fd|=%.3e  cosine=%.8f  shrink_vs_prev_h=%.1fx\n" h_try maxdiff_try cos_try shrink
+            ok = maxdiff_try < 1e-3 && cos_try > 0.999
+            h_prev, maxdiff_prev = h_try, maxdiff_try
         end
         @test ok
     end

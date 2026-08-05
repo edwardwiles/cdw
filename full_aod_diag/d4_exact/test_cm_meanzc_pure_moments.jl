@@ -14,6 +14,12 @@ using Test, Random, LinearAlgebra, Statistics
 
 Random.seed!(4021)
 
+# Fixed test exponent for the Frechet productivity transform z = U^(-mu); used everywhere below
+# a ZC feature matrix is built from raw U so tests exercise the SAME z^k = U^(-mu*k) formula as
+# production (frechet_power_feature), not the pre-fix U^k. 0 < mu_test*3 < 1 so k=1,2,3 all stay
+# comfortably inside the Gamma(1-mu*k) finiteness region tested elsewhere.
+const MU_TEST = 0.3
+
 @testset "packed_pair_index / round-trip mapping" begin
     for D in (3, 4, 5, 20)
         pairs = packed_pair_index(D)
@@ -51,13 +57,15 @@ end
 @testset "nu_feasible_interval" begin
     W, D = 5000, 4
     U = rand(W, D) .* 2.0 .+ [0.0 0.3 0.6 0.9]     # each origin's range [shift, shift+2) -- overlapping
-    lo, hi = nu_feasible_interval(U)
+    Z = frechet_power_feature(U, 1, MU_TEST)
+    lo, hi = nu_feasible_interval(U, 1; μ = MU_TEST)
     @test lo < hi
-    @test lo == maximum(minimum(U, dims = 1))
-    @test hi == minimum(maximum(U, dims = 1))
-    # degenerate: force an empty interval (origin 1 max < origin 2 min)
+    @test lo == maximum(minimum(Z, dims = 1))
+    @test hi == minimum(maximum(Z, dims = 1))
+    # degenerate: force an empty interval (origin 1 max < origin 2 min) -- z=U^(-mu) is strictly
+    # decreasing in U for mu>0, so disjoint U-ranges stay disjoint (order-reversed) in z-space too.
     U2 = hcat(rand(W) .* 0.1, rand(W) .* 0.1 .+ 5.0)
-    @test_throws ErrorException nu_feasible_interval(U2)
+    @test_throws ErrorException nu_feasible_interval(U2; μ = MU_TEST)
 end
 
 @testset "direct weighted calc vs moment-matrix implementation (D=4, arbitrary positive weights)" begin
@@ -67,29 +75,31 @@ end
     m = m_raw .* (W / sum(m_raw))            # normalized so mean(m)=1 (sum(m)=W)
     ν = 1.3
 
-    Zraw, Zpairraw = build_raw_mean_pair_matrices(U; want_pair = true)
-    @test Zraw == U
+    Zraw, Zpairraw = build_raw_mean_pair_matrices(U; μ = MU_TEST, want_pair = true)
+    Zexpect = frechet_power_feature(U, 1, MU_TEST)
+    @test Zraw ≈ Zexpect
+    @test !isapprox(Zraw, U)   # old U^k formula must NOT be what's returned (k=1 old: U; new: U^(-mu))
     @test size(Zpairraw, 2) == div(D * (D - 1), 2)
     pairs = packed_pair_index(D)
     for (k, (o, p)) in enumerate(pairs)
-        @test Zpairraw[:, k] ≈ U[:, o] .* U[:, p]
+        @test Zpairraw[:, k] ≈ Zexpect[:, o] .* Zexpect[:, p]
     end
 
     Gmean = mean_columns_direct(Zraw, ν)
     Gpair = pair_columns(Zpairraw, ν)
-    @test Gmean ≈ U .- ν
+    @test Gmean ≈ Zexpect .- ν
     for (k, (o, p)) in enumerate(pairs)
-        @test Gpair[:, k] ≈ U[:, o] .* U[:, p] .- ν^2
+        @test Gpair[:, k] ≈ Zexpect[:, o] .* Zexpect[:, p] .- ν^2
     end
 
     resid_mean = recovered_mean_residuals(m, Zraw, ν)
     resid_pair = recovered_pair_residuals(m, Zpairraw, ν)
     for o in 1:D
-        direct = sum(m[s] * (U[s, o] - ν) for s in 1:W) / W
+        direct = sum(m[s] * (Zexpect[s, o] - ν) for s in 1:W) / W
         @test resid_mean[o] ≈ direct atol=1e-9
     end
     for (k, (o, p)) in enumerate(pairs)
-        direct = sum(m[s] * (U[s, o] * U[s, p] - ν^2) for s in 1:W) / W
+        direct = sum(m[s] * (Zexpect[s, o] * Zexpect[s, p] - ν^2) for s in 1:W) / W
         @test resid_pair[k] ≈ direct atol=1e-9
     end
 end
@@ -99,31 +109,36 @@ end
     U = rand(W, D) .* 2 .+ 0.5
     ν2 = 1.9
 
-    Z2, Zpair2 = build_raw_mean_pair_matrices(U, 2; want_pair = true)
-    @test Z2 ≈ U .^ 2
+    Z1expect = frechet_power_feature(U, 1, MU_TEST)
+    Z2expect = frechet_power_feature(U, 2, MU_TEST)
+
+    Z2, Zpair2 = build_raw_mean_pair_matrices(U, 2; μ = MU_TEST, want_pair = true)
+    @test Z2 ≈ Z2expect
+    @test Z2 ≈ Z1expect .^ 2                          # z_o^2 == (z_o^1)^2, no double transform
+    @test !isapprox(Z2, U .^ 2)                        # old (wrong) formula must not reappear
     pairs = packed_pair_index(D)
     for (k, (o, p)) in enumerate(pairs)
-        @test Zpair2[:, k] ≈ (U[:, o] .^ 2) .* (U[:, p] .^ 2)
+        @test Zpair2[:, k] ≈ Z2expect[:, o] .* Z2expect[:, p]
     end
     Gmean2 = mean_columns_direct(Z2, ν2)
-    @test Gmean2 ≈ U .^ 2 .- ν2
+    @test Gmean2 ≈ Z2expect .- ν2
 
     # build_raw_mean_pair_matrix_levels stacks K_mean/K_pair levels consistently with the
     # single-level constructor above
-    Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(U, 2, 2)
+    Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(U, 2, 2; μ = MU_TEST)
     @test length(Zraw_all) == 2 && length(Zpairraw_all) == 2
-    @test Zraw_all[1] ≈ U
+    @test Zraw_all[1] ≈ Z1expect
     @test Zraw_all[2] ≈ Z2
     @test Zpairraw_all[2] ≈ Zpair2
 
-    Zraw_all_meanonly, Zpairraw_all_meanonly = build_raw_mean_pair_matrix_levels(U, 2, 0)
+    Zraw_all_meanonly, Zpairraw_all_meanonly = build_raw_mean_pair_matrix_levels(U, 2, 0; μ = MU_TEST)
     @test length(Zpairraw_all_meanonly) == 0    # no pair matrices built at all when K_pair=0
 end
 
 @testset "mean-only arm never builds pair columns" begin
     W, D = 500, 4
     U = rand(W, D) .+ 0.5
-    Zraw, Zpairraw = build_raw_mean_pair_matrices(U; want_pair = false)
+    Zraw, Zpairraw = build_raw_mean_pair_matrices(U; μ = MU_TEST, want_pair = false)
     @test Zpairraw === nothing
 end
 
@@ -152,7 +167,7 @@ end
     U = rand(W, D) .* 1.5 .+ 0.2
     m = ones(W) .+ 0.02 .* randn(W)
     m .= max.(m, 1e-6)
-    Zraw, Zpairraw = build_raw_mean_pair_matrices(U; want_pair = true)
+    Zraw, Zpairraw = build_raw_mean_pair_matrices(U; μ = MU_TEST, want_pair = true)
     pairs = packed_pair_index(D)
 
     ν_bad = 0.9
@@ -163,10 +178,11 @@ end
     end
 
     Ueq = repeat(U[:, 1], 1, D)
-    Zpair_eq = build_raw_mean_pair_matrices(Ueq; want_pair = true)[2]
-    νeq = dot(m, @view(Ueq[:, 1])) / W
+    Zeq = frechet_power_feature(Ueq, 1, MU_TEST)
+    Zpair_eq = build_raw_mean_pair_matrices(Ueq; μ = MU_TEST, want_pair = true)[2]
+    νeq = dot(m, @view(Zeq[:, 1])) / W
     resid_pair_eq = recovered_pair_residuals(m, Zpair_eq, νeq)
-    Σeq = recovered_covariance_matrix(m, Ueq, D)
+    Σeq = recovered_covariance_matrix(m, Zeq, D)
     for (k, (o, p)) in enumerate(pairs)
         @test resid_pair_eq[k] ≈ Σeq[o, p] atol = 1e-9
     end

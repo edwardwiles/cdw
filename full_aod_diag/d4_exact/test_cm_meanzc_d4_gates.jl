@@ -22,9 +22,10 @@ include(joinpath(@__DIR__, "lfix_cm_aware.jl"))
 include(joinpath(@__DIR__, "cm_hessian_architectures.jl"))
 include(joinpath(@__DIR__, "cm_production_bundle.jl"))
 include(joinpath(@__DIR__, "cm_outer_driver.jl"))
+include(joinpath(@__DIR__, "cm_originzc_target_layout.jl"))
 include(joinpath(@__DIR__, "cm_meanzc_moments.jl"))
 include(joinpath(@__DIR__, "cm_meanzc_production.jl"))
-using Test, Printf, LinearAlgebra, Random, Statistics
+using Test, Printf, LinearAlgebra, Random, Statistics, SpecialFunctions
 
 ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
 pe = build_pivot_elimination(ctx)
@@ -57,12 +58,13 @@ const L = 10
 # (K_mean, K_pair, label) -- (1,0)/(1,1) regression-check the original two named arms
 # (meanzc_extension_to_K(:cm_plus_equal_means)==(1,0), (:cm_plus_equal_means_zero_covariance)==(1,1));
 # (2,0)/(2,2) are the new generalized power-level configurations.
-const CONFIGS = [(1, 0, "K1_mean_only"), (1, 1, "K1_mean_zc"), (2, 0, "K2_mean_only"), (2, 2, "K2_mean_zc")]
+const CONFIGS = [(1, 0, "K1_mean_only"), (1, 1, "K1_mean_zc"), (2, 0, "K2_mean_only"), (2, 2, "K2_mean_zc"), (3, 0, "K3_mean_only"), (3, 3, "K3_mean_zc")]
 const BASES = (:direct, :anchored)
-# Draws are Exp(1) (genExpRands!), so E[z^k] = k! is the natural scale for nu_k (k=1: mean 1,
-# k=2: E[z^2]=2, etc.) -- an arbitrary constant offset per level (e.g. 1.0+0.15*(k-1)) is not a
-# feasible starting point for k>=2 since higher raw moments grow factorially, not linearly.
-nu0vec(K::Int) = [Float64(factorial(k)) for k in 1:K]
+# z_o(w)=U_o(w)^{-mu} is the Frechet PRODUCTIVITY draw (ctx.U itself is the raw Exp(1) draw), so
+# E[z^k] = Gamma(1-mu*k) is the natural (theoretical population) scale for nu_k, NOT k! (k! is
+# E[U^k], the raw exponential draw's own k-th moment -- using it here was the pre-fix bug; see
+# docs/audits/zc-frechet-draw-moments-2026-08-05/ZC_FEATURE_BASIS_SOURCE_AUDIT.md).
+nu0vec(K::Int) = [gamma(1 - ctx.μHat * k) for k in 1:K]
 
 @test meanzc_extension_to_K(:cm_plus_equal_means) == (1, 0)
 @test meanzc_extension_to_K(:cm_plus_equal_means_zero_covariance) == (1, 1)
