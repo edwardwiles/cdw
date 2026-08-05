@@ -35,8 +35,29 @@ isdefined(Main, :is_better_polish) || include(joinpath(@__DIR__, "incumbent_logi
 isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__DIR__, "cm_hessian_subblock_profiling.jl"))   # D=20 profiling task (2026-07-28): opt-in live-pcx stash this function writes below, default off
 isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "production_bundle_api.jl"))   # architecture/production-operator-bundle-hardening-2026-07-30
 isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
+isdefined(Main, :aod_pow_matrix) || include(joinpath(@__DIR__, "compressed_live.jl"))   # k=(sigma-1) narrow fix: aod_pow_matrix
+isdefined(Main, :autarky_cf_scalars) || include(joinpath(@__DIR__, "autarky_cf.jl"))   # k=(sigma-1) narrow fix: autarky_cf_scalars
 
 const CM_CHECKPOINT_SCHEMA = 9
+
+"""
+    meanzc_profiled_nu_value(xf, ctx) -> Float64
+
+k=(sigma-1) exact-collinearity narrow fix (see `run_cm_upper_checkpointed`'s own
+`meanzc_profiled_level` docstring for the full mechanism/evidence). Computes the SAME
+target the autarky/counterfactual price-index moment (`autarky_cf.jl`, column D^2+1)
+already enforces for the focal country `bi=baseIndex`: `E[z_bi(w)^(sigma-1)] =
+cf_denom/cf_num`. `xf` is the economic free-parameter vector (`x_free`, i.e. `[gp;
+vec(A_od free)]`, the SAME argument `cm_meanzc_production_value_verified_screened`/
+`cm_meanzc_production_gradient(_cplus)` already take).
+"""
+function meanzc_profiled_nu_value(xf::AbstractVector{Float64}, ctx)
+    θ_full = CS.reconstruct_full(xf, ctx.m)
+    AodPow = aod_pow_matrix(θ_full, ctx)
+    γ_prime_bi = θ_full[3+ctx.D]
+    cf_num, cf_denom, _ = autarky_cf_scalars(ctx.obj, AodPow, ctx.σ, γ_prime_bi)
+    return cf_denom / cf_num
+end
 # Bumped 8 -> 9 (transformed-A restricted-family port, 2026-07-26 production-audit task addendum;
 # whole-tree CMCheckpointV* grep confirms V9 unclaimed -- cm_originzc_checkpoint.jl currently ends
 # at V7, so this bump does not collide there; that file's own analogous bump uses V10, keeping the
@@ -705,6 +726,34 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # cm_frechet_level.jl/cm_frechet_hessian.jl/cm_frechet_cplus.jl; opt-in, currently requires
         # cm_extension=:cm_only, i.e. not yet combined with the meanzc extension -- see the guard
         # just below).
+        meanzc_profiled_level::Union{Nothing,Int} = nothing,   # k=(sigma-1) exact-collinearity
+        # narrow fix (user-approved, diagnostic/cmzc-k2-singularity-2026-08-05 --
+        # docs/audits/cmzc-k2-singularity-2026-08-05/MASTER.md). The autarky/counterfactual
+        # price-index moment (base economic block, column D^2+1, autarky_cf.jl) already enforces,
+        # for country bi=baseIndex, E[z_bi(w)^(sigma-1)] = cf_denom/cf_num -- an EXACT affine
+        # function of the SAME quantity a mean-ZC restriction at level k=(sigma-1) ALSO restricts,
+        # to a separate, gp-independent target nu_k. At the calibration point the two coincide;
+        # moving gp breaks that and both become jointly infeasible (confirmed live, D4/W5000/
+        # sigma3: fails nStatus=-300 at every |gp perturbation| from 1e-6 to 1e-2). Default
+        # `nothing`: zero behavior change for every existing caller. When set to k0, exactly ONE
+        # substitution is made, at the single upstream point where the outer KNITRO guess `w` is
+        # unpacked into `nuvec` (both in cb_F! and cb_G!, plus the backend-switch and final
+        # re-verification call sites): `nuvec[k0]` is set to `cf_denom/cf_num` (computed from the
+        # SAME theta_econ the autarky moment itself uses) instead of `exp(w[D2_econ+k0])`.
+        # Everything downstream (cm_meanzc_production_value_verified_screened,
+        # cm_meanzc_production_gradient(_cplus), the inner KNITRO dual solve, the structured/
+        # operator Hessian) receives `nuvec` exactly as before and is NOT modified in any way.
+        # The ONE necessary consequence, applied ONLY in cb_G! (also purely local, no other file
+        # touched): (a) w's own eta_nu_{k0} coordinate now has EXACTLY ZERO effect on the
+        # objective (nuvec[k0] no longer reads from it at all), so the gradient KNITRO receives
+        # for that coordinate is set to 0 (not the raw d(Delta)/d(eta_nu_k0) the unmodified
+        # gradient function still returns, since that quantity is real and well-defined but is not
+        # the correct partial derivative w.r.t. w's own now-unused slot); (b) since nuvec[k0] is
+        # now an implicit function of gp, the standard d(Delta)/d(gp) returned by the unmodified
+        # gradient function (which differentiates holding nuvec fixed, since it's passed as a
+        # plain argument) is missing the chain-rule term d(Delta)/d(nu_k0) * d(nu_k0)/d(gp) --
+        # added back in explicitly, using d(nu_k0)/d(gp) = sigma*nu_k0/gp (closed form, since
+        # cf_denom = gp^sigma * const and cf_num does not depend on gp).
         A_coordinate_mode::Symbol = :powered_aspace,   # transformed-A restricted-family port
         # (2026-07-26 five-family finish task §8): :powered_aspace (NEW PRODUCTION DEFAULT, fixed-
         # theta only -- promoted after test_cm_aspace_coordinate_gates.jl's real D=20/W=80,000
@@ -768,6 +817,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
               ":common_flexible with the meanzc extension.")
     marginal_restriction === :common_frechet &&
         lp("[", label, "] marginal_restriction=common_frechet (fixed Frechet as CM plus a common-level anchor)")
+    if meanzc_profiled_level !== nothing
+        is_meanzc || error("run_cm_upper_checkpointed($label): meanzc_profiled_level requires cm_extension!=:cm_only (is_meanzc)")
+        1 <= meanzc_profiled_level <= meanzc_K_mean ||
+            error("run_cm_upper_checkpointed($label): meanzc_profiled_level=$meanzc_profiled_level out of range 1:$meanzc_K_mean")
+        lp("[", label, "] k=(sigma-1) narrow fix ACTIVE: meanzc_profiled_level=", meanzc_profiled_level,
+           " -- nu_", meanzc_profiled_level, " replaced by cf_denom/cf_num (autarky_cf.jl) at every outer evaluation, not read from the KNITRO guess.")
+    end
 
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
     backend_switched = false   # Part II.4 follow-up -- set true below only on an explicit, audited cross-backend resume
@@ -1008,6 +1064,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         xf_switch = xf_from_w_econ(resumed.best_feasible.w[1:D2_econ])
         verify_switch = if is_meanzc
             νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
+            meanzc_profiled_level === nothing || (νvec_switch[meanzc_profiled_level] = meanzc_profiled_nu_value(xf_switch, ctx))
             (_, _, vs) = cm_meanzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters); vs
         elseif is_frechet
             (_, _, vs) = cm_frechet_production_value_verified_screened(xf_switch, pcx; counters = pcx.screen_counters); vs
@@ -1106,6 +1163,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         w = evalRequest.x
         xf = xf_from_w_econ(w[1:D2_econ])
         νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
+        is_meanzc && meanzc_profiled_level !== nothing && (νvec[meanzc_profiled_level] = meanzc_profiled_nu_value(xf, ctx))
         local base, verify
         cache_key = exact_cache === nothing ? nothing :
             CMProductionEvalKey(collect(xf), collect(νvec), delta, find_smallest, pcx.ctx_cm.obj.inner_loop_opt,
@@ -1173,6 +1231,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         w = evalRequest.x
         xf = xf_from_w_econ(w[1:D2_econ])
         νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
+        is_meanzc && meanzc_profiled_level !== nothing && (νvec[meanzc_profiled_level] = meanzc_profiled_nu_value(xf, ctx))
         shared = last_F_state[]
         matched = shared !== nothing && shared.w == w
         base = matched ? shared.base : nothing
@@ -1201,6 +1260,20 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                 cm_production_gradient(xf, pcx, ctx, pe; base = base, threaded = true,
                     h_mode = :cached, bandwidth_cache = bandwidth_cache)
             end
+        end
+        # k=(sigma-1) narrow fix: the ONE necessary consequence of overriding nuvec[k0] above (see
+        # meanzc_profiled_level's own docstring for the full derivation) -- neither line touches
+        # cm_meanzc_production_gradient(_cplus)/d_delta_dual_d_eta_nu_vec, both of which still
+        # correctly compute d(Delta)/d(eta_nu_k) treating nuvec as a plain fixed argument (exactly
+        # as before); only the ASSEMBLY of the final KNITRO-facing gradient vector changes, here.
+        if is_meanzc && meanzc_profiled_level !== nothing
+            k0 = meanzc_profiled_level
+            d_eta_k0 = gfull[D2_econ+k0]        # d(Delta)/d(eta_nu_k0), still correct as computed
+            dν_dgp = ctx.σ * νvec[k0] / w[1]     # nu_k0 = cf_denom/cf_num, cf_denom=gp^sigma*const
+            gfull[1] += d_eta_k0 * dν_dgp        # chain rule: nu_k0 now an implicit function of gp
+            gfull[D2_econ+k0] = 0.0              # w's own eta_nu_k0 coordinate has ZERO effect on
+            # the objective now (nuvec[k0] no longer reads from it) -- its correct partial
+            # derivative is exactly 0, not the d(Delta)/d(eta_nu_k0) quantity just consumed above.
         end
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
@@ -1252,6 +1325,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     try
         if is_meanzc
             νvec_final = exp.(xsol_v[D2_econ+1:end])
+            meanzc_profiled_level === nothing || (νvec_final[meanzc_profiled_level] = meanzc_profiled_nu_value(xf_final, ctx))
             _, _, verify_final = cm_meanzc_production_value_verified_screened(xf_final, νvec_final, pcx; counters = pcx.screen_counters)
         elseif is_frechet
             _, _, verify_final = cm_frechet_production_value_verified_screened(xf_final, pcx; counters = pcx.screen_counters)
