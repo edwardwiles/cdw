@@ -38,7 +38,7 @@ isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath
 isdefined(Main, :aod_pow_matrix) || include(joinpath(@__DIR__, "compressed_live.jl"))   # k=(sigma-1) narrow fix: aod_pow_matrix
 isdefined(Main, :autarky_cf_scalars) || include(joinpath(@__DIR__, "autarky_cf.jl"))   # k=(sigma-1) narrow fix: autarky_cf_scalars
 
-const CM_CHECKPOINT_SCHEMA = 9
+const CM_CHECKPOINT_SCHEMA = 10
 
 """
     meanzc_profiled_nu_value(xf, ctx) -> Float64
@@ -425,6 +425,106 @@ struct CMCheckpointV9
     A_coordinate_mode::Symbol   # :legacy_z | :powered_aspace
 end
 
+"""
+    CMCheckpointV10
+
+2026-08-05 truncated-power task: the CM moment-feature-family spec (`cm_moment_spec`) now varies
+(previously every checkpoint ever written implicitly meant "eq.35 CDF-only", the ONLY spec that
+existed) -- this is NOT a safely-inferable field the way every prior schema bump was (schema
+6->8's `marginal_restriction` or schema 8->9's `A_coordinate_mode` could each only ever have had
+one specific value in every pre-existing file; here, an old file's `zfree`/`dual_warm_start`/
+`best_feasible` were computed against a DIFFERENT, half-width inner CM block -- resuming from one
+under the new spec would silently corrupt the resumed state, not just mislabel it). Per this
+task's brief: old (schema<=9, `CMCheckpointV9`-and-earlier) CDF-only checkpoints/dual banks must
+HARD-REFUSE, not auto-upgrade -- see `load_cm_checkpoint`'s own schema-10 gate below, which
+deliberately does NOT extend the schema-2..9 auto-upgrade chain to schema 10.
+
+New fields (appended at the end, mirroring every prior schema bump's own convention):
+- `cm_moment_spec::Symbol`: `:cdf_only` (`cm_feature_family_count=1`, eq.35 only) or
+  `:cdf_plus_truncated_power_1msigma` (`cm_feature_family_count=2`, eq.35+eq.36) -- the two
+  values `common_marginals_moments.jl::build_cm_augmented_obj`'s `include_truncated_moment`
+  can actually produce.
+- `cm_feature_family_count::Int`: `1` or `2`, redundant with `cm_moment_spec` (kept as a separate
+  plain integer so a dimension check never has to string-compare a Symbol).
+- `cm_feature_schema_version::Int`: bumped whenever the FEATURE CONSTRUCTION itself (not just the
+  family count) changes in a way that would change the numeric CM block content at identical
+  `(U, z, contrasts, σ)` -- `1` for this task's own construction (see
+  `common_marginals_moments.jl::precalc_common_marginals_cdf`).
+- `cm_feature_operator_checksum::String`: `hash(...)` of the resolved `(cm_moment_spec, L,
+  cm_feature_schema_version, contrasts, ncm)` tuple (see `cm_feature_operator_fingerprint` below)
+  -- a cheap, deterministic fingerprint of "which exact CM operator produced this checkpoint's
+  dual vector," checked on resume in ADDITION to the existing draw-checksum/cm_L/cm_contrasts
+  checks (belt-and-suspenders: catches a mismatch even if some future change touches the feature
+  construction without bumping any of the human-maintained enum fields above).
+"""
+struct CMCheckpointV10
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    destination_sample::Symbol
+    row_idx::Union{Nothing,Int}
+    D_dest::Int
+    marginal_restriction::Symbol
+    A_coordinate_mode::Symbol
+    # ---- NEW (schema 10): CM moment-feature-family spec (2026-08-05 truncated-power task) ----
+    cm_moment_spec::Symbol
+    cm_feature_family_count::Int
+    cm_feature_schema_version::Int
+    cm_feature_operator_checksum::String
+end
+
+"""
+    cm_feature_operator_fingerprint(cm_moment_spec, L, cm_feature_schema_version, contrasts, ncm) -> String
+
+Deterministic fingerprint of the CM feature operator that produced a checkpoint's CM dual block --
+see `CMCheckpointV10`'s own docstring for why this exists alongside the human-maintained enum
+fields.
+"""
+cm_feature_operator_fingerprint(cm_moment_spec::Symbol, L::Int, cm_feature_schema_version::Int,
+                                 contrasts::Symbol, ncm::Int) =
+    string(hash((cm_moment_spec, L, cm_feature_schema_version, contrasts, ncm)))
+
+"Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV10)
+    tmp = path * ".tmp"
+    serialize(tmp, ckpt)
+    mv(tmp, path; force = true)
+    return path
+end
+
 "Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
 function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV6)
     tmp = path * ".tmp"
@@ -525,40 +625,54 @@ LAYOUT, not schema-1's own known defect. Always returns a `CMCheckpointV9` (unif
 every caller downstream of this function, regardless of which schema the file on disk actually is).
 """
 function load_cm_checkpoint(path::AbstractString)
-    ckpt = try
-        deserialize(path)::CMCheckpointV9
-    catch e00
-        (e00 isa TypeError || e00 isa EOFError || e00 isa MethodError) || rethrow()
-        try
-            upgrade_schema8_to_v9(deserialize(path)::CMCheckpointV8)
-        catch e0
-            (e0 isa TypeError || e0 isa EOFError || e0 isa MethodError) || rethrow()
+    # 2026-08-05 truncated-power task: schema 10 is NOT auto-upgraded from -- see CMCheckpointV10's
+    # own docstring for why (an old file's zfree/dual_warm_start/best_feasible were computed
+    # against a DIFFERENT, half-width inner CM block; silently reinterpreting them under the new
+    # spec would corrupt the resumed state, not just mislabel it). Try schema 10 first; any older
+    # schema that successfully deserializes under the pre-existing chain is HARD-REFUSED below
+    # (not upgraded) -- deliberately breaking the schema-2..9 auto-upgrade chain at this one step.
+    local ckpt, is_pre10
+    try
+        ckpt = deserialize(path)::CMCheckpointV10
+        is_pre10 = false
+    catch e10
+        (e10 isa TypeError || e10 isa EOFError || e10 isa MethodError) || rethrow()
+        ckpt = try
+            deserialize(path)::CMCheckpointV9
+        catch e00
+            (e00 isa TypeError || e00 isa EOFError || e00 isa MethodError) || rethrow()
             try
-                upgrade_schema8_to_v9(upgrade_schema6_to_v8(deserialize(path)::CMCheckpointV6))
-            catch e1b
-                (e1b isa TypeError || e1b isa EOFError || e1b isa MethodError) || rethrow()
+                upgrade_schema8_to_v9(deserialize(path)::CMCheckpointV8)
+            catch e0
+                (e0 isa TypeError || e0 isa EOFError || e0 isa MethodError) || rethrow()
                 try
-                    upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(deserialize(path)::CMCheckpointV4)))
-                catch e1
-                    (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
+                    upgrade_schema8_to_v9(upgrade_schema6_to_v8(deserialize(path)::CMCheckpointV6))
+                catch e1b
+                    (e1b isa TypeError || e1b isa EOFError || e1b isa MethodError) || rethrow()
                     try
-                        upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(deserialize(path)::CMCheckpointV3))))
-                    catch e2
-                        (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
-                        local old
+                        upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(deserialize(path)::CMCheckpointV4)))
+                    catch e1
+                        (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
                         try
-                            old = deserialize(path)::CMCheckpoint
-                        catch
-                            error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV9, " *
-                                  "CMCheckpointV8, CMCheckpointV6, CMCheckpointV4, CMCheckpointV3, AND the legacy " *
-                                  "CMCheckpoint (schema 1/2) layout -- this file is not a recognized CM checkpoint " *
-                                  "(corrupt, truncated, or an even older/unrelated format).")
+                            upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(deserialize(path)::CMCheckpointV3))))
+                        catch e2
+                            (e2 isa TypeError || e2 isa EOFError || e2 isa MethodError) || rethrow()
+                            local old
+                            try
+                                old = deserialize(path)::CMCheckpoint
+                            catch
+                                error("load_cm_checkpoint($path): failed to deserialize under CMCheckpointV10, " *
+                                      "CMCheckpointV9, CMCheckpointV8, CMCheckpointV6, CMCheckpointV4, CMCheckpointV3, " *
+                                      "AND the legacy CMCheckpoint (schema 1/2) layout -- this file is not a recognized " *
+                                      "CM checkpoint (corrupt, truncated, or an even older/unrelated format).")
+                            end
+                            upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(upgrade_schema2(old)))))
                         end
-                        upgrade_schema8_to_v9(upgrade_schema6_to_v8(upgrade_schema4_to_v6(upgrade_schema3(upgrade_schema2(old)))))
                     end
                 end
             end
         end
+        is_pre10 = true
     end
     if ckpt.schema == 1
         error("load_cm_checkpoint($path): schema=1, expected $(CM_CHECKPOINT_SCHEMA) -- schema-1 " *
@@ -569,11 +683,20 @@ function load_cm_checkpoint(path::AbstractString)
               "START POINT only, then cold-re-evaluate it with cm_production_value_verified before " *
               "trusting any Delta/feasibility for it.")
     end
-    ckpt.schema in (2, 3, 4, 6, 8, CM_CHECKPOINT_SCHEMA) ||
-        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected 2, 3, 4, 6, 8, or $(CM_CHECKPOINT_SCHEMA) -- " *
-              "this checkpoint predates the CM checkpoint-schema unification (task §11), e.g. a bare " *
-              "ad-hoc NamedTuple from c13_d20_cm_upper_continuation.jl's old save_stage. Start a fresh " *
-              "run instead of resuming from an incompatible checkpoint.")
+    if is_pre10
+        error("load_cm_checkpoint($path): schema=$(ckpt.schema), a pre-2026-08-05 CDF-only CM checkpoint " *
+              "(cm_moment_spec did not exist -- every such file implicitly means eq.35-CDF-only). Schema " *
+              "$(CM_CHECKPOINT_SCHEMA) checkpoints may impose eq.35+eq.36 (a WIDER, numerically DIFFERENT " *
+              "CM dual block) -- resuming a pre-schema-10 file's zfree/dual_warm_start/best_feasible under " *
+              "the new spec would silently reinterpret a solve of a different economic problem, not just " *
+              "mislabel it. Refusing to auto-upgrade (unlike every prior schema bump). Start a fresh run " *
+              "instead; if you specifically want the OLD eq.35-only spec, pass include_truncated_moment=" *
+              "false (schema $(CM_CHECKPOINT_SCHEMA) checkpoints written with cm_feature_family_count=1 " *
+              "remain readable via this same schema-10-only path, they are not what triggered this error).")
+    end
+    ckpt.schema == CM_CHECKPOINT_SCHEMA ||
+        error("load_cm_checkpoint($path): schema=$(ckpt.schema), expected $(CM_CHECKPOINT_SCHEMA) -- " *
+              "unrecognized schema (not caught by the pre-10 hard-refusal above either).")
     return ckpt
 end
 
@@ -618,6 +741,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # pre-existing caller's exact behavior byte-for-byte.
         W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
         L::Int = 10, contrasts::Symbol = :anchored, probs::Union{Nothing,AbstractVector{Float64}} = nothing,
+        include_truncated_moment::Bool,   # 2026-08-05 truncated-power task: REQUIRED, no default (repo
+        # rule: never default a scientific parameter that changes which restriction is imposed).
+        # `true` imposes eq.35+eq.36 (the corrected flexible-CM/CM+ZC production spec, requires
+        # moment_representation=:dense_reference internally -- see build_cm_production_context's own
+        # guard); `false` reproduces the pre-2026-08-05 eq.35-only behavior byte-for-byte. Ignored
+        # (any value accepted) when marginal_restriction=:common_frechet -- that family's CM sub-
+        # block is a deliberate single-family carve-out, see cm_frechet_level.jl.
         cm_hessian_backend::Symbol = :structured, cm_grid_rule::Symbol = :equal,
         threaded_bins::Bool = true,   # allocation/Hessian port task §6: pass-through to
         # build_cm_production_context/build_cm_bin_ctx -- true (production default) selects the
@@ -774,6 +904,28 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # common_frechet, cm_meanzc) now always construct OperatorPsiBundle via
         # prepare_production_run. A dense reference bundle is available only through
         # DenseReferenceDiagnostics.prepare_context, never from this driver.
+    # 2026-08-05 truncated-power task: include_truncated_moment=true (the two-family eq.35+eq.36
+    # CM spec) is NOT YET wired into this production driver, and cannot be silently routed through
+    # it: `prepare_production_run` (production_bundle_api.jl, called below) hard-requires an
+    # OperatorPsiBundle -- no dense G/H, by design (task architecture/production-operator-bundle-
+    # hardening-2026-07-30) -- and the structured (Architecture C) bin-table Hessian / :cm_lookup
+    # operator FG this driver's OperatorPsiBundle path relies on have NOT been extended to the
+    # weighted eq.36 family (see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for the full
+    # derivation and disclosed scope limitation). Refusing outright rather than silently downgrading
+    # a "production" call to a dense-reference diagnostic bundle (which this codebase's own
+    # dense_reference_diagnostics.jl explicitly bans for "a production outer solve or campaign").
+    include_truncated_moment && marginal_restriction !== :common_frechet &&
+        error("run_cm_upper_checkpointed($label): include_truncated_moment=true (the two-family " *
+              "eq.35+eq.36 CM spec) is not yet wired into this production driver -- see this call site's " *
+              "own comment for why (prepare_production_run's OperatorPsiBundle invariant vs. the " *
+              "single-family-only structured Hessian/operator FG backends). For CORRECTNESS " *
+              "testing/gates, call build_cm_production_context(...; include_truncated_moment=true, " *
+              "moment_representation=:dense_reference, use_archB_moments=false, ...) + archC_base_state " *
+              "directly (Architecture A/dense_reference is fully generic and needs zero new code, but is " *
+              "NOT production-grade -- see dense_reference_diagnostics.jl's own banner), or route through " *
+              "DenseReferenceDiagnostics.prepare_context with an explicit permit for a logged diagnostic " *
+              "run. Extending Architecture C / the operator FG to two families is disclosed follow-up " *
+              "work, not attempted in this task.")
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -869,6 +1021,19 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                   "checkpoint was written with marginal_restriction=:$(resumed.marginal_restriction), " *
                   "this call requests :$marginal_restriction -- refusing to resume under a different " *
                   "restriction family (CM-only vs CM-plus-level-anchor restriction-column count differs).")
+        # 2026-08-05 truncated-power task: cm_feature_family_count changes the CM block width (hence
+        # the inner dual-vector dimension) exactly like cm_extension/destination_sample/
+        # marginal_restriction do -- no safe override, hard-refuse on mismatch. (load_cm_checkpoint
+        # already refuses every pre-schema-10 file outright, so `resumed` here always has these
+        # fields -- this check catches a schema-10-vs-schema-10 family-count mismatch, e.g. an old
+        # single-family schema-10 run resumed under a new two-family request.)
+        resumed.cm_feature_family_count == (include_truncated_moment ? 2 : 1) ||
+            error("run_cm_upper_checkpointed($label): CM feature-family-count MISMATCH on resume -- " *
+                  "checkpoint was written with cm_moment_spec=:$(resumed.cm_moment_spec) " *
+                  "(cm_feature_family_count=$(resumed.cm_feature_family_count)), this call requests " *
+                  "include_truncated_moment=$include_truncated_moment " *
+                  "(cm_feature_family_count=$(include_truncated_moment ? 2 : 1)) -- refusing to resume " *
+                  "under a different CM restriction spec (the CM dual block's width/meaning differs).")
         W = resumed.W; delta = resumed.delta; draw_design = resumed.draw_design; draw_seed = resumed.draw_seed
         L = resumed.cm_L; probs = resumed.cm_probs; contrasts = resumed.cm_contrasts
         cm_hessian_backend = resumed.cm_hessian_backend; cm_grid_rule = resumed.cm_grid_rule
@@ -983,13 +1148,21 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # this driver does anything else with pcx.
     family_tag_pre = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
     prepared = prepare_production_run(family_tag_pre, "run_cm_upper_checkpointed",
+        # 2026-08-05 truncated-power task: include_truncated_moment is always `false` by the time
+        # execution reaches here (the guard near the top of this function already refused
+        # include_truncated_moment=true for the non-frechet branches) -- passed through explicitly
+        # because build_cm_meanzc_production_context/build_cm_production_context now REQUIRE it (no
+        # default, repo rule). build_cm_frechet_production_context does not take this kwarg at all
+        # (its CM sub-block is a deliberate single-family carve-out, unaffected).
         () -> is_meanzc ?
             build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
+                include_truncated_moment = include_truncated_moment,
                 contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = :operator) :
             is_frechet ?
             build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs,
                 cm_hessian_backend = cm_hessian_backend, moment_representation = :operator) :
             build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins,
+                include_truncated_moment = include_truncated_moment,
                 inner_fg_backend = inner_fg_backend, moment_representation = :operator))
     pcx = prepared.ctx.inner
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
@@ -1144,7 +1317,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         eta_nu_now = is_meanzc ? w_current[D2_econ+1:end] : Float64[]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = (is_meanzc || is_frechet) ? pcx.ctx_cm.obj.x : ctx.obj.x
-        ckpt = CMCheckpointV9(CM_CHECKPOINT_SCHEMA, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
+        # 2026-08-05 truncated-power task: schema-10 CM feature-family metadata. include_truncated_moment
+        # is always false by the time this closure can run for the non-frechet branches (the guard near
+        # the top of this function already refused true outright) -- frechet's CM sub-block is always
+        # single-family regardless of the caller's include_truncated_moment value, so it is recorded as
+        # cm_feature_family_count=1 unconditionally for that branch.
+        cm_family_count_now = is_frechet ? 1 : (include_truncated_moment ? 2 : 1)
+        cm_moment_spec_now = cm_family_count_now == 2 ? :cdf_plus_truncated_power_1msigma : :cdf_only
+        cm_feature_schema_version_now = 1
+        cm_feature_checksum_now = cm_feature_operator_fingerprint(cm_moment_spec_now, L, cm_feature_schema_version_now, contrasts, pcx.aug.ncm)
+        ckpt = CMCheckpointV10(CM_CHECKPOINT_SCHEMA, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
             cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, MEANZC_MOMENT_LAYOUT_VERSION,
@@ -1152,7 +1334,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             best_feasible[], n_eval[], n_grad[], prior_wall + (time() - t_start),
             maxtime_real - (time() - t_start), reason, knitro_version,
             destination_sample, ctx.row_idx, ctx.D_dest,
-            marginal_restriction, A_coordinate_mode)
+            marginal_restriction, A_coordinate_mode,
+            cm_moment_spec_now, cm_family_count_now, cm_feature_schema_version_now, cm_feature_checksum_now)
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
         save_cm_checkpoint(path, ckpt)
         last_ckpt_t[] = time()
