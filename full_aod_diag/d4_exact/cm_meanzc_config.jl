@@ -103,7 +103,7 @@ not a narrow box centered on a single shakedown value (task brief Section 6:
 """
 function meanzc_default_nu_bounds(ctx, K_mean::Int)
     return [begin
-        lo, hi = nu_feasible_interval(ctx.U, k)
+        lo, hi = nu_feasible_interval(ctx.U, k; μ = ctx.μHat)
         (log(lo / 4), log(hi * 4))
     end for k in 1:K_mean]
 end

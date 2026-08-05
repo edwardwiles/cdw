@@ -110,37 +110,75 @@ function meanzc_extension_to_K(cm_extension::Symbol)
 end
 
 """
-    build_raw_mean_pair_matrices(U::AbstractMatrix{Float64}, k::Int; want_pair::Bool) -> (Zraw_k, Zpairraw_k)
+    frechet_productivity_from_exponential(U::AbstractMatrix{Float64}, μ::Float64) -> Z
 
-Precompute the theta-independent raw draw-side objects for POWER LEVEL `k`
-ONCE per context: `Zraw_k = U.^k` (`W x D`), `Zpairraw_k[:,j] = (U[:,o].^k) .*
-(U[:,p].^k)` for `(o,p) = packed_pair_index(D)[j]` (`W x D(D-1)/2`), built
-ONLY when `want_pair=true`.
+The paper's Fréchet productivity draw, `z_o(ω) = U_o(ω)^{-μ}`, where
+`U_o(ω) ~ Exp(1)` is the underlying exponential draw stored at `ctx.U` and
+`μ` is the fixed exponent implied by the current gravity/Fréchet
+parameterization (`μ = 1/θ`; production's calibrated value lives at
+`ctx.μHat`, the SAME μ the economic/gravity moments already use via
+`createUDerivatives!`/`moments!.jl`'s `U.^(-μ)`). `μ` has NO default -- it
+changes what economic problem is being solved (repo-wide rule, see
+CLAUDE.md), so every caller must supply it explicitly.
 """
-function build_raw_mean_pair_matrices(U::AbstractMatrix{Float64}, k::Int = 1; want_pair::Bool)
-    W, D = size(U)
-    Uk = k == 1 ? Matrix{Float64}(U) : U .^ k
-    want_pair || return Uk, nothing
-    pairs = packed_pair_index(D)
-    Zpairraw = Matrix{Float64}(undef, W, length(pairs))
-    @inbounds for (j, (o, p)) in enumerate(pairs)
-        @views Zpairraw[:, j] .= Uk[:, o] .* Uk[:, p]
-    end
-    return Uk, Zpairraw
+function frechet_productivity_from_exponential(U::AbstractMatrix{Float64}, μ::Float64)
+    return U .^ (-μ)
 end
 
 """
-    build_raw_mean_pair_matrix_levels(U, K_mean, K_pair) -> (Zraw_all, Zpairraw_all)
+    frechet_power_feature(U::AbstractMatrix{Float64}, k::Int, μ::Float64) -> Q
 
-`Zraw_all[k] = U.^k` for `k=1:K_mean`; `Zpairraw_all[k]` for `k=1:K_pair`
-(empty vector if `K_pair==0`). Computed once per context, reused across every
-subsequent inner solve.
+`Q_so = z_so^k = U_so^{-μk}`, i.e. the k-th power of the Fréchet productivity
+draw (`frechet_productivity_from_exponential`), NOT the k-th power of the raw
+exponential draw `U`. Computed via the numerically stable
+`logQ = -μk*log(U); Q = exp(logQ)` form rather than `frechet_productivity_from_exponential(U,μ).^k`,
+to avoid a double power-transform / extra rounding pass. This is the SINGLE
+canonical feature builder for every ZC/meanZC restriction (origin-ZC,
+CM+ZC, FULL and REDUCED) -- do not reintroduce a second `U.^k`/`U.^(-μk)`
+formula anywhere else; call this function instead.
 """
-function build_raw_mean_pair_matrix_levels(U::AbstractMatrix{Float64}, K_mean::Int, K_pair::Int)
+function frechet_power_feature(U::AbstractMatrix{Float64}, k::Int, μ::Float64)
+    Q = similar(U)
+    @inbounds @. Q = exp(-μ * k * log(U))
+    return Q
+end
+
+"""
+    build_raw_mean_pair_matrices(U::AbstractMatrix{Float64}, k::Int=1; μ::Float64, want_pair::Bool) -> (Zraw_k, Zpairraw_k)
+
+Precompute the μ-fixed (context-immutable) Fréchet-productivity-power raw
+draw-side objects for POWER LEVEL `k` ONCE per context:
+`Zraw_k = frechet_power_feature(U,k,μ)` (`W x D`, i.e. `z_o(ω)^k =
+U_o(ω)^{-μk}`), `Zpairraw_k[:,j] = z_o(ω)^k * z_p(ω)^k` for
+`(o,p) = packed_pair_index(D)[j]` (`W x D(D-1)/2`), built ONLY when
+`want_pair=true`. `μ` has no default (see `frechet_power_feature`).
+"""
+function build_raw_mean_pair_matrices(U::AbstractMatrix{Float64}, k::Int = 1; μ::Float64, want_pair::Bool)
+    W, D = size(U)
+    Zk = frechet_power_feature(U, k, μ)
+    want_pair || return Zk, nothing
+    pairs = packed_pair_index(D)
+    Zpairraw = Matrix{Float64}(undef, W, length(pairs))
+    @inbounds for (j, (o, p)) in enumerate(pairs)
+        @views Zpairraw[:, j] .= Zk[:, o] .* Zk[:, p]
+    end
+    return Zk, Zpairraw
+end
+
+"""
+    build_raw_mean_pair_matrix_levels(U, K_mean, K_pair; μ::Float64) -> (Zraw_all, Zpairraw_all)
+
+`Zraw_all[k] = frechet_power_feature(U,k,μ)` (`= z.^k = U.^(-μk)`) for
+`k=1:K_mean`; `Zpairraw_all[k]` for `k=1:K_pair` (empty vector if
+`K_pair==0`). Computed once per context, reused across every subsequent
+inner solve (the feature operator is immutable w.r.t. current outer
+coordinates A/gp/eta_nu since μ is fixed -- see task Section 6/7).
+"""
+function build_raw_mean_pair_matrix_levels(U::AbstractMatrix{Float64}, K_mean::Int, K_pair::Int; μ::Float64)
     Zraw_all = Vector{Matrix{Float64}}(undef, K_mean)
     Zpairraw_all = Vector{Matrix{Float64}}(undef, K_pair)
     for k in 1:K_mean
-        Zk, Zpk = build_raw_mean_pair_matrices(U, k; want_pair = k <= K_pair)
+        Zk, Zpk = build_raw_mean_pair_matrices(U, k; μ = μ, want_pair = k <= K_pair)
         Zraw_all[k] = Zk
         k <= K_pair && (Zpairraw_all[k] = Zpk)
     end
@@ -148,18 +186,20 @@ function build_raw_mean_pair_matrix_levels(U::AbstractMatrix{Float64}, K_mean::I
 end
 
 """
-    nu_feasible_interval(U::AbstractMatrix{Float64}, k::Int=1) -> (lo, hi)
+    nu_feasible_interval(U::AbstractMatrix{Float64}, k::Int=1; μ::Float64) -> (lo, hi)
 
-Hard finite-support interval for a common `k`-th moment ν_k:
-`ν_k ∈ [max_o min_s U_so^k, min_o max_s U_so^k]`. Errors if the interval is
-empty (no scalar can lie within every origin's observed `k`-th-power range).
-This is a MINIMUM constraint on the production ν_k box, not a recommended box
-width on its own (see cm_meanzc_config.jl's `meanzc_nu_bounds`).
+Hard finite-support interval for a common `k`-th moment ν_k, now over the
+Fréchet productivity feature (NOT the raw exponential draw):
+`ν_k ∈ [max_o min_s z_so^k, min_o max_s z_so^k]` where `z = U.^(-μ)`. Errors
+if the interval is empty (no scalar can lie within every origin's observed
+`k`-th-power range). This is a MINIMUM constraint on the production ν_k box,
+not a recommended box width on its own (see cm_meanzc_config.jl's
+`meanzc_nu_bounds`).
 """
-function nu_feasible_interval(U::AbstractMatrix{Float64}, k::Int = 1)
-    Uk = k == 1 ? U : U .^ k
-    col_min = vec(minimum(Uk, dims = 1))
-    col_max = vec(maximum(Uk, dims = 1))
+function nu_feasible_interval(U::AbstractMatrix{Float64}, k::Int = 1; μ::Float64)
+    Zk = frechet_power_feature(U, k, μ)
+    col_min = vec(minimum(Zk, dims = 1))
+    col_max = vec(maximum(Zk, dims = 1))
     lo = maximum(col_min)
     hi = minimum(col_max)
     lo < hi || error("nu_feasible_interval: empty interval [lo=$lo, hi=$hi] at k=$k -- no common ν_k value lies within every origin's observed k-th-power range")
@@ -442,7 +482,7 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, K_pair::Int
     ncm = size(CM, 2)
     @assert ncm == n_cm_moments(ctx.D, L)
 
-    Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, K_pair)
+    Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, K_pair; μ = ctx.μHat)
     D = ctx.D
     npair = div(D * (D - 1), 2)
     n_mean = K_mean * D

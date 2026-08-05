@@ -147,7 +147,7 @@ function originzc_default_nu_bounds(ctx, layout::OriginByPowerLayout)
     D = layout.D
     bounds = Vector{NTuple{2,Float64}}(undef, n_eta(layout))
     for k in 1:layout.K_mean
-        Uk = ctx.U .^ k
+        Uk = frechet_power_feature(ctx.U, k, ctx.μHat)
         for o in 1:D
             lo_o = minimum(@view Uk[:, o]); hi_o = maximum(@view Uk[:, o])
             lo_o > 0 || error("originzc_default_nu_bounds: non-positive lower bound at origin=$o level=$k (lo=$lo_o) -- log(nu) undefined")

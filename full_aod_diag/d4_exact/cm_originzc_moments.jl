@@ -231,7 +231,7 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
     D = ctx.D
     K_mean = layout.K_mean; K_pair = layout.K_pair
 
-    Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, K_pair)
+    Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, K_pair; μ = ctx.μHat)
     npair = div(D * (D - 1), 2)
     n_mean = K_mean * D
     n_pair = K_pair * npair
