@@ -158,14 +158,33 @@ downstream of the fix:
 
 Calibration seed files: `POST_VERIFY_FIX/calibration_seeds/{origin_zc,cm_meanzc}_calibration_seed.jls`.
 
+**A 5th issue surfaced after launch #4 had already been confirmed "genuinely running" for 25+
+minutes**: `origin_zc`'s delta=0.1 cells (both directions) each found and verified a real new K=3
+candidate (`new_GT≈0.0239`), but `final_GT` stayed at an OLD pre-fix value (0.0485 upper / 0.0081
+lower) because the driver's "never regress" rule compared the new (correct-basis) result against
+a **stale `report.jls` already sitting in `campaign_output/{origin_zc,cm_meanzc}/*/delta_*/`**
+from before this session (some pre-dating this session entirely, Aug 4; some from this session's
+own earlier failed seeding attempts). The family-level `SCIENTIFICALLY_OBSOLETE_ZC_BASIS_EXPONENTIAL`
+marker left during campaign-safety cleanup (§7) is not something the driver code checks — it kept
+reading these stale per-delta files as valid inherited incumbents regardless, making every
+comparison scientifically meaningless (correct-basis vs wrong-basis Δ\*/GT are not on the same
+footing). **Fix**: archived the entire pre-existing `campaign_output/{origin_zc,cm_meanzc}/` tree
+to `POST_VERIFY_FIX/OBSOLETE_PRE_FIX_ARCHIVE_2026-08-05/` (moved, not deleted — see that
+directory's own `README_WHY_ARCHIVED.txt`); non-ZC families' directories and the shared
+`campaign_summary.csv` untouched. All 4 chains killed and relaunched (launch #5) with identical
+seeds/settings; confirmed "Inherited incumbent for this target: none" for all 4 at start, i.e.
+a genuinely clean continuation chain from here.
+
 ## 10. Campaign status at session handoff
 
-Launched: `origin_zc` upper/lower, `cm_meanzc` upper/lower, all at W=100,000, K_mean=K_pair=3,
-deltas 0.1/0.5/1/2 (serial chain per family/direction), cores 100-139, budgets matching the prior
-session's own validated values (origin_zc: 4500s explore + 2700s polish; cm_meanzc: 6300s explore +
-3600s polish, per delta — up to ~4-11 hours per chain across all 4 deltas). Logs:
-`POST_VERIFY_FIX/chain_logs/{originzc,cmmeanzc}_{upper,lower}_calib2_wrapper.log` and per-delta
-subdirs. A persistent background monitor is watching for delta completions/failures.
+Launched (launch #5, the current one): `origin_zc` upper/lower, `cm_meanzc` upper/lower, all at
+W=100,000, K_mean=K_pair=3, deltas 0.1/0.5/1/2 (serial chain per family/direction), cores 100-139,
+budgets matching the prior session's own validated values (origin_zc: 4500s explore + 2700s
+polish; cm_meanzc: 6300s explore + 3600s polish, per delta — up to ~4-11 hours per chain across
+all 4 deltas). Logs: `POST_VERIFY_FIX/chain_logs/{originzc,cmmeanzc}_{upper,lower}_calib3_wrapper.log`
+and per-delta subdirs (launches #1-4's logs, suffixed `_wrapper`/`_calib2_wrapper`, are left in
+place for the record, not deleted). A persistent background monitor is watching for delta
+completions/failures on the calib3 logs.
 
 ## 11. Deferred (per explicit user instruction, after FULL campaign launch)
 
