@@ -162,9 +162,40 @@ columns at construction time, so no separate target-correction term is needed fo
 D20/W=20,000, 900s budget) now reaches **`n_eval=4/n_grad=4`**, kappa 0.023862→0.04273, every eval
 feasible=true/verified=true.
 
-**Not merged to production** — pending the timing investigation below and your own review of the
-new kernel code, given it landed this session and only has D4/D20-smoke-level real-run mileage
-(much less than CM+ZC K=3's own evidence base).
+### 4.5 Follow-up: FD-vs-analytic scare resolved, real checkpoint bug found+fixed
+
+At the user's request, two further checks were run: a central-FD check of the real outer gradient,
+and a checkpoint/resume round-trip. **The production push (below) happened before these completed**
+(explicit user instruction: "just push to production now... if you find errors, you can always
+undo").
+
+The FD check (`fd_outer_gradient_check_frechet_twofamily_2026-08-06.jl`) initially looked alarming:
+gp (idx=1) passed cleanly (`rel_diff=2e-6`), but the A-block coordinates (idx=2, idx=380) showed
+**18.3% and 171%** analytic-vs-reoptimized mismatch at `h=1e-5` — much worse than flexible-CM's own
+0.2%/2.8% at the *identical* h and coordinates from §1. This was resolved, not just explained away:
+`diag_ablock_same_h_frechet_twofamily_2026-08-06.jl` reran the exact same decisive A-vs-B
+methodology from §1 (production secant vs. an independent full-rescan reimplementation, no
+reoptimization involved) for common-Fréchet specifically — **A≡B to ~1e-16 relative at both
+coordinates, both h=1e-5 and h=1e-6**. This is decisive: the analytic outer gradient is correct. The
+FD check's large mismatch is a property of the *reoptimization* comparison leg being noisier for
+Fréchet's larger two-family dual space at this h than for flexible-CM, not a bug in the code.
+**No revert was needed.**
+
+The checkpoint/resume test, however, found a **real, separate bug**: the first resume attempt
+failed outright — `"checkpoint was written with cm_moment_spec=:cdf_only... this call requests
+include_truncated_moment=true"` — even though the checkpoint being resumed was itself written by a
+`include_truncated_moment=true` run. Root cause: `do_checkpoint`'s own family-count computation
+(`cm_checkpoint.jl`) hardcoded `cm_feature_family_count=1` for `is_frechet` unconditionally, a
+stale premise from before two-family Fréchet existed that was never updated when it landed
+(§4.1) — the checkpoint's own *resume-side* validation already expected the uniform
+`include_truncated_moment ? 2 : 1` formula with no Fréchet special case, so write and read
+disagreed. **Fixed** (commit `23af807`) to the uniform formula. Verified: regenerated the
+checkpoint (fresh `n_eval=3/n_grad=3` run), then resumed cleanly — `"RESUMING from ...
+(n_eval=3 n_grad=3 wall_elapsed=943.7s)"`, continuing to `n_eval=10/n_grad=8`, kappa
+0.023862→0.04799.
+
+**Merged to production** (see §8) — local `production/fullA-exact` and `origin` both at `23af807`,
+tagged `frechet-twofamily-production-ready-2026-08-06`.
 
 ## 5. Timing — flagged as a real, unresolved concern, not a clean benchmark
 
@@ -205,13 +236,14 @@ is the right next step and was **not done this session**.
 |---|---|---|---|---|---|---|---|
 | unrestricted | n/a (baseline) | not touched this session | not touched | not touched | not touched | not touched | unknown — the prior session's own unresolved `obj.arg1`-staleness structural concern on `run_polish_checkpointed_unified`'s `cache_hit=false` branch is STILL not empirically verified either way |
 | flexible_cm | pass | pass | pass | pass (A-block confirmed correct §1) | not run this session (prior session's own W100k evidence stands) | not re-tested this session | yes, modulo the timing question (§5) |
-| common_Frechet (two-family, cdf_plus_power) | pass | pass | pass | not independently FD-checked this session (only the D4 dense-reference gate, §4.2) | W20k only (n_eval=4/n_grad=4); W100k only calibration+nearby, not a multi-gradient smoke | not tested this session for two-family | no — real bug found+fixed this session (§4.4), landed same day, not yet merged, timing unresolved |
+| common_Frechet (two-family, cdf_plus_power) | pass | pass | pass | **pass** — gp FD rel_diff=2e-6; A-block confirmed correct via the decisive A≡B same-h test (§4.5, ~1e-16 relative) after an initial FD-vs-reopt scare that turned out to be a reoptimization-noise artifact, not a bug | W20k only (n_eval up to 10 across smoke+resume); W100k only calibration+nearby, not a multi-gradient smoke | **pass** (real resume, n_eval 3→10, after fixing a genuine stale checkpoint-metadata bug, §4.5) | **yes** — merged to production (local+origin), tagged, modulo the timing question (§5) |
 | ZC_only (origin-ZC, corrected basis, K=3) | not touched this session | not touched | not touched | not touched | not touched | not touched | unknown — out of this session's scope, see prior k=2 investigation memory |
 | CM_plus_ZC (K=3, corrected basis) | pass | pass | pass | pass (A-block confirmed correct §1) | W100k calibration+nearby only (not multi-gradient) | pass (real resume, n_eval 5→7) | **yes** — merged to production (local+origin), tagged, modulo the timing question (§5) |
 
 Do not read this as "all five ready" — it explicitly is not. `common_Frechet` and `CM_plus_ZC`
-each have real, dated evidence this session; `unrestricted` and `ZC_only` were not touched at all
-and their prior open questions remain exactly as open as before.
+each have real, dated evidence this session, including follow-up gates for Fréchet requested after
+the initial pass; `unrestricted` and `ZC_only` were not touched at all and their prior open
+questions remain exactly as open as before.
 
 ## 7. Verdicts (task's requested format)
 
@@ -227,8 +259,12 @@ PRODUCTION_BANDWIDTH = retain_current
 
 COMMON_FRECHET_TWO_FAMILY =
     D4: pass (50/50, ~1e-14/1e-15 rel, both contrast modes, block-by-block)
-    W20K: pass (calibration+nearby verified direct; real outer smoke n_eval=4/n_grad=4)
+    W20K: pass (calibration+nearby verified direct; real outer smoke n_eval up to 10 across
+                smoke+resume; checkpoint/resume pass after fixing a real metadata bug)
     W100K: pass (calibration+nearby verified direct only, NOT a multi-gradient outer smoke)
+    outer_gradient: pass (gp rel_diff=2e-6; A-block confirmed correct via decisive A-vs-B
+                same-h test, ~1e-16 relative -- an initial FD-vs-reoptimization scare at this
+                same h/coordinates was resolved, not a bug, see section 4.5)
 
 CM_PLUS_ZC_INTENDED_SPEC =
     scientific_spec: pass
@@ -243,15 +279,20 @@ SHORT_REAL_OUTER_RUNS =
 FIVE_FAMILY_READY =
     unrestricted: unknown (not touched this session, prior structural concern still open)
     flexible_CM: yes (modulo timing question, section 5)
-    common_Frechet: no (real bug fixed same day it was found; timing unresolved; not merged)
+    common_Frechet: yes (merged to production local+origin, tagged; two real bugs found+fixed
+                same day -- a DimensionMismatch in the C+ outer-gradient path, and a stale
+                checkpoint family-count metadata bug -- both verified fixed; modulo timing question)
     ZC_only: unknown (not touched this session)
     CM_plus_ZC: yes (merged to production local+origin, tagged; modulo timing question)
 
-PRODUCTION_RELEASE = cmzc-k3-production-ready-2026-08-06
-    (CM+ZC K=3 only -- local production/fullA-exact fast-forwarded a07fcf6->cc18ac0, pushed to
-    origin, tag pushed. common-Fréchet two-family NOT merged: landed same-day, real bug found+
-    fixed hours before this report, timing concern unresolved -- deliberately held back pending
-    your review and/or the timing follow-up.)
+PRODUCTION_RELEASE = frechet-twofamily-production-ready-2026-08-06 (and cmzc-k3-production-ready-2026-08-06)
+    (BOTH CM+ZC K=3 and common-Fréchet two-family are merged -- local production/fullA-exact and
+    origin/production/fullA-exact both at 23af807. common-Fréchet two-family was pushed to
+    production at explicit user request AHEAD OF the outer-gradient follow-up checks completing;
+    those checks (section 4.5) subsequently confirmed the gradient correct and found+fixed one
+    real, separate checkpoint-metadata bug -- no revert was needed, but this is a materially
+    thinner evidence trail than CM+ZC K=3's own, and the timing question (section 5) applies to
+    both.)
 
 NEW_HESSIAN_ALGORITHMS = 0
 NEW_GRADIENT_ALGORITHMS = 0
@@ -266,17 +307,22 @@ EXTRA_WORKTREES_CREATED = 0
 ## 8. Production SHA / tags
 
 - `cmzc-k3-production-ready-2026-08-06` → `cc18ac0` — **merged**, local + `origin`.
-- Common-Fréchet two-family fix (`15b89ac`) — committed to this branch, **not** merged/tagged.
+- `frechet-twofamily-production-ready-2026-08-06` → `23af807` — **merged**, local + `origin`.
+- Current `production/fullA-exact` HEAD (both local and `origin`): `23af807`.
 
 Local commits this session on `diagnostic/cm-paired-basis-preconditioning-2026-08-05` (all also on
-`production/fullA-exact` up through `cc18ac0`, per the merge in §3):
+`production/fullA-exact` as of `23af807`):
 
 - `cc18ac0` — decisive same-h A-block gradient verdict + CM+ZC K=3 intended-spec real evidence
 - `abdf836` — extend `CMFrechetLookupState`/operator verification for two-family common-Fréchet
 - `15b89ac` — fix two-family common-Fréchet C+ fixed-contribution DimensionMismatch
+- `2a48a8f` — first MASTER.md (written before the section 4.5 follow-up)
+- `23af807` — resolve the FD-vs-analytic scare (A≡B decisive, no bug) + fix the stale checkpoint
+  family-count metadata bug
 
-## 9. Campaign launch commands (for CM+ZC K=3 only — the one merged family)
+## 9. Campaign launch commands
 
+**CM+ZC K=3:**
 ```julia
 run_cm_upper_checkpointed(w0;
     W = 100_000, delta = 1.0, draw_design = :sobol_randomized, draw_seed = 20260719,
@@ -292,9 +338,24 @@ run_cm_upper_checkpointed(w0;
 `w0` must include the `eta_nu` tail (length `meanzc_K_mean`); build via `cm_w0_from_calibration`
 plus the profiled/mean-of-raw-Z convention shown in `diag_cmzc_k3_intendedspec_2026-08-06.jl`.
 
-**Do not launch a real campaign from this alone** — this session ran short smokes (§3), not a
-campaign, and the timing question in §5 is directly relevant to how large a real campaign's
-wall-clock/compute budget needs to be.
+**Common-Fréchet two-family:**
+```julia
+run_cm_upper_checkpointed(w0;
+    W = 100_000, delta = 1.0, draw_design = :sobol_randomized, draw_seed = 20260719,
+    L = 50, contrasts = :anchored, probs = probs,
+    destination_sample = :exclude_row, exclude_diagonal_gravity = true,
+    gravity_exclude_cells = default_gravity_exclude_cells_brazil_korea(), σHat = 3.0,
+    marginal_restriction = :common_frechet, include_truncated_moment = true,
+    ckpt_dir = <dir>, run_id = <id>, label = <label>,
+    checkpoint_interval_s = 60.0, maxtime_real = <budget>)
+```
+
+`w0` here is just `cm_w0_from_calibration(ctx, pe, :powered_aspace)` (no `eta_nu` tail — Fréchet
+has no ZC mean/pair extension).
+
+**Do not launch a real campaign from this alone** — this session ran short smokes, not a campaign,
+and the timing question in §5 is directly relevant to how large a real campaign's wall-clock/
+compute budget needs to be.
 
 ## 10. Clean branch/worktree status
 
@@ -310,7 +371,10 @@ wall-clock/compute budget needs to be.
   `diag_cmzc_k3_intendedspec_2026-08-06.jl`, `diag_cmzc_k3_w100k_2026-08-06.jl`,
   `diag_cmzc_k3_checkpoint_inspect_2026-08-06.jl`, `smoke_cmzc_k3_intendedspec_2026-08-06.jl`,
   `smoke_cmzc_k3_resume_2026-08-06.jl`, `test_frechet_levelpow_fg_d4_2026-08-06.jl`,
-  `diag_frechet_twofamily_d20_2026-08-06.jl`, `smoke_frechet_twofamily_w20k_2026-08-06.jl`.
+  `diag_frechet_twofamily_d20_2026-08-06.jl`, `smoke_frechet_twofamily_w20k_2026-08-06.jl`,
+  `fd_outer_gradient_check_frechet_twofamily_2026-08-06.jl`,
+  `diag_ablock_same_h_frechet_twofamily_2026-08-06.jl`,
+  `smoke_frechet_twofamily_resume_2026-08-06.jl`.
 
 ## Artifacts
 
