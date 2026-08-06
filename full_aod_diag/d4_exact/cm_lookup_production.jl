@@ -154,7 +154,8 @@ function inner_loop_internal_cmlookup_production(obj, θ::AbstractVector, cctx::
         # consume it too instead of a dense `obj.H` BLAS.gemv! -- see CMLookupState's own
         # `core_cf_ref`-branch docstring for the fallback contract.
         cctx.cmlookup_st = CMLookupState(obj, cctx.NCORE, cctx.ncm, cctx.L, cctx.origins, cctx.refIndex1, bins_u, cctx.R;
-                                          method = method, nthreads_use = nthreads_use, core_cf_ref = cctx.core_cf_ref)
+                                          method = method, nthreads_use = nthreads_use, core_cf_ref = cctx.core_cf_ref,
+                                          Pow = cctx.n_families == 2 ? cctx.Pow : nothing)
     end
     st = cctx.cmlookup_st::CMLookupState
     st.method == method || error("inner_loop_internal_cmlookup_production: cached CMLookupState was built with method=$(st.method), called with method=$method -- a live method change on a reused cctx is not supported (rebuild cctx instead)")

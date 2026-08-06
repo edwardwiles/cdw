@@ -109,6 +109,16 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     hzz_zc_op = ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D)
     hzz_zc_layout = SharedByPowerLayout(aug.K_mean, aug.K_pair)
     hzz_zc_ws = ZCRestrictionWorkspace(hzz_zc_op)
+    n_families = hasproperty(aug, :n_families) ? aug.n_families : 1   # 2026-08-05 truncated-power task
+    # 2026-08-05 truncated-power task: same Pow/family2-table construction as build_cm_bin_ctx
+    # (cm_hessian_architectures.jl) -- ctx.σ/ctx.μHat are the SAME fields
+    # build_cm_meanzc_augmented_obj itself already reads for this exact purpose (cm_meanzc_moments.jl).
+    family2 = if n_families == 2
+        Pow = frechet_power_feature(ctx.U, ctx.σ - 1, Float64(ctx.μHat))
+        merge((Pow = Pow,), build_cm_family2_tables(D, NCORE_ext, nO, L, R))
+    else
+        NamedTuple()
+    end
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE_ext, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE_ext, L1), zeros(D, D, L, L), zeros(D, NCORE_ext, L),
         Matrix{Float64}(undef, W, NCORE_ext), Matrix{Float64}(undef, NCORE_ext + ncm, NCORE_ext + ncm),
@@ -131,7 +141,7 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: lazily built on first H_ZZ call
         ctx,   # econ_ctx: true no-H operator bundle continuation
         nothing;   # frechet_ext_cache: harmonization task -- CM+ZC never populates this (no level block)
-        n_families = hasproperty(aug, :n_families) ? aug.n_families : 1)   # 2026-08-05 truncated-power task
+        n_families = n_families, family2...)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true

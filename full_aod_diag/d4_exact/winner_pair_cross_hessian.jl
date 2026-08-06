@@ -68,6 +68,23 @@ mutable struct WinnerBinCrossScratch
     # flexible-CM's own H_EC/H_CC blocks have no un-binned economic-column-sum term, so this field
     # is unused (but harmlessly filled) for a plain flexible-CM caller of this same scratch struct.
     EsumEcon::Vector{Float64}  # ncolI
+    # 2026-08-05 truncated-power task: "_pow" companions of every table above, each with one extra
+    # `Pow[w,x]` weight factor multiplied into the SAME per-(w,x) accumulation loop (no second pass
+    # over draws) -- needed for the eq.36 (truncated-power) family's own winner-bin H_EC block,
+    # which is NOT a pure 0/1 cumulative indicator and so needs its own Pow-weighted twin of every
+    # table `winner_pair_cross_hessian_cm_block!` reads. Always allocated (not conditioned on
+    # n_families) -- a modest, fixed (ncolI x D x (L+1)) extra footprint, well under the
+    # already-existing tables' own size, kept unconditional to avoid threading a family-count flag
+    # through this struct's several call sites for a cost this small. See `winner_pair_cross_hessian_fill!`/
+    # `winner_pair_cross_hessian_cm_block!`'s own docstrings for the exact formulas.
+    QTab_pow::Array{Float64,3}
+    NuTab_pow::Matrix{Float64}
+    SOnlyTab_pow::Matrix{Float64}
+    QCfTab_pow::Matrix{Float64}
+    QCScum_pow::Array{Float64,3}
+    NuCScum_pow::Matrix{Float64}
+    SOnlyCScum_pow::Matrix{Float64}
+    QCfCScum_pow::Matrix{Float64}
 end
 
 function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
@@ -90,7 +107,11 @@ function WinnerBinCrossScratch(ncolI::Int, D::Int, L::Int)
     return WinnerBinCrossScratch(ncolI, D, L,
         zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
         zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L),
-        Vector{Task}(undef, Threads.nthreads()), zeros(ncolI))
+        Vector{Task}(undef, Threads.nthreads()), zeros(ncolI),
+        # 2026-08-05 truncated-power task: "_pow" companions (see struct's own field docstring) --
+        # same shapes as their non-pow counterparts above.
+        zeros(ncolI, D, L + 1), zeros(D, L + 1), zeros(D, L + 1), zeros(D, L + 1),
+        zeros(ncolI, D, L), zeros(D, L), zeros(D, L), zeros(D, L))
 end
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(ncolI, D, L)` -- mirrors this codebase's own `resize_*_if_needed!` idiom."
@@ -116,7 +137,7 @@ Requires `obj.arg0` to already reflect the CURRENT (zeta,lambda) (same precondit
 `winner_pair_hessian!`) -- recomputes `ddPsi!` internally, does not require a fresh `obj.arg2`.
 """
 function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinCrossScratch,
-        obj, Bidx::AbstractMatrix{<:Integer})
+        obj, Bidx::AbstractMatrix{<:Integer}; Pow::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     ddPsi! = obj.ddPsi!
     ddPsi!(obj.arg2, obj.arg0)
     S = obj.arg2
@@ -126,6 +147,13 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
 
     QTab = ws.QTab; NuTab = ws.NuTab; SOnlyTab = ws.SOnlyTab; QCfTab = ws.QCfTab; EsumEcon = ws.EsumEcon
     fill!(QTab, 0.0); fill!(NuTab, 0.0); fill!(SOnlyTab, 0.0); fill!(QCfTab, 0.0); fill!(EsumEcon, 0.0)
+    # 2026-08-05 truncated-power task: `Pow!==nothing` (a two-family cctx) additionally accumulates
+    # the "_pow" companion of every table below, with one extra `Pow[w,x]` weight factor folded
+    # into the SAME per-(w,x) loop (no second pass over draws) -- these feed the eq.36 truncated-
+    # power family's own winner-bin H_EC block in `winner_pair_cross_hessian_cm_block!` below.
+    fam2 = Pow !== nothing
+    QTab_pow = ws.QTab_pow; NuTab_pow = ws.NuTab_pow; SOnlyTab_pow = ws.SOnlyTab_pow; QCfTab_pow = ws.QCfTab_pow
+    fam2 && (fill!(QTab_pow, 0.0); fill!(NuTab_pow, 0.0); fill!(SOnlyTab_pow, 0.0); fill!(QCfTab_pow, 0.0))
 
     has_cf = wctx.has_cf
     crs = wctx.cf_raw_scaled
@@ -142,6 +170,12 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
             # used unmodified for the (zeta,zeta) Hessian entry).
             SOnlyTab[x, b] += Sw
             has_cf && (QCfTab[x, b] += snucf)
+            if fam2
+                px = Pow[w, x]
+                NuTab_pow[x, b] += snu * px
+                SOnlyTab_pow[x, b] += Sw * px
+                has_cf && (QCfTab_pow[x, b] += snucf * px)
+            end
         end
     end
     @inbounds for slot in 1:Ddest
@@ -154,7 +188,9 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
             # O(W*Ddest*D). See EsumEcon's own field docstring above.
             EsumEcon[j] += snuy
             for x in 1:D
-                QTab[j, x, Bidx[w, x]] += snuy
+                bx = Bidx[w, x]
+                QTab[j, x, bx] += snuy
+                fam2 && (QTab_pow[j, x, bx] += snuy * Pow[w, x])
             end
         end
     end
@@ -178,6 +214,28 @@ function winner_pair_cross_hessian_fill!(wctx::WinnerPairHessCtx, ws::WinnerBinC
             QCScum[j, x, l] = acc
         end
     end
+
+    if fam2
+        QCScum_pow = ws.QCScum_pow; NuCScum_pow = ws.NuCScum_pow; SOnlyCScum_pow = ws.SOnlyCScum_pow; QCfCScum_pow = ws.QCfCScum_pow
+        @inbounds for x in 1:D
+            acc = 0.0; accS = 0.0; accCf = 0.0
+            for l in 1:L
+                acc += NuTab_pow[x, l]
+                NuCScum_pow[x, l] = acc
+                accS += SOnlyTab_pow[x, l]
+                SOnlyCScum_pow[x, l] = accS
+                accCf += QCfTab_pow[x, l]
+                QCfCScum_pow[x, l] = accCf
+            end
+        end
+        @inbounds for x in 1:D, j in 1:ws.ncolI
+            acc = 0.0
+            for l in 1:L
+                acc += QTab_pow[j, x, l]
+                QCScum_pow[j, x, l] = acc
+            end
+        end
+    end
     return ws
 end
 
@@ -196,12 +254,35 @@ for the dense `CS_`-table read at the SAME row indices. Caller must call
 version's own per-`l` cost.
 """
 function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, wctx::WinnerPairHessCtx,
-        ws::WinnerBinCrossScratch, l::Int, origins::Vector{Int}, refIndex1::Int, M)
+        ws::WinnerBinCrossScratch, l::Int, origins::Vector{Int}, refIndex1::Int, M;
+        Hraw_EC_pow::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     QCScum = ws.QCScum; NuCScum = ws.NuCScum; SOnlyCScum = ws.SOnlyCScum; QCfCScum = ws.QCfCScum
     pi_vec = wctx.pi_vec
     invM = 1.0 / M
     has_cf = wctx.has_cf
     jcf = wctx.ncolI   # the cf column's index WITHIN wctx's own 1:ncolI numbering (cf.cf_col)
+    # 2026-08-05 truncated-power task: `Hraw_EC_pow!==nothing` (a two-family cctx) fills the eq.36
+    # truncated-power family's own H_EC block via the IDENTICAL formula shape below, reading the
+    # "_pow" tables `winner_pair_cross_hessian_fill!` populated instead of the plain ones --
+    # derivation: E[w,j]=nu[w]*(y[w,slot]*1{winner=o(j)}-pi[j]), so
+    # sum_w S[w]*E[w,j]*B_{o,l}[w] (B the eq.36 raw block, B_{o,l}[w]=Pow[w,o]*1{bin(o)<=l}-
+    # Pow[w,ref]*1{bin(ref)<=l}) expands to the SAME q_diff-minus-pi_vec*nu_diff shape as the CDF
+    # block, just with every table's own Pow[w,x]-weighted twin.
+    fam2 = Hraw_EC_pow !== nothing
+    QCScum_pow = fam2 ? ws.QCScum_pow : nothing
+    NuCScum_pow = fam2 ? ws.NuCScum_pow : nothing
+    SOnlyCScum_pow = fam2 ? ws.SOnlyCScum_pow : nothing
+    QCfCScum_pow = fam2 ? ws.QCfCScum_pow : nothing
+    # 2026-08-05 truncated-power task, BUG FIX: eq.36's own indicator is `1{U>c}`, not `1{U<=c}`
+    # (see cm_hessian_architectures.jl's `_build_reflected_bilinear` docstring for the full
+    # derivation). `*Total_pow[x] = sum_{k=1}^{L+1} *Tab_pow[x,k]` (the FULL grand total, including
+    # bin L+1, computed from the already-accumulated RAW tables -- O(D)/O(D*ncolI), negligible next
+    # to `winner_pair_cross_hessian_fill!`'s own O(W*D) cost) minus the existing cumulative gives
+    # `sum_{k>l} *Tab_pow[x,k]`, the correctly-reflected value. No new per-draw accumulation.
+    SOnlyTotal_pow = fam2 ? dropdims(sum(ws.SOnlyTab_pow, dims = 2), dims = 2) : nothing   # D
+    NuTotal_pow = fam2 ? dropdims(sum(ws.NuTab_pow, dims = 2), dims = 2) : nothing         # D
+    QTotal_pow = fam2 ? dropdims(sum(ws.QTab_pow, dims = 3), dims = 3) : nothing           # ncolI x D
+    QCfTotal_pow = fam2 ? dropdims(sum(ws.QCfTab_pow, dims = 2), dims = 2) : nothing       # D
     @inbounds for (oi, o) in enumerate(origins)
         Hraw_EC[1, oi] = (SOnlyCScum[o, l] - SOnlyCScum[refIndex1, l]) * invM
         nu_diff = NuCScum[o, l] - NuCScum[refIndex1, l]
@@ -216,6 +297,27 @@ function winner_pair_cross_hessian_cm_block!(Hraw_EC::AbstractMatrix{Float64}, w
         if has_cf
             qcf_diff = QCfCScum[o, l] - QCfCScum[refIndex1, l]
             Hraw_EC[jcf + 1, oi] = (qcf_diff - pi_vec[jcf] * nu_diff) * invM
+        end
+
+        if fam2
+            SOnly_o = SOnlyTotal_pow[o] - SOnlyCScum_pow[o, l]
+            SOnly_ref = SOnlyTotal_pow[refIndex1] - SOnlyCScum_pow[refIndex1, l]
+            Hraw_EC_pow[1, oi] = (SOnly_o - SOnly_ref) * invM
+            Nu_o = NuTotal_pow[o] - NuCScum_pow[o, l]
+            Nu_ref = NuTotal_pow[refIndex1] - NuCScum_pow[refIndex1, l]
+            nu_diff_pow = Nu_o - Nu_ref
+            for j in 1:wctx.ncolI
+                Q_o = QTotal_pow[j, o] - QCScum_pow[j, o, l]
+                Q_ref = QTotal_pow[j, refIndex1] - QCScum_pow[j, refIndex1, l]
+                q_diff_pow = Q_o - Q_ref
+                Hraw_EC_pow[j + 1, oi] = (q_diff_pow - pi_vec[j] * nu_diff_pow) * invM
+            end
+            if has_cf
+                QCf_o = QCfTotal_pow[o] - QCfCScum_pow[o, l]
+                QCf_ref = QCfTotal_pow[refIndex1] - QCfCScum_pow[refIndex1, l]
+                qcf_diff_pow = QCf_o - QCf_ref
+                Hraw_EC_pow[jcf + 1, oi] = (qcf_diff_pow - pi_vec[jcf] * nu_diff_pow) * invM
+            end
         end
     end
     return Hraw_EC
@@ -581,9 +683,18 @@ mutable struct BinZCrossScratch
     # for `bin_zc_cross_hessian_fill_threaded!` (threaded_cross_hessian.jl), sized to
     # `Threads.nthreads()` at construction -- no per-callback `Vector{Task}` allocation.
     tasks_cz::Vector{Task}
+    # 2026-08-05 truncated-power task: "_pow" companion of ZBinTab/ZBinCScum, one extra `Pow[w,x]`
+    # weight factor in the SAME per-(w,x) loop `bin_zc_cross_hessian_fill!` already runs -- feeds
+    # CM+ZC's own eq.36 H_CZ block (the widened ZC-restriction rows' cross with the CM-grid's new
+    # truncated-power columns), completing the no-dense-H extension for CM+ZC (user directive:
+    # "no uses of dense H"). Always allocated (same reasoning as WinnerBinCrossScratch's own
+    # unconditional "_pow" fields -- modest fixed cost, not worth a family-count flag here).
+    ZBinTab_pow::Array{Float64,3}
+    ZBinCScum_pow::Array{Float64,3}
 end
 BinZCrossScratch(D::Int, L::Int, nz::Int) =
-    BinZCrossScratch(D, L, nz, zeros(D, nz, L + 1), zeros(D, nz, L), Vector{Task}(undef, Threads.nthreads()))
+    BinZCrossScratch(D, L, nz, zeros(D, nz, L + 1), zeros(D, nz, L), Vector{Task}(undef, Threads.nthreads()),
+                      zeros(D, nz, L + 1), zeros(D, nz, L))
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(D,L,nz)` -- mirrors this file's own `ensure_*_scratch!` idiom."
 function ensure_bin_zc_cross_scratch!(ws::Union{Nothing,BinZCrossScratch}, D::Int, L::Int, nz::Int)
@@ -602,18 +713,26 @@ Fills `ws.ZBinTab`/`ws.ZBinCScum` from the CURRENT Hessian callback's `ZcS`
 callback before this function). `Bidx` is the SAME `W x D` bin-index matrix `cctx.Bidx` already
 carries (theta-independent, precomputed once per campaign).
 """
-function bin_zc_cross_hessian_fill!(ws::BinZCrossScratch, Bidx::AbstractMatrix{<:Integer}, ZcS::AbstractMatrix{Float64})
+function bin_zc_cross_hessian_fill!(ws::BinZCrossScratch, Bidx::AbstractMatrix{<:Integer}, ZcS::AbstractMatrix{Float64};
+                                     Pow::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     D = ws.D; L = ws.L; nz = ws.nz
     W = size(ZcS, 1)
     size(Bidx, 1) == W || error("bin_zc_cross_hessian_fill!: size(Bidx,1)=$(size(Bidx,1)) != size(ZcS,1)=$W")
     size(ZcS, 2) >= nz || error("bin_zc_cross_hessian_fill!: size(ZcS,2)=$(size(ZcS,2)) < ws.nz=$nz")
     ZBinTab = ws.ZBinTab
     fill!(ZBinTab, 0.0)
+    # 2026-08-05 truncated-power task: `Pow!==nothing` additionally accumulates the "_pow"
+    # companion table in the SAME loop -- see BinZCrossScratch's own field docstring.
+    fam2 = Pow !== nothing
+    ZBinTab_pow = ws.ZBinTab_pow
+    fam2 && fill!(ZBinTab_pow, 0.0)
     @inbounds for w in 1:W
         for x in 1:D
             b = Bidx[w, x]
+            px = fam2 ? Pow[w, x] : 0.0
             for j in 1:nz
                 ZBinTab[x, j, b] += ZcS[w, j]
+                fam2 && (ZBinTab_pow[x, j, b] += ZcS[w, j] * px)
             end
         end
     end
@@ -623,6 +742,16 @@ function bin_zc_cross_hessian_fill!(ws::BinZCrossScratch, Bidx::AbstractMatrix{<
         for l in 1:L
             acc += ZBinTab[x, j, l]
             ZBinCScum[x, j, l] = acc
+        end
+    end
+    if fam2
+        ZBinCScum_pow = ws.ZBinCScum_pow
+        @inbounds for x in 1:D, j in 1:nz
+            acc = 0.0
+            for l in 1:L
+                acc += ZBinTab_pow[x, j, l]
+                ZBinCScum_pow[x, j, l] = acc
+            end
         end
     end
     return ws
@@ -639,13 +768,27 @@ optional `R`-congruence treatment before being written into `Hfull`). Caller mus
 `bin_zc_cross_hessian_fill!` ONCE per Hessian callback first.
 """
 function bin_zc_cross_hessian_block!(HCZ::AbstractMatrix{Float64}, ws::BinZCrossScratch,
-        l::Int, origins::Vector{Int}, refIndex1::Int, M)
+        l::Int, origins::Vector{Int}, refIndex1::Int, M;
+        HCZ_pow::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     size(HCZ) == (ws.nz, length(origins)) || error("bin_zc_cross_hessian_block!: size(HCZ)=$(size(HCZ)) != ($(ws.nz), $(length(origins)))")
     ZBinCScum = ws.ZBinCScum
     invM = 1.0 / M
+    fam2 = HCZ_pow !== nothing
+    ZBinCScum_pow = fam2 ? ws.ZBinCScum_pow : nothing
+    # 2026-08-05 truncated-power task, BUG FIX: eq.36's own indicator is `1{U>c}`, not `1{U<=c}`
+    # (see cm_hessian_architectures.jl's `_build_reflected_bilinear` docstring). `ZBinTotal_pow[x,j]
+    # = sum_{k=1}^{L+1} ws.ZBinTab_pow[x,j,k]` minus the existing cumulative gives the correctly-
+    # reflected `sum_{k>l}` value -- O(D*nz), negligible next to `bin_zc_cross_hessian_fill!`'s own
+    # O(W*D*nz) cost.
+    ZBinTotal_pow = fam2 ? dropdims(sum(ws.ZBinTab_pow, dims = 3), dims = 3) : nothing   # D x nz
     @inbounds for (oi, o) in enumerate(origins)
         for j in 1:ws.nz
             HCZ[j, oi] = invM * (ZBinCScum[o, j, l] - ZBinCScum[refIndex1, j, l])
+            if fam2
+                ZBin_o = ZBinTotal_pow[o, j] - ZBinCScum_pow[o, j, l]
+                ZBin_ref = ZBinTotal_pow[refIndex1, j] - ZBinCScum_pow[refIndex1, j, l]
+                HCZ_pow[j, oi] = invM * (ZBin_o - ZBin_ref)
+            end
         end
     end
     return HCZ

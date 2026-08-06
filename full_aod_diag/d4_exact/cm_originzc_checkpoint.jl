@@ -278,13 +278,26 @@ const CM_CHECKPOINT_SCHEMA_V10 = 10
 # canonical z-space regardless of this field's value, same discipline as cm_checkpoint.jl's V9.
 
 """
-    CMCheckpointV10
+    OriginZCCheckpointV10
 
 Identical to `CMCheckpointV7` except one new field, appended at the end: `A_coordinate_mode`.
 `CMCheckpointV7` is retained permanently, read-only, for every schema-7 file already written (all
 of which are, by construction, `:legacy_z`).
+
+RENAMED 2026-08-05 (truncated-power task, real production-driver gate) from `CMCheckpointV10`:
+despite this file's own comment above claiming "the next globally unused number," `cm_checkpoint.jl`
+independently bumped ITS OWN flexible-CM checkpoint to the SAME name `CMCheckpointV10` the same day
+(that file's schema-10 addition, for the eq.36 truncated-power feature-family metadata) -- two
+unrelated `struct`s with the identical name in the same module. Whichever file's `include` ran
+last silently redefined the global `CMCheckpointV10` binding, so `cm_checkpoint.jl`'s own
+`do_checkpoint` closure (built with ITS field layout in mind) would construct against origin-ZC's
+DIFFERENT field layout instead -- confirmed live via `run_cm_upper_checkpointed`'s real D20
+production-driver gate: `MethodError: no method matching CMCheckpointV10(::Int64, ::String, ...)`
+with an argument list that, field-by-field, exactly matched `cm_checkpoint.jl`'s intended struct,
+not this one. Fixed by renaming this file's copy only -- `cm_checkpoint.jl`'s own `CMCheckpointV10`
+is untouched and is the one this task's own two-family checkpoint schema actually targets.
 """
-struct CMCheckpointV10
+struct OriginZCCheckpointV10
     schema::Int
     run_id::String
     label::String
@@ -334,8 +347,8 @@ struct CMCheckpointV10
     A_coordinate_mode::Symbol   # :legacy_z | :powered_aspace
 end
 
-"Atomic-ish checkpoint write for CMCheckpointV10 (same discipline/assertion as the V5/V7 methods above)."
-function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV10)
+"Atomic-ish checkpoint write for OriginZCCheckpointV10 (same discipline/assertion as the V5/V7 methods above)."
+function save_cm_checkpoint(path::AbstractString, ckpt::OriginZCCheckpointV10)
     (ckpt.cm_extension === :cm_only || ckpt.distribution_restriction === :unrestricted) ||
         error("save_cm_checkpoint: a single checkpoint must use exactly one restriction family non-trivially -- " *
               "got cm_extension=:$(ckpt.cm_extension) AND distribution_restriction=:$(ckpt.distribution_restriction) " *
@@ -346,9 +359,9 @@ function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV10)
     return path
 end
 
-"Upgrades a schema-7 `CMCheckpointV7` (:powered_aspace did not exist as a runtime option at that schema) to `CMCheckpointV10`, filling A_coordinate_mode=:legacy_z -- CORRECT (not a guess), same reasoning as cm_checkpoint.jl's upgrade_schema8_to_v9."
+"Upgrades a schema-7 `CMCheckpointV7` (:powered_aspace did not exist as a runtime option at that schema) to `OriginZCCheckpointV10`, filling A_coordinate_mode=:legacy_z -- CORRECT (not a guess), same reasoning as cm_checkpoint.jl's upgrade_schema8_to_v9."
 function upgrade_schema7_to_v10(old::CMCheckpointV7)
-    return CMCheckpointV10(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+    return OriginZCCheckpointV10(old.schema, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
         old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
         old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
         old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
@@ -362,17 +375,17 @@ function upgrade_schema7_to_v10(old::CMCheckpointV7)
 end
 
 """
-    load_cm_checkpoint_v10(path) -> CMCheckpointV10
+    load_cm_checkpoint_v10(path) -> OriginZCCheckpointV10
 
-Tries schema-10 (`CMCheckpointV10`) first; falls back to `load_cm_checkpoint_v7` (its own full
+Tries schema-10 (`OriginZCCheckpointV10`) first; falls back to `load_cm_checkpoint_v7` (its own full
 V7/V5/CM-family fallback chain) upgraded via `upgrade_schema7_to_v10`. Always returns a
-`CMCheckpointV10`. This is the loader `run_originzc_upper_checkpointed` uses as of the
+`OriginZCCheckpointV10`. This is the loader `run_originzc_upper_checkpointed` uses as of the
 transformed-A restricted-family port (superseding `load_cm_checkpoint_v7` for that call site,
 which remains defined/usable on its own for any other caller that still wants a plain V7 view).
 """
 function load_cm_checkpoint_v10(path::AbstractString)
     try
-        return deserialize(path)::CMCheckpointV10
+        return deserialize(path)::OriginZCCheckpointV10
     catch e1
         (e1 isa TypeError || e1 isa EOFError || e1 isa MethodError) || rethrow()
         return upgrade_schema7_to_v10(load_cm_checkpoint_v7(path))
@@ -785,7 +798,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         eta_now = w_current[D2_econ+1:end]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = pcx.ctx_cm.obj.x
-        ckpt = CMCheckpointV10(CM_CHECKPOINT_SCHEMA_V10, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
+        ckpt = OriginZCCheckpointV10(CM_CHECKPOINT_SCHEMA_V10, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             0, Float64[], :anchored, :equal, :cumulative, :dense_reference, cm_gradient_backend,
             :cm_only, 0, 0, :direct, 0,

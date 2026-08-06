@@ -164,6 +164,80 @@ end
 cumulative_forward_contribution!(out, bins, refIndex1, origins, P) =
     interval_forward_contribution!(out, bins, refIndex1, origins, P)   # identical lookup shape; P already encodes the suffix sum
 
+"""
+    interval_forward_contribution_pow!(out, bins, refIndex1, origins, λmat_ext, Pow)
+
+2026-08-05 truncated-power task, BUG FIX (user-caught, see common_marginals_moments.jl's own
+docstring for the full derivation/proof): eq.36's own indicator is `1{U>c}`, not `1{U<=c}`.
+`cumulative_forward_contribution!`'s SUFFIX-sum table `P[oi,k]=sum_{l>=k} λ[l,oi]` was built for
+the UNREFLECTED (`<=`) convention; `P[oi,1]` (summed from `l=1`) is therefore the FULL grand total
+over all thresholds, so `P[oi,1]-P[oi,bin(x)] = sum_{l<bin(x)} λ[l,oi]` gives exactly the
+correctly-reflected value with no new table. `out[s] = sum_oi (Pow[s,o(oi)]*(λmat_ext[oi,1] -
+λmat_ext[oi,bins[s,o(oi)]]) - Pow[s,refIndex1]*(λmat_ext[oi,1] - λmat_ext[oi,bins[s,refIndex1]]))`.
+(Only correct for the `:suffix`/cumulative basis this formula's own "total at index 1" property
+relies on -- `:interval` basis is not production's default and already has a separate, pre-existing,
+unrelated category-error limitation, see cm_lookup_production.jl's own header comment.)
+"""
+function interval_forward_contribution_pow!(out::AbstractVector{Float64}, bins::AbstractMatrix{<:Unsigned},
+                                             refIndex1::Int, origins::Vector{Int}, λmat_ext::AbstractMatrix{Float64},
+                                             Pow::AbstractMatrix{Float64})
+    W = length(out); nO = length(origins)
+    @inbounds for s in 1:W
+        acc = 0.0
+        bref = Int(bins[s, refIndex1])
+        pow_ref = Pow[s, refIndex1]
+        for oi in 1:nO
+            o = origins[oi]
+            bo = Int(bins[s, o])
+            pow_o = Pow[s, o]
+            total = λmat_ext[oi, 1]
+            acc += pow_o * (total - λmat_ext[oi, bo]) - pow_ref * (total - λmat_ext[oi, bref])
+        end
+        out[s] = acc
+    end
+    return out
+end
+"cumulative_forward_contribution_pow! -- eq.36 analogue of cumulative_forward_contribution!, same suffix-sum-extended-P reuse pattern."
+cumulative_forward_contribution_pow!(out, bins, refIndex1, origins, P, Pow) =
+    interval_forward_contribution_pow!(out, bins, refIndex1, origins, P, Pow)
+
+"""
+    build_weighted_histogram_pow!(h, partials, bins, weights, Pow, D, nbins) -> h
+
+2026-08-05 truncated-power task: eq.36's own backward histogram -- `h[o,k] = sum_{s: bins[s,o]==k}
+weights[s]*Pow[s,o]` (an EXTRA `Pow[s,o]` weight factor vs. `build_weighted_histogram!`'s plain
+`h[o,k] = sum_{s: bins[s,o]==k} weights[s]`, needed because the eq.36 restriction's per-draw weight
+is origin-AND-draw-specific, not draw-only like eq.35's plain indicator). Same threaded/thread-local/
+no-atomics design as `build_weighted_histogram!`/`build_weighted_histogram!` (in-place); its output
+`h`/`Hpre` feed the SAME `interval_backward_gradient!`/`cumulative_backward_gradient_from_prefix!`
+formulas eq.35 already uses (both are generic on whatever histogram/prefix-sum table they're given
+-- no new gradient formula needed, only a new weighted table to feed them).
+"""
+function build_weighted_histogram_pow!(h::Matrix{Float64}, partials::Vector{Matrix{Float64}},
+                                        bins::AbstractMatrix{<:Unsigned}, weights::AbstractVector{Float64},
+                                        Pow::AbstractMatrix{Float64}, D::Int, nbins::Int)
+    W = length(weights)
+    nt = length(partials)
+    chunk = cld(W, nt)
+    @threads for t in 1:nt
+        lo = (t - 1) * chunk + 1
+        hi = min(t * chunk, W)
+        buf = partials[t]
+        fill!(buf, 0.0)
+        @inbounds for s in lo:hi
+            for o in 1:D
+                k = Int(bins[s, o])
+                buf[o, k] += weights[s] * Pow[s, o]
+            end
+        end
+    end
+    fill!(h, 0.0)
+    @inbounds for t in 1:nt
+        h .+= partials[t]
+    end
+    return h
+end
+
 "prefix_sums(h, L) -> Hpre (D x L): Hpre[o,l] = sum_{k=1}^{l} h[o,k] (l=1:L; bin L+1 excluded, it's the dropped/uninformative one for the cumulative basis too since CDF thresholds only go up to z_L)."
 function prefix_sums(h::AbstractMatrix{Float64}, L::Int)
     D = size(h, 1)
@@ -361,7 +435,15 @@ common Fréchet always passes `:suffix` (its CM block is always stored in the cu
 cm_frechet_lookup_kernels.jl's module docstring).
 """
 function cm_forward_contribution!(st, λ_cm::AbstractVector{Float64}, method::Symbol)
-    λmat_stored = reshape(λ_cm, st.nO, st.L)
+    # 2026-08-05 truncated-power task: `st.Pow!==nothing` (a two-family state) means `λ_cm` is the
+    # FULL concatenated [eq.35; eq.36] dual vector (`length(λ_cm)==2*st.nO*st.L`) -- split it here
+    # so callers (`dual_index!`) need no change. The eq.35 half below is byte-identical to the
+    # single-family code path (same variables, same functions); the eq.36 half is a SEPARATE
+    # accumulation into `st.cm_contrib2`, using its own "_2" scratch and the Pow-weighted lookup.
+    fam2 = st.Pow !== nothing
+    ncm_cdf = st.nO * st.L
+    λ_cdf = fam2 ? (@view λ_cm[1:ncm_cdf]) : λ_cm
+    λmat_stored = reshape(λ_cdf, st.nO, st.L)
     apply_contrast!(st.λmat_block, λmat_stored, st.R)
     if method == :interval
         st.λmat_ext[:, 1:st.L] .= st.λmat_block
@@ -372,6 +454,21 @@ function cm_forward_contribution!(st, λ_cm::AbstractVector{Float64}, method::Sy
         cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
     end
     st.arg0 .-= st.cm_contrib
+
+    if fam2
+        λ_pow = @view λ_cm[ncm_cdf+1:2*ncm_cdf]
+        λmat_stored2 = reshape(λ_pow, st.nO, st.L)
+        apply_contrast!(st.λmat_block2, λmat_stored2, st.R)
+        if method == :interval
+            st.λmat_ext2[:, 1:st.L] .= st.λmat_block2
+            st.λmat_ext2[:, st.L+1] .= 0.0
+            interval_forward_contribution_pow!(st.cm_contrib2, st.bins, st.refIndex1, st.origins, st.λmat_ext2, st.Pow)
+        else
+            suffix_sums!(st.λmat_ext2, st.λmat_block2)
+            cumulative_forward_contribution_pow!(st.cm_contrib2, st.bins, st.refIndex1, st.origins, st.λmat_ext2, st.Pow)
+        end
+        st.arg0 .-= st.cm_contrib2
+    end
     return st.arg0
 end
 
@@ -419,7 +516,42 @@ function cm_transpose_into_g!(g::AbstractVector{Float64}, st, method::Symbol, D:
         cumulative_backward_gradient_from_prefix!(st.g_block, st.Hpre, st.refIndex1, st.origins, st.L, M)
     end
     apply_contrast!(st.g_stored, st.g_block, st.R)
-    @views g[2+ncore1:1+ncore1+ncm] .= vec(st.g_stored)
+    # 2026-08-05 truncated-power task: `ncm` here is the FULL two-family width (2*nO*L) whenever
+    # `st.Pow!==nothing` -- write the eq.35 half into the first nO*L slots of g's CM slice, then the
+    # eq.36 half (computed below, from a SEPARATELY Pow-weighted histogram -- see
+    # `build_weighted_histogram_pow!`'s own docstring for why a second histogram, not a second
+    # gradient FORMULA, is what's needed) into the remaining nO*L slots. `interval_backward_gradient!`/
+    # `cumulative_backward_gradient_from_prefix!` are reused UNCHANGED for eq.36 -- both are already
+    # generic on whatever histogram/prefix-sum table they're handed.
+    fam2 = st.Pow !== nothing
+    ncm_cdf = st.nO * st.L
+    if fam2
+        @views g[2+ncore1:1+ncore1+ncm_cdf] .= vec(st.g_stored)
+        build_weighted_histogram_pow!(st.hist_h2, st.hist_partials2, st.bins, st.arg1, st.Pow, D, st.nbins)
+        if method == :interval
+            interval_backward_gradient!(st.g_block2, st.hist_h2, st.refIndex1, st.origins, st.L, M)
+        else
+            # 2026-08-05 truncated-power task, BUG FIX: eq.36's own indicator is `1{U>c}`, not
+            # `1{U<=c}` (see common_marginals_moments.jl's own docstring for the full derivation).
+            # `prefix_sums!` gives the REGULAR (unreflected) `Hpre2[o,l]=sum_{k<=l} hist_h2[o,k]` --
+            # reflect it in place: `Total[o]=sum_k hist_h2[o,:]` (full nbins range) minus the
+            # existing prefix value gives `sum_{k>l} hist_h2[o,k]`, the correctly-reflected value,
+            # with no new gradient formula (`cumulative_backward_gradient_from_prefix!` is reused
+            # completely unchanged on the reflected `Hpre2`).
+            prefix_sums!(st.Hpre2, st.hist_h2, st.L)
+            @inbounds for o in 1:D
+                total_o = sum(@view st.hist_h2[o, :])
+                for l in 1:st.L
+                    st.Hpre2[o, l] = total_o - st.Hpre2[o, l]
+                end
+            end
+            cumulative_backward_gradient_from_prefix!(st.g_block2, st.Hpre2, st.refIndex1, st.origins, st.L, M)
+        end
+        apply_contrast!(st.g_stored2, st.g_block2, st.R)
+        @views g[2+ncore1+ncm_cdf:1+ncore1+ncm] .= vec(st.g_stored2)
+    else
+        @views g[2+ncore1:1+ncore1+ncm] .= vec(st.g_stored)
+    end
     return st.g_block
 end
 
@@ -486,11 +618,31 @@ mutable struct CMLookupState
     # No-moments/no-composite-G task (2026-07-28): same-point cache for the Hessian-weight prep
     # (operator_hessian_weights.jl) -- see that file's own docstring for the full contract.
     hw_cache::HessianWeightCache
+    # 2026-08-05 truncated-power task: eq.36 (truncated-power) family support. `Pow` is the (W x D)
+    # precomputed `z_x(ω)^(σ-1)=U_x(ω)^{-μ(σ-1)}` matrix (`frechet_power_feature`,
+    # cm_meanzc_moments.jl -- the SAME matrix `CMBinHessCtx.Pow` holds), `nothing` for a
+    # single-family (`n_families==1`) state (every pre-existing caller of this constructor, zero
+    # extra memory/behavior change). The remaining fields are the eq.36 block's own "_2" companions
+    # of `λmat_block`/`λmat_ext`/`cm_contrib`/`hist_partials`/`hist_h`/`Hpre`/`g_block`/`g_stored`
+    # above -- eq.36 needs an INDEPENDENT set of these because it carries its own dual coordinates
+    # (`λ_cm`'s second half) and its own Pow-weighted histogram (see `build_weighted_histogram_pow!`),
+    # not because any new formula is involved (the (E)-block/economic machinery above is completely
+    # untouched and shared).
+    Pow::Union{Nothing,Matrix{Float64}}
+    cm_contrib2::Vector{Float64}
+    λmat_ext2::Matrix{Float64}
+    λmat_block2::Matrix{Float64}
+    hist_partials2::Vector{Matrix{Float64}}
+    hist_h2::Matrix{Float64}
+    Hpre2::Matrix{Float64}
+    g_block2::Matrix{Float64}
+    g_stored2::Matrix{Float64}
 end
 
 function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, refIndex1::Int,
                         bins::Matrix{<:Unsigned}, R; method::Symbol = :interval, nthreads_use::Int = 1,
-                        core_cf_ref::Ref{Any} = Ref{Any}(nothing))
+                        core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                        Pow::Union{Nothing,Matrix{Float64}} = nothing)
     method in (:interval, :suffix) || error("CMLookupState: method must be :interval or :suffix, got $method")
     nO = length(origins)
     M = size(obj.U, 1)
@@ -500,12 +652,16 @@ function CMLookupState(obj, ncore::Int, ncm::Int, L::Int, origins::Vector{Int}, 
     D = size(bins, 2)
     nt = max(1, min(nthreads_use, W))
     hist_partials = [zeros(D, nbins) for _ in 1:nt]
+    Pow !== nothing && (ncm == 2 * nO * L || error("CMLookupState: Pow given but ncm=$ncm != 2*nO*L=$(2*nO*L) (nO=$nO, L=$L) -- a two-family state needs the doubled CM width"))
+    hist_partials2 = [zeros(D, nbins) for _ in 1:nt]
     CMLookupState(obj, ncore, ncm, L, nO, origins, refIndex1, bins, R, method, nbins, nthreads_use,
                   zeros(M), zeros(M), zeros(M), zeros(nO, L + 1), 0,
                   zeros(1 + ncore1), zeros(nO, L), hist_partials, zeros(D, nbins), zeros(D, L),
                   zeros(nO, L), zeros(nO, L),
                   core_cf_ref, nothing, nothing, zeros(M), 0,
-                  HessianWeightCache(1 + ncore1 + ncm))
+                  HessianWeightCache(1 + ncore1 + ncm),
+                  Pow, zeros(M), zeros(nO, L + 1), zeros(nO, L),
+                  hist_partials2, zeros(D, nbins), zeros(D, L), zeros(nO, L), zeros(nO, L))
 end
 
 """

@@ -149,24 +149,34 @@ eq.36 is a POWER-WEIGHTED moment and has NO such invariance -- it must be built 
 Fréchet productivity draw `z_o(ω) = U_o(ω)^{-μ}` (`μ = 1/θ`, `ctx.μHat`; confirmed via
 `fix/zc-frechet-draw-moments-2026-08-05`/`frechet_power_feature`, cm_meanzc_moments.jl, that
 `ctx.U` is genuinely the raw, untransformed `Exp(1)` draw in production), NOT from `U` directly.
-`z_o(ω)^(1-σ) = U_o(ω)^{-μ(1-σ)}`, computed via `frechet_power_feature(U, 1-σHat, μHat)` (the SAME
-canonical helper the ZC/meanZC restrictions use, widened to a real-valued exponent for this
-non-integer `k=1-σ` use -- not a second, independently-derived `U^power` formula).
 
-CONFIRMED BUG, FOUND AND FIXED WITHIN THIS SAME TASK (2026-08-05): an earlier version of this
-function used `Pow = U.^(1-σHat)` directly (treating the raw exponential draw as if it were
-already `z_o(ω)`, the same simplification that is harmless for eq.35 but not for a power moment).
-At real D=20 data (σHat=2.5), this diverges: `U~Exp(1)` has density bounded away from 0 at `U=0`,
-and exponent `1-σHat=-1.5<=-1` is non-integrable there, so `E[U^(1-σ)]` is genuinely infinite in
-population and a SINGLE near-zero draw dominates the entire sample mean (observed directly:
-`min(U[:,3])=1.3e-5` produced `Pow[:,3]≈2.1e7` at W=5,000, versus a well-behaved raw CDF moment
-of the same order as the other origins) -- this, not any solver or quantile-grid issue, is what
-made the two-family restriction spuriously infeasible (KNITRO nStatus=-300) at real D20 scale
-while D4's synthetic (non-Exp(1)) draws never exposed it. The corrected exponent
-`-μ(1-σ)=μ(σ-1)` is small and positive at realistic `(μHat,σHat)` (real D20 `μHat≈0.13-0.20`,
-giving exponent `≈0.13-0.30`), with finite Fréchet moments by construction (`E[z^k]=Γ(1-μk)`,
-finite for `μk<1`). See `docs/audits/cm-add-truncated-power-moments-2026-08-05/MASTER.md` for the
-full incident writeup.
+**Exponent, corrected 2026-08-05 (user-directed, second correction, same day as the U-vs-z fix
+below): the paper's eq.36 moment is `z^(σ-1)`, NOT `z^(1-σ)`** -- an earlier pass through this same
+task used `1-σ` (matching a first, imprecise reading of the mission brief) and only caught the
+sign after the U-vs-z bug below was already fixed and gates were passing; the user corrected it
+directly mid-session. `z_o(ω)^(σ-1) = U_o(ω)^{-μ(σ-1)}`, computed via
+`frechet_power_feature(U, σHat-1, μHat)` (the SAME canonical helper the ZC/meanZC restrictions
+use, widened to a real-valued exponent for this non-integer `k=σ-1` use -- not a second,
+independently-derived `U^power` formula). This is a standard CES-aggregator-shaped exponent in
+this literature (prices scale as `1/z`, CES weights as `p^(1-σ)~z^(σ-1)`), consistent with the
+user's direct correction. `-μ(σ-1)` is small and NEGATIVE at realistic `(μHat,σHat)` (real D20
+`μHat≈0.13-0.20`, `σHat≈2.5-3`, giving a `U`-space exponent of roughly `-0.2` to `-0.4`) -- still
+comfortably `>-1`, so `E[U^k]` for `U~Exp(1)` remains finite (`Γ(1+k)`, finite whenever `k>-1`); no
+new divergence risk from this sign flip.
+
+CONFIRMED BUG, FOUND AND FIXED WITHIN THIS SAME TASK (2026-08-05), independent of the exponent-sign
+correction above: an earlier version of this function used `Pow = U.^(1-σHat)` directly (treating
+the raw exponential draw as if it were already `z_o(ω)`, the same simplification that is harmless
+for eq.35 but not for a power moment). At real D=20 data (σHat=2.5), this diverges: `U~Exp(1)` has
+density bounded away from 0 at `U=0`, and exponent `1-σHat=-1.5<=-1` is non-integrable there, so
+`E[U^(1-σ)]` is genuinely infinite in population and a SINGLE near-zero draw dominates the entire
+sample mean (observed directly: `min(U[:,3])=1.3e-5` produced `Pow[:,3]≈2.1e7` at W=5,000, versus a
+well-behaved raw CDF moment of the same order as the other origins) -- this, not any solver or
+quantile-grid issue, is what made the two-family restriction spuriously infeasible (KNITRO
+nStatus=-300) at real D20 scale while D4's synthetic (non-Exp(1)) draws never exposed it. This bug
+was about using the WRONG VARIABLE (`U` instead of `z=U^{-μ}`); it is orthogonal to, and was fixed
+before, the exponent-SIGN correction above. See
+`docs/audits/cm-add-truncated-power-moments-2026-08-05/MASTER.md` for the full incident writeup.
 """
 function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int, L::Int;
                                        include_truncated_moment::Bool,
@@ -226,24 +236,48 @@ function precalc_common_marginals_cdf(U::AbstractMatrix{Float64}, refIndex1::Int
         end
     end
     if include_truncated_moment
-        # CDW eq.36: E_F[ z_o'(ω)^(1-σ) · 1{z_o'(ω)<z_l} ], anchored to the reference origin the
+        # CDW eq.36: E_F[ z_o'(ω)^(σ-1) · 1{z_o'(ω)<z_l} ], anchored to the reference origin the
         # SAME way eq.35 is (subtract the reference origin's own power-weighted indicator, using
         # the reference's OWN power weight -- NOT the non-reference origin's -- since the power
         # weight is itself origin-and-draw-specific, unlike eq.35's weight-1 indicator).
-        # z_x(ω)^(1-σ) = U_x(ω)^(-μ(1-σ)) for every origin x (incl. reference), precomputed once,
+        # z_x(ω)^(σ-1) = U_x(ω)^(-μ(σ-1)) for every origin x (incl. reference), precomputed once,
         # via the SAME frechet_power_feature the ZC/meanZC restrictions use (cm_meanzc_moments.jl)
-        # -- NOT a plain U.^(1-σHat) (that earlier, WRONG version treated the raw exponential draw
-        # as if it were already the Fréchet productivity level -- see this function's own docstring
-        # "CONFIRMED BUG" note for the full derivation and the divergence it caused at real scale).
-        Pow = frechet_power_feature(U, 1 - σHat, Float64(μHat))
+        # -- NOT a plain U.^(σHat-1)/U.^(1-σHat) (both would treat the raw exponential draw as if
+        # it were already the Fréchet productivity level -- see this function's own docstring
+        # "CONFIRMED BUG" note for the full derivation and the divergence it caused at real scale;
+        # the exponent SIGN itself -- σ-1, not 1-σ -- was a separate, later user correction, see
+        # the docstring's own "corrected 2026-08-05" note).
+        #
+        # SECOND BUG, FOUND AND FIXED 2026-08-05 (Architecture C follow-up, user-caught): the
+        # indicator direction. `theoretical_u_threshold`'s own derivation establishes
+        # `1{z_x(ω)<z_ℓ} = 1{U_x(ω) > c}` (c=z[l], the map z=U^{-μ} is DECREASING) -- but this
+        # function reused the SAME `U .<= z[l]` convention eq.35 uses. For eq.35 (a plain,
+        # constant-weight-1 indicator) that substitution is harmless: `1{U>c}-1{U_ref>c} =
+        # -(1{U<=c}-1{U_ref<=c})`, an overall sign flip, and `E_F[X]=0 ⟺ E_F[-X]=0`. For eq.36 the
+        # indicator is weighted by the ORIGIN-SPECIFIC `Pow` factor, and that symmetry breaks:
+        # `Pow_o*1{U_o<=c}-Pow_ref*1{U_ref<=c} = (Pow_o-Pow_ref) - (Pow_o*1{U_o>c}-Pow_ref*1{U_ref>c})`
+        # -- an ADDITIVE BIAS term `(Pow_o-Pow_ref)` that is exactly zero only at the untouched base
+        # (uniform-weight) measure (both origins draw from the identical canonical Fréchet
+        # distribution there) but is generically NONZERO under the reweighted measure π the inner
+        # KNITRO dual solve actually searches over -- confirmed numerically: under a base measure
+        # `code≈-literal` (bias≈0 as expected), but under an arbitrary reweighting,
+        # `code+literal` matched the predicted bias `E_π[Pow_o]-E_π[Pow_ref]` to machine precision.
+        # This, not any real economic infeasibility, is almost certainly what caused the spurious
+        # nStatus=-300/-400 results the Architecture C real-data gates hit. Fixed: use `U .> z[l]`
+        # for this family's own indicator (both the non-reference and the reference term).
+        Pow = frechet_power_feature(U, σHat - 1, Float64(μHat))
+        CDF_ref_pow = Matrix{Float64}(undef, W, L)   # 1{U[:,ref] > z[l]} -- REFLECTED vs CDF_ref
+        @inbounds for l in 1:L
+            @. CDF_ref_pow[:, l] = U[:, refIndex1] > z[l]
+        end
         TM_ref = Matrix{Float64}(undef, W, L)
         @inbounds for l in 1:L
-            @. TM_ref[:, l] = Pow[:, refIndex1] * CDF_ref[:, l]
+            @. TM_ref[:, l] = Pow[:, refIndex1] * CDF_ref_pow[:, l]
         end
         tm_offset = nO * L
         @inbounds for l in 1:L
             for (oi, o) in enumerate(origins)
-                @. block[:, oi] = Pow[:, o] * (U[:, o] <= z[l]) - TM_ref[:, l]
+                @. block[:, oi] = Pow[:, o] * (U[:, o] > z[l]) - TM_ref[:, l]
             end
             cols = tm_offset + (l - 1) * nO + 1 : tm_offset + l * nO
             if R === nothing

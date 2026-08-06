@@ -659,15 +659,92 @@ mutable struct CMBinHessCtx
     # CM content/width. `archC_base_state`/`archC_verified_state`/their cm_meanzc analogues switch
     # on this field to make that selection automatically, not leave it to the caller to remember.
     n_families::Int
+    # 2026-08-05 truncated-power task, ARCHITECTURE C EXTENSION (H_CC/H_EC now genuinely support
+    # n_families==2, per user directive -- "the dense method is not useful since I don't use it").
+    # `Pow` is the (W x D) precomputed `z_x(ω)^(σ-1)=U_x(ω)^{-μ(σ-1)}` matrix (`frechet_power_feature`,
+    # cm_meanzc_moments.jl -- the SAME feature `precalc_common_marginals_cdf` builds internally),
+    # recomputed once here from `ctx.U`/`ctx.σ`/`ctx.μHat` (byte-identical call, not re-derived) --
+    # `nothing` when `n_families==1` (every pre-existing single-family context, zero extra memory).
+    #
+    # H_CC generalization (dense-H-free, needs no winner-pair machinery -- build_bin_tables!'s T-loop
+    # already only reads Bidx/w): stacking raw eq.35 block A_ol[s]=1{U_o<=z_l}-1{U_ref<=z_l} and
+    # eq.36 block B_ol[s]=Pow[s,o]*1{U_o<=z_l}-Pow[s,ref]*1{U_ref<=z_l} gives THREE distinct
+    # bilinear contractions per (l,l') threshold-pair: sum_s w_s*A_ol*A_pl' (existing, Ttab/CT,
+    # unchanged), sum_s w_s*A_ol*B_pl' (NEW, needs T12(x,y,k,h)=sum_s w_s*Pow[s,y]*1{bin(x)=k}*
+    # 1{bin(y)=h} -- weight on the SECOND/B-side index only, since A carries no Pow factor), and
+    # sum_s w_s*B_ol*B_pl' (NEW, needs T22(x,y,k,h)=sum_s w_s*Pow[s,x]*Pow[s,y]*1{bin(x)=k}*
+    # 1{bin(y)=h}). The (2,1) sub-block is the TRANSPOSE of (1,2) (scalar multiplication commutes:
+    # sum_s w_s*B_ol*A_pl' at (p,l') vs (o,l) is the same number `fill_cm_HCC!`'s (1,2) computation
+    # already produces at (o,l) vs (p,l'), just read from the other corner) -- no T21 table needed.
+    # `nothing` when `n_families==1`.
+    Pow::Union{Nothing,Matrix{Float64}}         # W x D
+    Ttab12::Union{Nothing,Array{Float64,4}}     # D x D x (L+1) x (L+1)
+    Ttab22::Union{Nothing,Array{Float64,4}}     # D x D x (L+1) x (L+1)
+    CT12::Union{Nothing,Array{Float64,4}}       # D x D x L x L (prefix-summed)
+    CT22::Union{Nothing,Array{Float64,4}}       # D x D x L x L (prefix-summed)
+    # H_EC generalization, dense-H (`E`) path only -- S2(x,j,k)=sum_s w_s*E[s,j]*Pow[s,x]*
+    # 1{bin(x)=k} (same single extra Pow[s,x] weight factor as T22's own x-side, applied to the
+    # existing S-table's per-(s,x,j) accumulation). Real (no-dense-H, OperatorPsiBundle) production
+    # H_EC instead goes through winner_pair_cross_hessian.jl's own POW-weighted twin tables (added
+    # to WinnerBinCrossScratch directly, not here) -- Stab2/CScum2 are only ever read by
+    # `hessian_cm_structured!`'s explicit `:dense_reference`-only S/CS-table branch (same
+    # reachability restriction `Stab`/`CScum` themselves already have). `nothing` when
+    # `n_families==1`.
+    Stab2::Union{Nothing,Array{Float64,3}}      # D x NCORE x (L+1)
+    CScum2::Union{Nothing,Array{Float64,3}}     # D x NCORE x L
+    # Scratch (rebuilt every call, sized once here) for the three new raw nO x nO / NCORE x nO
+    # per-threshold-(-pair) blocks and their optional R-congruence products -- mirrors
+    # Hraw_CC/RtHraw_CC/block_cc and Hraw_EC/block_ec's own existing scratch-reuse discipline
+    # exactly, just one companion set per new raw block. `nothing` when `n_families==1`.
+    Hraw_CC12::Union{Nothing,Matrix{Float64}}   # nO x nO
+    Hraw_CC22::Union{Nothing,Matrix{Float64}}   # nO x nO
+    RtHraw_CC12::Union{Nothing,Matrix{Float64}}
+    RtHraw_CC22::Union{Nothing,Matrix{Float64}}
+    block_cc12::Union{Nothing,Matrix{Float64}}
+    block_cc22::Union{Nothing,Matrix{Float64}}
+    Hraw_EC2::Union{Nothing,Matrix{Float64}}    # NCORE x nO (dense-H S2/CScum2 fallback branch only)
+    block_ec2::Union{Nothing,Matrix{Float64}}
 end
 
 "Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change."
 function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAULT[], bin_zc_drawchunk = nothing,
         zc_ez_backend::Symbol = ZC_EZ_BACKEND_DEFAULT[], zc_drawmajor = nothing,
-        n_families::Int = 1)   # 2026-08-05 truncated-power task: additive field, defaults to 1
+        n_families::Int = 1,   # 2026-08-05 truncated-power task: additive field, defaults to 1
         # (byte-identical single-family behavior) for both pre-existing call sites
         # (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) unless they pass it explicitly.
-    return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk, zc_ez_backend, zc_drawmajor, n_families)
+        Pow::Union{Nothing,Matrix{Float64}} = nothing,
+        Ttab12::Union{Nothing,Array{Float64,4}} = nothing, Ttab22::Union{Nothing,Array{Float64,4}} = nothing,
+        CT12::Union{Nothing,Array{Float64,4}} = nothing, CT22::Union{Nothing,Array{Float64,4}} = nothing,
+        Stab2::Union{Nothing,Array{Float64,3}} = nothing, CScum2::Union{Nothing,Array{Float64,3}} = nothing,
+        Hraw_CC12::Union{Nothing,Matrix{Float64}} = nothing, Hraw_CC22::Union{Nothing,Matrix{Float64}} = nothing,
+        RtHraw_CC12::Union{Nothing,Matrix{Float64}} = nothing, RtHraw_CC22::Union{Nothing,Matrix{Float64}} = nothing,
+        block_cc12::Union{Nothing,Matrix{Float64}} = nothing, block_cc22::Union{Nothing,Matrix{Float64}} = nothing,
+        Hraw_EC2::Union{Nothing,Matrix{Float64}} = nothing, block_ec2::Union{Nothing,Matrix{Float64}} = nothing)
+    return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk, zc_ez_backend, zc_drawmajor, n_families,
+        Pow, Ttab12, Ttab22, CT12, CT22, Stab2, CScum2,
+        Hraw_CC12, Hraw_CC22, RtHraw_CC12, RtHraw_CC22, block_cc12, block_cc22, Hraw_EC2, block_ec2)
+end
+
+"""
+    build_cm_family2_tables(D, NCORE, nO, L, R) -> NamedTuple
+
+2026-08-05 truncated-power task: allocates the full set of `n_families==2`-only `CMBinHessCtx`
+scratch fields (see that struct's own field docstrings for what each holds) -- factored out so
+BOTH `build_cm_bin_ctx` and `build_cm_meanzc_bin_ctx` allocate them identically, once, rather than
+duplicating this list at both call sites.
+"""
+function build_cm_family2_tables(D::Int, NCORE::Int, nO::Int, L::Int, R::Union{Nothing,Matrix{Float64}})
+    L1 = L + 1
+    return (Ttab12 = zeros(D, D, L1, L1), Ttab22 = zeros(D, D, L1, L1),
+            CT12 = zeros(D, D, L, L), CT22 = zeros(D, D, L, L),
+            Stab2 = zeros(D, NCORE, L1), CScum2 = zeros(D, NCORE, L),
+            Hraw_CC12 = Matrix{Float64}(undef, nO, nO), Hraw_CC22 = Matrix{Float64}(undef, nO, nO),
+            RtHraw_CC12 = R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
+            RtHraw_CC22 = R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
+            block_cc12 = R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
+            block_cc22 = R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
+            Hraw_EC2 = Matrix{Float64}(undef, NCORE, nO),
+            block_ec2 = R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO))
 end
 
 """
@@ -706,6 +783,19 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     # to `nothing`, so `inner_loop_internal_cmlookup_production`'s `skip_fill=true`-argument branch
     # falls back to the always-fill `obj.moments!` (see that function's own dispatch).
     moments_skip_fn = hasproperty(aug, :moments_skip!) ? aug.moments_skip! : nothing
+    n_families = hasproperty(aug, :n_families) ? aug.n_families : 1   # 2026-08-05 truncated-power task
+    # 2026-08-05 truncated-power task: `Pow` recomputed here from `ctx.U`/`ctx.σ`/`ctx.μHat` via the
+    # SAME `frechet_power_feature` call `precalc_common_marginals_cdf` makes internally (not
+    # returned by that function, so recomputed once here rather than plumbing a new return value
+    # through every one of its other callers) -- required (no default) whenever `n_families==2`,
+    # per this repo's own "never default a scientific parameter" rule; `ctx.σ`/`ctx.μHat` are the
+    # SAME fields `build_cm_augmented_obj` itself already reads for this exact purpose.
+    family2 = if n_families == 2
+        Pow = frechet_power_feature(ctx.U, ctx.σ - 1, Float64(ctx.μHat))
+        merge((Pow = Pow,), build_cm_family2_tables(D, NCORE, nO, L, R))
+    else
+        NamedTuple()
+    end
     cctx = CMBinHessCtx(L, D, nO, origins, refIndex1, z, Bidx, NCORE, ncm, aug.contrasts, R,
         zeros(D, D, L1, L1), zeros(D, NCORE, L1), zeros(D, D, L, L), zeros(D, NCORE, L),
         Matrix{Float64}(undef, W, NCORE), Matrix{Float64}(undef, NCORE + ncm, NCORE + ncm),
@@ -721,7 +811,7 @@ function build_cm_bin_ctx(ctx, aug; threaded_bins::Bool = true,
         zc_gram_backend, zc_gram_workers, nothing,   # raw_zc_ws: plain CM has no ZC block, lazily unused
         ctx,   # econ_ctx: true no-H operator bundle continuation
         nothing;   # frechet_ext_cache: harmonization task -- lazily built, nothing until first common-Fréchet Hessian call
-        n_families = hasproperty(aug, :n_families) ? aug.n_families : 1)   # 2026-08-05 truncated-power task
+        n_families = n_families, family2...)
     if threaded_bins
         cctx.tls = build_thread_local_scratch(cctx)
         cctx.use_threaded_bins = true
@@ -747,6 +837,15 @@ function build_bin_tables!(cctx::CMBinHessCtx, H::Union{Nothing,AbstractMatrix{F
     T = cctx.Ttab; S = cctx.Stab
     fill!(T, 0.0); fill!(S, 0.0)
     W = length(w)
+    # 2026-08-05 truncated-power task: T12/T22 (H_CC's eq.35-eq.36 and eq.36-eq.36 blocks) need only
+    # Bidx/w/Pow -- no dense E dependency at all -- so they are filled in the SAME loop as Ttab
+    # regardless of `fill_S` (which only gates the E-dependent S-table). `nothing` (cctx.n_families
+    # ==1, the overwhelming majority of calls) skips this entirely at zero extra cost.
+    fam2 = cctx.n_families == 2
+    T12 = fam2 ? cctx.Ttab12 : nothing
+    T22 = fam2 ? cctx.Ttab22 : nothing
+    fam2 && (fill!(T12, 0.0); fill!(T22, 0.0))
+    Pow = fam2 ? cctx.Pow : nothing
     if fill_S
         # No-moments/no-composite-G task (2026-07-28): `E` is constructed HERE, lazily, only inside
         # the branch that actually reads it -- never at the caller's top level -- so that `H` need
@@ -758,6 +857,8 @@ function build_bin_tables!(cctx::CMBinHessCtx, H::Union{Nothing,AbstractMatrix{F
         # is ever violated, not expected to fire.
         H === nothing && error("build_bin_tables!: fill_S=true requested for an operator-mode bundle with no H field -- should be unreachable in production.")
         E = @view H[:, 2:1+NCORE]
+        S2 = fam2 ? cctx.Stab2 : nothing
+        fam2 && fill!(S2, 0.0)
         @inbounds for s in 1:W
             ws = w[s]
             for x in 1:D
@@ -765,12 +866,24 @@ function build_bin_tables!(cctx::CMBinHessCtx, H::Union{Nothing,AbstractMatrix{F
                 for j in 1:NCORE
                     S[x, j, bx] += ws * E[s, j]
                 end
+                fam2 && (for j in 1:NCORE
+                    S2[x, j, bx] += ws * E[s, j] * Pow[s, x]
+                end)
             end
             for x in 1:D
                 bx = Bidx[s, x]
                 for y in 1:D
                     by = Bidx[s, y]
                     T[x, y, bx, by] += ws
+                end
+            end
+            fam2 && @inbounds for x in 1:D
+                bx = Bidx[s, x]
+                for y in 1:D
+                    by = Bidx[s, y]
+                    wsy = ws * Pow[s, y]
+                    T12[x, y, bx, by] += wsy
+                    T22[x, y, bx, by] += wsy * Pow[s, x]
                 end
             end
         end
@@ -784,15 +897,22 @@ function build_bin_tables!(cctx::CMBinHessCtx, H::Union{Nothing,AbstractMatrix{F
                     T[x, y, bx, by] += ws
                 end
             end
+            fam2 && @inbounds for x in 1:D
+                bx = Bidx[s, x]
+                for y in 1:D
+                    by = Bidx[s, y]
+                    wsy = ws * Pow[s, y]
+                    T12[x, y, bx, by] += wsy
+                    T22[x, y, bx, by] += wsy * Pow[s, x]
+                end
+            end
         end
     end
     return nothing
 end
 
-"2D-prefix-sum `Ttab` into `CT` (restricted to l,l' in 1:L) and 1D-prefix-sum `Stab` into `CScum`. O(D^2*L^2 + D*NCORE*L). `fill_S=false` (winner-aware H_ER phase) skips the CScum prefix-sum -- `Stab` was never populated by `build_bin_tables!(...; fill_S=false)`, so prefix-summing it would only waste O(D*NCORE*L) work on zeros."
-function prefix_sum_tables!(cctx::CMBinHessCtx; fill_S::Bool = true)
-    D = cctx.D; L = cctx.L; NCORE = cctx.NCORE
-    T = cctx.Ttab; CT = cctx.CT
+"Shared 2D-prefix-sum body for a single (D x D x L1 x L1) table into its (D x D x L x L) cumulative twin -- extracted so Ttab/Ttab12/Ttab22 all call one implementation (2026-08-05 truncated-power task)."
+function _prefix_sum_2d!(CT::AbstractArray{Float64,4}, T::AbstractArray{Float64,4}, D::Int, L::Int)
     @inbounds for x in 1:D, y in 1:D
         for l in 1:L
             for lp in 1:L
@@ -804,15 +924,33 @@ function prefix_sum_tables!(cctx::CMBinHessCtx; fill_S::Bool = true)
             end
         end
     end
-    if fill_S
-        S = cctx.Stab; CS_ = cctx.CScum
-        @inbounds for x in 1:D, j in 1:NCORE
-            acc = 0.0
-            for l in 1:L
-                acc += S[x, j, l]
-                CS_[x, j, l] = acc
-            end
+    return CT
+end
+
+"Shared 1D-prefix-sum body for a single (D x NCORE x L1) table into its (D x NCORE x L) cumulative twin -- extracted so Stab/Stab2 both call one implementation (2026-08-05 truncated-power task)."
+function _prefix_sum_1d!(CS_::AbstractArray{Float64,3}, S::AbstractArray{Float64,3}, D::Int, NCORE::Int, L::Int)
+    @inbounds for x in 1:D, j in 1:NCORE
+        acc = 0.0
+        for l in 1:L
+            acc += S[x, j, l]
+            CS_[x, j, l] = acc
         end
+    end
+    return CS_
+end
+
+function prefix_sum_tables!(cctx::CMBinHessCtx; fill_S::Bool = true)
+    D = cctx.D; L = cctx.L; NCORE = cctx.NCORE
+    _prefix_sum_2d!(cctx.CT, cctx.Ttab, D, L)
+    # 2026-08-05 truncated-power task: CT12/CT22 prefix-summed the SAME way as CT, independent of
+    # `fill_S` -- see build_bin_tables!'s own comment for why T12/T22 never depend on fill_S.
+    if cctx.n_families == 2
+        _prefix_sum_2d!(cctx.CT12, cctx.Ttab12, D, L)
+        _prefix_sum_2d!(cctx.CT22, cctx.Ttab22, D, L)
+    end
+    if fill_S
+        _prefix_sum_1d!(cctx.CScum, cctx.Stab, D, NCORE, L)
+        cctx.n_families == 2 && _prefix_sum_1d!(cctx.CScum2, cctx.Stab2, D, NCORE, L)
     end
     return nothing
 end
@@ -1128,6 +1266,75 @@ function pack_upper_cm_hessian!(h::AbstractVector, Hfull::AbstractMatrix, NCORE:
 end
 
 """
+2026-08-05 truncated-power task: raw nO x nO block for one of the three CM-CC bilinear
+contractions (`CT`, `CT12`, or `CT22`), applying the SAME anchored-contrast expansion
+`(x,p,l,lp)->(x,p)-(x,ref)-(ref,p)+(ref,ref)` fill_cm_HCC! already used for the single-family
+`CT`/`Hraw_CC` case -- factored out so H^{11}/H^{12}/H^{22} are three calls to ONE implementation,
+not three hand-copies.
+"""
+function _fill_cm_hcc_raw!(Hraw::AbstractMatrix{Float64}, CT::AbstractArray{Float64,4},
+                            origins::Vector{Int}, refIndex1::Int, l::Int, lp::Int, M)
+    @inbounds for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
+        Hraw[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
+    end
+    return Hraw
+end
+
+"""
+2026-08-05 truncated-power task, BUG FIX (user-caught): the eq.36 (truncated-power) family's own
+indicator must be `1{U>c}`, not `1{U<=c}` (`theoretical_u_threshold`'s own derivation:
+`1{z<z_ℓ}=1{U>c}`; reusing `<=` is harmless for eq.35's plain, constant-weight-1 indicator via an
+overall-sign-flip argument, but NOT for eq.36's origin-weighted indicator -- see
+`common_marginals_moments.jl`'s own docstring for the full algebraic proof and numeric
+confirmation). This means H^{12}/H^{22} need `T'(x,y,l,lp) = sum_{k>l,h>lp} T[x,y,k,h]` (H^{22},
+BOTH indices reflected -- both factors are eq.36/B-side) or `sum_{k<=l,h>lp} T[x,y,k,h]` (H^{12},
+only the SECOND/eq.36-side index reflected -- the first/eq.35-side index keeps its existing `<=`
+meaning), computed via inclusion-exclusion from the ALREADY-BUILT raw `Ttab`/cumulative `CT`
+tables -- no new per-draw accumulation needed, no new derivative formula, just a different
+(already-fully-determined) linear combination of sums that were already being computed anyway.
+"""
+function _build_reflected_bilinear(Ttab::AbstractArray{Float64,4}, CT::AbstractArray{Float64,4}, D::Int, L::Int;
+                                    reflect_x::Bool, reflect_y::Bool)
+    Trefl = Array{Float64,4}(undef, D, D, L, L)
+    RowMarg = dropdims(sum(Ttab, dims = 4), dims = 4)   # D x D x L1: sum over ALL h (full 1:L+1 range)
+    ColMarg = dropdims(sum(Ttab, dims = 3), dims = 3)   # D x D x L1: sum over ALL k
+    RowCum = zeros(D, D, L)
+    ColCum = zeros(D, D, L)
+    @inbounds for x in 1:D, y in 1:D
+        accR = 0.0; accC = 0.0
+        for l in 1:L
+            accR += RowMarg[x, y, l]
+            RowCum[x, y, l] = accR
+            accC += ColMarg[x, y, l]
+            ColCum[x, y, l] = accC
+        end
+    end
+    if reflect_x && reflect_y
+        Total = dropdims(sum(Ttab, dims = (3, 4)), dims = (3, 4))   # D x D, full grand total (incl. bin L+1)
+        @inbounds for x in 1:D, y in 1:D, l in 1:L, lp in 1:L
+            Trefl[x, y, l, lp] = Total[x, y] - RowCum[x, y, l] - ColCum[x, y, lp] + CT[x, y, l, lp]
+        end
+    elseif reflect_y
+        @inbounds for x in 1:D, y in 1:D, l in 1:L, lp in 1:L
+            Trefl[x, y, l, lp] = RowCum[x, y, l] - CT[x, y, l, lp]
+        end
+    else
+        @inbounds for x in 1:D, y in 1:D, l in 1:L, lp in 1:L
+            Trefl[x, y, l, lp] = ColCum[x, y, lp] - CT[x, y, l, lp]
+        end
+    end
+    return Trefl
+end
+
+"In-place `R'*Hraw*R` congruence (or `Hraw` unchanged if `R===nothing`) into the given scratch pair -- shared by every one of fill_cm_HCC!'s raw blocks (2026-08-05 truncated-power task)."
+function _cm_hcc_congruence(Hraw::Matrix{Float64}, R::Union{Nothing,Matrix{Float64}}, RtHraw::Union{Nothing,Matrix{Float64}}, block::Union{Nothing,Matrix{Float64}})
+    R === nothing && return Hraw
+    mul!(RtHraw, R', Hraw)
+    mul!(block, RtHraw, R)
+    return block
+end
+
+"""
     fill_cm_HCC!(Hfull, cctx::CMBinHessCtx, M)
 
 H_CC (CM-CM restriction self-block): raw per-threshold-block-pair computation, then optional R
@@ -1140,20 +1347,52 @@ function fill_cm_HCC!(Hfull::AbstractMatrix, cctx::CMBinHessCtx, M)
     Hraw_CC = cctx.Hraw_CC
     L = cctx.L; nO = cctx.nO; NCORE = cctx.NCORE
     origins = cctx.origins; refIndex1 = cctx.refIndex1
+    fam2 = cctx.n_families == 2
+    ncm_cdf = nO * L
+    # 2026-08-05 truncated-power task, BUG FIX: T12/T22 (built with the SAME `bin(x)<=l` convention
+    # as the CDF family) do NOT directly give H^{12}/H^{22} -- eq.36's own indicator is `1{U>c}`,
+    # not `1{U<=c}` (see _build_reflected_bilinear's own docstring for the full derivation/proof).
+    D = cctx.D
+    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true) : nothing
+    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true) : nothing
     @inbounds for l in 1:L
+        rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
         for lp in 1:L
-            for (oi, o) in enumerate(origins), (pi, p) in enumerate(origins)
-                Hraw_CC[oi, pi] = (CT[o, p, l, lp] - CT[o, refIndex1, l, lp] - CT[refIndex1, p, l, lp] + CT[refIndex1, refIndex1, l, lp]) / M
-            end
-            rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
+            _fill_cm_hcc_raw!(Hraw_CC, CT, origins, refIndex1, l, lp, M)
             cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
-            block = if cctx.R === nothing
-                Hraw_CC
-            else
-                mul!(cctx.RtHraw_CC, cctx.R', Hraw_CC)
-                mul!(cctx.block_cc, cctx.RtHraw_CC, cctx.R)
-            end
+            block = _cm_hcc_congruence(Hraw_CC, cctx.R, cctx.RtHraw_CC, cctx.block_cc)
             @views Hfull[rows, cols] .= block
+
+            if fam2
+                # H^{12}(l,lp) = (1/M)*sum_s w_s*A_{o,l}[s]*B_{p,lp}[s] (eq.35-block row, eq.36-block
+                # col) -- same anchored-contrast expansion as H^{11}, using CT12(x,y,l,lp)=sum_s
+                # w_s*Pow[s,y]*1{bin(x)<=l}*1{bin(y)<=lp} (the extra Pow weight lives on the SECOND
+                # (eq.36/B-side) index, see CT12's own field docstring). Its mirror, H^{21}(lp,l) =
+                # transpose(H^{12}(l,lp)) (derivation: scalar multiplication commutes, so
+                # sum_s w_s*B_{o,l}A_{p,lp} at (POW(lp),CDF(l)) equals the SAME product summed the
+                # other way -- verified algebraically via CT12(x,y,l,lp)=CT12(y,x,lp,l)-style index
+                # permutation in this task's own derivation notes), is written in the SAME iteration
+                # (no separate loop pass needed) -- exactly the same "compute once, mirror the
+                # transpose into the other corner" pattern the H_EC loop below already uses.
+                Hraw_CC12 = cctx.Hraw_CC12
+                _fill_cm_hcc_raw!(Hraw_CC12, CT12_use, origins, refIndex1, l, lp, M)
+                cols_pow = NCORE + ncm_cdf + (lp-1)*nO + 1 : NCORE + ncm_cdf + lp*nO
+                rows_pow = NCORE + ncm_cdf + (l-1)*nO + 1 : NCORE + ncm_cdf + l*nO
+                block12 = _cm_hcc_congruence(Hraw_CC12, cctx.R, cctx.RtHraw_CC12, cctx.block_cc12)
+                @views Hfull[rows, cols_pow] .= block12
+                @views Hfull[cols_pow, rows] .= transpose(block12)
+
+                # H^{22}(l,lp) = (1/M)*sum_s w_s*B_{o,l}[s]*B_{p,lp}[s] (both eq.36) -- computed
+                # directly at every (l,lp) exactly like H^{11}, relying on the SAME final
+                # symmetrize-by-averaging pass (pack_upper_cm_hessian!) to absorb floating-point
+                # summation-order noise, not a separate mirrored write (T22 is symmetric under
+                # (x,l)<->(y,lp) index+threshold swap, so this block is analytically symmetric the
+                # same way H^{11} already is).
+                Hraw_CC22 = cctx.Hraw_CC22
+                _fill_cm_hcc_raw!(Hraw_CC22, CT22_use, origins, refIndex1, l, lp, M)
+                block22 = _cm_hcc_congruence(Hraw_CC22, cctx.R, cctx.RtHraw_CC22, cctx.block_cc22)
+                @views Hfull[rows_pow, cols_pow] .= block22
+            end
         end
     end
     return Hfull
@@ -1169,18 +1408,16 @@ below). Writes the packed upper-triangular Hessian into `h`, matching
 `cc_algo/PsiObjectiveBundle.jl::hessian!`'s own packing exactly.
 """
 function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = nothing)
-    # 2026-08-05 truncated-power task: hard-refuse, not silently wrong. This structured (bin-table)
-    # Hessian assumes every CM column is a pure 0/1 cumulative indicator (weight 1) -- see
-    # CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for the full derivation of why the weighted
-    # eq.36 (truncated-power) family does not collapse to the same table identities without a
-    # materially new derivation, and why extending every specialized backend in this file
-    # (winner_bin/threaded/drawmajor/CM+ZC H_CZ/H_ZZ) was judged out of this task's scope. Use
-    # `archA_hess_cb_builder` (fully generic dense Architecture A -- needs zero new code for any
-    # CM content/width) for a two-family (`cctx.n_families==2`) context instead.
-    cctx.n_families == 1 || error("hessian_cm_structured!: the structured (Architecture C) CM Hessian " *
-        "only supports a single (eq.35-only) CM feature family (cctx.n_families=$(cctx.n_families) requested) -- " *
-        "use archA_hess_cb_builder (Architecture A, dense-generic) for the two-family eq.35+eq.36 spec. " *
-        "See CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for why this is a disclosed limitation, not a bug.")
+    # 2026-08-05 truncated-power task, GENERALIZED (was a hard-refuse; see MASTER.md section 6b for
+    # the full writeup): `cctx.n_families==2` is now supported directly, with NO dense G/H anywhere
+    # (user directive, second follow-up: "no uses of dense H"). H_CC's T12/T22/CT12/CT22 tables
+    # (build_bin_tables!/prefix_sum_tables!/fill_cm_HCC!) are dense-H-free by construction. H_EC's
+    # winner-bin fast path (winner_pair_cross_hessian_fill!/_cm_block!) was extended with "_pow"
+    # companion tables. CM+ZC's OWN widened-row H_CZ cross (bin_zc_cross_hessian_fill!/_block!,
+    # `use_direct_hcz`) was ALSO extended with "_pow" companion tables (BinZCrossScratch's own
+    # ZBinTab_pow/ZBinCScum_pow) -- so a two-family, ZC-widened (CM+ZC) context now uses the SAME
+    # genuine no-dense-H winner-bin path plain flexible CM does; the earlier dense-H-forced
+    # fallback for this combination is gone.
     # Harmonization task (2026-07-28): `extension` is `nothing` for flexible CM/CM+ZC (every
     # existing call site, unchanged) or a `CMFrechetExtension` (cm_frechet_hessian.jl, included
     # after this file -- `Any`-typed here purely to avoid a forward reference, same reason
@@ -1207,8 +1444,9 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
     cf = cctx.core_cf_ref[]
     _fill_cm_HEE!(HEE, w, obj, cctx, H, M)   # may rebuild cctx.core_ws/core_ws_for for this cf
 
+    fam2 = cctx.n_families == 2
     use_winner_bin = _cm_cross_hessian_wants_winner_bin(cctx, cf)
-    use_direct_hcz = _cm_cross_hessian_wants_direct_hcz(cctx, cf)
+    use_direct_hcz = use_winner_bin && _cm_cross_hessian_wants_direct_hcz(cctx, cf)
     build_bin_tables!(cctx, H, w; fill_S = !use_winner_bin)
     prefix_sum_tables!(cctx; fill_S = !use_winner_bin)
 
@@ -1223,7 +1461,9 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
         record_winner_cross_hessian_call!()
         wctx = serial_ctx(cctx.core_ws)
         cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
-        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+        # 2026-08-05 truncated-power task: `Pow=cctx.Pow` (fam2 only) additionally accumulates the
+        # "_pow" tables this function's own eq.36 H_EC block reads below.
+        winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx; Pow = fam2 ? cctx.Pow : nothing)
         if use_direct_hcz
             # CM+ZC E/C/Z block-partition + H_CZ release (2026-07-27): fills the widened rows
             # (`ncore_core+1:NCORE`) the plain wctx-based `winner_pair_cross_hessian_cm_block!` call
@@ -1235,7 +1475,9 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
             nz = n_restriction(cctx.hzz_zc_op)
             bin_zc_ws = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz)
             cctx.bin_zc_cross = bin_zc_ws
-            bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS)
+            # 2026-08-05 truncated-power task: `Pow=cctx.Pow` (fam2 only) additionally accumulates
+            # the "_pow" tables this function's own eq.36 H_CZ block reads below.
+            bin_zc_cross_hessian_fill!(bin_zc_ws, cctx.Bidx, cctx.hzz_centered.ZcS; Pow = fam2 ? cctx.Pow : nothing)
         end
     else
         record_dense_cross_hessian_call!()
@@ -1249,18 +1491,35 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
     CS_ = cctx.CScum
     Hraw_EC = cctx.Hraw_EC   # reused per threshold block
     ncore_core = cctx.ncore_core
+    ncm_cdf = nO * L   # 2026-08-05 truncated-power task: eq.35 sub-block width, ALSO the eq.36 sub-block's column offset
+    CS2 = fam2 ? cctx.CScum2 : nothing
+    # 2026-08-05 truncated-power task, BUG FIX: eq.36's own indicator is `1{U>c}`, not `1{U<=c}`
+    # (see _build_reflected_bilinear's own docstring) -- `S2total[x,j] = sum_{k=1}^{L+1} Stab2[x,j,k]`
+    # (the FULL grand total, including bin L+1) minus the existing cumulative `CS2[x,j,l]` gives
+    # `sum_{k>l} Stab2[x,j,k]`, the correctly-reflected value, with no new per-draw accumulation.
+    S2total = fam2 ? dropdims(sum(cctx.Stab2, dims = 3), dims = 3) : nothing   # D x NCORE
+    Hraw_EC2 = fam2 ? cctx.Hraw_EC2 : nothing
     @inbounds for l in 1:L
         if use_winner_bin
             Hraw_EC_core = use_direct_hcz ? (@view Hraw_EC[1:ncore_core, :]) : Hraw_EC
-            winner_pair_cross_hessian_cm_block!(Hraw_EC_core, wctx, cross_ws, l, origins, refIndex1, M)
+            # 2026-08-05 truncated-power task: `Hraw_EC_pow` (fam2 only) fills the eq.36 H_EC
+            # economic-rows block via the SAME winner-bin call, reading the "_pow" tables built
+            # above. When `use_direct_hcz` (CM+ZC), `Hraw_EC2` must be split the SAME way as
+            # `Hraw_EC` itself -- economic rows here, widened ZC rows via bin_zc_cross_hessian_block!
+            # below -- both now genuinely no-dense-H (BinZCrossScratch's own "_pow" tables).
+            Hraw_EC2_core = fam2 ? (use_direct_hcz ? (@view Hraw_EC2[1:ncore_core, :]) : Hraw_EC2) : nothing
+            winner_pair_cross_hessian_cm_block!(Hraw_EC_core, wctx, cross_ws, l, origins, refIndex1, M;
+                Hraw_EC_pow = Hraw_EC2_core)
             if use_direct_hcz
                 Hraw_EC_z = @view Hraw_EC[ncore_core+1:NCORE, :]
-                bin_zc_cross_hessian_block!(Hraw_EC_z, bin_zc_ws, l, origins, refIndex1, M)
+                Hraw_EC2_z = fam2 ? (@view Hraw_EC2[ncore_core+1:NCORE, :]) : nothing
+                bin_zc_cross_hessian_block!(Hraw_EC_z, bin_zc_ws, l, origins, refIndex1, M; HCZ_pow = Hraw_EC2_z)
             end
         else
             for (oi, o) in enumerate(origins)
                 for j in 1:NCORE
                     Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+                    fam2 && (Hraw_EC2[j, oi] = ((S2total[o, j] - CS2[o, j, l]) - (S2total[refIndex1, j] - CS2[refIndex1, j, l])) / M)
                 end
             end
         end
@@ -1279,6 +1538,17 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
         # orderings explicitly; H_EE unaffected because BLAS gemm! fills both
         # triangles of a symmetric product).
         @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
+
+        if fam2
+            cols_pow = NCORE + ncm_cdf + (l-1)*nO + 1 : NCORE + ncm_cdf + l*nO
+            block_ec2 = if cctx.R === nothing
+                Hraw_EC2
+            else
+                mul!(cctx.block_ec2, Hraw_EC2, cctx.R)
+            end
+            @views Hfull[1:NCORE, cols_pow] .= block_ec2
+            @views Hfull[cols_pow, 1:NCORE] .= transpose(block_ec2)
+        end
     end
 
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----

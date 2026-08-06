@@ -904,28 +904,33 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # common_frechet, cm_meanzc) now always construct OperatorPsiBundle via
         # prepare_production_run. A dense reference bundle is available only through
         # DenseReferenceDiagnostics.prepare_context, never from this driver.
-    # 2026-08-05 truncated-power task: include_truncated_moment=true (the two-family eq.35+eq.36
-    # CM spec) is NOT YET wired into this production driver, and cannot be silently routed through
-    # it: `prepare_production_run` (production_bundle_api.jl, called below) hard-requires an
-    # OperatorPsiBundle -- no dense G/H, by design (task architecture/production-operator-bundle-
-    # hardening-2026-07-30) -- and the structured (Architecture C) bin-table Hessian / :cm_lookup
-    # operator FG this driver's OperatorPsiBundle path relies on have NOT been extended to the
-    # weighted eq.36 family (see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2 for the full
-    # derivation and disclosed scope limitation). Refusing outright rather than silently downgrading
-    # a "production" call to a dense-reference diagnostic bundle (which this codebase's own
-    # dense_reference_diagnostics.jl explicitly bans for "a production outer solve or campaign").
-    include_truncated_moment && marginal_restriction !== :common_frechet &&
+    # 2026-08-05 truncated-power task, RELAXED (was an unconditional hard-refuse for ANY
+    # include_truncated_moment=true call -- see git history for the original comment/message).
+    # Architecture C (hessian_cm_structured!) and the :cm_lookup operator FG (CMLookupState) now
+    # genuinely support the two-family eq.35+eq.36 spec with NO dense G/H, for PLAIN flexible CM
+    # (marginal_restriction=:common_flexible, cm_extension=:cm_only -- no ZC mean/pair widening):
+    # H_CC's T12/T22 tables are dense-H-free by construction, H_EC's winner-bin fast path was given
+    # its own Pow-weighted twin tables (winner_pair_cross_hessian.jl), and the operator FG's forward/
+    # backward lookups were given their own Pow-weighted histogram (cm_lookup_kernels.jl) -- see
+    # each file's own 2026-08-05 comments. CM+ZC (any cm_extension other than :cm_only) is NOT
+    # covered by this relaxation: its own widened-row H_CZ cross (bin_zc_cross_hessian_fill!/
+    # _block!) and its own :operator FG (CMMeanZCOperatorState) were NOT given the analogous
+    # extension in this pass (disclosed follow-up, not attempted silently) -- for CM+ZC,
+    # `hessian_cm_structured!` correctly falls back to requiring dense `obj.H` for H_EC whenever
+    # n_families==2 (see that function's own top-of-body comment), which this driver's
+    # `prepare_production_run`-built `OperatorPsiBundle` never has, so CM+ZC two-family still
+    # cannot run through this driver -- refuse that combination specifically, not flexible CM.
+    include_truncated_moment && cm_extension !== :cm_only && marginal_restriction !== :common_frechet &&
         error("run_cm_upper_checkpointed($label): include_truncated_moment=true (the two-family " *
-              "eq.35+eq.36 CM spec) is not yet wired into this production driver -- see this call site's " *
-              "own comment for why (prepare_production_run's OperatorPsiBundle invariant vs. the " *
-              "single-family-only structured Hessian/operator FG backends). For CORRECTNESS " *
-              "testing/gates, call build_cm_production_context(...; include_truncated_moment=true, " *
-              "moment_representation=:dense_reference, use_archB_moments=false, ...) + archC_base_state " *
-              "directly (Architecture A/dense_reference is fully generic and needs zero new code, but is " *
-              "NOT production-grade -- see dense_reference_diagnostics.jl's own banner), or route through " *
-              "DenseReferenceDiagnostics.prepare_context with an explicit permit for a logged diagnostic " *
-              "run. Extending Architecture C / the operator FG to two families is disclosed follow-up " *
-              "work, not attempted in this task.")
+              "eq.35+eq.36 CM spec) is only wired into this production driver for PLAIN flexible CM " *
+              "(cm_extension=:cm_only) -- got cm_extension=:$cm_extension. CM+ZC's own widened-row " *
+              "H_CZ cross Hessian and :operator FG were not extended to two families in this pass " *
+              "(see cm_hessian_architectures.jl's hessian_cm_structured! and " *
+              "cm_meanzc_lookup_kernels.jl's CMMeanZCOperatorState for the disclosed scope limit). " *
+              "For CM+ZC two-family CORRECTNESS testing/gates only, call " *
+              "build_cm_meanzc_production_context(...; include_truncated_moment=true, " *
+              "moment_representation=:dense_reference, ...) + archC_meanzc_base_state directly " *
+              "(requires dense obj.H, NOT production-grade for CM+ZC specifically).")
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -956,8 +961,20 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # here. is_meanzc==false takes the exact pre-existing :cm_only code path at every branch
     # below (byte-identical behavior, confirmed by test_cm_meanzc_d4_gates.jl's own CM-only
     # regression gate and by this function's own :cm_only smoke test).
+    # 2026-08-05 truncated-power task BUGFIX: `CMMeanZCConfig`'s own field default
+    # (`cm::CMConfig = CMConfig()`, cm_meanzc_config.jl) stopped being constructible the moment
+    # `CMConfig.cm_moment_families` became a required (no-default) field -- this call previously
+    # relied on that default and ran UNCONDITIONALLY (even for include_truncated_moment=false),
+    # so it silently broke EVERY call to this driver, not just two-family ones (confirmed live:
+    # UndefKeywordError inside CMConfig() at this exact line, for an include_truncated_moment=true
+    # smoke run -- a pre-existing regression from the earlier `cm_moment_families` field addition,
+    # never caught because no test in that session exercised this real driver, only the diagnostic
+    # archC_base_state path). Pass `cm_moment_families` explicitly, matching this driver's own
+    # `include_truncated_moment` -- `meanzc_resolve_K` itself never reads `cfg.cm`'s other fields,
+    # so no other CMConfig field needs threading through here.
     meanzc_K_mean, meanzc_K_pair = meanzc_resolve_K(CMMeanZCConfig(cm_extension = cm_extension,
-        meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair, meanzc_basis = meanzc_basis))
+        meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair, meanzc_basis = meanzc_basis,
+        cm = CMConfig(cm_moment_families = include_truncated_moment ? 2 : 1)))
     is_meanzc = cm_extension !== :cm_only
     is_meanzc && lp("[", label, "] cm_extension=", cm_extension, " K_mean=", meanzc_K_mean,
                      " K_pair=", meanzc_K_pair, " meanzc_basis=", meanzc_basis)

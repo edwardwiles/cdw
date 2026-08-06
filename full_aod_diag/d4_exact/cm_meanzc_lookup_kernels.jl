@@ -73,24 +73,41 @@ mutable struct CMMeanZCOperatorState
     # No-moments/no-composite-G task (2026-07-28): same-point cache for the Hessian-weight prep
     # (operator_hessian_weights.jl) -- see that file's own docstring for the full contract.
     hw_cache::HessianWeightCache
+    # 2026-08-05 truncated-power task: eq.36 (truncated-power) family support, mirroring
+    # `CMLookupState`'s own identical fields (cm_lookup_kernels.jl) exactly -- see that struct's
+    # docstring for the full rationale. `Pow` is `nothing` for a single-family (`n_families==1`)
+    # state (every pre-existing caller of this constructor).
+    Pow::Union{Nothing,Matrix{Float64}}
+    cm_contrib2::Vector{Float64}
+    λmat_ext2::Matrix{Float64}
+    λmat_block2::Matrix{Float64}
+    hist_partials2::Vector{Matrix{Float64}}
+    hist_h2::Matrix{Float64}
+    Hpre2::Matrix{Float64}
+    g_block2::Matrix{Float64}
+    g_stored2::Matrix{Float64}
 end
 
 function CMMeanZCOperatorState(obj, ncore1::Int, zc_op::ZCRestrictionOperator, zc_layout, core_cf_ref::Ref{Any},
         ncm::Int, L::Int, origins::Vector{Int}, refIndex1::Int, bins::Matrix{<:Unsigned}, R;
-        nthreads_use::Int = Threads.nthreads())
+        nthreads_use::Int = Threads.nthreads(), Pow::Union{Nothing,Matrix{Float64}} = nothing)
     W_ = size(obj.U, 1)
     nO = length(origins)
     nbins = L + 1
     D_bins = size(bins, 2)
     nt = max(1, min(nthreads_use, W_))
     hist_partials = [zeros(D_bins, nbins) for _ in 1:nt]
+    Pow !== nothing && (ncm == 2 * nO * L || error("CMMeanZCOperatorState: Pow given but ncm=$ncm != 2*nO*L=$(2*nO*L)"))
+    hist_partials2 = [zeros(D_bins, nbins) for _ in 1:nt]
     n_x = 1 + ncore1 + n_mean(zc_op) + n_pair(zc_op) + ncm
     CMMeanZCOperatorState(obj, ncore1, zc_op, zc_layout, core_cf_ref, nothing, nothing, ZCRestrictionWorkspace(zc_op),
         ncm, L, nO, origins, refIndex1, bins, R, nbins, nthreads_use,
         zeros(nO, L + 1), zeros(W_), zeros(nO, L), hist_partials, zeros(D_bins, nbins), zeros(D_bins, L),
         zeros(nO, L), zeros(nO, L),
         zeros(W_), zeros(W_), zeros(W_), 0, 0,
-        HessianWeightCache(n_x))
+        HessianWeightCache(n_x),
+        Pow, zeros(W_), zeros(nO, L + 1), zeros(nO, L),
+        hist_partials2, zeros(D_bins, nbins), zeros(D_bins, L), zeros(nO, L), zeros(nO, L))
 end
 
 """
@@ -129,11 +146,28 @@ function dual_index!(st::CMMeanZCOperatorState, x::AbstractVector{Float64})
 
     restriction_forward!(st.arg0, λ_mean, λ_pair, op, st.zc_ws)
 
-    λmat_stored = reshape(λ_cm, st.nO, st.L)
+    # 2026-08-05 truncated-power task: `st.Pow!==nothing` (a two-family cctx) means `λ_cm` is the
+    # FULL concatenated [eq.35; eq.36] dual vector -- mirrors CMLookupState's own
+    # `cm_forward_contribution!` (cm_lookup_kernels.jl) exactly, including its eq.36-indicator-
+    # direction bug fix (`1{U>c}`, not `1{U<=c}` -- see that file's own `interval_forward_
+    # contribution_pow!` docstring for the full derivation/proof).
+    fam2 = st.Pow !== nothing
+    ncm_cdf = fam2 ? st.nO * st.L : st.ncm
+    λ_cdf = fam2 ? (@view λ_cm[1:ncm_cdf]) : λ_cm
+    λmat_stored = reshape(λ_cdf, st.nO, st.L)
     apply_contrast!(st.λmat_block, λmat_stored, st.R)
     suffix_sums!(st.λmat_ext, st.λmat_block)
     cumulative_forward_contribution!(st.cm_contrib, st.bins, st.refIndex1, st.origins, st.λmat_ext)
     st.arg0 .-= st.cm_contrib
+
+    if fam2
+        λ_pow = @view λ_cm[ncm_cdf+1:2*ncm_cdf]
+        λmat_stored2 = reshape(λ_pow, st.nO, st.L)
+        apply_contrast!(st.λmat_block2, λmat_stored2, st.R)
+        suffix_sums!(st.λmat_ext2, st.λmat_block2)
+        cumulative_forward_contribution_pow!(st.cm_contrib2, st.bins, st.refIndex1, st.origins, st.λmat_ext2, st.Pow)
+        st.arg0 .-= st.cm_contrib2
+    end
     return st.arg0
 end
 
@@ -176,11 +210,33 @@ function (st::CMMeanZCOperatorState)(x::AbstractVector{Float64}, g::AbstractVect
                                 (@view g[2+ncore1+n_mean(op):1+ncore1+n_mean(op)+n_pair(op)]),
                                 st.arg1, op, st.zc_ws)
 
-        build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, size(st.bins, 2), st.nbins)
+        D = size(st.bins, 2)
+        build_weighted_histogram!(st.hist_h, st.hist_partials, st.bins, st.arg1, D, st.nbins)
         cumulative_backward_gradient!(st.g_block, st.Hpre, st.hist_h, st.refIndex1, st.origins, st.L, M)
         apply_contrast!(st.g_stored, st.g_block, st.R)
         cm_off = 1 + ncore1 + n_mean(op) + n_pair(op)
-        @views g[cm_off+1:cm_off+st.ncm] .= vec(st.g_stored)
+        fam2 = st.Pow !== nothing
+        ncm_cdf = fam2 ? st.nO * st.L : st.ncm
+        if fam2
+            @views g[cm_off+1:cm_off+ncm_cdf] .= vec(st.g_stored)
+            # 2026-08-05 truncated-power task, BUG FIX: eq.36's own indicator is `1{U>c}`, not
+            # `1{U<=c}` -- mirrors CMLookupState's own `cm_transpose_into_g!` fix (cm_lookup_kernels.jl)
+            # exactly: reflect the prefix-summed histogram (`Total - existing`) in place before
+            # feeding it to the UNCHANGED `cumulative_backward_gradient_from_prefix!` formula.
+            build_weighted_histogram_pow!(st.hist_h2, st.hist_partials2, st.bins, st.arg1, st.Pow, D, st.nbins)
+            prefix_sums!(st.Hpre2, st.hist_h2, st.L)
+            @inbounds for o in 1:D
+                total_o = sum(@view st.hist_h2[o, :])
+                for l in 1:st.L
+                    st.Hpre2[o, l] = total_o - st.Hpre2[o, l]
+                end
+            end
+            cumulative_backward_gradient_from_prefix!(st.g_block2, st.Hpre2, st.refIndex1, st.origins, st.L, M)
+            apply_contrast!(st.g_stored2, st.g_block2, st.R)
+            @views g[cm_off+ncm_cdf+1:cm_off+st.ncm] .= vec(st.g_stored2)
+        else
+            @views g[cm_off+1:cm_off+st.ncm] .= vec(st.g_stored)
+        end
     end
 
     obj.arg0 .= st.arg0

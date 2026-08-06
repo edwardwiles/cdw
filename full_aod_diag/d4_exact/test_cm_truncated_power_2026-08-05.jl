@@ -72,7 +72,8 @@ println("="^100)
         end
     end
     # INDEPENDENT hand reference for eq.36: z_x(omega) = U_x(omega)^(-mu) computed directly here
-    # (not via frechet_power_feature), then z^(1-sigma) -- this is genuinely re-deriving the
+    # (not via frechet_power_feature), then z^(sigma-1) -- 2026-08-05, user-corrected exponent sign
+    # (paper's eq.36 moment is z^(sigma-1), not z^(1-sigma)) -- this is genuinely re-deriving the
     # relation, not calling the same (potentially wrong) production helper twice.
     zhand = U .^ (-μHat)
     @test all(isfinite, zhand) && all(>(0), zhand)
@@ -80,7 +81,9 @@ println("="^100)
     for (li, l) in enumerate(1:L)
         for (oi, o) in enumerate(origins)
             col2 = tm_offset + (l-1)*nO + oi
-            hand2 = [ (zhand[s,o]^(1-σHat)) * Float64(U[s,o] <= z[l]) - (zhand[s,refIndex1]^(1-σHat)) * Float64(U[s,refIndex1] <= z[l]) for s in 1:W]
+            # 2026-08-05 BUG FIX (user-caught): eq.36's own indicator is `1{U>z[l]}`, not `<=` --
+            # see common_marginals_moments.jl's own docstring for the full derivation/proof.
+            hand2 = [ (zhand[s,o]^(σHat-1)) * Float64(U[s,o] > z[l]) - (zhand[s,refIndex1]^(σHat-1)) * Float64(U[s,refIndex1] > z[l]) for s in 1:W]
             @test CM[:, col2] ≈ hand2
         end
     end

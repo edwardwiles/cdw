@@ -3,6 +3,37 @@
 Branch: `fix/cm-add-truncated-power-moments-2026-08-05` (production/fullA-exact @546feff base).
 Worktree: `/bbkinghome/edav/cdw_worktrees/cm-add-truncated-power-moments-2026-08-05`.
 
+## ⚠️ CORRECTION / CONTINUATION SESSION (2026-08-05, later the same day) — READ THIS FIRST
+
+**Sections 0–16 below are from an earlier pass the same day and are now superseded in several
+material ways.** A follow-up continuation session (same day) made these corrections, in order:
+
+1. **The exponent in section 0's "fix" was itself still wrong.** The user corrected it directly:
+   the restriction is `z^(σ-1)`, not `z^(1-σ)` (a standard CES-aggregator-shaped exponent). Every
+   place below that says `z^(1-sigma)` / `1-σ` is the OLD, incorrect exponent.
+2. **A second, more serious bug was found and fixed after that**: the eq.36 feature reused eq.35's
+   `1{U≤c}` indicator convention for the *weighted* restriction. That's harmless for the unweighted
+   CDF family (a pure sign flip of the whole moment condition) but wrong for the POW family — the
+   correct translation of `1{z<z_ℓ}` given `z=U^{-μ}` (decreasing in `U`) is `1{U>c}`, not `1{U≤c}`.
+   Using `≤` silently introduces an additive bias term that vanishes only under the uniform/base
+   measure, not under any reweighting — exactly what the inner KNITRO dual solve searches over.
+   See new section 17 for the full derivation and fix.
+3. **Architecture C (the real, no-dense-H production path — structured Hessian +
+   `CMLookupState`/`CMMeanZCOperatorState` operator FG) was actually extended** for the two-family
+   spec, for BOTH plain flexible CM and CM+ZC, with zero dense G/H anywhere — closing the gap
+   section 6/6b of the earlier pass had left as a disclosed limitation. See new section 18.
+4. **The D20 real-data results in section 12b below (`nStatus=0` "fully feasible" at W=20k/100k)
+   predate fix #2 above and are INVALID** — they were computed with the wrong indicator direction.
+   The real, corrected re-test result is that the two-family real-D20 solve does **not** converge,
+   at any tested `L` down to 3, after a long investigation (sections 19–24) that ruled out several
+   more mundane explanations (W-sensitivity, iteration-budget, an Architecture C formula bug) but
+   did **not** identify a root cause — as of this writing this is an **open, unresolved
+   diagnostic**, believed more likely than not to be a residual bug (user's judgment, section 24),
+   not a confirmed finding either way. Do not cite section 12b's "PASS" claims.
+5. Section 16's verdict block is likewise stale on `SCIENTIFIC_SPEC` and `FLEXIBLE_CM`/`D20`
+   fields — see the new verdict block at the end of the document (section 25) for the current,
+   accurate status.
+
 ## 0. READ FIRST — scope grew beyond the original task brief, twice, both user-directed
 
 This task ended up covering FOUR distinct pieces of work, not one. In order:
@@ -251,6 +282,8 @@ inner dual:      +ncm_pow = (D-1)*L additional CM dual coordinates
 - Checkpoint schema: new `CMCheckpointV10` (see section 7).
 
 ## 6. Disclosed scope limitation: structured (Architecture C) Hessian and operator FG NOT extended
+### (SUPERSEDED — see section 6b below. This section is the first session's record; the gap it
+### describes was closed in a follow-up session the same day, at the user's direct request.)
 
 This is the one place this task did **not** reach full production-grade parity, and it is reported
 honestly rather than silently worked around or falsely claimed complete.
@@ -481,4 +514,280 @@ NEW_BRANCHES_CREATED = 0 (already created by orchestrator; one commit cherry-pic
 EXTRA_WORKTREES_CREATED = 0 (already created by orchestrator)
 BUG_FOUND_AND_FIXED_WITHIN_TASK = true (raw exponential draw U used where Frechet productivity z=U^(-mu) belongs in the new eq.36 feature -- see section 0a for full derivation/numeric confirmation)
 SCOPE_EXPANSIONS_BEYOND_ORIGINAL_BRIEF = 1 (user-directed: empirical -> theoretical Frechet quantile cutoffs + closed-form truncated-moment verification target, section 0b)
+```
+
+**This verdict block is STALE — see the CORRECTION banner at the top of this document and section
+25 at the end for the current, accurate status.**
+
+---
+
+# CONTINUATION SESSION (2026-08-05, later the same day)
+
+Everything below is from a second, longer continuation session the same day. It (a) corrects the
+exponent sign, (b) finds and fixes a second, more serious indicator-direction bug, (c) genuinely
+extends Architecture C (the real no-dense-H production path) for the two-family spec, (d)
+extensively verifies that extension, and (e) investigates — without yet resolving — why the real
+D20 two-family solve still does not converge even after both fixes.
+
+## 17. THE bug: eq.36's indicator direction, not just its exponent
+
+**User-caught, not self-discovered.** After the Architecture C extension (section 18) was built and
+initially verified against a hand-derived "brute-force" reference (which itself embedded the same
+mistake — see the warning in section 20), the real D20 two-family solve was infeasible
+(`nStatus∈{-300,-400}`) at the calibration point. The first-pass read of this was "the corrected
+z^(σ-1) restriction has real economic bite" — the user rejected that immediately and firmly:
+
+> "It is almost certainly not a scientific finding. It just means there's a bug. For example did
+> you set the correct theoretical quantile given that its sigma -1 now and not 1-sigma?"
+
+Re-deriving the theoretical cutoff math from scratch surfaced the real bug:
+`theoretical_u_threshold(p) = -log(1-p)` gives the U-space cutoff `c` such that
+`1{z(ω)<z_p} = 1{U(ω) > c}` — **not** `1{U(ω)<=c}` — because `z=U^{-μ}` is a *decreasing* function
+of `U`. For the CDF (weight=1) family, reusing `1{U<=c}` is harmless: it's just an overall sign
+flip of the whole restriction (`E[X]=0 ⟺ E[-X]=0`). For the POW (weight=`z^k`, `k=σ-1`) family it
+is NOT harmless:
+
+```
+Pow_o·1{U_o<=c} - Pow_ref·1{U_ref<=c}
+  = (Pow_o - Pow_ref) - (Pow_o·1{U_o>c} - Pow_ref·1{U_ref>c})
+```
+
+i.e. using `<=` instead of `>` introduces an additive bias term `E_π[Pow_o]-E_π[Pow_ref]` that
+vanishes only under the base/uniform measure (both origins IID canonical Fréchet(1)) but is
+generally nonzero under any *reweighted* measure π — exactly what the inner KNITRO dual solve
+searches over. Confirmed numerically before touching any code, then fixed in
+`common_marginals_moments.jl`'s `precalc_common_marginals_cdf` (the eq.36 block, separate
+`CDF_ref_pow` built with `.>` rather than reusing the CDF family's `.<=` reference), and propagated
+to every downstream consumer (section 18) and every hand-written test reference (section 20).
+
+## 18. Architecture C extension (the real no-dense-H production path), zero dense G/H
+
+Per direct user instruction: *"Your job is to make arch C work. It is not useful to fix it in the
+dense method, since I don't use it... you should definitely do it yourself rather than trusting an
+agent."* Extended, by hand, for BOTH plain flexible CM and CM+ZC:
+
+- **`cm_hessian_architectures.jl`**: `CMBinHessCtx` gained a `Pow::Union{Nothing,Matrix{Float64}}`
+  field plus `Ttab12/Ttab22/CT12/CT22/Stab2/CScum2/Hraw_CC12/Hraw_CC22/...` scratch. New
+  `_build_reflected_bilinear(Ttab, CT, D, L; reflect_x, reflect_y)` helper implements the
+  "total-minus-cumsum" inclusion–exclusion identity needed to get `1{bin(x)>l}`-style reflected
+  cumulative tables from the same raw per-draw accumulation `build_bin_tables!` already does — no
+  new per-draw accumulation, only post-processing of already-built tables.
+  `hessian_cm_structured!` now supports `cctx.n_families==2` on both the dense-H and winner-bin
+  (`:winner_bin`) paths.
+- **`winner_pair_cross_hessian.jl`**: `WinnerBinCrossScratch`/`BinZCrossScratch` gained matching
+  `*_pow` companion tables; `winner_pair_cross_hessian_fill!`/`_cm_block!` and
+  `bin_zc_cross_hessian_fill!`/`_block!` (CM+ZC's own widened-row H_CZ cross term) extended the
+  same way — this is what removed the CM+ZC dense-H-forced fallback the first-pass session had
+  left in place.
+- **`cm_lookup_kernels.jl` / `cm_meanzc_lookup_kernels.jl`**: `CMLookupState` /
+  `CMMeanZCOperatorState` (the real per-iterate operator FG KNITRO calls every inner-solve
+  iteration) gained `Pow`/`*_pow`/`*2` buffers, new `interval_forward_contribution_pow!` /
+  `cumulative_forward_contribution_pow!` / `build_weighted_histogram_pow!` kernels, and a
+  reflect-in-place step (`total_o - Hpre2[o,l]`) mirroring the Hessian-side reflection identity.
+  **`CMMeanZCOperatorState`'s fields were initially dead code** — `dual_index!` and the functor
+  never read them — fixed by actually wiring the pow forward/backward contributions through both.
+- **`cm_production_bundle.jl` / `cm_meanzc_lookup_production.jl`**: removed the stale hard-refuses
+  on `include_truncated_moment=true` + `inner_fg_backend=:cm_lookup`/`moment_representation=
+  :operator` (kept only the genuine `use_archB_moments` refuse — Architecture B was never
+  extended, out of scope), and flipped the production dispatch sites to the unconditional
+  `archC_hess_cb_builder(cctx)` (previously conditional on single-family).
+- Two unrelated, pre-existing production regressions found and fixed as a byproduct of actually
+  exercising `run_cm_upper_checkpointed` for the first time this task: `CMMeanZCConfig`'s own
+  `cm::CMConfig = CMConfig()` default broke the instant `CMConfig.cm_moment_families` lost its
+  default (fixed in `cm_checkpoint.jl` by passing it explicitly); and a `struct CMCheckpointV10`
+  name collision between `cm_checkpoint.jl` and `cm_originzc_checkpoint.jl` silently shadowed one
+  or the other depending on include order (fixed by renaming the origin-ZC copy to
+  `OriginZCCheckpointV10`).
+
+## 19. D4 verification — ALL PASS at machine precision (post both fixes)
+
+Four independent D4-scale gates, every one re-run after section 17's fix, all passing at machine
+precision (`<1e-8`, mostly `<1e-14`):
+- `test_cm_archc_hcc_twofamily_2026-08-05.jl` — H_CC vs an independent brute-force sum.
+- `test_cm_archc_full_twofamily_2026-08-05.jl` — full assembled Hessian (dense-H path AND the real
+  winner-bin production path) vs Architecture A.
+- `test_cm_lookup_fg_twofamily_2026-08-05.jl` — operator FG (f,g) vs Architecture A, both `:suffix`
+  (real production basis) and `:interval`.
+- `test_cm_meanzc_archc_twofamily_2026-08-05.jl` — CM+ZC, both the dense-H path and the winner-bin
+  + H_CZ path.
+
+## 20. Independent ground truth via ForwardDiff (user-requested, decisive)
+
+User's explicit concern: comparing Architecture C against a hand-derived "brute-force" reference
+(section 19) risks the SAME conceptual mistake appearing in both, since both were written in the
+same session with the same mental model. Requested an independent check via automatic
+differentiation instead.
+
+`test_cm_autodiff_groundtruth_2026-08-05.jl` reads ONLY the raw feature matrix
+`objA.H[:,3:n+1]` (== `G`, the actual columns `objA.moments!` populates, including the two-family
+CM columns) and the closed-form `Psi(a) = e^a-1` (a≤1) / `(e/2)(a²+1)-1` (a>1)
+(`cc_algo/Psi.jl`, reimplemented by value — zero shared code), then differentiates
+`f(ζ,λ) = (1/M)·Σ_s Psi(-ζ - dot(G[s,:],λ)) + ζ` via `ForwardDiff.gradient`/`ForwardDiff.hessian`.
+Compared against the REAL operator-bundle gradient (`CMLookupState`'s own functor) and the REAL
+winner-bin-path Hessian (`hessian_cm_structured!`, with a genuine `core_cf_ref` populated via
+`cf_build` so `_cm_cross_hessian_wants_winner_bin` is confirmed true).
+
+**Result: PASS at every one of 4 random dual points**, `max|Δg|` and `max|Δh|` both `~1e-14` to
+`~1e-16`, across the full gradient, full Hessian, and every CM sub-block (H_CC[cdf,cdf],
+H_CC[pow,pow], H_CC[cdf,pow] cross, H_EC[core,cdf], H_EC[core,pow]) — see
+`/tmp/cm_autodiff_groundtruth.log`. This rules out a Hessian/gradient *assembly* bug in the
+Architecture C CM extension, independent of any assumption shared with the hand-derived references
+in section 19.
+
+## 21. D20 real-data investigation: what was ruled out
+
+What's running in every test below is **plain flexible CM only** (`build_cm_production_context`
+has no `cm_extension` kwarg at all; `:cm_lookup`/`:operator` is documented "plain flexible CM
+only") — not CM+ZC, not common Fréchet, not origin-ZC.
+
+- **Raw-moment (solver-free) diagnostic** (`test_cm_raw_moment_check_2026-08-05.jl`, user-suggested
+  — "the average of the moments under the raw F* Monte Carlo draws should be near zero if the
+  moments are correctly specified and calibrated"): at the real calibration point, both CDF and POW
+  block column means are small relative to the raw feature scale (~1.066) and shrink correctly as
+  `1/√W` (max|col mean| 0.0182 at W=20k → 0.0059 at W=100k, vs the theoretical `√5≈2.24` ratio for
+  a 5x sample increase) — the signature of pure Monte Carlo noise around a true zero, not a
+  systematic spec bug.
+- **W-sensitivity ruled out**: the real two-family KNITRO fixed-state solve
+  (`test_cm_archc_d20_fixedstate_2026-08-05.jl`) gives the IDENTICAL result
+  (`nStatus=-400`) at W=20,000, W=100,000, AND W=300,000 — not shrinking with W, unlike the
+  single-family case at the same θ point, which genuinely improves (`-103` at W=100k → `0` at
+  W=300k). This is not the pre-existing `d20-realdata-w-sensitivity` pattern.
+- **Iteration-budget starvation ruled out**: `nStatus=-400` is KNITRO's
+  `KN_RC_ITER_LIMIT_FEAS` — "feasible point WAS found," not a hard failure — and every production
+  `archC_*_base_state` function's own accept-list (`(0,-100,-101,-103)`) is *narrower* than several
+  other gates/benches in this same repo that also accept `-400/-401/-402`. Raising `maxit` 100→2000
+  (`ek_inner_maxit2000_2026-08-05.opt`) gave the IDENTICAL `nStatus=-400` result after ~19 minutes
+  wall-clock (vs 18.6s for single-family) — 20x the iteration budget did not resolve it.
+
+## 22. Iteration trace and moment-matrix conditioning
+
+An `outlev=3` trace (`ek_inner_trace_2026-08-05.opt`, `maxit=60`,
+`test_cm_archc_d20_trace_2026-08-05.jl`) shows: `FeasError=0.000e+00` at every single iteration (the
+point stays feasible throughout); `OptError` (KKT residual) oscillates in a 0.01–0.05 band across
+all 60 iterations with no downward trend (never approaching the `opttol=1e-12` target); the
+objective decreases slowly and monotonically (`-4.3e-4`→`-2.2e-3` over 60 iterations) with small
+step sizes (`~1e-3`), never leveling off within the tested window.
+
+A dense moment-matrix rank/SVD check at the real D20 calibration point, W=100,000, L=10
+(`test_cm_moment_rank_2026-08-05.jl`) found no hard rank deficiency (every block full rank at a
+`1e-10`-relative tolerance — unlike the previously-found CM+ZC K=2(σ=3) case, which was a true
+near-machine-precision singularity) but a real conditioning jump from combining the two families:
+
+| block | cond(·) |
+|---|---|
+| CDF-only (eq.35) alone | ≈32 |
+| POW-only (eq.36) alone | ≈30 |
+| CDF+POW combined | ≈8,730 |
+| core+CDF+POW (full G) | ≈85,343 |
+
+and a maximum per-`(origin,ℓ)` correlation between a CDF column and its matching POW column of
+**0.9997**, at the last (highest-quantile) bin `ℓ=L=10`, origin index 15.
+
+## 23. L-sweep — the near-collinearity and non-convergence persist at EVERY L, down to L=3
+
+`test_cm_moment_rank_by_L_2026-08-05.jl` re-ran the rank check AND the real KNITRO fixed-state
+solve at L∈{3,4,5,6,8,10}:
+
+| L | ncm_cdf | cond(CM) | cond(fullG) | worst corr | at (ℓ,origin) | KNITRO |
+|---|---|---|---|---|---|---|
+| 3 | 57 | 1,978 | 28,092 | 0.9989 | (3, 7) | `-400` |
+| 4 | 76 | 2,236 | 30,137 | 0.9993 | (4, 15) | `-400` |
+| 5 | 95 | 2,881 | 36,511 | 0.9994 | (5, 15) | `-400` |
+| 6 | 114 | 3,743 | 44,668 | 0.9995 | (6, 15) | `-400` |
+| 8 | 152 | 5,934 | 63,624 | 0.9996 | (8, 15) | `-400` |
+| 10 | 190 | 8,730 | 85,343 | 0.9997 | (10, 15) | `-400` |
+
+Every tested L fails identically. The worst-correlated pair is always the LAST bin (`ℓ=L`)
+regardless of how many bins there are — at L=3 that bin's probability threshold is only 2/3, not an
+extreme tail — and origin index 15 recurs as the worst-correlated origin at every L≥4.
+
+## 24. Current status: UNRESOLVED — user's assessment is this is a residual bug, not a finding
+
+User's own read, directly: *"The fact that it's still there at L=3 strongly indicates that it's a
+bug. It just isn't that hard to satisfy this restriction, especially at L=3."* This is a reasonable
+and, as of this writing, **unrefuted** objection — a 3-bin flexible-CM restriction (only 6 CM
+moments per non-reference origin) should be easy to satisfy at real D20 scale, and section 17's
+already-confirmed, already-fixed bug demonstrates this exact restriction family is not immune to
+subtle sign/indicator mistakes.
+
+**What has been ruled out** (sections 19–23): a moment-specification/indicator-direction bug of
+the kind already found once (raw-moment check is clean at the base measure); W-sensitivity;
+iteration-budget starvation; an Architecture C Hessian/gradient *assembly* bug (independent
+ForwardDiff ground truth, section 20); hard rank deficiency (formally full rank at every tested L).
+
+**What has NOT been ruled out / not yet checked**:
+- A moment-specification bug that only manifests under a *reweighted* (non-uniform) measure — the
+  raw-moment check (section 21) only tests the base/uniform measure, which is exactly the situation
+  section 17's own bug analysis says is insufficient to catch a POW-family sign/direction error.
+- Whether the recurring origin index 15 (and the always-last-bin pattern, present even at L=3
+  where the last bin isn't tail-extreme) points at something specific to how the CDF/POW columns
+  are being constructed or indexed for that origin/bin combination specifically, rather than a
+  property of the true restriction.
+- Whether `contrasts=:anchored`'s reference-origin construction interacts with the two-family
+  augmentation in some column-indexing way that isn't a "wrong economics" bug but a "wrong column"
+  bug (e.g. an off-by-one in which origin/bin the POW column for a given CDF column actually
+  corresponds to).
+- Running the KNITRO solve to a much larger iteration count with NO cap, to see whether it
+  eventually crosses `lower_limit=-50` (a clean `-300`, confirming genuine unboundedness) — not yet
+  done; the trace in section 22 only covers 60 iterations.
+
+**This document does not claim the bug is found.** It documents the fix that WAS found and fixed
+(section 17, verified section 19–20) and the extensive, honest trail of eliminated hypotheses for
+the SEPARATE, still-open D20 non-convergence problem (sections 21–23), so a future session — or
+this same session, continuing — does not have to re-derive any of this from scratch.
+
+## 24b. POW-only isolation experiment — confirms it's the INTERACTION, not either family alone
+
+User-requested follow-up: *"remove the 'regular' CM moments and just leave these new z^(σ-1) ones?
+So we can see if it's about the interaction."* `test_cm_pow_only_experiment_2026-08-05.jl` builds a
+single-family bundle by reusing the already-validated CDF-only dense bundle as a template and
+overwriting its CM columns with the (bug-fixed, section 17) POW feature values — same width, same
+core columns, zero new Hessian/gradient code, dimensionally guaranteed correct. Deliberately uses
+the dense Architecture A path (not Architecture C) since this question is about the underlying
+restriction/moment-matrix, which is architecture-independent per section 20's ForwardDiff
+equivalence result. Real D20 W=100,000 solves, both L=3 and L=10:
+
+| Variant | L | cond(G) | nStatus | Result |
+|---|---|---|---|---|
+| CDF-only (baseline) | 3 | 670 | 0 | PASS |
+| CDF-only (baseline) | 10 | 917 | 0 | PASS |
+| POW-only (z^(σ-1) alone) | 3 | 669 | 0 | PASS |
+| POW-only (z^(σ-1) alone) | 10 | 894 | 0 | PASS |
+
+**Both families converge cleanly on their own**, with condition numbers ~670–920 — nowhere near the
+~8,730–85,343 seen when combined (section 22–23). This confirms the non-convergence is specifically
+about the INTERACTION between the two families, not either restriction being individually hard to
+satisfy — consistent with the user's expectation that neither restriction alone should be hard to
+satisfy, especially at L=3.
+
+Combined with the near-collinearity finding (max per-`(origin,ℓ)` correlation 0.9989–0.9997 at
+every tested L, section 22–23): the two families carry almost — but not quite — the same
+information. Jointly resolving the small residual difference between them to tight numerical
+tolerance is what's failing. Two explanations remain open and this experiment does not distinguish
+between them:
+1. **A genuine (non-bug) numerical-conditioning fact** — two individually-loose but ~99.9%+
+   correlated moment restrictions are inherently hard to jointly resolve to `opttol=1e-12`, a known
+   near-multicollinear-moments phenomenon, independent of any implementation bug.
+2. **A bug in how the two families' targets/anchoring interact** — e.g. something about jointly
+   anchoring eq.35 and eq.36 against the same reference origin that isn't quite right, even though
+   each family is individually correct (as this experiment and section 19–20 both confirm).
+
+No further experiment was run to separate these two explanations — this is the last checked
+hypothesis as of this writing.
+
+## 25. Updated verdict block (supersedes section 16)
+
+```
+SCIENTIFIC_SPEC = CDF_plus_truncated_sigma_minus_1 (feature: z^(sigma-1), z=U^(-mu); cutoffs: theoretical Frechet quantile; indicator 1{U>c} for the POW family, NOT 1{U<=c} -- see section 17)
+INDICATOR_DIRECTION_BUG_FOUND_AND_FIXED = true (section 17; user-caught, not self-discovered; confirmed via D4 gates AND independent ForwardDiff ground truth, sections 19-20)
+ARCHITECTURE_C_EXTENDED = true (plain flexible CM AND CM+ZC; zero dense G/H anywhere; section 18)
+ARCHITECTURE_C_VERIFIED = true (D4 machine-precision gates section 19; independent ForwardDiff ground truth section 20 -- both PASS decisively)
+D20_TWO_FAMILY_REAL_SOLVE = FAILS (nStatus=-400) at every tested (W,L) combination: W in {20k,100k,300k} x L=10, and L in {3,4,5,6,8,10} x W=100k -- STATUS: UNRESOLVED, see section 24
+D20_W_SENSITIVITY_HYPOTHESIS = REFUTED (section 21 -- identical failure across W, unlike single-family at the same theta point)
+D20_ITERATION_BUDGET_HYPOTHESIS = REFUTED (section 21 -- maxit 100->2000, ~19min wall-clock, identical result)
+D20_HARD_RANK_DEFICIENCY = false (section 22-23 -- full rank at 1e-10 relative tolerance at every tested L, but cond jumps 30(single family)->1978-8730(combined, L=3..10) and max per-(origin,l) CDF/POW correlation is 0.9989-0.9997 at every L, always at the last bin)
+POW_ONLY_ISOLATION_EXPERIMENT = section 24b: CDF-only AND POW-only EACH converge cleanly alone (nStatus=0, cond(G)~670-920, L=3 and L=10) -- confirms non-convergence is the INTERACTION between the two families, not either alone
+ROOT_CAUSE_OF_D20_NONCONVERGENCE = NOT_IDENTIFIED (user's judgment: more likely a residual bug than genuine infeasibility, given persistence at L=3 and given each family alone is easy; see section 24/24b for what remains unchecked -- genuine near-multicollinear-moments conditioning vs a cross-family anchoring bug, not yet distinguished)
+PRODUCTION_RELEASE = not_merged_awaiting_user_push_approval (unchanged)
+BUG_FOUND_AND_FIXED_WITHIN_TASK = true (TWO bugs across the full session: exponent sign 1-sigma->sigma-1 user-corrected, section 0a/CORRECTION banner; indicator direction <=c->  >c, section 17)
 ```
