@@ -152,6 +152,22 @@ mutable struct CMFrechetLookupState{O}
     # No-moments/no-composite-G task (2026-07-28): same-point cache for the Hessian-weight prep
     # (operator_hessian_weights.jl) -- see that file's own docstring for the full contract.
     hw_cache::HessianWeightCache
+    # 2026-08-06 outer-production-closeout task, BUG FIX: `cm_forward_contribution!`/
+    # `cm_transpose_into_g!` (cm_lookup_kernels.jl) are SHARED, untyped-`st` kernel functions this
+    # struct's own `dual_index!`/FG functor call directly (see those functions' own docstrings:
+    # "calls the EXACT SAME shared functions CMLookupState's own dual_index! calls"). The 2026-08-05
+    # truncated-power task added an unconditional `fam2 = st.Pow !== nothing` duck-typed read at the
+    # top of BOTH shared kernels, and gave `CMLookupState`/`CMMeanZCOperatorState`/
+    # `OriginZCOperatorState` a matching `Pow` field -- but never added the same field here, so EVERY
+    # call into either shared kernel via a `CMFrechetLookupState` (i.e. every real evaluation under
+    # `CM_FRECHET_INNER_FG_BACKEND_DEFAULT[]=:cm_frechet_lookup`, the actual production default)
+    # threw `FieldError(CMFrechetLookupState, :Pow)` -- masked by KNITRO.jl's own callback-error
+    # swallowing exactly like the CM+ZC missing-Pow= bug (895b99b). Common-Frechet has no two-family
+    # extension of its own (disclosed, separate gap -- see MASTER.md section 5b), so this field is
+    # ALWAYS `nothing` here; adding it only makes the two shared kernels' existing `fam2=false`
+    # branch reachable instead of erroring, per those kernels' own guard structure (every
+    # two-family-only scratch access is already behind `if fam2`, so no other field is needed).
+    Pow::Union{Nothing,Matrix{Float64}}
 end
 
 function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::Int, D::Int,
@@ -175,7 +191,7 @@ function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::I
         zeros(1 + ncore1), zeros(nO, L), zeros(nO, L + 1), zeros(L + 1),
         hist_partials, zeros(D, nbins), zeros(D, L), zeros(nO, L), zeros(nO, L), zeros(L),
         core_cf_ref, nothing, nothing, zeros(M), 0,
-        HessianWeightCache(1 + ncore1 + ncm_cm + ncm_level))
+        HessianWeightCache(1 + ncore1 + ncm_cm + ncm_level), nothing)
 end
 
 """
