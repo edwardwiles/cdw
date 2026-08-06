@@ -276,7 +276,8 @@ function archC_frechet_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMB
         cf isa CompressedFactual || error("archC_frechet_verified_state: verification_backend=:operator requires cctx.core_cf_ref[] to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
         ov = verify_inner_solution_operator_cm_frechet!(ζstar, λstar, cf, cctx.L, cctx.nO, cctx.origins,
-            cctx.refIndex1, bins_u, cctx.R, level_targets, obj, W)
+            cctx.refIndex1, bins_u, cctx.R, level_targets, obj, W;
+            Pow = cctx.n_families == 2 ? cctx.Pow : nothing)
         m_weights, verify = verify_namedtuple_from_operator(ov, obj, W, nStatus)
     elseif verification_backend === :dense_reference
         G = CS.select_G_from_H(obj, obj.H)

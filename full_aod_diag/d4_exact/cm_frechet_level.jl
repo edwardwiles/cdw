@@ -538,25 +538,30 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, include_truncated_
     moment_representation === :operator && inner_fg_backend !== :cm_frechet_lookup &&
         error("build_cm_frechet_production_context: moment_representation=:operator requires inner_fg_backend=:cm_frechet_lookup")
     # 2026-08-05 (paired-basis-preconditioning pilot, common-Fréchet two-family extension):
-    # `wrap_moments_with_cm_frechet_archB` (Architecture B) and `CMFrechetLookupState`
-    # (`:operator`/`:cm_frechet_lookup`) are BOTH still single-family-only (mirrors flexible CM's
-    # own `build_cm_production_context` guard: "use_archB_moments=true is incompatible with
-    # include_truncated_moment=true"). Hard-refuse rather than silently drop the POW/levelpow
-    # contribution -- `include_truncated_moment=true` requires `moment_representation=
-    # :dense_reference` AND `use_compressed_core=false` (the plain, already-two-family-aware dense
-    # splice `build_cm_frechet_level_augmented_obj` already built as `aug.obj_cm`, reused directly
-    # below, not rebuilt).
+    # `wrap_moments_with_cm_frechet_archB` (Architecture B) is still single-family-only (mirrors
+    # flexible CM's own `build_cm_production_context` guard: "use_archB_moments=true is
+    # incompatible with include_truncated_moment=true") -- `include_truncated_moment=true` still
+    # requires `use_compressed_core=false` when `moment_representation=:dense_reference` for this
+    # reason.
+    #
+    # 2026-08-06 (levelpow kernel task): `CMFrechetLookupState`/`:operator` IS now extended for the
+    # two-family CM/levelpow blocks (cm_frechet_lookup_kernels.jl's own `Pow`/`levelpow_targets`
+    # fields, `_verify_inner_solution_operator_cm_core`'s own `fam2_level` branch,
+    # operator_verification.jl) -- `:operator` is a real option here now, not a hard refusal.
+    # `cctx.n_families`/`cctx.Pow` are already built generically by `build_cm_bin_ctx`
+    # (cm_hessian_architectures.jl) from `aug.n_families`, exactly the same shared path
+    # flexible-CM/CM+ZC already use -- no separate Pow computation needed for this family.
     if include_truncated_moment
-        moment_representation === :dense_reference ||
+        moment_representation in (:dense_reference, :operator) ||
             error("build_cm_frechet_production_context: include_truncated_moment=true requires " *
-                  "moment_representation=:dense_reference (:operator/CMFrechetLookupState is not yet " *
-                  "extended for the two-family CM/levelpow blocks) -- got :$moment_representation")
-        use_compressed_core &&
-            error("build_cm_frechet_production_context: include_truncated_moment=true requires " *
-                  "use_compressed_core=false (wrap_moments_with_cm_frechet_archB's Architecture-B fill " *
-                  "is a pure single-family reconstruction, same reason flexible CM's own " *
-                  "build_cm_production_context refuses use_archB_moments=true here) -- the dense " *
-                  "aug.obj_cm splice is used directly instead, no Architecture-B fast path.")
+                  "moment_representation=:dense_reference or :operator, got :$moment_representation")
+        moment_representation === :dense_reference && use_compressed_core &&
+            error("build_cm_frechet_production_context: include_truncated_moment=true with " *
+                  "moment_representation=:dense_reference requires use_compressed_core=false " *
+                  "(wrap_moments_with_cm_frechet_archB's Architecture-B fill is a pure single-family " *
+                  "reconstruction, same reason flexible CM's own build_cm_production_context refuses " *
+                  "use_archB_moments=true here) -- the dense aug.obj_cm splice is used directly " *
+                  "instead, no Architecture-B fast path.")
     end
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
 
@@ -570,12 +575,12 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, include_truncated_
     core_cf_ref = Ref{Any}(nothing)
     obj0 = aug.obj_cm
     moments_archB_skip! = nothing
-    if include_truncated_moment
-        # Two-family: obj0 (aug.obj_cm, from build_cm_frechet_level_augmented_obj) is ALREADY the
-        # correct dense two-family+levelpow splice (wrap_moments_with_cm, generic) -- use it
-        # directly, no Architecture-B wrapping.
+    if include_truncated_moment && moment_representation === :dense_reference
+        # Two-family, dense: obj0 (aug.obj_cm, from build_cm_frechet_level_augmented_obj) is
+        # ALREADY the correct dense two-family+levelpow splice (wrap_moments_with_cm, generic) --
+        # use it directly, no Architecture-B wrapping.
         obj_cm = obj0
-    elseif moment_representation === :dense_reference
+    elseif moment_representation === :dense_reference   # single-family only reaches here (see condition above)
         # Re-tested and RE-ENABLED 2026-07-27 (see wrap_moments_with_cm_frechet_archB's own header
         # comment for the full chronology/rationale): build BOTH the always-fill closure
         # (`moments_archB!`, installed as `obj_cm.moments!`, used by every non-skip path AND by

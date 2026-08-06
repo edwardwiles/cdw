@@ -70,7 +70,7 @@ SAME `Hpre` buffer the CM block's own backward gradient already computed this ca
 """
 function frechet_level_backward_gradient!(g_level::AbstractVector{Float64}, Hpre::AbstractMatrix{Float64},
                                            D::Int, L::Int, M::Int, invsqrtD::Float64,
-                                           targets::Vector{Float64}, sum_dPsi::Float64)
+                                           targets::AbstractVector{Float64}, sum_dPsi::Float64)
     @inbounds for l in 1:L
         acc = 0.0
         for o in 1:D
@@ -79,6 +79,47 @@ function frechet_level_backward_gradient!(g_level::AbstractVector{Float64}, Hpre
         g_level[l] = -(invsqrtD / M) * acc + (targets[l] / M) * sum_dPsi
     end
     return g_level
+end
+
+"""
+    frechet_levelpow_prefix_sums!(Q, λ_levelpow)
+
+`Q[k] = sum_{l=1}^{k-1} λ_levelpow[l]` for `k=1:L+1`, `Q[1]=0` -- the levelpow block's own PREFIX
+(not suffix) analogue of `frechet_level_suffix_sums!`. The levelpow indicator is `1{Bidx[s,o]>l}`
+(reflected vs the plain level block's `1{Bidx[s,o]<=l}`, see `precalc_frechet_levelpow_dense`'s own
+docstring, cm_frechet_level.jl), so `sum_l λ_levelpow[l]*1{l<Bidx[s,o]} = Q[Bidx[s,o]]` is exactly
+the prefix (not suffix) sum evaluated at the bin index.
+"""
+function frechet_levelpow_prefix_sums!(Q::AbstractVector{Float64}, λ_levelpow::AbstractVector{Float64})
+    L = length(λ_levelpow)
+    Q[1] = 0.0
+    acc = 0.0
+    @inbounds for k in 1:L
+        acc += λ_levelpow[k]
+        Q[k + 1] = acc
+    end
+    return Q
+end
+
+"""
+    frechet_levelpow_forward_sum!(out, bins, D, Q, Pow)
+
+`out[s] = sum_{o=1}^D Q[bins[s,o]] * Pow[s,o]` -- the levelpow block's own Pow-weighted analogue of
+`frechet_level_forward_sum!`. `Q` a length-`(L+1)` prefix-sum-extended vector (from
+`frechet_levelpow_prefix_sums!`), `Pow` the SAME `W x D` `z^(sigma-1)` matrix the CM block's own
+eq.36 two-family extension already uses (`st.Pow`, cm_lookup_kernels.jl).
+"""
+function frechet_levelpow_forward_sum!(out::AbstractVector{Float64}, bins::AbstractMatrix{<:Unsigned}, D::Int,
+                                        Q::AbstractVector{Float64}, Pow::AbstractMatrix{Float64})
+    W = length(out)
+    @inbounds for s in 1:W
+        acc = 0.0
+        for o in 1:D
+            acc += Q[Int(bins[s, o])] * Pow[s, o]
+        end
+        out[s] = acc
+    end
+    return out
 end
 
 """
@@ -107,8 +148,8 @@ per-threshold `nO`-dimensional rotation, per the math doc's `[C u]`/`[CR u]` con
 mutable struct CMFrechetLookupState{O}
     obj::O
     ncore::Int
-    ncm_cm::Int         # (D-1)*L
-    ncm_level::Int      # L
+    ncm_cm::Int         # (D-1)*L, or 2*(D-1)*L when Pow!==nothing (two-family CM sub-block)
+    ncm_level::Int      # L, or 2*L when Pow!==nothing (level + levelpow)
     L::Int
     D::Int
     nO::Int
@@ -118,7 +159,7 @@ mutable struct CMFrechetLookupState{O}
     R::Union{Nothing,Matrix{Float64}}
     nbins::Int
     nthreads_use::Int
-    level_targets::Vector{Float64}
+    level_targets::Vector{Float64}         # length L, CDF-only level targets
     invsqrtD::Float64
     n_fg_calls::Int
     # persistent scratch (Phase 5.5 allocation-hygiene pattern, applied here from the start rather
@@ -137,6 +178,31 @@ mutable struct CMFrechetLookupState{O}
     g_block::Matrix{Float64}       # (nO, L)
     g_stored::Matrix{Float64}      # (nO, L)
     g_level::Vector{Float64}       # (L,)
+    # 2026-08-06 (levelpow kernel task): two-family CM sub-block scratch, exact analogue of
+    # CMLookupState's own `_2`-suffixed fields (cm_lookup_kernels.jl) -- `cm_forward_contribution!`/
+    # `cm_transpose_into_g!` (the SAME shared kernels this struct's dual_index!/FG functor already
+    # call) read these fields directly whenever `st.Pow!==nothing`. Always allocated (cheap, O(D*L)/
+    # O(D*nbins)) regardless of family count, matching CMLookupState's own unconditional-allocation
+    # constructor discipline.
+    cm_contrib2::Vector{Float64}
+    λmat_ext2::Matrix{Float64}
+    λmat_block2::Matrix{Float64}
+    hist_partials2::Vector{Matrix{Float64}}
+    hist_h2::Matrix{Float64}
+    Hpre2::Matrix{Float64}
+    g_block2::Matrix{Float64}
+    g_stored2::Matrix{Float64}
+    # 2026-08-06 (levelpow kernel task): the level block's OWN two-family extension --
+    # `E_{F*}[z(w)^{sigma-1}*1{z(w)<Z_l}]`, the Pow-weighted, reflected-indicator analogue of the
+    # plain `level`/`level_targets`/`level_contrib`/`g_level` block above (see
+    # `frechet_levelpow_prefix_sums!`/`frechet_levelpow_forward_sum!`, cm_frechet_level.jl's own
+    # `precalc_frechet_levelpow_dense`/`fill_frechet_levelpow_columns_from_bins!` for the dense-
+    # reference construction this mirrors). `nothing`/empty when `Pow===nothing` (single-family).
+    levelpow_targets::Union{Nothing,Vector{Float64}}   # length L, or nothing (single-family)
+    Q_levelpow::Vector{Float64}      # (L+1,) -- prefix-sum-extended lambda_levelpow
+    levelpow_contrib::Vector{Float64}   # (M,)
+    Hpre_pow::Matrix{Float64}        # (D, L) -- Pow-weighted, REFLECTED prefix sum (see backward pass)
+    g_levelpow::Vector{Float64}      # (L,)
     # Phase A item 4 (second half): shared economic operator retrofit, IDENTICAL pattern/rationale
     # to CMLookupState's own core_cf_ref/econ_ws/econ_ws_for/econ_buf/n_dense_econ_fallback fields
     # -- see that struct's docstring for the full contract. `core_cf_ref` defaults to
@@ -162,21 +228,32 @@ mutable struct CMFrechetLookupState{O}
     # call into either shared kernel via a `CMFrechetLookupState` (i.e. every real evaluation under
     # `CM_FRECHET_INNER_FG_BACKEND_DEFAULT[]=:cm_frechet_lookup`, the actual production default)
     # threw `FieldError(CMFrechetLookupState, :Pow)` -- masked by KNITRO.jl's own callback-error
-    # swallowing exactly like the CM+ZC missing-Pow= bug (895b99b). Common-Frechet has no two-family
-    # extension of its own (disclosed, separate gap -- see MASTER.md section 5b), so this field is
-    # ALWAYS `nothing` here; adding it only makes the two shared kernels' existing `fam2=false`
-    # branch reachable instead of erroring, per those kernels' own guard structure (every
-    # two-family-only scratch access is already behind `if fam2`, so no other field is needed).
+    # swallowing exactly like the CM+ZC missing-Pow= bug (895b99b). 2026-08-06 (levelpow kernel
+    # task): common-Fréchet NOW has a real two-family extension (CM sub-block via the shared
+    # kernels above, level sub-block via `levelpow_targets`/`Q_levelpow`/etc. above) -- `Pow`
+    # (`nothing` for single-family, the real `W x D` `z^(sigma-1)` matrix for two-family) is what
+    # gates BOTH extensions, matching `CMLookupState`'s own `Pow`-gated `fam2` convention exactly.
     Pow::Union{Nothing,Matrix{Float64}}
 end
 
 function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::Int, D::Int,
                                origins::Vector{Int}, refIndex1::Int, bins::Matrix{<:Unsigned},
                                R::Union{Nothing,Matrix{Float64}}, level_targets::Vector{Float64};
-                               nthreads_use::Int = 1, core_cf_ref::Ref{Any} = Ref{Any}(nothing))
-    ncm_level == L || error("CMFrechetLookupState: ncm_level=$ncm_level must equal L=$L")
-    length(level_targets) == L || error("CMFrechetLookupState: length(level_targets)=$(length(level_targets)) != L=$L")
+                               nthreads_use::Int = 1, core_cf_ref::Ref{Any} = Ref{Any}(nothing),
+                               Pow::Union{Nothing,Matrix{Float64}} = nothing,
+                               levelpow_targets::Union{Nothing,Vector{Float64}} = nothing)
     nO = length(origins)
+    fam2 = Pow !== nothing
+    if fam2
+        ncm_cm == 2 * nO * L || error("CMFrechetLookupState: Pow given but ncm_cm=$ncm_cm != 2*nO*L=$(2*nO*L) -- a two-family state needs the doubled CM width")
+        ncm_level == 2L || error("CMFrechetLookupState: Pow given but ncm_level=$ncm_level != 2*L=$(2L) -- a two-family state needs the doubled level width (level+levelpow)")
+        levelpow_targets !== nothing || error("CMFrechetLookupState: Pow given but levelpow_targets===nothing -- required (no default) for a two-family state")
+        length(levelpow_targets) == L || error("CMFrechetLookupState: length(levelpow_targets)=$(length(levelpow_targets)) != L=$L")
+    else
+        ncm_cm == nO * L || error("CMFrechetLookupState: ncm_cm=$ncm_cm must equal nO*L=$(nO*L) for a single-family state")
+        ncm_level == L || error("CMFrechetLookupState: ncm_level=$ncm_level must equal L=$L for a single-family state")
+    end
+    length(level_targets) == L || error("CMFrechetLookupState: length(level_targets)=$(length(level_targets)) != L=$L")
     M = size(obj.U, 1)
     ncore1 = ncore - 1
     W = size(bins, 1)
@@ -185,13 +262,16 @@ function CMFrechetLookupState(obj, ncore::Int, ncm_cm::Int, ncm_level::Int, L::I
     Dcheck == D || error("CMFrechetLookupState: D=$D != size(bins,2)=$Dcheck")
     nt = max(1, min(nthreads_use, W))
     hist_partials = [zeros(D, nbins) for _ in 1:nt]
+    hist_partials2 = [zeros(D, nbins) for _ in 1:nt]
     CMFrechetLookupState(obj, ncore, ncm_cm, ncm_level, L, D, nO, origins, refIndex1, bins, R,
         nbins, nthreads_use, level_targets, 1.0 / sqrt(D), 0,
         zeros(M), zeros(M), zeros(M), zeros(M),
         zeros(1 + ncore1), zeros(nO, L), zeros(nO, L + 1), zeros(L + 1),
         hist_partials, zeros(D, nbins), zeros(D, L), zeros(nO, L), zeros(nO, L), zeros(L),
+        zeros(M), zeros(nO, L + 1), zeros(nO, L), hist_partials2, zeros(D, nbins), zeros(D, L), zeros(nO, L), zeros(nO, L),
+        levelpow_targets, zeros(L + 1), zeros(M), zeros(D, L), zeros(L),
         core_cf_ref, nothing, nothing, zeros(M), 0,
-        HessianWeightCache(1 + ncore1 + ncm_cm + ncm_level), nothing)
+        HessianWeightCache(1 + ncore1 + ncm_cm + ncm_level), Pow)
 end
 
 """
@@ -205,8 +285,10 @@ Fréchet-specific.
 """
 function dual_index!(st::CMFrechetLookupState, x::AbstractVector{Float64})
     ncore1 = st.ncore - 1
+    fam2 = st.Pow !== nothing
     λ_cm = @view x[2+ncore1:1+ncore1+st.ncm_cm]
-    λ_level = @view x[2+ncore1+st.ncm_cm:1+ncore1+st.ncm_cm+st.ncm_level]
+    λ_level_full = @view x[2+ncore1+st.ncm_cm:1+ncore1+st.ncm_cm+st.ncm_level]
+    λ_level = fam2 ? (@view λ_level_full[1:st.L]) : λ_level_full
 
     economic_forward_into_arg0!(st, x)
     cm_forward_contribution!(st, λ_cm, :suffix)
@@ -219,6 +301,19 @@ function dual_index!(st::CMFrechetLookupState, x::AbstractVector{Float64})
     end
     @inbounds for s in 1:length(st.arg0)
         st.arg0[s] -= st.invsqrtD * st.level_contrib[s] - const_term
+    end
+
+    if fam2
+        λ_levelpow = @view λ_level_full[st.L+1:2*st.L]
+        frechet_levelpow_prefix_sums!(st.Q_levelpow, λ_levelpow)
+        frechet_levelpow_forward_sum!(st.levelpow_contrib, st.bins, st.D, st.Q_levelpow, st.Pow)
+        const_term_pow = 0.0
+        @inbounds for l in 1:st.L
+            const_term_pow += λ_levelpow[l] * st.levelpow_targets[l]
+        end
+        @inbounds for s in 1:length(st.arg0)
+            st.arg0[s] -= st.invsqrtD * st.levelpow_contrib[s] - const_term_pow
+        end
     end
     return st.arg0
 end
@@ -250,7 +345,26 @@ function (st::CMFrechetLookupState)(x::AbstractVector{Float64}, g::AbstractVecto
         cm_transpose_into_g!(g, st, :suffix, st.D, ncore1, st.ncm_cm, M)   # leaves st.Hpre populated, reused below
 
         frechet_level_backward_gradient!(st.g_level, st.Hpre, st.D, st.L, M, st.invsqrtD, st.level_targets, sum_dPsi)
-        @views g[2+ncore1+st.ncm_cm:1+ncore1+st.ncm_cm+st.ncm_level] .= st.g_level
+        g_level_off = 2 + ncore1 + st.ncm_cm
+        @views g[g_level_off:g_level_off+st.L-1] .= st.g_level
+
+        if st.Pow !== nothing
+            # levelpow backward: SAME Pow-weighted-histogram + reflected-prefix-sum reuse pattern
+            # `cm_transpose_into_g!`'s own eq.36 branch already established (cm_lookup_kernels.jl) --
+            # `frechet_level_backward_gradient!` is reused UNCHANGED, only the table it reads differs
+            # (Pow-weighted via build_weighted_histogram_pow!, then reflected total-minus-prefix).
+            build_weighted_histogram_pow!(st.hist_h2, st.hist_partials2, st.bins, st.arg1, st.Pow, st.D, st.nbins)
+            prefix_sums!(st.Hpre_pow, st.hist_h2, st.L)
+            @inbounds for o in 1:st.D
+                total_o = sum(@view st.hist_h2[o, :])
+                for l in 1:st.L
+                    st.Hpre_pow[o, l] = total_o - st.Hpre_pow[o, l]
+                end
+            end
+            frechet_level_backward_gradient!(st.g_levelpow, st.Hpre_pow, st.D, st.L, M, st.invsqrtD, st.levelpow_targets, sum_dPsi)
+            g_levelpow_off = g_level_off + st.L
+            @views g[g_levelpow_off:g_levelpow_off+st.L-1] .= st.g_levelpow
+        end
     end
 
     obj.arg0 .= st.arg0

@@ -110,10 +110,23 @@ function inner_loop_internal_cmfrechetlookup_production(obj, θ::AbstractVector,
 
     if cctx.cmlookup_st === nothing
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
-        ncm_cm = cctx.ncm - cctx.L   # cctx.ncm = ncm_cm + ncm_level = (D-1)*L + L for common-Frechet
-        cctx.cmlookup_st = CMFrechetLookupState(obj, cctx.NCORE, ncm_cm, cctx.L, cctx.L, cctx.D,
-            cctx.origins, cctx.refIndex1, bins_u, cctx.R, level_targets;
-            nthreads_use = nthreads_use, core_cf_ref = cctx.core_cf_ref)
+        # 2026-08-06 (levelpow kernel task): `cctx.n_families==2` (set generically by
+        # build_cm_bin_ctx from aug.n_families, cm_hessian_architectures.jl -- the SAME shared
+        # builder flexible-CM/CM+ZC already use) means `cctx.ncm` is TWO-FAMILY-widened
+        # (2*(D-1)*L + 2*L for common-Fréchet: CM_cdf+CM_pow+level+levelpow), and `level_targets`
+        # (the caller's own aug.level_targets) is the already-concatenated [level_cdf(L);
+        # level_pow(L)]. `cctx.Pow` is likewise already the real z^(sigma-1) matrix, built
+        # generically by build_cm_bin_ctx -- no separate computation needed here.
+        fam2 = cctx.n_families == 2
+        L = cctx.L
+        ncm_level_total = fam2 ? 2L : L
+        ncm_cm = cctx.ncm - ncm_level_total
+        level_targets_cdf = fam2 ? level_targets[1:L] : level_targets
+        levelpow_targets = fam2 ? level_targets[L+1:2L] : nothing
+        cctx.cmlookup_st = CMFrechetLookupState(obj, cctx.NCORE, ncm_cm, ncm_level_total, cctx.L, cctx.D,
+            cctx.origins, cctx.refIndex1, bins_u, cctx.R, level_targets_cdf;
+            nthreads_use = nthreads_use, core_cf_ref = cctx.core_cf_ref,
+            Pow = fam2 ? cctx.Pow : nothing, levelpow_targets = levelpow_targets)
     end
     st = cctx.cmlookup_st::CMFrechetLookupState
     st.n_fg_calls = 0

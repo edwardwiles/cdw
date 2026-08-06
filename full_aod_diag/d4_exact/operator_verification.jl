@@ -255,25 +255,29 @@ function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::Abstract
     # `build_weighted_histogram_pow!`) `CMLookupState`'s own two-family FG already uses (see that
     # struct's `Pow`-gated branches, cm_lookup_kernels.jl) -- not a new derivation, the same
     # independent-fresh-scratch reconstruction this function already does for the cdf half.
-    # `level_targets!==nothing && Pow!==nothing` (common-Fréchet two-family) is NOT yet supported --
-    # hard-refuse rather than silently omit the levelpow block's own contribution to `r`/`g_lambda`.
-    level_targets !== nothing && Pow !== nothing &&
-        error("_verify_inner_solution_operator_cm_core: common-Fréchet two-family (level_targets " *
-              "and Pow both given) operator verification is not yet implemented -- the levelpow " *
-              "block's own forward/backward contribution is missing here. Use verification_backend=" *
-              ":dense_reference for common_frechet with include_truncated_moment=true for now.")
+    # 2026-08-06 (levelpow kernel task): common-Fréchet two-family (level_targets and Pow both
+    # given) is now implemented -- `level_targets` is the CALLER's already-concatenated
+    # `[level_cdf(L); level_pow(L)]` vector (aug.level_targets's own convention,
+    # build_cm_frechet_level_augmented_obj), split into halves below exactly like
+    # CMFrechetLookupState's own dual_index!/FG functor split their own `λ_level_full`.
     fam2 = Pow !== nothing
+    fam2_level = fam2 && level_targets !== nothing && length(level_targets) == 2L
     D_bins = size(bins, 2)
     ncore1 = cf.oci - 1
     ncm_cdf = nO * L
     ncm = fam2 ? 2ncm_cdf : ncm_cdf
-    expected_len = level_targets === nothing ? ncore1 + ncm : ncore1 + ncm + L
+    L_level_total = level_targets === nothing ? 0 : (fam2_level ? 2L : L)
+    expected_len = ncore1 + ncm + L_level_total
     length(lambda) == expected_len ||
         error("_verify_inner_solution_operator_cm_core: length(lambda)=$(length(lambda)) != expected=$(expected_len)")
     λ_E = @view lambda[1:ncore1]
     λ_cm = @view lambda[ncore1+1:ncore1+ncm_cdf]
     λ_cm_pow = fam2 ? (@view lambda[ncore1+ncm_cdf+1:ncore1+ncm]) : nothing
-    λ_level = level_targets === nothing ? nothing : (@view lambda[ncore1+ncm+1:ncore1+ncm+L])
+    λ_level_full = level_targets === nothing ? nothing : (@view lambda[ncore1+ncm+1:ncore1+ncm+L_level_total])
+    λ_level = λ_level_full === nothing ? nothing : (fam2_level ? (@view λ_level_full[1:L]) : λ_level_full)
+    λ_levelpow = fam2_level ? (@view λ_level_full[L+1:2L]) : nothing
+    level_targets_cdf = fam2_level ? (@view level_targets[1:L]) : level_targets
+    level_targets_pow = fam2_level ? (@view level_targets[L+1:2L]) : nothing
 
     econ_ws = economic_operator_workspace(cf)
 
@@ -311,10 +315,23 @@ function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::Abstract
         frechet_level_forward_sum!(level_contrib, bins, D_bins, P_level)
         const_term = 0.0
         @inbounds for l in 1:L
-            const_term += λ_level[l] * level_targets[l]
+            const_term += λ_level[l] * level_targets_cdf[l]
         end
         @inbounds for s in 1:W
             r[s] -= invsqrtD * level_contrib[s] - const_term
+        end
+    end
+    if fam2_level
+        Q_levelpow = zeros(L + 1)
+        frechet_levelpow_prefix_sums!(Q_levelpow, λ_levelpow)
+        levelpow_contrib = zeros(W)
+        frechet_levelpow_forward_sum!(levelpow_contrib, bins, D_bins, Q_levelpow, Pow)
+        const_term_pow = 0.0
+        @inbounds for l in 1:L
+            const_term_pow += λ_levelpow[l] * level_targets_pow[l]
+        end
+        @inbounds for s in 1:W
+            r[s] -= invsqrtD * levelpow_contrib[s] - const_term_pow
         end
     end
 
@@ -368,8 +385,28 @@ function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::Abstract
         fam2 ? vcat(g_E, vec(g_stored), vec(g_stored2)) : vcat(g_E, vec(g_stored))
     else
         g_level = zeros(L)
-        frechet_level_backward_gradient!(g_level, Hpre, D_bins, L, W, invsqrtD, level_targets, sum_dPsi)
-        vcat(g_E, vec(g_stored), g_level)
+        frechet_level_backward_gradient!(g_level, Hpre, D_bins, L, W, invsqrtD, level_targets_cdf, sum_dPsi)
+        if fam2_level
+            # levelpow backward: SAME Pow-weighted-histogram + reflected-prefix-sum reuse pattern as
+            # the CM sub-block's own eq.36 branch above -- frechet_level_backward_gradient! is reused
+            # UNCHANGED, only the table it reads differs.
+            hist_partials_pow = [zeros(D_bins, nbins)]
+            hist_h_pow = zeros(D_bins, nbins)
+            build_weighted_histogram_pow!(hist_h_pow, hist_partials_pow, bins, dPsi_r, Pow, D_bins, nbins)
+            Hpre_pow = zeros(D_bins, L)
+            prefix_sums!(Hpre_pow, hist_h_pow, L)
+            @inbounds for o in 1:D_bins
+                total_o = sum(@view hist_h_pow[o, :])
+                for l in 1:L
+                    Hpre_pow[o, l] = total_o - Hpre_pow[o, l]
+                end
+            end
+            g_levelpow = zeros(L)
+            frechet_level_backward_gradient!(g_levelpow, Hpre_pow, D_bins, L, W, invsqrtD, level_targets_pow, sum_dPsi)
+            vcat(g_E, vec(g_stored), vec(g_stored2), g_level, g_levelpow)
+        else
+            vcat(g_E, vec(g_stored), g_level)
+        end
     end
     record_operator_verification!()
     return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
