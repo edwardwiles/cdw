@@ -164,7 +164,7 @@ function composite_gradient_at_Cplus_cm(x_free0::AbstractVector, ctx_cm, pe, ctx
 end
 
 """
-    cm_production_gradient_cplus(x_free0, pcx, ctx, pe, pool, ws; base=nothing, kwargs...) -> (g, meta)
+    cm_production_gradient_cplus(x_free0, pcx, ctx, pe, pool, ws; base=nothing, verify=nothing, kwargs...) -> (g, meta)
 
 `:cplus`-backend analog of `cm_production_bundle.jl::cm_production_gradient`, the production
 CM `cb_G!` entry point when `cm_gradient_backend=:reference` (unchanged default). `pcx` is the
@@ -172,10 +172,23 @@ SAME `build_cm_production_context(...)` return value both backends share; `pool`
 caller-owned `GradWorkspacePool`/`LFixFactorizedWorkspace` (built once per `(D,W)`, threaded
 through every call, matching every other `_Cplus`/`_KBplus`/`_Aplus` production entry point's own
 convention in `c10_d20_production_driver.jl`).
+
+2026-08-06 outer-production-closeout task, BUG FIX (same root cause and fix as
+`cm_frechet_production_gradient_cplus`, see that function's own bug-fix comment for the full
+mechanism): on an UNMATCHED gradient call (`base===nothing`), this used to fall back to the BARE
+`archC_base_state`, whose returned `BaseDualState.m_star` is `copy(obj.arg1)` -- never written
+under the production-default operator FG backend, so `gamma_component_analytic`'s `d(Delta)/d(gp)`
+term came back IDENTICALLY (bit-exact) zero. Confirmed live: plain flexible-CM (no CM+ZC/Fréchet
+extension at all) showed the exact same signature (analytic=0.0, central-FD=0.40 at a real
+D20/W=20,000 point) -- this was never family-specific, it affected every family whose gradient
+function used this exact fallback pattern (flexible-CM and common-Fréchet; CM+ZC and origin-ZC's
+own gradient functions already correctly called their verified-state builders). Fixed to match.
 """
 function cm_production_gradient_cplus(x_free0::AbstractVector, pcx, ctx, pe, pool::GradWorkspacePool,
-        ws::LFixFactorizedWorkspace; base::Union{Nothing,BaseDualState} = nothing, kwargs...)
-    base = base === nothing ? archC_base_state(x_free0, pcx.ctx_cm, pcx.cctx) : base
+        ws::LFixFactorizedWorkspace; base::Union{Nothing,BaseDualState} = nothing, verify = nothing, kwargs...)
+    if base === nothing || verify === nothing
+        base, verify = archC_verified_state(x_free0, pcx.ctx_cm, pcx.cctx)
+    end
     cache = build_lfix_base_cache_cm_C!(ws, x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins)
     return composite_gradient_at_Cplus_from_cache(x_free0, pcx.ctx_cm, pe, pool, cache; base = base, kwargs...)
 end
