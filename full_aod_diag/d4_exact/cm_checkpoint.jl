@@ -1524,7 +1524,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             end
         elseif is_frechet
             if cm_gradient_backend == :cplus
-                cm_frechet_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, threaded = true,
+                # 2026-08-06: pass verify = verify_c too, matching the is_meanzc branch above --
+                # cm_frechet_production_gradient_cplus now falls back to a fresh verified re-solve
+                # whenever EITHER base OR verify is missing (see that function's own bug-fix
+                # comment); passing the already-matched verify_c avoids a redundant re-solve on the
+                # common (matched) case.
+                cm_frechet_production_gradient_cplus(xf, pcx, ctx, pe, cplus_pool, cplus_ws; base = base, verify = verify_c, threaded = true,
                     h_mode = :cached, bandwidth_cache = bandwidth_cache)
             else
                 cm_frechet_production_gradient(xf, pcx, ctx, pe; base = base, threaded = true,

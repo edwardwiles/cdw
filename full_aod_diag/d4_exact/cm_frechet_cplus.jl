@@ -381,16 +381,38 @@ function cm_frechet_production_gradient(x_free0::AbstractVector, pcx, ctx, pe;
 end
 
 """
-    cm_frechet_production_gradient_cplus(x_free0, pcx, ctx, pe, pool, ws; base=nothing, kwargs...) -> (g, meta)
+    cm_frechet_production_gradient_cplus(x_free0, pcx, ctx, pe, pool, ws; base=nothing, verify=nothing, kwargs...) -> (g, meta)
 
 `:cplus`-backend level-aware analog of `cm_production_bundle.jl::cm_production_gradient_cplus`, the
 production `cb_G!` entry point when `cm_gradient_backend=:cplus` (unchanged default) AND
 `marginal_restriction=:common_frechet`. `pcx` is the SAME `build_cm_frechet_production_context(...)`
 return value both gradient backends share.
+
+2026-08-06 outer-production-closeout task, BUG FIX: on an UNMATCHED gradient call (`base===nothing`
+-- a real, documented calling mode, not just an internal fallback: KNITRO does not guarantee `cb_G!`
+is always called immediately after `cb_F!` at the identical point, and this function's own `base=`
+kwarg exists specifically to let a caller skip re-solving when it IS matched), this used to fall
+back to the BARE `archC_frechet_base_state` -- unlike `cm_meanzc_production_gradient_cplus`'s own
+identical fallback, which correctly uses the VERIFIED `archC_meanzc_verified_state`. Under the
+production-default operator FG backend (`CM_FRECHET_INNER_FG_BACKEND_DEFAULT[]=:cm_frechet_lookup`),
+`CMFrechetLookupState`'s own FG functor writes its result into its OWN private `st.arg1` scratch,
+NEVER into `obj.arg1` (confirmed by reading `cm_frechet_lookup_kernels.jl`/`cm_lookup_kernels.jl`/
+`cm_meanzc_lookup_kernels.jl`'s functor bodies -- true of all three operator states, not
+Fréchet-specific) -- so `archC_frechet_base_state`'s own `BaseDualState(..., copy(obj.arg1), ...)`
+silently returns an ALL-ZERO `m_star` on this path. `gamma_component_analytic` (`lfix_factorized.jl`)
+computes `d(Delta)/d(gp)` as proportional to `mean(m_star .* SW)` -- an all-zero `m_star` therefore
+makes the analytic gp-gradient IDENTICALLY (bit-exact) zero, confirmed live: a central-FD check at
+a real D20/W=20,000 point gave `d(Delta)/d(gp)=0.462` while the (unmatched-path) analytic gradient
+returned exactly `0.0`. `archC_frechet_verified_state` independently computes `m_weights` via
+operator-based verification (`verify_inner_solution_operator_cm_frechet!`), never reading
+`obj.arg1` at all -- the same mechanism that makes CM+ZC's own gradient correct. Fixed by matching
+`cm_meanzc_production_gradient_cplus`'s exact pattern.
 """
 function cm_frechet_production_gradient_cplus(x_free0::AbstractVector, pcx, ctx, pe, pool::GradWorkspacePool,
-        ws::LFixFactorizedWorkspace; base::Union{Nothing,BaseDualState} = nothing, kwargs...)
-    base = base === nothing ? archC_frechet_base_state(x_free0, pcx.ctx_cm, pcx.cctx, pcx.aug.level_targets) : base
+        ws::LFixFactorizedWorkspace; base::Union{Nothing,BaseDualState} = nothing, verify = nothing, kwargs...)
+    if base === nothing || verify === nothing
+        base, verify = archC_frechet_verified_state(x_free0, pcx.ctx_cm, pcx.cctx, pcx.aug.level_targets)
+    end
     cache = build_lfix_base_cache_cm_frechet_C!(ws, x_free0, pcx.ctx_cm, base, ctx, pcx.aug, pcx.bins)
     return composite_gradient_at_Cplus_from_cache(x_free0, pcx.ctx_cm, pe, pool, cache; base = base, kwargs...)
 end
