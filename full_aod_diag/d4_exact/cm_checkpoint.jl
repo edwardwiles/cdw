@@ -37,6 +37,54 @@ isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "producti
 isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 isdefined(Main, :aod_pow_matrix) || include(joinpath(@__DIR__, "compressed_live.jl"))   # k=(sigma-1) narrow fix: aod_pow_matrix
 isdefined(Main, :autarky_cf_scalars) || include(joinpath(@__DIR__, "autarky_cf.jl"))   # k=(sigma-1) narrow fix: autarky_cf_scalars
+isdefined(Main, :CallbackHealthRecord) || include(joinpath(@__DIR__, "cm_callback_health.jl"))   # 2026-08-06 outer-production-closeout: fake-success guard + assert_two_family_capabilities!
+
+"""
+    assert_two_family_capabilities!(label, pcx, is_meanzc, is_frechet, include_truncated_moment, threaded_bins)
+
+2026-08-06 outer-production-closeout task, section 4: replaces the blanket
+`include_truncated_moment=true` refusal that used to live at the top of `run_cm_upper_checkpointed`
+(see that function's own RELAXATION HISTORY comment) with a truthful, POST-build capability check
+driven by the ACTUAL constructed `pcx`/`cctx` this run will use -- not a static claim that "the code
+was written to support this". A caller may proceed only when every applicable check below passes;
+each one inspects a real field on the live context, and each corresponds to a concrete historical
+bug this session's investigation found (missing `cctx.Pow`, missing `cctx.tls` under
+`threaded_bins=true`).
+"""
+function assert_two_family_capabilities!(label::AbstractString, pcx, is_meanzc::Bool, is_frechet::Bool,
+                                          include_truncated_moment::Bool, threaded_bins::Bool)
+    include_truncated_moment || return nothing   # single-family (:cm_only, CDF-basis-only) path -- untouched
+    cctx = pcx.cctx
+    cctx === nothing &&
+        error("$label: include_truncated_moment=true requires an operator-backed CMBinHessCtx (cctx) -- " *
+              "got nothing (this pcx carries a dense-reference bundle). Dense is not a production path.")
+    cctx.n_families == 2 ||
+        error("$label: include_truncated_moment=true requires a genuinely two-family context " *
+              "(cctx.n_families==2), got n_families=$(cctx.n_families) -- the two-family CM spec " *
+              "(eq.35+eq.36) was requested but the constructed context does not actually carry it.")
+    cctx.Pow === nothing &&
+        error("$label: two-family capability check FAILED -- cctx.Pow is nothing despite " *
+              "cctx.n_families==2. This is exactly the missing-Pow-wiring defect fixed in commit " *
+              "895b99b (cm_meanzc_lookup_production.jl) for CM+ZC -- refusing to proceed rather than " *
+              "silently constructing an operator state with the wrong dual layout.")
+    if is_meanzc
+        cctx.inner_fg_backend === :operator ||
+            error("$label: two-family CM+ZC requires inner_fg_backend=:operator (the only backend with " *
+                  "a two-family-aware forward/backward FG kernel, CMMeanZCOperatorState) -- got " *
+                  ":$(cctx.inner_fg_backend).")
+        cctx.meanzc_zc_op === nothing &&
+            error("$label: two-family CM+ZC requires cctx.meanzc_zc_op (ZCRestrictionOperator) to be built -- got nothing.")
+    end
+    if threaded_bins && cctx.use_threaded_bins
+        cctx.tls === nothing &&
+            error("$label: threaded_bins=true requires cctx.tls to be constructed " *
+                  "(ThreadLocalBinScratch) -- got nothing. This is exactly the " *
+                  "threaded_bins=true/tls=nothing defect the D4 common-Frechet two-family Hessian " *
+                  "gate caught -- refusing to silently fall back to serial rather than erroring " *
+                  "before KNITRO starts.")
+    end
+    return nothing
+end
 
 const CM_CHECKPOINT_SCHEMA = 10
 
@@ -930,7 +978,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     #      build_cm_frechet_production_context (cm_frechet_level.jl), which still requires
     #      moment_representation=:dense_reference (CMFrechetLookupState/the outer-gradient q0-fold
     #      are not yet extended for two families).
-    nothing   # (guard removed; kept as a no-op statement so this comment block has something to attach to)
+    # 2026-08-06 (outer-production-closeout task, section 4): the blanket refusal that used to live
+    # here was removed (see git history / the RELAXATION HISTORY comment above) with only a prose
+    # justification, not a runtime check -- "do not merely delete a guard, replace it with a
+    # truthful capability check" is the explicit rule for this pass. `assert_two_family_capabilities!`
+    # (defined below, cm_checkpoint.jl) is called AFTER `pcx`/`cctx` are actually built (see the
+    # call site right after `prepare_production_run` below) and inspects REAL fields on the
+    # constructed context -- cctx.n_families, cctx.Pow, cctx.inner_fg_backend, cctx.tls -- rather
+    # than trusting that "the code was written to support this" implies "this specific run's
+    # context actually has the capability". A caller may proceed only when every check passes.
     lp(xs...) = (println(xs...); flush(stdout))
     # Release fix (2026-07-23, origin-ZC K<=2 release, section 4.1): resolve ckpt_dir to an
     # absolute path BEFORE any real-data/model setup runs -- see the identical fix and full
@@ -1190,6 +1246,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                 include_truncated_moment = include_truncated_moment,
                 inner_fg_backend = inner_fg_backend, moment_representation = :operator))
     pcx = prepared.ctx.inner
+    assert_two_family_capabilities!(label, pcx, is_meanzc, is_frechet, include_truncated_moment, threaded_bins)
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     # D=20 profiling task (flexible_cm/common_frechet, 2026-07-28): stash a live handle to this
     # run's own (cctx, obj) the instant it is built -- ONLY while
