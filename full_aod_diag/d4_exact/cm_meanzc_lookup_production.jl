@@ -98,8 +98,32 @@ function inner_loop_internal_meanzc_operator(obj, θ_ext::AbstractVector, cctx::
 
     if cctx.cmlookup_st === nothing
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        # 2026-08-06 (paired-basis-preconditioning pilot continuation), BUG FIX: `Pow` was never
+        # threaded through here at all -- defaulted to `nothing` even for a two-family (`cctx.
+        # n_families==2`) context, so `st.Pow` stayed `nothing` while `st.ncm` was still the FULL
+        # two-family width (2*nO*L). `dual_index!`'s own `fam2 = st.Pow !== nothing` therefore
+        # incorrectly evaluated `false`, causing it to `reshape(λ_cm, nO, L)` on the UNSLICED FULL
+        # two-family λ_cm (2*nO*L elements) instead of splitting it into cdf/pow halves first --
+        # a real, silent `DimensionMismatch` on the very first live KNITRO callback invocation.
+        # KNITRO's own C wrapper catches that exception at the FFI boundary (`_try_catch_handler`,
+        # KNITRO.jl) and returns `KN_RC_CALLBACK_ERR` -- printed as a generic "exception in puts
+        # callback" warning REGARDLESS of which callback actually threw (a KNITRO.jl package
+        # quirk, not evidence it was really the output-text callback) -- KNITRO then reports
+        # `nStatus=0` with the SOLVE NEVER HAVING RUN (n_fg_calls=0, x = the untouched all-zero
+        # initial point) rather than propagating a Julia error, which is what made this so hard to
+        # diagnose: no crash, no exception surfaced to the caller, just a silently-unsolved
+        # "successful" result. Confirmed root cause live via a real D20/W=100,000/L=50 diagnostic
+        # (st.n_fg_calls==0, lambdastar/zetastar == untouched zeros) plus a single-family control
+        # at the identical scale that worked correctly (n_fg_calls=7, genuinely converged
+        # nonzero lambdastar) -- isolating the difference to exactly this missing kwarg. This is
+        # ALSO why the independent CMMeanZCOperatorState-vs-dense-reference gate
+        # (test_cmmeanzc_operator_fg_twofamily_2026-08-06.jl, 28/28 PASS) never caught it -- that
+        # test constructs CMMeanZCOperatorState directly and DOES pass `Pow=cctx.Pow` itself,
+        # exercising the struct's own two-family logic correctly but never exercising this real
+        # production call site's own (buggy) construction.
         cctx.cmlookup_st = CMMeanZCOperatorState(obj, cctx.ncore_core - 1, cctx.meanzc_zc_op::ZCRestrictionOperator, layout, cctx.core_cf_ref,
-            cctx.ncm, cctx.L, cctx.origins, cctx.refIndex1, bins_u, cctx.R; nthreads_use = Threads.nthreads())
+            cctx.ncm, cctx.L, cctx.origins, cctx.refIndex1, bins_u, cctx.R; nthreads_use = Threads.nthreads(),
+            Pow = cctx.n_families == 2 ? cctx.Pow : nothing)
     end
     st = cctx.cmlookup_st::CMMeanZCOperatorState
     reset_for_solve!(st, collect(νs))
