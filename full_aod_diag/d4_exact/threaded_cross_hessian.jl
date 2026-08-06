@@ -97,7 +97,7 @@ end
 # ============================================================================
 
 """
-    winner_pair_cross_hessian_fill_threaded!(wctx, ws, obj, Bidx; workers) -> ws
+    winner_pair_cross_hessian_fill_threaded!(wctx, ws, obj, Bidx; workers, Pow=nothing) -> ws
 
 Threaded drop-in replacement for `winner_pair_cross_hessian_fill!` -- writes the SAME
 `ws.QTab`/`ws.NuTab`/`ws.SOnlyTab`/`ws.QCfTab`/`ws.EsumEcon`/`ws.QCScum`/`ws.NuCScum`/
@@ -106,9 +106,22 @@ Threaded drop-in replacement for `winner_pair_cross_hessian_fill!` -- writes the
 no `Vector{Task}` is allocated per call. Cumulative prefix-sum step (`O(D*L)`/`O(D*ncolI*L)`) is
 left serial -- negligible next to the raw-table fill it follows (confirmed in this task's own
 sub-block profile, not assumed).
+
+2026-08-05 root-cause fix #2b (paired-basis-preconditioning pilot): `Pow` (a two-family cctx's
+`W x D` `z^(sigma-1)` matrix) was entirely MISSING from this function -- unlike the serial
+`winner_pair_cross_hessian_fill!` (winner_pair_cross_hessian.jl), which accumulates the "_pow"
+companion tables for the eq.36 truncated-power family's own H_EC block. Since
+`CROSS_HESSIAN_THREADED_DEFAULT[]=true` (this file's own const, above) is the actual live default
+-- NOT the non-default fallback an earlier comment in `hessian_cm_structured_v2!` claimed -- this
+was the REAL production H_EC path for every two-family (`n_families==2`) solve, silently computing
+the POW-CM cross-Hessian block from all-zero "_pow" tables (same failure mode as root cause #1,
+just in this file instead of `cm_hessian_threaded.jl`). Ported here as a direct, unmodified port of
+the serial per-draw accumulation into the SAME two output-row-owned passes this function already
+uses (one extra `Pow[w,x]` factor folded into the same per-(w,x) loop, no new pass/thread pattern,
+no atomics) -- see the serial function's own docstring for the exact formula derivation.
 """
 function winner_pair_cross_hessian_fill_threaded!(wctx::WinnerPairHessCtx, ws::WinnerBinCrossScratch,
-        obj, Bidx::AbstractMatrix{<:Integer}; workers::Int)
+        obj, Bidx::AbstractMatrix{<:Integer}; workers::Int, Pow::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     workers <= nthreads() || error("winner_pair_cross_hessian_fill_threaded!: workers=$workers exceeds Threads.nthreads()=$(nthreads())")
     workers <= length(ws.tasks_ec) || error("winner_pair_cross_hessian_fill_threaded!: workers=$workers exceeds scratch's tasks_ec capacity=$(length(ws.tasks_ec)) -- rebuild scratch")
     ddPsi! = obj.ddPsi!
@@ -117,9 +130,15 @@ function winner_pair_cross_hessian_fill_threaded!(wctx::WinnerPairHessCtx, ws::W
     Ddest = wctx.Ddest; W = wctx.W
     nu = wctx.nu; y = wctx.y; winner = wctx.winner
     D = ws.D; L = ws.L
+    fam2 = Pow !== nothing
 
     QTab = ws.QTab; NuTab = ws.NuTab; SOnlyTab = ws.SOnlyTab; QCfTab = ws.QCfTab; EsumEcon = ws.EsumEcon
     fill!(QTab, 0.0); fill!(NuTab, 0.0); fill!(SOnlyTab, 0.0); fill!(QCfTab, 0.0); fill!(EsumEcon, 0.0)
+    QTab_pow = fam2 ? ws.QTab_pow : nothing
+    NuTab_pow = fam2 ? ws.NuTab_pow : nothing
+    SOnlyTab_pow = fam2 ? ws.SOnlyTab_pow : nothing
+    QCfTab_pow = fam2 ? ws.QCfTab_pow : nothing
+    fam2 && (fill!(QTab_pow, 0.0); fill!(NuTab_pow, 0.0); fill!(SOnlyTab_pow, 0.0); fill!(QCfTab_pow, 0.0))
 
     has_cf = wctx.has_cf
     crs = wctx.cf_raw_scaled
@@ -139,6 +158,12 @@ function winner_pair_cross_hessian_fill_threaded!(wctx::WinnerPairHessCtx, ws::W
                     NuTab[x, b] += snu
                     SOnlyTab[x, b] += Sw
                     has_cf && (QCfTab[x, b] += snucf)
+                    if fam2
+                        px = Pow[w, x]
+                        NuTab_pow[x, b] += snu * px
+                        SOnlyTab_pow[x, b] += Sw * px
+                        has_cf && (QCfTab_pow[x, b] += snucf * px)
+                    end
                 end
             end
         end
@@ -159,7 +184,9 @@ function winner_pair_cross_hessian_fill_threaded!(wctx::WinnerPairHessCtx, ws::W
                     snuy = (S[w] * nu[w]) * y[w, slot]
                     EsumEcon[j] += snuy
                     for x in 1:D
-                        QTab[j, x, Bidx[w, x]] += snuy
+                        bx = Bidx[w, x]
+                        QTab[j, x, bx] += snuy
+                        fam2 && (QTab_pow[j, x, bx] += snuy * Pow[w, x])
                     end
                 end
             end
@@ -187,6 +214,28 @@ function winner_pair_cross_hessian_fill_threaded!(wctx::WinnerPairHessCtx, ws::W
         for l in 1:L
             acc += QTab[j, x, l]
             QCScum[j, x, l] = acc
+        end
+    end
+
+    if fam2
+        QCScum_pow = ws.QCScum_pow; NuCScum_pow = ws.NuCScum_pow; SOnlyCScum_pow = ws.SOnlyCScum_pow; QCfCScum_pow = ws.QCfCScum_pow
+        @inbounds for x in 1:D
+            acc = 0.0; accS = 0.0; accCf = 0.0
+            for l in 1:L
+                acc += NuTab_pow[x, l]
+                NuCScum_pow[x, l] = acc
+                accS += SOnlyTab_pow[x, l]
+                SOnlyCScum_pow[x, l] = accS
+                accCf += QCfTab_pow[x, l]
+                QCfCScum_pow[x, l] = accCf
+            end
+        end
+        @inbounds for x in 1:D, j in 1:ws.ncolI
+            acc = 0.0
+            for l in 1:L
+                acc += QTab_pow[j, x, l]
+                QCScum_pow[j, x, l] = acc
+            end
         end
     end
     return ws
@@ -292,21 +341,29 @@ end
 # ============================================================================
 
 """
-    bin_zc_cross_hessian_fill_threaded!(ws, Bidx, ZcS; workers) -> ws
+    bin_zc_cross_hessian_fill_threaded!(ws, Bidx, ZcS; workers, Pow=nothing) -> ws
 
 Threaded drop-in replacement for `bin_zc_cross_hessian_fill!`. Bit-identical output (each origin's
 `ZBinTab[x,:,:]` row accumulates over `w=1:W` in the same order regardless of which worker owns it).
+
+2026-08-05 root-cause fix #3: `Pow` (two-family only) additionally accumulates `ws.ZBinTab_pow` in
+the SAME origin(x)-owned loop, one extra `Pow[w,x]` factor -- direct port of the serial
+`bin_zc_cross_hessian_fill!`'s own "_pow" formula. See `BinZCrossDrawChunkScratch`'s own docstring
+for the incident writeup (this is the `:origin_owned` backend's share of that same fix).
 """
 function bin_zc_cross_hessian_fill_threaded!(ws::BinZCrossScratch, Bidx::AbstractMatrix{<:Integer},
-        ZcS::AbstractMatrix{Float64}; workers::Int)
+        ZcS::AbstractMatrix{Float64}; workers::Int, Pow::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     workers <= nthreads() || error("bin_zc_cross_hessian_fill_threaded!: workers=$workers exceeds Threads.nthreads()=$(nthreads())")
     workers <= length(ws.tasks_cz) || error("bin_zc_cross_hessian_fill_threaded!: workers=$workers exceeds scratch's tasks_cz capacity=$(length(ws.tasks_cz)) -- rebuild scratch")
     D = ws.D; L = ws.L; nz = ws.nz
     W = size(ZcS, 1)
     size(Bidx, 1) == W || error("bin_zc_cross_hessian_fill_threaded!: size(Bidx,1)=$(size(Bidx,1)) != size(ZcS,1)=$W")
     size(ZcS, 2) >= nz || error("bin_zc_cross_hessian_fill_threaded!: size(ZcS,2)=$(size(ZcS,2)) < ws.nz=$nz")
+    fam2 = Pow !== nothing
     ZBinTab = ws.ZBinTab
     fill!(ZBinTab, 0.0)
+    ZBinTab_pow = fam2 ? ws.ZBinTab_pow : nothing
+    fam2 && fill!(ZBinTab_pow, 0.0)
 
     tasks = ws.tasks_cz
     x_chunks = cross_hessian_chunk_ranges(D, workers)
@@ -316,8 +373,10 @@ function bin_zc_cross_hessian_fill_threaded!(ws::BinZCrossScratch, Bidx::Abstrac
             @inbounds for w in 1:W
                 for x in xr
                     b = Bidx[w, x]
+                    px = fam2 ? Pow[w, x] : 0.0
                     for j in 1:nz
                         ZBinTab[x, j, b] += ZcS[w, j]
+                        fam2 && (ZBinTab_pow[x, j, b] += ZcS[w, j] * px)
                     end
                 end
             end
@@ -333,6 +392,17 @@ function bin_zc_cross_hessian_fill_threaded!(ws::BinZCrossScratch, Bidx::Abstrac
         for l in 1:L
             acc += ZBinTab[x, j, l]
             ZBinCScum[x, j, l] = acc
+        end
+    end
+
+    if fam2
+        ZBinCScum_pow = ws.ZBinCScum_pow
+        @inbounds for x in 1:D, j in 1:nz
+            acc = 0.0
+            for l in 1:L
+                acc += ZBinTab_pow[x, j, l]
+                ZBinCScum_pow[x, j, l] = acc
+            end
         end
     end
     return ws

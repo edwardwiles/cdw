@@ -18,33 +18,44 @@
 # tolerance-level (not bit-exact) candidate, same `HCZ_CANDIDATE_TOL` discipline as its sibling.
 
 """
-    bin_zc_cross_hessian_fill_drawchunk_reordered!(ws, dc, Bidx, ZcS; workers, jtile=64) -> ws
+    bin_zc_cross_hessian_fill_drawchunk_reordered!(ws, dc, Bidx, ZcS; workers, jtile=64, Pow=nothing) -> ws
 
 Cache-access-pattern candidate for H_CZ prep. Same public contract as
 `bin_zc_cross_hessian_fill_drawchunk!` (fills `ws.ZBinTab`/`ws.ZBinCScum`), reuses the SAME
 `BinZCrossDrawChunkScratch` (no new scratch type). `jtile` bounds how many `nz` columns are
 processed together before moving to the next batch of origins `x` -- purely a cache-tuning knob,
 does not change the result (only benchmarked, not gated, across a couple of `jtile` values).
+
+2026-08-05 root-cause fix #3: `Pow` (two-family only) additionally accumulates `dc.local_tabs_pow`
+in the SAME reordered `x -> j -> w` loop, one extra `Pow[w,x]` factor -- this is the actual
+`HCZ_PREP_BACKEND_DEFAULT[]` backend, so it was the real production gap (not just a benchmarked
+alternative) -- see `BinZCrossDrawChunkScratch`'s own docstring for the incident writeup.
 """
 function bin_zc_cross_hessian_fill_drawchunk_reordered!(ws::BinZCrossScratch, dc::BinZCrossDrawChunkScratch,
-        Bidx::AbstractMatrix{<:Integer}, ZcS::AbstractMatrix{Float64}; workers::Int, jtile::Int = 64)
+        Bidx::AbstractMatrix{<:Integer}, ZcS::AbstractMatrix{Float64}; workers::Int, jtile::Int = 64,
+        Pow::Union{Nothing,AbstractMatrix{Float64}} = nothing)
     workers <= nthreads() || error("bin_zc_cross_hessian_fill_drawchunk_reordered!: workers=$workers exceeds Threads.nthreads()=$(nthreads())")
     workers == dc.workers || error("bin_zc_cross_hessian_fill_drawchunk_reordered!: workers=$workers != scratch's dc.workers=$(dc.workers) -- rebuild scratch")
     D = ws.D; L = ws.L; nz = ws.nz
     W = size(ZcS, 1)
     size(Bidx, 1) == W || error("bin_zc_cross_hessian_fill_drawchunk_reordered!: size(Bidx,1)=$(size(Bidx,1)) != size(ZcS,1)=$W")
     size(ZcS, 2) >= nz || error("bin_zc_cross_hessian_fill_drawchunk_reordered!: size(ZcS,2)=$(size(ZcS,2)) < ws.nz=$nz")
+    fam2 = Pow !== nothing
 
     local_tabs = dc.local_tabs
+    local_tabs_pow = dc.local_tabs_pow
     fill!(local_tabs, 0.0)
+    fam2 && fill!(local_tabs_pow, 0.0)
     w_chunks = cross_hessian_chunk_ranges(W, workers)
     tasks = dc.tasks
     for wk in 1:workers
         wr = w_chunks[wk]
         lt = @view local_tabs[:, :, :, wk]
+        lt_pow = fam2 ? (@view local_tabs_pow[:, :, :, wk]) : nothing
         tasks[wk] = Threads.@spawn begin
             @inbounds for x in 1:D
                 bx = @view Bidx[:, x]
+                powx = fam2 ? (@view Pow[:, x]) : nothing
                 for jb in 1:jtile:nz
                     je = min(jb + jtile - 1, nz)
                     for j in jb:je
@@ -52,6 +63,7 @@ function bin_zc_cross_hessian_fill_drawchunk_reordered!(ws::BinZCrossScratch, dc
                         for w in wr
                             b = bx[w]
                             lt[x, j, b] += zcol[w]
+                            fam2 && (lt_pow[x, j, b] += zcol[w] * powx[w])
                         end
                     end
                 end
@@ -76,6 +88,24 @@ function bin_zc_cross_hessian_fill_drawchunk_reordered!(ws::BinZCrossScratch, dc
         for l in 1:L
             acc += ZBinTab[x, j, l]
             ZBinCScum[x, j, l] = acc
+        end
+    end
+
+    if fam2
+        ZBinTab_pow = ws.ZBinTab_pow
+        fill!(ZBinTab_pow, 0.0)
+        @inbounds for wk in 1:workers
+            for b in 1:(L+1), j in 1:nz, x in 1:D
+                ZBinTab_pow[x, j, b] += local_tabs_pow[x, j, b, wk]
+            end
+        end
+        ZBinCScum_pow = ws.ZBinCScum_pow
+        @inbounds for x in 1:D, j in 1:nz
+            acc = 0.0
+            for l in 1:L
+                acc += ZBinTab_pow[x, j, l]
+                ZBinCScum_pow[x, j, l] = acc
+            end
         end
     end
     return ws

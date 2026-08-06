@@ -39,10 +39,37 @@ isdefined(Main, :CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED) || include(joinpath(@__D
 # preallocated per-thread scratch, static contiguous draw-chunk partitioning) is UNCHANGED from the
 # source branch -- see its own header comment, reproduced in spirit above.
 
-"Per-thread scratch mirroring CMBinHessCtx's Ttab/Stab shapes, one set per Julia thread. Ported unchanged from diag/fullA-inner-blas-threading."
+"""
+Per-thread scratch mirroring CMBinHessCtx's Ttab/Stab shapes, one set per Julia thread. Ported
+unchanged from diag/fullA-inner-blas-threading.
+
+2026-08-05 root-cause fix (paired-basis-preconditioning pilot, Architecture C vs dense Hessian
+trajectory diagnostic): `Ttab12`/`Ttab22`/`Stab2` are the per-thread twins of `CMBinHessCtx`'s own
+`Ttab12`/`Ttab22`/`Stab2` (cm_hessian_architectures.jl), needed for the two-family (eq.35+eq.36)
+CM/CM+ZC Hessian's `H_CC` POW-involving blocks. These were MISSING entirely until this fix --
+`build_bin_tables_threaded!`/`prefix_sum_tables_threaded!` predate the 2026-08-05 truncated-power
+task and were never updated for `n_families==2`, so `cctx.Ttab12`/`Ttab22` (allocated once, zeroed,
+at context-build time) were silently NEVER FILLED on the `threaded_bins=true` production path (the
+`build_cm_bin_ctx` default) -- `fill_cm_HCC!` then computed the POW-POW and CDF-POW cross Hessian
+blocks from permanently-zero input, corrupting `H_CC` for every real two-family production solve.
+Confirmed live: at the real D20 calibration point, `moment_representation=:operator`, the
+Hessian's POW/cross blocks were off by ~0.46-0.49 (D4) / ~0.47-0.49 (D20) at EVERY one of 100
+captured KNITRO Hessian-callback iterates (vs machine precision, ~1e-15, for the pre-existing
+CDF-only block, and with the FG/gradient matching Architecture A's own dense callable to ~1e-16 at
+every point -- ruling out a coordinate-ordering artifact), while the real production solve stalled
+at `nStatus=-400`; forcing `threaded_bins=false` (the pre-existing, already-correct serial path)
+at the SAME point made every Hessian block match to machine precision and the solve converge
+cleanly (`nStatus=0` at D4, `nStatus=-103` at D20/W=20,000). `nothing` for every single-family
+context (`cctx.n_families==1`, the overwhelming majority), matching `CMBinHessCtx`'s own
+`Union{Nothing,...}` convention for these fields -- zero extra allocation for any pre-existing
+caller.
+"""
 struct ThreadLocalBinScratch
     Ttab::Vector{Array{Float64,4}}   # [tid] -> D x D x (L+1) x (L+1)
     Stab::Vector{Array{Float64,3}}   # [tid] -> D x NCORE x (L+1)
+    Ttab12::Union{Nothing,Vector{Array{Float64,4}}}   # [tid] -> D x D x (L+1) x (L+1); nothing iff n_families==1
+    Ttab22::Union{Nothing,Vector{Array{Float64,4}}}   # [tid] -> D x D x (L+1) x (L+1); nothing iff n_families==1
+    Stab2::Union{Nothing,Vector{Array{Float64,3}}}    # [tid] -> D x NCORE x (L+1); nothing iff n_families==1
 end
 
 function build_thread_local_scratch(cctx)
@@ -50,7 +77,11 @@ function build_thread_local_scratch(cctx)
     D = cctx.D; NCORE = cctx.NCORE; L1 = cctx.L + 1
     Ttab = [zeros(D, D, L1, L1) for _ in 1:nt]
     Stab = [zeros(D, NCORE, L1) for _ in 1:nt]
-    return ThreadLocalBinScratch(Ttab, Stab)
+    fam2 = cctx.n_families == 2
+    Ttab12 = fam2 ? [zeros(D, D, L1, L1) for _ in 1:nt] : nothing
+    Ttab22 = fam2 ? [zeros(D, D, L1, L1) for _ in 1:nt] : nothing
+    Stab2 = fam2 ? [zeros(D, NCORE, L1) for _ in 1:nt] : nothing
+    return ThreadLocalBinScratch(Ttab, Stab, Ttab12, Ttab22, Stab2)
 end
 
 """
@@ -62,15 +93,30 @@ reduction (no atomics; ported unchanged from diag/fullA-inner-blas-threading).
 loop -- the only per-thread read of `E` -- mirroring the serial `build_bin_tables!`'s own `fill_S`
 kwarg exactly, so the production default (`use_threaded_bins=true`) gets the SAME
 no-dense-economic-column-read property when the `:winner_bin` cross-Hessian backend is active.
+
+2026-08-05 root-cause fix: when `cctx.n_families==2`, also accumulates `Ttab12`/`Ttab22` (and
+`Stab2` when `fill_S=true`) -- the two-family H_CC/H_EE POW-block tables the serial
+`build_bin_tables!` already fills, but this threaded sibling never did (see `ThreadLocalBinScratch`'s
+own docstring for the full incident writeup). Formulas are a direct, unmodified port of the serial
+per-draw accumulation (`wsy = ws*Pow[s,y]; T12[x,y,bx,by] += wsy; T22[x,y,bx,by] += wsy*Pow[s,x]`;
+`S2[x,j,bx] += ws*E[s,j]*Pow[s,x]`) -- no new formula, just threading the SAME arithmetic that was
+already correct in the serial path.
 """
 function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::Union{Nothing,AbstractMatrix{Float64}}, w::AbstractVector{Float64}; fill_S::Bool = true)
     D = cctx.D; NCORE = cctx.NCORE; Bidx = cctx.Bidx
     W = length(w)
     nt = Threads.nthreads()
+    fam2 = cctx.n_families == 2
+    Pow = fam2 ? cctx.Pow : nothing
 
     for t in 1:nt
         fill!(tls.Ttab[t], 0.0)
         fill!(tls.Stab[t], 0.0)
+        if fam2
+            fill!(tls.Ttab12[t], 0.0)
+            fill!(tls.Ttab22[t], 0.0)
+            fill_S && fill!(tls.Stab2[t], 0.0)
+        end
     end
 
     if fill_S
@@ -86,6 +132,9 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::Union{N
             lo = 1 + div((tid - 1) * W, nt)
             hi = div(tid * W, nt)
             Tloc = tls.Ttab[tid]; Sloc = tls.Stab[tid]
+            T12loc = fam2 ? tls.Ttab12[tid] : nothing
+            T22loc = fam2 ? tls.Ttab22[tid] : nothing
+            S2loc = fam2 ? tls.Stab2[tid] : nothing
             @inbounds for s in lo:hi
                 ws = w[s]
                 for x in 1:D
@@ -93,12 +142,28 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::Union{N
                     for j in 1:NCORE
                         Sloc[x, j, bx] += ws * E[s, j]
                     end
+                    if fam2
+                        for j in 1:NCORE
+                            S2loc[x, j, bx] += ws * E[s, j] * Pow[s, x]
+                        end
+                    end
                 end
                 for x in 1:D
                     bx = Bidx[s, x]
                     for y in 1:D
                         by = Bidx[s, y]
                         Tloc[x, y, bx, by] += ws
+                    end
+                end
+                if fam2
+                    for x in 1:D
+                        bx = Bidx[s, x]
+                        for y in 1:D
+                            by = Bidx[s, y]
+                            wsy = ws * Pow[s, y]
+                            T12loc[x, y, bx, by] += wsy
+                            T22loc[x, y, bx, by] += wsy * Pow[s, x]
+                        end
                     end
                 end
             end
@@ -108,6 +173,8 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::Union{N
             lo = 1 + div((tid - 1) * W, nt)
             hi = div(tid * W, nt)
             Tloc = tls.Ttab[tid]
+            T12loc = fam2 ? tls.Ttab12[tid] : nothing
+            T22loc = fam2 ? tls.Ttab22[tid] : nothing
             @inbounds for s in lo:hi
                 ws = w[s]
                 for x in 1:D
@@ -117,25 +184,59 @@ function build_bin_tables_threaded!(cctx, tls::ThreadLocalBinScratch, H::Union{N
                         Tloc[x, y, bx, by] += ws
                     end
                 end
+                if fam2
+                    for x in 1:D
+                        bx = Bidx[s, x]
+                        for y in 1:D
+                            by = Bidx[s, y]
+                            wsy = ws * Pow[s, y]
+                            T12loc[x, y, bx, by] += wsy
+                            T22loc[x, y, bx, by] += wsy * Pow[s, x]
+                        end
+                    end
+                end
             end
         end
     end
 
     T = cctx.Ttab; S = cctx.Stab
     fill!(T, 0.0); fill!(S, 0.0)
+    if fam2
+        fill!(cctx.Ttab12, 0.0)
+        fill!(cctx.Ttab22, 0.0)
+        fill_S && fill!(cctx.Stab2, 0.0)
+    end
     for tid in 1:nt   # fixed order 1:nt (not completion order) -> deterministic
         T .+= tls.Ttab[tid]
         fill_S && (S .+= tls.Stab[tid])
+        if fam2
+            cctx.Ttab12 .+= tls.Ttab12[tid]
+            cctx.Ttab22 .+= tls.Ttab22[tid]
+            fill_S && (cctx.Stab2 .+= tls.Stab2[tid])
+        end
     end
     return nothing
 end
 
-"Threaded drop-in replacement for prefix_sum_tables!. Embarrassingly parallel over the D*D (x,y)
+"""
+Threaded drop-in replacement for prefix_sum_tables!. Embarrassingly parallel over the D*D (x,y)
 pairs -- no reduction needed. Ported unchanged from diag/fullA-inner-blas-threading. `fill_S=false`
-(winner-aware H_ER phase) skips the CScum prefix-sum, mirroring the serial version's own kwarg."
+(winner-aware H_ER phase) skips the CScum prefix-sum, mirroring the serial version's own kwarg.
+
+2026-08-05 root-cause fix: when `cctx.n_families==2`, also prefix-sums `Ttab12`/`Ttab22` into
+`CT12`/`CT22` (same 2D inclusion-exclusion identity as `CT`, computed in the SAME per-(x,y)-pair
+threaded loop) and `Stab2` into `CScum2` (same 1D running-sum as `CScum`) when `fill_S=true` --
+the direct threaded counterpart of `build_bin_tables_threaded!`'s own fix above; see that
+function's docstring and `ThreadLocalBinScratch`'s for the full incident writeup.
+"""
 function prefix_sum_tables_threaded!(cctx; fill_S::Bool = true)
     D = cctx.D; L = cctx.L; NCORE = cctx.NCORE
     T = cctx.Ttab; CT = cctx.CT
+    fam2 = cctx.n_families == 2
+    T12 = fam2 ? cctx.Ttab12 : nothing
+    CT12 = fam2 ? cctx.CT12 : nothing
+    T22 = fam2 ? cctx.Ttab22 : nothing
+    CT22 = fam2 ? cctx.CT22 : nothing
     pairs = [(x, y) for x in 1:D for y in 1:D]
     Threads.@threads :static for k in 1:length(pairs)
         (x, y) = pairs[k]
@@ -148,6 +249,23 @@ function prefix_sum_tables_threaded!(cctx; fill_S::Bool = true)
                 CT[x, y, l, lp] = v
             end
         end
+        if fam2
+            for l in 1:L
+                for lp in 1:L
+                    v12 = T12[x, y, l, lp]
+                    v12 += (l > 1 ? CT12[x, y, l-1, lp] : 0.0)
+                    v12 += (lp > 1 ? CT12[x, y, l, lp-1] : 0.0)
+                    v12 -= (l > 1 && lp > 1) ? CT12[x, y, l-1, lp-1] : 0.0
+                    CT12[x, y, l, lp] = v12
+
+                    v22 = T22[x, y, l, lp]
+                    v22 += (l > 1 ? CT22[x, y, l-1, lp] : 0.0)
+                    v22 += (lp > 1 ? CT22[x, y, l, lp-1] : 0.0)
+                    v22 -= (l > 1 && lp > 1) ? CT22[x, y, l-1, lp-1] : 0.0
+                    CT22[x, y, l, lp] = v22
+                end
+            end
+        end
     end
     if fill_S
         S = cctx.Stab; CS_ = cctx.CScum
@@ -156,6 +274,16 @@ function prefix_sum_tables_threaded!(cctx; fill_S::Bool = true)
             for l in 1:L
                 acc += S[x, j, l]
                 CS_[x, j, l] = acc
+            end
+        end
+        if fam2
+            S2 = cctx.Stab2; CS2_ = cctx.CScum2
+            @inbounds for x in 1:D, j in 1:NCORE
+                acc = 0.0
+                for l in 1:L
+                    acc += S2[x, j, l]
+                    CS2_[x, j, l] = acc
+                end
             end
         end
     end
@@ -184,6 +312,22 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     w = arg2
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
     refIndex1 = cctx.refIndex1; origins = cctx.origins
+    # 2026-08-05 root-cause fix #2 (paired-basis-preconditioning pilot): `fam2`, mirroring the
+    # serial hessian_cm_structured!'s own top-of-body definition (cm_hessian_architectures.jl) --
+    # this threaded/v2 path's H_EC section below was missing the ENTIRE two-family extension (the
+    # `Pow=` kwarg to winner_pair_cross_hessian_fill!, and the Hraw_EC2/CS2/S2total/cols_pow
+    # block-writing the serial version has), not just a table-filling gap like root cause #1
+    # (build_bin_tables_threaded!). Confirmed live: even after fixing #1, the real production D4/D20
+    # solves still stalled (nStatus=-400) with a large (~0.30-12.9), iterate-persistent Hessian
+    # discrepancy localized to the core-economic x POW-CM cross block -- exactly the block this gap
+    # left silently computed with `Pow=nothing`, i.e. degenerating to a meaningless-but-nonzero
+    # value (not even a clean zero, since `winner_pair_cross_hessian_fill!`'s "_pow" tables are
+    # simply never touched/never fed into Hfull at all here -- Hraw_EC2 was never even allocated
+    # into Hfull's cols_pow block, so those Hessian entries retained whatever `fill!(Hfull,0.0)`
+    # left them at MINUS whatever spurious residual `pack_upper_cm_hessian!`'s symmetrize-by-
+    # averaging picked up from the transposed corner -- not investigated further since the fix
+    # below makes the question moot).
+    fam2 = cctx.n_families == 2
 
     # No-moments/no-composite-G task (2026-07-28): `E` no longer constructed eagerly -- see the
     # identical change/rationale in cm_hessian_architectures.jl::hessian_cm_structured!.
@@ -221,6 +365,14 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     end
 
     use_direct_hcz = _cm_cross_hessian_wants_direct_hcz(cctx, cf)
+    # 2026-08-05 root-cause fix #3: `use_direct_hcz` (CM+ZC's widened mean/pair H_CZ block) --
+    # `hcz_prep_dispatch!`/`bin_zc_cross_hessian_fill!`/`_threaded!`/`_drawchunk!`/
+    # `_drawchunk_reordered!` (all 3 backends) and `bin_zc_cross_hessian_block!` now all support
+    # `Pow=`/`HCZ_pow=`, ported the same way as root causes #1/#2 -- see
+    # `BinZCrossDrawChunkScratch`'s own docstring (hcz_drawchunk_candidate_2026-07-29.jl) for the
+    # incident writeup. An earlier version of this fix hard-refused this combination instead of
+    # fixing it (before the three backend functions had `Pow` support at all); that guard is gone
+    # now that the wiring below is real.
     # harmonization task (2026-07-28): initialized to `nothing` -- see the serial
     # hessian_cm_structured!'s identical fix/comment (wctx/cross_ws are now also passed as plain
     # function arguments to _fill_frechet_level_blocks! below).
@@ -231,12 +383,21 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
         wctx = serial_ctx(cctx.core_ws)
         cross_ws = _ensure_cm_cross_scratch!(cctx, wctx.ncolI, D, L)
         # optimize/structured-cross-hessian-ZC-CM-2026-07-28: opt-in threaded H_EC raw-table fill
-        # (threaded_cross_hessian.jl), same output as the serial version (bit-identical, see that
-        # file's own header) -- gated behind cctx.cross_hessian_threaded, default false.
+        # (threaded_cross_hessian.jl) -- CROSS_HESSIAN_THREADED_DEFAULT[]=true (threaded_cross_hessian.jl),
+        # i.e. this IS the live production default, not a non-default fallback (an earlier version of
+        # this comment claimed "default false" -- wrong, confirmed live when the guard this comment
+        # used to describe actually fired during root-cause-fix verification).
+        #
+        # 2026-08-05 root-cause fix #2b: `winner_pair_cross_hessian_fill_threaded!` was missing the
+        # two-family "_pow" companion-table accumulation entirely (same failure mode as root cause #1,
+        # in this file instead of cm_hessian_threaded.jl's own build_bin_tables_threaded!) -- now
+        # fixed directly in threaded_cross_hessian.jl (ported from the serial
+        # winner_pair_cross_hessian_fill!'s own already-verified formulas), so `Pow=` is wired through
+        # on both branches below.
         @cmhess_prof "H_EC_prep" if cctx.cross_hessian_threaded
-            winner_pair_cross_hessian_fill_threaded!(wctx, cross_ws, obj, cctx.Bidx; workers = cctx.cross_hessian_workers)
+            winner_pair_cross_hessian_fill_threaded!(wctx, cross_ws, obj, cctx.Bidx; workers = cctx.cross_hessian_workers, Pow = fam2 ? cctx.Pow : nothing)
         else
-            winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx)
+            winner_pair_cross_hessian_fill!(wctx, cross_ws, obj, cctx.Bidx; Pow = fam2 ? cctx.Pow : nothing)
         end
         if use_direct_hcz
             # CM+ZC E/C/Z block-partition + H_CZ release (2026-07-27): SAME pairing as the serial
@@ -247,7 +408,7 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
             bin_zc_ws = ensure_bin_zc_cross_scratch!(cctx.bin_zc_cross, D, L, nz)
             cctx.bin_zc_cross = bin_zc_ws
             @cmhess_prof "H_CZ_prep" hcz_prep_dispatch!(bin_zc_ws, cctx.hcz_prep_backend, cctx.Bidx, cctx.hzz_centered.ZcS, cctx;
-                workers = cctx.cross_hessian_workers, threaded = cctx.cross_hessian_threaded)
+                workers = cctx.cross_hessian_workers, threaded = cctx.cross_hessian_threaded, Pow = fam2 ? cctx.Pow : nothing)
         end
     else
         record_dense_cross_hessian_call!()
@@ -265,18 +426,32 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     CS_ = cctx.CScum
     Hraw_EC = cctx.Hraw_EC
     ncore_core = cctx.ncore_core
+    # 2026-08-05 root-cause fix #2: ncm_cdf/CS2/S2total/Hraw_EC2 -- direct, unmodified port of the
+    # serial hessian_cm_structured!'s own H_EC-pow setup (cm_hessian_architectures.jl), needed so
+    # the `fam2` branch of the `l`-loop below can write the eq.36 H_EC block into `Hfull`'s
+    # `cols_pow` range exactly like the serial version already does.
+    ncm_cdf = nO * L
+    CS2 = fam2 ? cctx.CScum2 : nothing
+    S2total = fam2 ? dropdims(sum(cctx.Stab2, dims = 3), dims = 3) : nothing   # D x NCORE
+    Hraw_EC2 = fam2 ? cctx.Hraw_EC2 : nothing
     @cmhess_prof "H_EC_asm" @inbounds for l in 1:L
         if use_winner_bin
             Hraw_EC_core = use_direct_hcz ? (@view Hraw_EC[1:ncore_core, :]) : Hraw_EC
-            winner_pair_cross_hessian_cm_block!(Hraw_EC_core, wctx, cross_ws, l, origins, refIndex1, M)
+            Hraw_EC2_core = fam2 ? (use_direct_hcz ? (@view Hraw_EC2[1:ncore_core, :]) : Hraw_EC2) : nothing
+            winner_pair_cross_hessian_cm_block!(Hraw_EC_core, wctx, cross_ws, l, origins, refIndex1, M;
+                Hraw_EC_pow = Hraw_EC2_core)
             if use_direct_hcz
                 Hraw_EC_z = @view Hraw_EC[ncore_core+1:NCORE, :]
-                bin_zc_cross_hessian_block!(Hraw_EC_z, bin_zc_ws, l, origins, refIndex1, M)
+                # 2026-08-05 root-cause fix #3: Hraw_EC2_z, direct port of the serial
+                # hessian_cm_structured!'s own HCZ_pow= wiring (cm_hessian_architectures.jl).
+                Hraw_EC2_z = fam2 ? (@view Hraw_EC2[ncore_core+1:NCORE, :]) : nothing
+                bin_zc_cross_hessian_block!(Hraw_EC_z, bin_zc_ws, l, origins, refIndex1, M; HCZ_pow = Hraw_EC2_z)
             end
         else
             for (oi, o) in enumerate(origins)
                 for j in 1:NCORE
                     Hraw_EC[j, oi] = (CS_[o, j, l] - CS_[refIndex1, j, l]) / M
+                    fam2 && (Hraw_EC2[j, oi] = ((S2total[o, j] - CS2[o, j, l]) - (S2total[refIndex1, j] - CS2[refIndex1, j, l])) / M)
                 end
             end
         end
@@ -288,6 +463,17 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
         end
         @views Hfull[1:NCORE, cols] .= block_ec
         @views Hfull[cols, 1:NCORE] .= transpose(block_ec)
+
+        if fam2
+            cols_pow = NCORE + ncm_cdf + (l-1)*nO + 1 : NCORE + ncm_cdf + l*nO
+            block_ec2 = if cctx.R === nothing
+                Hraw_EC2
+            else
+                mul!(cctx.block_ec2, Hraw_EC2, cctx.R)
+            end
+            @views Hfull[1:NCORE, cols_pow] .= block_ec2
+            @views Hfull[cols_pow, 1:NCORE] .= transpose(block_ec2)
+        end
     end
 
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
