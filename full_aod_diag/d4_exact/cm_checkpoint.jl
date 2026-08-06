@@ -1234,6 +1234,18 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # then, moment_representation=:operator stays unconditional here (unchanged from before); the
     # actual gate is build_cm_meanzc_production_context's own internal guard (cm_meanzc_production.jl),
     # which still correctly refuses include_truncated_moment=true + moment_representation=:operator.
+    # 2026-08-06 (outer-production-closeout task, section 9.1): the is_frechet branch below never
+    # passed `include_truncated_moment`/`threaded_bins` through to `build_cm_frechet_production_context`
+    # at all -- since `include_truncated_moment` became a required (no-default) kwarg on that
+    # function during the 2026-08-05/06 truncated-power task, this meant EVERY call to this driver
+    # with `marginal_restriction=:common_frechet` threw `UndefKeywordError` before ever reaching
+    # KNITRO, regardless of any other setting -- the real public common-Frechet path was completely
+    # unreachable, not merely TLS-limited. Fixed by passing both through, mirroring the other two
+    # branches exactly. `build_cm_frechet_production_context`'s OWN internal capability gate (it
+    # requires `moment_representation=:dense_reference` for `include_truncated_moment=true`, which
+    # conflicts with `prepare_production_run`'s hard ban on dense bundles below) still correctly
+    # refuses two-family common-Frechet through this driver -- this fix makes plain (single-family)
+    # common-Frechet reachable again, it does not relax the two-family restriction.
     prepared = prepare_production_run(family_tag_pre, "run_cm_upper_checkpointed",
         () -> is_meanzc ?
             build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
@@ -1241,7 +1253,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                 contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = :operator) :
             is_frechet ?
             build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs,
-                cm_hessian_backend = cm_hessian_backend, moment_representation = :operator) :
+                cm_hessian_backend = cm_hessian_backend, threaded_bins = threaded_bins,
+                include_truncated_moment = include_truncated_moment, moment_representation = :operator) :
             build_cm_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs, threaded_bins = threaded_bins,
                 include_truncated_moment = include_truncated_moment,
                 inner_fg_backend = inner_fg_backend, moment_representation = :operator))
