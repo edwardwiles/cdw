@@ -25,7 +25,7 @@ end
 using Printf
 lp(xs...) = (println(xs...); flush(stdout))
 
-ctx = d20_real_setup_design(W = 20_000, δ = 1.0, find_smallest = true,
+ctx = d20_real_setup_design(W = 100_000, δ = 1.0, find_smallest = true,
     draw_design = :sobol_randomized, draw_seed = 20260719,
     destination_sample = :exclude_row, exclude_diagonal_gravity = true,
     gravity_exclude_cells = default_gravity_exclude_cells_brazil_korea(), σHat = 3.0)   # MUST match

@@ -7,13 +7,21 @@ exactly). `NEW_BRANCHES_CREATED = 0`, `EXTRA_WORKTREES_CREATED = 0` — the exis
 was reused throughout.
 
 **Scope note up front:** this session resolved the central blocking question (the CM+ZC screen
-contradiction) with strong, reproducible, live evidence, and shipped three narrow, tested production
-fixes (callback-health guard, capability-based guard, and a real common-Fréchet driver-reachability
-bug found while chasing the TLS question — the public common-Fréchet path was completely broken
-before this session, not merely TLS-limited). It did **not** complete the full scale ladder
-(D4/W5k/W20k/W100k × both families × multiple points), the outer-gradient FD matrix, the literal
-field-by-field differential CSV, a Fréchet-specific `w0` derivation, or a production merge. Those
-are called out explicitly below rather than fabricated — see "What remains open."
+contradiction) with strong, reproducible, live evidence, and found + fixed **seven** real, narrow,
+individually-tested production bugs (listed in "Production SHA / tag" below). Most significantly,
+common-Fréchet's public outer path was broken in **four** independent, stacked ways — driver
+unreachability, a missing struct field crashing every real evaluation, a false positive in this
+session's own new guard, and (found only because a reviewer refused to accept a structurally-zero
+economic derivative at face value) **the analytic `d(Delta)/d(gp)` outer gradient was identically
+zero** on any unmatched gradient call, a real campaign-blocking correctness bug, not merely an
+unrun test. All four are fixed and confirmed; common-Fréchet now reaches a genuine, verified
+D20/W=100,000 calibration result matching CM+ZC's own order of magnitude at Δ*, **and** its outer
+gradient at `gp` now agrees with central finite differences to 6 significant figures. It did
+**not** fully resolve a secondary, smaller-magnitude outer-gradient discrepancy in the A-block
+coordinates (present symmetrically in both families, likely a known FD-bandwidth-matching
+artifact rather than a bug — see "What remains open"), complete the W=5k/W20k tiers as their own
+dedicated gate, produce the literal field-by-field differential CSV, or merge to production. Those
+are called out explicitly below rather than fabricated.
 
 ## 1. CM+ZC screen contradiction — ROOT CAUSE FOUND
 
@@ -151,52 +159,116 @@ Committed locally: `3f9344e`. **Not pushed, not merged.**
 `TWO_FAMILY_GUARDS = removed_after_capability_gates` (for CM+ZC and the shared TLS check; see
 section 9 for the Fréchet-specific finding)
 
-## 5. Common-Fréchet: a much more fundamental driver bug found and fixed — public path was completely unreachable
+## 5. Common-Fréchet: four real bugs found and fixed — public path now reaches a genuine, verified, gradient-correct calibration result
 
-`COMMON_FRECHET_TLS = pass` (the specific TLS wiring question). But investigating it surfaced a
-**more serious, previously-undocumented bug** in the same call path, fixed this session.
+`COMMON_FRECHET_TLS = pass`, `COMMON_FRECHET_INNER = pass`, `COMMON_FRECHET_OUTER W100K = pass`,
+`COMMON_FRECHET_OUTER_GRADIENT (gp component) = pass`. This investigation started as a narrow TLS
+check and uncovered four independent, real, previously undocumented bugs stacked on top of each
+other — each masked the next, so they had to be found and fixed in sequence before a genuine,
+gradient-correct end-to-end result was reachable at all.
 
-**5a. The TLS question itself: real production path was already correct.** The archived D4 log's
-`hessian_cm_frechet_structured_v2!(threaded_bins=true) requires tls` came from a **diagnostic test
-script** (`test_frechet_hessian_structured_vs_dense_d4_twofamily_2026-08-06.jl`) calling the thin
-backward-compatibility wrapper `hessian_cm_frechet_structured_v2!` **directly**, which defaults
-`tls=nothing` (documented explicitly as "kept for legacy diagnostic scripts", not the production
-entry point). The **real** production Hessian dispatcher, `archC_frechet_hess_cb_builder`
-(`cm_frechet_hessian.jl:476-508`), already reads `tls = cctx.tls` (not a hardcoded `nothing`)
-whenever `cctx.use_threaded_bins`, and `cctx.tls` is built by the **shared** `build_cm_bin_ctx`
-(`cm_hessian_architectures.jl:758`) — the same builder flexible-CM's context uses. No genuine TLS
-gap in the real driver.
+**5a. The TLS question itself: real production path was already correct, no fix needed.** The
+archived D4 log's `hessian_cm_frechet_structured_v2!(threaded_bins=true) requires tls` came from a
+**diagnostic test script** calling the thin backward-compatibility wrapper directly (which defaults
+`tls=nothing`, documented as "kept for legacy diagnostic scripts"), not the real dispatcher.
+`archC_frechet_hess_cb_builder` (`cm_frechet_hessian.jl:476-508`) already reads `tls = cctx.tls`
+whenever `cctx.use_threaded_bins`, and `cctx.tls` is built by the shared `build_cm_bin_ctx`
+(`cm_hessian_architectures.jl:758`) — the same builder flexible-CM's context uses.
 
-**5b. What that investigation actually found: `run_cm_upper_checkpointed`'s `is_frechet` branch
-never passed `include_truncated_moment`/`threaded_bins` through to
-`build_cm_frechet_production_context` at all.** Since `include_truncated_moment` became a required
-(no-default) kwarg on that function during the 2026-08-05/06 truncated-power task, this meant
-**every single call to this driver with `marginal_restriction=:common_frechet` threw
-`UndefKeywordError` before ever reaching KNITRO, regardless of any other setting** — the real
-public common-Fréchet path was entirely unreachable, not merely TLS-limited. Confirmed live: the
-first attempt at a real D20/W=5,000 smoke through the unfixed driver failed exactly this way.
+**5b. Real bug #1 — driver reachability (`cm_checkpoint.jl`, commit `56375bb`).**
+`run_cm_upper_checkpointed`'s `is_frechet` branch never passed `include_truncated_moment`/
+`threaded_bins` through to `build_cm_frechet_production_context` at all. Since
+`include_truncated_moment` became a required (no-default) kwarg on that function during the
+2026-08-05/06 truncated-power task, **every single call to this driver with
+`marginal_restriction=:common_frechet` threw `UndefKeywordError` before ever reaching KNITRO** —
+confirmed live. Fixed by passing both through, mirroring the other two branches; the internal
+two-family gate (requires `moment_representation=:dense_reference`, incompatible with this driver's
+dense ban) still correctly refuses two-family Fréchet — this fix restores single-family reachability
+only.
 
-**Fixed** (`cm_checkpoint.jl`, committed `56375bb`): both kwargs now passed through, mirroring the
-other two branches exactly. `build_cm_frechet_production_context`'s own internal capability gate
-(requires `moment_representation=:dense_reference` for `include_truncated_moment=true`, which
-conflicts with `prepare_production_run`'s hard ban on dense bundles) still correctly refuses
-two-family common-Fréchet through this driver — this fix restores reachability for **plain
-(single-family) common-Fréchet only**; it does not relax the two-family restriction, which remains
-a separate, disclosed, still-open gap.
+**5c. Real bug #2 — missing `Pow` field on `CMFrechetLookupState` (`cm_frechet_lookup_kernels.jl`,
+commit `a4a0671`).** With reachability fixed, every real evaluation immediately crashed with
+`FieldError(CMFrechetLookupState, :Pow)`. `cm_forward_contribution!`/`cm_transpose_into_g!`
+(`cm_lookup_kernels.jl`) are shared, untyped-`st` kernels that Fréchet's own `dual_index!`/FG
+functor call directly by design; the 2026-08-05 truncated-power task added an unconditional
+`fam2 = st.Pow !== nothing` duck-typed read to both and gave the other three operator-state types a
+matching `Pow` field, but never added it to `CMFrechetLookupState` — breaking **every** real
+evaluation under `CM_FRECHET_INNER_FG_BACKEND_DEFAULT[]=:cm_frechet_lookup`, which **is the actual
+production default**, single-family or not. Masked by KNITRO.jl's own callback-error swallowing
+exactly like the original CM+ZC missing-`Pow=` bug. Fixed by adding the field (always `nothing`,
+since Fréchet has no two-family extension) — every two-family-only branch in the shared kernels is
+already gated behind `if fam2`, so no other field was needed; confirmed by reading both kernels'
+full bodies before making the change.
 
-**After the fix**, a real D20/W=5,000 smoke (`smoke_frechet_public_driver_tls_2026-08-06.jl`)
-confirms: the driver now reaches KNITRO cleanly, `cctx.tls` is constructed
-(`cctx.use_threaded_bins==true`, `cctx.tls!==nothing`), and **no** "threaded_bins=true requires
-tls" error occurs — section 5a's TLS finding holds. **However, the generic calibration `w0`**
-(built via `cm_w0_from_calibration`, the same construction flexible-CM/CM+ZC use) **is not
-automatically a valid starting point for common-Fréchet's own restriction structure** (`D*L`
-restrictions vs. flexible-CM's `(D-1)*L` — a genuinely different feasible region/anchor): the
-first outer evaluation fails (KNITRO `-500`/`-502`, "could not evaluate objective or constraints
-at the initial point"). **This is a separate, still-open item** (Fréchet needs its own
-calibration-consistent `w0`, not yet derived this session) — do not read `COMMON_FRECHET_OUTER` as
-passing at any real-evaluation tier; only the reachability/TLS defect is fixed and confirmed.
+**5d. Real bug #3 (in this session's own new code) — callback-health false positive (commit
+`8a9f811`).** With 5b/5c fixed, the real driver reached a genuine converged eval 1, then the
+session's own newly-added `assert_no_fake_success!` (section 3) incorrectly rejected a **later**,
+legitimately-converged evaluation as "fake" because its returned dual was byte-identical to its
+initial guess. Root cause: `CS.inner_loop_initial_values` legitimately **warm-starts** from the
+previous solve's converged `obj.x` (a documented, real feature — `dual_bank.jl`/
+`cm_dual_bank_production.jl`), so a warm-started dual that is *already* optimal at a nearby new
+point legitimately converges in zero steps with `x_solution==x_initial`. Fixed by restricting the
+check to a **cold** (all-zero) initial vector specifically — the actual fingerprint of the original
+bug — confirmed the missing-Pow= regression test still catches the real case (8/8 PASS, cold-starts
+by construction) while the legitimate warm-start case no longer false-positives.
 
-The new `assert_two_family_capabilities!` (section 4) additionally adds a defensive, explicit
+**5e. A real, user-flagged sanity check that turned out to be a mismatched-scale artifact, not a
+bug.** After 5b-5d, a direct diagnostic (`diag_frechet_w0_direct_2026-08-06.jl`) reported
+`Delta_dual=0.005` at D20/**W=20,000** — correctly flagged by the user as too high relative to
+CM+ZC's own `0.00065` at D20/**W=100,000**, an apples-to-oranges comparison (this codebase has
+documented real W-sensitivity at D=20: `d20-realdata-w-sensitivity` memory, W=8,000 understates κ
+for δ≥1 vs W≥80,000). Rerun at the matched W=100,000: `Delta_dual=0.000511` — directly comparable
+to and consistent with CM+ZC's `0.00065`, both well under the <0.001 calibration benchmark.
+Confirmed through the **real public driver** too (not just the direct/bypass call), D20/W=100,000/
+L=50: `eval 1 gp=0.9840278851786317 Delta=0.000511 feasible=true verified=true` — the same
+calibration `gp` every other family lands on, genuinely verified, matching CM+ZC's own order of
+magnitude at the same scale.
+
+**5f. Real bug #4 — the analytic outer gradient's `d(Delta)/d(gp)` component was identically zero
+(commit `0a991d8`).** Caught only because a reviewer refused to accept a structurally-zero economic
+derivative at face value: "the objective function is literally γ_d′ ... that has nothing to do with
+the common Fréchet restriction ... surely a bug." Correct call. Root cause:
+`gamma_component_analytic` (`lfix_factorized.jl`) computes `d(Delta)/d(gp)` as proportional to
+`mean(base.m_star .* SW)`, where `m_star` is `obj.arg1` at the converged solve. Under the
+production-default **operator** FG backend, none of the three operator states
+(`CMLookupState`/`CMMeanZCOperatorState`/`CMFrechetLookupState`) ever write into `obj.arg1` — each
+writes into its own private scratch (confirmed by reading all three functor bodies). The *verified*
+state builders (`archC_X_verified_state`) sidestep this entirely, computing `m_star` independently
+via operator-based verification. The *bare* builders (`archC_X_base_state`) do not — they read the
+never-written `obj.arg1`, silently returning an all-zero `m_star`.
+
+`cm_meanzc_production_gradient_cplus` already falls back to the verified builder on an unmatched
+gradient call (`base===nothing`, a real KNITRO calling mode: it does not guarantee `cb_G!` always
+follows `cb_F!` at the identical point, not just an internal implementation detail).
+`cm_frechet_production_gradient_cplus` fell back to the **bare** builder instead — silently
+zeroing the entire `d(Delta)/d(gp)` term on every unmatched gradient call. Confirmed live at a real
+D20/W=20,000 point: central-FD gave `d(Delta)/d(gp)=0.462`; the buggy analytic gradient returned
+exactly `0.0`. Fixed to match CM+ZC's exact pattern (fall back to `archC_frechet_verified_state`
+whenever `base` OR `verify` is missing); also updated `cb_G!`'s own call site
+(`cm_checkpoint.jl`) to pass `verify=verify_c` through, avoiding a redundant re-solve on the common
+matched case. **Verified: analytic vs. central-FD now agree to `rel_diff=1.7e-6`**, matching
+CM+ZC's own precision at the identical point.
+
+This is a genuine, previously-undiscovered, campaign-blocking correctness bug — not merely an
+unrun test. Every real common-Fréchet outer search would have had a structurally wrong search
+direction along `gp` on any unmatched gradient evaluation, silently, with no error or warning.
+
+A secondary, smaller-magnitude discrepancy remains **unresolved**: the A-block coordinates (e.g.
+index 2, index 380) show 17%–176% analytic-vs-FD mismatches for **both** families symmetrically
+(including CM+ZC, an already-validated backend), which makes a second family-specific Fréchet bug
+unlikely. An attempt to fix this by matching the analytic computation's own internally-selected
+adaptive bandwidth (rather than a fixed external `h`) immediately walked the perturbed point into
+genuine inner-solve infeasibility, so it could not be cleanly validated either way this session.
+Best current read: this is the documented `feedback-fd-bandwidth-mismatch-looks-like-a-bug`
+pitfall (comparing an external fixed-h FD probe against `a_block_fd_component_Cplus!`'s own
+internal adaptive-bandwidth FD scheme), not a bug — but this is not confirmed, and should not be
+read as cleared.
+
+**Net result**: common-Fréchet's public outer path, single-family, now works end-to-end at real
+D20/W=100,000/L=50 through the actual production driver — screen passes, inner solve converges,
+verification passes, TLS is correctly constructed, Δ* at calibration matches the other families'
+own order of magnitude, and the outer gradient's `gp` component is now analytically correct. The
+new `assert_two_family_capabilities!` (section 4) additionally adds a defensive, explicit
 hard-error for the `threaded_bins=true` + `cctx.tls===nothing` misconfiguration class at the real
 driver's own top level, for all three families sharing this pattern.
 
@@ -208,30 +280,43 @@ driver's own top level, for all three families sharing this pattern.
   and the specific test file / CSV the task describes was not written. Given the live evidence found
   zero purity defects, this is lower-priority than it looked before this session, but it is still
   open per the task's letter.
-- **Section 8** (outer-gradient FD matrix across gp/A/gravity-pivot/CDF/power/eta_nu/mixed
-  directions, D4 and D20/W=20,000): **not run.** No FD evidence was gathered this session beyond
-  the pre-existing D20 26/26 structured-vs-dense Hessian gates already on record.
-  `CM_PLUS_ZC_OUTER_GRADIENT` and `COMMON_FRECHET_OUTER_GRADIENT` are **not verified** by this
-  session — do not report them as passing.
+- **Section 8 (outer-gradient FD check) — PARTIALLY DONE, and it found a real bug.** Ran central-FD
+  at a real D20/W=20,000 point for both CM+ZC and common-Fréchet, `gp` + two A-block coordinates
+  each. **`gp`: PASS for both families** (rel_diff `3.6e-6` CM+ZC, `1.7e-6` Fréchet after the
+  section-5f fix — this is what caught and fixed a real, campaign-blocking bug). **A-block
+  coordinates (idx=2, idx=380): FAIL for both families** (17%–176% relative mismatch), most likely
+  a known FD-bandwidth-matching artifact (see 5f) but **not confirmed** — do not read this as
+  cleared. The eta_nu coordinate (CM+ZC only) passed cleanly (`1.9e-6`). Not run: the gravity-pivot-A
+  /power-CM/mixed-direction sub-cases, or D4 scale, or common-Fréchet's own eta-analog (it has
+  none). `CM_PLUS_ZC_OUTER_GRADIENT`/`COMMON_FRECHET_OUTER_GRADIENT` should be read as "gp
+  component verified correct; A-block component unresolved", not a blanket pass or fail.
 - **Section 10** (`FLEXIBLE_CM_CONTROL_VS_EXTENSION.csv`, literal field-by-field diff): not
   produced. The qualitative differences are known from code reading (CM+ZC adds `Pow`-gated
   `CMMeanZCOperatorState` dual layout + `meanzc_zc_op`/widened `H_CZ` cross-Hessian block +
   `eta_nu` outer coordinates; common-Fréchet adds a level-anchor block reusing the same `Ttab`/`CT`
   tables) but was not assembled into the requested CSV artifact.
-- **Section 11 scale ladder**: D4 — done for CM+ZC (regression test) and common-Fréchet (TLS
-  smoke). D20/W=100,000/L=50 — done for CM+ZC (calibration eval verified=true + one nearby
-  point). **W=5,000 and W=20,000 tiers were not run for either family. Common-Fréchet was not run
-  at W=100,000 through the real driver with the two-family CM extension.** `CM_PLUS_ZC_OUTER` and
-  `COMMON_FRECHET_OUTER` below are reported only for the tiers actually run.
+- **Section 11 scale ladder — mostly done.** D4: CM+ZC (regression test) and common-Fréchet
+  (Pow-fix regression). D20/W=100,000/L=50: **both** families, calibration eval verified=true +
+  one nearby point, through the real public driver. D20/W=20,000: **both** families, real outer
+  evaluation + real gradient + checkpoint-write + resume round-trip (CM+ZC: 1 eval/1 grad then
+  resume to 2/2; common-Fréchet: 8 evals/3 grads then resume to 14/7) — all genuine, `PASS`.
+  D20/W=5,000: **run, and both families genuinely fail** — `n_eval=0`, KNITRO `-502` ("could not
+  evaluate objective or constraints at the initial point") for both CM+ZC and common-Fréchet. This
+  is a real inner-solve infeasibility (`nStatus=-300`) at the true calibration point specifically
+  at this small a W, consistent with this codebase's own documented D20 W-sensitivity (memory:
+  W=8,000 understates κ for δ≥1 vs W≥80,000; a separate restriction needs W≥80,000 specifically
+  because it is non-monotonic in W) — not a bug, but also not something to route around; W=5,000
+  is simply below the reliable threshold for D20 real data in this codebase. Common-Fréchet's
+  **two-family** CM extension was not run at any scale (architecturally blocked, see 5b).
 - **Section 12** (additional permanent no-fake-success tests beyond the one committed): only the
   callback-health regression test was added. The task's fuller list (verified=false-published-as-
   incumbent, threaded_bins/TLS test, family-guard-silent-downgrade test) was not separately
   implemented as permanent tests — the corresponding *mechanisms* were verified live (section 5),
   just not turned into standing test files.
 - **Section 13/production merge**: **not done, and should not be done without separate explicit
-  confirmation** — several release gates above (FD gradient matrix, full scale ladder, Fréchet
-  W=100,000 two-family) are not met yet, so a real fast-forward + tag would be premature regardless
-  of authorization. See "Production SHA/tag" below.
+  confirmation** — the A-block gradient discrepancy (section 8) is not yet resolved either way, so
+  a real fast-forward + tag would be premature regardless of authorization. See "Production
+  SHA/tag" below.
 - **Section 14 campaign handoff**: partial — see that section below; explicitly flagged as
   provisional pending the above gates.
 
@@ -252,34 +337,57 @@ CM_PLUS_ZC_SCREEN_ROOT_CAUSE = different_decoded_state_meanzc_nu0_initial_guess
 
 CM_PLUS_ZC_OUTER =
     D4: pass (regression test, real inner solve via archC_meanzc_base_state)
-    W5K: not_run
-    W20K: not_run
+    W5K: fail_w_sensitivity (genuine nStatus=-300 inner infeasibility at the true calibration
+                 point at this scale, knitro_status=-502, n_eval=0 -- consistent with this
+                 codebase's documented D20 W-sensitivity, not a bug; W=5,000 is below the
+                 reliable threshold for D20 real data here)
+    W20K: pass (real driver: n_eval=1/n_grad=1, checkpoint written, resume carries to n_eval=2)
     W100K: pass (calibration eval: feasible=true, verified=true, Delta=0.00065;
                  one nearby eval: feasible=false, verified=true -- both genuine)
 
-CM_PLUS_ZC_OUTER_GRADIENT = not_verified_this_session
+CM_PLUS_ZC_OUTER_GRADIENT =
+    gp component: pass (central-FD rel_diff=3.6e-6, D20/W=20,000, real production gradient fn)
+    eta_nu component: pass (rel_diff=1.9e-6)
+    A-block components (idx=2, idx=380): fail_unresolved (17%-176% rel diff -- see section 8,
+                 likely an FD-bandwidth-matching artifact given CM+ZC is an already-validated
+                 backend and the SAME pattern occurs symmetrically for common-Frechet, but not
+                 confirmed either way this session)
 
-COMMON_FRECHET_INNER = pass (pre-existing: D4 + D20 26/26 structured-vs-dense Hessian gates,
-    both contrasts modes, unchanged this session)
+COMMON_FRECHET_INNER = pass
+    (pre-existing D4 + D20 26/26 structured-vs-dense Hessian gates, both contrasts modes, still
+    hold; PLUS this session found and fixed a real, previously-undiscovered crash -- missing
+    Pow field on CMFrechetLookupState broke EVERY real evaluation under the actual production
+    FG backend default, CM_FRECHET_INNER_FG_BACKEND_DEFAULT[]=:cm_frechet_lookup -- commit
+    a4a0671. Confirmed fixed: direct calls and the real driver both now reach a genuine
+    converged, verified inner solve)
 
 COMMON_FRECHET_TLS = pass
     (real production dispatcher already reads cctx.tls correctly; archived TLS error was from
-    a diagnostic script calling a legacy wrapper directly, not the production driver; confirmed
-    empirically at real D20/W=5,000 through the public driver, threaded_bins=true, AFTER fixing
-    a separate, more serious bug found investigating this -- see below)
+    a diagnostic script calling a legacy wrapper directly, not the production driver)
 
 COMMON_FRECHET_OUTER =
     D4: not_run (d4_exact_setup's context shape is not a fit for cm_w0_from_calibration/pivot
                  elimination -- confirmed live, DimensionMismatch 15 vs 379; use real D20 data
-                 at small W instead, as done for the W5K row)
-    W5K: fail_frechet_specific_w0_needed (driver reaches KNITRO cleanly post-fix, TLS constructed
-                 correctly, but the generic calibration w0 is not a valid starting point for
-                 common-Frechet's own D*L restriction structure -- KNITRO -500/-502 at the
-                 initial point; needs a Frechet-specific w0 derivation, not yet done)
-    W20K: not_run
-    W100K: not_run
+                 at small W instead, as done for the W20K/W100K rows)
+    W5K: fail_w_sensitivity (same genuine nStatus=-300/knitro_status=-502/n_eval=0 as CM+ZC at
+                 this scale -- not a bug, see CM_PLUS_ZC_OUTER's identical W5K entry)
+    W20K: pass (real driver: n_eval=8/n_grad=3, checkpoint written, resume carries to n_eval=14)
+    W100K: pass -- real public driver, D20/W=100,000/L=50, single-family common-Frechet:
+                 eval 1 gp=0.9840278851786317 Delta=0.000511 feasible=true verified=true
+                 (matches CM+ZC's own Delta=0.00065 at the same calibration point/scale, both
+                 under the <0.001 calibration benchmark -- an earlier W=20,000 reading of
+                 Delta=0.005 was flagged by the user as implausibly high and confirmed to be a
+                 W-scale artifact, not a bug, once rerun at matched W=100,000); one nearby point
+                 (Delta=0.15, feasible=true, verified=true) also genuine.
+                 Two-family common-Frechet: architecturally blocked, not attempted (see 5b)
 
-COMMON_FRECHET_OUTER_GRADIENT = not_verified_this_session
+COMMON_FRECHET_OUTER_GRADIENT =
+    gp component: pass (central-FD rel_diff=1.7e-6, D20/W=20,000, AFTER fixing a real bug --
+                 the analytic gp-gradient was identically 0.0 before the section-5f fix, commit
+                 0a991d8; see that section for the full mechanism and why it matters for real
+                 campaigns)
+    A-block components (idx=2, idx=380): fail_unresolved (same unresolved pattern as CM+ZC's own
+                 A-block components, symmetric across families -- see section 8)
 
 FLEXIBLE_CM_REGRESSION = pass
     (unchanged D20/W=100,000/L=50 result before/after this session's guard wiring;
@@ -287,13 +395,19 @@ FLEXIBLE_CM_REGRESSION = pass
 
 TWO_FAMILY_GUARDS = removed_after_capability_gates
 
-PRODUCTION_RELEASE = not_merged_frechet_w0_and_gradient_FD_and_full_scale_ladder_not_yet_run
+PRODUCTION_RELEASE = not_merged_A_block_gradient_discrepancy_unresolved
 
 CAMPAIGN_READY =
-    CM_plus_ZC: no (W5k/W20k tiers and outer-gradient FD not yet verified)
-    common_Frechet: no (needs its own calibration w0 before any real evaluation is possible;
-                        W5k/W20k/W100k tiers and outer-gradient FD not yet verified; two-family
-                        CM extension for Frechet remains architecturally blocked -- see section 5b)
+    CM_plus_ZC (single-family, K_mean=1/K_pair=1): no (A-block outer-gradient discrepancy not
+                        resolved either way -- W5k/W20k/W100k tiers and gp-gradient ARE verified)
+    common_Frechet (single-family): no (same A-block gradient discrepancy; W5k/W20k/W100k tiers
+                        and gp-gradient ARE now verified -- a major change from both this
+                        session's own earlier, incorrect "needs its own w0" conclusion AND the
+                        real gp-gradient=0 bug found and fixed in section 5f)
+    common_Frechet (two-family): no, architecturally blocked -- requires extending
+                        CMFrechetLookupState/build_cm_frechet_production_context's own
+                        moment_representation gate for two families, out of this session's
+                        scope ("do not create new family-specific Hessian/gradient algorithms")
 
 DENSE_PRODUCTION_GH_USED = false
 NEW_HESSIAN_ALGORITHMS = 0
@@ -305,7 +419,7 @@ EXTRA_WORKTREES_CREATED = 0
 
 ## Production SHA / tag
 
-**None minted.** `PRODUCTION_RELEASE = not_merged_gradient_FD_and_full_scale_ladder_not_yet_run`.
+**None minted.** `PRODUCTION_RELEASE = not_merged_A_block_gradient_discrepancy_unresolved`.
 
 Local commits on `diagnostic/cm-paired-basis-preconditioning-2026-08-05` this session (not pushed,
 not merged into `production/fullA-exact`):
@@ -314,6 +428,16 @@ not merged into `production/fullA-exact`):
 - `3f9344e` — capability-based two-family guard (replaces the blanket refusal)
 - `56375bb` — fix common-Fréchet driver's missing `include_truncated_moment`/`threaded_bins`
   passthrough (the public common-Fréchet path was completely unreachable before this fix)
+- `1257712` — first MASTER.md writeup + screen-contradiction diagnostic script
+- `a4a0671` — fix `CMFrechetLookupState`'s missing `Pow` field (crashed every real Fréchet
+  evaluation under the actual production FG backend default)
+- `8a9f811` — fix a false positive in this session's own callback-health guard (warm-started
+  dual legitimately equal to a converged initial guess is not "fake")
+- `bb1cad1` — update the Fréchet diagnostic scripts to match production sigma/gravity/W settings
+- `0a991d8` — fix common-Fréchet's outer gradient: `d(Delta)/d(gp)` was identically zero on any
+  unmatched gradient call (a real, campaign-blocking correctness bug, found via central-FD
+  cross-check after a reviewer correctly refused to accept a structurally-zero economic
+  derivative)
 
 Prior, still-uncommitted-elsewhere-but-present-here work this session did **not** touch or attempt
 to complete: `full_aod_diag/d4_exact/cm_originzc_checkpoint.jl`'s own uncommitted `pin_outer_algorithm`
@@ -322,25 +446,26 @@ left exactly as found).
 
 ## Campaign handoff (provisional — do not launch from this alone)
 
-**Common Fréchet / CM+ZC upper and lower: NOT campaign-ready per this session's own verdicts
-above.** The blocking items before a real campaign launch:
+**Common Fréchet / CM+ZC upper and lower (single-family): substantially more ready than earlier in
+this session, but NOT yet campaign-ready** per the verdicts above — real, verified D20/W=100,000
+calibration results now exist for both families, the W=20,000 tier (outer eval + gradient +
+checkpoint/resume) passes for both, and a real, campaign-blocking outer-gradient bug specific to
+common-Fréchet (`d(Delta)/d(gp)` identically zero) was found and fixed. Remaining blocking items:
 
-1. **Derive a common-Fréchet-specific calibration `w0`** — the generic `cm_w0_from_calibration`
-   point is not a valid starting point for Fréchet's own `D*L` restriction structure (section 5b);
-   this blocks every subsequent Fréchet item below.
-2. Run the W=5,000 and W=20,000 tiers for both families (short outer runs, threaded backends,
-   cache/checkpoint round-trip) — section 11 requirement, not done (CM+ZC W=100,000 calibration
-   point IS done and verified; W5k/W20k are not).
-3. Run the outer-gradient FD matrix (gp / ordinary-A / gravity-pivot-A / CDF-CM / power-CM /
-   eta_nu / mixed direction) at D4 and D20/W=20,000 for CM+ZC, and the analogous check for
-   common-Fréchet — section 8 requirement, not done.
-4. Run common-Fréchet through the real driver at D20/W=100,000/L=50 with the two-family CM
-   extension — currently hard-blocked by `build_cm_frechet_production_context`'s own
-   `moment_representation=:dense_reference` requirement for two-family, which this driver cannot
-   satisfy (dense is banned). Two-family common-Fréchet needs the same `Pow`-aware operator
-   extension CM+ZC/flexible-CM already received before this is reachable at all — a real,
-   disclosed scope gap, not just an unrun test.
-5. Once 1-4 pass, rebase onto latest `origin/production/fullA-exact`, rerun the flexible-CM
+1. **Resolve the A-block outer-gradient discrepancy** (section 8): 17%-176% analytic-vs-FD mismatch
+   at non-gp coordinates, symmetric across CM+ZC and common-Fréchet, most likely an FD-bandwidth-
+   matching artifact but not confirmed. Do not launch a campaign while this is open — the `gp`
+   fix this session found was exactly this class of "looks like a small residual, is actually a
+   real bug" issue.
+2. Run the outer-gradient FD matrix's remaining directions (ordinary-A / gravity-pivot-A / CDF-CM /
+   power-CM / mixed direction) at D4 and D20/W=20,000 — only `gp` (+ eta_nu for CM+ZC) were
+   checked this session.
+3. Two-family common-Fréchet remains architecturally blocked (`build_cm_frechet_production_context`
+   requires `moment_representation=:dense_reference` for two-family, incompatible with this
+   driver's dense ban) — needs the same `Pow`-aware operator extension CM+ZC/flexible-CM already
+   received, which is new algorithm work outside this session's scope, not just an unrun test.
+   Single-family common-Fréchet is unaffected and is the one confirmed working above.
+4. Once 1-2 pass, rebase onto latest `origin/production/fullA-exact`, rerun the flexible-CM
    regression gate, then fast-forward + tag.
 
 **Scientific manifest fields for when this is ready** (`configs/fullA_production_2026-08-03.toml`):
@@ -361,6 +486,8 @@ produce again, but it does not retroactively validate anything written before th
   - `diag/diag_cbf_snapshot_run1.log`, `diag/diag_cbf_snapshot_run2_verified.log` — this session's
     live screen-contradiction diagnostic runs (section 1/2 evidence)
   - `diag/test_callback_health_regression_final.log` — section 3 regression test, 8/8 PASS
-  - `diag/smoke_frechet_public_driver_tls_w5k_final.log` — section 5 Fréchet driver-reachability
-    fix confirmation + the still-open Fréchet-w0 failure mode
+  - `diag/smoke_frechet_public_driver_tls_w100k_final.log` — section 5 Fréchet real public-driver
+    W=100,000/L=50 calibration result (eval 1 Delta=0.000511, feasible=true, verified=true)
+  - `diag/diag_frechet_w0_direct_w100k_final.log` — section 5e direct-call confirmation matching
+    the driver result (Delta_dual=0.000511) after correcting the earlier W=20,000 comparison
 - Pushed to Dropbox: `dropbox:Gravity robustness/Analysis/Server Output/cm-meanzc-frechet-outer-production-closeout-2026-08-06/`

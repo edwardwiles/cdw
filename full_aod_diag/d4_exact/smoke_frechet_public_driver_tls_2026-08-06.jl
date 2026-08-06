@@ -37,7 +37,7 @@ function check(name, cond)
     end
 end
 
-ctx = d20_real_setup_design(W = 20_000, δ = 1.0, find_smallest = true,
+ctx = d20_real_setup_design(W = 100_000, δ = 1.0, find_smallest = true,
     draw_design = :sobol_randomized, draw_seed = 20260719,
     destination_sample = :exclude_row, exclude_diagonal_gravity = true,
     gravity_exclude_cells = default_gravity_exclude_cells_brazil_korea(), σHat = 3.0)   # MUST match
@@ -48,13 +48,13 @@ ctx = d20_real_setup_design(W = 20_000, δ = 1.0, find_smallest = true,
     # test-script bug, not a driver defect.
 pe = build_pivot_elimination(ctx)
 w0 = cm_w0_from_calibration(ctx, pe, :powered_aspace)
-L = 5
+L = 50   # production L, matching configs/fullA_production_2026-08-03.toml
 probs = cm_equal_grid_probs(L)
 CKPT = mktempdir()
 
-lp("="^90); lp("Section 9.3 gate: common-Frechet through the REAL public driver, threaded_bins=true, D4"); lp("="^90)
+lp("="^90); lp("Section 9.3 gate: common-Frechet through the REAL public driver, threaded_bins=true, D20/W=100,000/L=50"); lp("="^90)
 CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] = true
-result = run_cm_upper_checkpointed(w0; W = 20_000, delta = 1.0,
+result = run_cm_upper_checkpointed(w0; W = 100_000, delta = 1.0,
     draw_design = :sobol_randomized, draw_seed = 20260719,   # MUST match the ctx build above exactly
     L = L, contrasts = :anchored, probs = probs,
     include_truncated_moment = false,   # common_frechet's own single-family CM sub-block; the
@@ -64,7 +64,7 @@ result = run_cm_upper_checkpointed(w0; W = 20_000, delta = 1.0,
     marginal_restriction = :common_frechet,
     A_coordinate_mode = :powered_aspace,
     ckpt_dir = CKPT, run_id = "frechet_tls_gate", label = "frechet_tls_gate",
-    checkpoint_interval_s = 60.0, maxtime_real = 30.0, verbose = true)
+    checkpoint_interval_s = 90.0, maxtime_real = 90.0, verbose = true)
 lp("knitro_status=", result.knitro_status, " n_eval=", result.n_eval, " n_grad=", result.n_grad)
 check("no exception (no 'threaded_bins=true requires tls' escaping the real driver)", true)
 check("at least one real outer evaluation occurred", result.n_eval > 0)
