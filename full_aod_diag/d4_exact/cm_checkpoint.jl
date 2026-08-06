@@ -1412,12 +1412,22 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         eta_nu_now = is_meanzc ? w_current[D2_econ+1:end] : Float64[]
         logA_full = pivot_expand(zfree_now, pe)
         dual_warm_src = (is_meanzc || is_frechet) ? pcx.ctx_cm.obj.x : ctx.obj.x
-        # 2026-08-05 truncated-power task: schema-10 CM feature-family metadata. include_truncated_moment
-        # is always false by the time this closure can run for the non-frechet branches (the guard near
-        # the top of this function already refused true outright) -- frechet's CM sub-block is always
-        # single-family regardless of the caller's include_truncated_moment value, so it is recorded as
-        # cm_feature_family_count=1 unconditionally for that branch.
-        cm_family_count_now = is_frechet ? 1 : (include_truncated_moment ? 2 : 1)
+        # 2026-08-05 truncated-power task, corrected 2026-08-06 (levelpow kernel task): schema-10 CM
+        # feature-family metadata. This USED to hardcode cm_feature_family_count=1 for is_frechet
+        # unconditionally, on the (then-true) premise that Frechet's CM sub-block was always
+        # single-family regardless of include_truncated_moment. That premise is now FALSE --
+        # build_cm_frechet_production_context genuinely supports include_truncated_moment=true
+        # (two-family, cdf_plus_power) as of commit abdf836 -- and the stale hardcode caused every
+        # real two-family-Frechet checkpoint to be written claiming cm_feature_family_count=1 while
+        # the checkpoint's own resume-side validation (this function's own guard near the top,
+        # `resumed.cm_feature_family_count == (include_truncated_moment ? 2 : 1)`) already assumed
+        # the uniform (non-is_frechet-special-cased) formula -- confirmed live: a real two-family
+        # resume attempt failed with "checkpoint was written with cm_moment_spec=:cdf_only
+        # (cm_feature_family_count=1), this call requests include_truncated_moment=true
+        # (cm_feature_family_count=2)" even though the SAME call's own include_truncated_moment=true
+        # was what wrote the checkpoint being resumed. Fixed to the same uniform formula every other
+        # family already used.
+        cm_family_count_now = include_truncated_moment ? 2 : 1
         cm_moment_spec_now = cm_family_count_now == 2 ? :cdf_plus_truncated_power_1msigma : :cdf_only
         cm_feature_schema_version_now = 1
         cm_feature_checksum_now = cm_feature_operator_fingerprint(cm_moment_spec_now, L, cm_feature_schema_version_now, contrasts, pcx.aug.ncm)
