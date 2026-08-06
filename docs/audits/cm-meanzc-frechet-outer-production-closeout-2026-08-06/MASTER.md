@@ -6,22 +6,36 @@ recorded HEAD `895b99b8e6b1256a69e8e910f6a4f1533c59520f` (verified live at sessi
 exactly). `NEW_BRANCHES_CREATED = 0`, `EXTRA_WORKTREES_CREATED = 0` — the existing branch/worktree
 was reused throughout.
 
-**Scope note up front:** this session resolved the central blocking question (the CM+ZC screen
-contradiction) with strong, reproducible, live evidence, and found + fixed **seven** real, narrow,
-individually-tested production bugs (listed in "Production SHA / tag" below). Most significantly,
-common-Fréchet's public outer path was broken in **four** independent, stacked ways — driver
-unreachability, a missing struct field crashing every real evaluation, a false positive in this
-session's own new guard, and (found only because a reviewer refused to accept a structurally-zero
-economic derivative at face value) **the analytic `d(Delta)/d(gp)` outer gradient was identically
-zero** on any unmatched gradient call, a real campaign-blocking correctness bug, not merely an
-unrun test. All four are fixed and confirmed; common-Fréchet now reaches a genuine, verified
-D20/W=100,000 calibration result matching CM+ZC's own order of magnitude at Δ*, **and** its outer
-gradient at `gp` now agrees with central finite differences to 6 significant figures. It did
-**not** fully resolve a secondary, smaller-magnitude outer-gradient discrepancy in the A-block
-coordinates (present symmetrically in both families, likely a known FD-bandwidth-matching
-artifact rather than a bug — see "What remains open"), complete the W=5k/W20k tiers as their own
-dedicated gate, produce the literal field-by-field differential CSV, or merge to production. Those
-are called out explicitly below rather than fabricated.
+**Scope note up front, including a correction of this session's own earlier overclaim (read this
+before the numbered sections):** this session resolved the central blocking question (the CM+ZC
+screen contradiction) with strong, reproducible, live evidence, and found + fixed **eight** real,
+narrow, individually-tested production bugs (listed in "Production SHA / tag" below), most
+significantly a chain of four stacked bugs that left common-Fréchet's public outer path broken
+(driver unreachability, a missing struct field crashing every real evaluation, a false positive in
+this session's own new guard, and an outer-gradient bug described next), plus the SAME
+outer-gradient bug found independently in plain flexible-CM. All are fixed and confirmed;
+common-Fréchet now reaches a genuine, verified D20/W=100,000 calibration result matching CM+ZC's
+own order of magnitude at Δ*.
+
+The outer-gradient bug (section 5f): the analytic `d(Delta)/d(gp)` component came back identically
+zero on an *unmatched* gradient call, in both common-Fréchet and flexible-CM. **This session's own
+first writeup called this "campaign-blocking" — that claim was wrong and has been retracted.** The
+user directly challenged it (a mechanically-always-zero gradient on the literal objective variable
+would make any real KNITRO campaign immediately declare the start point optimal, which is not
+observed), and a direct instrumented test of a real live outer run confirmed `matched=true` for
+every real gradient call — the buggy path was never actually exercised in practice; only this
+session's own standalone diagnostic scripts (which never established a matched F-call first)
+triggered it. The bug is real and correctly fixed, but there is no evidence any actual campaign
+result was affected.
+
+**Two items remain genuinely open and unresolved, not merely "not yet run":** (1) a
+larger-magnitude outer-gradient discrepancy in the non-`gp` (A-block) coordinates, confirmed
+present in all three families tested (CM+ZC, common-Fréchet, flexible-CM) and NOT explained by
+winner-switching (directly ruled out via a tiny-`h` probe) — root cause not found; (2) a structural
+concern, raised but **not empirically verified**, that the unrestricted production driver may have
+a related `obj.arg1`-staleness issue that is live rather than dormant (unlike the CM-family case).
+Neither should be treated as resolved. This also did not complete the W=5k/W20k tiers as their own
+dedicated gate, produce the literal field-by-field differential CSV, or merge to production.
 
 ## 1. CM+ZC screen contradiction — ROOT CAUSE FOUND
 
@@ -225,7 +239,8 @@ calibration `gp` every other family lands on, genuinely verified, matching CM+ZC
 magnitude at the same scale.
 
 **5f. Real bug #4 — the analytic outer gradient's `d(Delta)/d(gp)` component was identically zero
-(commit `0a991d8`).** Caught only because a reviewer refused to accept a structurally-zero economic
+on an unmatched gradient call, in BOTH common-Fréchet and plain flexible-CM (commits `0a991d8`,
+`18089cf`).** Caught only because a reviewer refused to accept a structurally-zero economic
 derivative at face value: "the objective function is literally γ_d′ ... that has nothing to do with
 the common Fréchet restriction ... surely a bug." Correct call. Root cause:
 `gamma_component_analytic` (`lfix_factorized.jl`) computes `d(Delta)/d(gp)` as proportional to
@@ -237,40 +252,107 @@ state builders (`archC_X_verified_state`) sidestep this entirely, computing `m_s
 via operator-based verification. The *bare* builders (`archC_X_base_state`) do not — they read the
 never-written `obj.arg1`, silently returning an all-zero `m_star`.
 
-`cm_meanzc_production_gradient_cplus` already falls back to the verified builder on an unmatched
-gradient call (`base===nothing`, a real KNITRO calling mode: it does not guarantee `cb_G!` always
-follows `cb_F!` at the identical point, not just an internal implementation detail).
-`cm_frechet_production_gradient_cplus` fell back to the **bare** builder instead — silently
-zeroing the entire `d(Delta)/d(gp)` term on every unmatched gradient call. Confirmed live at a real
-D20/W=20,000 point: central-FD gave `d(Delta)/d(gp)=0.462`; the buggy analytic gradient returned
-exactly `0.0`. Fixed to match CM+ZC's exact pattern (fall back to `archC_frechet_verified_state`
-whenever `base` OR `verify` is missing); also updated `cb_G!`'s own call site
-(`cm_checkpoint.jl`) to pass `verify=verify_c` through, avoiding a redundant re-solve on the common
-matched case. **Verified: analytic vs. central-FD now agree to `rel_diff=1.7e-6`**, matching
-CM+ZC's own precision at the identical point.
+`cm_meanzc_production_gradient_cplus` (CM+ZC) and `cm_originzc_production_gradient_cplus`
+(origin-ZC) already fall back to the verified builder on an unmatched gradient call
+(`base===nothing`). `cm_frechet_production_gradient_cplus` **and** plain flexible-CM's own
+`cm_production_gradient_cplus` (`lfix_cm_cplus.jl`) both fell back to the **bare** builder instead —
+silently zeroing the entire `d(Delta)/d(gp)` term whenever called unmatched. Confirmed live at a
+real D20/W=20,000 point: central-FD gave `d(Delta)/d(gp)=0.40–0.46`; the buggy analytic gradient
+returned exactly `0.0` for both families. Fixed both to match CM+ZC's exact pattern (fall back to
+the verified state builder whenever `base` OR `verify` is missing); also updated `cb_G!`'s own
+call sites (`cm_checkpoint.jl`) to pass `verify=verify_c` through for both branches. **Verified:
+analytic vs. central-FD now agree to `rel_diff=1.7e-6` (Fréchet) and `3.9e-8` (flexible-CM)**,
+matching CM+ZC's own precision.
 
-This is a genuine, previously-undiscovered, campaign-blocking correctness bug — not merely an
-unrun test. Every real common-Fréchet outer search would have had a structurally wrong search
-direction along `gp` on any unmatched gradient evaluation, silently, with no error or warning.
+**Correction to this session's own earlier claim — read this before treating the bug above as
+campaign-relevant.** This was first written up as "a genuine, previously-undiscovered,
+campaign-blocking correctness bug ... every real common-Fréchet outer search would have had a
+structurally wrong search direction along gp." **That characterization is wrong and is retracted.**
+The user directly and correctly challenged it: if `gp`'s gradient were mechanically always zero in
+real use, a real KNITRO campaign would treat the initial point as already optimal and stop
+immediately — which is not what's observed; real campaigns on this exact code progress normally.
+The reconciliation: the bug **only** fires when `cb_G!` is called *unmatched* — no `cb_F!` was
+cached at the bit-identical point (`shared.w == w` false or `shared===nothing`). Standard NLP
+solver behavior (evaluate `f` at a trial point, then request its gradient at that *same* point)
+means `matched=true` in the overwhelming normal case. This was verified directly, not assumed:
+`cb_G!` was instrumented and a real short outer search was run (real public driver, plain
+flexible-CM, D20/W=20,000/L=50) — **`matched=true` for all 3 real gradient calls observed; the
+buggy unmatched fallback was never exercised.** This session's own diagnostic scripts, by calling
+the gradient functions standalone with no preceding matched F-call, were unconditionally exercising
+exactly the one path that's buggy — not representative of real campaign behavior. **Net
+assessment: the bug is real, now fixed, and worth having fixed (the documented `base=nothing`
+calling contract, and untested edge cases such as a checkpoint resume's first callback), but there
+is no evidence it affected any actual historical campaign result**, and it should not be described
+as campaign-blocking.
 
-A secondary, smaller-magnitude discrepancy remains **unresolved**: the A-block coordinates (e.g.
-index 2, index 380) show 17%–176% analytic-vs-FD mismatches for **both** families symmetrically
-(including CM+ZC, an already-validated backend), which makes a second family-specific Fréchet bug
-unlikely. An attempt to fix this by matching the analytic computation's own internally-selected
-adaptive bandwidth (rather than a fixed external `h`) immediately walked the perturbed point into
-genuine inner-solve infeasibility, so it could not be cleanly validated either way this session.
-Best current read: this is the documented `feedback-fd-bandwidth-mismatch-looks-like-a-bug`
-pitfall (comparing an external fixed-h FD probe against `a_block_fd_component_Cplus!`'s own
-internal adaptive-bandwidth FD scheme), not a bug — but this is not confirmed, and should not be
-read as cleared.
+**Open design question, raised by the user, not resolved/decided this session:** should `cb_G!`
+itself hard-error on an unmatched call, rather than silently paying for a correct-but-expensive
+recompute? Two considerations pull in different directions: (a) the `base=nothing` fallback inside
+`cm_X_production_gradient_cplus` is a documented, intentional convenience API for callers with no
+prior matching F-call (standalone scripts, diagnostics) — forcing an error at that layer would
+break legitimate direct callers; (b) inside `cb_G!` specifically, an unmatched call is empirically
+anomalous (never observed in real operation) and could indicate a different, unrelated bug (e.g. a
+floating-point `==` comparison failing for "the same" point) that a silent, valid-looking recompute
+would mask. Not implemented this session — flagged for a decision, not resolved.
+
+**A-block gradient discrepancy — unresolved, and NOT explained by winner-switching.** A secondary,
+larger-magnitude discrepancy exists in the non-`gp` coordinates of the SAME outer gradient (e.g.
+index 2, index 380 of the A-block): 17%–176% analytic-vs-FD mismatch. Confirmed present in **all
+three** families tested — CM+ZC, common-Fréchet, and **plain flexible-CM** — all via the identical
+shared `composite_gradient_at_Cplus_from_cache`/`a_block_fd_component_Cplus!` machinery,
+`cm_gradient_backend=:cplus` (no dense G/H) throughout. Not yet tested: origin-ZC, or the literal
+unrestricted family (see below).
+
+The user asked for this to be decomposed into the exact intensive-margin (incumbent-winner,
+smooth-reweighting) piece vs. the winner-switching piece, since `a_block_fd_component_Cplus!` is
+itself a central-FD computation (`lfix_incremental_at_Cplus!` at `w0±h`, holding the base dual
+`λ*/ζ*` fixed via an envelope-theorem shortcut, NOT a full re-solve) built on
+`dest_contrib_incremental_top3_C!`, which is an **exact** (not approximate/smoothed) recomputation
+of the true winner among `{cached top-3 candidates} ∪ {perturbed origins}` — provably correct
+because non-perturbed origins' prices are unchanged, so the best non-perturbed candidate is
+necessarily one of the cached top-3. This means the "harder, winner-switching" piece the user asked
+about is not a smoothing approximation in this codebase — it's computed exactly.
+
+**Direct test result: a tiny-h probe (`h=1e-10`, small enough that essentially no winner can flip)
+still shows the SAME discrepancy** (idx=2: 19.7%, idx=380: ~180%) as larger `h`. This rules out
+winner-switching as the explanation — the mismatch is present even in the pure intensive-margin
+regime, which was not the expected result. A companion attempt to directly count winner switches at
+this coordinate had its own decode bug (missed the powered-aspace `cm_z_from_a` transform when
+reconstructing the perturbed θ), so that specific piece of evidence is unreliable and should not be
+cited. **Root cause not found this session.** Two live hypotheses, neither confirmed: (a) a genuine
+bug in the shared A-block formula/implementation, independent of the two bugs already found and
+fixed; (b) an error specific to this session's own external FD reimplementation (full re-solve at
+`w0±h`) that the `gp` check's success doesn't rule out, since `gp` takes a structurally different
+code path (`gamma_component_analytic`, no FD at all internally) than the A-block coordinates do.
+
+**Unrestricted family — structural concern raised, NOT empirically verified. Do not treat as
+confirmed.** Asked directly whether the same `obj.arg1`-based bug pattern reaches the unrestricted
+production driver (`run_polish_checkpointed_unified`, `c10_d20_production_driver_unified.jl`).
+Structural reading of the code: `cb_F!`/`cb_G!` there build `BaseDualState` via
+`r.cache_hit ? (compressed_base_state(...) or solve_base_state(...)) : BaseDualState(..., copy(ctx.obj.arg1), ...)`.
+`compressed_base_state` (used on `cache_hit=true`) independently computes `m_star` via
+`compressed_cc_value_grad` — confirmed correct, not reading `obj.arg1`. The `cache_hit=false`
+branch, however, reads `copy(ctx.obj.arg1)` directly, and `obj.arg1` is confirmed (by the same
+grep-for-writes check used elsewhere) never written under the operator backend in this file either.
+Unlike the CM-family case, `r.cache_hit` here is an **exact-point cache** (has this literal point
+been evaluated before), not "did F just run at this same point" — for a normal outer search
+visiting new points every iteration, `cache_hit=false` would plausibly be the *common* case, not a
+rare one, which would make this a live rather than dormant risk if the reasoning holds. **This has
+NOT been tested the way the CM-family claim was verified** (no instrumented real run, no confirmed
+observation of `cache_hit` or `obj.arg1`'s actual state at the read site). Given this session
+already produced one overclaim that required direct empirical correction, this is deliberately
+reported as an unconfirmed structural concern requiring its own dedicated verification, not a
+finding.
 
 **Net result**: common-Fréchet's public outer path, single-family, now works end-to-end at real
 D20/W=100,000/L=50 through the actual production driver — screen passes, inner solve converges,
 verification passes, TLS is correctly constructed, Δ* at calibration matches the other families'
-own order of magnitude, and the outer gradient's `gp` component is now analytically correct. The
-new `assert_two_family_capabilities!` (section 4) additionally adds a defensive, explicit
-hard-error for the `threaded_bins=true` + `cctx.tls===nothing` misconfiguration class at the real
-driver's own top level, for all three families sharing this pattern.
+own order of magnitude, and the outer gradient's `gp` component is now analytically correct (in
+both common-Fréchet and flexible-CM). The A-block discrepancy and the unrestricted-family question
+are both open, unresolved, and should block any production merge. The new
+`assert_two_family_capabilities!` (section 4) additionally adds a defensive, explicit hard-error
+for the `threaded_bins=true` + `cctx.tls===nothing` misconfiguration class at the real driver's own
+top level, for all three CM-family families sharing this pattern.
 
 ## 6. What remains open (not completed this session — do not treat as done)
 
@@ -280,16 +362,35 @@ driver's own top level, for all three families sharing this pattern.
   and the specific test file / CSV the task describes was not written. Given the live evidence found
   zero purity defects, this is lower-priority than it looked before this session, but it is still
   open per the task's letter.
-- **Section 8 (outer-gradient FD check) — PARTIALLY DONE, and it found a real bug.** Ran central-FD
-  at a real D20/W=20,000 point for both CM+ZC and common-Fréchet, `gp` + two A-block coordinates
-  each. **`gp`: PASS for both families** (rel_diff `3.6e-6` CM+ZC, `1.7e-6` Fréchet after the
-  section-5f fix — this is what caught and fixed a real, campaign-blocking bug). **A-block
-  coordinates (idx=2, idx=380): FAIL for both families** (17%–176% relative mismatch), most likely
-  a known FD-bandwidth-matching artifact (see 5f) but **not confirmed** — do not read this as
-  cleared. The eta_nu coordinate (CM+ZC only) passed cleanly (`1.9e-6`). Not run: the gravity-pivot-A
-  /power-CM/mixed-direction sub-cases, or D4 scale, or common-Fréchet's own eta-analog (it has
-  none). `CM_PLUS_ZC_OUTER_GRADIENT`/`COMMON_FRECHET_OUTER_GRADIENT` should be read as "gp
-  component verified correct; A-block component unresolved", not a blanket pass or fail.
+- **Section 8 (outer-gradient FD check) — PARTIALLY DONE; found and fixed one real bug (impact
+  corrected below), left a second genuinely unresolved.** Ran central-FD at a real D20/W=20,000
+  point for CM+ZC, common-Fréchet, AND (after the user asked) plain flexible-CM, `gp` + two A-block
+  coordinates each. **`gp`: PASS for all three families** (rel_diff `3.6e-6` CM+ZC, `1.7e-6`
+  Fréchet, `3.9e-8` flexible-CM, all after the section-5f fix) — but see section 5f's own
+  correction: the bug this caught was confirmed, via a direct instrumented real run, to be dormant
+  in normal production operation (`matched=true` always observed), not campaign-blocking as first
+  claimed. **A-block coordinates (idx=2, idx=380): FAIL for all three families** (17%–176%
+  relative mismatch) — a tiny-`h` probe (`h=1e-10`) directly ruled out winner-switching as the
+  explanation (mismatch persists essentially unchanged), so this is NOT the documented
+  FD-bandwidth-mismatch pitfall as this session's own earlier draft speculated; root cause
+  genuinely unknown. The eta_nu coordinate (CM+ZC only) passed cleanly (`1.9e-6`). Not run: the
+  gravity-pivot-A/power-CM/mixed-direction sub-cases, D4 scale, origin-ZC, or the literal
+  unrestricted family (see the new structural-concern item below).
+  `CM_PLUS_ZC_OUTER_GRADIENT`/`COMMON_FRECHET_OUTER_GRADIENT`/`FLEXIBLE_CM_OUTER_GRADIENT` should
+  be read as "gp component verified correct, confirmed dormant-not-campaign-blocking; A-block
+  component genuinely unresolved" — not a blanket pass.
+- **NEW — unrestricted-family structural concern, raised but NOT verified.** Reading
+  `run_polish_checkpointed_unified`'s own `cb_F!`/`cb_G!` (`c10_d20_production_driver_unified.jl`)
+  found a similarly-shaped `BaseDualState(..., copy(ctx.obj.arg1), ...)` construction on its
+  `cache_hit=false` branch — and unlike the CM-family case, this branch's own trigger condition
+  (an exact-point cache miss) is plausibly the *common* case for a normal outer search visiting new
+  points every iteration, which would make this a live risk rather than a dormant one if the
+  reasoning holds. **This was explicitly NOT tested empirically this session** — no instrumented
+  real run, no confirmed observation of `cache_hit` or `obj.arg1`'s actual state at the read site.
+  Given this session already had to retract one overclaim after direct verification proved it
+  wrong, this is deliberately reported as an open question requiring its own dedicated check, not
+  a finding. Do not action this without first verifying it the same way the CM-family claim was
+  verified (instrument the real driver, run a real outer search, observe directly).
 - **Section 10** (`FLEXIBLE_CM_CONTROL_VS_EXTENSION.csv`, literal field-by-field diff): not
   produced. The qualitative differences are known from code reading (CM+ZC adds `Pow`-gated
   `CMMeanZCOperatorState` dual layout + `meanzc_zc_op`/widened `H_CZ` cross-Hessian block +
@@ -346,12 +447,13 @@ CM_PLUS_ZC_OUTER =
                  one nearby eval: feasible=false, verified=true -- both genuine)
 
 CM_PLUS_ZC_OUTER_GRADIENT =
-    gp component: pass (central-FD rel_diff=3.6e-6, D20/W=20,000, real production gradient fn)
+    gp component: pass (central-FD rel_diff=3.6e-6, D20/W=20,000, real production gradient fn --
+                 CM+ZC's own gp-gradient was ALREADY correct before this session; unaffected by
+                 the section-5f bug, which was specific to Frechet/flexible-CM)
     eta_nu component: pass (rel_diff=1.9e-6)
-    A-block components (idx=2, idx=380): fail_unresolved (17%-176% rel diff -- see section 8,
-                 likely an FD-bandwidth-matching artifact given CM+ZC is an already-validated
-                 backend and the SAME pattern occurs symmetrically for common-Frechet, but not
-                 confirmed either way this session)
+    A-block components (idx=2, idx=380): fail_unresolved (17%-176% rel diff -- see section 8;
+                 a tiny-h probe ruled OUT winner-switching as the explanation; root cause unknown,
+                 present identically in CM+ZC/Frechet/flexible-CM -- do not assume benign)
 
 COMMON_FRECHET_INNER = pass
     (pre-existing D4 + D20 26/26 structured-vs-dense Hessian gates, both contrasts modes, still
@@ -383,27 +485,42 @@ COMMON_FRECHET_OUTER =
 
 COMMON_FRECHET_OUTER_GRADIENT =
     gp component: pass (central-FD rel_diff=1.7e-6, D20/W=20,000, AFTER fixing a real bug --
-                 the analytic gp-gradient was identically 0.0 before the section-5f fix, commit
-                 0a991d8; see that section for the full mechanism and why it matters for real
-                 campaigns)
+                 the analytic gp-gradient was identically 0.0 before the section-5f fix (commit
+                 0a991d8), but ONLY on an unmatched cb_G! call; a direct instrumented real run
+                 confirmed matched=true for every real gradient call observed, i.e. the bug was
+                 dormant in practice, not campaign-blocking as first (incorrectly) claimed)
     A-block components (idx=2, idx=380): fail_unresolved (same unresolved pattern as CM+ZC's own
                  A-block components, symmetric across families -- see section 8)
 
-FLEXIBLE_CM_REGRESSION = pass
-    (unchanged D20/W=100,000/L=50 result before/after this session's guard wiring;
-    flexible_cm's own screen control passes identically to CM+ZC's)
+FLEXIBLE_CM_REGRESSION = pass, WITH a real bug found and fixed (commit 18089cf)
+    (screen/inner-solve results unchanged before/after this session's guard wiring; but plain
+    flexible-CM's own cm_production_gradient_cplus had the IDENTICAL gp-gradient=0 bug as
+    Fréchet's -- found only because the user asked "is this present in flexible_cm too?".
+    gp component now: pass (rel_diff=3.9e-8). Same dormant-not-campaign-blocking correction
+    applies -- verified via the same direct instrumented real-run check. A-block components
+    (idx=2, idx=380): fail_unresolved, same as the other two families.)
+
+UNRESTRICTED_OUTER_GRADIENT = not_verified_this_session
+    (structural reading of run_polish_checkpointed_unified found a similarly-shaped obj.arg1
+    read on its cache_hit=false branch, which may be the COMMON case for this driver -- unlike
+    the CM-family bug, this has NOT been empirically confirmed one way or the other; treat as
+    an open question requiring its own dedicated verification, not a finding)
 
 TWO_FAMILY_GUARDS = removed_after_capability_gates
 
-PRODUCTION_RELEASE = not_merged_A_block_gradient_discrepancy_unresolved
+PRODUCTION_RELEASE = not_merged_A_block_gradient_discrepancy_unresolved_plus_unrestricted_unverified
 
 CAMPAIGN_READY =
     CM_plus_ZC (single-family, K_mean=1/K_pair=1): no (A-block outer-gradient discrepancy not
                         resolved either way -- W5k/W20k/W100k tiers and gp-gradient ARE verified)
     common_Frechet (single-family): no (same A-block gradient discrepancy; W5k/W20k/W100k tiers
-                        and gp-gradient ARE now verified -- a major change from both this
-                        session's own earlier, incorrect "needs its own w0" conclusion AND the
-                        real gp-gradient=0 bug found and fixed in section 5f)
+                        and gp-gradient ARE now verified -- a major change from this session's
+                        own earlier, incorrect "needs its own w0" conclusion; the gp-gradient=0
+                        bug found and fixed in section 5f was confirmed dormant, not the reason
+                        this remains not-ready -- the A-block discrepancy is)
+    flexible_cm: no new blocker found beyond the A-block discrepancy (present here too); the
+                        gp-gradient=0 bug found in this family too is fixed and confirmed dormant
+    unrestricted: status unknown -- the structural concern above was not verified either way
     common_Frechet (two-family): no, architecturally blocked -- requires extending
                         CMFrechetLookupState/build_cm_frechet_production_context's own
                         moment_representation gate for two families, out of this session's
@@ -419,7 +536,7 @@ EXTRA_WORKTREES_CREATED = 0
 
 ## Production SHA / tag
 
-**None minted.** `PRODUCTION_RELEASE = not_merged_A_block_gradient_discrepancy_unresolved`.
+**None minted.** `PRODUCTION_RELEASE = not_merged_A_block_gradient_discrepancy_unresolved_plus_unrestricted_unverified`.
 
 Local commits on `diagnostic/cm-paired-basis-preconditioning-2026-08-05` this session (not pushed,
 not merged into `production/fullA-exact`):
@@ -435,9 +552,13 @@ not merged into `production/fullA-exact`):
   dual legitimately equal to a converged initial guess is not "fake")
 - `bb1cad1` — update the Fréchet diagnostic scripts to match production sigma/gravity/W settings
 - `0a991d8` — fix common-Fréchet's outer gradient: `d(Delta)/d(gp)` was identically zero on any
-  unmatched gradient call (a real, campaign-blocking correctness bug, found via central-FD
-  cross-check after a reviewer correctly refused to accept a structurally-zero economic
-  derivative)
+  unmatched gradient call. **Its own commit message called this "campaign-blocking" — that claim
+  is retracted, see commit `18089cf` and section 5f for the correction and direct verification.**
+- `18089cf` — fix the SAME `d(Delta)/d(gp)=0` bug in plain flexible-CM (found because the user
+  asked whether it was Fréchet-specific — it wasn't); **also** the commit that directly verifies,
+  by instrumenting the real driver and running a real outer search, that `matched=true` for every
+  real gradient call observed — i.e. the bug (in both families) was dormant in practice, not
+  campaign-blocking. This is the correction commit for `0a991d8`'s own overclaim.
 
 Prior, still-uncommitted-elsewhere-but-present-here work this session did **not** touch or attempt
 to complete: `full_aod_diag/d4_exact/cm_originzc_checkpoint.jl`'s own uncommitted `pin_outer_algorithm`
@@ -449,23 +570,28 @@ left exactly as found).
 **Common Fréchet / CM+ZC upper and lower (single-family): substantially more ready than earlier in
 this session, but NOT yet campaign-ready** per the verdicts above — real, verified D20/W=100,000
 calibration results now exist for both families, the W=20,000 tier (outer eval + gradient +
-checkpoint/resume) passes for both, and a real, campaign-blocking outer-gradient bug specific to
-common-Fréchet (`d(Delta)/d(gp)` identically zero) was found and fixed. Remaining blocking items:
+checkpoint/resume) passes for both, and a real outer-gradient bug affecting common-Fréchet AND
+flexible-CM (`d(Delta)/d(gp)` identically zero on an unmatched gradient call) was found and fixed
+— directly confirmed dormant in real operation, not the reason campaign-readiness is blocked.
+Remaining blocking items:
 
 1. **Resolve the A-block outer-gradient discrepancy** (section 8): 17%-176% analytic-vs-FD mismatch
-   at non-gp coordinates, symmetric across CM+ZC and common-Fréchet, most likely an FD-bandwidth-
-   matching artifact but not confirmed. Do not launch a campaign while this is open — the `gp`
-   fix this session found was exactly this class of "looks like a small residual, is actually a
-   real bug" issue.
-2. Run the outer-gradient FD matrix's remaining directions (ordinary-A / gravity-pivot-A / CDF-CM /
+   at non-gp coordinates, present identically in CM+ZC, common-Fréchet, AND flexible-CM. A tiny-`h`
+   probe directly ruled OUT winner-switching as the explanation — root cause genuinely unknown. Do
+   not launch a campaign while this is open.
+2. **Verify (or refute) the unrestricted-family structural concern** (section 8/5f): a
+   similarly-shaped `obj.arg1` read in `run_polish_checkpointed_unified`'s `cache_hit=false`
+   branch, plausibly the *common* case for that driver (unlike the CM-family bug, which was
+   confirmed dormant) — not yet empirically tested either way.
+3. Run the outer-gradient FD matrix's remaining directions (ordinary-A / gravity-pivot-A / CDF-CM /
    power-CM / mixed direction) at D4 and D20/W=20,000 — only `gp` (+ eta_nu for CM+ZC) were
    checked this session.
-3. Two-family common-Fréchet remains architecturally blocked (`build_cm_frechet_production_context`
+4. Two-family common-Fréchet remains architecturally blocked (`build_cm_frechet_production_context`
    requires `moment_representation=:dense_reference` for two-family, incompatible with this
    driver's dense ban) — needs the same `Pow`-aware operator extension CM+ZC/flexible-CM already
    received, which is new algorithm work outside this session's scope, not just an unrun test.
    Single-family common-Fréchet is unaffected and is the one confirmed working above.
-4. Once 1-2 pass, rebase onto latest `origin/production/fullA-exact`, rerun the flexible-CM
+5. Once 1-3 pass, rebase onto latest `origin/production/fullA-exact`, rerun the flexible-CM
    regression gate, then fast-forward + tag.
 
 **Scientific manifest fields for when this is ready** (`configs/fullA_production_2026-08-03.toml`):
@@ -490,4 +616,14 @@ produce again, but it does not retroactively validate anything written before th
     W=100,000/L=50 calibration result (eval 1 Delta=0.000511, feasible=true, verified=true)
   - `diag/diag_frechet_w0_direct_w100k_final.log` — section 5e direct-call confirmation matching
     the driver result (Delta_dual=0.000511) after correcting the earlier W=20,000 comparison
-- Pushed to Dropbox: `dropbox:Gravity robustness/Analysis/Server Output/cm-meanzc-frechet-outer-production-closeout-2026-08-06/`
+  - `diag/tier_w5k_w20k_final.log` — section 11 W=5,000/W=20,000 tier runs, both families
+  - `diag/fd_outer_gradient_check_AFTER_FIX.log` — the gp=0 bug: before/after FD comparison
+  - `diag/diag_gamma_component_trace.log` — factor-by-factor trace that located the exact missing
+    `archC_frechet_verified_state` call (section 5f mechanism)
+  - `diag/diag_ablock_decompose.log` — flexible-CM gp=0 confirmation, the tiny-h winner-switching
+    test, and the (unreliable, decode-bug-affected) winner-switch count
+  - `diag/diag_matched_check.log` — the direct instrumented real-run confirmation that
+    `matched=true` for every real gradient call observed (the correction evidence for the
+    "campaign-blocking" retraction)
+- Pushed to Dropbox, single consolidated folder (no new subfolders per finding):
+  `dropbox:Gravity robustness/Analysis/Server Output/cm-meanzc-frechet-outer-production-closeout-2026-08-06/`
