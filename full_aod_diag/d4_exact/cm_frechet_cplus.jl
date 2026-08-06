@@ -69,18 +69,50 @@ function frechet_cm_level_fixed_contribution(base::BaseDualState, ctx, aug, bins
     nO = length(aug.origins)
     D = ctx.D
     @assert length(base.λstar) >= ncore - 1 + ncm_cm + ncm_level "base.λstar too short for aug's (ncore,ncm_cm,ncm_level) -- was base solved against aug.obj_cm?"
-
-    λ_cm = base.λstar[ncore : ncore - 1 + ncm_cm]
+    # 2026-08-06 (levelpow kernel task): `nf==2` means BOTH ncm_cm and ncm_level are TWO-FAMILY-
+    # widened (ncm_cm=2*nO*L, ncm_level=2*L) -- this function used to hardcode the single-family
+    # widths (`reshape(λ_cm,nO,L)`/`reshape(λ_level,1,L)` on the FULL, now-doubled slices), which
+    # threw exactly the DimensionMismatch a real public-driver outer-gradient call hit live
+    # (caught by this session's own W20k common-Fréchet two-family smoke, not by the D4/D20
+    # calibration-only FG gates above, which never exercise this C+ envelope-theorem path). Fixed
+    # by splitting each tail into its cdf/pow halves BEFORE slicing into the single-family kernel,
+    # mirroring lfix_cm_aware.jl::cm_fixed_value_contribution_two_family's own accepted pattern for
+    # the CM block's own eq.36 term (a direct, unoptimized matvec against aug.CM's already-built
+    # pow sub-block, done ONCE per outer point -- cheap, not a per-Newton-iteration cost). Unlike
+    # that CM-block precedent, no separate target-correction term is needed for the levelpow half:
+    # `precalc_frechet_levelpow_dense` (cm_frechet_level.jl) already subtracts levelpow_targets
+    # INTO aug.CM's own levelpow columns at construction time, so a plain matvec against them
+    # already yields the fully target-corrected contribution.
+    nf = hasproperty(aug, :n_families) ? aug.n_families : 1
     R = aug.contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
-    cm_out = cm_fixed_value_contribution(λ_cm, nO, L, aug.refIndex1, aug.origins, bins, R)
 
-    λ_level = base.λstar[ncore + ncm_cm : ncore - 1 + ncm_cm + ncm_level]
-    P_level_mat = suffix_sums(reshape(λ_level, 1, L))   # 1 x (L+1), column L+1 == 0
+    λ_cm_full = base.λstar[ncore : ncore - 1 + ncm_cm]
+    ncm_cdf = nf == 2 ? aug.ncm_cdf : ncm_cm
+    λ_cm_cdf = @view λ_cm_full[1:ncm_cdf]
+    cm_out = cm_fixed_value_contribution(λ_cm_cdf, nO, L, aug.refIndex1, aug.origins, bins, R)
+    if nf == 2
+        ncm_pow = aug.ncm_pow
+        λ_cm_pow = @view λ_cm_full[ncm_cdf+1:ncm_cdf+ncm_pow]
+        CM_pow = @view aug.CM[:, ncm_cdf+1:ncm_cdf+ncm_pow]
+        cm_out = cm_out .+ CM_pow * λ_cm_pow
+    end
+
+    λ_level_full = base.λstar[ncore + ncm_cm : ncore - 1 + ncm_cm + ncm_level]
+    ncm_level_cdf = nf == 2 ? aug.ncm_level_cdf : ncm_level   # == L either way
+    λ_level_cdf = @view λ_level_full[1:ncm_level_cdf]
+    P_level_mat = suffix_sums(reshape(λ_level_cdf, 1, L))   # 1 x (L+1), column L+1 == 0
     invsqrtD = 1.0 / sqrt(D)
     level_out = Vector{Float64}(undef, size(bins, 1))
     frechet_level_forward_sum!(level_out, bins, D, vec(P_level_mat))
     level_out .*= invsqrtD
-    level_out .-= sum(λ_level .* aug.level_targets)   # constant target-correction term (see docstring)
+    level_out .-= sum(λ_level_cdf .* aug.level_targets[1:ncm_level_cdf])   # constant target-correction term (see docstring)
+    if nf == 2
+        ncm_level_pow = aug.ncm_level_pow
+        λ_level_pow = @view λ_level_full[ncm_level_cdf+1:ncm_level_cdf+ncm_level_pow]
+        levelpow_col_off = ncm_cm + ncm_level_cdf   # aug.CM layout: [CM_cdf|CM_pow|level_cdf|level_pow]
+        CM_levelpow = @view aug.CM[:, levelpow_col_off+1:levelpow_col_off+ncm_level_pow]
+        level_out = level_out .+ CM_levelpow * λ_level_pow
+    end
 
     return cm_out .+ level_out
 end
