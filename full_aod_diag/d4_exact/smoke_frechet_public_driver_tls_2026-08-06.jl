@@ -37,7 +37,15 @@ function check(name, cond)
     end
 end
 
-ctx = d20_real_setup(W = 5000, δ = 1.0, find_smallest = true, destination_sample = :exclude_row)   # small W for speed -- real D20 rectangular setup, the shape this driver's pivot/aspace machinery actually expects (d4_exact_setup's square D4 shape is not a fit for cm_w0_from_calibration, confirmed live: DimensionMismatch 15 vs 379)
+ctx = d20_real_setup_design(W = 20_000, δ = 1.0, find_smallest = true,
+    draw_design = :sobol_randomized, draw_seed = 20260719,
+    destination_sample = :exclude_row, exclude_diagonal_gravity = true,
+    gravity_exclude_cells = default_gravity_exclude_cells_brazil_korea(), σHat = 3.0)   # MUST match
+    # run_cm_upper_checkpointed's own defaults exactly -- see diag_frechet_w0_direct_2026-08-06.jl's
+    # identical comment; the plain d20_real_setup(...) call used here originally silently used
+    # sigma=2.5/no gravity exclusion, a genuinely different economic model than the driver's own
+    # internal context, which is why the driver's screen legitimately rejected this w0 -- a
+    # test-script bug, not a driver defect.
 pe = build_pivot_elimination(ctx)
 w0 = cm_w0_from_calibration(ctx, pe, :powered_aspace)
 L = 5
@@ -46,12 +54,13 @@ CKPT = mktempdir()
 
 lp("="^90); lp("Section 9.3 gate: common-Frechet through the REAL public driver, threaded_bins=true, D4"); lp("="^90)
 CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] = true
-result = run_cm_upper_checkpointed(w0; W = 5000, delta = 1.0,
-    draw_design = :pseudorandom, draw_seed = 20260719,
+result = run_cm_upper_checkpointed(w0; W = 20_000, delta = 1.0,
+    draw_design = :sobol_randomized, draw_seed = 20260719,   # MUST match the ctx build above exactly
     L = L, contrasts = :anchored, probs = probs,
     include_truncated_moment = false,   # common_frechet's own single-family CM sub-block; the
         # two-family CM extension is orthogonal to this TLS gate specifically
     cm_hessian_backend = :structured, threaded_bins = true,
+    exclude_diagonal_gravity = true, gravity_exclude_cells = default_gravity_exclude_cells_brazil_korea(), σHat = 3.0,
     marginal_restriction = :common_frechet,
     A_coordinate_mode = :powered_aspace,
     ckpt_dir = CKPT, run_id = "frechet_tls_gate", label = "frechet_tls_gate",
