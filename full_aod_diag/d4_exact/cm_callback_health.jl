@@ -104,9 +104,21 @@ function assert_no_fake_success!(label::AbstractString, health::CallbackHealthRe
               "invoked, so nothing was actually solved; this is the fake-success signature (KNITRO " *
               "reporting a status without ever calling back into the objective), not a real result.")
     end
-    if nStatus in (0, -100, -101, -102, -103) && length(x_initial) == length(x_solution) && x_solution == x_initial
-        error("$label: nStatus=$nStatus claims a converged solve, but the returned dual is byte-" *
-              "identical to the untouched initial vector -- fake success.")
+    # 2026-08-06 correction: `x_initial` (CS.inner_loop_initial_values(obj)) legitimately WARM-
+    # STARTS from the previous solve's converged obj.x (dual_bank.jl/cm_dual_bank_production.jl's
+    # own documented reuse contract) -- it is NOT always a fixed cold zero vector. A warm-started
+    # dual that happens to already BE the optimum at a nearby new point legitimately converges in
+    # zero real steps with x_solution==x_initial and n_fg>0 -- confirmed live 2026-08-06 at a real
+    # common-Frechet D20/W=20,000 point (this exact false positive fired and was traced to a
+    # genuine warm-started zero-step convergence, not a masked exception). The real fingerprint of
+    # the original missing-Pow= bug this check exists to catch is specifically a COLD (all-zero)
+    # start that never moved despite a claimed converged status -- restricting to that case keeps
+    # the check's detection power for the actual failure mode without flagging legitimate warm
+    # starts.
+    if nStatus in (0, -100, -101, -102, -103) && length(x_initial) == length(x_solution) &&
+       x_solution == x_initial && all(iszero, x_initial)
+        error("$label: nStatus=$nStatus claims a converged solve, but the returned dual is still the " *
+              "untouched COLD (all-zero) initial vector -- fake success.")
     end
     return nothing
 end
