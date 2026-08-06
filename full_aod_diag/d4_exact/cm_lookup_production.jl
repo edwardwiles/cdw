@@ -31,6 +31,8 @@
 # hessian_cm_structured!/`_v2!`/archC_hess_cb_builder themselves.
 # ================================================================================================
 
+isdefined(Main, :CallbackHealthRecord) || include(joinpath(@__DIR__, "cm_callback_health.jl"))
+
 """
     _adapt_hess_cb_for_lookup(hess_cb) -> Function
 
@@ -54,24 +56,26 @@ fair, matched A/B.
 """
 function inner_loop_KNITRO_cmlookup_production(obj, st::CMLookupState; hess_cb_builder)
     CS.guard_enter_inner_solve!()
+    health = CallbackHealthRecord()   # 2026-08-06 fake-success guard, see cm_callback_health.jl
     try
         kc = KNITRO.KN_new()
         KNITRO.KN_add_vars(kc, CS.inner_loop_number_variables(obj))
         KNITRO.KN_set_var_lobnds_all(kc, CS.inner_loop_lower_bounds(obj))
-        KNITRO.KN_set_var_primal_init_values_all(kc, CS.inner_loop_initial_values(obj))
+        x_initial = CS.inner_loop_initial_values(obj)
+        KNITRO.KN_set_var_primal_init_values_all(kc, x_initial)
 
-        cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], _callbackEvalFG_inner_cmlookup!)
+        cb = KNITRO.KN_add_eval_callback(kc, true, Int32[], callback_health_guard(_callbackEvalFG_inner_cmlookup!, health))
         KNITRO.KN_set_cb_user_params(kc, cb, st)
         KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
 
         n_hess = Ref(0)
         if KNITRO.KN_get_int_param(kc, "hessopt") == 1
             hess_cb_raw = hess_cb_builder(obj)
-            hess_cb_adapted = (kc2, cb2, evalRequest, evalResult, userParams) -> begin
+            hess_cb_adapted = callback_health_guard((kc2, cb2, evalRequest, evalResult, userParams) -> begin
                 r = _adapt_hess_cb_for_lookup(hess_cb_raw)(kc2, cb2, evalRequest, evalResult, userParams)
                 n_hess[] += 1
                 return r
-            end
+            end, health)
             KNITRO.KN_set_cb_hess(kc, cb, KNITRO.KN_DENSE_ROWMAJOR, hess_cb_adapted)
         end
         if obj.complement_index != [0 0]
@@ -80,6 +84,7 @@ function inner_loop_KNITRO_cmlookup_production(obj, st::CMLookupState; hess_cb_b
 
         KNITRO.KN_solve(kc)
         nStatus, objSol, x, lambda_ = KNITRO.KN_get_solution(kc)
+        assert_no_fake_success!("inner_loop_KNITRO_cmlookup_production", health, nStatus, st.n_fg_calls, x_initial, x)
         CS.INNER_ITERS_TOTAL[] += CS._kn_num_iters(kc)
         n_fg = st.n_fg_calls
         KNITRO.KN_free(kc)
