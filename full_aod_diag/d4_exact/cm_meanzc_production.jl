@@ -288,8 +288,12 @@ function archC_meanzc_verified_state(x_free0::AbstractVector, νvec::AbstractVec
         cf isa CompressedFactual || error("archC_meanzc_verified_state: verification_backend=:operator requires cctx.core_cf_ref[] to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
         cctx.meanzc_zc_op !== nothing || error("archC_meanzc_verified_state: verification_backend=:operator requires cctx.meanzc_zc_op to be built (this CMBinHessCtx was not built via build_cm_meanzc_bin_ctx)")
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        # 2026-08-05 (paired-basis-preconditioning pilot): Pow=cctx.Pow (fam2 only) -- same fix as
+        # flexible_cm's own archC_verified_state call site, see
+        # verify_inner_solution_operator_cmmeanzc!'s own header comment.
         ov = verify_inner_solution_operator_cmmeanzc!(ζstar, λstar, cf, cctx.meanzc_zc_op, cctx.meanzc_zc_layout,
-            νvec, cctx.L, cctx.nO, cctx.origins, cctx.refIndex1, bins_u, cctx.R, obj, W)
+            νvec, cctx.L, cctx.nO, cctx.origins, cctx.refIndex1, bins_u, cctx.R, obj, W;
+            Pow = cctx.n_families == 2 ? cctx.Pow : nothing)
         m_weights, verify = verify_namedtuple_from_operator(ov, obj, W, nStatus)
     elseif verification_backend === :dense_reference
         G = CS.select_G_from_H(obj, obj.H)

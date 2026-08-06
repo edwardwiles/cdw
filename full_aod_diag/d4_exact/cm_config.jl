@@ -61,9 +61,10 @@ Base.@kwdef struct CMConfig
     # parameter that changes which economic restriction is imposed; explicitly extended to this
     # new feature-family metadata by the task brief). `1` = eq.35 (CDF) only, the pre-2026-08-05
     # behavior; `2` = eq.35+eq.36 (CDF + truncated (1-σ)-power), the corrected production spec.
-    # Ignored for `marginal_restriction=:common_frechet` (that family's CM sub-block is a
-    # deliberate single-family carve-out, see cm_frechet_level.jl) -- still required so every
-    # caller states its intent explicitly, but ANY value is accepted in that branch.
+    # 2026-08-05 (paired-basis-preconditioning pilot): also now threaded through for
+    # `marginal_restriction=:common_frechet` (`2` enables the levelpow restriction alongside the
+    # CM-pow sub-block, see cm_frechet_level.jl's `include_truncated_moment` kwarg) -- previously
+    # ignored there (a deliberate single-family carve-out) when only the CDF-only spec existed.
     cm_moment_families::Int
 end
 
@@ -82,12 +83,19 @@ function _cm_validate(cfg::CMConfig)
     end
     cfg.cm_moment_families in (1, 2) ||
         error("CMConfig: cm_moment_families must be 1 (eq.35 only) or 2 (eq.35+eq.36), got $(cfg.cm_moment_families)")
-    if cfg.marginal_restriction === :common_flexible && cfg.cm_moment_families == 2 && cfg.cm_hessian_backend === :structured
-        error("CMConfig: cm_moment_families=2 (the two-family eq.35+eq.36 spec) is incompatible with " *
-              "cm_hessian_backend=:structured -- the structured (Architecture C) bin-table Hessian assumes a " *
-              "pure-indicator single CM feature family and has not been extended to the weighted eq.36 family " *
-              "(see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2). Pass cm_hessian_backend=:dense_reference.")
-    end
+    # 2026-08-05 (paired-basis-preconditioning pilot): this guard was written when the structured
+    # (Architecture C) threaded bin-table Hessian genuinely had no eq.36/two-family support --
+    # ROOT-CAUSED AND FIXED this session (cm_hessian_threaded.jl's ThreadLocalBinScratch/
+    # build_bin_tables_threaded!, threaded_cross_hessian.jl's winner_pair_cross_hessian_fill_threaded!/
+    # bin_zc_cross_hessian_fill_threaded!, hcz_drawchunk_candidate_2026-07-29.jl/
+    # hcz_reordered_candidate_2026-08-01.jl's own H_CZ backends -- all three now carry the same
+    # "_pow" companion tables the serial path already had). Verified bit-identical against dense
+    # reference (Architecture A) at D4 and D20/W=20,000 via a dedicated Hessian-diff harness
+    # (test_cm_archc_vs_densea_hessian_trajectory_2026-08-05.jl). :common_flexible +
+    # cm_moment_families=2 + cm_hessian_backend=:structured is now a real, supported combination --
+    # removing the stale blanket refusal. (CM+ZC's own narrower "ZC-widened direct-H_CZ + two-family"
+    # sub-case remains hard-refused at a lower layer, cm_hessian_threaded.jl, since THAT specific
+    # combination was not part of this fix.)
     if cfg.cm_grid_rule === :equal
         cfg.cm_grid_size >= 1 || error("CMConfig: cm_grid_size must be >= 1")
     else
@@ -166,11 +174,18 @@ function build_cm_production_context_v2(ctx, CS, cfg::CMConfig; L::Int = cfg.cm_
     probs = cm_resolve_probs_for_L(cfg, L)
 
     if cfg.marginal_restriction === :common_frechet
-        # cm_frechet_level.jl -- only :cumulative basis / :dense_reference Hessian backend so far
-        # (enforced in _cm_validate above), so this branch has just one call site, unlike the
-        # (basis x backend) dispatch below.
+        # cm_frechet_level.jl -- 2026-08-05 (paired-basis-preconditioning pilot): cm_moment_families
+        # is NO LONGER ignored here (contrary to CMConfig's own field docstring, now stale) --
+        # threaded through as include_truncated_moment, matching the :common_flexible branch below.
+        # `build_cm_frechet_production_context` itself hard-requires moment_representation=
+        # :dense_reference and use_compressed_core=false whenever this is true (both defaulted
+        # correctly here), and cm_hessian_backend=:structured is now supported (see
+        # _fill_frechet_level_blocks!'s two-family extension, cm_frechet_hessian.jl).
+        frechet_fam2 = cfg.cm_moment_families == 2
+        frechet_extra = frechet_fam2 ? (moment_representation = :dense_reference, use_compressed_core = false) : NamedTuple()
         pcx = build_cm_frechet_production_context(ctx, CS; L = L, contrasts = cfg.contrasts, probs = probs,
-                                                    cm_hessian_backend = cfg.cm_hessian_backend)
+                                                    cm_hessian_backend = cfg.cm_hessian_backend,
+                                                    include_truncated_moment = frechet_fam2, frechet_extra...)
         return (ctx_cm = pcx.ctx_cm, aug = pcx.aug, bins = pcx.bins, cctx = pcx.cctx,
                 hess_cb_builder = pcx.hess_cb_builder, cfg = cfg, L = L)
     end

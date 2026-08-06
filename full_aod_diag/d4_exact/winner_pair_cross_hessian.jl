@@ -583,6 +583,63 @@ function winner_pair_cross_hessian_colsum!(colsum::AbstractVector{Float64}, wctx
 end
 
 """
+    winner_pair_cross_hessian_colsum_pow!(colsum_pow, wctx, ws, l) -> colsum_pow
+
+2026-08-05 (common-Fréchet two-family extension, item 1+2): the eq.36/truncated-power twin of
+`winner_pair_cross_hessian_colsum!` above -- feeds common-Fréchet's NEW `H_E,levelpow` block
+(`_fill_frechet_level_blocks!`, cm_frechet_hessian.jl) exactly the way the plain `colsum!` feeds
+`H_E,level`. Reads the SAME "_pow" REFLECTED (`1{U>c}`, not `<=c`) tables
+`winner_pair_cross_hessian_cm_block!` already reads for the eq.36 H_EC block (`QCScum_pow`/
+`NuCScum_pow`/`SOnlyCScum_pow`/`QCfCScum_pow`, `winner_pair_cross_hessian_fill!` must have been
+called with `Pow=cctx.Pow` first) -- no new accumulation pass, just a different linear combination
+of already-built tables, mirroring `colsum!`'s own "sum over ALL D origins" (the level/levelpow
+restriction's own u=1/sqrt(D) weight vector, not CM's (e_o-e_ref) difference) applied to the
+reflected/Pow-weighted twin instead of the plain one.
+"""
+function winner_pair_cross_hessian_colsum_pow!(colsum_pow::AbstractVector{Float64}, wctx::WinnerPairHessCtx,
+        ws::WinnerBinCrossScratch, l::Int)
+    QCScum_pow = ws.QCScum_pow; NuCScum_pow = ws.NuCScum_pow
+    SOnlyCScum_pow = ws.SOnlyCScum_pow; QCfCScum_pow = ws.QCfCScum_pow
+    pi_vec = wctx.pi_vec
+    has_cf = wctx.has_cf
+    jcf = wctx.ncolI
+    D = ws.D
+
+    SOnlyTotal_pow = dropdims(sum(ws.SOnlyTab_pow, dims = 2), dims = 2)   # D
+    NuTotal_pow = dropdims(sum(ws.NuTab_pow, dims = 2), dims = 2)         # D
+    QTotal_pow = dropdims(sum(ws.QTab_pow, dims = 3), dims = 3)          # ncolI x D
+    QCfTotal_pow = dropdims(sum(ws.QCfTab_pow, dims = 2), dims = 2)      # D
+
+    sumNu = 0.0
+    @inbounds for o in 1:D
+        sumNu += NuTotal_pow[o] - NuCScum_pow[o, l]
+    end
+
+    sumS = 0.0
+    @inbounds for o in 1:D
+        sumS += SOnlyTotal_pow[o] - SOnlyCScum_pow[o, l]
+    end
+    colsum_pow[1] = sumS
+
+    @inbounds for j in 1:wctx.ncolI
+        sumQ = 0.0
+        for o in 1:D
+            sumQ += QTotal_pow[j, o] - QCScum_pow[j, o, l]
+        end
+        colsum_pow[j + 1] = sumQ - pi_vec[j] * sumNu
+    end
+
+    if has_cf
+        sumQCf = 0.0
+        @inbounds for o in 1:D
+            sumQCf += QCfTotal_pow[o] - QCfCScum_pow[o, l]
+        end
+        colsum_pow[jcf + 1] = sumQCf - pi_vec[jcf] * sumNu
+    end
+    return colsum_pow
+end
+
+"""
     winner_pair_cross_hessian_esum!(Esum, wctx, ws, w, Wtot) -> Esum
 
 `Esum[j] = sum_s w[s]*E[s,j]` for `j = 1:NCORE` -- the UN-binned (no threshold dependence) column

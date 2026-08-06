@@ -92,13 +92,29 @@ origin-ZC verifier. `lambda = [lambda_E; lambda_mean; lambda_pair; lambda_cm]`, 
 function verify_inner_solution_operator_cmmeanzc!(zeta::Float64, lambda::AbstractVector{Float64},
         cf::CompressedFactual, zc_op::ZCRestrictionOperator, zc_layout, nu_vec::AbstractVector{Float64},
         L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int, bins::Matrix{<:Unsigned},
-        R::Union{Nothing,Matrix{Float64}}, obj, W::Int)
+        R::Union{Nothing,Matrix{Float64}}, obj, W::Int; Pow::Union{Nothing,Matrix{Float64}} = nothing)
+    # 2026-08-05 (paired-basis-preconditioning pilot): same bug/fix as
+    # `_verify_inner_solution_operator_cm_core` (see that function's own header comment for the
+    # real production incident this addresses) -- `ncm` was hardcoded to single-family width,
+    # which would have crashed CM+ZC's own :operator verification identically to plain flexible_cm's
+    # the first time a two-family (`include_truncated_moment=true`) CM+ZC run reached it. The Z
+    # (mean/pair) restriction block is UNCHANGED by family count (it has no CM-grid dependency at
+    # all) -- only the trailing CM-grid slice of `lambda`/`g_lambda` gains a POW half, mirroring
+    # `_verify_inner_solution_operator_cm_core`'s own extension exactly (same kernels, same
+    # reflected-histogram idiom).
+    fam2 = Pow !== nothing
     ncore1 = cf.oci - 1
-    ncm = nO * L
+    ncm_cdf = nO * L
+    ncm = fam2 ? 2ncm_cdf : ncm_cdf
+    expected_len = ncore1 + n_mean(zc_op) + n_pair(zc_op) + ncm
+    length(lambda) == expected_len ||
+        error("verify_inner_solution_operator_cmmeanzc!: length(lambda)=$(length(lambda)) != expected=$(expected_len)")
     λ_E = @view lambda[1:ncore1]
     λ_mean = @view lambda[ncore1+1:ncore1+n_mean(zc_op)]
     λ_pair = @view lambda[ncore1+n_mean(zc_op)+1:ncore1+n_mean(zc_op)+n_pair(zc_op)]
-    λ_cm = @view lambda[ncore1+n_mean(zc_op)+n_pair(zc_op)+1:ncore1+n_mean(zc_op)+n_pair(zc_op)+ncm]
+    zc_off = ncore1 + n_mean(zc_op) + n_pair(zc_op)
+    λ_cm = @view lambda[zc_off+1:zc_off+ncm_cdf]
+    λ_cm_pow = fam2 ? (@view lambda[zc_off+ncm_cdf+1:zc_off+ncm]) : nothing
 
     econ_ws = economic_operator_workspace(cf)
     zc_ws = ZCRestrictionWorkspace(zc_op)
@@ -121,6 +137,17 @@ function verify_inner_solution_operator_cmmeanzc!(zeta::Float64, lambda::Abstrac
     cumulative_forward_contribution!(cm_contrib, bins, refIndex1, origins, λmat_ext)
     r .-= cm_contrib
 
+    if fam2
+        λmat_stored2 = reshape(λ_cm_pow, nO, L)
+        λmat_block2 = zeros(nO, L)
+        apply_contrast!(λmat_block2, λmat_stored2, R)
+        λmat_ext2 = zeros(nO, L + 1)
+        suffix_sums!(λmat_ext2, λmat_block2)
+        cm_contrib2 = zeros(W)
+        cumulative_forward_contribution_pow!(cm_contrib2, bins, refIndex1, origins, λmat_ext2, Pow)
+        r .-= cm_contrib2
+    end
+
     Psi_r = similar(r); obj.Psi!(Psi_r, r)
     f = sum(Psi_r) / W + zeta
 
@@ -140,7 +167,26 @@ function verify_inner_solution_operator_cmmeanzc!(zeta::Float64, lambda::Abstrac
     g_stored = zeros(nO, L)
     apply_contrast!(g_stored, g_block, R)
 
-    g_lambda = vcat(g_E, g_mean, g_pair, vec(g_stored))
+    g_stored2 = nothing
+    if fam2
+        hist_partials2 = [zeros(D_bins, nbins)]
+        hist_h2 = zeros(D_bins, nbins)
+        build_weighted_histogram_pow!(hist_h2, hist_partials2, bins, dPsi_r, Pow, D_bins, nbins)
+        Hpre2 = zeros(D_bins, L)
+        prefix_sums!(Hpre2, hist_h2, L)
+        @inbounds for o in 1:D_bins
+            total_o = sum(@view hist_h2[o, :])
+            for l in 1:L
+                Hpre2[o, l] = total_o - Hpre2[o, l]
+            end
+        end
+        g_block2 = zeros(nO, L)
+        cumulative_backward_gradient_from_prefix!(g_block2, Hpre2, refIndex1, origins, L, W)
+        g_stored2 = zeros(nO, L)
+        apply_contrast!(g_stored2, g_block2, R)
+    end
+
+    g_lambda = fam2 ? vcat(g_E, g_mean, g_pair, vec(g_stored), vec(g_stored2)) : vcat(g_E, g_mean, g_pair, vec(g_stored))
     record_operator_verification!()
     return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda))
 end
@@ -159,8 +205,9 @@ touches a live `CMLookupState`'s own `st.arg0`/`st.hist_h`/etc).
 """
 function verify_inner_solution_operator_cm!(zeta::Float64, lambda::AbstractVector{Float64},
         cf::CompressedFactual, L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int,
-        bins::Matrix{<:Unsigned}, R::Union{Nothing,Matrix{Float64}}, obj, W::Int)
-    return _verify_inner_solution_operator_cm_core(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R, obj, W, nothing)
+        bins::Matrix{<:Unsigned}, R::Union{Nothing,Matrix{Float64}}, obj, W::Int;
+        Pow::Union{Nothing,Matrix{Float64}} = nothing)
+    return _verify_inner_solution_operator_cm_core(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R, obj, W, nothing; Pow = Pow)
 end
 
 isdefined(Main, :CMFrechetLookupState) || include(joinpath(@__DIR__, "cm_frechet_lookup_kernels.jl"))
@@ -178,8 +225,8 @@ without breaking every existing caller). Delegates to the shared
 function verify_inner_solution_operator_cm_frechet!(zeta::Float64, lambda::AbstractVector{Float64},
         cf::CompressedFactual, L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int,
         bins::Matrix{<:Unsigned}, R::Union{Nothing,Matrix{Float64}}, level_targets::Vector{Float64},
-        obj, W::Int)
-    return _verify_inner_solution_operator_cm_core(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R, obj, W, level_targets)
+        obj, W::Int; Pow::Union{Nothing,Matrix{Float64}} = nothing)
+    return _verify_inner_solution_operator_cm_core(zeta, lambda, cf, L, nO, origins, refIndex1, bins, R, obj, W, level_targets; Pow = Pow)
 end
 
 """
@@ -195,15 +242,37 @@ contribution). `G=[E|C]` when `level_targets===nothing`, `G=[E|C|Level]` otherwi
 function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::AbstractVector{Float64},
         cf::CompressedFactual, L::Int, nO::Int, origins::Vector{Int}, refIndex1::Int,
         bins::Matrix{<:Unsigned}, R::Union{Nothing,Matrix{Float64}}, obj, W::Int,
-        level_targets::Union{Nothing,Vector{Float64}})
+        level_targets::Union{Nothing,Vector{Float64}}; Pow::Union{Nothing,Matrix{Float64}} = nothing)
+    # 2026-08-05 (paired-basis-preconditioning pilot): `Pow!==nothing` (a two-family, eq.35+eq.36
+    # cctx) means `lambda`'s CM block is DOUBLE width (cdf half + pow half, matching CMLookupState's
+    # own `ncm=2*nO*L` convention, cm_lookup_kernels.jl) -- this `ncm` was previously hardcoded to
+    # single-family width, causing a real production bug: `archC_verified_state`'s
+    # verification_backend=:operator path (cm_production_bundle.jl) crashed with a length mismatch
+    # on every two-family flexible_cm/CM+ZC inner solve (`length(lambda)` reflecting the REAL,
+    # correct two-family dual width, `expected_len` stuck at the stale single-family one) --
+    # confirmed live via a real W=100,000/L=50/D=20 overnight campaign run, 2026-08-05/06. Reuses
+    # the SAME free-function kernels (`cumulative_forward_contribution_pow!`/
+    # `build_weighted_histogram_pow!`) `CMLookupState`'s own two-family FG already uses (see that
+    # struct's `Pow`-gated branches, cm_lookup_kernels.jl) -- not a new derivation, the same
+    # independent-fresh-scratch reconstruction this function already does for the cdf half.
+    # `level_targets!==nothing && Pow!==nothing` (common-Fréchet two-family) is NOT yet supported --
+    # hard-refuse rather than silently omit the levelpow block's own contribution to `r`/`g_lambda`.
+    level_targets !== nothing && Pow !== nothing &&
+        error("_verify_inner_solution_operator_cm_core: common-Fréchet two-family (level_targets " *
+              "and Pow both given) operator verification is not yet implemented -- the levelpow " *
+              "block's own forward/backward contribution is missing here. Use verification_backend=" *
+              ":dense_reference for common_frechet with include_truncated_moment=true for now.")
+    fam2 = Pow !== nothing
     D_bins = size(bins, 2)
     ncore1 = cf.oci - 1
-    ncm = nO * L
+    ncm_cdf = nO * L
+    ncm = fam2 ? 2ncm_cdf : ncm_cdf
     expected_len = level_targets === nothing ? ncore1 + ncm : ncore1 + ncm + L
     length(lambda) == expected_len ||
         error("_verify_inner_solution_operator_cm_core: length(lambda)=$(length(lambda)) != expected=$(expected_len)")
     λ_E = @view lambda[1:ncore1]
-    λ_cm = @view lambda[ncore1+1:ncore1+ncm]
+    λ_cm = @view lambda[ncore1+1:ncore1+ncm_cdf]
+    λ_cm_pow = fam2 ? (@view lambda[ncore1+ncm_cdf+1:ncore1+ncm]) : nothing
     λ_level = level_targets === nothing ? nothing : (@view lambda[ncore1+ncm+1:ncore1+ncm+L])
 
     econ_ws = economic_operator_workspace(cf)
@@ -222,6 +291,17 @@ function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::Abstract
     cm_contrib = zeros(W)
     cumulative_forward_contribution!(cm_contrib, bins, refIndex1, origins, λmat_ext)
     r .-= cm_contrib
+
+    if fam2
+        λmat_stored2 = reshape(λ_cm_pow, nO, L)
+        λmat_block2 = zeros(nO, L)
+        apply_contrast!(λmat_block2, λmat_stored2, R)
+        λmat_ext2 = zeros(nO, L + 1)
+        suffix_sums!(λmat_ext2, λmat_block2)
+        cm_contrib2 = zeros(W)
+        cumulative_forward_contribution_pow!(cm_contrib2, bins, refIndex1, origins, λmat_ext2, Pow)
+        r .-= cm_contrib2
+    end
 
     invsqrtD = 1.0 / sqrt(D_bins)
     if level_targets !== nothing
@@ -261,8 +341,31 @@ function _verify_inner_solution_operator_cm_core(zeta::Float64, lambda::Abstract
     g_stored = zeros(nO, L)
     apply_contrast!(g_stored, g_block, R)
 
+    g_stored2 = nothing
+    if fam2
+        # eq.36 backward gradient: same Pow-weighted histogram + reflected-prefix-sum reuse
+        # `cm_transpose_into_g!`'s own two-family branch already established (cm_lookup_kernels.jl)
+        # -- `cumulative_backward_gradient_from_prefix!` is reused UNCHANGED, only the table it reads
+        # differs (Pow-weighted, then reflected via total-minus-cumsum).
+        hist_partials2 = [zeros(D_bins, nbins)]
+        hist_h2 = zeros(D_bins, nbins)
+        build_weighted_histogram_pow!(hist_h2, hist_partials2, bins, dPsi_r, Pow, D_bins, nbins)
+        Hpre2 = zeros(D_bins, L)
+        prefix_sums!(Hpre2, hist_h2, L)
+        @inbounds for o in 1:D_bins
+            total_o = sum(@view hist_h2[o, :])
+            for l in 1:L
+                Hpre2[o, l] = total_o - Hpre2[o, l]
+            end
+        end
+        g_block2 = zeros(nO, L)
+        cumulative_backward_gradient_from_prefix!(g_block2, Hpre2, refIndex1, origins, L, W)
+        g_stored2 = zeros(nO, L)
+        apply_contrast!(g_stored2, g_block2, R)
+    end
+
     g_lambda = if level_targets === nothing
-        vcat(g_E, vec(g_stored))
+        fam2 ? vcat(g_E, vec(g_stored), vec(g_stored2)) : vcat(g_E, vec(g_stored))
     else
         g_level = zeros(L)
         frechet_level_backward_gradient!(g_level, Hpre, D_bins, L, W, invsqrtD, level_targets, sum_dPsi)

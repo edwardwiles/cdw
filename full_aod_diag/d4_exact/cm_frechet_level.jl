@@ -52,6 +52,63 @@ function frechet_level_targets(D::Int, L::Int; probs::Union{Nothing,AbstractVect
     p = frechet_level_probs(L; probs = probs)
     return sqrt(D) .* p
 end
+
+"""
+    frechet_levelpow_target(z_l::Real, k::Real, μHat::Real) -> Float64
+
+2026-08-05 (user-directed): the population target for ONE thresh_old of the new POW-weighted
+common-level restriction, `E_{F*}[ z(ω)^k · 1{z(ω)<Z_l} ]`, where `Z_l` is the SAME Fréchet-space
+threshold `theoretical_u_threshold`/`z[l]` already implicitly tests for the (plain, CDF-only) level
+restriction and for CM's own eq.36 block (`1{U>c} ⟺ 1{z<Z_l}` with `Z_l=c^{-μ}`, `c=z[l]`).
+
+**Deliberately does NOT call `eq36_theoretical_truncated_moment` with a computed `Z_l` -- takes
+`z_l` (the U-space cutoff, i.e. this file's/precalc_common_marginals_cdf's own `z[l]`) DIRECTLY.**
+Derivation: `eq36_theoretical_truncated_moment(z_ℓ,k,μ) = Γ(1-μk, z_ℓ^(-1/μ))`. Substituting
+`z_ℓ=Z_l=z[l]^{-μ}` gives `a = (z[l]^{-μ})^{-1/μ} = z[l]^{(-μ)(-1/μ)} = z[l]` -- the exponents
+cancel EXACTLY, so `E_{F*}[z^k·1{z<Z_l}] = Γ(1-μk, z[l])` with `z[l]` used verbatim, no
+power/inverse-power round trip (avoids a numerically noisier `z[l]^(-μ)` then `(...)^(-1/μ)` pair
+of operations for the identical mathematical result). Verified two independent ways before use in
+any restriction/Hessian code: (1) this exact identity by hand, (2) direct Monte Carlo at real
+(μHat,σHat) values converging to this closed form as W grows (see this task's own diagnostic
+script, not committed -- matches the SAME "verify via MC before trusting" discipline
+`eq36_theoretical_truncated_moment`'s own D4 gate already applied to CM's eq.36 target).
+
+Unlike CM's own eq.36 restriction (a reference-origin DIFFERENCE, always zero-target by
+construction), the level restriction is an all-origin SUM with a genuinely nonzero absolute
+target -- this function supplies exactly that absolute target, mirroring how
+`frechet_level_targets` already supplies the plain-CDF level restriction's own nonzero target
+`p_l` (a special case of this same construction at `k=0`: `Γ(1,z_l)=e^{-z_l}`... note this is NOT
+literally `p_l` at k=0, since the plain level restriction's own target derivation takes a
+different, sign-flip-invariant shortcut valid only for k=0 -- see this file's own header comment
+and `theoretical_u_threshold`'s docstring for why k=0's target is legitimately just `p_l`, not
+`Γ(1,z_l)`; the two are NOT interchangeable formulas, they happen to answer the same k=0 question
+via different valid routes).
+
+**Verification/reference use only for the CDF (k=0) case; for k=σ-1 THIS closed form IS the actual
+restriction target** (unlike `eq36_theoretical_truncated_moment`, which per its own docstring is
+never used as a live restriction target for CM's own zero-mean eq.36 block) -- the level
+restriction has always used an absolute theoretical target (`p_l`), and `levelpow` needs its own
+absolute target the same way, computed once, theta-independent, exactly like `frechet_level_targets`
+itself.
+"""
+function frechet_levelpow_target(z_l::Real, k::Real, μHat::Real)
+    return gamma(1 - μHat * k, z_l)
+end
+
+"""
+    frechet_levelpow_targets(D, L, z::Vector{Float64}, σHat, μHat) -> Vector{Float64}
+
+`target_l = sqrt(D) * frechet_levelpow_target(z[l], σHat-1, μHat)` -- the POW-level restriction's
+own analog of `frechet_level_targets`, using the SAME `(u'1)=sqrt(D)` scaling and the SAME `z`
+cutoff vector `precalc_common_marginals_cdf`/`build_cm_frechet_level_augmented_obj` already build
+(byte-identical cutoffs to the plain level block and to CM's own eq.36 block -- required for the
+combined restriction to test the coherent SAME set of Fréchet-quantile events across every family).
+"""
+function frechet_levelpow_targets(D::Int, L::Int, z::Vector{Float64}, σHat::Real, μHat::Real)
+    @assert length(z) == L "frechet_levelpow_targets: length(z)=$(length(z)) != L=$L"
+    k = σHat - 1
+    return sqrt(D) .* [frechet_levelpow_target(z[l], k, μHat) for l in 1:L]
+end
 # CMFrechetExtension is defined in cm_frechet_hessian.jl (not here) -- every current include-list
 # ordering (D=4/D=20 equivalence gates, smoke scripts) loads cm_frechet_hessian.jl either before
 # or independently of this file, but the reverse is not true for the two equivalence-gate scripts,
@@ -123,8 +180,82 @@ function fill_frechet_level_columns_from_bins!(Gdest::AbstractMatrix{Float64}, B
 end
 
 """
-    build_cm_frechet_level_augmented_obj(ctx, CS; L, contrasts=:anchored, probs=nothing,
-                                          refIndex1=ctx.γ.refIndex1) -> NamedTuple
+    precalc_frechet_levelpow_dense(U, z, D, Pow, targets) -> Matrix{Float64}  (W x L)
+
+DENSE REFERENCE builder for the POW-weighted common-level restriction (`levelpow`), the
+`k=σ-1`-weighted analog of `precalc_frechet_level_dense`. `level_pow[:,l] =
+(1/sqrt(D))*sum_{o=1}^D z_o(ω)^(σ-1)·1{z_o(ω)<Z_l} - targets[l]`.
+
+**Indicator direction is `U[s,o] > z[l]` (strict `>`), NOT `<=` like the plain level block.** The
+plain level restriction gets away with `<=` only because a weight-1 indicator's restriction is
+invariant to an overall sign flip (`E_F[X]=0 ⟺ E_F[-X]=0`, see `theoretical_u_threshold`'s own
+docstring) -- that invariance does NOT hold once the indicator carries an origin-and-draw-specific
+`Pow` weight (exactly the bug CM's own eq.36 restriction hit once already, section 17 of
+docs/... -- fixed there via `U>c`, not `U<=c`; same fix required here for the identical reason).
+`Pow` is the SAME `W x D` `z^(σ-1)=U^{-μ(σ-1)}` matrix CM's own eq.36 block already computes
+(`frechet_power_feature(U, σHat-1, μHat)`) -- passed in, not recomputed.
+"""
+function precalc_frechet_levelpow_dense(U::AbstractMatrix{Float64}, z::Vector{Float64}, D::Int,
+                                         Pow::AbstractMatrix{Float64}, targets::Vector{Float64})
+    W = size(U, 1)
+    L = length(z)
+    @assert length(targets) == L
+    @assert size(Pow) == (W, D) "precalc_frechet_levelpow_dense: size(Pow)=$(size(Pow)) != (W,D)=($W,$D)"
+    invsqrtD = 1.0 / sqrt(D)
+    level = Matrix{Float64}(undef, W, L)
+    @inbounds for l in 1:L
+        zl = z[l]
+        for s in 1:W
+            acc = 0.0
+            for o in 1:D
+                acc += U[s, o] > zl ? Pow[s, o] : 0.0
+            end
+            level[s, l] = invsqrtD * acc - targets[l]
+        end
+    end
+    return level
+end
+
+"""
+    fill_frechet_levelpow_columns_from_bins!(Gdest, Bidx, D, L, Pow, targets; chunk_size=2000)
+
+Architecture-B analogue of `fill_frechet_level_columns_from_bins!` for the POW-weighted level
+block. `Gdest[s,l] = (1/sqrt(D))*sum_{o=1}^D Pow[s,o]*(Bidx[s,o]>l) - targets[l]` -- indicator
+`Bidx[s,o]>l` (reflected, NOT `<=l`), matching `precalc_frechet_levelpow_dense`'s own U-space `>`
+convention (`Bidx[s,o]` is the bin index of `U[s,o]` against the ascending cutoffs `z`, so
+`Bidx[s,o]<=l ⟺ U[s,o]<=z[l]`, hence `Bidx[s,o]>l ⟺ U[s,o]>z[l]`, the SAME reflection CM's own
+`fill_cm_columns_from_bins!`-adjacent eq.36 bin logic already uses for this same reason).
+"""
+function fill_frechet_levelpow_columns_from_bins!(Gdest::AbstractMatrix{Float64}, Bidx::AbstractMatrix{Int},
+                                                   D::Int, L::Int, Pow::AbstractMatrix{Float64},
+                                                   targets::Vector{Float64}; chunk_size::Int = 2000)
+    W = size(Gdest, 1)
+    @assert size(Gdest, 2) == L
+    @assert length(targets) == L
+    @assert size(Pow) == (W, D) "fill_frechet_levelpow_columns_from_bins!: size(Pow)=$(size(Pow)) != (W,D)=($W,$D)"
+    invsqrtD = 1.0 / sqrt(D)
+    cs = min(chunk_size, W)
+    start = 1
+    @inbounds while start <= W
+        stop = min(start + cs - 1, W)
+        for l in 1:L
+            tl = targets[l]
+            for s in start:stop
+                acc = 0.0
+                for o in 1:D
+                    acc += Bidx[s, o] > l ? Pow[s, o] : 0.0
+                end
+                Gdest[s, l] = invsqrtD * acc - tl
+            end
+        end
+        start = stop + 1
+    end
+    return nothing
+end
+
+"""
+    build_cm_frechet_level_augmented_obj(ctx, CS; L, include_truncated_moment, contrasts=:anchored,
+                                          probs=nothing, refIndex1=ctx.γ.refIndex1) -> NamedTuple
 
 DENSE reference construction (Architecture A -- validation-oriented, mirrors
 `build_cm_augmented_obj`'s own shape exactly, not the hot production path). Builds the CM block
@@ -132,38 +263,72 @@ EXACTLY as `precalc_common_marginals_cdf` does (unchanged, reused), builds the l
 `precalc_frechet_level_dense`, concatenates `[CM level]` horizontally into ONE `(W x (ncm+L))`
 matrix, and hands it to `wrap_moments_with_cm` UNCHANGED (that function is generic on the supplied
 moment matrix -- no modification needed, confirming task §5's "reuse the exact CM forward and
-transpose operators"). Column layout: CM block first (`(D-1)*L` columns, threshold-major, IDENTICAL
-to flexible CM's own layout), level block last (`L` columns, one per threshold) -- see
-`docs/COMMON_FRECHET_CM_DRIVER_PORT_2026-07-25.md` for the full machine-readable layout table
+transpose operators"). Column layout: CM block first (`(D-1)*L` or `2*(D-1)*L` columns,
+threshold-major, IDENTICAL to flexible CM's own layout), level block last (`L` or `2*L` columns) --
+see `docs/COMMON_FRECHET_CM_DRIVER_PORT_2026-07-25.md` for the full machine-readable layout table
 (Part II §6 of the task).
 
+2026-08-05 (paired-basis-preconditioning pilot, common-Fréchet extension): `include_truncated_moment`
+is now a REQUIRED kwarg (no default, per repo rule -- was previously hardcoded `false` here, a
+deliberate single-family carve-out CLAUDE.md/CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md documented as
+"audit only, not rewired"). `true` imposes BOTH families on the CM sub-block (eq.35+eq.36, reusing
+`precalc_common_marginals_cdf`'s own already-fixed two-family construction unchanged) AND adds a
+NEW `levelpow` block (`precalc_frechet_levelpow_dense`, the POW-weighted analog of the existing
+plain `level` block) -- `E_{F*}[z(ω)^{σ-1}·1{z(ω)<Z_l}]`, closed-form target via
+`frechet_levelpow_targets`. `false` reproduces the pre-existing CDF-only, level-only behavior
+byte-for-byte. Column layout when `true`: `[CM_cdf ((D-1)L) | CM_pow ((D-1)L) | level (L) |
+levelpow (L)]` -- CM's own two sub-families stay adjacent (matching flexible CM's own layout
+exactly, so the shared `fill_cm_HCC!`/`archC_hess_cb_builder` machinery needs no change to find
+them), levelpow placed immediately after level (mirroring how CM_pow follows CM_cdf).
+
 Returns the same-shaped NamedTuple as `build_cm_augmented_obj`, plus `level_targets`, `probs`, and
-`ncm_cm`/`ncm_level` (the two block sizes) so callers can locate either block within the combined
+`ncm_cm`/`ncm_level` (the two block sizes, EACH already including both families when
+`include_truncated_moment=true` -- i.e. `ncm_cm=2*(D-1)*L`, `ncm_level=2*L` -- callers that need the
+within-family split use the new `ncm_cdf`/`ncm_pow` (CM side) and `ncm_level_cdf`/`ncm_level_pow`
+(level side) fields instead) so callers can locate any block within the combined
 `ncm = ncm_cm + ncm_level` columns.
 """
-function build_cm_frechet_level_augmented_obj(ctx, CS; L::Int, contrasts::Symbol = :anchored,
+function build_cm_frechet_level_augmented_obj(ctx, CS; L::Int, include_truncated_moment::Bool,
+                                               contrasts::Symbol = :anchored,
                                                refIndex1::Int = ctx.γ.refIndex1,
                                                probs::Union{Nothing,AbstractVector{Float64}} = nothing)
     obj0 = ctx.obj
     ncore = obj0.d
-    # Common-Fréchet's CM sub-block is a deliberate single-family (eq.35 only) carve-out -- see
-    # CLAUDE.md / CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md's "audit only, not rewired" note (2026-08-05
-    # truncated-power task): its own separate D*L level-anchor block is a structurally different
-    # (target-based) restriction, not a second flexible-CM feature family in the eq.35/36 sense.
-    CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; include_truncated_moment = false,
-                                                   contrasts = contrasts, probs = probs)
+    σHat = include_truncated_moment ? ctx.σ : nothing
+    μHat = include_truncated_moment ? ctx.μHat : nothing
+    CM, z, origins = precalc_common_marginals_cdf(ctx.U, refIndex1, L; include_truncated_moment = include_truncated_moment,
+                                                   σHat = σHat, μHat = μHat, contrasts = contrasts, probs = probs)
     ncm_cm = size(CM, 2)
-    @assert ncm_cm == n_cm_moments(ctx.D, L; include_truncated_moment = false)
+    @assert ncm_cm == n_cm_moments(ctx.D, L; include_truncated_moment = include_truncated_moment)
+    ncm_cdf = length(origins) * L
+    ncm_pow = include_truncated_moment ? ncm_cdf : 0
 
     level_probs = frechet_level_probs(L; probs = probs)
     level_targets = frechet_level_targets(ctx.D, L; probs = level_probs)
-    LEVEL = precalc_frechet_level_dense(ctx.U, z, ctx.D, level_targets)
+    LEVEL_cdf = precalc_frechet_level_dense(ctx.U, z, ctx.D, level_targets)
+    ncm_level_cdf = size(LEVEL_cdf, 2)
+    @assert ncm_level_cdf == L
+
+    if include_truncated_moment
+        Pow = frechet_power_feature(ctx.U, σHat - 1, Float64(μHat))
+        levelpow_targets = frechet_levelpow_targets(ctx.D, L, z, σHat, μHat)
+        LEVEL_pow = precalc_frechet_levelpow_dense(ctx.U, z, ctx.D, Pow, levelpow_targets)
+        ncm_level_pow = size(LEVEL_pow, 2)
+        @assert ncm_level_pow == L
+        LEVEL = hcat(LEVEL_cdf, LEVEL_pow)
+        level_targets_full = vcat(level_targets, levelpow_targets)
+    else
+        levelpow_targets = Float64[]
+        LEVEL = LEVEL_cdf
+        ncm_level_pow = 0
+        level_targets_full = level_targets
+    end
     ncm_level = size(LEVEL, 2)
-    @assert ncm_level == L
+    @assert ncm_level == ncm_level_cdf + ncm_level_pow
 
     CMF = hcat(CM, LEVEL)
     ncm = ncm_cm + ncm_level
-    @assert ncm == ctx.D * L   # task §3: exactly DL restrictions total
+    @assert ncm == (include_truncated_moment ? 2 : 1) * ctx.D * L   # task §3 (single-family): D*L restrictions total
 
     d_new = ncore + ncm
     outer_constr_index_new = obj0.outer_constr_index + ncm
@@ -181,9 +346,13 @@ function build_cm_frechet_level_augmented_obj(ctx, CS; L::Int, contrasts::Symbol
     @assert obj_cmf.outer_constr_index == obj_cmf.d
 
     return (obj_cm = obj_cmf, CM = CMF, z = z, origins = origins, ncore = ncore, ncm = ncm,
-            ncm_cm = ncm_cm, ncm_level = ncm_level, L = L, contrasts = contrasts,
-            include_truncated_moment = false, refIndex1 = refIndex1,
-            level_targets = level_targets, level_probs = level_probs,
+            ncm_cm = ncm_cm, ncm_level = ncm_level, ncm_cdf = ncm_cdf, ncm_pow = ncm_pow,
+            ncm_level_cdf = ncm_level_cdf, ncm_level_pow = ncm_level_pow,
+            L = L, contrasts = contrasts,
+            include_truncated_moment = include_truncated_moment, refIndex1 = refIndex1,
+            level_targets = level_targets_full, level_targets_cdf = level_targets,
+            level_targets_pow = levelpow_targets, level_probs = level_probs,
+            n_families = include_truncated_moment ? 2 : 1,
             marginal_restriction = :common_frechet)
 end
 
@@ -308,7 +477,8 @@ augmented obj -- `archA_hess_cb_builder`, unchanged) or `:structured` (Architect
 generic on `aug.ncm` (it sizes `Hfull`/scratch from `aug.ncm` alone, with no assumption about what
 the extra columns beyond the core mean) -- only the Hessian-FILL step needed a level-aware version.
 """
-function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol = :anchored,
+function build_cm_frechet_production_context(ctx, CS; L::Int, include_truncated_moment::Bool,
+                                              contrasts::Symbol = :anchored,
                                               probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                               use_compressed_core::Bool = true,
                                               cm_hessian_backend::Symbol = :dense_reference,
@@ -367,9 +537,31 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
         error("build_cm_frechet_production_context: moment_representation must be :operator or :dense_reference, got :$moment_representation")
     moment_representation === :operator && inner_fg_backend !== :cm_frechet_lookup &&
         error("build_cm_frechet_production_context: moment_representation=:operator requires inner_fg_backend=:cm_frechet_lookup")
+    # 2026-08-05 (paired-basis-preconditioning pilot, common-Fréchet two-family extension):
+    # `wrap_moments_with_cm_frechet_archB` (Architecture B) and `CMFrechetLookupState`
+    # (`:operator`/`:cm_frechet_lookup`) are BOTH still single-family-only (mirrors flexible CM's
+    # own `build_cm_production_context` guard: "use_archB_moments=true is incompatible with
+    # include_truncated_moment=true"). Hard-refuse rather than silently drop the POW/levelpow
+    # contribution -- `include_truncated_moment=true` requires `moment_representation=
+    # :dense_reference` AND `use_compressed_core=false` (the plain, already-two-family-aware dense
+    # splice `build_cm_frechet_level_augmented_obj` already built as `aug.obj_cm`, reused directly
+    # below, not rebuilt).
+    if include_truncated_moment
+        moment_representation === :dense_reference ||
+            error("build_cm_frechet_production_context: include_truncated_moment=true requires " *
+                  "moment_representation=:dense_reference (:operator/CMFrechetLookupState is not yet " *
+                  "extended for the two-family CM/levelpow blocks) -- got :$moment_representation")
+        use_compressed_core &&
+            error("build_cm_frechet_production_context: include_truncated_moment=true requires " *
+                  "use_compressed_core=false (wrap_moments_with_cm_frechet_archB's Architecture-B fill " *
+                  "is a pure single-family reconstruction, same reason flexible CM's own " *
+                  "build_cm_production_context refuses use_archB_moments=true here) -- the dense " *
+                  "aug.obj_cm splice is used directly instead, no Architecture-B fast path.")
+    end
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
 
-    aug = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts, probs = probs)
+    aug = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, include_truncated_moment = include_truncated_moment,
+                                                contrasts = contrasts, probs = probs)
     D = ctx.D
     refIndex1 = aug.refIndex1
     R = contrasts == :orthonormal ? orthonormal_contrast_matrix(D) : nothing
@@ -378,7 +570,12 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
     core_cf_ref = Ref{Any}(nothing)
     obj0 = aug.obj_cm
     moments_archB_skip! = nothing
-    if moment_representation === :dense_reference
+    if include_truncated_moment
+        # Two-family: obj0 (aug.obj_cm, from build_cm_frechet_level_augmented_obj) is ALREADY the
+        # correct dense two-family+levelpow splice (wrap_moments_with_cm, generic) -- use it
+        # directly, no Architecture-B wrapping.
+        obj_cm = obj0
+    elseif moment_representation === :dense_reference
         # Re-tested and RE-ENABLED 2026-07-27 (see wrap_moments_with_cm_frechet_archB's own header
         # comment for the full chronology/rationale): build BOTH the always-fill closure
         # (`moments_archB!`, installed as `obj_cm.moments!`, used by every non-skip path AND by
@@ -416,6 +613,12 @@ function build_cm_frechet_production_context(ctx, CS; L::Int, contrasts::Symbol 
 
     cctx = nothing
     if cm_hessian_backend === :structured
+        # 2026-08-05: `_fill_frechet_level_blocks!` (cm_frechet_hessian.jl) two-family extension
+        # (H_CM(pow),level / H_CM(cdf,pow),levelpow / H_level(pow),levelpow) is now implemented --
+        # see that function's own docstring/derivation. PENDING: independent D4 ForwardDiff/dense-
+        # reference verification gate (test_frechet_hessian_structured_vs_dense_d4_twofamily_2026-08-05.jl)
+        # before this is trusted for real production use -- do not remove this comment or treat
+        # include_truncated_moment=true + :structured as production-ready until that gate is green.
         # inner_fg_backend now genuinely selects the FG callback (Phase 5.2, 2026-07-26) -- previously
         # PINNED to :dense_reference unconditionally here because archC_frechet_base_state/
         # archC_frechet_verified_state (cm_frechet_cplus.jl) never read cctx.inner_fg_backend at all;

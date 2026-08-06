@@ -387,8 +387,12 @@ function archC_verified_state(x_free0::AbstractVector, ctx_cm, cctx::CMBinHessCt
         cf = cctx.core_cf_ref[]
         cf isa CompressedFactual || error("archC_verified_state: verification_backend=:operator requires cctx.core_cf_ref[] to be a CompressedFactual (got $(typeof(cf))) -- prerequisite not met, refusing silent dense fallback")
         bins_u = cctx.Bidx isa Matrix{UInt32} ? cctx.Bidx : Matrix{UInt32}(cctx.Bidx)
+        # 2026-08-05 (paired-basis-preconditioning pilot): Pow=cctx.Pow (fam2 only) -- see
+        # _verify_inner_solution_operator_cm_core's own header comment for the real production bug
+        # this fixes (a hardcoded single-family lambda-length assumption crashed every two-family
+        # flexible_cm/CM+ZC :operator verification, confirmed live via a W=100,000/L=50 overnight run).
         ov = verify_inner_solution_operator_cm!(ζstar, λstar, cf, cctx.L, cctx.nO, cctx.origins,
-            cctx.refIndex1, bins_u, cctx.R, obj, W)
+            cctx.refIndex1, bins_u, cctx.R, obj, W; Pow = cctx.n_families == 2 ? cctx.Pow : nothing)
         m_weights, verify = verify_namedtuple_from_operator(ov, obj, W, nStatus)
     elseif verification_backend === :dense_reference
         G = CS.select_G_from_H(obj, obj.H)   # already built once by inner_loop_internal_archgeneric above

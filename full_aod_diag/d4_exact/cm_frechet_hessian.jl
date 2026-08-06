@@ -61,13 +61,35 @@ mutable struct CMFrechetExtension
     # nO (matches Hraw_cmlevel's own length); `nothing` when R===nothing (that branch returns
     # Hraw_cmlevel directly, no product needed, mirroring block_ec's own Union{Nothing,...} use).
     block_cmlevel::Union{Nothing,Vector{Float64}}
+    # 2026-08-05 (paired-basis-preconditioning pilot, common-Fréchet two-family extension):
+    # `fam2`-only scratch for the NEW H_E,levelpow / H_CM(cdf),levelpow / H_CM(pow),level /
+    # H_level,levelpow / H_levelpow,levelpow blocks -- see `_fill_frechet_level_blocks!`'s own
+    # updated docstring for the full derivation. `Wtab_pow`/`T1_pow` are the Pow-weighted,
+    # REFLECTED (`1{bin>l}`, not `<=l`) analogs of `Wtab`/`T1` (needed because levelpow, like CM's
+    # own eq.36, uses the reflected `z<Z_l ⟺ U>c` indicator -- see `theoretical_u_threshold`'s own
+    # docstring for why the plain level block gets away with unreflected `<=` and levelpow does
+    # not). `nothing` for every single-family context (`fam2=false`), matching `CMBinHessCtx`'s
+    # own `Union{Nothing,...}` convention for POW-only fields -- zero extra allocation otherwise.
+    Wtab_pow::Union{Nothing,Matrix{Float64}}
+    T1_pow::Union{Nothing,Matrix{Float64}}
+    Hraw_cmlevelpow::Union{Nothing,Vector{Float64}}     # H_CM(cdf),levelpow raw column (nO)
+    block_cmlevelpow::Union{Nothing,Vector{Float64}}
+    Hraw_cmpowlevel::Union{Nothing,Vector{Float64}}     # H_CM(pow),level AND H_CM(pow),levelpow raw column (nO) -- reused sequentially within one (l,lp) iteration, see _fill_frechet_level_blocks!
+    block_cmpowlevel::Union{Nothing,Vector{Float64}}
+    colsum_pow::Union{Nothing,Vector{Float64}}          # H_E,levelpow winner-bin scratch (NCORE+1), mirrors `colsum` above
 end
 
 function CMFrechetExtension(D::Int, L::Int, nO::Int, NCORE::Int, level_targets::Vector{Float64};
-        R::Union{Nothing,AbstractMatrix{Float64}} = nothing)
+        R::Union{Nothing,AbstractMatrix{Float64}} = nothing, fam2::Bool = false)
     return CMFrechetExtension(level_targets, zeros(D, L + 1), zeros(D, L),
         Vector{Float64}(undef, NCORE), Vector{Float64}(undef, NCORE), Vector{Float64}(undef, nO),
-        R === nothing ? nothing : Vector{Float64}(undef, nO))
+        R === nothing ? nothing : Vector{Float64}(undef, nO),
+        fam2 ? zeros(D, L + 1) : nothing, fam2 ? zeros(D, L) : nothing,
+        fam2 ? Vector{Float64}(undef, nO) : nothing,
+        fam2 ? (R === nothing ? nothing : Vector{Float64}(undef, nO)) : nothing,
+        fam2 ? Vector{Float64}(undef, nO) : nothing,
+        fam2 ? (R === nothing ? nothing : Vector{Float64}(undef, nO)) : nothing,
+        fam2 ? Vector{Float64}(undef, NCORE) : nothing)
 end
 
 """
@@ -83,13 +105,31 @@ of the ENTIRE H_EE/H_EC/H_CC computation; everything ABOVE this point is now the
 function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_winner_bin::Bool, wctx, cross_ws, ext::CMFrechetExtension)
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
     refIndex1 = cctx.refIndex1; origins = cctx.origins
-    ncm_cm = nO * L
-    ncm_level = ncm - ncm_cm
-    @assert ncm_level == L "_fill_frechet_level_blocks!: cctx.ncm=$(cctx.ncm) inconsistent with D*L (got ncm_level=$ncm_level, expected L=$L) -- was cctx built from a :common_frechet aug?"
+    fam2 = cctx.n_families == 2
+    ncm_cdf = nO * L
+    ncm_level = fam2 ? 2L : L
+    ncm_cm = ncm - ncm_level
+    @assert ncm_cm == (fam2 ? 2ncm_cdf : ncm_cdf) "_fill_frechet_level_blocks!: cctx.ncm=$(cctx.ncm) inconsistent with D*L/n_families (got ncm_cm=$ncm_cm, ncm_cdf=$ncm_cdf, fam2=$fam2) -- was cctx built from a :common_frechet aug?"
     invsqrtD = 1.0 / sqrt(D)
-    level_targets = ext.level_targets
+    invD = 1.0 / D
+    # 2026-08-05 (common-Fréchet two-family extension): `ext.level_targets` is the FULL, CONCATENATED
+    # `[level_cdf_targets (L) | level_pow_targets (L)]` vector when fam2 (matches
+    # `build_cm_frechet_level_augmented_obj`'s own `LEVEL = hcat(LEVEL_cdf, LEVEL_pow)` column
+    # layout) -- sliced here rather than threaded as a separate constructor argument, since
+    # `_resolve_frechet_ext!` caches ONE `CMFrechetExtension` per cctx lifetime and this slice is
+    # O(L), negligible next to this function's own O(D^2*L^2) blocks.
+    level_targets = fam2 ? (@view ext.level_targets[1:L]) : ext.level_targets
+    level_targets_pow = fam2 ? (@view ext.level_targets[L+1:2L]) : nothing
     CS_ = cctx.CScum
     CT = cctx.CT
+    # 2026-08-05 (common-Fréchet two-family extension): eq.36's own reflected (`1{U>c}`, not `<=c`)
+    # bilinear tables -- direct reuse of `fill_cm_HCC!`'s own `CT12_use`/`CT22_use` construction
+    # (cm_hessian_architectures.jl), recomputed here rather than shared/cached since this function
+    # runs once per Hessian callback exactly like that one does. `CT12_use[x,y,l,lp]` = CDF-side
+    # (index x, `<=l`) x POW-side (index y, `>lp` reflected); `CT22_use[x,y,l,lp]` = both sides POW
+    # (`>l`,`>lp` reflected).
+    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true) : nothing
+    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true) : nothing
 
     # ---- marginal weighted-count table T1[x,l] = sum_s w_s*1{bin(s,x)<=l} (D x L), Wtot, Esum.
     # Needed because (unlike CM's own zero-target raw features) the level feature has a NONZERO
@@ -122,6 +162,44 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
         Wtot = sum(w)
     end
 
+    # ---- 2026-08-05 (common-Fréchet two-family extension): T1_pow[x,l] = sum_s w_s*Pow[s,x]*
+    # 1{bin(s,x)>l} (D x L), the REFLECTED (`>l`, not `<=l`) Pow-weighted twin of T1 above -- needed
+    # because levelpow's own raw feature uses the SAME `1{U>c}` reflected convention as CM's own
+    # eq.36 sub-block (see fill_cm_HCC!'s own BUG FIX comment, cm_hessian_architectures.jl, for the
+    # derivation of why eq.36 needs reflection and eq.35/plain-level does not). Built the same way
+    # `Wtab`/`T1` are (one extra O(W*D) pass, Pow-weighted; grand-total-minus-cumsum for the
+    # reflection, mirroring `winner_pair_cross_hessian_cm_block!`'s own `*Total_pow .- *CScum_pow`
+    # idiom). `nothing` when !fam2 (single-family common-Fréchet is completely unaffected, zero
+    # extra allocation or work). ----
+    local T1_pow
+    if fam2
+        @cmhess_prof "levelpow_table_prep" begin
+            Pow = cctx.Pow
+            Wtab_pow = ext.Wtab_pow
+            fill!(Wtab_pow, 0.0)
+            @inbounds for s in 1:Wraw
+                ws = w[s]
+                for x in 1:D
+                    Wtab_pow[x, Bidx[s, x]] += ws * Pow[s, x]
+                end
+            end
+            T1_pow = ext.T1_pow
+            @inbounds for x in 1:D
+                total = 0.0
+                for k in 1:(L+1)
+                    total += Wtab_pow[x, k]
+                end
+                acc = 0.0
+                for l in 1:L
+                    acc += Wtab_pow[x, l]
+                    T1_pow[x, l] = total - acc
+                end
+            end
+        end
+    else
+        T1_pow = nothing
+    end
+
     # ---- H_E,level (core x level), O(D*NCORE*L) + O(NCORE*L) correction ----
     # Winner-aware H_ER phase (2026-07-27), Section 3 Part B: only THIS block ever reads
     # sum_o CS_[o,j,l] / Esum[j] -- H_CM,level and H_level,level below use CT/T1/Wtot alone, never
@@ -129,7 +207,8 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
     # (winner_pair_cross_hessian.jl) replace both dense reads with O(D)/O(1)-per-entry lookups from
     # the SAME cumulative tables the H_EC block already built via `winner_pair_cross_hessian_fill!`
     # -- no dense `E`/`obj.H` read at all in the fast path.
-    level_off = NCORE + ncm_cm   # level columns are level_off+1 : level_off+L
+    level_off = NCORE + ncm_cm   # level_cdf columns level_off+1:level_off+L; level_pow (fam2) level_off+L+1:level_off+2L
+    level_pow_off = level_off + L
     @cmhess_prof "H_EF" if use_winner_bin
         Esum_wb = ext.Esum_wb
         winner_pair_cross_hessian_esum!(Esum_wb, wctx, cross_ws, w, Wtot)
@@ -141,6 +220,21 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
                 v = invsqrtD * colsum[j] / M - tl * Esum_wb[j] / M
                 Hfull[j, level_off + l] = v
                 Hfull[level_off + l, j] = v
+            end
+        end
+        # ---- H_E,levelpow (2026-08-05 two-family extension): same shape as H_E,level above, reading
+        # the REFLECTED "_pow" winner-bin tables instead -- see winner_pair_cross_hessian_colsum_pow!'s
+        # own docstring. ----
+        if fam2
+            colsum_pow = ext.colsum_pow
+            @inbounds for l in 1:L
+                tl_pow = level_targets_pow[l]
+                winner_pair_cross_hessian_colsum_pow!(colsum_pow, wctx, cross_ws, l)
+                for j in 1:NCORE
+                    v = invsqrtD * colsum_pow[j] / M - tl_pow * Esum_wb[j] / M
+                    Hfull[j, level_pow_off + l] = v
+                    Hfull[level_pow_off + l, j] = v
+                end
             end
         end
     else
@@ -167,10 +261,37 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
                 Hfull[level_off + l, j] = v
             end
         end
+        # ---- H_E,levelpow, dense fallback (2026-08-05 two-family extension) -- mirrors
+        # hessian_cm_structured!'s own dense H_EC(pow) computation (`S2total .- CS2`, the REFLECTED
+        # correction), reusing the SAME `Esum` (E has no target, independent of family). Requires
+        # `cctx.Stab2`/`CScum2` to have been filled (`fill_S=!use_winner_bin`, i.e. exactly this
+        # branch's own precondition -- see `hessian_cm_structured!`'s `build_bin_tables!` call). ----
+        if fam2
+            S2total = dropdims(sum(cctx.Stab2, dims = 3), dims = 3)   # D x NCORE
+            CS2 = cctx.CScum2
+            @inbounds for l in 1:L
+                tl_pow = level_targets_pow[l]
+                for j in 1:NCORE
+                    acc = 0.0
+                    for o in 1:D
+                        acc += S2total[o, j] - CS2[o, j, l]
+                    end
+                    v = invsqrtD * acc / M - tl_pow * Esum[j] / M
+                    Hfull[j, level_pow_off + l] = v
+                    Hfull[level_pow_off + l, j] = v
+                end
+            end
+        end
     end
 
-    # ---- H_CM,level (CM x level), O(D^2*L^2) worst case (same order as H_CC's own loop) ----
+    # ---- H_CM,level (CM x level), O(D^2*L^2) worst case (same order as H_CC's own loop). fam2
+    # additionally folds in H_CM(pow),level [user's explicitly-requested "item 1"] and
+    # H_CM(cdf),levelpow / H_CM(pow),levelpow [item 2] into the SAME (l,lp) double loop, reusing the
+    # SAME CT12_use table already built above for all three -- no extra O(D^2*L^2) passes. ----
     Hraw_cmlevel = ext.Hraw_cmlevel
+    Hraw_cmpowlevel = fam2 ? ext.Hraw_cmpowlevel : nothing
+    Hraw_cmlevelpow = fam2 ? ext.Hraw_cmlevelpow : nothing
+    ncm_pow_off = NCORE + ncm_cdf   # CM-pow rows for threshold l: ncm_pow_off+(l-1)*nO+1 : ncm_pow_off+l*nO
     @cmhess_prof "H_CF" @inbounds for l in 1:L
         for lp in 1:L
             tlp = level_targets[lp]
@@ -197,14 +318,76 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
             block_cmlevel = cctx.R === nothing ? Hraw_cmlevel : mul!(ext.block_cmlevel, cctx.R', Hraw_cmlevel)
             @views Hfull[cm_rows, col] .= block_cmlevel
             @views Hfull[col, cm_rows] .= block_cmlevel
+
+            if fam2
+                tl_pow = level_targets_pow[l]
+                # H_CM(pow),level[(o,l),lp] (item 1): CM-pow's own origin o at its own reflected
+                # threshold l, x level-cdf's implicit sum-over-origins at threshold lp -- CT12_use's
+                # CDF-side index (`<=a`) is the SUM-over-origins side here (level has no single
+                # origin), so `a=lp`; its POW-side index (`>b` reflected) is CM-pow's own origin,
+                # `b=l`. NOTE the (lp,l) argument order -- swapped relative to CT12_use's own (l,lp)
+                # loop-variable naming, since here CM-pow (not CM-cdf) supplies the POW-side index.
+                tlp_level = level_targets[lp]
+                for (oi, o) in enumerate(origins)
+                    acc_o = 0.0
+                    acc_ref = 0.0
+                    for x in 1:D
+                        acc_o += CT12_use[x, o, lp, l]
+                        acc_ref += CT12_use[x, refIndex1, lp, l]
+                    end
+                    Hraw_cmpowlevel[oi] = invsqrtD * (acc_o - acc_ref) / M - tlp_level * (T1_pow[o, l] - T1_pow[refIndex1, l]) / M
+                end
+                cm_rows_pow = ncm_pow_off + (l-1)*nO + 1 : ncm_pow_off + l*nO
+                block_cmpowlevel = cctx.R === nothing ? Hraw_cmpowlevel : mul!(ext.block_cmpowlevel, cctx.R', Hraw_cmpowlevel)
+                @views Hfull[cm_rows_pow, col] .= block_cmpowlevel
+                @views Hfull[col, cm_rows_pow] .= block_cmpowlevel
+
+                # H_CM(cdf),levelpow[(o,l),lp] (item 2, CM interaction): CM-cdf's own origin o at
+                # its own threshold l (CDF-side, `<=l`), x levelpow's implicit sum-over-origins at
+                # threshold lp (POW-side, `>lp` reflected) -- direct (l,lp) index order, matching
+                # CT12_use's own naming exactly.
+                col_pow = level_pow_off + lp
+                for (oi, o) in enumerate(origins)
+                    acc_o = 0.0
+                    acc_ref = 0.0
+                    for y in 1:D
+                        acc_o += CT12_use[o, y, l, lp]
+                        acc_ref += CT12_use[refIndex1, y, l, lp]
+                    end
+                    Hraw_cmlevelpow[oi] = invsqrtD * (acc_o - acc_ref) / M - tlp * (T1[o, l] - T1[refIndex1, l]) / M
+                end
+                block_cmlevelpow = cctx.R === nothing ? Hraw_cmlevelpow : mul!(ext.block_cmlevelpow, cctx.R', Hraw_cmlevelpow)
+                @views Hfull[cm_rows, col_pow] .= block_cmlevelpow
+                @views Hfull[col_pow, cm_rows] .= block_cmlevelpow
+
+                # H_CM(pow),levelpow[(o,l),lp]: CM-pow's own origin o at threshold l (POW-side,
+                # `>l` reflected) x levelpow's implicit sum-over-origins at threshold lp (POW-side,
+                # `>lp` reflected) -- both-POW, so reads CT22_use (not CT12_use), (lp,l) order for
+                # the same reason as H_CM(pow),level above (level-pow's sum-over-origins is the
+                # FIRST/CDF-slot argument of CT22_use's own (x,y,a,b) convention, CM-pow's o is the
+                # second/POW-slot argument).
+                for (oi, o) in enumerate(origins)
+                    acc_o = 0.0
+                    acc_ref = 0.0
+                    for x in 1:D
+                        acc_o += CT22_use[x, o, lp, l]
+                        acc_ref += CT22_use[x, refIndex1, lp, l]
+                    end
+                    Hraw_cmpowlevel[oi] = invsqrtD * (acc_o - acc_ref) / M - tl_pow * (T1_pow[o, l] - T1_pow[refIndex1, l]) / M
+                end
+                block_cmpowlevelpow = cctx.R === nothing ? Hraw_cmpowlevel : mul!(ext.block_cmpowlevel, cctx.R', Hraw_cmpowlevel)
+                @views Hfull[cm_rows_pow, col_pow] .= block_cmpowlevelpow
+                @views Hfull[col_pow, cm_rows_pow] .= block_cmpowlevelpow
+            end
         end
     end
 
-    # ---- H_level,level (level x level), O(D^2*L^2) + O(D*L^2) correction ----
-    invD = 1.0 / D
+    # ---- H_level,level (level x level), O(D^2*L^2) + O(D*L^2) correction. fam2 additionally folds
+    # in H_level,levelpow and H_levelpow,levelpow into the SAME (l,lp) loop. ----
     @cmhess_prof "H_FF" @inbounds for l in 1:L
         tl = level_targets[l]
         sum_T1_l = sum(@view T1[:, l])
+        sum_T1pow_l = fam2 ? sum(@view T1_pow[:, l]) : 0.0
         for lp in 1:L
             tlp = level_targets[lp]
             acc = 0.0
@@ -214,6 +397,30 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
             sum_T1_lp = sum(@view T1[:, lp])
             Hfull[level_off + l, level_off + lp] =
                 invD * acc / M - tlp * invsqrtD * sum_T1_l / M - tl * invsqrtD * sum_T1_lp / M + tl * tlp * Wtot / M
+
+            if fam2
+                tlp_pow = level_targets_pow[lp]
+                tl_pow = level_targets_pow[l]
+                sum_T1pow_lp = sum(@view T1_pow[:, lp])
+
+                # H_level,levelpow[l,lp]: level-cdf (CDF-side, `<=l`) x levelpow (POW-side, `>lp`
+                # reflected) -- direct (l,lp), matching CT12_use's own naming.
+                acc12 = 0.0
+                for x in 1:D, y in 1:D
+                    acc12 += CT12_use[x, y, l, lp]
+                end
+                Hfull[level_off + l, level_pow_off + lp] =
+                    invD * acc12 / M - tlp_pow * invsqrtD * sum_T1_l / M - tl * invsqrtD * sum_T1pow_lp / M + tl * tlp_pow * Wtot / M
+                Hfull[level_pow_off + lp, level_off + l] = Hfull[level_off + l, level_pow_off + lp]
+
+                # H_levelpow,levelpow[l,lp]: both POW-side (`>l`,`>lp` reflected) -- CT22_use.
+                acc22 = 0.0
+                for x in 1:D, y in 1:D
+                    acc22 += CT22_use[x, y, l, lp]
+                end
+                Hfull[level_pow_off + l, level_pow_off + lp] =
+                    invD * acc22 / M - tlp_pow * invsqrtD * sum_T1pow_l / M - tl_pow * invsqrtD * sum_T1pow_lp / M + tl_pow * tlp_pow * Wtot / M
+            end
         end
     end
     return Hfull
@@ -234,7 +441,7 @@ identity is not re-checked on the fast path (this cctx is built once per campaig
 function _resolve_frechet_ext!(cctx::CMBinHessCtx, level_targets::Vector{Float64})
     cached = cctx.frechet_ext_cache
     cached isa CMFrechetExtension && return cached
-    ext = CMFrechetExtension(cctx.D, cctx.L, cctx.nO, cctx.NCORE, level_targets; R = cctx.R)
+    ext = CMFrechetExtension(cctx.D, cctx.L, cctx.nO, cctx.NCORE, level_targets; R = cctx.R, fam2 = cctx.n_families == 2)
     cctx.frechet_ext_cache = ext
     return ext
 end
