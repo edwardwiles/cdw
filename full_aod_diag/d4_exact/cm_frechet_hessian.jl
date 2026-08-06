@@ -295,6 +295,17 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
     @cmhess_prof "H_CF" @inbounds for l in 1:L
         for lp in 1:L
             tlp = level_targets[lp]
+            # 2026-08-06 (D20 real-data gate, BUG FIX): levelpow's OWN target at lp -- was missing,
+            # causing H_CM(cdf),levelpow/H_CM(pow),levelpow below to reuse the WRONG target (either
+            # `tlp`, the level-CDF family's target, or `tl_pow=level_targets_pow[l]`, the right
+            # family but the wrong index) for their own correction term. Caught only at D20/W=80,000
+            # real-data scale (max|diff|~5.7e-6) -- the D4 gate's own small/degenerate target values
+            # happened to mask this for both blocks (test_frechet_hessian_structured_vs_dense_d4_
+            # twofamily_2026-08-05.jl still reports PASS at 1e-15 for both, i.e. does not by itself
+            # certify this fix -- the real evidence is the D20 gate). See _fill_frechet_level_blocks!'s
+            # own module-level derivation (top of file) for why the correction term is always
+            # `target_B * marginal_A`, B being whichever family the OTHER (non-CM) index belongs to.
+            tlp_pow = fam2 ? level_targets_pow[lp] : 0.0
             for (oi, o) in enumerate(origins)
                 acc_o = 0.0
                 acc_ref = 0.0
@@ -320,7 +331,6 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
             @views Hfull[col, cm_rows] .= block_cmlevel
 
             if fam2
-                tl_pow = level_targets_pow[l]
                 # H_CM(pow),level[(o,l),lp] (item 1): CM-pow's own origin o at its own reflected
                 # threshold l, x level-cdf's implicit sum-over-origins at threshold lp -- CT12_use's
                 # CDF-side index (`<=a`) is the SUM-over-origins side here (level has no single
@@ -354,7 +364,7 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
                         acc_o += CT12_use[o, y, l, lp]
                         acc_ref += CT12_use[refIndex1, y, l, lp]
                     end
-                    Hraw_cmlevelpow[oi] = invsqrtD * (acc_o - acc_ref) / M - tlp * (T1[o, l] - T1[refIndex1, l]) / M
+                    Hraw_cmlevelpow[oi] = invsqrtD * (acc_o - acc_ref) / M - tlp_pow * (T1[o, l] - T1[refIndex1, l]) / M
                 end
                 block_cmlevelpow = cctx.R === nothing ? Hraw_cmlevelpow : mul!(ext.block_cmlevelpow, cctx.R', Hraw_cmlevelpow)
                 @views Hfull[cm_rows, col_pow] .= block_cmlevelpow
@@ -373,7 +383,7 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
                         acc_o += CT22_use[x, o, lp, l]
                         acc_ref += CT22_use[x, refIndex1, lp, l]
                     end
-                    Hraw_cmpowlevel[oi] = invsqrtD * (acc_o - acc_ref) / M - tl_pow * (T1_pow[o, l] - T1_pow[refIndex1, l]) / M
+                    Hraw_cmpowlevel[oi] = invsqrtD * (acc_o - acc_ref) / M - tlp_pow * (T1_pow[o, l] - T1_pow[refIndex1, l]) / M
                 end
                 block_cmpowlevelpow = cctx.R === nothing ? Hraw_cmpowlevel : mul!(ext.block_cmpowlevel, cctx.R', Hraw_cmpowlevel)
                 @views Hfull[cm_rows_pow, col_pow] .= block_cmpowlevelpow

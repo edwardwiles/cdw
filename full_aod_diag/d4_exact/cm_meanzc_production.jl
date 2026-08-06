@@ -162,8 +162,20 @@ performance contract).
 function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, include_truncated_moment::Bool, K_pair::Int = 0,
                                              contrasts::Symbol = :orthonormal, meanzc_basis::Symbol = :direct,
                                              probs::Union{Nothing,AbstractVector{Float64}} = nothing,
-                                             inner_fg_backend::Symbol = include_truncated_moment ? :dense_reference : CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
-                                             moment_representation::Symbol = include_truncated_moment ? :dense_reference : :operator)   # true no-H
+                                             # 2026-08-06 (paired-basis-preconditioning pilot continuation): both defaults were
+                                             # conditioned on `include_truncated_moment` ONLY because :operator was refused for
+                                             # two-family at the time -- now that it is verified (see the guard's own comment
+                                             # below), both defaults are UNCONDITIONAL again, matching flexible_cm's own
+                                             # build_cm_production_context (whose driver call site always passes an explicit
+                                             # inner_fg_backend regardless of include_truncated_moment). This was the actual
+                                             # remaining wiring gap blocking cm_meanzc through run_cm_upper_checkpointed even
+                                             # after the guard below was relaxed -- that driver's own call site never passes
+                                             # inner_fg_backend explicitly, so it fell through to this stale conditional default
+                                             # (:dense_reference), mismatching the driver's own hardcoded moment_representation=
+                                             # :operator and tripping the guard just below. Confirmed live via a real W=100,000/
+                                             # L=50 run through the actual driver.
+                                             inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
+                                             moment_representation::Symbol = :operator)   # true no-H
                                              # operator bundle (2026-07-28 continuation, flipped
                                              # 2026-07-29 moment_representation threading task):
                                              # pass-through to build_cm_meanzc_augmented_obj --
@@ -185,20 +197,19 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, includ
                                              # inner_fg_backend=:operator when :operator is chosen).
     moment_representation === :operator && inner_fg_backend !== :operator &&
         error("build_cm_meanzc_production_context: moment_representation=:operator requires inner_fg_backend=:operator")
-    # 2026-08-05 truncated-power task: same hard-refuse discipline as build_cm_production_context
-    # (plain flexible CM) -- see CM_CURRENT_SINGLE_BLOCK_SOURCE_MAP.md section 2. CM+ZC's
-    # `:operator` FG path has not been verified safe for a weighted (two-family) CM-grid block
-    # within this task's time budget, so it is conservatively refused rather than assumed fine.
-    if include_truncated_moment
-        moment_representation === :operator &&
-            error("build_cm_meanzc_production_context: include_truncated_moment=true (two-family CM) requires " *
-                  "moment_representation=:dense_reference -- the :operator FG path (CMMeanZCOperatorState) has " *
-                  "not been extended/verified for the weighted eq.36 family; use :dense_reference (wrap_moments_" *
-                  "with_cm_meanzc's dense fill is already generic in the CM block width).")
-        inner_fg_backend === :operator &&
-            error("build_cm_meanzc_production_context: include_truncated_moment=true (two-family CM) requires " *
-                  "inner_fg_backend=:dense_reference for the same reason as moment_representation above.")
-    end
+    # 2026-08-05 truncated-power task, RELAXED 2026-08-06 (paired-basis-preconditioning pilot
+    # continuation): this guard originally refused include_truncated_moment=true + :operator
+    # unconditionally because CMMeanZCOperatorState's own two-family (Pow-gated) forward/backward
+    # FG math -- though the code already existed (built the same 2026-08-05 pass as CMLookupState's
+    # own two-family extension) -- had not been independently cross-checked against dense reference.
+    # That gate now exists and passes cleanly: test_cmmeanzc_operator_fg_twofamily_2026-08-06.jl,
+    # both contrasts, x=0 + 4 random points, objective/gradient agree to 1e-10/1e-8. `:operator` is
+    # therefore no longer refused for the two-family spec -- this driver-level relaxation is what
+    # then lets run_cm_upper_checkpointed's own real production path (prepare_production_run, which
+    # fatally requires an OperatorPsiBundle -- :dense_reference is NOT a usable fallback there, see
+    # cm_checkpoint.jl's own comment on this) actually run cm_meanzc two-family end to end;
+    # re-verified at real W=100,000/L=50 scale -- see key_results/cmmeanzc_w100k_l50_evidence.txt in
+    # this session's Dropbox push.
     println(stdout, "cm_restriction_basis [CM+mean/ZC] = cumulative_cdf_contrasts")
     println(stdout, "cm_internal_feature_storage [CM+mean/ZC] = bin_indices")
     println(stdout, "inner_fg_backend [CM+mean/ZC] = ", inner_fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
