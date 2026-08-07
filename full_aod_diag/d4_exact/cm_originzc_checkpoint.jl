@@ -540,6 +540,15 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # algorithm=Direct+hessopt=SR1(3)/BFGS(6) via set_outer_algorithm_direct!. `nothing`
         # (default): zero behavior change.
         outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
+        # 2026-08-06 lower-limit/hotpath task, P3 follow-up (user-requested): this driver was the
+        # ONE real production entry point missing the CG+L-BFGS opt-in that
+        # run_cm_upper_checkpointed/run_polish_checkpointed_unified already both have -- origin_zc
+        # could be forced to auto or Direct+SR1/BFGS but never to Interior/CG+L-BFGS. Same
+        # kwarg/semantics/mutual-exclusion-with-outer_direct_hessopt as those two drivers' own
+        # pin_outer_algorithm, via the SAME family-agnostic set_production_outer_algorithm!
+        # (knitro_outer_algorithm.jl) -- no new mechanism, just wiring this family into the
+        # existing one. `false` (default): zero behavior change.
+        pin_outer_algorithm::Bool = false,
         destination_sample::Symbol = :exclude_row,   # exclude-ROW-destination production release
         # (2026-07-24): same option/semantics/production-default as run_cm_upper_checkpointed's
         # own destination_sample kwarg.
@@ -771,9 +780,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
     if outer_direct_hessopt !== nothing
+        pin_outer_algorithm && error("run_originzc_upper_checkpointed($label): outer_direct_hessopt and pin_outer_algorithm are mutually exclusive (different, incompatible pinned outer configs) -- set at most one.")
         outer_direct_hessopt in (:sr1, :bfgs) || error("run_originzc_upper_checkpointed($label): outer_direct_hessopt must be :sr1 or :bfgs, got :$outer_direct_hessopt")
         set_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS)
     end
+    pin_outer_algorithm && set_production_outer_algorithm!(kc)   # opt-in only; default leaves opt_file's algorithm=auto in effect
     KNITRO.KN_set_param_by_name(kc, "maxtime_real", maxtime_real)
     KNITRO.KN_set_param_by_name(kc, "maxit", 1_000_000)
     xIndices = KNITRO.KN_add_vars(kc, D2)
@@ -906,6 +917,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     if outer_direct_hessopt !== nothing
         assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_originzc_upper_checkpointed($label)")
     end
+    pin_outer_algorithm && assert_outer_algorithm_explicit!(kc; context = "run_originzc_upper_checkpointed($label)")
     KNITRO.KN_solve(kc)
     wall_ext = time() - t_start
     nStatus, _, xsol, _ = KNITRO.KN_get_solution(kc)
