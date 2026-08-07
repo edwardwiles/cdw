@@ -704,6 +704,16 @@ mutable struct CMBinHessCtx
     block_cc22::Union{Nothing,Matrix{Float64}}
     Hraw_EC2::Union{Nothing,Matrix{Float64}}    # NCORE x nO (dense-H S2/CScum2 fallback branch only)
     block_ec2::Union{Nothing,Matrix{Float64}}
+    # 2026-08-06 lower-limit/hotpath task, P1 allocation fix: persistent scratch for
+    # _build_reflected_bilinear's own D x D x L x L output (previously `Array{Float64,4}(undef,
+    # D,D,L,L)` freshly allocated on EVERY fill_cm_HCC! call for n_families==2 -- confirmed via a
+    # live Profile.Allocs trace to be the single dominant allocation site in the common-Frechet
+    # two-family Hessian callback, ~67% of all bytes attributed to the Hessian call tree; see
+    # docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md §7). `nothing` when
+    # n_families==1 (every pre-existing single-family context, zero extra memory -- mirrors every
+    # other n_families==2-only field on this struct).
+    Trefl12::Union{Nothing,Array{Float64,4}}    # D x D x L x L
+    Trefl22::Union{Nothing,Array{Float64,4}}    # D x D x L x L
 end
 
 "Outer constructor: forwards to the full positional inner constructor, appending the new H_CZ prep backend fields with their defaults so neither existing CMBinHessCtx(...) call site (build_cm_bin_ctx/build_cm_meanzc_bin_ctx) needs to change."
@@ -719,10 +729,12 @@ function CMBinHessCtx(args...; hcz_prep_backend::Symbol = HCZ_PREP_BACKEND_DEFAU
         Hraw_CC12::Union{Nothing,Matrix{Float64}} = nothing, Hraw_CC22::Union{Nothing,Matrix{Float64}} = nothing,
         RtHraw_CC12::Union{Nothing,Matrix{Float64}} = nothing, RtHraw_CC22::Union{Nothing,Matrix{Float64}} = nothing,
         block_cc12::Union{Nothing,Matrix{Float64}} = nothing, block_cc22::Union{Nothing,Matrix{Float64}} = nothing,
-        Hraw_EC2::Union{Nothing,Matrix{Float64}} = nothing, block_ec2::Union{Nothing,Matrix{Float64}} = nothing)
+        Hraw_EC2::Union{Nothing,Matrix{Float64}} = nothing, block_ec2::Union{Nothing,Matrix{Float64}} = nothing,
+        Trefl12::Union{Nothing,Array{Float64,4}} = nothing, Trefl22::Union{Nothing,Array{Float64,4}} = nothing)
     return CMBinHessCtx(args..., hcz_prep_backend, bin_zc_drawchunk, zc_ez_backend, zc_drawmajor, n_families,
         Pow, Ttab12, Ttab22, CT12, CT22, Stab2, CScum2,
-        Hraw_CC12, Hraw_CC22, RtHraw_CC12, RtHraw_CC22, block_cc12, block_cc22, Hraw_EC2, block_ec2)
+        Hraw_CC12, Hraw_CC22, RtHraw_CC12, RtHraw_CC22, block_cc12, block_cc22, Hraw_EC2, block_ec2,
+        Trefl12, Trefl22)
 end
 
 """
@@ -744,7 +756,8 @@ function build_cm_family2_tables(D::Int, NCORE::Int, nO::Int, L::Int, R::Union{N
             block_cc12 = R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
             block_cc22 = R === nothing ? nothing : Matrix{Float64}(undef, nO, nO),
             Hraw_EC2 = Matrix{Float64}(undef, NCORE, nO),
-            block_ec2 = R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO))
+            block_ec2 = R === nothing ? nothing : Matrix{Float64}(undef, NCORE, nO),
+            Trefl12 = Array{Float64,4}(undef, D, D, L, L), Trefl22 = Array{Float64,4}(undef, D, D, L, L))
 end
 
 """
@@ -1294,8 +1307,13 @@ tables -- no new per-draw accumulation needed, no new derivative formula, just a
 (already-fully-determined) linear combination of sums that were already being computed anyway.
 """
 function _build_reflected_bilinear(Ttab::AbstractArray{Float64,4}, CT::AbstractArray{Float64,4}, D::Int, L::Int;
-                                    reflect_x::Bool, reflect_y::Bool)
-    Trefl = Array{Float64,4}(undef, D, D, L, L)
+                                    reflect_x::Bool, reflect_y::Bool,
+                                    Trefl::Union{Nothing,Array{Float64,4}} = nothing)
+    # 2026-08-06 lower-limit/hotpath task, P1 allocation fix: `Trefl` is now an OPTIONAL persistent
+    # output buffer (cctx.Trefl12/Trefl22, see CMBinHessCtx's own field docstring) instead of always
+    # allocating fresh -- `nothing` (default) preserves the exact prior behavior byte-for-byte for
+    # any caller that does not pass one (e.g. a future/diagnostic call site).
+    Trefl === nothing && (Trefl = Array{Float64,4}(undef, D, D, L, L))
     RowMarg = dropdims(sum(Ttab, dims = 4), dims = 4)   # D x D x L1: sum over ALL h (full 1:L+1 range)
     ColMarg = dropdims(sum(Ttab, dims = 3), dims = 3)   # D x D x L1: sum over ALL k
     RowCum = zeros(D, D, L)
@@ -1353,8 +1371,8 @@ function fill_cm_HCC!(Hfull::AbstractMatrix, cctx::CMBinHessCtx, M)
     # as the CDF family) do NOT directly give H^{12}/H^{22} -- eq.36's own indicator is `1{U>c}`,
     # not `1{U<=c}` (see _build_reflected_bilinear's own docstring for the full derivation/proof).
     D = cctx.D
-    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true) : nothing
-    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true) : nothing
+    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true, Trefl = cctx.Trefl12) : nothing
+    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true, Trefl = cctx.Trefl22) : nothing
     @inbounds for l in 1:L
         rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
         for lp in 1:L

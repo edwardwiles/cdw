@@ -128,8 +128,14 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
     # runs once per Hessian callback exactly like that one does. `CT12_use[x,y,l,lp]` = CDF-side
     # (index x, `<=l`) x POW-side (index y, `>lp` reflected); `CT22_use[x,y,l,lp]` = both sides POW
     # (`>l`,`>lp` reflected).
-    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true) : nothing
-    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true) : nothing
+    # 2026-08-06 lower-limit/hotpath task, P1 allocation fix: reuse the SAME persistent
+    # cctx.Trefl12/Trefl22 buffer fill_cm_HCC! already wrote into and fully consumed (into Hfull)
+    # earlier in this SAME Hessian callback -- safe because the two calls are strictly sequential
+    # within one single-threaded callback (fill_cm_HCC! always runs before this function, per
+    # hessian_cm_structured!/_v2!'s own call order), never concurrent, so there is no aliasing
+    # hazard in overwriting a buffer whose prior contents are already fully consumed.
+    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true, Trefl = cctx.Trefl12) : nothing
+    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true, Trefl = cctx.Trefl22) : nothing
 
     # ---- marginal weighted-count table T1[x,l] = sum_s w_s*1{bin(s,x)<=l} (D x L), Wtot, Esum.
     # Needed because (unlike CM's own zero-target raw features) the level feature has a NONZERO
