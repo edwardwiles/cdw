@@ -36,7 +36,7 @@ for contrasts in (:anchored, :orthonormal)
     println("== contrasts = $contrasts ==")
 
     # ---- dense (Architecture A) solve ----
-    aug_dense = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts)
+    aug_dense = build_cm_frechet_level_augmented_obj(ctx, CS; L = L, contrasts = contrasts, include_truncated_moment = false)
     ctx_dense = merge(ctx, (obj = aug_dense.obj_cm,))
     r_dense = evaluate_fullA(x_free0, ctx_dense; use_cache = false, warm = false)
     check("dense solve feasible", r_dense.inner_status in (0, -100, -101, -102, -103, -400, -401, -402))
@@ -53,7 +53,7 @@ for contrasts in (:anchored, :orthonormal)
     # knitro_status.jl) -- this is a maxit-budget artifact of the small test, not evidence either way
     # about Hessian correctness, which the direct block-by-block comparison below settles independently. ----
     cfg_struct = CMConfig(common_marginals = true, cm_grid_size = L, cm_hessian_backend = :structured,
-                           contrasts = contrasts, marginal_restriction = :common_frechet)
+                           contrasts = contrasts, marginal_restriction = :common_frechet, cm_moment_families = 1)
     pcx_struct = build_cm_production_context_v2(ctx, CS, cfg_struct; L = L)
     θ_full0_s = CS.reconstruct_full(x_free0, pcx_struct.ctx_cm.m)
     H_save_s, x_s, nStatus_s, n_fg_s, n_hess_s = inner_loop_internal_archgeneric(

@@ -502,6 +502,61 @@ equal-or-better verified progress per wall/CPU and no new failures" — this pil
 short to confirm "no new failures" at full rigor, both runs hit -401 which needs the fuller
 matched-budget replication task §12 itself calls out as the eventual bar, not repeated here).
 
+## 12. ADDENDUM (continuation session, same day): 3 user-directed follow-ups
+
+After P0 merged to production and P1's Trefl-buffer fix merged, the user asked 3 direct follow-up
+questions during review; all three led to real fixes, now also merged to production.
+
+### 12.1 Outer-algorithm choice was NOT symmetric across families -- fixed
+
+`origin_zc` (`run_originzc_upper_checkpointed`) was the one real production entry point missing
+`pin_outer_algorithm` (Interior/CG+L-BFGS) -- it only had `outer_direct_hessopt` (Direct+SR1/BFGS),
+unlike `run_cm_upper_checkpointed`/`run_polish_checkpointed_unified`, which both already had both
+options. Added `pin_outer_algorithm::Bool=false` to `run_originzc_upper_checkpointed`, wired via
+the exact same `set_production_outer_algorithm!`/`assert_outer_algorithm_explicit!` mechanism
+(`knitro_outer_algorithm.jl`) the other two drivers already use -- same mutual-exclusion check with
+`outer_direct_hessopt`, same opt-in-only default. Verified structurally
+(`Base.kwarg_decl` confirms the kwarg is real) and via a real KNITRO-level smoke: the wiring reaches
+KNITRO and passes its own internal assertion cleanly (a broken wiring would throw a specific Julia
+error at that assertion, before ever reaching KNITRO's own evaluation callback -- that did not
+happen). The smoke's own hand-built initial point separately hit `knitro_status=-502` ("could not
+evaluate at initial point") -- a scale/initial-point issue in the throwaway smoke script itself
+(built at W=20,000 with a reduced budget, unlike the existing real smoke `smoke_delta1_originzc.jl`,
+which uses W=80,000-100,000), not evidence against the outer-algorithm feature.
+
+### 12.2 "Doesn't the redundant second function suggest removing it?" -- fixed properly
+
+The user's own correct observation on the P1 writeup's own wording ("2x redundantly, in a second
+function that recomputes the same tables"): the Trefl-buffer fix (§7.4) only eliminated the
+*allocation* half of that redundancy. `_fill_frechet_level_blocks!` still independently recomputed
+the exact same `CT12_use`/`CT22_use` tables `fill_cm_HCC!` had already computed moments earlier in
+the SAME Hessian callback -- real, duplicated O(D²L²) arithmetic, not just duplicated allocation.
+Fixed: `fill_cm_HCC!` now returns `(Hfull, CT12_use, CT22_use)`; both real callers
+(`hessian_cm_structured!`/`_v2!`) thread these into `_fill_frechet_level_blocks!` via new optional
+`CT12_precomputed`/`CT22_precomputed` kwargs (default `nothing` → compute internally, preserving
+exact prior behavior for any other/standalone caller). Verified: 26/26 against the D20/W=80,000 and
+D4 two-family dense-reference gates (both re-passed after this change).
+
+### 12.3 "Do any Hessian functions compute the full matrix instead of one triangle?" -- yes, found and fixed one real case
+
+Investigated systematically:
+- **Production H_EE** (`hessian_core_winner_pair!`, the real `:exact_winner_pair_parallel` backend):
+  already correct -- its final packing loop is explicitly `for i in 1:ncolI, j in i:ncolI` (upper
+  triangle only), writing directly into a packed output. The `BLAS.gemm!` (full, not `syrk!`) call
+  found in `_fill_cm_HEE!` is confined to the **`:dense_reference` diagnostic fallback branch only**
+  (guarded by a fail-fast error if reached in production) -- not a production concern.
+- **H_EC / H^{12}/H^{21} cross-blocks**: already correct -- computed once, mirrored via a cheap
+  `transpose(block)` copy into the other corner, within the same iteration. Not doubled compute.
+- **H_CC (`fill_cm_HCC!`'s H^{11}/H^{22})**: **genuinely was** computing both triangles via full,
+  independent arithmetic -- see §12.2's fix above, which resolved this specific case (found via this
+  exact question, not a separate investigation). A pre-existing code comment on
+  `pack_upper_cm_hessian!` already documented this as a known fact without it having been acted on.
+
+No other instances found in the time available. `winner_pair_cross_hessian_cm_block!`/
+`bin_zc_cross_hessian_fill!` (CM+ZC's own widened cross-block, items #3-4 in the P1 allocation
+table) were not separately audited for this same question this session -- flagged as a candidate
+for a future pass, not confirmed either way.
+
 ## Branch/SHA and clean status
 
 - Branch: `fix/fullA-lower-limit-and-hotpath-2026-08-06`, forked from `origin/production/fullA-exact`
