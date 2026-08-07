@@ -362,7 +362,13 @@ struct CMCheckpointV6
     D_dest::Int                        # destination count; D_dest==D for :all_legacy
 end
 
-const MEANZC_MOMENT_LAYOUT_VERSION = 1   # wrap_moments_with_cm_meanzc's column order, cm_meanzc_moments.jl
+const MEANZC_MOMENT_LAYOUT_VERSION = 2   # wrap_moments_with_cm_meanzc's column order, cm_meanzc_moments.jl.
+# Bumped 1->2 by fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: meanzc_profiled_level's
+# behavior changed from Variant C (derive shared nu_k0, RETAIN every mean row) to Variant D
+# (derive, OMIT the focal origin's own mean row/eta coordinate) -- a genuine dimension change
+# whenever meanzc_profiled_level is active. See ORIGINZC_MOMENT_LAYOUT_VERSION's identical
+# rationale (cm_originzc_checkpoint.jl) for why this is a blanket, conservative version bump
+# rather than a selective one.
 
 """
     CMCheckpointV8
@@ -1048,13 +1054,25 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
               ":common_flexible with the meanzc extension.")
     marginal_restriction === :common_frechet &&
         lp("[", label, "] marginal_restriction=common_frechet (fixed Frechet as CM plus a common-level anchor)")
+    # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: meanzc_profiled_level now implements
+    # Variant D (derive shared nu_{k0}=cf_denom/cf_num, OMIT the FOCAL origin's own mean row/eta
+    # coordinate at that level entirely -- task Section 6) in place of the 2026-08-05 merge's
+    # Variant C (derive, but RETAIN every row). Other origins' mean rows at level k0 are UNCHANGED
+    # (still genuine, independent restrictions targeted at the same derived shared value).
+    meanzc_aml = nothing
     if meanzc_profiled_level !== nothing
         is_meanzc || error("run_cm_upper_checkpointed($label): meanzc_profiled_level requires cm_extension!=:cm_only (is_meanzc)")
         1 <= meanzc_profiled_level <= meanzc_K_mean ||
             error("run_cm_upper_checkpointed($label): meanzc_profiled_level=$meanzc_profiled_level out of range 1:$meanzc_K_mean")
-        lp("[", label, "] k=(sigma-1) narrow fix ACTIVE: meanzc_profiled_level=", meanzc_profiled_level,
-           " -- nu_", meanzc_profiled_level, " replaced by cf_denom/cf_num (autarky_cf.jl) at every outer evaluation, not read from the KNITRO guess.")
+        meanzc_shared_layout = SharedByPowerLayout(meanzc_K_mean, meanzc_K_pair)
+        meanzc_aml = ActiveMeanLayout(meanzc_shared_layout, ctx.bi, meanzc_profiled_level, ctx.D)
+        lp("[", label, "] k=(sigma-1) row-omission fix ACTIVE (Variant D): meanzc_profiled_level=", meanzc_profiled_level,
+           " -- shared nu_", meanzc_profiled_level, " DERIVED via cf_denom/cf_num (autarky_cf.jl); ",
+           "ONLY the focal origin's (bi=", ctx.bi, ") own mean row/eta coordinate removed ",
+           "(n_eta: ", meanzc_K_mean, " -> ", meanzc_aml.n_eta_active, "); every other origin's mean row ",
+           "at this level retained, now targeted at the derived value.")
     end
+    n_eta_active_meanzc = meanzc_aml === nothing ? meanzc_K_mean : meanzc_aml.n_eta_active
 
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
     backend_switched = false   # Part II.4 follow-up -- set true below only on an explicit, audited cross-backend resume
@@ -1210,10 +1228,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                resumed_coord_mode, ", requested=:", A_coordinate_mode, ") -- safe (checkpoint zfree is ",
                "always canonical z-space), reconstructing w0 in the requested coordinate.")
         A_native0 = A_coordinate_mode == :powered_aspace ? cm_a_from_z(resumed.zfree, theta_cm, xy_cm, pe) : resumed.zfree
+        !is_meanzc || length(resumed.eta_nu) == n_eta_active_meanzc ||
+            error("run_cm_upper_checkpointed($label): checkpoint eta_nu length=$(length(resumed.eta_nu)) != " *
+                  "n_eta_active_meanzc=$n_eta_active_meanzc for the current meanzc_profiled_level=$meanzc_profiled_level " *
+                  "-- refusing to resume under a mismatched active-mean-layout (belt-and-suspenders re-check, " *
+                  "should already be caught by the moment-layout-version check above).")
         w0 = vcat(resumed.g, A_native0, resumed.eta_nu)
     elseif w0 === nothing
         error("run_cm_upper_checkpointed($label): w0 required for a fresh (non-resumed) run " *
-              (is_meanzc ? "-- must be vcat(gp, A_nonpivot_native, eta_nu) with length(eta_nu)==$(meanzc_K_mean), " *
+              (is_meanzc ? "-- must be vcat(gp, A_nonpivot_native, eta_nu) with length(eta_nu)==$(n_eta_active_meanzc), " *
                            "A_nonpivot_native in whichever coordinate A_coordinate_mode selects (see cm_w0_from_calibration)" : ""))
     end
 
@@ -1256,7 +1279,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         () -> is_meanzc ?
             build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
                 include_truncated_moment = include_truncated_moment,
-                contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = :operator) :
+                contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = :operator,
+                aml = meanzc_aml) :
             is_frechet ?
             build_cm_frechet_production_context(ctx, CS; L = L, contrasts = contrasts, probs = probs,
                 cm_hessian_backend = cm_hessian_backend, threaded_bins = threaded_bins,
@@ -1315,11 +1339,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # D2_econ = length of the (gp, zfree) economic block only -- length(w0) itself is
     # D2_econ + meanzc_K_mean when is_meanzc, matching cm_meanzc_production.jl's own convention
     # (g_ext has length D^2 + K_mean, D^2 == D2_econ).
-    D2_econ = length(w0) - (is_meanzc ? meanzc_K_mean : 0)
+    D2_econ = length(w0) - (is_meanzc ? n_eta_active_meanzc : 0)
 
-    nu_bounds = is_meanzc ?
+    nu_bounds_dense = is_meanzc ?
         (meanzc_nu_bounds === nothing ? meanzc_default_nu_bounds(ctx, meanzc_K_mean) : meanzc_nu_bounds) :
         NTuple{2,Float64}[]
+    nu_bounds = (is_meanzc && meanzc_aml !== nothing && meanzc_aml.active) ?
+        [nu_bounds_dense[d] for d in 1:length(nu_bounds_dense) if d != meanzc_aml.dense_omit_idx] :
+        nu_bounds_dense
     is_meanzc && lp("[", label, "] eta_nu box (per level, log-nu units): ", nu_bounds)
 
     # pool/workspace for cm_gradient_backend=:cplus only -- zero cost (nothing allocated) when
@@ -1337,8 +1364,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     if backend_switched && resumed.best_feasible !== nothing
         xf_switch = xf_from_w_econ(resumed.best_feasible.w[1:D2_econ])
         verify_switch = if is_meanzc
-            νvec_switch = exp.(resumed.best_feasible.w[D2_econ+1:end])
-            meanzc_profiled_level === nothing || (νvec_switch[meanzc_profiled_level] = meanzc_profiled_nu_value(xf_switch, ctx))
+            νvec_switch_active = exp.(resumed.best_feasible.w[D2_econ+1:end])
+            νvec_switch = meanzc_aml === nothing ? νvec_switch_active : scatter_nu_eff(meanzc_aml, νvec_switch_active, meanzc_profiled_nu_value(xf_switch, ctx))
             (_, _, vs) = cm_meanzc_production_value_verified_screened(xf_switch, νvec_switch, pcx; counters = pcx.screen_counters); vs
         elseif is_frechet
             (_, _, vs) = cm_frechet_production_value_verified_screened(xf_switch, pcx; counters = pcx.screen_counters); vs
@@ -1359,8 +1386,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     gp_lo, gp_hi = ctx.bounds.γp_lo, ctx.bounds.γp_hi
     w_lo_econ = vcat(gp_lo, w0[2:D2_econ] .- z_halfwidth)
     w_hi_econ = vcat(gp_hi, w0[2:D2_econ] .+ z_halfwidth)
-    w_lo = is_meanzc ? vcat(w_lo_econ, [nu_bounds[k][1] for k in 1:meanzc_K_mean]) : w_lo_econ
-    w_hi = is_meanzc ? vcat(w_hi_econ, [nu_bounds[k][2] for k in 1:meanzc_K_mean]) : w_hi_econ
+    w_lo = is_meanzc ? vcat(w_lo_econ, [nu_bounds[k][1] for k in 1:n_eta_active_meanzc]) : w_lo_econ
+    w_hi = is_meanzc ? vcat(w_hi_econ, [nu_bounds[k][2] for k in 1:n_eta_active_meanzc]) : w_hi_econ
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
@@ -1456,8 +1483,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     function cb_F!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         xf = xf_from_w_econ(w[1:D2_econ])
-        νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
-        is_meanzc && meanzc_profiled_level !== nothing && (νvec[meanzc_profiled_level] = meanzc_profiled_nu_value(xf, ctx))
+        νvec_active = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
+        νvec = (is_meanzc && meanzc_aml !== nothing) ? scatter_nu_eff(meanzc_aml, νvec_active, meanzc_profiled_nu_value(xf, ctx)) : νvec_active
         local base, verify
         cache_key = exact_cache === nothing ? nothing :
             CMProductionEvalKey(collect(xf), collect(νvec), delta, find_smallest, pcx.ctx_cm.obj.inner_loop_opt,
@@ -1524,8 +1551,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     function cb_G!(kc2, cb, evalRequest, evalResult, userParams)
         w = evalRequest.x
         xf = xf_from_w_econ(w[1:D2_econ])
-        νvec = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
-        is_meanzc && meanzc_profiled_level !== nothing && (νvec[meanzc_profiled_level] = meanzc_profiled_nu_value(xf, ctx))
+        νvec_active = is_meanzc ? exp.(w[D2_econ+1:end]) : Float64[]
+        νvec = (is_meanzc && meanzc_aml !== nothing) ? scatter_nu_eff(meanzc_aml, νvec_active, meanzc_profiled_nu_value(xf, ctx)) : νvec_active
         shared = last_F_state[]
         matched = shared !== nothing && shared.w == w
         base = matched ? shared.base : nothing
@@ -1565,25 +1592,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                     h_mode = :cached, bandwidth_cache = bandwidth_cache)
             end
         end
-        # k=(sigma-1) narrow fix: the ONE necessary consequence of overriding nuvec[k0] above (see
-        # meanzc_profiled_level's own docstring for the full derivation) -- neither line touches
-        # cm_meanzc_production_gradient(_cplus)/d_delta_dual_d_eta_nu_vec, both of which still
-        # correctly compute d(Delta)/d(eta_nu_k) treating nuvec as a plain fixed argument (exactly
-        # as before); only the ASSEMBLY of the final KNITRO-facing gradient vector changes, here.
-        if is_meanzc && meanzc_profiled_level !== nothing
-            k0 = meanzc_profiled_level
-            # d_eta_k0 = d(Delta)/d(eta_nu_k0) = nu_k0 * d(Delta)/d(nu_k0) (eta=log(nu), still
-            # correct as computed -- d_delta_dual_d_eta_nu_vec = nu .* d_delta_dual_d_nu_vec).
-            # The needed correction is d(Delta)/d(nu_k0) * d(nu_k0)/d(gp), NOT d_eta_k0 *
-            # d(nu_k0)/d(gp) -- the two nu_k0 factors (one implicit in d_eta_k0, one in
-            # d(nu_k0)/d(gp)=sigma*nu_k0/gp) cancel exactly: d(Delta)/d(nu_k0) = d_eta_k0/nu_k0, so
-            # the correction is (d_eta_k0/nu_k0)*(sigma*nu_k0/gp) = d_eta_k0*sigma/gp.
-            d_eta_k0 = gfull[D2_econ+k0]
-            gfull[1] += d_eta_k0 * ctx.σ / w[1]  # chain rule: nu_k0 now an implicit function of gp
-            gfull[D2_econ+k0] = 0.0              # w's own eta_nu_k0 coordinate has ZERO effect on
-            # the objective now (nuvec[k0] no longer reads from it) -- its correct partial
-            # derivative is exactly 0, not the d(Delta)/d(eta_nu_k0) quantity just consumed above.
-        end
+        # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: the k=(sigma-1) row-omission chain-rule
+        # term (d(nu_star)/d(gp) AND d(nu_star)/d(A_dd), task Section 13 -- the OLD 2026-08-05
+        # Variant-C code above only ever chain-ruled through gp, silently dropping the A_dd term)
+        # is now applied INSIDE cm_meanzc_production_gradient/_cplus, on g_econ, before gfull is
+        # even assembled -- gfull is already complete (length D2_econ+n_eta_active_meanzc) here.
+        # Nothing left to do at this call site.
         n_grad[] += 1
         evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
         # Transformed-A restricted-family port: gfull is ALWAYS the z-space gradient (the shared
@@ -1633,8 +1647,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     local verify_final
     try
         if is_meanzc
-            νvec_final = exp.(xsol_v[D2_econ+1:end])
-            meanzc_profiled_level === nothing || (νvec_final[meanzc_profiled_level] = meanzc_profiled_nu_value(xf_final, ctx))
+            νvec_final_active = exp.(xsol_v[D2_econ+1:end])
+            νvec_final = meanzc_aml === nothing ? νvec_final_active : scatter_nu_eff(meanzc_aml, νvec_final_active, meanzc_profiled_nu_value(xf_final, ctx))
             _, _, verify_final = cm_meanzc_production_value_verified_screened(xf_final, νvec_final, pcx; counters = pcx.screen_counters)
         elseif is_frechet
             _, _, verify_final = cm_frechet_production_value_verified_screened(xf_final, pcx; counters = pcx.screen_counters)

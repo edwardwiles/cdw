@@ -100,13 +100,20 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     # wrap_moments_with_cm_meanzc's own mean_columns_direct!(dest,Z,nu_k::Float64) by this file's
     # own D=4 correctness gate, not assumed from reading alone).
     isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
-    meanzc_zc_op = inner_fg_backend === :operator ? ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D) : nothing
+    aug_aml = hasproperty(aug, :aml) ? aug.aml : nothing   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07
+    aug_aml === nothing || !aug_aml.active || include(joinpath(@__DIR__, "zc_restriction_operator_ragged.jl"))
+    meanzc_zc_op = inner_fg_backend === :operator ?
+        ((aug_aml === nothing || !aug_aml.active) ?
+            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D) :
+            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D, aug_aml)) : nothing
     meanzc_zc_layout = inner_fg_backend === :operator ? SharedByPowerLayout(aug.K_mean, aug.K_pair) : nothing
     # CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): DEDICATED raw-ZC-feature state
     # for the NEW direct H_CZ/H_ZZ Hessian primitives, built ALWAYS (independent of
     # inner_fg_backend, unlike `meanzc_zc_op`/`meanzc_zc_layout` above -- see CMBinHessCtx's own
     # `hzz_zc_op` field docstring for why this is a separate object, not a repurposing of those).
-    hzz_zc_op = ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D)
+    hzz_zc_op = (aug_aml === nothing || !aug_aml.active) ?
+        ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D) :
+        ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D, aug_aml)
     hzz_zc_layout = SharedByPowerLayout(aug.K_mean, aug.K_pair)
     hzz_zc_ws = ZCRestrictionWorkspace(hzz_zc_op)
     n_families = hasproperty(aug, :n_families) ? aug.n_families : 1   # 2026-08-05 truncated-power task
@@ -175,7 +182,7 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, includ
                                              # :operator and tripping the guard just below. Confirmed live via a real W=100,000/
                                              # L=50 run through the actual driver.
                                              inner_fg_backend::Symbol = CM_MEANZC_INNER_FG_BACKEND_DEFAULT[],
-                                             moment_representation::Symbol = :operator)   # true no-H
+                                             moment_representation::Symbol = :operator,   # true no-H
                                              # operator bundle (2026-07-28 continuation, flipped
                                              # 2026-07-29 moment_representation threading task):
                                              # pass-through to build_cm_meanzc_augmented_obj --
@@ -195,6 +202,11 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, includ
                                              # :dense_reference (explicit opt-out, unchanged
                                              # PsiObjectiveBundleImplicit, requires
                                              # inner_fg_backend=:operator when :operator is chosen).
+                                             aml::Union{Nothing,ActiveMeanLayout} = nothing)   # fix/zc-
+                                             # profile-focal-sigmaminus1-mean-2026-08-07: optional
+                                             # focal k=(sigma-1) mean-row omission, threaded
+                                             # straight through to build_cm_meanzc_augmented_obj;
+                                             # nothing (default) = zero behavior change.
     moment_representation === :operator && inner_fg_backend !== :operator &&
         error("build_cm_meanzc_production_context: moment_representation=:operator requires inner_fg_backend=:operator")
     # 2026-08-05 truncated-power task, RELAXED 2026-08-06 (paired-basis-preconditioning pilot
@@ -216,7 +228,7 @@ function build_cm_meanzc_production_context(ctx, CS; L::Int, K_mean::Int, includ
     flush(stdout)
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
     aug = build_cm_meanzc_augmented_obj(ctx, CS; L = L, K_mean = K_mean, include_truncated_moment = include_truncated_moment, K_pair = K_pair,
-        contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = moment_representation)
+        contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = moment_representation, aml = aml)
     ctx_cm = merge(ctx, (obj = aug.obj_cm,))
     cctx = build_cm_meanzc_bin_ctx(ctx, aug; inner_fg_backend = inner_fg_backend)
     bins = cm_bin_indices_for(ctx, aug)   # lfix_cm_aware.jl -- Unsigned-typed, for the CM fixed-contribution lookup
@@ -381,10 +393,21 @@ function meanzc_fixed_contribution(base::BaseDualState, aug, νvec::AbstractVect
     W = size(aug.Zraw_all[1], 1)
     out = zeros(W)
     mean_start = ncore_econ
-    pair_start0 = ncore_econ + K_mean * D
+    # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: ragged-aware mean-block indexing/columns
+    # when aug.aml is active (was previously hardcoded dense K_mean*D/(k-1)*D -- same bug class
+    # confirmed live in originzc_fixed_contribution, cm_originzc_moments.jl). aug.Zraw_all[k] is
+    # ALWAYS the full dense (W,D) table; subset its columns to the active origins. The
+    # `νvec[k]*sum(λ_mean_k)` simplification (every origin shares the SAME target under
+    # SharedByPowerLayout) remains exactly valid regardless of which/how-many origins are active.
+    aml_local = hasproperty(aug, :aml) ? aug.aml : nothing
+    mean_offset = aml_local !== nothing && aml_local.active ? mean_offset_from_aml(aml_local) : collect(0:D:K_mean*D)
+    n_mean_active = mean_offset[end]
+    pair_start0 = ncore_econ + n_mean_active
     for k in 1:K_mean
-        λ_mean_k = @view base.λstar[mean_start+(k-1)*D : mean_start+k*D-1]
-        out .+= aug.Zraw_all[k] * λ_mean_k
+        active = aml_local !== nothing && aml_local.active ? aml_local.mean_active_origins[k] : collect(1:D)
+        λ_mean_k = @view base.λstar[mean_start+mean_offset[k] : mean_start+mean_offset[k+1]-1]
+        Zk_active = length(active) == D ? aug.Zraw_all[k] : @view aug.Zraw_all[k][:, active]
+        out .+= Zk_active * λ_mean_k
         out .-= νvec[k] * sum(λ_mean_k)
     end
     for k in 1:K_pair
@@ -479,6 +502,15 @@ function cm_meanzc_production_gradient(x_free0::AbstractVector, νvec::AbstractV
         g_econ, meta = composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
     else
         error("cm_meanzc_production_gradient: gradient_backend must be :shared_inplace_pooled|:legacy_unbuffered, got $gradient_backend")
+    end
+    aml = hasproperty(pcx.aug, :aml) ? pcx.aug.aml : nothing   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07
+    if aml !== nothing && aml.active
+        eta_grad_active, d_delta_d_nu_star = d_delta_dual_d_eta_active_and_nustar_shared(base.λstar, pcx.aug, aml, νvec; mean_m = verify.m_mean)
+        θ_full = CS.reconstruct_full(x_free0, ctx.m)
+        info = build_focal_kstar_derivative_info(ctx, pe)
+        D2_econ = length(g_econ)
+        apply_focal_kstar_chain_rule!(g_econ, θ_full, ctx, info, D2_econ, d_delta_d_nu_star)
+        return vcat(g_econ, eta_grad_active), meta
     end
     d_eta = d_delta_dual_d_eta_nu_vec(base.λstar, pcx.aug, νvec; mean_m = verify.m_mean)
     return vcat(g_econ, d_eta), meta

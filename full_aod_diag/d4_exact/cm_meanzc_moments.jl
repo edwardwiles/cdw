@@ -53,6 +53,7 @@
 using LinearAlgebra: dot
 
 isdefined(Main, :OperatorPsiBundle) || include(joinpath(@__DIR__, "operator_psi_bundle.jl"))   # true no-H operator bundle (2026-07-28 continuation): OperatorPsiBundle/prime_operator!, load-bearing for build_cm_meanzc_augmented_obj below
+isdefined(Main, :ActiveMeanLayout) || include(joinpath(@__DIR__, "cm_originzc_target_layout.jl"))   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: ActiveMeanLayout/scatter_nu_eff/gather_active_grad, load-bearing for build_cm_meanzc_augmented_obj/d_delta_dual_d_eta_active_and_nustar_shared below. cm_meanzc_moments.jl is included from many driver/gate scripts whose own include order does not guarantee cm_originzc_target_layout.jl loads first (confirmed live: common_marginals_moments.jl -> cm_meanzc_moments.jl fires before it in several existing scripts).
 
 """
     packed_pair_index(D::Int) -> Vector{Tuple{Int,Int}}
@@ -470,12 +471,18 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, include_tru
                                         contrasts::Symbol = :anchored, meanzc_basis::Symbol = :direct,
                                         probs::Union{Nothing,AbstractVector{Float64}} = nothing,
                                         refIndex1::Int = ctx.γ.refIndex1,
-                                        moment_representation::Symbol = :dense_reference)   # true no-H
+                                        moment_representation::Symbol = :dense_reference,   # true no-H
                                         # operator bundle (2026-07-28 continuation): :dense_reference
                                         # (default, unchanged) constructs PsiObjectiveBundleImplicit +
                                         # both moments! closures exactly as before; :operator constructs
                                         # OperatorPsiBundle and skips building the closures entirely
                                         # (never called in that mode -- priming uses prime_operator!).
+                                        aml::Union{Nothing,ActiveMeanLayout} = nothing)   # fix/zc-profile-
+                                        # focal-sigmaminus1-mean-2026-08-07: optional focal
+                                        # k=(sigma-1) mean-row omission ("Variant D", task Section 6).
+                                        # nothing (default) = zero behavior change. ONLY supported for
+                                        # moment_representation=:operator (dense_reference out of scope,
+                                        # same as origin-ZC's analogous kwarg).
     K_mean >= 1 || error("build_cm_meanzc_augmented_obj: K_mean must be >= 1, got $K_mean")
     0 <= K_pair <= K_mean || error("build_cm_meanzc_augmented_obj: K_pair must satisfy 0 <= K_pair <= K_mean, got K_pair=$K_pair, K_mean=$K_mean")
     meanzc_basis in (:direct, :anchored) || error("build_cm_meanzc_augmented_obj: meanzc_basis must be :direct or :anchored, got $meanzc_basis")
@@ -499,15 +506,27 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, include_tru
     Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, K_pair; μ = ctx.μHat)
     D = ctx.D
     npair = div(D * (D - 1), 2)
-    n_mean = K_mean * D
+    n_mean_dense = K_mean * D
+    # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07 BUG FIX: this must be the MEAN-ROW count
+    # (mean_offset_from_aml(aml)[end] = n_mean_dense - 1, since only ONE origin's row at ONE level
+    # is ever omitted, regardless of layout type), NOT aml.n_eta_active -- those two coincide for
+    # OriginByPowerLayout (one eta per mean row, so n_eta_active happens to equal the active
+    # mean-row count) but are COMPLETELY DIFFERENT SCALES for SharedByPowerLayout (n_eta(shared)
+    # = K_mean, not K_mean*D; n_eta_active = K_mean-1 there, e.g. 1 for K_mean=2 -- confirmed live
+    # to crash the inner KNITRO solve with a genuine dimension mismatch, NCORE_ext computed as 402
+    # + 1 + 0 = 403 instead of the correct 402 + 39 + 0 = 441).
+    n_mean = (aml !== nothing && aml.active) ? mean_offset_from_aml(aml)[end] : n_mean_dense
     n_pair = K_pair * npair
-    @assert n_mean + n_pair == n_meanzc_moments(D, K_mean, K_pair)
+    @assert n_mean_dense + n_pair == n_meanzc_moments(D, K_mean, K_pair)
 
     d_new = ncore_econ + n_mean + n_pair + ncm
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair + ncm
     core_cf_ref = Ref{Any}(nothing)
     moments_meanzc_skip! = nothing
     if moment_representation === :dense_reference
+        aml === nothing || !aml.active ||
+            error("build_cm_meanzc_augmented_obj: focal k=(sigma-1) row omission (aml.active=true) is only " *
+                  "implemented for moment_representation=:operator -- dense_reference is out of scope.")
         moments_meanzc! = wrap_moments_with_cm_meanzc(obj0.moments!, ncore_econ, CM, Zraw_all, Zpairraw_all;
                                                        meanzc_basis = meanzc_basis, refIndex1 = refIndex1,
                                                        ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
@@ -547,7 +566,7 @@ function build_cm_meanzc_augmented_obj(ctx, CS; L::Int, K_mean::Int, include_tru
             n_mean = n_mean, n_pair = n_pair, meanzc_basis = meanzc_basis,
             ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_meanzc_skip!,
             include_truncated_moment = include_truncated_moment, n_families = n_families,
-            ncm_cdf = ncm_cdf, ncm_pow = ncm_pow)
+            ncm_cdf = ncm_cdf, ncm_pow = ncm_pow, aml = aml)
 end
 
 """
@@ -591,6 +610,56 @@ end
 function d_delta_dual_d_eta_nu_vec(λstar::AbstractVector{Float64}, aug, νvec::AbstractVector{Float64}; mean_m::Float64)
     d_nu = d_delta_dual_d_nu_vec(λstar, aug, νvec; mean_m = mean_m)
     return νvec .* d_nu
+end
+
+"""
+    d_delta_dual_d_eta_active_and_nustar_shared(λstar, aug, aml::ActiveMeanLayout, νvec_eff::Vector{Float64};
+                                                 mean_m::Float64) -> (eta_grad_active::Vector{Float64}, d_delta_d_nu_star::Float64)
+
+Row-omission analog of `d_delta_dual_d_nu_vec`/`d_delta_dual_d_eta_nu_vec` above
+(fix/zc-profile-focal-sigmaminus1-mean-2026-08-07, task Section 13): the IDENTICAL
+envelope-derivative formula -- NOT a new gradient engine -- adapted only for the fact that level
+`aml.kstar`'s mean block is `D-1`-wide (`aml.mean_active_origins[aml.kstar]`, only the FOCAL
+origin's row omitted; every other origin's mean row at that level remains, still targeted at the
+SAME shared derived `nu_star`) instead of `D`-wide. `d_mean_dnu_direct`/`d_mean_dnu_anchored` are
+called UNCHANGED and simply subset to the active origins for the ragged level (`SharedByPowerLayout`
+means every level has exactly one eta coordinate at `target_index(layout,o,k)=k`, so
+`n_eta(SharedByPowerLayout)=K_mean` and `aml.dense_omit_idx==aml.kstar` exactly -- the existing,
+generic `gather_active_grad` helper from cm_originzc_target_layout.jl applies unchanged, no
+CM+ZC-specific splitting logic needed).
+
+`νvec_eff` is the FULL dense (length K_mean) shared-nu vector, with the derived `nu_star` already
+scattered into position `aml.kstar` (via `scatter_nu_eff`) -- pair targets always need the shared
+value at every level, including the derived one.
+"""
+function d_delta_dual_d_eta_active_and_nustar_shared(λstar::AbstractVector{Float64}, aug, aml::ActiveMeanLayout,
+                                                      νvec_eff::AbstractVector{Float64}; mean_m::Float64)
+    K_mean = aug.K_mean; K_pair = aug.K_pair
+    length(νvec_eff) == K_mean || error("d_delta_dual_d_eta_active_and_nustar_shared: length(νvec_eff)=$(length(νvec_eff)) != aug.K_mean=$K_mean")
+    ncore_econ = aug.ncore_econ
+    D = size(aug.Zraw_all[1], 2)
+    npair = D * (D - 1) ÷ 2
+    mean_start = ncore_econ
+    mean_offset = mean_offset_from_aml(aml)
+    pair_start0 = ncore_econ + mean_offset[end]   # ragged-aware: active mean count, not K_mean*D
+    d_nu = Vector{Float64}(undef, K_mean)
+    for k in 1:K_mean
+        active_k = aml.mean_active_origins[k]
+        λ_mean_k = @view λstar[mean_start+mean_offset[k] : mean_start+mean_offset[k+1]-1]
+        d_mean_dense = aug.meanzc_basis === :direct ? d_mean_dnu_direct(D) : d_mean_dnu_anchored(D, aug.refIndex1)
+        d_mean_active = length(active_k) == D ? d_mean_dense : d_mean_dense[active_k]
+        total = dot(λ_mean_k, d_mean_active)
+        if k <= K_pair
+            λ_pair_k = @view λstar[pair_start0+(k-1)*npair : pair_start0+k*npair-1]
+            total += dot(λ_pair_k, d_pair_dnu(νvec_eff[k], npair))
+        end
+        d_nu[k] = mean_m * total
+    end
+    eta_grad_active, _ = gather_active_grad(aml, νvec_eff .* d_nu)
+    # d_delta_d_nu_star: RAW (un-nu-multiplied) d(Delta)/d(nu_star) at the omitted dense index --
+    # no eta exists there anymore, chain-ruled into gp/A_dd by the caller instead.
+    _, d_delta_d_nu_star = gather_active_grad(aml, d_nu)
+    return eta_grad_active, d_delta_d_nu_star
 end
 
 """
