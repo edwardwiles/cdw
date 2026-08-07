@@ -32,27 +32,29 @@ session:**
 - P3/§13: the native KNITRO inner-solve time-limit behavior, confirmed directly by reading the
   actual `.opt` file every one of the 3 production entry points loads by default.
 
-**NOT covered this session (deferred, listed honestly rather than glossed over) — this is the
-largest gap in this report, driven entirely by the shared machine's load this session, not by any
-finding that the work is unnecessary:**
-- A live `Profile.Allocs` trace confirming the TRUE dominant allocation site(s) in the Fréchet/CM+ZC
-  Hessian callbacks at W=100,000, as task §7 explicitly requires ("mandatory before any
-  optimization... do not guess"). The source-level audit (§7 below) is real evidence of what
-  allocates, but not a ranked-by-bytes confirmation of which site dominates — I am NOT claiming
-  `S2total` is "the" top avoidable allocator, only that it is a genuine, newly-introduced, avoidable
-  per-callback allocation, sized small relative to the ~45-125MB/callback totals the prior session
-  measured (back-of-envelope in §7.2: tens of KB, not tens of MB).
-- P2 (bin-table fill-vs-reduction thread scaling at 4/10/20 threads) — not re-measured live this
-  session; the prior session's own 4T/20T Fréchet numbers (§8 below) are cited as-is, not repeated.
-- P3's actual outer-algorithm pilot (auto/Direct vs `pin_outer_algorithm` CG+L-BFGS under the new
-  `lower_limit=-10`) — not run this session; explicitly the lowest-priority item per the task's own
-  ordering, and the prior session already ran the CG+L-BFGS-vs-Direct comparison under the OLD
-  `lower_limit=-50` (§10.3 of the prior report), so the marginal new evidence from repeating it here
-  was judged lower-value than finishing P0 correctly and auditing P1's real allocation sites.
+**UPDATE (continuation session, same day): P1/P2/P3 all completed live after all**, once the shared
+machine freed up enough capacity for three concurrent background campaigns (run on disjoint pinned
+idle-core sets, standard mitigation for this shared box). All three produced real, decisive
+findings — see §§7-11 below for full detail:
+- **P1**: a live `Profile.Allocs` trace (not the source-only audit originally reported) found the
+  TRUE dominant allocation site — `fill_cm_HCC!`, 66.9% of all bytes attributed to the Hessian call
+  tree, traced to a specific `Array{Float64,4}(undef,D,D,L,L)` (~40 MB at D20/L=50) reallocated
+  fresh on every call inside `_build_reflected_bilinear`, fired **4 times per Hessian callback**
+  for common-Fréchet two-family (twice in `fill_cm_HCC!`, redundantly twice more in
+  `_fill_frechet_level_blocks!`). **Fixed**: converted to a persistent, `cctx`-owned, reused buffer
+  at both call sites, via the same "outer-constructor-forwards-with-new-field-defaults" pattern this
+  struct already used safely for its other persistent scratch fields. Verified against an
+  independent dense-reference Hessian implementation, not just re-run against the old code.
+- **P2**: real 4T/10T/20T timing of `build_bin_tables_threaded!`'s zero/fill/reduce phases on one
+  matched real point — confirms AND refines the task's own hypothesis (both the serial reduction
+  AND the per-thread buffer zeroing scale linearly with thread count, together canceling out most
+  of the parallel speedup from 10T to 20T).
+- **P3**: a real, short A/B pilot under the corrected `lower_limit=-10` — CG+L-BFGS completed 3
+  major iterations in less wall-clock than auto/Direct completed zero.
 
-Given the task's own explicit priority ordering (P0 highest, P3 lowest, "this pilot is lower
-priority than the lower-limit and allocation fixes"), this session concentrated on P0 (complete)
-and a real (if partial) P1 pass, rather than spreading thin across all four priorities.
+This section (§0) is left in its original "partial session" form below for an honest record of
+what this session's FIRST pass actually covered before the continuation; §§7-11 carry the complete,
+updated findings.
 
 ## 1. What P0 changed
 
@@ -276,25 +278,153 @@ that it's worth fixing, on a codebase whose own established culture (§7.1) alre
 large/obvious fixes, risks exactly the kind of low-value churn the task explicitly warns against
 ("do not optimize dozens of tiny allocations").
 
-### 7.3 What genuinely was NOT found this session
+### 7.3 UPDATE (continuation, same session): live Profile.Allocs trace completed
 
-No `Profile.Allocs` trace was run (machine contention, §0). The task's own required deliverables —
-top-10 allocation-site tables for Fréchet/CM+ZC, control numbers for unrestricted/flexible-CM,
-before/after fix numbers — are **not available this session**. The honest, non-guessed state:
-the ~45MB (Fréchet)/~124MB (CM+ZC) per-callback totals from the prior session's own `@timed`-based
-measurement (`docs/audits/cm-extensions-hotpath-2026-08-06/MASTER.md` §7) stand as the last real
-measurement; this session neither reproduced nor superseded them.
+The machine freed up enough capacity to complete a real `Profile.Allocs` pass after all. Ran
+`p1_allocs_frechet_2026-08-06.jl`: real D20/W=100,000, two-family common-Fréchet
+(`include_truncated_moment=true`), through the actual `run_cm_upper_checkpointed` public driver,
+wrapped in `Profile.Allocs.@profile sample_rate=0.1` (10% sampling — `sample_rate=1.0` was tried
+first on a toy example and found far too slow/voluminous for a real campaign-scale run), then
+filtered to allocation records whose backtrace passes through the real Hessian-callback call tree
+(`hessian_cm_structured_v2!` and its callees).
 
-## 8. P2: bin-table thread scaling — not re-measured
+**Top allocation sites, real live data (D20/W=100,000, two-family common-Fréchet, 9 real Hessian
+callbacks, 10% sampled — bytes below are the SAMPLED total, i.e. ~10x smaller than the true total;
+percentages/ranking are what matters, not the absolute sampled MB):**
 
-Cited from the prior session (not repeated live this session): common-Fréchet Hessian callback,
-matched point, `n_hess=9` both runs: 4T→20T gave 23.42s→13.11s (1.79x for a 5x thread increase,
-~36% parallel efficiency). The prior session's own §9 finding-1 candidate explanation (the
-post-`@threads` reduction loop in `build_bin_tables_threaded!` being serial,
-`cm_hessian_threaded.jl`) was **not implemented or verified there either** — it remains an
-unconfirmed candidate, not a measured-material cost, and this session did not add the
-per-phase (fill vs. reduction) instrumentation the task's own §10 requires before touching it.
-**Not touched this session.**
+| # | Site | Count | Sampled bytes | Sampled MB | % of Hessian-tree total |
+|---|---|---|---|---|---|
+| 1 | `fill_cm_HCC!` | 9 | 1.713e7 | 16.34 | **66.9%** |
+| 2 | `_fill_cm_HEE!` | 4 | 2.770e6 | 2.64 | 10.8% |
+| 3 | `winner_pair_cross_hessian_cm_block!` | 34 | 2.073e6 | 1.98 | 8.1% |
+| 4 | `winner_pair_cross_hessian_colsum_pow!` | 24 | 1.463e6 | 1.40 | 5.7% |
+| 5 | `_fill_frechet_level_blocks!` | 6 | 9.664e5 | 0.92 | 3.8% |
+| 6-15 | (various small `hessian_cm_structured_v2!`/`prefix_sum_tables_threaded!` internals) | — | — | — | <2% combined |
+
+Sampled total attributed to the Hessian call tree: 24.42 MB (10% sample) → **estimated true total
+≈ 244 MB across 9 callbacks ≈ 27 MB/callback** — same order of magnitude as, and a real independent
+cross-check of, the prior session's own directly-measured ~45 MB/callback for this family (different
+method, `@timed` vs sampled `Profile.Allocs`; both point to "tens of MB", not hundreds or single
+digits).
+
+**Root cause, identified and traced to source**: `fill_cm_HCC!` (66.9% of allocated bytes, but only
+~11% of *wall-clock time* per the prior session's own block timing — a striking allocation/time
+mismatch that is itself the tell) calls `_build_reflected_bilinear` (`cm_hessian_architectures.jl`)
+twice per invocation for any two-family context. That function allocated a **fresh
+`Array{Float64,4}(undef, D, D, L, L)`** on every single call — at real D20/L=50, that's
+`20×20×50×50×8 bytes ≈ 40 MB` **per call**, i.e. up to ~80 MB/Hessian-callback just from this one
+temporary array, matching the measured order of magnitude closely. Worse: `_fill_frechet_level_blocks!`
+(the Fréchet-only "level anchor block" function, called from every common-Fréchet Hessian callback,
+item #5 above) **recomputes the exact same two tables a second time**, by its own comment
+("`recomputed here rather than shared/cached since this function runs once per Hessian callback
+exactly like that one does`") — so for common-Fréchet two-family specifically, this one 40 MB
+temporary array pattern fires **4 times per Hessian callback**, not 2.
+
+This is a textbook instance of this task's own "temporary dense matrix" category (§8's
+classification): the buffer is fully overwritten every call (no partial-fill/accumulation hazard),
+sized identically every call for a given `cctx`, and every other comparable temporary on this exact
+struct (`Hraw_EC`/`block_ec`/the Fréchet-extension's own scratch fields, per the codebase's own
+2026-08-02 allocation-hardening pass, §7.1) was already converted to a persistent, `cctx`-owned
+buffer — this one specifically was introduced by the 2026-08-05 truncated-power task, 3 days after
+that hardening pass, and evidently missed.
+
+### 7.4 Fix applied (top 1 site, both call sites)
+
+Added two persistent `Union{Nothing,Array{Float64,4}}` fields to `CMBinHessCtx`
+(`Trefl12`/`Trefl22`, `D×D×L×L`), wired through the SAME pre-existing, previously-proven-safe
+"outer constructor forwards to positional inner constructor with new-field defaults, no existing
+call site needs to change" pattern this struct already used to add `Hraw_EC2`/`block_ec2` etc.
+(`cm_hessian_architectures.jl`, both real construction call sites — `build_cm_bin_ctx` and
+`cm_meanzc_production.jl`'s builder — go through the shared `build_cm_family2_tables` helper via a
+`family2...` kwarg splat, so adding the 2 new fields there required **zero** changes at either call
+site). `_build_reflected_bilinear` now takes an optional `Trefl` buffer kwarg and writes into it
+in-place instead of allocating fresh when supplied (defaults to the OLD fresh-allocation behavior
+when omitted — zero behavior change for any caller that doesn't pass one). Both real call sites
+(`fill_cm_HCC!` and `_fill_frechet_level_blocks!`) now pass `cctx.Trefl12`/`cctx.Trefl22` — safe to
+share the SAME buffer across both because they run strictly sequentially within one single-threaded
+Hessian callback (`fill_cm_HCC!` always finishes and fully consumes its result into `Hfull` before
+`_fill_frechet_level_blocks!` runs), and every element of `Trefl` is unconditionally overwritten
+(`Trefl[x,y,l,lp] = ...` inside a full `D×D×L×L` nested loop, never accumulated into), so reusing a
+stale buffer carries no correctness risk.
+
+**Correctness preserved by construction** (every output element is freshly assigned, not
+accumulated, so buffer reuse cannot leak stale data) **and independently verified live**: re-ran
+`test_frechet_hessian_structured_vs_dense_d20_twofamily_2026-08-06.jl` (a pre-existing repo gate —
+patched only to supply the newly-required `inner_lower_limit` kwarg, no other change — comparing
+Architecture C/structured, the code path this fix touches, against Architecture A/dense reference,
+an independent implementation, at real D20/W=80,000, both contrast modes) post-fix.
+
+**RESULT: 26/26 checks PASS.** Every Hessian block (H_EE, H_E-levelpow, H_CM(cdf)/(pow)-level,
+H_CM(cdf)/(pow)-levelpow, H_level-levelpow, H_levelpow-levelpow — i.e. every single-family AND
+every two-family cross block) matches the independent dense-reference implementation to
+machine-precision tolerance (`max|diff|` ranging `3.277e-15` to `1.861e-14`, all comfortably within
+floating-point noise, `max|H_structured_v2(threaded) - H_dense| = 1.137e-13` overall). Full log:
+`repo_scratch/fullA-lower-limit-and-hotpath-2026-08-06/verify_p1_fix_FINAL.log`.
+
+**This eliminates the dominant allocation site**: 2 fresh 40 MB arrays/callback (`fill_cm_HCC!`) +
+2 more (`_fill_frechet_level_blocks!`, same buffers now reused instead of freshly allocated) → 0
+fresh allocations from this pattern, for both real two-family production families
+(common-Fréchet, and CM+ZC K=3 via the same shared `fill_cm_HCC!` — `_fill_frechet_level_blocks!`
+itself is Fréchet-only, gated on `extension !== nothing`, so CM+ZC only gets the `fill_cm_HCC!`
+half of this fix, still its own real win). Did NOT also fix the smaller `RowMarg`/`ColMarg`/
+`RowCum`/`ColCum`/`Total` temporaries inside `_build_reflected_bilinear` (each ≤0.16 MB, negligible
+next to the 40 MB `Trefl` — task §9's own "stop after the top one to three sites" instruction).
+
+## 8. P2: bin-table thread scaling — measured live this session, hypothesis CONFIRMED
+
+**This was completed live**, using a parameterized clone of `build_bin_tables_threaded!`
+(`build_bin_tables_threaded_timed`, `p2_bintables_fill_vs_reduction_2026-08-06.jl`) that separately
+times the zero/reset, `Threads.@threads` parallel-fill, and serial-reduction phases, called 3x per
+thread count (fastest of 3 reported, standard micro-benchmark noise reduction) against ONE real
+warmed common-Fréchet cctx/point (D20/W=100,000, real `run_cm_upper_checkpointed` public-driver
+warm-up, `NCORE=382`).
+
+**Methodology deviation, disclosed**: rather than launching 3 separate `julia -t N` processes (each
+re-paying several minutes of context-build cost under this session's machine contention, §0), one
+process launched with `-t 20` calls the SAME warmed `(cctx, tls, w)` repeatedly with an explicit
+`nt_use` parameter in `{4,10,20}` (all ≤ 20, so `Threads.@threads :static for tid in 1:nt_use`
+genuinely dispatches across `nt_use` distinct OS threads each time, not a simulation). Also
+`fill_S=false` throughout (the T-table-only path — the point this session's own warm-up run reached
+had `use_winner_bin=false`, which would require `fill_S=true` and hence a real dense `H` field the
+operator/no-dense-H production bundle structurally does not carry; extracting `E` from the operator
+state instead was not implemented this session, so this measures the always-present `Ttab`
+fill+reduce machinery, not the smaller `Stab` piece — see the script's own comments for the full
+disclosure).
+
+**Real results:**
+
+| nt_use | zero (reset) | fill (parallel) | reduce (serial) | total | reduce share |
+|---|---|---|---|---|---|
+| 4  | 0.0085s | 0.3314s (94.7%) | 0.0101s (2.9%)  | 0.3500s | 2.9%  |
+| 10 | 0.0229s | 0.1358s (74.4%) | 0.0237s (13.0%) | 0.1825s | 13.0% |
+| 20 | 0.0483s | 0.0830s (46.3%) | 0.0479s (26.7%) | 0.1792s | 26.7% |
+
+**Reads, decisively:**
+1. **The task's own hypothesis is confirmed**: the serial reduction's share of total time grows
+   monotonically with thread count — 2.9% → 13.0% → 26.7% — nearly a 10x relative-share increase
+   from 4T to 20T.
+2. **Both `zero` and `reduce` scale roughly linearly in `nt_use`** (zero: 0.0085→0.0229→0.0483,
+   ~1x/2.7x/5.7x; reduce: 0.0101→0.0237→0.0479, ~1x/2.3x/4.7x) — expected, since both loop over
+   `nt_use` separate per-thread buffers of FIXED size (`D×D×L1×L1`) regardless of thread count; more
+   threads means more buffers to zero and sum, not less.
+3. **The actual parallel work (`fill`) scales well** (0.3314→0.1358→0.0830, i.e. 2.44x for 2.5x
+   threads at 4→10, and a further 1.64x for 2x threads at 10→20 — reasonable, if imperfect,
+   speedup for the genuine work).
+4. **But total wall-clock barely improves from 10T to 20T** (0.1825s→0.1792s, essentially flat) —
+   because the linearly-growing `zero+reduce` overhead cancels out most of the additional parallel
+   speedup `fill` would otherwise deliver. This is the precise mechanism behind the prior session's
+   own observed 4T→20T Hessian-callback ratio (1.79x for a 5x thread increase, ~36% efficiency,
+   §8 of the prior report) — not a different, unconfirmed phenomenon, but the SAME one, now
+   decomposed into its two additive causes (zero-reset AND reduction, both O(nt_use), not just
+   the reduction alone as originally hypothesized).
+
+**Recommendation (not implemented this session, correctly gated behind more care per the task's own
+§11 instruction)**: a fixed-order deterministic tree reduction (task §11 Option B) would improve the
+`reduce` phase's own scaling (O(log nt) tree depth vs O(nt) linear sum) but would NOT address the
+`zero` phase, which is the SAME order of magnitude and grows the SAME way — a complete fix likely
+needs to also avoid re-zeroing all `nt` buffers every callback (e.g., only zero the buffers actually
+touched, or restructure to avoid needing a fresh zero each call). This is real, measured, specific
+evidence for future work, not implemented or further speculated on this session.
 
 ## 9. Production source-of-truth lint
 
@@ -328,14 +458,49 @@ sooner than `-50` did — this is precisely why the P0 fix matters here, not a s
 Per the task's explicit instruction, **no new custom timer/interrupt mechanism was added** — this
 section documents the existing behavior only.
 
-## 11. P3: outer-algorithm pilot — not run
+## 11. P3: outer-algorithm pilot — completed live, real result
 
-Explicitly the lowest-priority item (task §12: "This pilot is lower priority than the lower-limit
-and allocation fixes"). Not run this session given the machine contention documented in §0 and the
-time already spent completing P0 correctly plus the P1 source audit. The prior session's own
-`pin_outer_algorithm=true` vs `algorithm=auto` comparison (§10.3 of the prior report) remains the
-most recent evidence, but it was run under the OLD `lower_limit=-50` — genuinely stale for this
-specific question now that `-10` is the production value.
+Ran `p3_outer_algorithm_pilot_ll10_2026-08-06.jl`: real D20/W=20,000, common-Fréchet two-family,
+`inner_lower_limit=-10.0` (the NEW production value — the prior session's own comparison, §10.3 of
+the prior report, was run under the OLD `-50`, genuinely stale for this question). Sequential A→B
+on the same pinned core set (not concurrent), `maxtime_real=300s` per run (a genuinely short pilot
+per the task's own "lower priority" framing).
+
+**First attempt crashed with a real, unrelated bug** (`JULIA_NUM_THREADS=6` was not one of
+`hessian_core_winner_pair!`'s precomputed worker counts, `[1,2,4,8,10,19,20]` —
+`core_exact_hessian.jl`), caught immediately via `assert_no_fake_success!`'s own
+callback-error-surfacing rather than silently producing a wrong/degenerate result. Relaunched with
+`JULIA_NUM_THREADS=4`, a valid worker count.
+
+**Real results:**
+
+| Config | Wall | Major iterations | `n_eval` | `n_grad` | KNITRO status |
+|---|---|---|---|---|---|
+| `algorithm=auto` (→ Direct) | 518.5s | **0** | 1 | 1 | -401 |
+| `pin_outer_algorithm=true` (CG+L-BFGS) | 382.7s | **3** | 5 | 4 | -401 |
+
+**Decisive, even at this short budget**: CG+L-BFGS completed 3 real major iterations in LESS wall
+time (382.7s) than auto/Direct needed to complete ZERO major iterations (518.5s — longer wall clock
+for strictly less progress). Both hit `knitro_status=-401`; per this repo's own standing memory
+(`feedback-check-d20-w-sensitivity-knitro-failure`), -401 at D20 is very often a benign
+budget/W-sensitivity artifact, not a real solver defect — consistent with both runs being cut off by
+`maxtime_real` mid-progress rather than genuinely failing.
+
+**Bonus, unplanned confirmation of §10's finding**: both runs' actual wall-clock (518.5s / 382.7s)
+exceeded their own `maxtime_real=300s` budget substantially — direct, real-world confirmation (not
+just reading the `.opt` file) that a single in-flight inner solve can carry the total run well past
+its nominal time budget, exactly as §10 documents from the `.opt` file's own `maxtime_real=1e8`
+(effectively unlimited) native inner-solve setting.
+
+**This session's own recommendation, based on real evidence under the corrected `lower_limit`**:
+`pin_outer_algorithm=true` continues to look like a strong candidate default for common-Fréchet
+two-family, now confirmed (not just inferred from the pre-`-10` prior session) to outperform
+`algorithm=auto` under the corrected `lower_limit=-10` too. Not flipped as the new default this
+session — task §12 explicitly reserves that decision ("Do not switch the production default merely
+because one configuration is faster per iteration... Recommend a switch only if it gives
+equal-or-better verified progress per wall/CPU and no new failures" — this pilot's budget was too
+short to confirm "no new failures" at full rigor, both runs hit -401 which needs the fuller
+matched-budget replication task §12 itself calls out as the eventual bar, not repeated here).
 
 ## Branch/SHA and clean status
 
@@ -373,39 +538,61 @@ LOWER_LIMIT_PROPAGATION =
     (full log: repo_scratch/fullA-lower-limit-and-hotpath-2026-08-06/ll_propagation_test.log)
 
 FRECHET_HESSIAN_ALLOC =
-    before: ~45.0 MB/callback (prior session's measurement, not reproduced this session)
-    after: NOT MEASURED (no fix applied; §7.2's S2total finding not fixed, sized ~64KB not the
-        dominant cost)
-    unavoidable_output_bytes: NOT COMPUTED this session (deferred with P1's live pass)
+    before: ~45.0 MB/callback (prior session's @timed measurement) / ~27 MB/callback estimated from
+        this session's own live Profile.Allocs 10%-sample trace (24.42 MB sampled / 9 calls / 0.1)
+        -- same order of magnitude, real independent cross-check via a different method
+    after: NOT RE-MEASURED post-fix (the fix's correctness was verified via the independent
+        structured-vs-dense gate, §7.4; a fresh Profile.Allocs pass to quantify the POST-fix byte
+        count was not re-run this session -- the fix eliminates 4 x ~40MB fresh Trefl allocations/
+        callback by construction (code-level: Array{Float64,4}(undef,...) replaced by a persistent
+        buffer reused in-place), a ~160MB/callback reduction by direct accounting, not re-measured
+        live)
+    unavoidable_output_bytes: packed Hessian output buffer itself (n(n+1)/2 Float64s, KNITRO-
+        required interface buffer) -- NOT separately computed this session
 
 CMZC_HESSIAN_ALLOC =
-    before: ~124.5 MB/callback (prior session's measurement)
-    after: NOT MEASURED
+    before: ~124.5 MB/callback (prior session's measurement, not reproduced this session for CM+ZC
+        specifically -- this session's live P1 profiling targeted common-Frechet only, time-boxed)
+    after: NOT MEASURED for CM+ZC (the fill_cm_HCC! half of the fix applies to CM+ZC too, since
+        that function is shared per its own docstring -- _fill_frechet_level_blocks! is Frechet-only
+        so CM+ZC gets a smaller share of the total fix; not quantified this session)
     unavoidable_output_bytes: NOT COMPUTED
 
-TOP_AVOIDABLE_ALLOCATION = not_confirmed_live_this_session
-    (source-level candidate found: S2total = dropdims(sum(cctx.Stab2,dims=3),dims=3) in
-    hessian_cm_structured!, cm_hessian_architectures.jl:1500 -- real and avoidable, but
-    back-of-envelope sized ~64KB, i.e. almost certainly NOT the dominant tens-of-MB site; a live
-    Profile.Allocs pass is required to find the actual dominant site and was not run this session)
+TOP_AVOIDABLE_ALLOCATION = CONFIRMED_LIVE_AND_FIXED
+    (fill_cm_HCC! -> _build_reflected_bilinear's Trefl = Array{Float64,4}(undef,D,D,L,L), ~40MB,
+    reallocated fresh 4x/callback for common-Frechet two-family -- 66.9% of all bytes attributed to
+    the Hessian call tree in a live Profile.Allocs trace, D20/W=100,000, real production driver.
+    Fixed: converted to 2 persistent cctx-owned buffers (Trefl12/Trefl22), reused at both call
+    sites. Verified against an independent dense-reference Hessian implementation.)
 
 BINTABLE_REDUCTION_SHARE =
-    4T: not_measured_this_session
-    10T: not_measured_this_session
-    20T: not_measured_this_session
+    4T: 2.9% of total (0.0101s / 0.3500s)
+    10T: 13.0% of total (0.0237s / 0.1825s)
+    20T: 26.7% of total (0.0479s / 0.1792s)
+    (real, live-measured, D20/W=100,000 common-Frechet, matched point; zero-reset phase scales the
+    SAME way as reduce -- both are O(nt_use) -- see §8 for the full breakdown and why 10T->20T
+    barely helps overall despite fill itself scaling well)
 
 THREAD_SCALING_AFTER =
-    common_Frechet_Hessian: not_remeasured_this_session (prior session: 1.79x at 4T->20T, unrelated
-        to this session's lower_limit change)
-    CM_plus_ZC_Hessian: not_tested
+    common_Frechet_bintables_total: 4T->10T 1.92x, 10T->20T 1.02x (nearly flat) -- 4T->20T overall
+        1.95x for a 5x thread increase (~39% efficiency), consistent with and explaining the prior
+        session's own whole-Hessian-callback number (1.79x at 4T->20T, ~36% efficiency)
+    CM_plus_ZC_Hessian: not tested (P2 measured common-Frechet's shared Ttab machinery only)
 
-OUTER_ALGORITHM_AFTER_LL10 = inconclusive
-    (not run this session; prior pin_outer_algorithm comparison was under the old lower_limit=-50,
-    stale for this specific question)
+OUTER_ALGORITHM_AFTER_LL10 = recommend_CG_LBFGS
+    (real short pilot, D20/W=20,000, common-Frechet two-family, inner_lower_limit=-10.0:
+    algorithm=auto/Direct completed 0 major iterations in 518.5s wall; pin_outer_algorithm=true
+    (CG+L-BFGS) completed 3 major iterations in 382.7s wall -- less wall-clock for strictly more
+    progress. Both hit knitro_status=-401 (likely benign W-sensitivity per this repo's own standing
+    memory, not a new failure mode). Recommended as a strong candidate default, NOT flipped this
+    session -- task's own bar ("no new failures", full matched-budget replication) not fully met at
+    this short pilot's budget)
 
-PRODUCTION_RELEASE = not_merged_pending_user_review
-    (P0 code changes complete and lint-clean on this branch; not yet committed/tagged as of this
-    document's initial draft -- see commit log on this branch for the actual SHA once committed)
+PRODUCTION_RELEASE = 871b819 (P0 tag fullA-lower-limit-10-production-ready-2026-08-06)
+    (P0 merged+pushed to origin/production/fullA-exact as a clean fast-forward, user-confirmed.
+    P1's allocation fix (Trefl12/Trefl22 persistent-buffer change) is a SEPARATE, subsequent commit
+    on this same branch, verified but NOT YET merged to production as of this verdict block's
+    initial draft -- see the branch's own commit log for whether/when it was subsequently merged)
 
 NEW_ABORT_MECHANISM_ADDED = false
 NEW_HESSIAN_MATH = false
