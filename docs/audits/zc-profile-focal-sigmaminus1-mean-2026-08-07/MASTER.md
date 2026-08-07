@@ -332,7 +332,8 @@ D20_W100K =
     CM_plus_ZC: pass (inner_status=0/-100, dense_fallback_calls=0, gradient length=401=400+1)
 
 PRODUCTION_RELEASE =
-    pending final merge -- see "Production merge" section below for live status
+    23fe440ca0eb4a4d3f01757185a4c2402d568939 (origin/production/fullA-exact, fast-forwarded from 63301b1)
+    tag: fullA-zc-profiled-focal-sigmaminus1-mean-production-ready-2026-08-07
 
 NEW_HESSIAN_FORMULAS = 0
 NEW_GRADIENT_ENGINES = 0
