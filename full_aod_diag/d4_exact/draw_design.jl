@@ -157,7 +157,11 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
         # σHat passthrough (2026-07-30, sigma=3 campaign prep) to d20_real_setup's/
         # d20_real_setup_qmc's own kwarg of the same name. `nothing` default reproduces
         # AD_PARAMS.σHat=2.5 unchanged for every pre-existing caller.
-        σHat::Union{Nothing,Float64} = nothing)
+        σHat::Union{Nothing,Float64} = nothing,
+        # inner_lower_limit passthrough (2026-08-06, lower-limit/hotpath task) to d20_real_setup's
+        # own kwarg of the same name -- REQUIRED, no default, for the same reason. Production
+        # value -10.0.
+        inner_lower_limit::Float64)
     draw_design in VALID_DRAW_DESIGNS ||
         error("d20_real_setup_design: draw_design must be one of $(VALID_DRAW_DESIGNS), got :$(draw_design)")
 
@@ -177,7 +181,8 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
             outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
             needs_outer_moment_jacobian = needs_outer_moment_jacobian, build_screen = build_screen,
             destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity,
-            gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
+            gravity_exclude_cells = gravity_exclude_cells, σHat = σHat,
+            inner_lower_limit = inner_lower_limit)
         timing = (uniform_and_transform = NaN, ctx_build = t_ctx,
                   pairwise = ctx0.screen_setup_wall.pairwise, witness = ctx0.screen_setup_wall.witness)
     else
@@ -190,7 +195,7 @@ function d20_real_setup_design(; W::Int, δ::Float64 = 1.0, find_smallest::Bool 
             needs_outer_moment_jacobian = needs_outer_moment_jacobian, build_screen = build_screen,
             destination_sample = destination_sample, U = Uexp,
             exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells,
-            σHat = σHat)
+            σHat = σHat, inner_lower_limit = inner_lower_limit)
         # Screens and threshold_state are now built ONCE, inside d20_real_setup itself, for
         # every design -- no compensating patch here (task §9: "It must not construct or patch
         # screens, threshold state, context fields").

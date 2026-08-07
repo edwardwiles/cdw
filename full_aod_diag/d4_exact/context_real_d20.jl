@@ -132,7 +132,22 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         gravity_exclude_cells::AbstractVector{<:Tuple{Int,Int}} = Tuple{Int,Int}[],
         # σHat passthrough to build_ad_context_real_d20's own kwarg of the same name (2026-07-30).
         # `nothing` default reproduces AD_PARAMS.σHat=2.5 unchanged.
-        σHat::Union{Nothing,Float64} = nothing)
+        σHat::Union{Nothing,Float64} = nothing,
+        # inner_lower_limit (2026-08-06, lower-limit/hotpath task): REQUIRED, no default -- repo
+        # rule (CLAUDE.md): never let a function default a run-configuration value that changes
+        # inner-solve stopping behavior. This IS the single source of truth for the inner KNITRO
+        # objective's `lower_limit` (the f<=lower_limit -> -Inf "declare infeasible, stop chasing
+        # this trial point" backstop every family's FG callback applies -- see
+        # cm_frechet_lookup_production.jl/cm_lookup_production.jl/cm_meanzc_lookup_production.jl/
+        # cm_originzc_lookup_production.jl/compressed_live_v2.jl, all of which read
+        # `st.obj.lower_limit`/`obj.lower_limit` off the bundle this function constructs below --
+        # no other layer may substitute a value. Production callers must pass -10.0
+        # (docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md: empirically validated,
+        # zero effect on any accepted point's Delta_dual/n_fg/n_hess, cuts mean rejected-attempt
+        # cost ~43%, and is the difference between a CM+ZC campaign completing vs hanging >32min
+        # at the old -50). Diagnostic callers that intentionally want the old, more permissive
+        # -50 (or any other value) must pass it explicitly.
+        inner_lower_limit::Float64)
     destination_sample in (:exclude_row, :all_legacy) ||
         error("d20_real_setup: destination_sample must be :exclude_row or :all_legacy, got :$destination_sample")
     row_idx = destination_sample == :exclude_row ? D20_REAL : nothing
@@ -195,11 +210,19 @@ function d20_real_setup(; W::Int, δ::Float64 = 1.0, find_smallest::Bool = true,
         (moments!) = EK_moments_gammanorm_directgp!, moments_jacobian! = error, d = nTotalMoments,
         outer_constr_index = outer_constr_index, inequality_index = inequality_index,
         complement_index = complement_index, l = l_full, U = U, N = params_used.Jac_W,
-        lower_limit = -50, use_cached_x = true,
-        # Part C (2026-07-23 release): delta_auto_reject_threshold=10 production default, gated
-        # by the compatibility rule (disables automatically once delta is no longer safely below
-        # 10) -- separate from and does not change the pre-existing lower_limit=-50 backstop above.
-        threshold_state = CS.ThresholdAbortState(CS.resolve_threshold_for_delta(δ)),
+        lower_limit = inner_lower_limit, use_cached_x = true,
+        # threshold_state deliberately NOT constructed here (2026-08-06 lower-limit/hotpath task,
+        # §4): the custom ThresholdAbortState/resolve_threshold_for_delta certified-lower-bound
+        # early-abort mechanism is real but was never wired into any of the 5 families' actual
+        # production FG callbacks (they all only ever read `lower_limit`, confirmed by direct
+        # inspection of cm_frechet_lookup_production.jl/cm_lookup_production.jl/
+        # cm_meanzc_lookup_production.jl/cm_originzc_lookup_production.jl/compressed_live_v2.jl --
+        # none call maybe_abort_on_threshold!, only cc_algo/inner_loop_functions.jl's generic
+        # dense-reference callback does, which is not reachable from any production family).
+        # Omitting this field leaves `obj.threshold_state` at its own struct default
+        # (`ThresholdAbortState()`, threshold=Inf, i.e. inert) -- byte-identical runtime behavior
+        # to before, minus the dead construction. Removed rather than wired up, per user
+        # direction: production's only stopping mechanism is `lower_limit`.
         outer_loop_opt = outer_loop_opt, inner_loop_opt = inner_loop_opt,
         needs_outer_moment_jacobian = needs_outer_moment_jacobian)
     @assert obj.outer_constr_index == obj.d

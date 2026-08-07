@@ -932,6 +932,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # plain argument) is missing the chain-rule term d(Delta)/d(nu_k0) * d(nu_k0)/d(gp) --
         # added back in explicitly, using d(nu_k0)/d(gp) = sigma*nu_k0/gp (closed form, since
         # cf_denom = gp^sigma * const and cf_num does not depend on gp).
+        # inner_lower_limit (2026-08-06, lower-limit/hotpath task): REQUIRED, no default -- this
+        # IS a real production entry point (task §2/§14: "Public production constructors/runners
+        # must require the field explicitly; throw a clear configuration error when absent").
+        # Passthrough to d20_real_setup_design/d20_real_setup's own kwarg of the same name.
+        # Production value -10.0 (docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md).
+        inner_lower_limit::Float64,
         A_coordinate_mode::Symbol = :powered_aspace,   # transformed-A restricted-family port
         # (2026-07-26 five-family finish task §8): :powered_aspace (NEW PRODUCTION DEFAULT, fixed-
         # theta only -- promoted after test_cm_aspace_coordinate_gates.jl's real D=20/W=80,000
@@ -1150,7 +1156,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat, inner_lower_limit = inner_lower_limit)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # Phase E remediation (2026-07-26): cf_build (moments! closures below) reuses this instead of allocating fresh every call
     pe = build_pivot_elimination(ctx)
     # Transformed-A restricted-family port: theta_cm/xy_cm are only actually used when

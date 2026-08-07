@@ -182,6 +182,11 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         # hessopt via knitro_outer_algorithm.jl's set_outer_algorithm_direct!. `nothing` (default):
         # zero behavior change.
         outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
+        # inner_lower_limit (2026-08-06, lower-limit/hotpath task): REQUIRED, no default -- this
+        # IS a real production entry point. Passthrough to d20_real_setup_design/d20_real_setup's
+        # own kwarg of the same name. Production value -10.0
+        # (docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md).
+        inner_lower_limit::Float64,
         )   # architecture/production-operator-bundle-hardening-2026-07-30: the moment_representation
         # kwarg that previously lived here is REMOVED, not defaulted -- production runners must not
         # accept a representation choice at all (task §2). This function now always constructs
@@ -227,7 +232,8 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     ctx_base = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
                                       draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample,
                                       exclude_diagonal_gravity = exclude_diagonal_gravity,
-                                      gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
+                                      gravity_exclude_cells = gravity_exclude_cells, σHat = σHat,
+                                      inner_lower_limit = inner_lower_limit)
     # Reconciliation (task §1/Phase 1): the same three campaign-lifetime workspace attaches and
     # BLAS-thread pin that run_polish_checkpointed itself carries -- attached to ctx_base BEFORE
     # build_unified_ctx so a flexible-mode `merge(ctx, (...))` (flexible_theta.jl:make_flexible_

@@ -519,6 +519,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         allow_backend_switch::Bool = false,
         distribution_restriction::Symbol,   # REQUIRED, no default -- explicit opt-in (task brief Section 12)
         K_mean::Int, K_pair::Int = 0,
+        # inner_lower_limit (2026-08-06, lower-limit/hotpath task): REQUIRED, no default -- this
+        # IS a real production entry point. Passthrough to d20_real_setup_design/d20_real_setup's
+        # own kwarg of the same name. Production value -10.0
+        # (docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md).
+        inner_lower_limit::Float64,
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
         nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
         # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
@@ -654,7 +659,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat, inner_lower_limit = inner_lower_limit)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # Phase E remediation (2026-07-26): cf_build (moments! closures below) reuses this instead of allocating fresh every call
     pe = build_pivot_elimination(ctx)
     D = ctx.D
