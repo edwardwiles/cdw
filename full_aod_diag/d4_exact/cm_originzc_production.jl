@@ -47,7 +47,7 @@ precompute for it). `ctx_cm.obj` is `aug.obj_cm`.
 """
 function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; fg_backend::Symbol = ORIGINZC_FG_BACKEND_DEFAULT[],
         zc_cross_hessian_backend::Symbol = ORIGINZC_ZC_CROSS_HESSIAN_BACKEND_DEFAULT[],
-        moment_representation::Symbol = :operator)   # true no-H operator bundle (2026-07-28
+        moment_representation::Symbol = :operator,   # true no-H operator bundle (2026-07-28
         # continuation, flipped 2026-07-29 moment_representation threading task): :operator
         # (PRODUCTION DEFAULT since 2026-07-29; ORIGINZC_FG_BACKEND_DEFAULT[] is already :operator,
         # so no other default needs to change -- validated D=4
@@ -59,6 +59,9 @@ function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; 
         # passed this kwarg, so ctx.obj stayed dense in every real solve until this fix) |
         # :dense_reference (explicit opt-out, unchanged PsiObjectiveBundleImplicit, requires
         # fg_backend=:operator when :operator is chosen).
+        aml::Union{Nothing,ActiveMeanLayout} = nothing)   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07:
+        # optional focal k=(sigma-1) mean-row omission, threaded straight through to
+        # build_originzc_augmented_obj; nothing (default) = zero behavior change.
     moment_representation === :operator && fg_backend !== :operator &&
         error("build_originzc_production_context: moment_representation=:operator requires fg_backend=:operator")
     println(stdout, "cm_restriction_basis [origin-ZC] = none (no CM-grid block; origin-specific mean/pairwise-ZC targets only)")
@@ -66,7 +69,7 @@ function build_originzc_production_context(ctx, CS, layout::MeanZCTargetLayout; 
     println(stdout, "origin_fg_backend [origin-ZC] = ", fg_backend, " (port/shared-inner-fg-operator-and-verification-2026-07-26)")
     flush(stdout)
     isdefined(Main, :record_cm_feature_context_build!) && record_cm_feature_context_build!()   # Phase 3 (2026-07-26): CM feature immutability counters
-    aug = build_originzc_augmented_obj(ctx, CS, layout; moment_representation = moment_representation)
+    aug = build_originzc_augmented_obj(ctx, CS, layout; moment_representation = moment_representation, aml = aml)
     # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §4.4): `octx` rides on
     # `ctx_cm` itself (rather than as a new positional argument to
     # `archOZ_base_state`/`archOZ_verified_state`) so every EXISTING caller of those two
@@ -260,6 +263,15 @@ function cm_originzc_production_gradient(x_free0::AbstractVector, νfull::Abstra
         g_econ, meta = composite_gradient_at_fast(x_free0, pcx.ctx_cm, pe; base = base, cache = cache, kwargs...)
     else
         error("cm_originzc_production_gradient: gradient_backend must be :shared_inplace_pooled|:legacy_unbuffered, got $gradient_backend")
+    end
+    aml = hasproperty(pcx.aug, :aml) ? pcx.aug.aml : nothing   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07
+    if aml !== nothing && aml.active
+        eta_grad_active, d_delta_d_nu_star = d_delta_dual_d_eta_active_and_nustar(base.λstar, pcx.aug, aml, νfull; mean_m = verify.m_mean)
+        θ_full = CS.reconstruct_full(x_free0, ctx.m)
+        info = build_focal_kstar_derivative_info(ctx, pe)
+        D2_econ = length(g_econ)
+        apply_focal_kstar_chain_rule!(g_econ, θ_full, ctx, info, D2_econ, d_delta_d_nu_star)
+        return vcat(g_econ, eta_grad_active), meta
     end
     d_eta = d_delta_dual_d_eta_origin_vec(base.λstar, pcx.aug, νfull; mean_m = verify.m_mean)
     return vcat(g_econ, d_eta), meta

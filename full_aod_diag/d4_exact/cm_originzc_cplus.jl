@@ -67,6 +67,15 @@ function cm_originzc_production_gradient_cplus(x_free0::AbstractVector, νfull::
     end
     cache = build_lfix_base_cache_originzc_C!(ws, x_free0, pcx.ctx_cm, base, pcx.aug, νfull)
     g_econ, meta = composite_gradient_at_Cplus_from_cache(x_free0, pcx.ctx_cm, pe, pool, cache; base = base, kwargs...)
+    aml = hasproperty(pcx.aug, :aml) ? pcx.aug.aml : nothing   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07
+    if aml !== nothing && aml.active
+        eta_grad_active, d_delta_d_nu_star = d_delta_dual_d_eta_active_and_nustar(base.λstar, pcx.aug, aml, νfull; mean_m = verify.m_mean)
+        θ_full = CS.reconstruct_full(x_free0, ctx.m)
+        info = build_focal_kstar_derivative_info(ctx, pe)
+        D2_econ = length(g_econ)
+        apply_focal_kstar_chain_rule!(g_econ, θ_full, ctx, info, D2_econ, d_delta_d_nu_star)
+        return vcat(g_econ, eta_grad_active), meta
+    end
     d_eta = d_delta_dual_d_eta_origin_vec(base.λstar, pcx.aug, νfull; mean_m = verify.m_mean)
     return vcat(g_econ, d_eta), meta
 end

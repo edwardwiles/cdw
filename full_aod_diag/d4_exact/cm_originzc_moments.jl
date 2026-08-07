@@ -221,10 +221,20 @@ PLUS `layout` itself (so callers can recover `K_mean`/`K_pair`/target-index
 mapping without re-threading them separately).
 """
 function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
-        moment_representation::Symbol = :dense_reference)   # true no-H operator bundle (2026-07-28
+        moment_representation::Symbol = :dense_reference,   # true no-H operator bundle (2026-07-28
         # continuation): :dense_reference (default, unchanged) | :operator (explicit opt-in).
+        aml::Union{Nothing,ActiveMeanLayout} = nothing)   # fix/zc-profile-focal-sigmaminus1-mean-
+        # 2026-08-07: optional focal k=(sigma-1) mean-row omission ("Variant D"). `nothing`
+        # (default): zero behavior change, byte-identical to every pre-existing caller. When
+        # `aml.active`, the inner moment vector (and hence the KNITRO dual/eta vector) is sized
+        # ONE ROW SMALLER (`n_mean = aml.n_eta_active` instead of `K_mean*D`) -- ONLY supported for
+        # `moment_representation=:operator` (task scope: no dense-reference row omission; the only
+        # production driver ever requests `:operator` anyway, confirmed live, see
+        # docs/audits/zc-profile-focal-sigmaminus1-mean-2026-08-07/MASTER.md).
     layout isa OriginByPowerLayout || layout isa SharedByPowerLayout ||
         error("build_originzc_augmented_obj: unsupported layout type $(typeof(layout))")
+    aml === nothing || aml.base === layout ||
+        error("build_originzc_augmented_obj: aml.base must be === layout (got a different layout object)")
 
     obj0 = ctx.obj
     ncore_econ = obj0.d
@@ -233,15 +243,25 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
 
     Zraw_all, Zpairraw_all = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, K_pair; μ = ctx.μHat)
     npair = div(D * (D - 1), 2)
-    n_mean = K_mean * D
+    n_mean_dense = K_mean * D
+    # Uses mean_offset_from_aml(aml)[end] (the MEAN-ROW count), not aml.n_eta_active (the ETA-
+    # coordinate count) -- these coincide for OriginByPowerLayout (one eta per mean row, a
+    # structural invariant of that layout) but are DIFFERENT quantities in general (confirmed to
+    # diverge for SharedByPowerLayout/CM+ZC -- see build_cm_meanzc_augmented_obj's identical fix,
+    # cm_meanzc_moments.jl); using the unambiguous quantity here defensively, not the coincidence.
+    n_mean = (aml !== nothing && aml.active) ? mean_offset_from_aml(aml)[end] : n_mean_dense
     n_pair = K_pair * npair
-    @assert n_mean + n_pair == n_originzc_moments(D, K_mean, K_pair)
+    @assert n_mean_dense + n_pair == n_originzc_moments(D, K_mean, K_pair)
 
     d_new = ncore_econ + n_mean + n_pair
     outer_constr_index_new = obj0.outer_constr_index + n_mean + n_pair
     core_cf_ref = Ref{Any}(nothing)
     moments_originzc_skip! = nothing
     if moment_representation === :dense_reference
+        aml === nothing || !aml.active ||
+            error("build_originzc_augmented_obj: focal k=(sigma-1) row omission (aml.active=true) is only " *
+                  "implemented for moment_representation=:operator -- dense_reference is out of this task's scope " *
+                  "(production never uses it; see CLAUDE.md's no-dense-fallback requirement).")
         moments_originzc! = wrap_moments_with_originzc(obj0.moments!, ncore_econ, Zraw_all, Zpairraw_all, layout;
             ctx = ctx, core_cf_ref = core_cf_ref, skip_fill = false)
         # Legacy-H cleanup (2026-07-28): second closure, same shared core_cf_ref, skip_fill=true --
@@ -273,7 +293,8 @@ function build_originzc_augmented_obj(ctx, CS, layout::MeanZCTargetLayout;
     return (obj_cm = obj_oz, ncore = ncore_econ,
             Zraw_all = Zraw_all, Zpairraw_all = Zpairraw_all, layout = layout,
             K_mean = K_mean, K_pair = K_pair, n_mean = n_mean, n_pair = n_pair,
-            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_originzc_skip!)
+            ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, moments_skip! = moments_originzc_skip!,
+            aml = aml)
 end
 
 """
@@ -326,6 +347,87 @@ function d_delta_dual_d_eta_origin_vec(λstar::AbstractVector{Float64}, aug, νf
 end
 
 """
+    mean_offset_from_aml(aml::ActiveMeanLayout) -> Vector{Int}
+
+Cumulative flat mean-block offset derived purely from `aml.mean_active_origins`'s widths -- the
+SAME quantity `ZCRestrictionOperator`'s ragged constructor computes (`zc_restriction_operator.jl`)
+and is guaranteed to be identical to it since both are pure functions of `aml` alone. Kept as a
+separate tiny helper (not stored on `ActiveMeanLayout` itself) so `d_delta_dual_d_eta_active_and_nustar`
+below never needs the actual `ZCRestrictionOperator` instance in hand -- only `aml`, which is
+already threaded everywhere the checkpoint driver needs it.
+"""
+mean_offset_from_aml(aml::ActiveMeanLayout) = vcat(0, cumsum(length.(aml.mean_active_origins)))
+
+"""
+    d_delta_dual_d_eta_active_and_nustar(λstar, aug, aml::ActiveMeanLayout, nu_eff::Vector{Float64};
+                                          mean_m::Float64) -> (eta_grad_active::Vector{Float64}, d_delta_d_nu_star::Float64)
+
+Row-omission analog of `d_delta_dual_d_eta_origin_vec` above (fix/zc-profile-focal-sigmaminus1-
+mean-2026-08-07, task Section 11): the IDENTICAL envelope-derivative formula -- NOT a new gradient
+engine -- adapted only for the fact that level `aml.kstar`'s mean block is `D-1`-wide
+(`aml.mean_active_origins[aml.kstar]`) instead of `D`-wide, so its flat `λstar` slice is located via
+`mean_offset_from_aml` (ragged-aware) rather than the dense `(k-1)*D` stride, and the omitted
+origin's mean row/dual simply does not exist (no term for it in the mean loop at all). The PAIR
+loop is completely UNCHANGED (still runs over every unordered pair, including every pair involving
+the focal origin at every level) -- this is exactly what makes the accumulated `d_nu` at the
+omitted dense coordinate equal `d(Delta_dual)/d(nu_star)` (mean_m-scaled, PRE the `nu*eta` chain
+rule -- there is no eta at that coordinate to chain through anymore; the caller propagates it into
+`gp`/`A_dd` instead, via `dnu_star/dx`, task Section 11's `[sum_p lambda^P_fp,k* * nu_p,k*] *
+dnu_star/dx` formula).
+
+`λstar` must come from an inner solve that ACTUALLY used the `aml`-constructed ragged
+`ZCRestrictionOperator` (i.e. `n_mean(op) == mean_offset_from_aml(aml)[end]` many mean duals, not
+`K_mean*D`). `nu_eff` is the FULL dense nu vector (length `n_eta(aml.base)`, via `scatter_nu_eff`)
+-- pair targets always need every origin's value, including the derived focal one.
+"""
+function d_delta_dual_d_eta_active_and_nustar(λstar::AbstractVector{Float64}, aug, aml::ActiveMeanLayout,
+                                               nu_eff::AbstractVector{Float64}; mean_m::Float64)
+    layout = aml.base
+    K_mean = layout.K_mean; K_pair = layout.K_pair
+    D = layout isa OriginByPowerLayout ? layout.D : size(aug.Zraw_all[1], 2)
+    npair = D * (D - 1) ÷ 2
+    length(nu_eff) == n_eta(layout) || error("d_delta_dual_d_eta_active_and_nustar: length(nu_eff)=$(length(nu_eff)) != n_eta(layout)=$(n_eta(layout))")
+    ncore_econ = aug.ncore_econ
+    mean_start = ncore_econ
+    mean_offset = mean_offset_from_aml(aml)
+    n_mean_active = mean_offset[end]
+    pair_start0 = ncore_econ + n_mean_active   # ragged-aware: active count, not K_mean*D
+    expected_len = (ncore_econ - 1) + n_mean_active + K_pair * (D * (D - 1) ÷ 2)
+    length(λstar) >= expected_len ||
+        error("d_delta_dual_d_eta_active_and_nustar: length(λstar)=$(length(λstar)) < expected_len=$expected_len " *
+              "(ncore_econ=$ncore_econ, n_mean_active=$n_mean_active, K_pair=$K_pair, npair=$(D*(D-1)÷2)) -- " *
+              "aug/λstar dimension mismatch, refusing to silently misindex.")
+    d_nu = zeros(n_eta(layout))
+    pairs = packed_pair_index(D)
+    for k in 1:K_mean
+        active_k = aml.mean_active_origins[k]
+        λ_mean_k = @view λstar[mean_start+mean_offset[k] : mean_start+mean_offset[k+1]-1]
+        for (jo, o) in enumerate(active_k)
+            idx = target_index(layout, o, k)
+            d_nu[idx] -= λ_mean_k[jo]
+        end
+        if k <= K_pair
+            λ_pair_k = @view λstar[pair_start0+(k-1)*npair : pair_start0+k*npair-1]
+            for (j, (o, p)) in enumerate(pairs)
+                idx_o = target_index(layout, o, k)
+                idx_p = target_index(layout, p, k)
+                nu_o = nu_eff[idx_o]; nu_p = nu_eff[idx_p]
+                d_nu[idx_o] -= nu_p * λ_pair_k[j]
+                d_nu[idx_p] -= nu_o * λ_pair_k[j]
+            end
+        end
+    end
+    d_nu .*= mean_m
+    eta_grad_dense = nu_eff .* d_nu   # chain rule, nu = exp(eta), well-defined at every dense index
+    eta_grad_active, _ = gather_active_grad(aml, eta_grad_dense)
+    # d_delta_d_nu_star is the RAW (un-nu-multiplied) d(Delta)/d(nu_star) -- gathered from d_nu
+    # directly, NOT from eta_grad_dense (which would spuriously carry a nu_eff[dense_omit_idx]
+    # factor with no eta to justify it).
+    _, d_delta_d_nu_star = gather_active_grad(aml, d_nu)
+    return eta_grad_active, d_delta_d_nu_star
+end
+
+"""
     originzc_fixed_contribution(base, aug, νfull::Vector{Float64}) -> Vector{Float64}
 
 No-CM analog of `meanzc_fixed_contribution` (cm_meanzc_production.jl):
@@ -348,11 +450,24 @@ function originzc_fixed_contribution(base, aug, νfull::AbstractVector{Float64})
     W = size(aug.Zraw_all[1], 1)
     out = zeros(W)
     mean_start = ncore_econ
-    pair_start0 = ncore_econ + K_mean * D
+    # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: ragged-aware mean-block indexing/columns
+    # when aug.aml is active (was previously hardcoded dense K_mean*D/(k-1)*D -- confirmed live to
+    # crash with a BoundsError once aug.n_mean/base.λstar were genuinely shorter than that dense
+    # formula expected). aug.Zraw_all[k] itself is ALWAYS the full dense (W,D) table (task Section
+    # 7: compaction happens only in the separate ZCRestrictionOperator, not here) -- subset its
+    # columns to the active origins via aml.mean_active_origins, matching lambda's actual width.
+    aml_local = hasproperty(aug, :aml) ? aug.aml : nothing
+    mean_offset = aml_local !== nothing && aml_local.active ? mean_offset_from_aml(aml_local) : collect(0:D:K_mean*D)
+    n_mean_active = mean_offset[end]
+    pair_start0 = ncore_econ + n_mean_active
     for k in 1:K_mean
-        λ_mean_k = @view base.λstar[mean_start+(k-1)*D : mean_start+k*D-1]
-        out .+= aug.Zraw_all[k] * λ_mean_k
-        out .-= dot(mean_targets(layout, νfull, k, D), λ_mean_k)
+        active = aml_local !== nothing && aml_local.active ? aml_local.mean_active_origins[k] : collect(1:D)
+        λ_mean_k = @view base.λstar[mean_start+mean_offset[k] : mean_start+mean_offset[k+1]-1]
+        Zk_active = length(active) == D ? aug.Zraw_all[k] : @view aug.Zraw_all[k][:, active]
+        dense_targets_k = mean_targets(layout, νfull, k, D)
+        targets_active = length(active) == D ? dense_targets_k : dense_targets_k[active]
+        out .+= Zk_active * λ_mean_k
+        out .-= dot(targets_active, λ_mean_k)
     end
     for k in 1:K_pair
         λ_pair_k = @view base.λstar[pair_start0+(k-1)*npair : pair_start0+k*npair-1]

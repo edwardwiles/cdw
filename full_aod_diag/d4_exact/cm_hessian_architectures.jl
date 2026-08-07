@@ -1914,9 +1914,18 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
     # file has no unconditional load-order dependency on zc_restriction_operator.jl for callers that
     # never request fg_backend=:operator.
     local fg_zc_op, fg_layout
+    aug_aml = hasproperty(aug, :aml) ? aug.aml : nothing   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07
     if fg_backend === :operator
         isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
-        fg_zc_op = ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2))
+        # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: the ActiveMeanLayout-consuming
+        # constructor lives in zc_restriction_operator_ragged.jl (split out to avoid an
+        # ActiveMeanLayout load-order dependency on every OTHER caller of zc_restriction_operator.jl
+        # -- see that file's own header comment); only include it when actually needed. Re-including
+        # is safe/idempotent (it only (re)defines a method, not a struct).
+        aug_aml === nothing || !aug_aml.active || include(joinpath(@__DIR__, "zc_restriction_operator_ragged.jl"))
+        fg_zc_op = (aug_aml === nothing || !aug_aml.active) ?
+            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2)) :
+            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2), aug_aml)
         fg_layout = aug.layout
     else
         fg_zc_op = nothing
@@ -1929,7 +1938,10 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
     local hzz_zc_op, hzz_zc_layout, hzz_zc_ws
     if n_eta_total > 0
         isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
-        hzz_zc_op = ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2))
+        aug_aml === nothing || !aug_aml.active || include(joinpath(@__DIR__, "zc_restriction_operator_ragged.jl"))
+        hzz_zc_op = (aug_aml === nothing || !aug_aml.active) ?
+            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2)) :
+            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2), aug_aml)
         hzz_zc_layout = aug.layout
         hzz_zc_ws = ZCRestrictionWorkspace(hzz_zc_op)
     else
