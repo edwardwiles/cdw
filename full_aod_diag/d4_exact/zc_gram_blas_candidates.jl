@@ -60,12 +60,12 @@ this same matrix, never rebuilds it.
 function build_zc_raw_weighted_workspace(op::ZCRestrictionOperator, W::Int)
     nx = n_restriction(op)
     Phi = Matrix{Float64}(undef, W, max(nx, 1))
-    D = op.D; npair = op.npair
+    npair = op.npair
     @inbounds for k in 1:op.K_mean
-        cols = (k-1)*D+1 : k*D
+        cols = op.mean_offset[k]+1 : op.mean_offset[k+1]
         @views Phi[:, cols] .= op.Zraw_all[k]
     end
-    off = op.K_mean * D
+    off = n_mean(op)
     @inbounds for k in 1:op.K_pair
         cols = off+(k-1)*npair+1 : off+k*npair
         @views Phi[:, cols] .= op.Zpairraw_all[k]
@@ -92,12 +92,12 @@ inner solve (targets are theta-fixed for the whole solve, not per-Hessian-callba
 `refresh_zc_targets!`'s own "once per inner solve" discipline.
 """
 function refresh_zc_raw_target_vector!(ws::ZCRawWeightedWorkspace, zws::ZCRestrictionWorkspace, op::ZCRestrictionOperator)
-    D = op.D; npair = op.npair
+    npair = op.npair
     @inbounds for k in 1:op.K_mean
-        cols = (k-1)*D+1 : k*D
-        @views ws.tvec[cols] .= zws.targets_mean[:, k]
+        cols = op.mean_offset[k]+1 : op.mean_offset[k+1]
+        @views ws.tvec[cols] .= zws.targets_mean[cols]
     end
-    off = op.K_mean * D
+    off = n_mean(op)
     @inbounds for k in 1:op.K_pair
         cols = off+(k-1)*npair+1 : off+k*npair
         @views ws.tvec[cols] .= zws.targets_pair[:, k]

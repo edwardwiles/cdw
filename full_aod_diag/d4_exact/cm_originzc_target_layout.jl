@@ -155,3 +155,127 @@ function layout_fingerprint(layout::MeanZCTargetLayout)
     meta = layout_checkpoint_meta(layout)
     return "$(meta.target_layout):D=$(meta.D):K_mean=$(meta.K_mean):K_pair=$(meta.K_pair)"
 end
+
+# ============================================================================
+# fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: focal k=(sigma-1) mean-row
+# omission ("Variant D" -- derive nu_{focal,k*}=b(psi)/c(psi) exactly, per
+# autarky_cf.jl, and OMIT the now-exactly-redundant focal mean row/eta coordinate
+# entirely, rather than the 2026-08-05 merge's Variant C, which derives the same
+# value but leaves the row/eta coordinate in place -- see
+# docs/audits/zc-profile-focal-sigmaminus1-mean-2026-08-07/MASTER.md for the
+# exact-redundancy proof (autarky moment and focal k* mean moment are affinely
+# related in the draw omega, for EVERY nu value, so once nu is pinned at its
+# consistent value the two rows become exactly proportional -- a genuine KKT
+# rank deficiency, not merely an off-manifold-search hazard).
+#
+# `ActiveMeanLayout` is a THIN WRAPPER around an existing `layout` -- it does
+# NOT replace `target_index`/`mean_targets`/`pair_targets` above (those keep
+# operating on a "dense" nu vector of length `n_eta(layout)`, UNCHANGED). The
+# active layout instead describes (a) which of the `n_eta(layout)` dense
+# coordinates has no outer eta anymore, (b) how to reconstruct a full dense nu
+# vector (`nu_eff`) from the shorter active outer eta vector plus the one
+# derived scalar, for consumption by the UNCHANGED dense `target_index`-based
+# functions, and (c) which origin-column subset of each mean level is ACTIVE
+# (present in `ZCRestrictionOperator.Zraw_all[k]`, `zc_restriction_operator.jl`).
+# ============================================================================
+
+"""
+    ActiveMeanLayout(base, focal_origin, kstar)
+
+`base` is the EXISTING, unmodified `SharedByPowerLayout`/`OriginByPowerLayout`.
+`active = (1 <= kstar <= base.K_mean)` (task Section 4: profiling only occurs
+if the requested power set actually contains k*=sigma-1 -- for any other
+sigma, `active=false` and this struct is a pure passthrough, zero behavior
+change). `dense_omit_idx = target_index(base, focal_origin, kstar)` (meaningless
+if `!active`). `mean_active_origins[k]` lists, in column order, which of `1:D`
+origins occupy `ZCRestrictionOperator.Zraw_all[k]`'s columns after compaction
+-- `1:D` for every level except `kstar` (if active), which is `1:D` with
+`focal_origin` removed. `n_eta_active = n_eta(base) - (active ? 1 : 0)`.
+"""
+struct ActiveMeanLayout{L<:MeanZCTargetLayout}
+    base::L
+    focal_origin::Int
+    kstar::Int
+    active::Bool
+    dense_omit_idx::Int
+    n_eta_active::Int
+    mean_active_origins::Vector{Vector{Int}}
+end
+
+function ActiveMeanLayout(base::MeanZCTargetLayout, focal_origin::Int, kstar::Int, D::Int)
+    1 <= focal_origin <= D || error("ActiveMeanLayout: focal_origin=$focal_origin out of range 1:$D")
+    active = 1 <= kstar <= base.K_mean
+    dense_omit_idx = active ? target_index(base, focal_origin, kstar) : 0
+    n_eta_active = n_eta(base) - (active ? 1 : 0)
+    mean_active_origins = Vector{Vector{Int}}(undef, base.K_mean)
+    for k in 1:base.K_mean
+        mean_active_origins[k] = (active && k == kstar) ? setdiff(1:D, focal_origin) : collect(1:D)
+    end
+    return ActiveMeanLayout(base, focal_origin, kstar, active, dense_omit_idx, n_eta_active, mean_active_origins)
+end
+
+"""
+    scatter_nu_eff(aml, νfull_active, nu_star) -> nu_eff   (dense, length n_eta(aml.base))
+
+Reconstructs the FULL dense nu vector consumed UNCHANGED by `target_index`/
+`mean_targets`/`pair_targets` above, by inserting the derived `nu_star` at the
+one omitted dense coordinate (if `aml.active`) and every other outer eta value
+at its (shifted) dense slot, in order. Identity map if `!aml.active`
+(`νfull_active` is already dense length `n_eta(aml.base)`; `nu_star` unused).
+"""
+function scatter_nu_eff(aml::ActiveMeanLayout, νfull_active::AbstractVector{Float64}, nu_star::Float64)
+    aml.active || return νfull_active
+    n_dense = n_eta(aml.base)
+    length(νfull_active) == n_dense - 1 ||
+        error("scatter_nu_eff: length(νfull_active)=$(length(νfull_active)) != n_eta(base)-1=$(n_dense-1)")
+    nu_eff = Vector{Float64}(undef, n_dense)
+    j = 1
+    @inbounds for d in 1:n_dense
+        if d == aml.dense_omit_idx
+            nu_eff[d] = nu_star
+        else
+            nu_eff[d] = νfull_active[j]
+            j += 1
+        end
+    end
+    return nu_eff
+end
+
+"""
+    gather_active_grad(aml, g_dense) -> (g_active, g_omit)
+
+Inverse-shaped helper for the outer-gradient side: splits a length-`n_eta(base)`
+dense gradient vector (e.g. from `d_delta_dual_d_eta_origin_vec`-style envelope
+math evaluated as if every dense coordinate still had an eta) into the active
+`n_eta_active`-length gradient (in the SAME order the active outer eta vector
+uses) and the single scalar gradient component at the omitted coordinate
+(needed by the `dnu_star/dx` chain-rule term, Section 11/12). Identity
+(`g_dense`, `0.0`) if `!aml.active`.
+"""
+function gather_active_grad(aml::ActiveMeanLayout, g_dense::AbstractVector{Float64})
+    aml.active || return g_dense, 0.0
+    n_dense = length(g_dense)
+    g_active = Vector{Float64}(undef, n_dense - 1)
+    g_omit = 0.0
+    j = 1
+    @inbounds for d in 1:n_dense
+        if d == aml.dense_omit_idx
+            g_omit = g_dense[d]
+        else
+            g_active[j] = g_dense[d]
+            j += 1
+        end
+    end
+    return g_active, g_omit
+end
+
+"""
+    active_mean_layout_fingerprint(aml) -> String
+
+Checkpoint/manifest metadata (task Section 18): distinguishes an
+active/row-omitted layout from the base dense layout it wraps, for hard
+resume-refusal against pre-2026-08-07 checkpoints that have no such field.
+"""
+function active_mean_layout_fingerprint(aml::ActiveMeanLayout)
+    return "$(layout_fingerprint(aml.base)):focal=$(aml.focal_origin):kstar=$(aml.kstar):active=$(aml.active)"
+end

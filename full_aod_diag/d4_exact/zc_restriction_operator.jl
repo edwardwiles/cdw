@@ -19,10 +19,12 @@
 # copy every outer point) in addition to satisfying the addendum's "no dense G" ask.
 #
 # ALLOCATION: `lambda_mean`/`lambda_pair`/`g_mean`/`g_pair` are FLAT vectors (length
-# `n_mean=K_mean*D` / `n_pair=K_pair*npair`), block `k` occupying `(k-1)*D+1:k*D` (mean) /
-# `(k-1)*npair+1:k*npair` (pair) -- the SAME layout `wrap_moments_with_originzc`'s column ranges
-# already use. `targets_mean`/`targets_pair` are precomputed ONCE per inner solve (theta/nu fixed
-# for the whole KNITRO solve) into persistent `(D,K_mean)`/`(npair,K_pair)` matrices via
+# `n_mean(op)` / `n_pair(op)`), block `k` occupying `op.mean_offset[k]+1:op.mean_offset[k+1]` (mean
+# -- `(k-1)*D+1:k*D` unless fix/zc-profile-focal-sigmaminus1-mean-2026-08-07's row omission is
+# active at level `k`, in which case that level is `D-1`-wide) / `(k-1)*npair+1:k*npair` (pair,
+# always D-wide-pairs, never ragged) -- the SAME layout `wrap_moments_with_originzc`'s column
+# ranges already use. `targets_mean`/`targets_pair` are precomputed ONCE per inner solve (theta/nu
+# fixed for the whole KNITRO solve) into persistent flat/`(npair,K_pair)` buffers via
 # `refresh_zc_targets!`, not recomputed per FG callback. Per-callback cost is `@view` slicing only
 # (the same idiom `CMLookupState`'s own `@view x[2:1+ncore1]` already uses throughout this
 # codebase) plus BLAS gemv! -- no per-callback heap allocation of new arrays.
@@ -63,21 +65,44 @@ inner solve via `refresh_zc_targets!` into a caller-owned `ZCRestrictionWorkspac
 unmodified, by origin-ZC and CM+ZC.
 """
 struct ZCRestrictionOperator
-    Zraw_all::Vector{Matrix{Float64}}       # K_mean matrices, each (W, D)
-    Zpairraw_all::Vector{Matrix{Float64}}   # K_pair matrices, each (W, npair)
+    Zraw_all::Vector{Matrix{Float64}}       # K_mean matrices; each (W, mean_width(op,k)) -- D
+                                             # unless fix/zc-profile-focal-sigmaminus1-mean-2026-08-07's
+                                             # focal k=(sigma-1) row omission is active at level k,
+                                             # in which case it is (W, D-1), compacted ONCE here at
+                                             # construction (task Section 7: "compact the active
+                                             # mean rows once at CONTEXT CONSTRUCTION", never
+                                             # per-callback).
+    Zpairraw_all::Vector{Matrix{Float64}}   # K_pair matrices, each (W, npair) -- UNCHANGED, all
+                                             # pair rows retained regardless of mean-row omission.
     D::Int
     npair::Int
     K_mean::Int
     K_pair::Int
+    mean_active_origins::Vector{Vector{Int}}   # length K_mean; column order of Zraw_all[k],
+                                                # 1:D except at an active-omission level.
+    mean_offset::Vector{Int}                   # length K_mean+1, cumulative flat offset:
+                                                # level k's flat lambda_mean/g_mean slice is
+                                                # mean_offset[k]+1 : mean_offset[k+1].
 end
 
+"""
+    ZCRestrictionOperator(Zraw_all, Zpairraw_all, D)
+
+Original (no row omission) constructor -- UNCHANGED behavior/signature, every pre-existing call
+site (`cm_meanzc_production.jl`, `cm_hessian_architectures.jl`) continues to work verbatim.
+`mean_active_origins[k] = 1:D` for every level; `mean_offset` is the plain `(k-1)*D` stride.
+"""
 function ZCRestrictionOperator(Zraw_all::Vector{Matrix{Float64}}, Zpairraw_all::Vector{Matrix{Float64}}, D::Int)
     npair = D * (D - 1) ÷ 2
-    ZCRestrictionOperator(Zraw_all, Zpairraw_all, D, npair, length(Zraw_all), length(Zpairraw_all))
+    K_mean = length(Zraw_all)
+    mean_active_origins = [collect(1:D) for _ in 1:K_mean]
+    mean_offset = collect(0:D:K_mean*D)
+    ZCRestrictionOperator(Zraw_all, Zpairraw_all, D, npair, K_mean, length(Zpairraw_all),
+                           mean_active_origins, mean_offset)
 end
 
-"n_mean(op)/n_pair(op)/n_restriction(op): total column counts, matching `n_originzc_moments`/`n_meanzc_moments`."
-n_mean(op::ZCRestrictionOperator) = op.K_mean * op.D
+"n_mean(op)/n_pair(op)/n_restriction(op): total column counts, matching `n_originzc_moments`/`n_meanzc_moments` (minus any active row omission)."
+n_mean(op::ZCRestrictionOperator) = op.mean_offset[end]
 n_pair(op::ZCRestrictionOperator) = op.K_pair * op.npair
 n_restriction(op::ZCRestrictionOperator) = n_mean(op) + n_pair(op)
 
@@ -89,8 +114,11 @@ directly into caller-supplied `arg0`/gradient buffers, no intermediate buffers n
 struct). `targets_mean[:,k]`/`targets_pair[:,k]` hold block `k`'s target vector.
 """
 mutable struct ZCRestrictionWorkspace
-    targets_mean::Matrix{Float64}   # (D, K_mean)
-    targets_pair::Matrix{Float64}   # (npair, K_pair)
+    targets_mean::Vector{Float64}   # flat, length n_mean(op) -- level k's slice is
+                                     # op.mean_offset[k]+1:op.mean_offset[k+1] (ragged-width-aware,
+                                     # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07; was a plain
+                                     # (D,K_mean) matrix before every level was guaranteed D-wide)
+    targets_pair::Matrix{Float64}   # (npair, K_pair) -- UNCHANGED, pair rows never ragged
     # Zc-caching release (2026-07-28, Section 10 / lifecycle-audit `HIGHEST_PRIORITY_REMAINING_GAP`):
     # `gen` is a cheap "did the outer point actually change" signal `refresh_zc_centered!` compares
     # against to decide whether `Zc` needs rebuilding. IMPORTANT CORRECTION vs the lifecycle audit
@@ -113,7 +141,7 @@ mutable struct ZCRestrictionWorkspace
 end
 
 ZCRestrictionWorkspace(op::ZCRestrictionOperator) =
-    ZCRestrictionWorkspace(zeros(op.D, max(op.K_mean, 1)), zeros(op.npair, max(op.K_pair, 1)), 0, nothing)
+    ZCRestrictionWorkspace(zeros(n_mean(op)), zeros(op.npair, max(op.K_pair, 1)), 0, nothing)
 
 """
     refresh_zc_targets!(ws, op, layout, νfull) -> ws
@@ -129,7 +157,12 @@ gated on `νfull`'s object identity actually changing since the last call (Zc-ca
 """
 function refresh_zc_targets!(ws::ZCRestrictionWorkspace, op::ZCRestrictionOperator, layout, νfull::AbstractVector{Float64})
     @inbounds for k in 1:op.K_mean
-        ws.targets_mean[:, k] .= mean_targets(layout, νfull, k, op.D)
+        dense_targets_k = mean_targets(layout, νfull, k, op.D)   # UNCHANGED dense function (length D);
+        # subset to this level's active origins (task Section 7: reuse dense math, no parallel
+        # "active" target formula) -- identity slice (dense_targets_k itself) at every non-omitted level.
+        active = op.mean_active_origins[k]
+        cols = op.mean_offset[k]+1 : op.mean_offset[k+1]
+        ws.targets_mean[cols] .= length(active) == op.D ? dense_targets_k : dense_targets_k[active]
     end
     @inbounds for k in 1:op.K_pair
         ws.targets_pair[:, k] .= pair_targets(layout, νfull, k, op.D)
@@ -152,10 +185,11 @@ block layout documented above).
 function restriction_forward!(arg0::AbstractVector{Float64},
                                lambda_mean::AbstractVector{Float64}, lambda_pair::AbstractVector{Float64},
                                op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace)
-    D = op.D; npair = op.npair
+    npair = op.npair
     @inbounds for k in 1:op.K_mean
-        λk = @view lambda_mean[(k-1)*D+1:k*D]
-        tk = @view ws.targets_mean[:, k]
+        cols = op.mean_offset[k]+1 : op.mean_offset[k+1]
+        λk = @view lambda_mean[cols]
+        tk = @view ws.targets_mean[cols]
         BLAS.gemv!('N', -1.0, op.Zraw_all[k], λk, 1.0, arg0)
         arg0 .+= dot(tk, λk)
     end
@@ -178,12 +212,13 @@ into caller-supplied FLAT buffers (`g_mean`/`g_pair`, same block layout as `lamb
 function restriction_transpose!(g_mean::AbstractVector{Float64}, g_pair::AbstractVector{Float64},
                                  draw_weights::AbstractVector{Float64},
                                  op::ZCRestrictionOperator, ws::ZCRestrictionWorkspace)
-    D = op.D; npair = op.npair
+    npair = op.npair
     M = length(draw_weights)
     sw = sum(draw_weights)
     @inbounds for k in 1:op.K_mean
-        gk = @view g_mean[(k-1)*D+1:k*D]
-        tk = @view ws.targets_mean[:, k]
+        cols = op.mean_offset[k]+1 : op.mean_offset[k+1]
+        gk = @view g_mean[cols]
+        tk = @view ws.targets_mean[cols]
         BLAS.gemv!('T', -1.0 / M, op.Zraw_all[k], draw_weights, 0.0, gk)
         gk .+= (sw / M) .* tk
     end
@@ -293,13 +328,13 @@ function refresh_zc_centered!(cs::ZCCenteredScratch, op::ZCRestrictionOperator, 
     if cache_across_callbacks && cs.built_gen == ws.gen
         record_zc_centered_cache_hit!()
     else
-        D = op.D; npair = op.npair
+        npair = op.npair
         Zc = @view cs.Zc[:, 1:nx]
         @inbounds for k in 1:op.K_mean
-            cols = (k-1)*D+1 : k*D
-            @views Zc[:, cols] .= op.Zraw_all[k] .- ws.targets_mean[:, k]'
+            cols = op.mean_offset[k]+1 : op.mean_offset[k+1]
+            @views Zc[:, cols] .= op.Zraw_all[k] .- ws.targets_mean[cols]'
         end
-        off = op.K_mean * D
+        off = n_mean(op)
         @inbounds for k in 1:op.K_pair
             cols = off+(k-1)*npair+1 : off+k*npair
             @views Zc[:, cols] .= op.Zpairraw_all[k] .- ws.targets_pair[:, k]'
