@@ -39,6 +39,10 @@ ALLOWLIST_GLOBS=(
   "compare_*.jl" "solve_*.jl" "verify_*.jl" "validate_*.jl" "c8_*.jl" "c9_*.jl" "c10_*.jl" "c12*.jl"
   "c13_*.jl" "c14_*.jl" "c30_*.jl" "c33_*.jl" "run_fullA_*.jl"
   "cm_hessian_subblock_profiling.jl"
+  # this task's own P1/P2/P3 diagnostic/measurement scripts (docs/audits/fullA-lower-limit-and-
+  # hotpath-2026-08-06/MASTER.md) -- may reference the OLD -50 value in explanatory comments
+  "p1_allocs_frechet_2026-08-06.jl" "p2_bintables_fill_vs_reduction_2026-08-06.jl"
+  "p3_outer_algorithm_pilot_ll10_2026-08-06.jl"
 )
 
 is_allowlisted() {

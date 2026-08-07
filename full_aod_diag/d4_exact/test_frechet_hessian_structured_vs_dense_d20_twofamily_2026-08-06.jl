@@ -29,7 +29,7 @@ end
 
 W = 80_000
 L = 10
-ctx = d20_real_setup(W = W, δ = 1.0, find_smallest = true, destination_sample = :exclude_row)
+ctx = d20_real_setup(W = W, δ = 1.0, find_smallest = true, destination_sample = :exclude_row, inner_lower_limit = -10.0)
 D = ctx.D
 x_free0 = ctx.θ0_up[ctx.free_idx]
 
