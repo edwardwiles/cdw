@@ -225,3 +225,114 @@ function enable_autarky_cf!(ctx; pow_cache = nothing)
     obj.moments! = (K, G, θ, U, o) -> EK_moments_gammanorm_directgp_autarkyCF!(K, G, θ, U, o; pow_cache = pow_cache)
     return nothing
 end
+
+# ============================================================================
+# fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: derived focal k=(sigma-1) mean value
+# nu_star = cf_denom/cf_num and its EXACT Jacobian w.r.t. every economic coordinate that affects
+# it (gp AND the focal A_dd term -- task Section 3; the 2026-08-05 merged Variant-C fix only
+# chain-ruled through gp, silently dropping the A_dd term, since cf_num depends on AodPow[bi,bi]).
+# Both derivatives verified against direct finite differences at real D20 data, sigma=3
+# (docs/audits/zc-profile-focal-sigmaminus1-mean-2026-08-07/MASTER.md,
+# diagnostics/02_dnu_star_jacobian_d20.jl): <1e-9 relative error.
+# ============================================================================
+
+"""
+    nu_star_value_and_dgrad(θ_full, ctx) -> (nu_star, d_nu_d_gp, d_lognu_d_adid)
+
+Pure algebraic function of `theta_full` (NO inner solve -- `nu_star` is an algebraic function of
+theta, not a fixed point of the inner problem). Reconstructs `AodPow` exactly as
+`EK_moments_gammanorm_directgp_autarkyCF!` does, then calls `autarky_cf_scalars` (UNCHANGED,
+above) to get `cf_num`/`cf_denom`.
+
+    nu_star = cf_denom / cf_num
+    d(nu_star)/d(gp)       = nu_star * sigma / gp     (cf_denom = gp^sigma*(...), cf_num has NO
+                                                         gp dependence -- confirmed by inspection
+                                                         of autarky_cf_scalars above)
+    d(log nu_star)/d(a_dd) = sigma - 1                 (a_dd := log(AodPow[bi,bi]); cf_num propto
+                                                         AodPow[bi,bi]^(1-sigma), cf_denom has NO
+                                                         AodPow[bi,bi] dependence)
+"""
+function nu_star_value_and_dgrad(θ_full::AbstractVector{Float64}, ctx)
+    D = ctx.D
+    μ = θ_full[1]; σ = θ_full[2]
+    Aod_offset = 3 + D
+    Aod_θ = reshape(θ_full[Aod_offset+1:Aod_offset+D^2], (D, D))
+    γo = ctx.γ
+    lambda = reshape(γo.P, (D, D))'
+    Aod_lvl = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
+    AodPow = (Aod_lvl ./ γo.cHat) .^ (-μ)
+    γ_prime_bi = θ_full[3+D]
+    cf_num, cf_denom, _ = autarky_cf_scalars(ctx.obj, AodPow, σ, γ_prime_bi)
+    nu_star = cf_denom / cf_num
+    d_nu_d_gp = nu_star * σ / γ_prime_bi
+    d_lognu_d_adid = σ - 1
+    return nu_star, d_nu_d_gp, d_lognu_d_adid
+end
+
+"""
+    FocalKStarDerivativeInfo
+
+Precomputed (ONCE per driver setup -- not per callback) description of which `z_free` coordinate
+governs the focal country's own diagonal cell `z[bi,bi] = log(Aod_theta[bi,bi])`, needed to
+propagate `d(nu_star)/dx` into the outer gradient (task Section 3/11) through the EXISTING
+gravity-pivot chain-rule machinery (`gravity_elimination.jl`'s `PivotGravityElim`), not a new one.
+Handles BOTH cases the pivot choice could put `(bi,bi)` in -- confirmed live at real D20 production
+data that `(bi,bi)` is an ORDINARY free coordinate (`is_pivot=false`), but this is data-dependent
+(the pivot is chosen as `argmax|c|` over ALL D*Ddest cells, task-brief-unspecified whether `(bi,bi)`
+could ever coincide with it under some other config), so both branches are implemented, not assumed.
+"""
+struct FocalKStarDerivativeInfo
+    is_pivot::Bool
+    j0::Int                      # valid iff !is_pivot: position of (bi,bi) in z_free/pe.other_idx
+    dz_dzfree::Vector{Float64}   # valid iff is_pivot: length(z_free), = -pe.c[pe.other_idx]/pe.c[pe.pivot_lin]
+end
+
+"""
+    build_focal_kstar_derivative_info(ctx, pe) -> FocalKStarDerivativeInfo
+
+`pe::PivotGravityElim` is the driver's own (already-built) pivot-elimination object. Locates
+`(bi,bi)`'s linear (column-major) index in the `D x Ddest` matrix and checks it against
+`pe.pivot_lin`/`pe.other_idx` -- read directly off `pe`'s own fields, no re-derivation of the pivot
+choice itself.
+"""
+function build_focal_kstar_derivative_info(ctx, pe)
+    D = ctx.D; bi = ctx.bi
+    lin_bd = bi + (bi - 1) * D
+    if lin_bd == pe.pivot_lin
+        dz_dzfree = -pe.c[pe.other_idx] ./ pe.c[pe.pivot_lin]
+        return FocalKStarDerivativeInfo(true, -1, dz_dzfree)
+    else
+        j0 = findfirst(==(lin_bd), pe.other_idx)
+        j0 === nothing && error("build_focal_kstar_derivative_info: (bi,bi) linear index $lin_bd not found in pe.other_idx or as the pivot -- inconsistent pivot elimination structure")
+        return FocalKStarDerivativeInfo(false, j0, Float64[])
+    end
+end
+
+"""
+    apply_focal_kstar_chain_rule!(gfull, θ_full, ctx, info::FocalKStarDerivativeInfo, D2_econ, coeff)
+
+Adds `coeff * d(nu_star)/dx` into `gfull` at every economic coordinate `x` (`gp` always at
+`gfull[1]`; the `z_free` coordinate(s) governing the focal A_dd term at `gfull[2:D2_econ]`, in
+Z-SPACE units). MUST be called BEFORE any `A_coordinate_mode=:powered_aspace` rescale
+(`gfull[2:D2_econ] .*= -theta_cm`) -- that existing, UNCHANGED rescale applies uniformly to
+whatever is in `gfull[2:D2_econ]` at the time it runs, so adding this z-space contribution first
+lets it get carried through by the SAME existing machinery, no separate a-space derivative needed.
+`coeff` is task Section 11's pair-lambda sum (`d_delta_d_nu_star`, from
+`d_delta_dual_d_eta_active_and_nustar`/its CM+ZC analog).
+"""
+function apply_focal_kstar_chain_rule!(gfull::AbstractVector{Float64}, θ_full::AbstractVector{Float64}, ctx,
+                                        info::FocalKStarDerivativeInfo, D2_econ::Int, coeff::Float64)
+    nu_star, d_nu_d_gp, d_lognu_d_adid = nu_star_value_and_dgrad(θ_full, ctx)
+    μ = θ_full[1]
+    d_lognu_d_z_at_focal = d_lognu_d_adid * (-μ)   # d(a_dd)/d(z[bi,bi]) = -mu, FD-verified
+    d_nu_d_z_at_focal = nu_star * d_lognu_d_z_at_focal
+    gfull[1] += coeff * d_nu_d_gp
+    if info.is_pivot
+        @inbounds for j in eachindex(info.dz_dzfree)
+            gfull[1+j] += coeff * d_nu_d_z_at_focal * info.dz_dzfree[j]
+        end
+    else
+        gfull[1+info.j0] += coeff * d_nu_d_z_at_focal
+    end
+    return gfull
+end
