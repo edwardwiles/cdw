@@ -479,13 +479,18 @@ function hessian_cm_structured_v2!(h, obj, cctx, extension::Any = nothing; threa
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
     # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (cm_hessian_architectures.jl),
     # also used by common Fréchet -- previously a third verbatim copy of this loop.
-    @cmhess_prof "H_CC" fill_cm_HCC!(Hfull, cctx, M)
+    _, CT12_use, CT22_use = @cmhess_prof "H_CC" fill_cm_HCC!(Hfull, cctx, M)
 
     # harmonization task (2026-07-28): common Fréchet's level blocks -- see the serial
     # hessian_cm_structured!'s identical note (cm_hessian_architectures.jl). `extension !== nothing`
     # (not `isa CMFrechetExtension`) for the same load-order reason documented there.
+    # 2026-08-06 lower-limit/hotpath task (user-identified): pass through CT12_use/CT22_use so
+    # _fill_frechet_level_blocks! does not recompute them a second time -- see fill_cm_HCC!'s own
+    # docstring for the full writeup (this was real duplicated O(D^2*L^2) compute, not just
+    # duplicated allocation, which the prior commit already fixed).
     if extension !== nothing
-        _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension)
+        _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension;
+                                     CT12_precomputed = CT12_use, CT22_precomputed = CT22_use)
     end
 
     # Hessian upper-only cleanup (2026-07-28): now calls the ONE shared packing function

@@ -93,7 +93,8 @@ function CMFrechetExtension(D::Int, L::Int, nO::Int, NCORE::Int, level_targets::
 end
 
 """
-    _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, ext::CMFrechetExtension)
+    _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, ext::CMFrechetExtension;
+                                 CT12_precomputed=nothing, CT22_precomputed=nothing)
 
 Harmonization task (2026-07-28): the genuinely Fréchet-only "CM-F" computation -- the three common-
 level anchor blocks H_E,level / H_CM,level / H_level,level -- extracted verbatim from the former
@@ -101,8 +102,17 @@ level anchor blocks H_E,level / H_CM,level / H_level,level -- extracted verbatim
 of the ENTIRE H_EE/H_EC/H_CC computation; everything ABOVE this point is now the one shared
 `hessian_cm_structured!`, cm_hessian_architectures.jl, that flexible CM already uses). Called from
 `hessian_cm_structured!`/`_v2!` only when `extension !== nothing`.
+
+2026-08-06 lower-limit/hotpath task, P1 follow-up (user-identified): `CT12_precomputed`/
+`CT22_precomputed` let the caller pass in the SAME `CT12_use`/`CT22_use` tables `fill_cm_HCC!`
+already computed earlier in this SAME Hessian callback, avoiding the genuine duplicated
+O(D^2*L^2) recomputation this function used to always do on its own (see `fill_cm_HCC!`'s own
+docstring for the full writeup). `nothing` (default) preserves the exact prior behavior --
+compute internally -- for any other/standalone caller.
 """
-function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_winner_bin::Bool, wctx, cross_ws, ext::CMFrechetExtension)
+function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_winner_bin::Bool, wctx, cross_ws, ext::CMFrechetExtension;
+                                      CT12_precomputed::Union{Nothing,Array{Float64,4}} = nothing,
+                                      CT22_precomputed::Union{Nothing,Array{Float64,4}} = nothing)
     NCORE = cctx.NCORE; ncm = cctx.ncm; L = cctx.L; nO = cctx.nO; D = cctx.D
     refIndex1 = cctx.refIndex1; origins = cctx.origins
     fam2 = cctx.n_families == 2
@@ -128,14 +138,14 @@ function _fill_frechet_level_blocks!(Hfull, cctx::CMBinHessCtx, w, H, M, use_win
     # runs once per Hessian callback exactly like that one does. `CT12_use[x,y,l,lp]` = CDF-side
     # (index x, `<=l`) x POW-side (index y, `>lp` reflected); `CT22_use[x,y,l,lp]` = both sides POW
     # (`>l`,`>lp` reflected).
-    # 2026-08-06 lower-limit/hotpath task, P1 allocation fix: reuse the SAME persistent
-    # cctx.Trefl12/Trefl22 buffer fill_cm_HCC! already wrote into and fully consumed (into Hfull)
-    # earlier in this SAME Hessian callback -- safe because the two calls are strictly sequential
-    # within one single-threaded callback (fill_cm_HCC! always runs before this function, per
-    # hessian_cm_structured!/_v2!'s own call order), never concurrent, so there is no aliasing
-    # hazard in overwriting a buffer whose prior contents are already fully consumed.
-    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true, Trefl = cctx.Trefl12) : nothing
-    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true, Trefl = cctx.Trefl22) : nothing
+    # 2026-08-06 lower-limit/hotpath task: prefer the caller-supplied CT12_precomputed/
+    # CT22_precomputed (fill_cm_HCC! already computed these earlier in this SAME callback -- see
+    # this function's own docstring) over recomputing. Falls back to the old behavior (compute via
+    # cctx.Trefl12/Trefl22 persistent scratch) only when a caller doesn't supply them.
+    CT12_use = CT12_precomputed !== nothing ? CT12_precomputed :
+        (fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true, Trefl = cctx.Trefl12) : nothing)
+    CT22_use = CT22_precomputed !== nothing ? CT22_precomputed :
+        (fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true, Trefl = cctx.Trefl22) : nothing)
 
     # ---- marginal weighted-count table T1[x,l] = sum_s w_s*1{bin(s,x)<=l} (D x L), Wtot, Esum.
     # Needed because (unlike CM's own zero-target raw features) the level feature has a NONZERO

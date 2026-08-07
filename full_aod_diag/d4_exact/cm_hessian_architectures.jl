@@ -1353,14 +1353,30 @@ function _cm_hcc_congruence(Hraw::Matrix{Float64}, R::Union{Nothing,Matrix{Float
 end
 
 """
-    fill_cm_HCC!(Hfull, cctx::CMBinHessCtx, M)
+    fill_cm_HCC!(Hfull, cctx::CMBinHessCtx, M; CT12_precomputed=nothing, CT22_precomputed=nothing)
+        -> (Hfull, CT12_use, CT22_use)
 
 H_CC (CM-CM restriction self-block): raw per-threshold-block-pair computation, then optional R
 congruence. Shared between flexible CM and common Fréchet (harmonization task, 2026-07-28) --
 previously two verbatim-identical copies, one per family. `M` is `obj.M` (not a `CMBinHessCtx`
 field), passed through exactly as both pre-existing call sites already had it in scope.
+
+2026-08-06 lower-limit/hotpath task, P1 follow-up (user-identified): common-Fréchet two-family
+callers (`hessian_cm_structured!`/`_v2!`) ALSO call `_fill_frechet_level_blocks!` afterward, which
+previously recomputed these SAME `CT12_use`/`CT22_use` reflected-bilinear tables a second time --
+real, duplicated O(D^2*L^2) work, not just duplicated allocation (the allocation half was already
+fixed by reusing `cctx.Trefl12`/`Trefl22`, see that fix's own commit). `CT12_precomputed`/
+`CT22_precomputed` let a caller that already has them (from an earlier `fill_cm_HCC!` call in the
+SAME Hessian callback) skip the recomputation entirely; `nothing` (default) preserves the exact
+prior behavior (compute internally) for every other caller, including the standalone
+`test_cm_archc_hcc_twofamily_2026-08-05.jl` gate. Now returns `(Hfull, CT12_use, CT22_use)` (was
+`Hfull` alone) so a caller CAN capture and reuse them -- no existing caller unpacks/compares the
+return value, so this is additive, not breaking (checked: only 3 call sites total, `grep -rn
+"fill_cm_HCC!\\("`).
 """
-function fill_cm_HCC!(Hfull::AbstractMatrix, cctx::CMBinHessCtx, M)
+function fill_cm_HCC!(Hfull::AbstractMatrix, cctx::CMBinHessCtx, M;
+                       CT12_precomputed::Union{Nothing,Array{Float64,4}} = nothing,
+                       CT22_precomputed::Union{Nothing,Array{Float64,4}} = nothing)
     CT = cctx.CT
     Hraw_CC = cctx.Hraw_CC
     L = cctx.L; nO = cctx.nO; NCORE = cctx.NCORE
@@ -1371,49 +1387,73 @@ function fill_cm_HCC!(Hfull::AbstractMatrix, cctx::CMBinHessCtx, M)
     # as the CDF family) do NOT directly give H^{12}/H^{22} -- eq.36's own indicator is `1{U>c}`,
     # not `1{U<=c}` (see _build_reflected_bilinear's own docstring for the full derivation/proof).
     D = cctx.D
-    CT12_use = fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true, Trefl = cctx.Trefl12) : nothing
-    CT22_use = fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true, Trefl = cctx.Trefl22) : nothing
+    CT12_use = CT12_precomputed !== nothing ? CT12_precomputed :
+        (fam2 ? _build_reflected_bilinear(cctx.Ttab12, cctx.CT12, D, L; reflect_x = false, reflect_y = true, Trefl = cctx.Trefl12) : nothing)
+    CT22_use = CT22_precomputed !== nothing ? CT22_precomputed :
+        (fam2 ? _build_reflected_bilinear(cctx.Ttab22, cctx.CT22, D, L; reflect_x = true, reflect_y = true, Trefl = cctx.Trefl22) : nothing)
+    # 2026-08-06 lower-limit/hotpath task, H_CC symmetry fix (user-identified): H^{11}(l,lp) and
+    # H^{22}(l,lp) are PROVABLY transposes of H^{11}(lp,l)/H^{22}(lp,l) respectively -- the
+    # underlying T-table accumulation (build_bin_tables!/_threaded!'s `Tloc[x,y,bx,by] += ws` and
+    # `T22loc[x,y,bx,by] += ws*Pow[s,x]*Pow[s,y]`) is symmetric under simultaneous (x,bx)<->(y,by)
+    # swap in BOTH cases (equal weight on x and y), so CT[o,p,l,lp]==CT[p,o,lp,l] and likewise for
+    # CT22, hence _fill_cm_hcc_raw!(...,l,lp,...)[o,p] == _fill_cm_hcc_raw!(...,lp,l,...)[p,o] for
+    # both tables. The ORIGINAL code looped the FULL L x L grid and independently recomputed both
+    # directions via a fresh `_fill_cm_hcc_raw!` + `_cm_hcc_congruence` (a real mul! when R!==nothing)
+    # call each time -- genuinely ~2x wasted work on these two blocks, not merely doubled storage
+    # (a comment on pack_upper_cm_hessian!, right above, already documented this AS a fact --
+    # "H_CC's (l,lp) grid is genuinely independently accumulated from a fresh prefix-sum evaluation
+    # per pair, not copied" -- without acting on it). Now loops `lp in l:L` (upper triangle of the
+    # threshold-pair grid only) and mirrors H^{11}/H^{22} via a cheap transpose-copy instead,
+    # exactly the same "compute once, mirror the transpose" pattern H_EC already used.
+    #
+    # H^{12}(l,lp) (CDF@l x POW@lp) is DIFFERENT: CT12's own accumulation
+    # (`T12loc[x,y,bx,by] += ws*Pow[s,y]`) weights ONLY the second/y index, so it is NOT symmetric
+    # under the same swap -- H^{12}(l,lp) and H^{12}(lp,l) are two genuinely different quantities,
+    # neither derivable from the other by transpose. Both must still be computed explicitly when
+    # lp != l (same total H^{12}/H^{21} work as the original full-grid loop -- no savings possible
+    # there, only for H^{11}/H^{22} above).
     @inbounds for l in 1:L
         rows = NCORE + (l-1)*nO + 1 : NCORE + l*nO
-        for lp in 1:L
+        rows_pow = fam2 ? (NCORE + ncm_cdf + (l-1)*nO + 1 : NCORE + ncm_cdf + l*nO) : (1:0)
+        for lp in l:L
             _fill_cm_hcc_raw!(Hraw_CC, CT, origins, refIndex1, l, lp, M)
             cols = NCORE + (lp-1)*nO + 1 : NCORE + lp*nO
             block = _cm_hcc_congruence(Hraw_CC, cctx.R, cctx.RtHraw_CC, cctx.block_cc)
             @views Hfull[rows, cols] .= block
+            lp != l && (@views Hfull[cols, rows] .= transpose(block))
 
             if fam2
-                # H^{12}(l,lp) = (1/M)*sum_s w_s*A_{o,l}[s]*B_{p,lp}[s] (eq.35-block row, eq.36-block
-                # col) -- same anchored-contrast expansion as H^{11}, using CT12(x,y,l,lp)=sum_s
-                # w_s*Pow[s,y]*1{bin(x)<=l}*1{bin(y)<=lp} (the extra Pow weight lives on the SECOND
-                # (eq.36/B-side) index, see CT12's own field docstring). Its mirror, H^{21}(lp,l) =
-                # transpose(H^{12}(l,lp)) (derivation: scalar multiplication commutes, so
-                # sum_s w_s*B_{o,l}A_{p,lp} at (POW(lp),CDF(l)) equals the SAME product summed the
-                # other way -- verified algebraically via CT12(x,y,l,lp)=CT12(y,x,lp,l)-style index
-                # permutation in this task's own derivation notes), is written in the SAME iteration
-                # (no separate loop pass needed) -- exactly the same "compute once, mirror the
-                # transpose into the other corner" pattern the H_EC loop below already uses.
+                # H^{12}(l,lp) -- computed once, mirrored into H^{21}(l,lp)'s own position within
+                # the SAME iteration, exactly as before (this direction was already efficient).
                 Hraw_CC12 = cctx.Hraw_CC12
                 _fill_cm_hcc_raw!(Hraw_CC12, CT12_use, origins, refIndex1, l, lp, M)
                 cols_pow = NCORE + ncm_cdf + (lp-1)*nO + 1 : NCORE + ncm_cdf + lp*nO
-                rows_pow = NCORE + ncm_cdf + (l-1)*nO + 1 : NCORE + ncm_cdf + l*nO
                 block12 = _cm_hcc_congruence(Hraw_CC12, cctx.R, cctx.RtHraw_CC12, cctx.block_cc12)
                 @views Hfull[rows, cols_pow] .= block12
                 @views Hfull[cols_pow, rows] .= transpose(block12)
 
-                # H^{22}(l,lp) = (1/M)*sum_s w_s*B_{o,l}[s]*B_{p,lp}[s] (both eq.36) -- computed
-                # directly at every (l,lp) exactly like H^{11}, relying on the SAME final
-                # symmetrize-by-averaging pass (pack_upper_cm_hessian!) to absorb floating-point
-                # summation-order noise, not a separate mirrored write (T22 is symmetric under
-                # (x,l)<->(y,lp) index+threshold swap, so this block is analytically symmetric the
-                # same way H^{11} already is).
+                # H^{22}(l,lp) -- symmetric like H^{11}, mirror instead of recomputing at (lp,l).
                 Hraw_CC22 = cctx.Hraw_CC22
                 _fill_cm_hcc_raw!(Hraw_CC22, CT22_use, origins, refIndex1, l, lp, M)
                 block22 = _cm_hcc_congruence(Hraw_CC22, cctx.R, cctx.RtHraw_CC22, cctx.block_cc22)
                 @views Hfull[rows_pow, cols_pow] .= block22
+                lp != l && (@views Hfull[cols_pow, rows_pow] .= transpose(block22))
+
+                if lp != l
+                    # H^{12}(lp,l) (CDF@lp x POW@l) -- genuinely distinct from H^{12}(l,lp), must
+                    # still be computed explicitly (see this loop's own header comment). Safe to
+                    # reuse cctx.Hraw_CC12/RtHraw_CC12/block_cc12: block12 above was already fully
+                    # consumed (copied into Hfull) before this call overwrites that scratch.
+                    Hraw_CC12_swap = cctx.Hraw_CC12
+                    _fill_cm_hcc_raw!(Hraw_CC12_swap, CT12_use, origins, refIndex1, lp, l, M)
+                    block12_swap = _cm_hcc_congruence(Hraw_CC12_swap, cctx.R, cctx.RtHraw_CC12, cctx.block_cc12)
+                    @views Hfull[cols, rows_pow] .= block12_swap
+                    @views Hfull[rows_pow, cols] .= transpose(block12_swap)
+                end
             end
         end
     end
-    return Hfull
+    return Hfull, CT12_use, CT22_use
 end
 
 """
@@ -1572,7 +1612,7 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
     # ---- H_CC raw, then optional R congruence (per threshold-block pair) ----
     # harmonization task (2026-07-28): extracted to the shared fill_cm_HCC! (also used by common
     # Fréchet) -- previously two verbatim-identical copies, one per family.
-    fill_cm_HCC!(Hfull, cctx, M)
+    _, CT12_use, CT22_use = fill_cm_HCC!(Hfull, cctx, M)
 
     # harmonization task (2026-07-28): common Fréchet's ONLY genuinely family-specific piece (the
     # "CM-F" common-level anchor blocks H_E,level / H_CM,level / H_level,level) -- was
@@ -1582,8 +1622,12 @@ function hessian_cm_structured!(h, obj, cctx::CMBinHessCtx, extension::Any = not
     # the CMFrechetExtension type name directly -- flexible CM's own scripts (which always pass
     # extension=nothing) do not load cm_frechet_hessian.jl at all, so a name reference here would
     # throw UndefVarError for them even though they never take this branch.
+    # 2026-08-06 lower-limit/hotpath task (user-identified): pass through the CT12_use/CT22_use
+    # fill_cm_HCC! just computed (fam2 only, nothing otherwise) so _fill_frechet_level_blocks!
+    # does not recompute the identical reflected-bilinear tables a second time.
     if extension !== nothing
-        _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension)
+        _fill_frechet_level_blocks!(Hfull, cctx, w, H, M, use_winner_bin, wctx, cross_ws, extension;
+                                     CT12_precomputed = CT12_use, CT22_precomputed = CT22_use)
     end
 
     # symmetrize defensively (analytically symmetric; absorbs FP-order noise, same
