@@ -1054,25 +1054,6 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
               ":common_flexible with the meanzc extension.")
     marginal_restriction === :common_frechet &&
         lp("[", label, "] marginal_restriction=common_frechet (fixed Frechet as CM plus a common-level anchor)")
-    # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: meanzc_profiled_level now implements
-    # Variant D (derive shared nu_{k0}=cf_denom/cf_num, OMIT the FOCAL origin's own mean row/eta
-    # coordinate at that level entirely -- task Section 6) in place of the 2026-08-05 merge's
-    # Variant C (derive, but RETAIN every row). Other origins' mean rows at level k0 are UNCHANGED
-    # (still genuine, independent restrictions targeted at the same derived shared value).
-    meanzc_aml = nothing
-    if meanzc_profiled_level !== nothing
-        is_meanzc || error("run_cm_upper_checkpointed($label): meanzc_profiled_level requires cm_extension!=:cm_only (is_meanzc)")
-        1 <= meanzc_profiled_level <= meanzc_K_mean ||
-            error("run_cm_upper_checkpointed($label): meanzc_profiled_level=$meanzc_profiled_level out of range 1:$meanzc_K_mean")
-        meanzc_shared_layout = SharedByPowerLayout(meanzc_K_mean, meanzc_K_pair)
-        meanzc_aml = ActiveMeanLayout(meanzc_shared_layout, ctx.bi, meanzc_profiled_level, ctx.D)
-        lp("[", label, "] k=(sigma-1) row-omission fix ACTIVE (Variant D): meanzc_profiled_level=", meanzc_profiled_level,
-           " -- shared nu_", meanzc_profiled_level, " DERIVED via cf_denom/cf_num (autarky_cf.jl); ",
-           "ONLY the focal origin's (bi=", ctx.bi, ") own mean row/eta coordinate removed ",
-           "(n_eta: ", meanzc_K_mean, " -> ", meanzc_aml.n_eta_active, "); every other origin's mean row ",
-           "at this level retained, now targeted at the derived value.")
-    end
-    n_eta_active_meanzc = meanzc_aml === nothing ? meanzc_K_mean : meanzc_aml.n_eta_active
 
     resumed = resume_from === nothing ? nothing : load_cm_checkpoint(resume_from)
     backend_switched = false   # Part II.4 follow-up -- set true below only on an explicit, audited cross-backend resume
@@ -1177,6 +1158,28 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat, inner_lower_limit = inner_lower_limit)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # Phase E remediation (2026-07-26): cf_build (moments! closures below) reuses this instead of allocating fresh every call
     pe = build_pivot_elimination(ctx)
+    # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07: meanzc_profiled_level implements Variant D
+    # (derive shared nu_{k0}=cf_denom/cf_num, OMIT the FOCAL origin's own mean row/eta coordinate
+    # at that level entirely -- task Section 6) in place of the 2026-08-05 merge's Variant C
+    # (derive, but RETAIN every row). Other origins' mean rows at level k0 are UNCHANGED (still
+    # genuine, independent restrictions targeted at the same derived shared value). MUST run after
+    # `ctx` exists (needs ctx.bi/ctx.D) -- moved here 2026-08-07 after a live run exposed
+    # `meanzc_aml`'s original position referencing `ctx` before this function ever builds it
+    # (UndefVarError: `ctx` not defined in local scope, cm_checkpoint.jl, confirmed live).
+    meanzc_aml = nothing
+    if meanzc_profiled_level !== nothing
+        is_meanzc || error("run_cm_upper_checkpointed($label): meanzc_profiled_level requires cm_extension!=:cm_only (is_meanzc)")
+        1 <= meanzc_profiled_level <= meanzc_K_mean ||
+            error("run_cm_upper_checkpointed($label): meanzc_profiled_level=$meanzc_profiled_level out of range 1:$meanzc_K_mean")
+        meanzc_shared_layout = SharedByPowerLayout(meanzc_K_mean, meanzc_K_pair)
+        meanzc_aml = ActiveMeanLayout(meanzc_shared_layout, ctx.bi, meanzc_profiled_level, ctx.D)
+        lp("[", label, "] k=(sigma-1) row-omission fix ACTIVE (Variant D): meanzc_profiled_level=", meanzc_profiled_level,
+           " -- shared nu_", meanzc_profiled_level, " DERIVED via cf_denom/cf_num (autarky_cf.jl); ",
+           "ONLY the focal origin's (bi=", ctx.bi, ") own mean row/eta coordinate removed ",
+           "(n_eta: ", meanzc_K_mean, " -> ", meanzc_aml.n_eta_active, "); every other origin's mean row ",
+           "at this level retained, now targeted at the derived value.")
+    end
+    n_eta_active_meanzc = meanzc_aml === nothing ? meanzc_K_mean : meanzc_aml.n_eta_active
     # Transformed-A restricted-family port: theta_cm/xy_cm are only actually used when
     # A_coordinate_mode==:powered_aspace (cheap to compute unconditionally regardless -- O(D*Ddest),
     # negligible next to ctx build -- so both branches below can share one code path).

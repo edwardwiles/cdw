@@ -254,12 +254,13 @@ above) to get `cf_num`/`cf_denom`.
 """
 function nu_star_value_and_dgrad(θ_full::AbstractVector{Float64}, ctx)
     D = ctx.D
+    Ddest = _ctx_ddest(ctx)
     μ = θ_full[1]; σ = θ_full[2]
     Aod_offset = 3 + D
-    Aod_θ = reshape(θ_full[Aod_offset+1:Aod_offset+D^2], (D, D))
+    Aod_θ = reshape(θ_full[Aod_offset+1:Aod_offset+D*Ddest], (D, Ddest))
     γo = ctx.γ
-    lambda = reshape(γo.P, (D, D))'
-    Aod_lvl = Aod_θ .* γo.cHat .* (((γo.wHat .* γo.τ) ./ (γo.wHat[1, 1] .* γo.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
+    lambda = reshape(γo.P, (Ddest, D))'
+    Aod_lvl = Aod_θ .* γo.cHat .* (((γo.wHat .* ctx.τ) ./ (γo.wHat[1, 1] .* ctx.τ[1, :]')) .^ (1 / μ)) .* (lambda ./ lambda[1, :]')
     AodPow = (Aod_lvl ./ γo.cHat) .^ (-μ)
     γ_prime_bi = θ_full[3+D]
     cf_num, cf_denom, _ = autarky_cf_scalars(ctx.obj, AodPow, σ, γ_prime_bi)
