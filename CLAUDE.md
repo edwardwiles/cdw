@@ -54,3 +54,47 @@ concrete lessons from the same session, both confirmed live:
 that way on purpose (user directive, 2026-08-03). Do not make Melitz code depend on
 `ScientificManifest`, and do not give Melitz's own settings the same treatment without being
 asked — it wasn't part of this hardening pass.
+
+## Reusable production utility: multistart seed generator — use this, don't reinvent it
+
+**If a task needs multiple randomized-but-verified starting points for a FULL-A outer campaign
+(origin-ZC / CM+ZC / common-Fréchet, any combination), a reusable, tested, production-validated
+generator already exists.** Do not hand-invent candidate `A_od`/`gp` points, guess nu values, or
+write a one-off campaign-specific script for this — that exact anti-pattern (repeated across many
+past sessions) is precisely what this utility replaces.
+
+- **Code**: `full_aod_diag/d4_exact/multistart_seed_generator.jl` (implementation) +
+  `full_aod_diag/d4_exact/test_multistart_seed_generator.jl` (tests, run standalone the same way
+  every other `test_*.jl` file in this directory runs). Include both the same way every other
+  `cm_*` file in this directory is included (self-`include`s nothing external beyond the standard
+  d4_exact family machinery — its own header comment lists every file it needs already loaded).
+- **Full docs, API reference, worked examples, and the exact live `gp`/nu-policy formulas**:
+  `docs/audits/reproducible-multistart-generator-2026-08-08/MASTER.md` — read this before calling
+  the generator, not just this pointer.
+- **Entry point**:
+  ```julia
+  generate_multistart_seeds(ctx; M, direction, delta_max, family_specs, W, rng_seed, A_scale,
+      gp_scale=1.0, max_attempts=200, include_calibration=true, min_seed_distance=0.0,
+      output_dir) -> MultiStartSeedSet
+  ```
+  `ctx` must be built via `d20_real_setup_design(...)` (explicit `σHat`, `inner_lower_limit=-10.0`,
+  the draw design/gravity settings you actually intend) — nothing scientific is defaulted inside
+  the generator itself. `family_specs` is a plain caller-supplied `Vector{FamilySeedSpec}` (never
+  hard-wired) — `production_five_family_seed_specs(ctx)` gives the CURRENT five-family production
+  comparison (Origin-ZC/CM+ZC at K_mean=3×{K_pair=0,K_pair=3}, plus single-family common-Fréchet)
+  as one convenience preset, not the only option.
+- **Before trusting a specific `A_scale`/`gp_scale`**: these are NOT tuned defaults — an
+  aggressive scale can make every random draw genuinely infeasible (confirmed live: 0/10 vs 10/10
+  acceptance between two scale choices at the same `W`). Scan a small grid at your own `W`/
+  `delta_max` first (MASTER.md documents the exact scan pattern used to find a working scale), do
+  not assume a value from an old campaign or from the docs' own example call transfers unchanged.
+- **Nu is not something you invent per family**: it is derived deterministically from a companion
+  LFD solve at the same candidate point (never a fixed constant, never randomized) — MASTER.md
+  section 5 has the exact mechanism and why. Each origin-ZC/CM+ZC family costs TWO real KNITRO
+  solves per candidate (the companion, then the restricted family) — budget campaign wall-clock
+  accordingly, especially at `W=100_000`.
+- **Reproducibility is a tested contract**: identical `(rng_seed, family_specs, W, A_scale,
+  gp_scale)` always gives bit-identical accepted seeds and digests, independent of attempt
+  completion order — verified live at real D20/W=20000 (two independent process-cold runs, exact
+  diff match) and covered by the test suite's own reordering test. If a campaign needs a different
+  seed set, change `rng_seed`, don't work around the generator.

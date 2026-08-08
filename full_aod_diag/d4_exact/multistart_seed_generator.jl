@@ -1,6 +1,39 @@
 # Reusable production multistart seed generator for the FULL-A Ricardian robustness problem
 # (task: reproducible-multistart-generator-2026-08-08).
 #
+# ============================================================================================
+# READ THIS BEFORE WRITING A NEW CAMPAIGN-SPECIFIC SEED SCRIPT. If you need multiple randomized-
+# but-verified starting points for an outer campaign (any combination of origin-ZC/CM+ZC/common-
+# Fréchet), this file already does it -- do not hand-invent candidate A_od/gp points, guess nu
+# values, or write a one-off script; that exact pattern is what this file replaces.
+#
+# QUICK START:
+#   ctx = d20_real_setup_design(W = 100_000, δ = 1.0, find_smallest = true,
+#       draw_design = :sobol_randomized, draw_seed = 20260719, destination_sample = :exclude_row,
+#       exclude_diagonal_gravity = true, gravity_exclude_cells = default_gravity_exclude_cells_brazil_korea(),
+#       σHat = 3.0, inner_lower_limit = -10.0)   # every scientific param explicit, nothing defaulted
+#   seeds = generate_multistart_seeds(ctx;
+#       M = 5, include_calibration = true, direction = :upper, delta_max = 3.0,
+#       family_specs = production_five_family_seed_specs(ctx),   # or your own Vector{FamilySeedSpec}
+#       W = 100_000, rng_seed = 0x0000000000000001,
+#       A_scale = <SCAN THIS, see below>, gp_scale = <SCAN THIS>,
+#       max_attempts = 200, output_dir = "/path/to/campaign/seeds")
+#   # seeds.accepted :: Vector{AcceptedSeed}; output_dir/attempts.csv|.jsonl + seeds/S<k>/... are
+#   # written automatically -- do not re-implement ledger/output serialization elsewhere.
+#
+# A_scale/gp_scale are NOT tuned defaults -- an aggressive scale can make every random draw
+# genuinely infeasible (confirmed live: 0/10 vs 10/10 acceptance between two scale choices at the
+# same W). Scan a small (A_scale,gp_scale) grid at your own W/delta_max first (evaluate_attempt is
+# exposed exactly for this -- see the empirical-scan pattern in
+# docs/audits/reproducible-multistart-generator-2026-08-08/MASTER.md) before trusting any specific
+# value, including the one in this comment.
+#
+# Full API reference, the exact live gp/nu-policy formulas, reproducibility test results, and a
+# real D20/W=20000 release smoke (including a genuine 5-random-seed acceptance run) are in
+# docs/audits/reproducible-multistart-generator-2026-08-08/MASTER.md -- read that before extending
+# or debugging this file, not just this header.
+# ============================================================================================
+#
 # Replaces the one-off campaign-specific pattern (manually inventing candidate A/gp points,
 # guessing nu values, losing track of what was tried between campaigns) with a single reusable
 # utility: randomly perturb the CALIBRATION ECONOMIC POINT (free powered-a-space A coordinates +
