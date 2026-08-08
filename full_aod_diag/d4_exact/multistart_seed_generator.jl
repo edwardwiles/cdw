@@ -19,10 +19,18 @@
 #                                   target_index, scatter_nu_eff)
 #   cm_originzc_production.jl     (build_originzc_production_context, archOZ_verified_state)
 #   cm_meanzc_production.jl       (build_cm_meanzc_production_context, archC_meanzc_verified_state)
+#   cm_production_bundle.jl       (build_cm_production_context, archC_verified_state, CMExpectedSolveFailure --
+#                                   the plain CM-only companion used to derive CM+ZC's nu, section 8)
+#   cm_meanzc_moments.jl          (build_raw_mean_pair_matrix_levels, frechet_power_feature -- the
+#                                   SAME raw z^k feature construction production's own restriction
+#                                   columns use, reused here for the companion-LFD nu policy)
+#   three_way_derivatives.jl      (solve_base_state, BaseDualState -- the plain unrestricted
+#                                   ctx.obj companion solve for origin-ZC's own nu policy)
 #   cm_frechet_level.jl           (build_cm_frechet_production_context)
 #   cm_frechet_cplus.jl           (cm_frechet_production_value_verified_screened)
 #   cm_screen_bridge.jl           (cm_originzc_production_value_verified_screened,
-#                                   cm_meanzc_production_value_verified_screened)
+#                                   cm_meanzc_production_value_verified_screened,
+#                                   cm_production_value_verified_screened)
 #   cm_originzc_checkpoint.jl     (originzc_profiled_nu_value)
 #   cm_checkpoint.jl              (meanzc_profiled_nu_value)
 #   oracle.jl                     (classify_inner_result, is_verified_success, sha256_of_matrix)
@@ -45,6 +53,8 @@ for _dep in (:build_pivot_elimination, :cm_w0_from_calibration, :OriginByPowerLa
              :build_originzc_production_context, :build_cm_meanzc_production_context,
              :build_cm_frechet_production_context, :cm_originzc_production_value_verified_screened,
              :cm_meanzc_production_value_verified_screened, :cm_frechet_production_value_verified_screened,
+             :build_cm_production_context, :cm_production_value_verified_screened, :CMExpectedSolveFailure,
+             :build_raw_mean_pair_matrix_levels, :solve_base_state,
              :originzc_profiled_nu_value, :meanzc_profiled_nu_value, :classify_inner_result,
              :is_verified_success, :sha256_of_matrix, :default_gravity_exclude_cells_brazil_korea,
              :nested_grid_sequence, :attach_compressed_factual_workspace, :CS)
@@ -54,7 +64,6 @@ for _dep in (:build_pivot_elimination, :cm_w0_from_calibration, :OriginByPowerLa
 end
 
 using Random, LinearAlgebra, SHA, Serialization, Printf
-using SpecialFunctions: gamma
 
 # ============================================================================
 # 1. Family spec: the caller-supplied, non-hard-wired family list.
@@ -308,11 +317,30 @@ function precheck_candidate(x_free::AbstractVector{Float64})
 end
 
 # ============================================================================
-# 8. Deterministic nu lift (task section 9): NEVER randomized. Theoretical population-mean
-#    nu0 (gamma(1-muHat*k), the CORRECT population moment -- NOT a sample average, matching the
-#    2026-08-07 K2/K3 production fix already merged into this branch's ancestry), reduced by the
-#    focal k=(sigma-1) row-omission (Variant D) whenever K_mean>=kstar>=1, exactly mirroring the
-#    live originzc_profiled_level/meanzc_profiled_level production kwarg.
+# 8. Deterministic nu lift (task section 9): NEVER randomized, but genuinely a function of the
+#    CURRENT candidate economic point -- not a fixed theoretical constant. For each of the
+#    non-focal nu coordinates, this solves the SAME family's own unrestricted/CM-only companion
+#    member (a solve the caller needs no new machinery for -- origin-ZC's own K_mean=0/K_pair=0
+#    case, or CM+ZC's own CM-only case) at the SAME (A_od, gp) point, and reads the resulting
+#    LFD's own implied k-th raw moment of the Frechet productivity feature z_o=U_o^{-mu} as nu.
+#    Confirmed 2026-08-09 (user directive, replacing an earlier fixed-theoretical-constant policy):
+#    using a FIXED nu (independent of the candidate point) makes every mean/pair restriction
+#    artificially far more binding than the eventual campaign's own outer nu search would ever
+#    leave it -- nu is itself part of the outer search vector `w0` (`w0 = vcat(g, A_native0,
+#    eta_nu)`, cm_originzc_checkpoint.jl:752, with its own `nu_bounds`), so a THEORETICAL constant
+#    is really just an arbitrarily cold starting value, not a scientific target. The companion-LFD
+#    value is a much warmer, still-fully-deterministic starting value -- NOT full LFD-optimal nu
+#    for the RESTRICTED problem itself (that would require solving the restricted problem, which
+#    is what nu is FOR), so some genuine gap between it and the restricted problem's own eventual
+#    optimum is expected, not a bug (the mean/pair restrictions really do add binding structure
+#    beyond the unrestricted/CM-only case, by design -- see section 9 below).
+#
+#    The ONE separate, unrelated mechanism layered on top is the focal k=(sigma-1) row-omission
+#    (Variant D): whenever K_mean>=kstar>=1, that ONE coordinate is not independently identified
+#    (a collinearity issue, not a modeling choice) and must instead be derived analytically via
+#    the existing production KKT/envelope formula, then scattered back into the dense vector via
+#    scatter_nu_eff -- exactly mirroring the live originzc_profiled_level/meanzc_profiled_level
+#    production kwarg. This applies identically regardless of where the OTHER nu entries came from.
 # ============================================================================
 
 "kstar = sigma-1, the CURRENT focal profiling level. Requires sigma-1 to be a positive integer (as production's own ActiveMeanLayout(...,kstar,...) requires)."
@@ -333,7 +361,6 @@ struct FamilyBuild
     pcx::Any
     layout::Any
     aml::Any                       # ActiveMeanLayout or nothing
-    nu0_active::Vector{Float64}    # dense-omission-reduced theoretical nu0 (empty for common_frechet)
 end
 
 """
@@ -342,6 +369,8 @@ end
 Builds a FRESH production context per call (never reused across candidates -- confirmed
 correctness-critical by the 2026-08-07 K3 prior-art script: a stale internal screen/Hessian
 buffer sized for one candidate silently corrupted a structurally different candidate's solve).
+Does NOT compute nu here -- nu is a genuine function of the candidate economic point (section 8
+above), so it is computed in `evaluate_family`, which receives `x_free`.
 """
 function build_family(ctx, spec::FamilySeedSpec)
     if spec.kind == :origin_zc
@@ -349,12 +378,7 @@ function build_family(ctx, spec::FamilySeedSpec)
         kstar = profiled_level_for(ctx, spec.K_mean)
         aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
         pcx = build_originzc_production_context(ctx, CS, layout; aml = aml)
-        nu0 = Vector{Float64}(undef, n_eta(layout))
-        for k in 1:spec.K_mean, o in 1:ctx.D
-            nu0[target_index(layout, o, k)] = gamma(1 - ctx.μHat * k)
-        end
-        nu0_active = aml === nothing ? nu0 : nu0[setdiff(1:length(nu0), aml.dense_omit_idx)]
-        return FamilyBuild(spec, pcx, layout, aml, nu0_active)
+        return FamilyBuild(spec, pcx, layout, aml)
     elseif spec.kind == :cm_zc
         layout = SharedByPowerLayout(spec.K_mean, spec.K_pair)
         kstar = profiled_level_for(ctx, spec.K_mean)
@@ -362,9 +386,7 @@ function build_family(ctx, spec::FamilySeedSpec)
         pcx = build_cm_meanzc_production_context(ctx, CS; L = spec.L, K_mean = spec.K_mean, K_pair = spec.K_pair,
             include_truncated_moment = spec.include_truncated_moment, contrasts = spec.contrasts,
             meanzc_basis = spec.meanzc_basis, probs = spec.probs, moment_representation = :operator, aml = aml)
-        nu0 = [gamma(1 - ctx.μHat * k) for k in 1:spec.K_mean]
-        nu0_active = aml === nothing ? nu0 : nu0[setdiff(1:length(nu0), aml.dense_omit_idx)]
-        return FamilyBuild(spec, pcx, layout, aml, nu0_active)
+        return FamilyBuild(spec, pcx, layout, aml)
     elseif spec.kind == :common_frechet
         # cm_hessian_backend=:structured required: build_cm_frechet_production_context's own
         # default inner_fg_backend (CM_FRECHET_INNER_FG_BACKEND_DEFAULT[] = :cm_frechet_lookup)
@@ -373,13 +395,74 @@ function build_family(ctx, spec::FamilySeedSpec)
         # convention for every CM-family builder call.
         pcx = build_cm_frechet_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
             contrasts = spec.contrasts, probs = spec.probs, cm_hessian_backend = :structured, moment_representation = :operator)
-        return FamilyBuild(spec, pcx, nothing, nothing, Float64[])
+        return FamilyBuild(spec, pcx, nothing, nothing)
     else
         error("build_family: unknown family kind :$(spec.kind) for spec $(spec.id)")
     end
 end
 
-"Derived focal nu value at this economic point (nothing for common_frechet / non-profiled families) -- pure algebra, no solver call."
+"""
+    companion_implied_nu_originzc(ctx, x_free, layout_target; eval_id=0) -> Vector{Float64}
+
+Solves the truly unrestricted companion at this candidate's economic point -- the PLAIN, un-
+augmented `ctx.obj` (base economic+gravity moments only, zero ZC structure), via `solve_base_state`
+-- and reads the resulting LFD's own implied k-th raw moment of the Frechet productivity feature
+per origin: `nu_{o,k} = sum_s m_s*z_o(s)^k / sum_s m_s`, `z_o(s)^k` from
+`build_raw_mean_pair_matrix_levels`/`frechet_power_feature` -- the EXACT same feature array
+origin-ZC's own restriction columns are built from (never a hand-derived power transform; this
+codebase has a recurring U^k-vs-z^k bug history). `m` is `base.m_star` (`obj.arg1` at the
+converged companion solve = `dPsi(q*)`, the un-normalized LFD weight over the W draws) -- present
+identically on every family's `BaseDualState` (confirmed at `three_way_derivatives.jl:33`/
+`cm_production_bundle.jl:432`).
+
+NOTE: `OriginByPowerLayout` itself requires `K_mean>=1` (confirmed live 2026-08-09 -- there is no
+"K_mean=0 origin-ZC" object to construct), so the companion is NOT origin-ZC's own machinery at
+K_mean=0 -- it is the strictly simpler base `ctx.obj`, which is exactly what "zero ZC restriction"
+means anyway (origin-ZC's restriction columns are pure ADDITIONS on top of `ctx.obj`; removing all
+of them is identical to evaluating `ctx.obj` directly, not a degenerate case of the ZC machinery).
+"""
+function companion_implied_nu_originzc(ctx, x_free::AbstractVector{Float64}, layout_target::OriginByPowerLayout; eval_id::Int = 0)
+    K_mean = layout_target.K_mean
+    Zraw_all, _ = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, 0; μ = ctx.μHat)
+    base = solve_base_state(collect(x_free), ctx)
+    m = base.m_star
+    s = sum(m)
+    nu = Vector{Float64}(undef, n_eta(layout_target))
+    for k in 1:K_mean, o in 1:ctx.D
+        nu[target_index(layout_target, o, k)] = dot(m, view(Zraw_all[k], :, o)) / s
+    end
+    return nu
+end
+
+"""
+    companion_implied_nu_cmzc(ctx, x_free, spec; eval_id=0) -> Vector{Float64}
+
+CM+ZC analog: solves the plain CM-only companion (`build_cm_production_context`, the un-widened
+CM family, SAME `L`/`contrasts`/`probs` as the restricted family so the CM-grid structure
+matches) at this candidate's economic point, and pools the companion LFD's implied moment ACROSS
+ORIGINS as well as draws -- `SharedByPowerLayout`'s `nu_k` is a single value shared by every
+origin (the "common marginals" assumption), so `nu_k = sum_s sum_o m_s*z_o(s)^k / (D*sum_s m_s)`,
+equal-weighting every origin (user-confirmed pooling, 2026-08-09).
+"""
+function companion_implied_nu_cmzc(ctx, x_free::AbstractVector{Float64}, spec::FamilySeedSpec; eval_id::Int = 0)
+    K_mean = spec.K_mean
+    D = ctx.D
+    Zraw_all, _ = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, 0; μ = ctx.μHat)
+    pcx0 = build_cm_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
+        contrasts = spec.contrasts, probs = spec.probs, moment_representation = :operator)
+    _, base, verify = cm_production_value_verified_screened(collect(x_free), pcx0; eval_id = eval_id)
+    is_verified_success(verify) || throw(CMExpectedSolveFailure(
+        "companion_implied_nu_cmzc: CM-only companion failed to verify at this candidate (inner_status=$(verify.inner_status))"))
+    m = base.m_star
+    s = sum(m)
+    nu = Vector{Float64}(undef, K_mean)
+    for k in 1:K_mean
+        nu[k] = sum(dot(m, view(Zraw_all[k], :, o)) for o in 1:D) / (D * s)
+    end
+    return nu
+end
+
+"Derived focal nu value at this economic point (nothing for common_frechet / non-profiled families) -- pure algebra, no solver call. Unrelated to the companion-LFD nu policy above: this ONE coordinate is not independently identified (collinearity, not a modeling choice), see section 8's header."
 function derived_focal_nu(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64})
     fb.aml === nothing && return nothing
     if fb.spec.kind == :origin_zc
@@ -412,45 +495,53 @@ struct FamilyLiftResult
 end
 
 """
-    dense_nu_for_solve(fb, focal_nu) -> Vector{Float64}
+    dense_nu_for_solve(fb, nu0_active, focal_nu) -> Vector{Float64}
 
 Reconstructs the DENSE nu vector the real production checkpointed drivers always feed the inner
 solve, via `scatter_nu_eff` -- matching `run_originzc_upper_checkpointed`/`run_cm_upper_checkpointed`'s
 own `νvec = aml === nothing ? νvec_active : scatter_nu_eff(aml, νvec_active, ...profiled_nu_value(xf,ctx))`
 pattern (`cm_originzc_checkpoint.jl`/`cm_checkpoint.jl`) exactly. Confirmed live 2026-08-08: passing
 the ACTIVE (omission-reduced) nu vector directly to `inner_loop_internal_originzc_operator`/
-`inner_loop_internal_meanzc_operator` (the K3 prior-art script's own convention, apparently never
-actually exercised at real D20/W>=20000 scale) corrupts `mean_targets`'s `target_index` lookups --
+`inner_loop_internal_meanzc_operator` corrupts `mean_targets`'s `target_index` lookups --
 `refresh_zc_targets!`/`mean_targets` are written to consume the FULL dense nu (any placeholder value
 survives at the omitted slot, since `op.mean_active_origins`/`mean_offset`, already aml-aware from
 `ZCRestrictionOperator`'s own construction, discard it downstream) and internally handle the actual
-active-origin reduction on the OUTPUT restriction targets, not on the INPUT nu vector.
+active-origin reduction on the OUTPUT restriction targets, not on the INPUT nu vector. `nu0_active`
+is the (already active-length) companion-LFD-implied nu (section 8) -- this function only handles
+the SEPARATE focal-omission reconstruction, agnostic to where nu0_active came from.
 """
-function dense_nu_for_solve(fb::FamilyBuild, focal_nu::Union{Nothing,Float64})
-    fb.aml === nothing && return fb.nu0_active
-    return scatter_nu_eff(fb.aml, fb.nu0_active, focal_nu::Float64)
+function dense_nu_for_solve(fb::FamilyBuild, nu0_active::Vector{Float64}, focal_nu::Union{Nothing,Float64})
+    fb.aml === nothing && return nu0_active
+    return scatter_nu_eff(fb.aml, nu0_active, focal_nu::Float64)
 end
 
 function evaluate_family(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64}; eval_id::Int = 0)
     t0 = time()
-    focal_nu = derived_focal_nu(ctx, fb, x_free)
     if fb.spec.kind == :origin_zc
-        nu_dense = dense_nu_for_solve(fb, focal_nu)
+        nu0_dense = companion_implied_nu_originzc(ctx, x_free, fb.layout::OriginByPowerLayout; eval_id = eval_id)
+        nu0_active = fb.aml === nothing ? nu0_dense : nu0_dense[setdiff(1:length(nu0_dense), fb.aml.dense_omit_idx)]
+        focal_nu = derived_focal_nu(ctx, fb, x_free)
+        nu_dense = dense_nu_for_solve(fb, nu0_active, focal_nu)
         K, base, verify = cm_originzc_production_value_verified_screened(x_free, nu_dense, fb.pcx; eval_id = eval_id)
         full_vec = vcat(x_free, nu_dense)
     elseif fb.spec.kind == :cm_zc
-        nu_dense = dense_nu_for_solve(fb, focal_nu)
+        nu0_dense = companion_implied_nu_cmzc(ctx, x_free, fb.spec; eval_id = eval_id)
+        nu0_active = fb.aml === nothing ? nu0_dense : nu0_dense[setdiff(1:length(nu0_dense), fb.aml.dense_omit_idx)]
+        focal_nu = derived_focal_nu(ctx, fb, x_free)
+        nu_dense = dense_nu_for_solve(fb, nu0_active, focal_nu)
         K, base, verify = cm_meanzc_production_value_verified_screened(x_free, nu_dense, fb.pcx; eval_id = eval_id)
         full_vec = vcat(x_free, nu_dense)
     else
+        nu0_active = Float64[]
+        focal_nu = nothing
         K, base, verify = cm_frechet_production_value_verified_screened(x_free, fb.pcx; eval_id = eval_id)
         full_vec = x_free
     end
     wall = time() - t0
     cls = classify_inner_result(verify)
     layout_desc = fb.aml === nothing ? "dense" : "active_omit=$(fb.aml.dense_omit_idx)_kstar_focal=$(fb.aml.kstar)"
-    return FamilyLiftResult(fb.spec.id, fb.spec.kind, sha256_of_vector(full_vec), fb.nu0_active,
-        :deterministic_lfd_theoretical_mean, focal_nu,
+    return FamilyLiftResult(fb.spec.id, fb.spec.kind, sha256_of_vector(full_vec), nu0_active,
+        :companion_lfd_implied, focal_nu,
         verify.Delta_dual, is_verified_success(verify), verify.inner_status, Symbol(string(cls)),
         sha256_of_string(layout_desc), wall)
 end
