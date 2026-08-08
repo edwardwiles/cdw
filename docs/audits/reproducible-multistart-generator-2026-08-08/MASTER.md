@@ -138,18 +138,54 @@ the correct and only source of truth.
 fraction*(gp_target-gp_cal)` — monotone toward `gp_target` only (`fraction>=0`), so an
 upper-direction candidate can never cross into lower-direction territory or vice versa.
 
-## 5. Nu policy — deterministic LFD-based, never randomized
+## 5. Nu policy — deterministic LFD-based, never randomized, genuinely a function of the candidate
 
-`NU_POLICY = deterministic_LFD_based`, `NU_RANDOMIZED = false`.
+`NU_POLICY = companion_lfd_implied`, `NU_RANDOMIZED = false`.
 
-Two components, neither depending on the RNG:
+**Superseded design note (2026-08-09):** the first working version of this file used a FIXED
+theoretical population-mean `nu0[level=k] = gamma(1 - ctx.μHat*k)` (`SpecialFunctions.gamma`),
+identical at every candidate point. User review caught the real problem with this: nu is not a
+fixed exogenous scientific assumption imposed once — it is literally part of the same outer
+search vector as `A_od`/`gp` (`w0 = vcat(g, A_native0, eta_nu)`, `cm_originzc_checkpoint.jl:752`,
+with its own `nu_bounds`), so a fixed theoretical constant is really just a cold, arbitrary
+STARTING value, and using it made every mean/pair restriction look artificially far more binding
+than a real campaign's own outer nu search would ever leave it. Confirmed live: switching to the
+policy below raised the real 5-seed-demo acceptance rate from 5/8 attempts to 5/6 attempts at
+identical `A_scale`/`gp_scale` (section 10).
 
-1. **Theoretical population-mean nu0** (NOT a sample average — matches the 2026-08-07
-   K2/K3 production fix already merged into this branch's ancestry): `nu0[level=k] =
-   gamma(1 - ctx.μHat*k)` (`SpecialFunctions.gamma`), one shared value per `k` for CM+ZC
-   (`SharedByPowerLayout`), one value per `(origin,k)` for Origin-ZC (`OriginByPowerLayout`,
-   filled identically for every origin — matches the confirmed-working 2026-08-07 K3 prior-art
-   script, `repo_scratch/fullA_OZC_CMZC_K3_W100k_5xmultistart_upper_2026-08-07/generate_and_qualify_seeds.jl`).
+**Current policy**, two components, neither depending on the RNG, both genuinely functions of the
+CANDIDATE point (computed in `evaluate_family`, which receives `x_free`, not in `build_family`):
+
+1. **Companion-LFD-implied nu0** for every non-focal coordinate: solve the SAME family's own
+   simplest ("no restriction beyond what's structurally required") member at the SAME candidate
+   point, and read the resulting LFD's own implied k-th raw moment of the Fréchet productivity
+   feature as nu — a solve this generator effectively needs anyway, not a new mechanism.
+   - **Origin-ZC**: the companion is the fully unrestricted `ctx.obj` itself (plain economic +
+     gravity moments, zero ZC structure) via `solve_base_state` (`three_way_derivatives.jl`) — NOT
+     a degenerate origin-ZC object. `OriginByPowerLayout` itself hard-requires `K_mean>=1`
+     (confirmed live: `OriginByPowerLayout: K_mean must be >= 1, got 0`), so there is no
+     "K_mean=0 origin-ZC" to construct — and there doesn't need to be, since removing every ZC
+     restriction column from origin-ZC's own augmented objective is definitionally identical to
+     evaluating `ctx.obj` directly.
+     `nu_{o,k} = sum_s m_s*z_o(s)^k / sum_s m_s`, per origin.
+   - **CM+ZC**: the companion is the plain CM-only family (`build_cm_production_context`, same
+     `L`/`contrasts`/`probs` as the restricted family, no K-moment extension). `SharedByPowerLayout`'s
+     `nu_k` is a single value shared by every origin (the "common marginals" assumption), so the
+     companion's implied moment is POOLED across origins as well as draws:
+     `nu_k = sum_s sum_o m_s*z_o(s)^k / (D*sum_s m_s)` (equal-weighting every origin — user-
+     confirmed pooling convention, 2026-08-09).
+   - In both cases `z_o(s)^k` comes from `build_raw_mean_pair_matrix_levels`/
+     `frechet_power_feature` — the EXACT same feature array each family's own restriction columns
+     are built from (never a hand-derived power transform; this codebase has a recurring
+     U^k-vs-z^k bug history) — and `m` is `base.m_star` (`obj.arg1` at the converged companion
+     solve `= dPsi(q*)`, the un-normalized LFD weight over the W draws), present identically on
+     every family's `BaseDualState` (`three_way_derivatives.jl:33`, `cm_production_bundle.jl:432`,
+     `cm_originzc_production.jl:161`).
+   - This is NOT full LFD-optimal nu for the RESTRICTED problem itself (that would require solving
+     the restricted problem, which is what nu is for) — some genuine gap between the companion-
+     implied value and the restricted problem's own eventual optimum is expected, not a bug: the
+     mean/pair restrictions really do add binding structure beyond the unrestricted/CM-only case,
+     by design.
 2. **Focal k=(sigma-1) row-omission ("Variant D")**, applied automatically whenever
    `1<=kstar<=K_mean` (`kstar = focal_kstar(ctx) = Int(ctx.σ-1)`, erroring if `sigma-1` is not an
    integer): the dense nu0 vector's `(focal_origin=ctx.bi, level=kstar)` entry is omitted
@@ -157,15 +193,21 @@ Two components, neither depending on the RNG:
    `originzc_profiled_level`/`meanzc_profiled_level` production kwarg mechanism, not a
    reimplementation. The derived focal value itself (pure algebra, no solver call) is recorded per
    accepted seed via `originzc_profiled_nu_value`/`meanzc_profiled_nu_value` — the exact same
-   functions `cm_originzc_checkpoint.jl`/`cm_checkpoint.jl` call internally.
+   functions `cm_originzc_checkpoint.jl`/`cm_checkpoint.jl` call internally. This is a SEPARATE,
+   unrelated mechanism from the companion-LFD policy above (a collinearity/identification fix, not
+   a modeling choice) — it applies identically regardless of where the other nu entries came from.
 
 Common Fréchet needs no nu at all (confirmed: `archC_frechet_verified_state` takes no nu argument
 — purely economic-point-based).
 
+Cost implication: every origin-ZC/CM+ZC family evaluation now requires TWO real KNITRO solves
+(the companion, then the restricted family) instead of one — roughly doubling wall-clock cost for
+those two families. Worth accounting for when budgeting a real W=100k campaign's `max_attempts`.
+
 `build_family` builds a FRESH production context per call (never reused across candidates —
 confirmed correctness-critical by the 2026-08-07 K3 prior-art script's own comment: a stale
 internal screen/Hessian buffer sized for one candidate silently corrupted evaluation of a
-structurally different candidate).
+structurally different candidate); this now applies to the companion context too.
 
 ## 6. Qualification: every family, cheap-to-expensive, exact screen first
 
@@ -263,6 +305,18 @@ was completed to include `cm_frechet_hessian.jl`/`cm_frechet_lookup_production.j
 (`archC_frechet_hess_cb_builder`/`inner_loop_internal_cmfrechetlookup_production`), missing from
 an earlier draft of the bootstrap scripts.
 
+3. **Nu source design correction (post-review, 2026-08-09), not a bug in the sense above but a
+   real user-caught design flaw**: the first working version used a fixed theoretical nu0 constant
+   (see section 5's superseded-design note) rather than a value that adapts to the candidate point.
+   Fixing this required one more real discovery: `OriginByPowerLayout` hard-requires `K_mean>=1`
+   (`OriginByPowerLayout: K_mean must be >= 1, got 0`), so the natural first attempt (build
+   origin-ZC's own machinery at `K_mean=0` as the "unrestricted companion") does not compile — the
+   correct companion is the plain `ctx.obj` itself via `solve_base_state`, confirmed correct by
+   comparing it directly against the production W=20000/`draw_seed=20260719` context (succeeds
+   cleanly, `inner_status=0`) versus the W=8000 functional-test-only context (genuinely fails,
+   `nStatus=-300`, at that context's own calibration — a real small-W/non-production-seed
+   artifact, not a bug in this mechanism; see the test suite's own `twice_same_outcome` handling).
+
 ## 7. Reproducibility contract
 
 `REPRODUCIBILITY`: `attempt_based_rng: pass`, `completion_order_independent: pass` (see test
@@ -312,7 +366,10 @@ functional testing only — not the production W>=20000+ scale). Section A is pu
 ctx/KNITRO); Section B builds one real D20 context (once) and reuses it across every test that
 needs a real ctx.
 
-**Result: ALL 12 testsets PASS, 457/457 assertions, 0 failures, 0 errors.**
+**Result: ALL 13 testsets PASS, 859/859 assertions, 0 failures, 0 errors** (re-run after the
+2026-08-09 companion-LFD nu policy correction below; the Nu-lift testset now performs real
+companion + restricted solves, correctly tolerating a matching failure at this small-W/
+non-production-seed test context as well as a matching success — see that testset's own comment).
 
 | Testset | Assertions | Time |
 |---|---|---|
@@ -325,7 +382,7 @@ needs a real ctx.
 | json_scalar / csv-safe encoding | 7 | 0.2s |
 | gp directional bounds match ctx.bounds exactly | 6 | 0.0s |
 | Gravity reconstruction: decode_w_econ round-trips exactly | 3 | 2.9-3.7s |
-| Nu lift deterministic, RNG-independent, correctly length-reduced | 5 | 21.5-22.6s |
+| Nu lift (companion-LFD-implied) deterministic, RNG-independent, correctly length-reduced | 6 | ~1m07s |
 | qualify_economic_point / all-family intersection short-circuit | 3 | 10.4-21.0s |
 | Attempt cap: exits at max_attempts, fewer than M returned | 6 | 5.5-6.9s |
 | Reproducibility: identical inputs -> bit-identical digests; reordered-completion match | 5 | 11.4-16.8s |
@@ -336,13 +393,13 @@ directly: identical `(rng_seed, family_specs, W)` inputs give bit-identical
 `evaluate_attempt` schedule (task section 20's reordering scenario) reproduces the exact same
 per-attempt digests as the sequential run.
 
-## 10. D20 release smoke (task section 24)
+## 10. D20 release smoke (task section 24) + real multi-seed demonstration
 
 Ran exactly as specified: `D=20`, `W=20_000`, `sobol_randomized` (production draw design,
 `draw_seed=20260719`), `σHat=3.0`, `inner_lower_limit=-10.0`, `M=3` (including calibration),
 `direction=:upper`, `delta_max=3.0`, `A_scale=0.03`, `gp_scale=0.5`, `max_attempts=6`,
 `rng_seed=0x2026080800000001`, `production_five_family_seed_specs(ctx)`. Two independent runs
-(`run1`, `run2`), same process-cold each time.
+(`run1`, `run2`), same process-cold each time, using the final companion-LFD nu policy (section 5).
 
 **Both runs: exit code 0. `n_attempted=6, n_accepted=1, stop_reason=:attempt_limit`.**
 
@@ -351,27 +408,17 @@ Brazil-Korea data, `inner_status=0` / `VerifiedSolved` every time):
 
 | Family | Δ* | verified | inner_status |
 |---|---|---|---|
-| U_MEAN3 | 0.006306404412009799 | true | 0 (VerifiedSolved) |
+| U_MEAN3 | 0.004543848599080799 | true | 0 (VerifiedSolved) |
 | COMMON_FRECHET | 0.00503581224099289 | true | 0 (VerifiedSolved) |
-| CM_MEAN3 | 0.007711900145763122 | true | 0 (VerifiedSolved) |
-| ORIGIN_ZC_K3 | 0.0507449198300673 | true | 0 (VerifiedSolved) |
-| CMZC_K3 | 0.056995536522590234 | true | 0 (VerifiedSolved) |
+| CM_MEAN3 | 0.009018508675413817 | true | 0 (VerifiedSolved) |
+| ORIGIN_ZC_K3 | 0.05599430959227194 | true | 0 (VerifiedSolved) |
+| CMZC_K3 | 0.06522160908742689 | true | 0 (VerifiedSolved) |
 
 All five Δ* values are small and finite (consistent with a genuinely feasible point, per
-CLAUDE.md's own bimodal-Δ* observation), and the origin-ZC/CM+ZC families' `derived_focal_nu`
-(`1.2487738293117998`) lands within floating-point distance of the corresponding THEORETICAL nu0
-entry at that level (`1.2487738293118`) — expected at calibration itself, where the true point and
-the theoretical Fréchet moment should nearly coincide.
-
-None of the 6 randomized attempts (`A_scale=0.03`, `gp_scale=0.5`) qualified within
-`max_attempts=6` — 5 of 6 were rejected immediately by `U_MEAN3` (the cheapest-to-test family in
-this preset ordering), one (`attempt_id=3`) got as far as passing `U_MEAN3`
-(Δ*=0.2967) and `COMMON_FRECHET` (Δ*=0.0485) before failing `CM_MEAN3` — a genuine demonstration
-of the cheap-to-expensive short-circuit (task section 12): once `CM_MEAN3` failed, `ORIGIN_ZC_K3`/
-`CMZC_K3` were never evaluated for that attempt. `n_accepted=1 < M=3` and `stop_reason=
-:attempt_limit` are both exactly the documented/tested "no more attempts qualify" behavior, not a
-bug — a small `A_scale`/`max_attempts` smoke isn't expected to find many additional multistart
-seeds beyond calibration itself; a real campaign uses a much larger `max_attempts` budget.
+CLAUDE.md's own bimodal-Δ* observation), essentially unchanged from the earlier fixed-theoretical-
+nu numbers — expected, since AT calibration itself the companion LFD's implied moment and the
+theoretical Fréchet population moment nearly coincide by construction; the real effect of the
+nu-policy correction shows up away from calibration (below).
 
 **`run1` vs `run2` (identical inputs, independent process-cold executions): bit-identical**, confirmed
 via `diff` on both runs' full ledgers (all 7 attempts, 0-6) after stripping only wall-clock-timing
@@ -386,6 +433,42 @@ full_outer_seed.jls` — the full contract from section 12 below, produced autom
 `source_sha` recorded in both runs: `c22d831798edf0ca74df1916fb258dac89d35e85` (production tip at
 task start) — this generator's own file changes (this branch, not yet merged) are layered on top;
 see section 13 for the branch's own commit history once merged.
+
+### Real multi-seed demonstration (user-requested, 2026-08-09): does this generator actually find randomized seeds?
+
+The section-24 smoke above only demonstrates calibration (`S0`) qualifying — `A_scale=0.03`/
+`gp_scale=0.5` is deliberately too aggressive to find additional random seeds within a 6-attempt
+smoke budget (real random draws at that scale hit genuine `nStatus=-300`, a confirmed KNITRO
+infeasibility certificate — not a bug). A user review correctly flagged that this alone does not
+demonstrate the generator finding NEW randomized points, so a separate real run was executed:
+`M=5`, `include_calibration=false` (every accepted seed genuinely randomized, none of them
+calibration), `direction=:upper`, `delta_max=3.0`, `A_scale=0.002`, `gp_scale=0.02` (found by a
+direct empirical scale scan: 10/10 acceptance for the cheapest family alone at this scale, vs 0/10
+at the original 0.03/0.5), `max_attempts=40`, `W=20_000`, real D20 Brazil-Korea data, the current
+companion-LFD nu policy.
+
+**Result: `n_attempted=6, n_accepted=5, stop_reason=:target_reached`** (5/6 attempts qualified —
+up from 5/8 with the earlier fixed-theoretical-nu policy at the identical scale, a direct
+confirmation that the companion-LFD nu correction genuinely raises acceptance, not just a
+re-labeling):
+
+| Seed | attempt_id | U_MEAN3 | COMMON_FRECHET | CM_MEAN3 | ORIGIN_ZC_K3 | CMZC_K3 |
+|---|---|---|---|---|---|---|
+| S0 | 1 | 0.0048 | 0.0068 | 0.1931 | 0.0593 | 0.7494 |
+| S1 | 3 | 0.0046 | 0.0061 | 0.0109 | 0.0631 | 0.0721 |
+| S2 | 4 | 0.0062 | 0.0261 | 0.0409 | 0.0662 | 0.0981 |
+| S3 | 5 | 0.0047 | 0.0084 | 0.1403 | 0.0757 | 0.5525 |
+| S4 | 6 | 0.0046 | 0.0055 | 0.1207 | 0.0708 | 0.4866 |
+
+All 25 values real (`inner_status=0`, `VerifiedSolved`), all well under `delta_max=3`. The one
+rejected attempt (`attempt_id=2`) passed `U_MEAN3`/`COMMON_FRECHET`/`CM_MEAN3` (Δ*=2.7717, close
+to but under 3) before genuinely failing `CMZC_K3` — a real demonstration of the all-family
+short-circuit qualification logic making a genuine reject decision on real KNITRO output, not a
+rubber stamp.
+
+`A_scale`/`gp_scale` are caller-supplied parameters, not generator constants — a real campaign
+should scan/tune them for its own `W`/`delta_max` the same way this session did, rather than
+assuming the section-11 example values are universally correct.
 
 ## 11. Example calls
 
@@ -435,7 +518,9 @@ Branch `feature/reproducible-multistart-generator-2026-08-08`, based on
 
 - `e36ae39` — core generator (`multistart_seed_generator.jl`)
 - `eccc7b6` — test suite (`test_multistart_seed_generator.jl`, 12/12 passing)
-- (this commit) — docs (this file)
+- `8d9eff3` — docs (D20 smoke results, superseded by the results in this file's current form)
+- `fc2dddb` — companion-LFD-implied nu policy (post-review correction, section 5), 13/13 tests passing
+- (this commit) — docs update: final nu policy, real 5-seed demonstration, corrected verdict block
 
 Not yet rebased/merged/tagged/pushed to `origin/production/fullA-exact` — awaiting explicit
 confirmation before any of those steps (repo convention: never merge/push to the real remote
@@ -470,7 +555,8 @@ UPPER_GP_ENDPOINT = ctx.bounds.gamma_prime_lo = lambda_dd^(1/sigma)  (theoretica
 
 LOWER_GP_ENDPOINT = ctx.bounds.gamma_prime_hi = 1.0  (kappa=0, zero GT)
 
-NU_POLICY = deterministic_LFD_based
+NU_POLICY = companion_lfd_implied (origin-ZC: plain ctx.obj via solve_base_state; CM+ZC: plain
+    CM-only family, pooled across origins -- see section 5; NOT a fixed theoretical constant)
 NU_RANDOMIZED = false
 
 FAMILY_PRESET =
