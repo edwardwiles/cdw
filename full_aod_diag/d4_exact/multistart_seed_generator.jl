@@ -929,11 +929,33 @@ function generate_multistart_seeds(ctx;
                     sid = "S$(length(accepted))"
                     push!(accepted, AcceptedSeed(sid, global_attempt_id, res.w_econ, res.economic_digest, res.gp,
                         res.A_radius, res.A_radius, res.gp_fraction, res.family_results))
-                    if length(accepted) >= M
-                        stop_reason = :target_reached
-                        block_loop_done = true
-                        break
-                    end
+                end
+                # Live progress + incremental checkpoint (2026-08-08): without this, a long real
+                # run gives ZERO visibility until it either finishes or is killed -- confirmed live
+                # this is a genuine usability problem, not a cosmetic one, when running unattended
+                # overnight. Prints one line per attempt and re-writes the FULL output set (cheap;
+                # write_seed_set overwrites in place) after every attempt, not just on acceptance,
+                # so `tail -f attempts.csv` / re-reading seeds/manifest.jls at any time reflects
+                # real, current progress -- including whatever has been accepted SO FAR if this
+                # process is killed mid-run.
+                println("[multistart] attempt ", global_attempt_id, "/", max_attempts, " block=", block_id,
+                    " accepted=", accepted_flag, reason === nothing ? "" : " reason=$(reason)",
+                    " families_reached=", length(res.families_attempted), "/", length(family_specs),
+                    " progress=", length(accepted), "/", M, " wall=", round(res.wall_seconds, digits = 1), "s")
+                flush(stdout)
+                let interim_request = (M = M, direction = direction, delta_max = delta_max,
+                        family_ids = [s.id for s in family_specs], W = W, rng_seed = rng_seed, A_scale = A_scale,
+                        gp_scale = gp_scale, max_attempts = max_attempts, include_calibration = include_calibration,
+                        min_seed_distance = min_seed_distance, max_concurrency = max_concurrency,
+                        radius_mode = radius_mode, output_dir = String(output_dir), scale_schedule = scale_schedule)
+                    interim = MultiStartSeedSet(manifest_digest, src_sha, interim_request, accepted, ledger,
+                        global_attempt_id, length(accepted), :in_progress)
+                    write_seed_set(interim, output_dir)
+                end
+                if accepted_flag && length(accepted) >= M
+                    stop_reason = :target_reached
+                    block_loop_done = true
+                    break
                 end
             end
         end
