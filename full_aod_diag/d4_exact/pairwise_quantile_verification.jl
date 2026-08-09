@@ -51,7 +51,11 @@ function verify_inner_solution_operator_pairwisequantile!(zeta::Float64, lambda:
         error("verify_inner_solution_operator_pairwisequantile!: length(lambda)=$(length(lambda)) != ncore1+nM+nP=$(ncore1+nM+nP)")
 
     λ_E = @view lambda[1:ncore1]
-    λ_M = reshape(@view(lambda[ncore1+1:ncore1+nM]), D, 4)
+    # Same o-major/a-major reshape convention fix as pairwise_quantile_production.jl's dual_index! --
+    # marginal_row(o,a)=(o-1)*4+a is O-MAJOR; reshape(v,D,4) is column-major (A-MAJOR). Must match
+    # the ACTUAL KNITRO solution vector's layout (dual_index!'s own convention) for this
+    # independent recompute to read the right lambda values.
+    λ_M = reshape(@view(lambda[ncore1+1:ncore1+nM]), 4, D)'
     λ_P = reshape(@view(lambda[ncore1+nM+1:ncore1+nM+nP]), 4, 4, npair)
 
     r = fill(-zeta, W)

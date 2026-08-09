@@ -19,10 +19,10 @@
 # ================================================================================================
 
 "Row index of marginal (origin o, bin a) within the restriction-only Hfull block."
-marginal_row(o::Int, a::Int) = (o - 1) * 4 + a
+marginal_row(o::Integer, a::Integer) = (Int(o) - 1) * 4 + Int(a)
 
 "Row index of pair cell (pidx, bin a of pairs[pidx][1], bin b of pairs[pidx][2]) within the block."
-pair_row(D::Int, pidx::Int, a::Int, b::Int) = n_marginal_rows(D) + (pidx - 1) * 16 + (b - 1) * 4 + a
+pair_row(D::Integer, pidx::Integer, a::Integer, b::Integer) = n_marginal_rows(Int(D)) + (Int(pidx) - 1) * 16 + (Int(b) - 1) * 4 + Int(a)
 
 "origin_slot(op,pidx,o): 1 if o==pairs[pidx][1], 2 if o==pairs[pidx][2], else 0 (disjoint)."
 function origin_slot(op::PairwiseQuantileOperator, pidx::Int, o::Int)

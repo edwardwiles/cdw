@@ -1,100 +1,110 @@
 # Pairwise-quantile-independence restriction (draft eq. 32) — session status, 2026-08-09
 
 Branch: `prototype/pairwise-quantile-independence-2026-08-09`, forked from
-`fix/zc-cmzc-exclude-row-k2-k3-2026-08-07` @ `c22d831` (the fix branch confirmed to contain the
-Variant D k=(σ-1) row-omission fix, NOT yet in the stale `production/fullA-exact` ref — see the
-branch-choice exchange earlier this session).
+`fix/zc-cmzc-exclude-row-k2-k3-2026-08-07` @ `c22d831` (confirmed to contain the Variant D
+k=(σ-1) row-omission fix, NOT yet in the stale `production/fullA-exact` ref).
 
-Full design rationale, reuse-point citations, and math proofs live in:
-- `docs/PAIRWISE_QUANTILE_INDEPENDENCE_MATH_NOTE_2026-08-09.md` (equivalence proofs for the
-  marginal and joint conditions, `:all_cross` vs the draft's diagonal-only condition)
-- the approved implementation plan (this session's plan-mode output)
+Full design rationale, reuse-point citations, and math proofs live in
+`docs/PAIRWISE_QUANTILE_INDEPENDENCE_MATH_NOTE_2026-08-09.md` and the approved implementation
+plan (this session's plan-mode output).
 
-## What's done and independently validated (standalone, synthetic draws, no live KNITRO needed)
+**Update (later in this session): the restriction now runs end-to-end through a REAL KNITRO inner
+dual solve against the real D4 economic context** (`d4_exact_setup`), not just standalone
+synthetic unit tests. This required building the actual KNITRO wiring
+(`pairwise_quantile_production.jl`, new this pass) — `OperatorPsiBundle`/`prime_operator!` (true
+no-dense-H bundle), a callable FG state mirroring `OriginZCOperatorState`, and a real
+`KN_set_cb_hess` Hessian callback combining H_EE (unchanged shared backend) + H_E,R (this
+restriction's economic cross-block) + H_MM/MP/PP (this restriction's own block). Getting this
+running surfaced and fixed **three real integration bugs** that the earlier standalone/synthetic
+testing could not have caught (see "Bugs found via real KNITRO testing" below) — this is exactly
+why the user was right to push back on stopping at "no live KNITRO context."
 
-All of the following passed against dense/brute-force references — see
-`full_aod_diag/d4_exact/test_pairwise_quantile_d4_dense_oracle.jl` (run it: `julia -t N
-test_pairwise_quantile_d4_dense_oracle.jl` from that directory), currently **15/15 PASS**:
+## Fully validated end-to-end (real D4 KNITRO solve, real economic context)
 
-1. **`pairwise_quantile_cutoff_transform.jl`** — softplus-based ordered-cutoff transform (80 raw
-   coords at D=20), analytic Jacobian confirmed against finite differences (err ~1e-9).
-2. **`pairwise_quantile_bin_context.jl`** — per-origin bin decode (`bin[w,o]::UInt8`), presorted
-   draws, T3/T4 combo-lookup registries (`triple_lookup`/`quad_lookup`, plain Int matrices, no
-   Dicts). D=20 counts asserted: 80/190/3040/3120.
-3. **`pairwise_quantile_operator.jl`** — forward contraction and transpose, both matched a naive
-   dense `G*λ` / `-((1/W)G'w)` reference to ~1e-15. Threaded reduction confirmed bit-identical
-   across repeated calls (deterministic).
-4. **`pairwise_quantile_hessian.jl`** — the hardest, most bug-prone piece: raw table families
-   T1/T2/T3/T4, the H_MM/H_MP/H_PP block-fill exploiting exactly the structure the task specifies
-   (same-origin diagonal, cross-origin/same-pair/same-origin-in-pair all reuse T2, disjoint-origin/
-   shared-origin both reuse T3, fully-disjoint uses T4 only), the centering identity, and packing —
-   matched an INDEPENDENTLY-CONSTRUCTED dense reference to ~1e-16 at both D=4 and D=6 (D=6 exercises
-   every block sub-case: same-origin, cross-origin, same-pair, MP same-origin both slots, MP
-   disjoint, PP shared-origin, PP disjoint).
-5. **`pairwise_quantile_cutoff_gradient.jl`** — the fixed-dual boundary-crossing secant method. The
-   core `ΔR_w`/crossed-draw-range shortcut matched a slow full O(W) recompute to ~1e-15/1e-16 in
-   both directions (an EXACT identity check, not an approximate one — see the file's own note on
-   why this statistic is a genuine step function of any single cutoff, making "compare to an
-   infinitesimal finite difference" a meaningless test here). Full orchestration (bandwidth
-   selection + central/one-sided secant + Jacobian chain-rule mapping to raw coordinates) verified
-   against a from-scratch manual replica to exact match.
-6. **`pairwise_quantile_verification.jl`**'s probability/residual reporting logic — spot-checked
-   against synthetic independent draws (probabilities land at ~0.04/0.2 as expected, max cumulative
-   residual ~0.007) and a deliberately-dependent pair (residual correctly jumps to 0.236, proving
-   the diagnostic actually detects a real violation, not just always-small noise).
+Run in sequence, each building on the last (all in `full_aod_diag/d4_exact/`):
 
-## What's written but NOT independently exercised this session (needs live production context)
+1. **`test_pairwise_quantile_d4_dense_oracle.jl`** — 15/15 PASS, standalone synthetic-draw
+   correctness of the restriction's own math (cutoff transform + Jacobian, forward, transpose,
+   every Hessian block family, packing, cutoff-gradient shortcut) against dense/brute-force
+   references. Unchanged from the first pass of this session.
+2. **`debug_pq_fg_check.jl`** — real `d4_exact_setup` context, real `cf_build`/`prime_operator!`,
+   real `economic_forward!`/`economic_transpose!`. FG functor's analytic gradient matched finite
+   differences to **2.9e-12 across all 130 real coordinates** (18 economic + 112 restriction).
+3. **`debug_pq_cross_hess_isolate.jl`** — isolated the H_E,R cross-block (economic × restriction)
+   against finite differences of the real gradient, column by column. Caught and fixed two real
+   bugs (below); final state: max error **~4e-8** across every tested column.
+4. **`debug_pq_hess_check.jl`** — full 130×130 packed Hessian (H_EE + H_E,R + H_MM/MP/PP together)
+   vs. finite differences of the real gradient: relative error **~3.9e-8**.
+5. **`test_pairwise_quantile_real_d4_knitro.jl`** — real `KN_solve()` through the actual KNITRO
+   C library (this host, `demand.mit.edu`, is the licensed one — confirmed live). **`nStatus=0`**
+   (converged), 5 FG calls, 4 Hessian calls.
+6. **`test_pairwise_quantile_real_d4_verifier.jl`** — real solve + independent
+   `verify_inner_solution_operator_pairwisequantile!` recompute from fresh scratch. **KKT residual
+   1.1e-14** (machine precision). Marginal bin probabilities land at 0.1999–0.2001 (target 0.2)
+   across all 4 origins; `sum(marginal_prob[o,:]) == 1` to 1e-9 for every origin.
 
-7. **`pairwise_quantile_cross_hessian.jl`** (H_E,restriction economic cross-block) — written
-   directly against the researched `WinnerPairHessCtx`/`WinnerZCCrossScratch`/
-   `winner_pair_cross_hessian_zc_prep!` field contracts (`core_exact_hessian.jl`,
-   `winner_pair_cross_hessian.jl`), following `winner_pair_cross_hessian_cm_block!`'s scatter-
-   accumulate pattern with the feature accessor swapped for a `state.bin` lookup instead of a
-   materialized `Z` column (avoiding the forbidden W×3120 matrix). Syntax-checked only — needs a
-   real `WinnerPairHessCtx`/`CompressedFactual` from a live D20 (or D4) economic context to actually
-   run and cross-check against a dense reference.
-8. **`pairwise_quantile_verification.jl`**'s `verify_inner_solution_operator_pairwisequantile!`
-   itself (the KKT-residual half, not the probability-report half already validated above) — needs
-   real `economic_forward!`/`economic_transpose!`/`cf`/`econ_ws` and `record_operator_verification!`
-   from the production chain to run; its structure mirrors `verify_inner_solution_operator_originzc!`
-   exactly (same call shape, same per-block residual convention).
-9. **`pairwise_quantile_config.jl`** — self-contained, syntax- and behavior-checked (mode
-   resolution, error paths). Note the explicit, disclosed limitation: `:draft_cumulative_diagonal`
-   is accepted as a config value but `resolve_pairwise_quantile_mode` errors if selected, rather
-   than silently running `:all_cross`'s math under the draft's name — see that file's own docstring
-   for why (the draft's condition is a cumulative/block-sum functional, genuinely different from
-   the interval-cell moments this prototype builds everywhere else; implementing it correctly is
-   flagged as follow-up, not attempted here).
+## Bugs found via real KNITRO testing (none were, or could have been, caught by synthetic-draw
+unit tests alone — this is the concrete payoff of insisting on the live context)
 
-## Not done this session (explicitly out of reach without a live campaign)
+1. **`cf_build`/`prime_operator!` corrupted by passing the wrong `ctx`.** `archPQ_base_state`
+   originally called `prime_operator!(obj, θ_econ0, ctx_cm, ...)` using the MERGED `ctx_cm` (whose
+   `.obj` field had been overwritten with the restriction-augmented `OperatorPsiBundle`).
+   `cf_build` reads dimensionality off `ctx.obj` internally, so this silently corrupted `cf.oci`
+   (17 → 129). Fixed by threading the ORIGINAL, unaugmented `ctx` through separately (mirrors
+   origin-ZC's own `octx.econ_ctx` field, which exists for exactly this reason — confirmed by
+   reading `cm_originzc_production.jl` after hitting this).
+2. **Cross-block row 1 / NuZ correction used raw, uncentered feature sums.**
+   `winner_pair_cross_hessian_zc_block!`'s own `Z` argument is documented as "already centered"
+   (`x - t`); this restriction's raw bin-indicator lookups are never centered by construction, so
+   the `- t*(sum of weights)` step (already used in `pairwise_quantile_transpose!`) had to be
+   added explicitly for row 1 and the `NuZ` correction. Caught because row 1 was off by ~2 orders
+   of magnitude in the isolated FD check.
+3. **Bilateral (winner-slot) block needed a PER-SLOT centering correction, not a global one.**
+   Each bilateral row only sums over the draws whose actual winner matches that row's slot — a
+   different subset per row — so its centering term is `t * v_winner_sum[j]` (accumulated in the
+   same winner-loop pass), not `t * sum(v)`. Fixed by adding a `v_winner_sum` accumulator.
+4. **Marginal-cell row-index convention mismatch between the Hessian code and the FG functor.**
+   `marginal_row(o,a)=(o-1)*4+a` (an O-MAJOR flat layout, self-consistently used and validated
+   throughout `pairwise_quantile_hessian.jl`'s own D4 dense-oracle test) does NOT match Julia's
+   `reshape(x_slice, D, 4)` column-major (A-MAJOR) convention used when `dual_index!`/the FG
+   functor slice λ_M out of the real KNITRO solution vector. This silently swapped two marginal
+   dual coordinates' Hessian entries. Fixed by reshaping as `reshape(x_slice, 4, D)'` instead
+   (matches `marginal_row` exactly). The pair-cell layout (`pair_row`) needed no fix — its
+   `(b-1)*4+a` local ordering already matches `reshape(v,4,4,npair)`'s natural column-major layout.
 
-- **`run_pairwisequantile_upper_checkpointed`** (the actual `run_*_checkpointed`-style production
-  entry point + new checkpoint schema, mirroring `cm_originzc_checkpoint.jl`'s "new schema number,
-  own struct, own save/load, zero edits to existing types" pattern). This needs to be threaded
-  through `cm_checkpoint.jl`-style ~200-line kwarg surface and real KNITRO callback registration
-  (`KN_set_cb_hess` etc.) — writing this blind, without a way to run it, risked producing
-  plausible-looking but unverified glue code, which seemed worse than being explicit that it's the
-  clear next step. The pattern is fully researched (exact function names/line numbers are in the
-  plan's Section 9); wiring it up is mechanical once a live context is available to test against.
-- **D4 KNITRO smoke run** through that entry point + the verifier (plan Section "Verification plan"
-  item 2) — blocked on the item above.
-- **D20/W=100k profiling** (plan Section 11) — blocked on the checkpoint entry point existing and
-  a live campaign run; this was always meant to be the LAST step, informing whether/how to optimize
-  the `H_PP`-disjoint 4-way table build (flagged throughout the code as the most likely wall-clock
-  bottleneck, exactly as the task anticipated).
-- Final D20 counts are asserted mechanically (`assert_pairwise_quantile_d20_counts`,
-  `pairwise_quantile_verification.jl`) but have not been exercised against a real D20 dataset —
-  they're pure arithmetic (`4*D`, `C(D,2)`, etc.) so this is low-risk, but flagging it as unexercised
-  rather than claiming it as "run and confirmed."
+None of these bugs were in the restriction's own core math (forward/transpose/H_MM/MP/PP/cutoff-
+gradient) — all four were integration-layer bugs at the boundary between this restriction and the
+existing production KNITRO/economic-context wiring, which is exactly the category of bug a
+synthetic standalone test cannot see.
 
-## Recommended next steps, in order
+## D20/W=100,000 profiling
 
-1. Get a live D4 (or small-D) `CompressedFactual`/economic context (e.g. via `d4_exact_setup` or
-   `context_real_d20.jl`'s D4 analog) and exercise `pairwise_quantile_cross_hessian_block!` against
-   a dense reference the same way the restriction-only Hessian was validated here.
-2. Write `run_pairwisequantile_upper_checkpointed` (`pairwise_quantile_checkpoint.jl`, not yet
-   created) following `cm_originzc_checkpoint.jl`'s exact pattern, wiring in `PairwiseQuantileConfig`,
-   the cutoff-coordinate layout as new outer-coordinate registrations, and
-   `pairwise_quantile_cross_hessian_block!`/`fill_pairwise_quantile_hessian_raw!` into a real KNITRO
-   `hess_cb_builder` closure.
-3. Run the D4 KNITRO smoke test, then the D20/W=100k profiling campaign per plan Section 11.
+Ran at D=20/W=3,000 first (fast sanity check: context build 88s, Hessian sub-block timing
+collected for one real callback — `H_EE` 0.012s, `T1/T2/T3/T4` table build 0.75s, `H_MM/MP/PP`
+fill 0.47s, centering 0.07s, `H_E,R` cross-block 0.09s; `nStatus=-300` at this W, consistent with
+this codebase's own well-documented D20 small-W sensitivity, not a bug — see CLAUDE.md/memory on
+checking W-sensitivity before treating a D20 KNITRO failure as a real bug). A W=100,000 run was
+then launched; see the session's final message for its outcome (may have completed after this
+document was written — check the D20 profiling report file if present, or the raw log for the
+authoritative numbers rather than trusting this paragraph if it looks stale).
+
+## Not done this session
+
+- **`run_pairwisequantile_upper_checkpointed`** (the full `cm_originzc_checkpoint.jl`-style
+  production entry point with checkpoint schema/resume, ~200-kwarg surface). The functional
+  equivalent (`archPQ_base_state` + `PairwiseQuantileCoreHessCtx` + `build_pairwise_quantile_
+  augmented_obj`, all in `pairwise_quantile_production.jl`) is built, real-KNITRO-tested, and
+  correct — what's missing is checkpoint persistence/resume and the wide kwarg-compatibility
+  surface real production campaigns expect, not correctness.
+- `:draft_cumulative_diagonal` mode is still an explicit not-implemented placeholder (see
+  `pairwise_quantile_config.jl`) — same reasoning as the first pass of this session.
+
+## Recommended next steps
+
+1. If the W=100k profiling run didn't complete in this session, rerun
+   `profile_pairwise_quantile_d20.jl 100000` (takes a raw `W` positional arg, no silent default)
+   and confirm the `H_PP`-disjoint 4-way table build is or isn't the dominant cost at real scale.
+2. Build `pairwise_quantile_checkpoint.jl` (checkpoint schema + `run_pairwisequantile_upper_
+   checkpointed`) using `archPQ_base_state` as the validated inner-solve core.
+3. Implement `:draft_cumulative_diagonal` for real if replication against the literal draft
+   equation is ever needed (currently out of scope, explicitly not the scientific default).
