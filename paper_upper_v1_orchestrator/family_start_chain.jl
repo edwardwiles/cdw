@@ -138,43 +138,31 @@ function call_unrestricted_driver(w0::Vector{Float64}, delta::Float64; label::St
                                    maxtime_real::Float64, checkpoint_interval_s::Float64, algo_kwargs::NamedTuple,
                                    gp_fixed::Union{Nothing,Float64} = nothing, verbose::Bool = true)
     grav = default_gravity_exclude_cells_brazil_korea()
-    if gp_fixed === nothing
-        # Stage A / Stage C -- the real, primary/alternate constrained push.
-        r = run_polish_checkpointed_unified(label, SCI["find_smallest"], w0;
-            layout = UNRESTRICTED_LAYOUT, theta_lo = NaN, theta_hi = NaN,
-            maxtime_real = maxtime_real, W_in = SCI["W"], delta_in = delta,
-            draw_seed_in = SCI["draw_seed"], draw_design_in = sym(SCI["draw_design"]),
-            ckpt_dir = ckpt_dir, checkpoint_interval_s = checkpoint_interval_s,
-            destination_sample = sym(SCI["destination_sample"]), exclude_diagonal_gravity = SCI["exclude_diagonal_gravity"],
-            gravity_exclude_cells = grav, σHat = SCI["sigma"], inner_lower_limit = SCI["inner_lower_limit"],
-            algo_kwargs...)
-        best = r.best_feasible === nothing ? nothing : (gp = r.best_feasible.gp, w = r.best_feasible.w,
-            Delta = r.best_feasible.Delta, n_eval = r.best_feasible.n_eval, t = r.best_feasible.t_elapsed)
-        return (best = best, knitro_status = r.knitro_status, n_eval = r.n_eval, n_grad = r.n_grad_calls)
-    else
-        # Stage B / Stage R0 -- fixed-gp Delta restoration via the PRE-EXISTING unconstrained
-        # objective=Delta driver (this family never needed the new objective_mode kwarg -- it
-        # already had exactly this mechanism, see project CLAUDE.md's own note that this stage
-        # "never optimized gp" by construction).
-        isapprox(w0[1], gp_fixed; atol = 1e-10) ||
-            error("call_unrestricted_driver: w0[1]=$(w0[1]) does not match gp_fixed=$gp_fixed")
-        # run_profile_checkpointed now requires σHat/inner_lower_limit explicitly (2026-08-09 fix,
-        # c10_d20_production_driver.jl) -- it was previously silently defaulting σHat to 2.5
-        # internally (never forwarded to its own d20_real_setup_design call) and had no way to
-        # accept inner_lower_limit at all. A prior pass here (comment previously read "run_profile_
-        # checkpointed has NO inner_lower_limit kwarg... production callers never pass it either")
-        # tried passing it, hit a MethodError against the THEN-current signature, and gave up on
-        # the real fix instead of adding the kwarg upstream -- exactly the anti-pattern CLAUDE.md
-        # warns about. Both are now required, no-default kwargs on run_profile_checkpointed itself.
-        r = run_profile_checkpointed(label, gp_fixed, SCI["find_smallest"], w0[2:end];
-            maxtime_real = maxtime_real, W_in = SCI["W"], delta_in = delta, draw_seed_in = SCI["draw_seed"],
-            draw_design_in = sym(SCI["draw_design"]), ckpt_dir = ckpt_dir, checkpoint_interval_s = checkpoint_interval_s,
-            destination_sample = sym(SCI["destination_sample"]), σHat = SCI["sigma"],
-            inner_lower_limit = SCI["inner_lower_limit"])
-        best = r.best === nothing ? nothing : (gp = gp_fixed, w = vcat(gp_fixed, r.best.zfree), Delta = r.best.Delta_dual,
-            n_eval = r.best.n_eval, t = r.best.t_elapsed)
-        return (best = best, knitro_status = r.knitro_status, n_eval = r.n_eval, n_grad = r.n_grad_calls)
-    end
+    # Stage A/C (gp_fixed===nothing, objective_mode=:min_gp) and Stage B/R0 (gp_fixed set,
+    # objective_mode=:min_delta_fixed_gp) now go through the SAME run_polish_checkpointed_unified
+    # driver, SAME UNRESTRICTED_LAYOUT, SAME context-build machinery throughout -- 2026-08-09 fix.
+    # Previously Stage B routed through a SEPARATE, older function (run_profile_checkpointed) with
+    # its own hardcoded :legacy_z coordinate machinery and no `layout` kwarg at all, requiring an
+    # error-prone coordinate conversion between the two that -- despite being independently proven
+    # mathematically exact against a real production-scale verified-feasible checkpoint -- still
+    # did not resolve Stage B's systematic infeasibility (see the paper-upper-v1-unrestricted-
+    # stage-b-layout-bug-2026-08-09 memory for that full, ultimately-inconclusive investigation).
+    # Using the identical driver/layout for both stages removes the cross-function boundary
+    # entirely rather than trying to bridge it correctly -- exactly mirroring how the OTHER four
+    # families already do Stage B (run_cm_upper_checkpointed/run_originzc_upper_checkpointed with
+    # objective_mode=:min_delta_fixed_gp, added 2026-08-08) via one shared driver, not two.
+    r = run_polish_checkpointed_unified(label, SCI["find_smallest"], w0;
+        layout = UNRESTRICTED_LAYOUT, theta_lo = NaN, theta_hi = NaN,
+        maxtime_real = maxtime_real, W_in = SCI["W"], delta_in = delta,
+        draw_seed_in = SCI["draw_seed"], draw_design_in = sym(SCI["draw_design"]),
+        ckpt_dir = ckpt_dir, checkpoint_interval_s = checkpoint_interval_s,
+        destination_sample = sym(SCI["destination_sample"]), exclude_diagonal_gravity = SCI["exclude_diagonal_gravity"],
+        gravity_exclude_cells = grav, σHat = SCI["sigma"], inner_lower_limit = SCI["inner_lower_limit"],
+        gp_fixed = gp_fixed, objective_mode = gp_fixed === nothing ? :min_gp : :min_delta_fixed_gp,
+        algo_kwargs...)
+    best = r.best_feasible === nothing ? nothing : (gp = r.best_feasible.gp, w = r.best_feasible.w,
+        Delta = r.best_feasible.Delta, n_eval = r.best_feasible.n_eval, t = r.best_feasible.t_elapsed)
+    return (best = best, knitro_status = r.knitro_status, n_eval = r.n_eval, n_grad = r.n_grad_calls)
 end
 
 # ============================================================================

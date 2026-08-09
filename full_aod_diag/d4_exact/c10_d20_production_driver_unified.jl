@@ -187,6 +187,21 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         # own kwarg of the same name. Production value -10.0
         # (docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md).
         inner_lower_limit::Float64,
+        gp_fixed::Union{Nothing,Float64} = nothing,   # paper_upper_v1 Stage B fix (2026-08-09):
+        # when set, pins the outer gp coordinate's box bounds to a degenerate [gp_fixed, gp_fixed]
+        # point, so the outer solve only optimizes over the A-block while gp is held fixed.
+        # `nothing` (default): zero behavior change, gp remains free within its normal box.
+        objective_mode::Symbol = :min_gp,   # paper_upper_v1 Stage B fix (2026-08-09): `:min_gp`
+        # (default) is the ORIGINAL, unchanged NLP -- minimize/maximize gp subject to Delta<=delta.
+        # `:min_delta_fixed_gp` is a NEW NLP over the SAME free coordinates/box/value+gradient
+        # machinery, framed the other way: gp is REQUIRED fixed (via gp_fixed, checked below),
+        # there is NO Delta<=delta constraint, and the objective is Delta_dual itself -- exactly
+        # mirroring run_cm_upper_checkpointed's own :min_delta_fixed_gp mode (cm_checkpoint.jl,
+        # added 2026-08-08), applied here so Stage A/Stage B for the UNRESTRICTED family can go
+        # through this SAME driver/layout/context (no separate run_profile_checkpointed call, no
+        # coordinate-conversion boundary between them at all). Not supported in combination with
+        # layout.trade_elasticity_mode==:flexible (not needed by paper_upper_v1, which only uses
+        # :fixed for UNRESTRICTED -- errors below if combined).
         )   # architecture/production-operator-bundle-hardening-2026-07-30: the moment_representation
         # kwarg that previously lived here is REMOVED, not defaulted -- production runners must not
         # accept a representation choice at all (task §2). This function now always constructs
@@ -199,6 +214,12 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         error("run_polish_checkpointed_unified($label): :flexible requires theta_lo/theta_hi")
     layout.gp_coordinate_mode == :scaled_log && gp_scale === nothing &&
         error("run_polish_checkpointed_unified($label): :scaled_log requires gp_scale")
+    objective_mode in (:min_gp, :min_delta_fixed_gp) ||
+        error("run_polish_checkpointed_unified($label): objective_mode must be :min_gp|:min_delta_fixed_gp, got :$objective_mode")
+    objective_mode == :min_delta_fixed_gp && gp_fixed === nothing &&
+        error("run_polish_checkpointed_unified($label): objective_mode=:min_delta_fixed_gp requires gp_fixed to be set")
+    objective_mode == :min_delta_fixed_gp && layout.trade_elasticity_mode == :flexible &&
+        error("run_polish_checkpointed_unified($label): objective_mode=:min_delta_fixed_gp is not supported with layout.trade_elasticity_mode=:flexible (not needed by any current caller)")
 
     mkpath(ckpt_dir)
     resumed = resume_from === nothing ? nothing : load_checkpoint_unified(resume_from)
@@ -325,6 +346,14 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         w_lo = vcat(gp_coord_lo, w0[2:end] .- a_halfwidth)
         w_hi = vcat(gp_coord_hi, w0[2:end] .+ a_halfwidth)
     end
+    if gp_fixed !== nothing
+        isapprox(w0[1], gp_fixed; atol = 1e-10) ||
+            error("run_polish_checkpointed_unified($label): w0[1]=$(w0[1]) does not match gp_fixed=$gp_fixed " *
+                  "-- caller must construct w0 with the SAME pinned gp value, not rely on KNITRO to move it there.")
+        gp_fixed_coord = encode_gp(gp_fixed, layout, gp_scale)
+        w_lo[1] = gp_fixed_coord
+        w_hi[1] = gp_fixed_coord
+    end
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, "csw_outer_wallclock_$(hessopt_tag).opt"))
@@ -340,8 +369,12 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
     KNITRO.KN_set_var_upbnds_all(kc, w_hi)
     KNITRO.KN_set_var_primal_init_values_all(kc, w0)
-    cIndices = KNITRO.KN_add_cons(kc, 1)
-    KNITRO.KN_set_con_upbnd(kc, cIndices[1], ctx_base.δ)
+    # :min_delta_fixed_gp mirrors run_cm_upper_checkpointed's own unconstrained-objective=Delta NLP
+    # (Int32[] eval-callback constraint indices, no KN_add_cons at all) -- gp is already pinned to
+    # a degenerate box above via gp_fixed, so there is nothing left for a Delta<=delta constraint
+    # to gate; Delta itself becomes the objective in cb_F!/cb_G! below.
+    cIndices = objective_mode == :min_gp ? KNITRO.KN_add_cons(kc, 1) : Int32[]
+    objective_mode == :min_gp && KNITRO.KN_set_con_upbnd(kc, cIndices[1], ctx_base.δ)
 
     last_F_state = Ref{Union{Nothing,NamedTuple}}(nothing)
     seed_cand_feasible = r0.inner_status in FEASIBLE_CODES && isfinite(r0.Delta_dual) && r0.Delta_dual <= ctx_base.δ + 1e-6
@@ -394,8 +427,12 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         end
         Δ = r.Delta_dual
         gp_idx = layout.trade_elasticity_mode == :flexible ? 2 : 1
-        evalResult.obj[1] = find_smallest ? w[gp_idx] : -w[gp_idx]
-        evalResult.c[1] = Δ
+        if objective_mode == :min_gp
+            evalResult.obj[1] = find_smallest ? w[gp_idx] : -w[gp_idx]
+            evalResult.c[1] = Δ
+        else   # :min_delta_fixed_gp -- gp is pinned (degenerate box), objective IS Delta itself
+            evalResult.obj[1] = Δ
+        end
         n_eval[] += 1
         t_el = time() - t_start
         feasible = Δ <= ctx_base.δ + 1e-6
@@ -410,8 +447,16 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
         base = r.cache_hit ? (ctx.obj isa OperatorPsiBundle ? compressed_base_state(d.xf, ctx) : solve_base_state(d.xf, ctx)) :
             BaseDualState(collect(d.xf), r.θ_full, r.zeta, r.lambda, copy(ctx.obj.arg1), r.inner_status)
         last_F_state[] = (w = copy(w), base = base, r = r, d = d)
-        is_new_best = feasible && is_verified_success(r) &&
-            is_better_polish(d.gp, best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
+        is_new_best = if objective_mode == :min_gp
+            feasible && is_verified_success(r) &&
+                is_better_polish(d.gp, best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
+        else
+            # :min_delta_fixed_gp: track the best (smallest) VERIFIED Delta seen so far, regardless
+            # of whether it has reached the target `delta` yet -- Stage R0/B explicitly need the
+            # best-restored point even when the target is not reached, matching
+            # run_cm_upper_checkpointed's own :min_delta_fixed_gp pattern.
+            is_verified_success(r) && is_better_profile(Δ, best_feasible[] === nothing ? nothing : best_feasible[].Delta)
+        end
         if is_new_best
             best_feasible[] = (gp = d.gp, w = copy(w), Delta = Δ, gravity = r.gravity_value,
                                 kkt = r.max_abs_moment_kkt_resid, inner_status = r.inner_status,
@@ -486,10 +531,18 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
             evalResult.objGrad .= 0.0; evalResult.objGrad[2] = find_smallest ? 1.0 : -1.0
         else
             jac_full = gfull_reduced
-            evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
+            if objective_mode == :min_gp
+                evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
+            else
+                # :min_delta_fixed_gp: Delta itself is the objective -- jac_full IS d(Delta)/d(w)
+                # over the full free vector already (including its index-1 d/dgp entry, which
+                # KNITRO simply ignores since gp's box is degenerate there).
+                evalResult.objGrad .= jac_full
+            end
         end
         n_grad_calls[] += 1
-        evalResult.jac .= jac_full
+        # :min_delta_fixed_gp has no constraint (cIndices=Int32[] above) -- nothing to write here.
+        objective_mode == :min_gp && (evalResult.jac .= jac_full)
         return 0
     end
 
@@ -507,7 +560,13 @@ function run_polish_checkpointed_unified(label::String, find_smallest_in::Bool, 
     end
 
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
-    KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], n_outer), jacIndexVars = xIndices)
+    if objective_mode == :min_gp
+        KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], n_outer), jacIndexVars = xIndices)
+    else
+        # :min_delta_fixed_gp mirrors run_cm_upper_checkpointed's own unconstrained registration --
+        # no constraint jacobian to register, only a dense objective gradient.
+        KNITRO.KN_set_cb_grad(kc, cb, cb_G!)
+    end
     KNITRO.KN_set_newpt_callback(kc, cb_newpt!)
 
     if outer_direct_hessopt !== nothing
