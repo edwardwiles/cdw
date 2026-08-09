@@ -311,8 +311,26 @@ function run_delta_cell(w_start::Vector{Float64}, delta::Float64, delta_dir::Str
         start_Delta = stB.best === nothing ? (stA.best === nothing ? nothing : stA.best.Delta) : stB.best.Delta)
     push!(stages, stC)
 
+    # Cell-level incumbent selection (2026-08-09 fix): pick the FEASIBLE stage result with the
+    # best gp (per is_better_polish/find_smallest -- the SAME criterion every stage's own cb_F!
+    # already uses internally to pick ITS OWN best), not argmin(Delta). Delta is a feasibility
+    # BUDGET, not a quality score: Stage A/C each already solve "best gp subject to Delta<=target"
+    # (their own .Delta reflects how much budget got used getting there, nothing more), while
+    # Stage B/R0 solve "best Delta at a FIXED gp" (a restoration probe -- gp is pinned, so its own
+    # Delta can be made arbitrarily small without ever improving gp/kappa at all). argmin(Delta)
+    # therefore almost always picked Stage B whenever it succeeded -- discarding any better gp
+    # Stage C found, purely because B's Delta undercuts C's by construction, not because B found a
+    # better answer. Confirmed live: UNRESTRICTED/S2/delta=0.1 had stA.gp=0.970358, stB.gp=0.970358
+    # (pinned, Delta=0.054), stC.gp=0.969905 (strictly better, Delta=0.096, still feasible) -- the
+    # old logic reported Stage B's worse-gp point. All per-stage results remain fully preserved in
+    # `stages` regardless of which one wins here, so this is non-destructive.
     all_bests = filter(!isnothing, [s.best for s in stages])
-    overall_best = isempty(all_bests) ? nothing : all_bests[argmin([b.Delta for b in all_bests])]
+    overall_best = nothing
+    for cand in all_bests
+        if is_better_polish(cand.gp, overall_best === nothing ? nothing : overall_best.gp, SCI["find_smallest"])
+            overall_best = cand
+        end
+    end
     final_status = stC.status
 
     result = (family = FAMILY_ID, start = START_ID, delta = delta, stages = stages,
