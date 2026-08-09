@@ -108,7 +108,7 @@ while i <= length(start_ids)
         lp("Final partial wave: ", wave_starts)
     end
     lp("-"^100); lp("WAVE ", wave_idx, ": ", wave_starts)
-    cmd = `bash $(joinpath(SRC_DIR, "paper_upper_v1_orchestrator", "launch_wave.sh")) $PROTOCOL_TOML $CAMPAIGN_ROOT $(wave_starts...) $core_offset`
+    cmd = `bash $(joinpath(SRC_DIR, "paper_upper_v1_orchestrator", "launch_wave.sh")) $PROTOCOL_TOML $CAMPAIGN_ROOT $wave_starts $core_offset`
     run(cmd)
     global core_offset = 0   # each wave reuses the same core range (waves never overlap in time)
     global i += starts_per_wave
