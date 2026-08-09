@@ -77,16 +77,71 @@ gradient) — all four were integration-layer bugs at the boundary between this 
 existing production KNITRO/economic-context wiring, which is exactly the category of bug a
 synthetic standalone test cannot see.
 
-## D20/W=100,000 profiling
+## D20/W=100,000 profiling — REAL numbers, real KNITRO solve
 
-Ran at D=20/W=3,000 first (fast sanity check: context build 88s, Hessian sub-block timing
-collected for one real callback — `H_EE` 0.012s, `T1/T2/T3/T4` table build 0.75s, `H_MM/MP/PP`
-fill 0.47s, centering 0.07s, `H_E,R` cross-block 0.09s; `nStatus=-300` at this W, consistent with
-this codebase's own well-documented D20 small-W sensitivity, not a bug — see CLAUDE.md/memory on
-checking W-sensitivity before treating a D20 KNITRO failure as a real bug). A W=100,000 run was
-then launched; see the session's final message for its outcome (may have completed after this
-document was written — check the D20 profiling report file if present, or the raw log for the
-authoritative numbers rather than trusting this paragraph if it looks stale).
+`profile_pairwise_quantile_d20.jl` (no silent `W` default — takes it as a required positional
+arg), real `d20_real_setup_design` context, `σHat=3.0` / `inner_lower_limit=-10.0` passed
+explicitly (both required kwargs, per this codebase's own no-silent-scientific-defaults rule).
+
+**Sanity pass at W=3,000** first (fast: ~90s total): confirmed the whole pipeline runs at D=20 and
+collected a first timing sample. `nStatus=-300` at this W — consistent with this codebase's own
+well-documented D20 small-W sensitivity (CLAUDE.md/memory: check W-sensitivity before treating a
+D20 KNITRO non-convergence as a real bug), not a defect in this restriction.
+
+**Real pass at W=100,000** (the task's actual target scale):
+
+| stage | wall-clock |
+|---|---|
+| context build (`d20_real_setup_design`) | 111.6s |
+| augmented obj + `PairwiseQuantileOperator` build (incl. presort) | 2.3s |
+| full inner KNITRO solve | 407.4s (`nStatus=-103`, in this codebase's accepted set `(0,-100,-101,-103)`; 10 FG calls, 9 Hessian calls) |
+
+**One Hessian callback, sub-block breakdown** (`D=20, W=100000, ncombo3(T3)=3420, ncombo4(T4)=14535`):
+
+| sub-block | wall-clock | share |
+|---|---|---|
+| H_EE (winner-pair, unchanged shared backend) | 0.125s | 0.3% |
+| **T1/T2/T3/T4 raw table build** | **35.80s** | **78.4%** |
+| H_MM/MP/PP raw block-fill (reading the tables) | 0.573s | 1.3% |
+| centering correction (dense 3120×3120 pass) | 0.087s | 0.2% |
+| H_E,R prep (Snu/crs_buf) | 0.003s | 0.0% |
+| H_E,R cross-block (economic × restriction) | 3.128s | 6.9% |
+| final assembly + packing (dense 3502×3502) | 5.950s | 13.0% |
+| **sum** | **45.67s** | |
+
+`45.67s × 9 Hessian calls ≈ 411s`, matching the measured 407.4s solve wall-clock almost exactly —
+confirms the Hessian callback is the dominant cost of the whole inner solve (consistent with this
+codebase's own established finding for every other restriction family).
+
+**The task's own anticipated bottleneck is confirmed with real numbers**: the raw table build
+(T1/T2 cheap via the threaded builder; T3/T4 — the disjoint-origin/shared-origin 3-way and fully-
+disjoint 4-way tables — the dominant cost within this block, though this pass did not break T3 out
+from T4 separately; `ncombo4=14535` is 4.25× `ncombo3=3420` and involves one more nested index per
+combo, so T4 is very likely the larger share, but that is an inference from the combo counts, not
+a directly measured split) accounts for **~78% of one Hessian callback's wall-clock**. Per the
+task's own explicit instruction, this is exactly the "if disjoint 4-way dominates, optimize that
+measured path only" case — the correct, honest next step (not attempted this session) is a
+targeted optimization of `build_pairwise_quantile_hessian_tables!`'s T3/T4 construction (e.g. the
+BLAS-batched one-hot-matrix approach sketched in the original plan), guided by first splitting T3
+vs T4 timing separately, never a retreat to dense G.
+
+**Allocations** (bytes, JIT-warm second call): `H_EE: 0`, `T1/T2/T3/T4 tables: 496`,
+`H_MM/MP/PP fill: 0`, `centering: 50032`, `H_E,R cross-block: 921784`. The cross-block's ~900KB/
+call is a real, identified (not yet fixed) inefficiency — `pairwise_quantile_cross_hessian_block!`
+currently allocates its `Mtab_S`/`Ptab_S`/`Mtab_Snu`/`Ptab_Snu`/`Mtab_cf`/`Ptab_cf`/`v`/
+`v_winner_sum` buffers fresh every call instead of using persistent scratch (unlike every other
+block, which is already zero- or near-zero-allocation) — small in absolute terms at this scale but
+a legitimate "reuse persistent scratch" follow-up.
+
+**RSS**: 3.3GB total process (KNITRO + the full D20 economic context + JIT-compiled code + this
+restriction's state) — for scale, a literal dense `W×n_rows` matrix alone (the thing this whole
+task forbids) would be `100000×3120×8B ≈ 2.5GB`; this implementation reaches a comparable total
+footprint only when counting the ENTIRE process, never by materializing that forbidden object.
+
+**Final D20 counts, asserted not just printed**: `n_bins=5, n_cutoffs=4, outer_cutoff_params=80,
+unordered_pairs=190, marginal_rows=80, pair_rows=3040, total_rows=3120, dense_G_production=false`
+— confirmed live at real D=20 scale (not just arithmetic), matching
+`assert_pairwise_quantile_d20_counts`'s expected values exactly.
 
 ## Not done this session
 
@@ -101,10 +156,15 @@ authoritative numbers rather than trusting this paragraph if it looks stale).
 
 ## Recommended next steps
 
-1. If the W=100k profiling run didn't complete in this session, rerun
-   `profile_pairwise_quantile_d20.jl 100000` (takes a raw `W` positional arg, no silent default)
-   and confirm the `H_PP`-disjoint 4-way table build is or isn't the dominant cost at real scale.
-2. Build `pairwise_quantile_checkpoint.jl` (checkpoint schema + `run_pairwisequantile_upper_
+1. **Split T3 vs T4 timing separately** within `build_pairwise_quantile_hessian_tables!` (currently
+   timed as one combined 35.8s block) to confirm which of the two actually dominates before
+   optimizing either — the combo counts (`ncombo4=14535` vs `ncombo3=3420`) suggest T4, but this
+   session measured them together, not separately.
+2. Once split, optimize the confirmed-dominant table build (likely T4, the disjoint 4-way tables)
+   using the BLAS-batched one-hot-matrix approach sketched in the original plan — never dense G.
+3. Give `pairwise_quantile_cross_hessian_block!` persistent scratch buffers instead of its current
+   per-call allocations (~900KB/call at D=20/W=100k — real but not urgent at this scale).
+4. Build `pairwise_quantile_checkpoint.jl` (checkpoint schema + `run_pairwisequantile_upper_
    checkpointed`) using `archPQ_base_state` as the validated inner-solve core.
-3. Implement `:draft_cumulative_diagonal` for real if replication against the literal draft
+5. Implement `:draft_cumulative_diagonal` for real if replication against the literal draft
    equation is ever needed (currently out of scope, explicitly not the scientific default).
