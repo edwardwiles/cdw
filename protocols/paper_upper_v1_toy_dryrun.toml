@@ -41,6 +41,10 @@ mean_m_resid_tol = 1.0e-6
 max_abs_moment_kkt_resid_tol = 1.0e-3
 m_min_floor = 0.0
 
+[families.UNRESTRICTED]
+driver = "run_polish_checkpointed_unified"
+delta_restoration_driver = "run_profile_checkpointed"
+
 [families.COMMON_MARGINALS]
 driver = "run_cm_upper_checkpointed"
 delta_restoration_driver = "run_cm_upper_checkpointed"
@@ -50,6 +54,30 @@ cm_extension = "cm_only"
 L = 50
 contrasts = "orthonormal"
 include_truncated_moment = false
+
+[families.COMMON_FRECHET]
+driver = "run_cm_upper_checkpointed"
+delta_restoration_driver = "run_cm_upper_checkpointed"
+[families.COMMON_FRECHET.kwargs]
+marginal_restriction = "common_frechet"
+cm_extension = "cm_only"
+L = 50
+contrasts = "orthonormal"
+include_truncated_moment = false
+
+[families.CM_PLUS_ZC]
+driver = "run_cm_upper_checkpointed"
+delta_restoration_driver = "run_cm_upper_checkpointed"
+[families.CM_PLUS_ZC.kwargs]
+marginal_restriction = "common_flexible"
+cm_extension = "cm_plus_moments"
+L = 50
+contrasts = "orthonormal"
+include_truncated_moment = false
+meanzc_K_mean = 3
+meanzc_K_pair = 3
+meanzc_profiled_level = 2
+meanzc_basis = "direct"
 
 [families.ORIGIN_ZC]
 driver = "run_originzc_upper_checkpointed"
@@ -69,9 +97,9 @@ power_target_layout = "origin_by_power"
 [seeds]
 generator = "generate_multistart_seeds"
 family_specs = "paper_five_family_seed_specs"
-number_of_starts = 1
+number_of_starts = 10
 include_calibration = true
-randomized_noncalibration_starts = 0
+randomized_noncalibration_starts = 9
 seed_delta_max = 5.0
 seed_delta_qualification_tolerance = 0.02
 seed_requires_all_five_families = false
