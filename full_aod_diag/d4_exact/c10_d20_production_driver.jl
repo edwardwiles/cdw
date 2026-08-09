@@ -588,6 +588,21 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
         blas_threads::Union{Nothing,Int} = nothing,   # allocation/Hessian port task §6.3: set once
         # right after ctx build (see blas_thread_policy.jl) -- nothing (default) leaves the ambient
         # process BLAS thread count (e.g. OPENBLAS_NUM_THREADS) untouched, zero behavior change.
+        σHat::Float64,   # REQUIRED, no default (2026-08-09 fix) -- this function's internal
+        # d20_real_setup_design call was previously omitting σHat entirely, silently falling back
+        # to that function's own σHat=nothing->AD_PARAMS.σHat=2.5 default regardless of what the
+        # caller actually wanted. This is exactly the "no default on a scientific parameter" hazard
+        # CLAUDE.md warns about: run_profile_checkpointed was never updated during the 2026-08-03
+        # hardening pass (it is not one of the three officially-hardened production entry points),
+        # so it kept silently mis-solving at sigma=2.5 for any caller wanting a different sigma.
+        # Caught live 2026-08-09 via paper_upper_v1's UNRESTRICTED family Stage B (which needs a
+        # DIFFERENT missing param, inner_lower_limit, and hard-erred on THAT first) -- if sigma had
+        # been the first missing kwarg instead, this would have silently computed wrong-sigma
+        # results with no crash at all.
+        inner_lower_limit::Float64,   # REQUIRED, no default -- same passthrough gap as σHat above;
+        # d20_real_setup_design itself has no default for this (2026-08-06 hardening), so omitting
+        # it here always hard-errored (UndefKeywordError), never silently substituted -- this is the
+        # error that actually surfaced live and prompted this fix.
         pin_outer_algorithm::Bool = false)   # allocation/Hessian port task §1.3/§4: opt-in explicit
         # algorithm=2(Interior/CG)+hessopt=6(L-BFGS) via knitro_outer_algorithm.jl, for matched
         # benchmark A/Bs only. false (default): unchanged existing behavior (hardcoded algorithm=3
@@ -650,7 +665,8 @@ function run_profile_checkpointed(label::String, g_in::Float64, find_smallest_in
     end
 
     ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest,
-                                 draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample)
+                                 draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample,
+                                 σHat = σHat, inner_lower_limit = inner_lower_limit)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # allocation/Hessian port task §3.1
     ctx = attach_canonical_price_precompute_workspace(ctx)   # allocation/Hessian port task §3.3
     ctx = attach_hard_score_b_cache(ctx)   # allocation/Hessian port task §3.3

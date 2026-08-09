@@ -158,13 +158,19 @@ function call_unrestricted_driver(w0::Vector{Float64}, delta::Float64; label::St
         # "never optimized gp" by construction).
         isapprox(w0[1], gp_fixed; atol = 1e-10) ||
             error("call_unrestricted_driver: w0[1]=$(w0[1]) does not match gp_fixed=$gp_fixed")
-        # run_profile_checkpointed has NO inner_lower_limit kwarg (confirmed live 2026-08-08,
-        # MethodError otherwise) -- unlike the other three drivers, it does not accept this as an
-        # explicit passthrough; production callers of this function never pass it either.
+        # run_profile_checkpointed now requires σHat/inner_lower_limit explicitly (2026-08-09 fix,
+        # c10_d20_production_driver.jl) -- it was previously silently defaulting σHat to 2.5
+        # internally (never forwarded to its own d20_real_setup_design call) and had no way to
+        # accept inner_lower_limit at all. A prior pass here (comment previously read "run_profile_
+        # checkpointed has NO inner_lower_limit kwarg... production callers never pass it either")
+        # tried passing it, hit a MethodError against the THEN-current signature, and gave up on
+        # the real fix instead of adding the kwarg upstream -- exactly the anti-pattern CLAUDE.md
+        # warns about. Both are now required, no-default kwargs on run_profile_checkpointed itself.
         r = run_profile_checkpointed(label, gp_fixed, SCI["find_smallest"], w0[2:end];
             maxtime_real = maxtime_real, W_in = SCI["W"], delta_in = delta, draw_seed_in = SCI["draw_seed"],
             draw_design_in = sym(SCI["draw_design"]), ckpt_dir = ckpt_dir, checkpoint_interval_s = checkpoint_interval_s,
-            destination_sample = sym(SCI["destination_sample"]))
+            destination_sample = sym(SCI["destination_sample"]), σHat = SCI["sigma"],
+            inner_lower_limit = SCI["inner_lower_limit"])
         best = r.best === nothing ? nothing : (gp = gp_fixed, w = vcat(gp_fixed, r.best.zfree), Delta = r.best.Delta_dual,
             n_eval = r.best.n_eval, t = r.best.t_elapsed)
         return (best = best, knitro_status = r.knitro_status, n_eval = r.n_eval, n_grad = r.n_grad_calls)
