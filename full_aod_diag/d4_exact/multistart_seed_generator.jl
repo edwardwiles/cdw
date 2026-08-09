@@ -71,6 +71,13 @@
 #   nested_quantile_grids.jl      (nested_grid_sequence)
 #   compressed_factual_buffer_reuse.jl (attach_compressed_factual_workspace -- REQUIRED once per
 #                                   ctx, before any real family evaluation; see generate_multistart_seeds)
+#   fast_range_screen.jl          (build_ranged_screen_context, evaluate_fullA_screened_ranged --
+#                                   paper_upper_v1 extension, :unrestricted family kind only; pulls
+#                                   in its own chain -- compressed_live.jl, compressed_moments.jl,
+#                                   structured_moment_build.jl, compressed_cc_inner.jl, dual_bank.jl,
+#                                   etc. -- see c10_d20_production_driver.jl's own include list for
+#                                   the full canonical order, or test_multistart_seed_generator.jl's
+#                                   include list for a validated concrete example)
 #   `CS` (the CounterfactualSensitivity module) already bound in Main -- same convention as every
 #   other cm_*_production.jl file (see cc_algo/include_cc_algo.jl).
 #
@@ -90,7 +97,14 @@ for _dep in (:build_pivot_elimination, :cm_w0_from_calibration, :OriginByPowerLa
              :build_raw_mean_pair_matrix_levels, :solve_base_state,
              :originzc_profiled_nu_value, :meanzc_profiled_nu_value, :classify_inner_result,
              :is_verified_success, :sha256_of_matrix, :default_gravity_exclude_cells_brazil_korea,
-             :nested_grid_sequence, :attach_compressed_factual_workspace, :CS)
+             :nested_grid_sequence, :attach_compressed_factual_workspace, :CS,
+             # paper_upper_v1 extension (2026-08-08): :unrestricted / :cm_only family kinds, added
+             # so this SAME reusable generator can qualify seeds against the plain (no-ZC)
+             # Unrestricted and Common-Marginals families too, not just the three ZC-flavor kinds
+             # the original release covered. Reuses `evaluate_fullA_screened_ranged`'s own
+             # `build_ranged_screen_context(ctx)` companion -- the exact per-point value-only
+             # verified evaluator `run_polish_checkpointed_unified` itself calls (fast_range_screen.jl).
+             :build_ranged_screen_context, :evaluate_fullA_screened_ranged)
     isdefined(Main, _dep) ||
         error("multistart_seed_generator.jl requires `$(_dep)` to already be defined -- include the " *
               "full d4_exact family machinery (see this file's header comment) before this file.")
@@ -159,6 +173,35 @@ function common_frechet_family_spec(id::Symbol; L::Int, contrasts::Symbol = :ort
     FamilySeedSpec(id, :common_frechet, 0, 0, L, contrasts, probs, false, :direct)
 end
 
+"""
+    unrestricted_family_spec(id) -> FamilySeedSpec
+
+paper_upper_v1 extension (2026-08-08): the plain, wholly unrestricted family -- no CM grid, no ZC
+moments. `K_mean`/`K_pair`/`L`/`contrasts`/`probs` are unused (uniform struct only); qualification
+calls `evaluate_fullA_screened_ranged` directly (see `build_family`/`evaluate_family` below), the
+same value-only verified evaluator `run_polish_checkpointed_unified` itself uses at a candidate
+point -- no nu lift, no companion solve (there is nothing to lift; this IS the companion the other
+families' own nu policies solve internally).
+"""
+function unrestricted_family_spec(id::Symbol)
+    FamilySeedSpec(id, :unrestricted, 0, 0, 0, :orthonormal, nothing, false, :direct)
+end
+
+"""
+    cm_only_family_spec(id; L, contrasts=:orthonormal, probs=resolve_cm_probs(L)) -> FamilySeedSpec
+
+paper_upper_v1 extension (2026-08-08): plain flexible Common-Marginals, `cm_extension=:cm_only`
+(no ZC moments) -- `run_cm_upper_checkpointed`'s own default extension. `K_mean`/`K_pair` are
+unused (uniform struct only, always 0). Qualification reuses the EXACT SAME plain-CM builder/
+evaluator pair (`build_cm_production_context` + `cm_production_value_verified_screened`) the
+`:cm_zc` kind's own `companion_implied_nu_cmzc` already calls as its companion solve -- this spec
+just evaluates that companion directly as ITS OWN family, rather than as an internal nu-lift step.
+"""
+function cm_only_family_spec(id::Symbol; L::Int, contrasts::Symbol = :orthonormal,
+                              probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
+    FamilySeedSpec(id, :cm_only, 0, 0, L, contrasts, probs, false, :direct)
+end
+
 # ============================================================================
 # 2. Five-family production preset (task section 10). Not hard-wired into the core generator.
 # ============================================================================
@@ -184,6 +227,30 @@ function production_five_family_seed_specs(ctx)
         cm_zc_family_spec(:CM_MEAN3; K_mean = 3, K_pair = 0, L = 50),
         origin_zc_family_spec(:ORIGIN_ZC_K3; K_mean = 3, K_pair = 3),
         cm_zc_family_spec(:CMZC_K3; K_mean = 3, K_pair = 3, L = 50),
+    ]
+end
+
+"""
+    paper_five_family_seed_specs(ctx) -> Vector{FamilySeedSpec}
+
+The `paper_upper_v1` protocol's actual five scientific families (protocols/paper_upper_v1.toml),
+in cheap-to-expensive qualification order: Unrestricted (one companion-only solve) -> Common
+Marginals (`cm_only`, one plain-CM solve) -> Common-Fréchet (single-family CDF-only, the one
+variant production actually reaches -- see `production_five_family_seed_specs`'s own docstring)
+-> Origin-ZC K_mean=K_pair=3 (companion + restricted, two solves) -> CM+ZC K_mean=K_pair=3
+(companion + restricted, two solves). Distinct from `production_five_family_seed_specs` (which
+qualifies three ZC-flavor K_mean=3/K_pair=0-or-3 variants for a different, non-paper comparison) --
+this is the exact five-family set the paper protocol freezes: no redundant mean moments added to
+Unrestricted or Common Marginals, family definitions unchanged from their standing production
+meaning.
+"""
+function paper_five_family_seed_specs(ctx)
+    return [
+        unrestricted_family_spec(:UNRESTRICTED),
+        cm_only_family_spec(:COMMON_MARGINALS; L = 50),
+        common_frechet_family_spec(:COMMON_FRECHET; L = 50),
+        origin_zc_family_spec(:ORIGIN_ZC; K_mean = 3, K_pair = 3),
+        cm_zc_family_spec(:CM_PLUS_ZC; K_mean = 3, K_pair = 3, L = 50),
     ]
 end
 
@@ -429,6 +496,18 @@ function build_family(ctx, spec::FamilySeedSpec)
         pcx = build_cm_frechet_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
             contrasts = spec.contrasts, probs = spec.probs, cm_hessian_backend = :structured, moment_representation = :operator)
         return FamilyBuild(spec, pcx, nothing, nothing)
+    elseif spec.kind == :unrestricted
+        # paper_upper_v1 extension: `pcx` slot holds the RangedScreenContext (fast_range_screen.jl),
+        # built fresh per candidate for the same stale-buffer-safety reason build_family never
+        # reuses a context across candidates for the ZC/CM kinds (see this function's own docstring).
+        rsc = build_ranged_screen_context(ctx)
+        return FamilyBuild(spec, rsc, nothing, nothing)
+    elseif spec.kind == :cm_only
+        # Exactly companion_implied_nu_cmzc's own companion-builder call (section 8 above), just
+        # evaluated here as ITS OWN family rather than as an internal nu-lift step.
+        pcx0 = build_cm_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
+            contrasts = spec.contrasts, probs = spec.probs, moment_representation = :operator)
+        return FamilyBuild(spec, pcx0, nothing, nothing)
     else
         error("build_family: unknown family kind :$(spec.kind) for spec $(spec.id)")
     end
@@ -564,10 +643,22 @@ function evaluate_family(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64}; 
         nu_dense = dense_nu_for_solve(fb, nu0_active, focal_nu)
         K, base, verify = cm_meanzc_production_value_verified_screened(x_free, nu_dense, fb.pcx; eval_id = eval_id)
         full_vec = vcat(x_free, nu_dense)
-    else
+    elseif fb.spec.kind == :common_frechet
         nu0_active = Float64[]
         focal_nu = nothing
         K, base, verify = cm_frechet_production_value_verified_screened(x_free, fb.pcx; eval_id = eval_id)
+        full_vec = x_free
+    elseif fb.spec.kind == :unrestricted
+        nu0_active = Float64[]
+        focal_nu = nothing
+        verify, _prof_meta = evaluate_fullA_screened_ranged(collect(x_free), ctx, fb.pcx;
+            moment_representation = :compressed, use_cache = false, use_witness = false)
+        full_vec = x_free
+    else
+        @assert fb.spec.kind == :cm_only "evaluate_family: unknown family kind :$(fb.spec.kind) for spec $(fb.spec.id)"
+        nu0_active = Float64[]
+        focal_nu = nothing
+        K, base, verify = cm_production_value_verified_screened(x_free, fb.pcx; eval_id = eval_id)
         full_vec = x_free
     end
     wall = time() - t0

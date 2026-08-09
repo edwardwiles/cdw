@@ -20,6 +20,17 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           "cm_meanzc_cplus.jl", "cm_checkpoint.jl", "cm_originzc_target_layout.jl", "zc_restriction_operator_ragged.jl", "cm_aspace_coordinate.jl",
           "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl", "cm_originzc_config.jl",
           "cm_originzc_checkpoint.jl", "direction_bounds.jl", "cm_frechet_hessian.jl", "cm_frechet_level.jl", "cm_frechet_lookup_production.jl", "cm_frechet_cplus.jl", "country_resolve.jl",
+          # paper_upper_v1 extension (2026-08-08): additional files needed for the new :unrestricted
+          # family kind's evaluate_fullA_screened_ranged path -- not needed by the original ZC/CM/
+          # Frechet-only generator. List/relative order taken directly from the real production
+          # driver's own dependency chain (c10_d20_production_driver.jl's include list), restricted
+          # to files not already present above.
+          "cross_delta_cache.jl", "compressed_moments.jl", "canonical_price_precompute_workspace.jl",
+          "hard_score_b_cache.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
+          "lfix_buffer_reuse.jl", "lfix_base_workspace_pooled.jl", "lfix_kbplus_workspace.jl",
+          "bandwidth_cache_policy.jl", "fast_range_screen.jl", "dual_bank.jl", "negative_cache.jl",
+          "dual_bank_ab_harness.jl", "incumbent_logic.jl", "knitro_status.jl", "reusable_context.jl",
+          "organic_failure_capture.jl",
           "multistart_seed_generator.jl"]
     include(joinpath(_D4E, f))
 end
@@ -117,6 +128,13 @@ end
     @test s2.kind == :cm_zc && s2.L == 50 && s2.probs !== nothing && length(s2.probs) == 50
     s3 = common_frechet_family_spec(:COMMON_FRECHET; L = 50)
     @test s3.kind == :common_frechet
+end
+
+@testset "paper_upper_v1 extension: unrestricted_family_spec / cm_only_family_spec constructors" begin
+    su = unrestricted_family_spec(:UNRESTRICTED)
+    @test su.kind == :unrestricted
+    sc = cm_only_family_spec(:COMMON_MARGINALS; L = 50)
+    @test sc.kind == :cm_only && sc.L == 50 && sc.probs !== nothing && length(sc.probs) == 50
 end
 
 @testset "json_scalar / csv-safe encoding: escapes and round-trips the shapes this file emits" begin
@@ -241,6 +259,59 @@ end
 
     spec_cz = cm_zc_family_spec(:CM_MEAN3; K_mean = 3, K_pair = 0, L = 50)
     twice_same_outcome(() -> build_family(CTX_TEST, spec_cz), 902, 903)
+end
+
+@testset "paper_upper_v1 extension: unrestricted/cm_only real evaluation at calibration" begin
+    # Same tolerance convention as the "Nu lift" testset above: this W=8000/draw_seed=20260808
+    # context is documented functional-testing-only (file header), not the production W>=20000/
+    # draw_seed=20260719 scale -- a genuine nStatus=-300 companion failure here is a known,
+    # expected occurrence (confirmed live for the ZC companion above), not a sign of a bug. What
+    # this test must never accept is an outright crash from a cause OTHER than an inner-solve
+    # failure, or a kind-dispatch error (e.g. hitting the "unknown family kind" branch).
+    geo = build_aspace_geometry(CTX_TEST)
+    w_cal = cm_w0_from_calibration(CTX_TEST, geo.pe, :powered_aspace)
+    x_free_cal = decode_w_econ(geo, w_cal)
+
+    function eval_or_expected_failure(spec)
+        fb = build_family(CTX_TEST, spec)
+        try
+            return evaluate_family(CTX_TEST, fb, x_free_cal; eval_id = 950)
+        catch e
+            e isa CMExpectedSolveFailure || rethrow()
+            return e
+        end
+    end
+
+    r_u = eval_or_expected_failure(unrestricted_family_spec(:UNRESTRICTED))
+    if r_u isa FamilyLiftResult
+        @test isempty(r_u.nu_values)
+        lp("  unrestricted @ calibration: Delta*=", r_u.Delta_star, " verified=", r_u.verified,
+           " inner_status=", r_u.inner_status, " class=", r_u.verification_class)
+        # Graceful-failure path (evaluate_fullA_screened_ranged never throws) can still return
+        # verified=false/non-finite Delta* at this deliberately non-production test scale -- only
+        # a VERIFIED result is required to be internally consistent (finite Delta*).
+        r_u.verified && @test isfinite(r_u.Delta_star)
+    else
+        lp("  unrestricted @ calibration: expected inner-solve failure at this test scale: ", sprint(showerror, r_u))
+    end
+
+    r_c = eval_or_expected_failure(cm_only_family_spec(:COMMON_MARGINALS; L = 50))
+    if r_c isa FamilyLiftResult
+        @test isempty(r_c.nu_values)
+        lp("  cm_only @ calibration: Delta*=", r_c.Delta_star, " verified=", r_c.verified,
+           " inner_status=", r_c.inner_status, " class=", r_c.verification_class)
+        r_c.verified && @test isfinite(r_c.Delta_star)
+    else
+        lp("  cm_only @ calibration: expected inner-solve failure at this test scale: ", sprint(showerror, r_c))
+    end
+
+    # Unrestricted is the least-restrictive family in the whole 5-family set -- IF both verified
+    # at this same point, unrestricted's Delta* must be <= the plain-CM companion's Delta* (CM is
+    # a genuine restriction on top of unrestricted). Nested-feasible-set monotonicity, not a
+    # heuristic -- only checked when both sides are actually verified numbers.
+    if r_u isa FamilyLiftResult && r_c isa FamilyLiftResult && r_u.verified && r_c.verified
+        @test r_u.Delta_star <= r_c.Delta_star + 1e-6
+    end
 end
 
 @testset "qualify_economic_point / all-family intersection: cheap-first ordering short-circuits, no later families evaluated" begin
