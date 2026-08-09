@@ -36,7 +36,7 @@ base_sha = "4df5254"                                  # "Document the multistart
 # protocol_branch/protocol_sha are filled in by scripts/freeze_protocol_source.sh at launch time
 # (records the exact commit these two extensions were committed as) -- placeholder until then.
 protocol_branch = "protocol/paper-upper-v1-2026-08-08"
-protocol_sha = "6a2d3a2afccb92603a66b10f09765e978d93fe4f"                        # filled at launch; hard-refuse launch if still this value
+protocol_sha = "PENDING_COMMIT"                        # filled at launch; hard-refuse launch if still this value
 require_clean_worktree = true                          # launcher refuses to run from a dirty git worktree
 
 [source.recorded_versions]
