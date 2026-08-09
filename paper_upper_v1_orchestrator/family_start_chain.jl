@@ -229,7 +229,7 @@ function run_stage(kind::Symbol, w0::Vector{Float64}, delta::Float64, budget_min
             call_driver(copy(w0); extra = extra)
         end
     catch e
-        lp("  [", label, "] STAGE ", kind, " THREW: ", sprint(showerror, e))
+        lp("  [", label, "] STAGE ", kind, " THREW: ", sprint(showerror, e, catch_backtrace()))
         e
     end
     elapsed = time() - t0
@@ -335,28 +335,6 @@ end
 # 7. Seed loading (Phase-I delta=0.1 entry point)
 # ============================================================================
 
-"""
-Builds the SAME ZC layout + ActiveMeanLayout multistart_seed_generator.jl's own `build_family`
-builds for this family (OriginByPowerLayout/SharedByPowerLayout + profiled_level_for +
-ActiveMeanLayout), so `scatter_nu_eff` can reconstruct the dense nu vector from the seed file's
-already-computed `nu_values` (active) + `derived_focal_nu`. Needs a real `ctx` only for
-ctx.D/ctx.bi/ctx.σ (delta-independent), so any delta's ctx works -- callers pass one built at the
-chain's own first delta.
-"""
-function zc_layout_and_aml(ctx, K_mean::Int, K_pair::Int)
-    driver = FAM["driver"]
-    if driver == "run_originzc_upper_checkpointed"
-        layout = OriginByPowerLayout(ctx.D, K_mean, K_pair)
-    elseif driver == "run_cm_upper_checkpointed"
-        layout = SharedByPowerLayout(K_mean, K_pair)
-    else
-        error("zc_layout_and_aml: driver '$driver' has no ZC layout")
-    end
-    kstar = profiled_level_for(ctx, K_mean)
-    aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
-    return layout, aml
-end
-
 function load_seed_w0()
     seeds_dir = joinpath(CAMPAIGN_ROOT, "seeds", "seeds", START_ID)
     econ = deserialize(joinpath(seeds_dir, "economic_seed.jls"))
@@ -366,22 +344,20 @@ function load_seed_w0()
         return copy(econ.economic_vector), nothing
     end
     fseed = deserialize(joinpath(fam_dir, "full_outer_seed.jls"))
-    if isempty(fseed.nu_values) && fseed.derived_focal_nu === nothing
+    if isempty(fseed.nu_values)
         return copy(econ.economic_vector), fseed.Delta_star
     end
-    if fseed.derived_focal_nu === nothing
-        nu_dense = fseed.nu_values
-    else
-        fk = fam_kwargs()
-        K_mean = haskey(fk, :K_mean) ? fk.K_mean : fk.meanzc_K_mean
-        K_pair = haskey(fk, :K_pair) ? fk.K_pair : fk.meanzc_K_pair
-        ctx0 = build_ctx_at_delta(Float64(SCI["deltas"][1]))
-        _, aml = zc_layout_and_aml(ctx0, K_mean, K_pair)
-        aml === nothing && error("load_seed_w0: seed file has a derived_focal_nu but this family/K_mean=$K_mean " *
-            "does not resolve to an active ActiveMeanLayout (kstar mismatch) -- seed/manifest inconsistency.")
-        nu_dense = scatter_nu_eff(aml, fseed.nu_values, fseed.derived_focal_nu)
-    end
-    return vcat(econ.economic_vector, log.(nu_dense)), fseed.Delta_star
+    # fseed.nu_values is ALREADY the ACTIVE (omission-reduced) nu vector -- exactly what the outer
+    # KNITRO search vector's own nu block holds (cb_F!: `νvec_active = exp.(w[D2_econ+1:end])`).
+    # The driver reconstructs the DENSE nu internally via scatter_nu_eff + its own freshly-computed
+    # originzc_profiled_nu_value/meanzc_profiled_nu_value (a function of the CURRENT point, not a
+    # fixed seed-time value) on every evaluation -- it must NEVER be pre-expanded to dense here.
+    # Confirmed live 2026-08-08: pre-expanding to dense here silently added the omitted focal
+    # coordinate as an EXTRA free dimension, producing DimensionMismatch(380 vs 379) deep inside
+    # cm_z_from_a (a genuinely dense/active length confusion, not a production driver bug -- see
+    # multistart_seed_generator.jl's own dense_nu_for_solve, which is the ONLY place expansion to
+    # dense is supposed to happen, and it happens per-eval inside the driver, not at seed load time).
+    return vcat(econ.economic_vector, log.(fseed.nu_values)), fseed.Delta_star
 end
 
 # ============================================================================
