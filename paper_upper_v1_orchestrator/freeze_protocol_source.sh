@@ -42,7 +42,7 @@ JULIA_VERSION=$(julia --version | awk '{print $3}')
 export ZIENA_LICENSE=/etc/sharedsw_licenses/ziena.txt
 export KNITRODIR=/opt/shared_sw/knitro/14.2.0
 export LD_LIBRARY_PATH="/opt/shared_sw/knitro/14.2.0/lib:${LD_LIBRARY_PATH:-}"
-KNITRO_VERSION=$(julia --project="$SRC_DIR" -e 'using KNITRO; println(KNITRO.KN_get_release())' 2>/dev/null | tail -1)
+KNITRO_VERSION=$(julia --project="$SRC_DIR" -e 'using KNITRO; println(KNITRO.KN_get_release())' 2>/dev/null | tail -1) || true
 
 echo "Recording:"
 echo "  protocol_sha    = $CURRENT_SHA"
