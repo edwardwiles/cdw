@@ -159,14 +159,15 @@ seed_delta_max = 1.0                                    # Delta* < 1.0 qualifica
 seed_delta_qualification_tolerance = 0.02               # accept Delta* <= 1.0 - tolerance = 0.98 (explicit, not floating-point <1.0)
 seed_requires_all_five_families = true
 master_rng_seed = 0x0000000000000002                    # DISTINCT from any prior campaign's seed (0x1 used previously) -- immutable once seed generation starts
-A_scale = 0.02                                           # frozen 2026-08-08 under time pressure (user wanted launch before bed): real scan's own FIRST cell
-                                                          # (A_scale=0.01/gp_scale=0.1) showed 0/5 accept, too tight; 0.02/0.2 is the toy dry-run's own
-                                                          # already-exercised value (proven not to break the mechanics) and a reasonable mid-grid choice
-                                                          # from the same candidate set -- NOT the result of a completed empirical scan. Revisit once
-                                                          # paper_upper_v1_orchestrator/scan_seed_scales.jl finishes its full grid (still running in the
-                                                          # background, see seeds/scale_scan_report.txt) -- if it shows a clearly better cell, that
-                                                          # should govern any FUTURE seed regeneration, but do not retroactively change this run's own
-                                                          # already-accepted seeds without bumping to a new protocol version.
+A_scale = 0.01                                           # revised 2026-08-08: real empirical scan (still running in the background, see
+                                                          # seeds/scale_scan_report.txt) showed (A_scale,gp_scale)=(0.02,0.2) -- this manifest's
+                                                          # own first frozen choice -- at 0/5 acceptance across 5 trials; (0.01,0.1) and (0.01,0.4)
+                                                          # also 0/5; (0.01,0.2) was the ONLY cell scanned so far with any acceptance (1/5).
+                                                          # Killed the first real seed-generation attempt (which had not yet accepted any
+                                                          # non-calibration seed) and restarted with this value rather than risk exhausting
+                                                          # max_attempts=200 at a scale the scan already suggests is too tight. Small trial
+                                                          # counts (n=5/cell) mean this is still a noisy signal, not a fully-converged optimum --
+                                                          # revisit if the real generation itself also struggles to reach M=10.
 gp_scale = 0.2
 max_attempts = 200
 min_seed_distance = 0.0
