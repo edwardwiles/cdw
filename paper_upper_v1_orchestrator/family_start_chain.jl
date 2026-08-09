@@ -148,9 +148,9 @@ function call_unrestricted_driver(w0::Vector{Float64}, delta::Float64; label::St
             destination_sample = sym(SCI["destination_sample"]), exclude_diagonal_gravity = SCI["exclude_diagonal_gravity"],
             gravity_exclude_cells = grav, σHat = SCI["sigma"], inner_lower_limit = SCI["inner_lower_limit"],
             algo_kwargs...)
-        best = r.best === nothing ? nothing : (gp = r.best.gp, w = r.best.w, Delta = r.best.Delta_dual,
-            n_eval = r.best.n_eval, t = r.best.t)
-        return (best = best, knitro_status = r.knitro_status, n_eval = r.n_eval, n_grad = get(r, :n_grad, nothing))
+        best = r.best_feasible === nothing ? nothing : (gp = r.best_feasible.gp, w = r.best_feasible.w,
+            Delta = r.best_feasible.Delta, n_eval = r.best_feasible.n_eval, t = r.best_feasible.t_elapsed)
+        return (best = best, knitro_status = r.knitro_status, n_eval = r.n_eval, n_grad = r.n_grad_calls)
     else
         # Stage B / Stage R0 -- fixed-gp Delta restoration via the PRE-EXISTING unconstrained
         # objective=Delta driver (this family never needed the new objective_mode kwarg -- it
@@ -163,8 +163,8 @@ function call_unrestricted_driver(w0::Vector{Float64}, delta::Float64; label::St
             draw_design_in = sym(SCI["draw_design"]), ckpt_dir = ckpt_dir, checkpoint_interval_s = checkpoint_interval_s,
             destination_sample = sym(SCI["destination_sample"]), inner_lower_limit = SCI["inner_lower_limit"])
         best = r.best === nothing ? nothing : (gp = gp_fixed, w = vcat(gp_fixed, r.best.zfree), Delta = r.best.Delta_dual,
-            n_eval = get(r, :n_eval, 0), t = get(r, :wall, r.wall))
-        return (best = best, knitro_status = r.knitro_status, n_eval = get(r, :n_eval, nothing), n_grad = nothing)
+            n_eval = r.best.n_eval, t = r.best.t_elapsed)
+        return (best = best, knitro_status = r.knitro_status, n_eval = r.n_eval, n_grad = r.n_grad_calls)
     end
 end
 
