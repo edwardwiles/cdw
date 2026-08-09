@@ -73,6 +73,26 @@ else
     run(`julia --project=$SRC_DIR $(joinpath(SRC_DIR, "paper_upper_v1_orchestrator", "generate_seeds.jl")) $PROTOCOL_TOML $CAMPAIGN_ROOT`)
 end
 
+# Hard gate: generate_multistart_seeds/write_seed_set writes seeds/manifest.jls unconditionally,
+# even on a SHORTFALL (n_accepted < requested M, stop_reason=:attempt_limit) -- its own docstring
+# says explicitly "per protocol, DO NOT hand-select substitutes" rather than erroring outright.
+# Without this check, the wave loop below would reference S<k> seed files that were never written
+# for k >= n_accepted, and each affected family_start_chain.jl process would crash on an unguarded
+# deserialize() call in load_seed_w0() -- only surfacing as a launch_wave.sh/run() failure AFTER
+# real KNITRO compute was already sunk into earlier, successfully-seeded waves. Confirmed live
+# 2026-08-08 that this gap is real, not hypothetical, at a scale where acceptance was marginal.
+using Serialization
+seed_manifest = deserialize(seeds_manifest_path)
+n_starts_requested = MANIFEST["seeds"]["number_of_starts"]
+if seed_manifest.n_accepted < n_starts_requested
+    error("run_paper_upper_bounds.jl: seed generation only accepted $(seed_manifest.n_accepted)/$(n_starts_requested) " *
+          "requested starts (stop_reason=:$(seed_manifest.stop_reason)) -- refusing to launch Phase I against an " *
+          "incomplete seed set. Per protocol, do not hand-select substitutes: lower [seeds].A_scale/gp_scale " *
+          "(re-run scan_seed_scales.jl if needed), re-freeze protocol_sha, and re-run seed generation against a " *
+          "FRESH campaign root (or clear this one's seeds/ dir) before retrying.")
+end
+lp("Seeds confirmed: ", seed_manifest.n_accepted, "/", n_starts_requested, " accepted.")
+
 # ---- Phase I: waves ----
 n_starts = MANIFEST["seeds"]["number_of_starts"]
 starts_per_wave = get(get(MANIFEST, "concurrency", Dict()), "phase1_starts_per_wave", 2)
