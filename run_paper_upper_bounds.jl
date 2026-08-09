@@ -55,7 +55,7 @@ MANIFEST["source"]["protocol_sha"] != "PENDING_COMMIT" ||
 
 mkpath(CAMPAIGN_ROOT)
 mkpath(joinpath(CAMPAIGN_ROOT, "protocol"))
-cp(PROTOCOL_TOML, joinpath(CAMPAIGN_ROOT, "protocol", "paper_upper_v1.toml"); force = false)
+cp(PROTOCOL_TOML, joinpath(CAMPAIGN_ROOT, "protocol", "paper_upper_v1.toml"); force = true)
 
 lp("="^100)
 lp("paper_upper_v1 launch: protocol=", MANIFEST["protocol"]["name"], " campaign_root=", CAMPAIGN_ROOT)
