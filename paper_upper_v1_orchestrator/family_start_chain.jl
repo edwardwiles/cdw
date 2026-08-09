@@ -212,11 +212,11 @@ function classify_stage(r, elapsed_s::Float64, budget_s::Float64, start_Delta::U
     return :CONVERGED   # terminated early for a reason other than the wall clock (e.g. KNITRO's own convergence tolerance)
 end
 
-function run_stage(kind::Symbol, w0::Vector{Float64}, delta::Float64, budget_minutes::Float64;
+function run_stage(kind::Symbol, w0::Vector{Float64}, delta::Float64, budget_minutes::Real;
                     ckpt_dir::String, label::String, algo_kwargs::NamedTuple, gp_fixed::Union{Nothing,Float64} = nothing,
                     start_Delta::Union{Nothing,Float64} = nothing)
     mkpath(ckpt_dir)
-    budget_s = budget_minutes * 60
+    budget_s = Float64(budget_minutes) * 60
     t0 = time()
     r = try
         if FAM["driver"] == "run_polish_checkpointed_unified"
