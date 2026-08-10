@@ -27,7 +27,7 @@ function build_pairwise_quantile_augmented_obj(ctx, cutoff_layout::PairwiseQuant
     ncore_econ = obj0.d
     D = ctx.D
     D == cutoff_layout.D || error("build_pairwise_quantile_augmented_obj: ctx.D=$D != cutoff_layout.D=$(cutoff_layout.D)")
-    n_rows = n_total_rows(D)
+    n_rows = n_total_rows(D, cutoff_layout.L)
     outer_constr_index_new = obj0.outer_constr_index + n_rows
     core_cf_ref = Ref{Any}(nothing)
     obj_pq = OperatorPsiBundle(δ = obj0.δ, find_smallest = obj0.find_smallest,
@@ -36,7 +36,7 @@ function build_pairwise_quantile_augmented_obj(ctx, cutoff_layout::PairwiseQuant
         U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
         use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
         inner_loop_opt = obj0.inner_loop_opt)
-    op = PairwiseQuantileOperator(ctx.U)
+    op = PairwiseQuantileOperator(ctx.U, cutoff_layout.L)
     return (obj_pq = obj_pq, ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, op = op, D = D)
 end
 
@@ -91,18 +91,20 @@ function dual_index!(st::PairwiseQuantileOperatorState, x::AbstractVector{Float6
     op = st.op
     D = op.D; npair = op.npair
 
+    L = op.L; nc = L - 1
     ζ = x[1]
     λ_E = @view x[2:1+ncore1]
     # BUG FIX (found live, 2026-08-09, via a real-KNITRO-context finite-difference check that
-    # exactly swapped two marginal-cell columns): `marginal_row(o,a)=(o-1)*4+a` (pairwise_quantile_
-    # hessian.jl) is an O-MAJOR flat layout (each origin's 4 bins contiguous). Julia's own
-    # `reshape(v, D, 4)` is COLUMN-MAJOR, i.e. A-MAJOR (`M[o,a] = v[(a-1)*D+o]`) -- the OPPOSITE
-    # convention. `reshape(v, 4, D)'` (reshape into (4,D) then transpose) gives
-    # `M[o,a] = v[(o-1)*4+a]`, matching marginal_row exactly. The pair layout needs NO such fix:
-    # `pair_row(D,pidx,a,b) = ...+(b-1)*4+a` already matches `reshape(v,4,4,npair)`'s natural
-    # column-major layout (`M[a,b,pidx] = v[(pidx-1)*16+(b-1)*4+a]`) directly.
-    λ_M = reshape(@view(x[2+ncore1 : 1+ncore1+n_mean_flat(D)]), 4, D)'
-    λ_P = reshape(@view(x[2+ncore1+n_mean_flat(D) : 1+ncore1+n_mean_flat(D)+n_pair_flat(npair)]), 4, 4, npair)
+    # exactly swapped two marginal-cell columns): `marginal_row(o,a,L)=(o-1)*(L-1)+a`
+    # (pairwise_quantile_hessian.jl) is an O-MAJOR flat layout (each origin's `nc=L-1` bins
+    # contiguous). Julia's own `reshape(v, D, nc)` is COLUMN-MAJOR, i.e. A-MAJOR
+    # (`M[o,a] = v[(a-1)*D+o]`) -- the OPPOSITE convention. `reshape(v, nc, D)'` (reshape into
+    # (nc,D) then transpose) gives `M[o,a] = v[(o-1)*nc+a]`, matching marginal_row exactly. The
+    # pair layout needs NO such fix: `pair_row(D,pidx,a,b,L) = ...+(b-1)*nc+a` already matches
+    # `reshape(v,nc,nc,npair)`'s natural column-major layout (`M[a,b,pidx] = v[(pidx-1)*nc^2+(b-1)*nc+a]`)
+    # directly.
+    λ_M = reshape(@view(x[2+ncore1 : 1+ncore1+n_mean_flat(D, L)]), nc, D)'
+    λ_P = reshape(@view(x[2+ncore1+n_mean_flat(D, L) : 1+ncore1+n_mean_flat(D, L)+n_pair_flat(npair, L)]), nc, nc, npair)
 
     fill!(st.arg0, -ζ)
 
@@ -140,10 +142,11 @@ function (st::PairwiseQuantileOperatorState)(x::AbstractVector{Float64}, g::Abst
         economic_transpose!(g_E, st.arg1, cf, st.econ_ws)
         g_E .*= -(1.0 / M)
 
-        g_M = reshape(@view(g[2+ncore1 : 1+ncore1+n_mean_flat(D)]), 4, D)'
-        g_P = reshape(@view(g[2+ncore1+n_mean_flat(D) : 1+ncore1+n_mean_flat(D)+n_pair_flat(npair)]), 4, 4, npair)
-        tls = build_pairwise_quantile_thread_scratch(D, npair)
-        scratch = PairwiseQuantileTransposeScratch(D, npair)
+        L = op.L; nc = L - 1
+        g_M = reshape(@view(g[2+ncore1 : 1+ncore1+n_mean_flat(D, L)]), nc, D)'
+        g_P = reshape(@view(g[2+ncore1+n_mean_flat(D, L) : 1+ncore1+n_mean_flat(D, L)+n_pair_flat(npair, L)]), nc, nc, npair)
+        tls = build_pairwise_quantile_thread_scratch(D, npair, L)
+        scratch = PairwiseQuantileTransposeScratch(D, npair, L)
         pairwise_quantile_transpose!(g_M, g_P, st.arg1, op, st.bin_state, tls, scratch)
     end
 
@@ -167,8 +170,13 @@ end
 
 Per-context (campaign-lifetime shape) Hessian state: H_EE via the SHARED `WinnerPairHessCtx`/
 `winner_pair_hessian!` (UNCHANGED), H_E,R via `pairwise_quantile_cross_hessian_block!`, H_MM/MP/PP
-via `fill_pairwise_quantile_hessian_raw!`/`center_and_scale_pairwise_quantile_hessian!`. `Hfull` is
-`(NCORE+n_rows) x (NCORE+n_rows)`, NEVER draw-indexed.
+via `fill_pairwise_quantile_hessian_raw!`/`center_and_scale_pairwise_quantile_hessian!`.
+
+`hee_packed`/`HEQ`/`HRR` are persistent (campaign-lifetime shape, never reallocated) -- fixes the
+handover doc's "Two smaller, lower-risk fixes" #1 (dense assembly/packing overhead): the packed
+KNITRO output is now written DIRECTLY from these three structured blocks (`_pk_upper` below), no
+intermediate `(NCORE+n_rows) x (NCORE+n_rows)` `Hfull` build/mirror/repack (previously ~98MB of
+avoidable memory traffic per callback at D=20).
 """
 mutable struct PairwiseQuantileCoreHessCtx
     NCORE::Int
@@ -181,22 +189,34 @@ mutable struct PairwiseQuantileCoreHessCtx
     core_ws::Union{Nothing,WinnerPairHessCtx}
     core_ws_for::Any
     cross_scratch::Union{Nothing,WinnerZCCrossScratch}
-    Hfull::Matrix{Float64}
+    cross_hess_scratch::PairwiseQuantileCrossHessScratch
+    hee_packed::Vector{Float64}
+    HEQ::Matrix{Float64}
+    HRR::Matrix{Float64}
 end
 
 function PairwiseQuantileCoreHessCtx(NCORE::Int, op::PairwiseQuantileOperator, bin_state::PairwiseQuantileBinState,
         core_cf_ref::Ref{Any})
-    D = op.D
-    n = NCORE + n_total_rows(D)
+    D = op.D; L = op.L
+    n_rows = n_total_rows(D, L)
+    ncolI = NCORE - 1
     return PairwiseQuantileCoreHessCtx(NCORE, D, op, bin_state, PairwiseQuantileHessianTables(op),
-        build_pairwise_quantile_thread_scratch(D, op.npair), core_cf_ref, nothing, nothing, nothing, zeros(n, n))
+        build_pairwise_quantile_thread_scratch(D, op.npair, L), core_cf_ref, nothing, nothing, nothing,
+        PairwiseQuantileCrossHessScratch(D, op.npair, op.W, ncolI, L),
+        Vector{Float64}(undef, NCORE * (NCORE + 1) ÷ 2), zeros(NCORE, n_rows), zeros(n_rows, n_rows))
 end
+
+"Row-major upper-triangular packed index of (i,j), i<=j, within an n x n matrix -- the SAME
+convention `winner_pair_hessian!` (`core_exact_hessian.jl`) already fills `hee_packed` with (a
+single running counter across BOTH its zeta-row and lambda-lambda loops), confirmed by construction
+rather than assumed: `_pk_upper(1,1,n)=1`, `_pk_upper(1,2,n)=2`, ..., `_pk_upper(2,2,n)=n+1`."
+@inline _pk_upper(i::Int, j::Int, n::Int) = (i - 1) * (n + 1) - div((i - 1) * i, 2) + (j - i + 1)
 
 function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
     return (kc, cb, evalRequest, evalResult, userParams) -> begin
         obj = userParams
         NCORE = octx.NCORE; D = octx.D; op = octx.op
-        n_rows = n_total_rows(D)
+        n_rows = n_total_rows(D, op.L)
         n = NCORE + n_rows
 
         cf = octx.core_cf_ref[]
@@ -207,26 +227,22 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
         end
         wctx = octx.core_ws
 
-        Hfull = octx.Hfull
-        fill!(Hfull, 0.0)
-
-        # H_EE (unchanged shared winner-pair backend, packed then unpacked into Hfull's corner)
-        hee_packed = Vector{Float64}(undef, NCORE * (NCORE + 1) ÷ 2)
+        # H_EE (unchanged shared winner-pair backend) -- stays in ITS OWN packed form; read directly
+        # at pack time below, never unpacked into a dense corner.
+        hee_packed = octx.hee_packed
         winner_pair_hessian!(hee_packed, obj, wctx)
-        k = 0
-        @inbounds for i in 1:NCORE, j in i:NCORE
-            k += 1
-            Hfull[i, j] = hee_packed[k]; Hfull[j, i] = hee_packed[k]
-        end
 
         # h_w = Psi''(R_w) for the restriction Hessian + H_E,R cross block
         obj.ddPsi!(obj.arg2, obj.arg0)
         h = obj.arg2
 
         build_pairwise_quantile_hessian_tables!(octx.tabs, op, octx.bin_state, h, octx.tls)
-        HRR = @view Hfull[NCORE+1:n, NCORE+1:n]
+        HRR = octx.HRR
         fill_pairwise_quantile_hessian_raw!(HRR, op, octx.tabs)
         center_and_scale_pairwise_quantile_hessian!(HRR, op, octx.tabs)
+        # HRR is symmetric by construction (fill_pairwise_quantile_hessian_raw! mirrors both
+        # triangles; the centering identity applied in place is itself symmetric in (I,J)) -- read
+        # directly at pack time below, no extra 0.5*(HRR[i,j]+HRR[j,i]) defensive pass needed.
 
         # WinnerPairHessCtx's own convention: H_EE is (1+ncolI) x (1+ncolI) = NCORE x NCORE, so
         # ncolI = NCORE-1; pairwise_quantile_cross_hessian_block! fills a (ncolI+1) x n_rows = NCORE
@@ -234,15 +250,30 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
         octx.cross_scratch = ensure_winner_zc_cross_scratch!(Ref{Union{Nothing,WinnerZCCrossScratch}}(octx.cross_scratch),
             op.W, n_rows)
         winner_pair_cross_hessian_zc_prep!(octx.cross_scratch, wctx, h)
-        HEQ = zeros(NCORE, n_rows)
-        pairwise_quantile_cross_hessian_block!(HEQ, wctx, octx.cross_scratch, op, octx.bin_state, octx.tls, h)
-        @views Hfull[1:NCORE, NCORE+1:n] .= HEQ
-        @views Hfull[NCORE+1:n, 1:NCORE] .= transpose(HEQ)
+        HEQ = octx.HEQ
+        pairwise_quantile_cross_hessian_block!(HEQ, wctx, octx.cross_scratch, op, octx.bin_state, octx.tls, h,
+            octx.cross_hess_scratch)
 
+        # Direct packed write: select the correct source block per (i,j) instead of assembling a
+        # dense Hfull first (handover doc fix #1) -- H_EE via hee_packed's own packed index, H_E,R
+        # via HEQ, H_MM/MP/PP via HRR, each already in its final (correctly signed/scaled) form.
         k = 0
-        @inbounds for i in 1:n, j in i:n
-            k += 1
-            evalResult.hess[k] = 0.5 * (Hfull[i, j] + Hfull[j, i])
+        @inbounds for i in 1:n
+            if i <= NCORE
+                for j in i:NCORE
+                    k += 1
+                    evalResult.hess[k] = hee_packed[_pk_upper(i, j, NCORE)]
+                end
+                for j in NCORE+1:n
+                    k += 1
+                    evalResult.hess[k] = HEQ[i, j - NCORE]
+                end
+            else
+                for j in i:n
+                    k += 1
+                    evalResult.hess[k] = HRR[i - NCORE, j - NCORE]
+                end
+            end
         end
         return 0
     end
@@ -309,7 +340,7 @@ function archPQ_base_state(x_free0::AbstractVector, raw_cutoffs::AbstractVector{
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     prime_operator!(obj, θ_econ0, econ_ctx, ctx_cm.pq_core_cf_ref)
 
-    st = PairwiseQuantileOperatorState(obj, obj.outer_constr_index - 1 - n_total_rows(ctx_cm.pq_op.D),
+    st = PairwiseQuantileOperatorState(obj, obj.outer_constr_index - 1 - n_total_rows(ctx_cm.pq_op.D, ctx_cm.pq_op.L),
         ctx_cm.pq_op, ctx_cm.U, ctx_cm.pq_bin_state, ctx_cm.pq_core_cf_ref)
     reset_for_solve!(st, raw_cutoffs, layout)
 

@@ -22,8 +22,9 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
 end
 using LinearAlgebra, Printf
 
-W = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : error("usage: julia profile_pairwise_quantile_d20.jl <W>")
-println("=== D20 profiling, W=$W ===")
+W = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : error("usage: julia profile_pairwise_quantile_d20.jl <W> <L>")
+PQ_L = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : error("usage: julia profile_pairwise_quantile_d20.jl <W> <L>")
+println("=== D20 profiling, W=$W, L=$PQ_L ===")
 flush(stdout)
 
 t_ctx = @elapsed begin
@@ -35,7 +36,7 @@ println("context build: ", round(t_ctx, digits=2), "s  D=", ctx.D, "  size(U)=",
 flush(stdout)
 
 x_free_calib = ctx.θ0_up[ctx.free_idx]
-layout = PairwiseQuantileCutoffLayout(ctx.D)
+layout = PairwiseQuantileCutoffLayout(ctx.D, PQ_L)
 
 t_aug = @elapsed begin
     global aug = build_pairwise_quantile_augmented_obj(ctx, layout)
@@ -43,7 +44,7 @@ end
 println("augmented obj + PairwiseQuantileOperator build (incl. presort): ", round(t_aug, digits=2), "s")
 flush(stdout)
 
-bin_state = PairwiseQuantileBinState(size(ctx.U, 1), ctx.D)
+bin_state = PairwiseQuantileBinState(size(ctx.U, 1), ctx.D, PQ_L)
 hess_ctx = PairwiseQuantileCoreHessCtx(aug.ncore_econ, aug.op, bin_state, aug.core_cf_ref)
 ctx_cm = merge(ctx, (obj = aug.obj_pq, pq_op = aug.op, pq_bin_state = bin_state,
                       pq_core_cf_ref = aug.core_cf_ref, pq_hess_ctx = hess_ctx))
@@ -56,9 +57,9 @@ raw_cutoffs = zeros(n_raw(layout))
 for o in 1:ctx.D
     base = raw_index(layout, o, 1)
     Uo = @view ctx.U[:, o]
-    q = [quantile_naive(Uo, r/5) for r in 1:4]
+    q = [quantile_naive(Uo, r/PQ_L) for r in 1:PQ_L-1]
     raw_cutoffs[base] = log(q[1])
-    for k in 2:4
+    for k in 2:PQ_L-1
         gap = log(q[k]) - log(q[k-1])
         raw_cutoffs[base+k-1] = gap > 0 ? log(expm1(gap)) : -5.0
     end
@@ -73,8 +74,8 @@ println("solve: ", round(t_solve, digits=2), "s  nStatus=", nStatus, "  n_fg=", 
 flush(stdout)
 
 D = ctx.D; op = aug.op; npair = op.npair
-n_rows = n_total_rows(D)
-println("\nD=$D n_bins=5 n_cutoffs=4 outer_cutoff_params=$(4*D) unordered_pairs=$npair marginal_rows=$(n_marginal_rows(D)) pair_rows=$(n_pair_rows(D)) total_rows=$n_rows dense_G_production=false")
+n_rows = n_total_rows(D, PQ_L)
+println("\nD=$D n_bins=$PQ_L n_cutoffs=$(PQ_L-1) outer_cutoff_params=$((PQ_L-1)*D) unordered_pairs=$npair marginal_rows=$(n_marginal_rows(D,PQ_L)) pair_rows=$(n_pair_rows(D,PQ_L)) total_rows=$n_rows dense_G_production=false")
 println("ncombo3 (T3) = ", length(op.triple_combos), "   ncombo4 (T4) = ", length(op.quad_combos))
 
 # ---- one dedicated, timed Hessian callback at the SOLVED point, sub-block broken out ----
@@ -84,7 +85,7 @@ wctx = build_winner_pair_ctx(cf)
 NCORE = aug.ncore_econ
 obj.ddPsi!(obj.arg2, obj.arg0)
 h = obj.arg2
-tls = build_pairwise_quantile_thread_scratch(D, npair)
+tls = build_pairwise_quantile_thread_scratch(D, npair, PQ_L)
 tabs = PairwiseQuantileHessianTables(op)
 
 println("\n=== Hessian sub-block timing (one callback at the solved point) ===")
@@ -109,28 +110,35 @@ t_prep = @elapsed winner_pair_cross_hessian_zc_prep!(cross_scratch, wctx, h)
 @printf("H_E,R prep (Snu/crs_buf): %.4fs\n", t_prep)
 
 HEQ = zeros(NCORE, n_rows)
-t_cross = @elapsed pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, bin_state, tls, h)
+cross_hess_scratch = PairwiseQuantileCrossHessScratch(D, npair, op.W, NCORE - 1, PQ_L)
+t_cross = @elapsed pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, bin_state, tls, h, cross_hess_scratch)
 @printf("H_E,R cross-block (economic x restriction): %.4fs\n", t_cross)
 
+# direct packed write (Hessian-optimization pass, 2026-08-09 -- matches production
+# pairwisequantile_hess_cb_builder exactly): no intermediate dense Hfull build/mirror/repack.
 t_pack = @elapsed begin
     local n = NCORE + n_rows
     local hvec = Vector{Float64}(undef, n*(n+1)÷2)
-    local Hfull = zeros(n, n)
     local k = 0
-    for i in 1:NCORE, j in i:NCORE
-        k += 1
-        Hfull[i,j] = hee_packed[k]; Hfull[j,i] = hee_packed[k]
-    end
-    Hfull[1:NCORE, NCORE+1:n] .= HEQ
-    Hfull[NCORE+1:n, 1:NCORE] .= transpose(HEQ)
-    Hfull[NCORE+1:n, NCORE+1:n] .= HRR
-    local kk = 0
-    for i in 1:n, j in i:n
-        kk += 1
-        hvec[kk] = 0.5*(Hfull[i,j]+Hfull[j,i])
+    for i in 1:n
+        if i <= NCORE
+            for j in i:NCORE
+                k += 1
+                hvec[k] = hee_packed[_pk_upper(i, j, NCORE)]
+            end
+            for j in NCORE+1:n
+                k += 1
+                hvec[k] = HEQ[i, j - NCORE]
+            end
+        else
+            for j in i:n
+                k += 1
+                hvec[k] = HRR[i - NCORE, j - NCORE]
+            end
+        end
     end
 end
-@printf("final assembly + packing (dense n x n, n=%d): %.4fs\n", NCORE+n_rows, t_pack)
+@printf("final packed write (direct, no dense Hfull, n=%d): %.4fs\n", NCORE+n_rows, t_pack)
 
 t_total = t_HEE + t_T1T2 + t_fill + t_center + t_prep + t_cross + t_pack
 @printf("\nSUM of measured sub-blocks: %.4fs\n", t_total)
@@ -140,7 +148,7 @@ a_HEE = @allocated winner_pair_hessian!(hee_packed, obj, wctx)
 a_T1T2 = @allocated build_pairwise_quantile_hessian_tables!(tabs, op, bin_state, h, tls)
 a_fill = @allocated fill_pairwise_quantile_hessian_raw!(HRR, op, tabs)
 a_center = @allocated center_and_scale_pairwise_quantile_hessian!(HRR, op, tabs)
-a_cross = @allocated pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, bin_state, tls, h)
+a_cross = @allocated pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, bin_state, tls, h, cross_hess_scratch)
 println("\n=== allocations (bytes, second call so JIT-warm) ===")
 @printf("H_EE: %d   T1/T2/T3/T4 tables: %d   H_MM/MP/PP fill: %d   centering: %d   H_E,R cross: %d\n",
         a_HEE, a_T1T2, a_fill, a_center, a_cross)

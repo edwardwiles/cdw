@@ -18,11 +18,12 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
 end
 using Random, LinearAlgebra
 
+const PQ_L = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5   # test-file convenience only; production requires explicit L
 ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
 x_free_calib = ctx.θ0_up[ctx.free_idx]
-layout = PairwiseQuantileCutoffLayout(ctx.D)
+layout = PairwiseQuantileCutoffLayout(ctx.D, PQ_L)
 aug = build_pairwise_quantile_augmented_obj(ctx, layout)
-bin_state = PairwiseQuantileBinState(size(ctx.U,1), ctx.D)
+bin_state = PairwiseQuantileBinState(size(ctx.U,1), ctx.D, PQ_L)
 
 function quantile_naive(v::AbstractVector{Float64}, p::Float64)
     s = sort(v); n = length(s)
@@ -32,9 +33,9 @@ raw_cutoffs = zeros(n_raw(layout))
 for o in 1:ctx.D
     base = raw_index(layout, o, 1)
     Uo = @view ctx.U[:, o]
-    q = [quantile_naive(Uo, r/5) for r in 1:4]
+    q = [quantile_naive(Uo, r/PQ_L) for r in 1:PQ_L-1]
     raw_cutoffs[base] = log(q[1])
-    for k in 2:4
+    for k in 2:PQ_L-1
         gap = log(q[k]) - log(q[k-1])
         raw_cutoffs[base+k-1] = gap > 0 ? log(expm1(gap)) : -5.0
     end
@@ -44,8 +45,8 @@ obj = aug.obj_pq
 θ_econ0 = CS.reconstruct_full(x_free_calib, ctx.m)
 prime_operator!(obj, θ_econ0, ctx, aug.core_cf_ref)
 
-ncore1 = obj.outer_constr_index - 1 - n_total_rows(ctx.D)
-println("ncore1 = ", ncore1, "  n_total_rows = ", n_total_rows(ctx.D), "  outer_constr_index = ", obj.outer_constr_index)
+ncore1 = obj.outer_constr_index - 1 - n_total_rows(ctx.D, PQ_L)
+println("ncore1 = ", ncore1, "  n_total_rows = ", n_total_rows(ctx.D, PQ_L), "  outer_constr_index = ", obj.outer_constr_index)
 
 st = PairwiseQuantileOperatorState(obj, ncore1, aug.op, ctx.U, bin_state, aug.core_cf_ref)
 reset_for_solve!(st, raw_cutoffs, layout)

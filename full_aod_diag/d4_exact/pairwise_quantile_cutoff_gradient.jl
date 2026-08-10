@@ -86,6 +86,7 @@ function fixed_dual_delta_f(op::PairwiseQuantileOperator, state::PairwiseQuantil
         q_new::Float64, lambda_M::AbstractMatrix{Float64}, lambda_P::AbstractArray{Float64,3},
         r_current::AbstractVector{Float64})
     D = op.D
+    nlast = UInt8(op.L - 1)   # last ACTIVE bin index; bin L (the omitted implicit-zero bin) is > nlast
     q_old = state.Q[r, o]
     rng = crossed_draw_range(op, o, q_old, q_new)
     isempty(rng) && return (0.0, 0)
@@ -95,7 +96,7 @@ function fixed_dual_delta_f(op::PairwiseQuantileOperator, state::PairwiseQuantil
     # b_old for every crossed draw is the SAME single value (r or r+1, depending on direction) --
     # but recomputed directly via searchsortedfirst against the OLD/NEW cutoff columns rather than
     # hand-derived from direction, matching refresh_pairwise_quantile_bins!'s own convention exactly
-    # (robust against any off-by-one, at negligible extra cost since D=4 cutoffs is O(1) to search).
+    # (robust against any off-by-one, at negligible extra cost since L-1 cutoffs is O(1) to search).
     Qold_col = @view state.Q[:, o]
     Qnew = copy(Qold_col); Qnew[r] = q_new
 
@@ -109,20 +110,20 @@ function fixed_dual_delta_f(op::PairwiseQuantileOperator, state::PairwiseQuantil
         k_crossed += 1
 
         dR = 0.0
-        b_old <= 0x04 && (dR -= lambda_M[o, b_old])
-        b_new <= 0x04 && (dR += lambda_M[o, b_new])
+        b_old <= nlast && (dR -= lambda_M[o, b_old])
+        b_new <= nlast && (dR += lambda_M[o, b_new])
         for p in 1:D
             p == o && continue
             bp = bin[w, p]
-            bp > 0x04 && continue
+            bp > nlast && continue
             pidx = pair_index(op, o, p)
             (op1, op2) = pairs[pidx]
             if op1 == o
-                b_old <= 0x04 && (dR -= lambda_P[b_old, bp, pidx])
-                b_new <= 0x04 && (dR += lambda_P[b_new, bp, pidx])
+                b_old <= nlast && (dR -= lambda_P[b_old, bp, pidx])
+                b_new <= nlast && (dR += lambda_P[b_new, bp, pidx])
             else
-                b_old <= 0x04 && (dR -= lambda_P[bp, b_old, pidx])
-                b_new <= 0x04 && (dR += lambda_P[bp, b_new, pidx])
+                b_old <= nlast && (dR -= lambda_P[bp, b_old, pidx])
+                b_new <= nlast && (dR += lambda_P[bp, b_new, pidx])
             end
         end
 
@@ -137,18 +138,19 @@ end
                              min_crossed) -> grad_raw
 
 Fills `grad_raw` (length `n_raw(layout)`) with the fixed-dual boundary-crossing secant estimate of
-`∂f/∂raw_k` for EVERY raw outer coordinate, one origin/level at a time. For each `(o,r)`:
+`∂f/∂raw_k` for EVERY raw outer coordinate, one origin/level at a time. For each `(o,r)`,
+`r=1,...,n_cutoffs(layout)=layout.L-1`:
   1. `bandwidth_target` picks an up-step and a down-step (clamped to respect `q_{o,r-1}<q_{o,r}<
-     q_{o,r+1}`, using `-Inf`/`+Inf` as the implicit bound at `r=1`/`r=4`).
+     q_{o,r+1}`, using `-Inf`/`+Inf` as the implicit bound at `r=1`/`r=n_cutoffs(layout)`).
   2. `fixed_dual_delta_f` gives `Δf_up`/`Δf_down` from ONLY the crossed draws.
   3. Central secant `(Δf_up - Δf_down)/(q_up - q_down)` when BOTH directions achieved at least
      `min_crossed` crossed draws; one-sided `Δf/(q_new-q_old)` otherwise (whichever direction
      succeeded) -- task's "central when possible" instruction.
-  4. The physical-cutoff derivative is mapped back to the 4 raw coordinates of origin `o` via
-     `cutoff_jacobian_block!` (chain rule: `∂f/∂raw_k = Σ_r (∂f/∂q_r)*(∂q_r/∂raw_k)`), accumulated
-     into `grad_raw[raw_index(layout,o,k)]` across all 4 levels `r` of that origin (each level's
-     Jacobian ROW contributes to every raw coordinate `k<=r`, per `cutoff_jacobian_block!`'s own
-     lower-triangular structure).
+  4. The physical-cutoff derivative is mapped back to the `n_cutoffs(layout)` raw coordinates of
+     origin `o` via `cutoff_jacobian_block!` (chain rule: `∂f/∂raw_k = Σ_r (∂f/∂q_r)*(∂q_r/∂raw_k)`),
+     accumulated into `grad_raw[raw_index(layout,o,k)]` across all levels `r` of that origin (each
+     level's Jacobian ROW contributes to every raw coordinate `k<=r`, per `cutoff_jacobian_block!`'s
+     own lower-triangular structure).
 
 `min_crossed` has NO default (task's own no-silent-defaults convention) -- callers must choose it
 based on the campaign's `W` (e.g. a few hundred draws at `W=100,000`).
@@ -158,21 +160,22 @@ function cutoff_secant_gradient!(grad_raw::AbstractVector{Float64}, op::Pairwise
         r_current::AbstractVector{Float64}, layout::PairwiseQuantileCutoffLayout, raw::AbstractVector{Float64};
         min_crossed::Int)
     D = op.D
+    nc = n_cutoffs(layout)
     length(grad_raw) == n_raw(layout) || error("cutoff_secant_gradient!: length(grad_raw) mismatch")
     fill!(grad_raw, 0.0)
-    J = zeros(4, 4)
-    dfdq = zeros(4)
+    J = zeros(nc, nc)
+    dfdq = zeros(nc)
 
     @inbounds for o in 1:D
         base = raw_index(layout, o, 1)
-        raw4 = (raw[base], raw[base+1], raw[base+2], raw[base+3])
+        rawo = @view raw[base:base+nc-1]
         Qcol = @view state.Q[:, o]
-        cutoff_jacobian_block!(J, raw4, Qcol)
+        cutoff_jacobian_block!(J, rawo, Qcol)
 
-        for r in 1:4
+        for r in 1:nc
             q_old = Qcol[r]
             lo_bound = r == 1 ? -Inf : Qcol[r-1]
-            hi_bound = r == 4 ? Inf : Qcol[r+1]
+            hi_bound = r == nc ? Inf : Qcol[r+1]
 
             q_up = bandwidth_target(op, o, q_old, :up, min_crossed, hi_bound)
             q_down = bandwidth_target(op, o, q_old, :down, min_crossed, lo_bound)
@@ -194,10 +197,10 @@ function cutoff_secant_gradient!(grad_raw::AbstractVector{Float64}, op::Pairwise
             end
         end
 
-        for k in 1:4
+        for k in 1:nc
             gi = raw_index(layout, o, k)
             acc = 0.0
-            for r in 1:4
+            for r in 1:nc
                 acc += dfdq[r] * J[r, k]
             end
             grad_raw[gi] = acc

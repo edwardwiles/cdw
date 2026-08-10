@@ -2,7 +2,7 @@ include(joinpath(@__DIR__, "debug_pq_fg_check.jl"))
 
 println("\n=== isolating H_E,R cross-block ===")
 D = ctx.D; npair = aug.op.npair
-n_rows = n_total_rows(D)
+n_rows = n_total_rows(D, PQ_L)
 NCORE = ncore1 + 1
 
 cf = aug.core_cf_ref[]
@@ -15,7 +15,8 @@ h = obj.arg2
 cross_scratch = ensure_winner_zc_cross_scratch!(Ref{Union{Nothing,WinnerZCCrossScratch}}(nothing), aug.op.W, n_rows)
 winner_pair_cross_hessian_zc_prep!(cross_scratch, wctx, h)
 HEQ = zeros(NCORE, n_rows)
-pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, aug.op, bin_state, build_pairwise_quantile_thread_scratch(D, npair), h)
+cross_hess_scratch = PairwiseQuantileCrossHessScratch(D, npair, aug.op.W, ncore1, PQ_L)
+pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, aug.op, bin_state, build_pairwise_quantile_thread_scratch(D, npair, PQ_L), h, cross_hess_scratch)
 
 # brute-force cross derivative: d(g_E[j]) / d(lambda_R[x]) via FD on the FG functor's gradient,
 # for a SMALL sample of (j,x) pairs including the culprit column j=6 (Hfull col index 7 = j+1=7 -> j=6)
@@ -27,7 +28,7 @@ function g_full(xvec)
 end
 
 # pick a handful of restriction coordinates to test against ALL economic rows (cheap: ncore1+1=18 rows x few x)
-test_xs = [1, 2, 5, marginal_row(2,1), pair_row(D,1,1,1), 20, 50, n_rows]
+test_xs = [1, 2, 5, marginal_row(2,1,PQ_L), pair_row(D,1,1,1,PQ_L), 20, 50, n_rows]
 println("testing restriction cols (Hfull col index, i.e. NCORE+x): ", test_xs)
 
 maxerr = 0.0

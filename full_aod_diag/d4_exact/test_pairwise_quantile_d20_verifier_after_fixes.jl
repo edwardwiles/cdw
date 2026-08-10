@@ -1,4 +1,9 @@
-# Real D4 KNITRO solve + independent verifier check for the pairwise-quantile-independence restriction.
+# D20/W=<ARG> real KNITRO solve + independent verifier, AFTER the Hessian-optimization pass
+# (T3/T4 dedup+threading, dense-packing removal, cross-block scratch reuse). Confirms the real
+# production path is still correct at D20 scale, not just D4 -- the T3/T4 dedup overcounting bug
+# this pass found+fixed was only caught because of exactly this kind of end-to-end real-context
+# check (a synthetic brute-force check alone caught the bug; this confirms the fix holds at the
+# real production scale too).
 const D4X = @__DIR__
 for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl", "common_marginals_interval.jl",
           "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
@@ -10,14 +15,14 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "cm_production_bundle.jl", "cm_outer_driver.jl",
           "cm_originzc_target_layout.jl", "cm_meanzc_moments.jl", "cm_meanzc_production.jl",
           "cm_originzc_moments.jl", "cm_originzc_production.jl", "operator_psi_bundle.jl",
-          "cm_callback_health.jl", "compressed_factual_buffer_reuse.jl",
+          "cm_callback_health.jl", "compressed_factual_buffer_reuse.jl", "draw_design.jl",
           "pairwise_quantile_cutoff_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
           "pairwise_quantile_production.jl"]
     include(joinpath(D4X, f))
 end
-using LinearAlgebra
+using LinearAlgebra, Printf
 
 ALL_PASS = Ref(true)
 function check(name::AbstractString, cond::Bool)
@@ -25,8 +30,17 @@ function check(name::AbstractString, cond::Bool)
     println(cond ? "PASS  " : "FAIL  ", name)
 end
 
-const PQ_L = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5   # test-file convenience only; production requires explicit L
-ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
+W = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : error("usage: julia test_pairwise_quantile_d20_verifier_after_fixes.jl <W> <L>")
+PQ_L = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : error("usage: julia test_pairwise_quantile_d20_verifier_after_fixes.jl <W> <L>")
+
+t_ctx = @elapsed begin
+    global ctx = d20_real_setup_design(; W = W, δ = 1.0, find_smallest = true,
+        draw_design = :pseudorandom, draw_seed = 20260719,
+        destination_sample = :exclude_row, σHat = 3.0, inner_lower_limit = -10.0)
+end
+println("context build: ", round(t_ctx, digits=2), "s  D=", ctx.D)
+flush(stdout)
+
 x_free_calib = ctx.θ0_up[ctx.free_idx]
 layout = PairwiseQuantileCutoffLayout(ctx.D, PQ_L)
 aug = build_pairwise_quantile_augmented_obj(ctx, layout)
@@ -51,10 +65,14 @@ for o in 1:ctx.D
     end
 end
 
-println("=== running REAL KNITRO inner solve ===")
-nStatus, x, obj, n_fg, n_hess = archPQ_base_state(x_free_calib, raw_cutoffs, ctx, ctx_cm, layout)
-println("nStatus = ", nStatus, "  n_fg = ", n_fg, "  n_hess = ", n_hess)
+println("\n=== running REAL KNITRO inner solve (post-fix production path) ===")
+flush(stdout)
+t_solve = @elapsed begin
+    global nStatus, x, obj, n_fg, n_hess = archPQ_base_state(x_free_calib, raw_cutoffs, ctx, ctx_cm, layout)
+end
+println("solve: ", round(t_solve, digits=2), "s  nStatus=", nStatus, "  n_fg=", n_fg, "  n_hess=", n_hess)
 check("real KNITRO solve feasible", nStatus in (0, -100, -101, -103))
+flush(stdout)
 
 println("\n=== running independent verifier on the solved point ===")
 ncore1 = obj.outer_constr_index - 1 - n_total_rows(ctx.D, PQ_L)
@@ -70,11 +88,7 @@ println("kkt_resid = ", verify.kkt_resid)
 println("kkt_resid_E = ", verify.kkt_resid_E, "  kkt_resid_marginalbin = ", verify.kkt_resid_marginalbin,
         "  kkt_resid_pairindep = ", verify.kkt_resid_pairindep)
 check("verifier KKT residual small (< 1e-4)", verify.kkt_resid < 1e-4)
-
-println("\nmarginal_prob sample (origin 1, all 5 bins): ", round.(verify.marginal_prob[1, :], digits=4))
-println("max_marginal_cumulative_residual = ", verify.max_marginal_cumulative_residual)
-println("max_cumulative_residual (joint) = ", verify.max_cumulative_residual)
 check("marginal probabilities sum to ~1 per origin", all(o -> abs(sum(verify.marginal_prob[o, :]) - 1.0) < 1e-9, 1:ctx.D))
 
 println()
-println(ALL_PASS[] ? "ALL VERIFIER CHECKS PASSED" : "SOME CHECKS FAILED")
+println(ALL_PASS[] ? "ALL POST-FIX D20 CHECKS PASSED" : "SOME CHECKS FAILED")

@@ -16,9 +16,15 @@
 # ================================================================================================
 
 """
-    PairwiseQuantileOperator(U::Matrix{Float64})
+    PairwiseQuantileOperator(U::Matrix{Float64}, L::Int)
 
-`U` is `ctx.U` (W x D raw productivity draws, immutable for the whole campaign). Builds, ONCE:
+`U` is `ctx.U` (W x D raw productivity draws, immutable for the whole campaign). `L` is the number
+of quantile BINS per origin (`L>=2`; `n_cutoffs = L-1` cutoffs partition each origin's draws into
+`L` bins) -- a REQUIRED argument, no default (repo's own no-silent-defaults convention; this is a
+genuine modeling choice, same footing as `min_crossed`/`W`/`draw_seed` elsewhere in this
+restriction). The task's own eq. (32) draft used `L=5` (quintiles); this campaign-lifetime struct
+and everything downstream of it is now genuinely `L`-generic, not hardcoded to quintiles. Builds,
+ONCE:
   - `sorted_z[:,o]` = `U[:,o]` sorted ascending; `sorted_idx[:,o]` = the corresponding `sortperm`
     (so `U[sorted_idx[k,o],o] == sorted_z[k,o]`) -- used by the cutoff-crossing gradient method to
     find, in `O(log W + k)`, exactly the draws whose bin membership changes when `q_{o,r}` moves.
@@ -28,6 +34,7 @@
 """
 struct PairwiseQuantileOperator
     D::Int
+    L::Int
     W::Int
     npair::Int
     pairs::Vector{Tuple{Int,Int}}
@@ -43,15 +50,16 @@ struct PairwiseQuantileOperator
     triple_combos::Vector{Tuple{Int,Int}}
     # `quad_lookup[pidx1,pidx2]` = 1-based index into the T4 combo axis if `pairs[pidx1]` and
     # `pairs[pidx2]` share NO origin, for pidx1<pidx2 ONLY (canonical order -- the disjoint block's
-    # transpose, pidx1>pidx2, is obtained by transposing the SAME stored 16x16 sub-block when
-    # filling Hfull, never by storing a second copy). `quad_combos[k]=(pidx1,pidx2)`, pidx1<pidx2.
+    # transpose, pidx1>pidx2, is obtained by transposing the SAME stored (L-1)^2 x (L-1)^2 sub-block
+    # when filling Hfull, never by storing a second copy). `quad_combos[k]=(pidx1,pidx2)`, pidx1<pidx2.
     quad_lookup::Matrix{Int}
     quad_combos::Vector{Tuple{Int,Int}}
 end
 
-function PairwiseQuantileOperator(U::AbstractMatrix{Float64})
+function PairwiseQuantileOperator(U::AbstractMatrix{Float64}, L::Int)
     W, D = size(U)
     D >= 2 || error("PairwiseQuantileOperator: D must be >= 2, got $D")
+    L >= 2 || error("PairwiseQuantileOperator: L (n_bins) must be >= 2, got $L")
     pairs = packed_pair_index(D)
     npair = length(pairs)
     npair == div(D * (D - 1), 2) || error("PairwiseQuantileOperator: internal pair-count mismatch")
@@ -87,31 +95,32 @@ function PairwiseQuantileOperator(U::AbstractMatrix{Float64})
         end
     end
 
-    return PairwiseQuantileOperator(D, W, npair, pairs, sorted_z, sorted_idx,
+    return PairwiseQuantileOperator(D, L, W, npair, pairs, sorted_z, sorted_idx,
         triple_lookup, triple_combos, quad_lookup, quad_combos)
 end
 
 "pair_index(op, o, p) -> Int: O(1) linear index into the 190-pair convention, o,p in either order."
 pair_index(op::PairwiseQuantileOperator, o::Int, p::Int) = pair_oi_to_lin(o, p, op.D)
 
-"n_marginal_rows(D) = 4*D; n_pair_rows(D) = 16*C(D,2); n_total_rows(D) = their sum. D=20 gives the
-task's own asserted counts: 80, 3040, 3120."
-n_marginal_rows(D::Int) = 4 * D
-n_pair_rows(D::Int) = 16 * div(D * (D - 1), 2)
-n_total_rows(D::Int) = n_marginal_rows(D) + n_pair_rows(D)
+"n_marginal_rows(D,L) = (L-1)*D; n_pair_rows(D,L) = (L-1)^2*C(D,2); n_total_rows(D,L) = their sum.
+`L` is the number of bins (task's own draft used `L=5`, giving the originally-asserted D=20 counts
+80/3040/3120 -- both are now `L`-generic, no bin count hardcoded)."
+n_marginal_rows(D::Int, L::Int) = (L - 1) * D
+n_pair_rows(D::Int, L::Int) = (L - 1)^2 * div(D * (D - 1), 2)
+n_total_rows(D::Int, L::Int) = n_marginal_rows(D, L) + n_pair_rows(D, L)
 
 """
-    PairwiseQuantileBinState(W::Int, D::Int)
+    PairwiseQuantileBinState(W::Int, D::Int, L::Int)
 
 Mutable, rebuilt once per outer point via `refresh_pairwise_quantile_bins!` below.
-`Q[r,o] = q_{o,r}` (4xD physical cutoffs); `bin[w,o] in 1:5` (Wx D, `UInt8`).
+`Q[r,o] = q_{o,r}` (`(L-1) x D` physical cutoffs); `bin[w,o] in 1:L` (Wx D, `UInt8`).
 """
 mutable struct PairwiseQuantileBinState
     Q::Matrix{Float64}
     bin::Matrix{UInt8}
 end
 
-PairwiseQuantileBinState(W::Int, D::Int) = PairwiseQuantileBinState(zeros(4, D), zeros(UInt8, W, D))
+PairwiseQuantileBinState(W::Int, D::Int, L::Int) = PairwiseQuantileBinState(zeros(L - 1, D), zeros(UInt8, W, D))
 
 """
     refresh_pairwise_quantile_bins!(state, op, U, raw, layout) -> state

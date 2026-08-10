@@ -13,6 +13,13 @@
 # genuine step function of any single cutoff between consecutive draws, so an "infinitesimal-h"
 # comparison would be meaningless here; see this file's own CHECK 8/9 comments).
 #
+# `L`-generic (2026-08-09): `L` (number of quantile bins) is a test parameter, `ARGS[1]` if given
+# else 5 (the task's own draft quintile value) -- this file is the fast, standalone, real-scale-
+# independent way to prove the whole restriction is genuinely `L`-generic, not hardcoded to
+# quintiles: run once at the default `L=5` (regression) and once at a DIFFERENT `L` (e.g. `L=7`) to
+# prove it. The `ARGS`-with-fallback here is a TEST-file convenience only, not a production default
+# (this file is never included by production code -- see the SCOPE NOTE below).
+#
 # SCOPE NOTE: this oracle validates the restriction's OWN numerics (forward/transpose/Hessian/
 # cutoff-gradient) in isolation, using synthetic draws -- it does NOT exercise the real economic
 # H_EE/H_E,restriction cross-block or a live KNITRO inner solve (that requires the full production
@@ -64,63 +71,69 @@ end
 Random.seed!(20260809)
 const D = 4
 const W = 6000
+const L = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5   # test-file convenience only, see header note
+const NC = L - 1
+println("=== D4 dense oracle, L=$L (n_cutoffs=$NC) ===")
 U = rand(W, D) .* 3.0 .+ 0.3   # positive support, matches ctx.U's own convention
 
-op = PairwiseQuantileOperator(U)
-layout = PairwiseQuantileCutoffLayout(D)
+op = PairwiseQuantileOperator(U, L)
+layout = PairwiseQuantileCutoffLayout(D, L)
 raw = randn(n_raw(layout)) .* 0.3
-state = PairwiseQuantileBinState(W, D)
+state = PairwiseQuantileBinState(W, D, L)
 refresh_pairwise_quantile_bins!(state, op, U, raw, layout)
 npair = op.npair
-nrow = n_total_rows(D)
+nrow = n_total_rows(D, L)
 
-println("D=$D W=$W npair=$npair nrow=$nrow (marginal=$(n_marginal_rows(D)) pair=$(n_pair_rows(D)))")
+println("D=$D W=$W L=$L npair=$npair nrow=$nrow (marginal=$(n_marginal_rows(D,L)) pair=$(n_pair_rows(D,L)))")
 check("D=4 counts: npair==6", npair == 6)
-check("D=4 counts: nrow==112 (16 marginal + 96 pair)", nrow == 112 && n_marginal_rows(D) == 16 && n_pair_rows(D) == 96)
+check("D=4 counts: nrow == NC*D + NC^2*6 (marginal+pair)", nrow == NC * D + NC^2 * 6 &&
+      n_marginal_rows(D, L) == NC * D && n_pair_rows(D, L) == NC^2 * 6)
 
 # ==== CHECK 1: ordering + Jacobian vs finite differences ====
 check("cutoffs strictly ordered at every origin", all(o -> all(diff(state.Q[:, o]) .> 0), 1:D))
 begin
     o = 2
     base = raw_index(layout, o, 1)
-    raw4 = (raw[base], raw[base+1], raw[base+2], raw[base+3])
+    raw_o = raw[base:base+NC-1]
     Qcol = state.Q[:, o]
-    J = zeros(4, 4); cutoff_jacobian_block!(J, raw4, Qcol)
-    h = 1e-6; Jfd = zeros(4, 4)
-    for k in 1:4
-        rp = collect(raw4); rp[k] += h
-        rm = collect(raw4); rm[k] -= h
-        qp = exp.(collect(decode_origin_logcutoffs(Tuple(rp))))
-        qm = exp.(collect(decode_origin_logcutoffs(Tuple(rm))))
+    J = zeros(NC, NC); cutoff_jacobian_block!(J, raw_o, Qcol)
+    h = 1e-6; Jfd = zeros(NC, NC)
+    logq_buf = zeros(NC)
+    for k in 1:NC
+        rp = copy(raw_o); rp[k] += h
+        rm = copy(raw_o); rm[k] -= h
+        decode_origin_logcutoffs!(logq_buf, rp); qp = exp.(copy(logq_buf))
+        decode_origin_logcutoffs!(logq_buf, rm); qm = exp.(copy(logq_buf))
         Jfd[:, k] .= (qp .- qm) ./ (2h)
     end
     check_tol("cutoff Jacobian vs finite differences", maximum(abs.(J .- Jfd)), 1e-6)
 end
 
 # ==== dense reference builder (shared by checks 2-7) ====
-lambda_M = randn(D, 4)
-lambda_P = randn(4, 4, npair)
+tM = 1.0 / L; tP = 1.0 / L^2
+lambda_M = randn(D, NC)
+lambda_P = randn(NC, NC, npair)
 Gdense = zeros(W, nrow)
 tvec = zeros(nrow)
-for o in 1:D, a in 1:4
-    i = marginal_row(o, a)
-    @views Gdense[:, i] .= (state.bin[:, o] .== a) .- 0.2
-    tvec[i] = 0.2
+for o in 1:D, a in 1:NC
+    i = marginal_row(o, a, L)
+    @views Gdense[:, i] .= (state.bin[:, o] .== a) .- tM
+    tvec[i] = tM
 end
 for pidx in 1:npair
     (p, q) = op.pairs[pidx]
-    for b in 1:4, a in 1:4
-        j = pair_row(D, pidx, a, b)
-        @views Gdense[:, j] .= ((state.bin[:, p] .== a) .& (state.bin[:, q] .== b)) .- 0.04
-        tvec[j] = 0.04
+    for b in 1:NC, a in 1:NC
+        j = pair_row(D, pidx, a, b, L)
+        @views Gdense[:, j] .= ((state.bin[:, p] .== a) .& (state.bin[:, q] .== b)) .- tP
+        tvec[j] = tP
     end
 end
 lam_flat = zeros(nrow)
-for o in 1:D, a in 1:4
-    lam_flat[marginal_row(o, a)] = lambda_M[o, a]
+for o in 1:D, a in 1:NC
+    lam_flat[marginal_row(o, a, L)] = lambda_M[o, a]
 end
-for pidx in 1:npair, b in 1:4, a in 1:4
-    lam_flat[pair_row(D, pidx, a, b)] = lambda_P[a, b, pidx]
+for pidx in 1:npair, b in 1:NC, a in 1:NC
+    lam_flat[pair_row(D, pidx, a, b, L)] = lambda_P[a, b, pidx]
 end
 
 # ==== CHECK 2: forward ====
@@ -132,17 +145,17 @@ check_tol("forward! vs dense G*lambda", maximum(abs.(R_lookup .- R_dense)), 1e-9
 
 # ==== CHECK 3: transpose ====
 draw_weights = rand(W) .+ 0.1
-g_M = zeros(D, 4); g_P = zeros(4, 4, npair)
-tls = build_pairwise_quantile_thread_scratch(D, npair)
-scratch_tr = PairwiseQuantileTransposeScratch(D, npair)
+g_M = zeros(D, NC); g_P = zeros(NC, NC, npair)
+tls = build_pairwise_quantile_thread_scratch(D, npair, L)
+scratch_tr = PairwiseQuantileTransposeScratch(D, npair, L)
 pairwise_quantile_transpose!(g_M, g_P, draw_weights, op, state, tls, scratch_tr)
 g_dense_flat = -(1.0 / W) .* (Gdense' * draw_weights)
 g_lookup_flat = zeros(nrow)
-for o in 1:D, a in 1:4
-    g_lookup_flat[marginal_row(o, a)] = g_M[o, a]
+for o in 1:D, a in 1:NC
+    g_lookup_flat[marginal_row(o, a, L)] = g_M[o, a]
 end
-for pidx in 1:npair, b in 1:4, a in 1:4
-    g_lookup_flat[pair_row(D, pidx, a, b)] = g_P[a, b, pidx]
+for pidx in 1:npair, b in 1:NC, a in 1:NC
+    g_lookup_flat[pair_row(D, pidx, a, b, L)] = g_P[a, b, pidx]
 end
 check_tol("transpose! vs dense adjoint -(1/W)G'w", maximum(abs.(g_lookup_flat .- g_dense_flat)), 1e-9)
 
@@ -153,7 +166,7 @@ Xraw = Gdense' * Ghw
 r_dense = Gdense' * h
 S_dense = sum(h)
 tvec2 = tvec   # same target vector as above (already includes the -t offset baked into Gdense... )
-# NOTE: Gdense here is the CENTERED feature matrix (columns already have -0.2/-0.04 subtracted),
+# NOTE: Gdense here is the CENTERED feature matrix (columns already have -tM/-tP subtracted),
 # so Xraw = G'WG is ALREADY the doubly-centered Gram matrix directly (no separate r t'+t r' term
 # needed) -- this is an INDEPENDENT reference construction from the lookup code's own centering
 # path (which centers the RAW indicator via the X'WX-rt'-tr'+Stt' identity on UNCENTERED features),
@@ -187,8 +200,8 @@ r_current = -r0
 f0 = sum(psi_scalar.(r_current)) / W
 
 function slow_full_delta(U, op, Qmod, lambda_M, lambda_P, f0)
-    D = op.D; W = op.W
-    st = PairwiseQuantileBinState(W, D)
+    D = op.D; W = op.W; L = op.L
+    st = PairwiseQuantileBinState(W, D, L)
     st.Q .= Qmod
     for w in 1:W, oo in 1:D
         st.bin[w, oo] = UInt8(searchsortedfirst(view(Qmod, :, oo), U[w, oo]))
@@ -199,7 +212,7 @@ function slow_full_delta(U, op, Qmod, lambda_M, lambda_P, f0)
     return fnew - f0, st
 end
 
-o8 = 3; r8 = 2
+o8 = 3; r8 = min(2, NC)
 q_old8 = state.Q[r8, o8]
 q_up8 = q_old8 + 0.06
 (df_fast_up, k_up8) = fixed_dual_delta_f(op, state, o8, r8, q_up8, lambda_M, lambda_P, r_current)

@@ -27,18 +27,19 @@ function check(name::AbstractString, cond::Bool)
     println(cond ? "PASS  " : "FAIL  ", name)
 end
 
+const PQ_L = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5   # test-file convenience only; production requires explicit L
 println("=== building ctx via d4_exact_setup ===")
 ctx = d4_exact_setup(δ = 1.0, find_smallest = true, needs_outer_moment_jacobian = false)
 x_free_calib = ctx.θ0_up[ctx.free_idx]
-println("ctx.D = ", ctx.D, "  size(ctx.U) = ", size(ctx.U))
+println("ctx.D = ", ctx.D, "  size(ctx.U) = ", size(ctx.U), "  L = ", PQ_L)
 
-layout = PairwiseQuantileCutoffLayout(ctx.D)
+layout = PairwiseQuantileCutoffLayout(ctx.D, PQ_L)
 aug = build_pairwise_quantile_augmented_obj(ctx, layout)
 println("obj_pq.outer_constr_index = ", aug.obj_pq.outer_constr_index, "  ncore_econ = ", aug.ncore_econ,
-        "  n_total_rows(D) = ", n_total_rows(ctx.D))
-check("outer_constr_index == ncore_econ + n_total_rows(D)", aug.obj_pq.outer_constr_index == aug.ncore_econ + n_total_rows(ctx.D))
+        "  n_total_rows(D) = ", n_total_rows(ctx.D, PQ_L))
+check("outer_constr_index == ncore_econ + n_total_rows(D)", aug.obj_pq.outer_constr_index == aug.ncore_econ + n_total_rows(ctx.D, PQ_L))
 
-bin_state = PairwiseQuantileBinState(ctx.U |> size |> first, ctx.D)
+bin_state = PairwiseQuantileBinState(ctx.U |> size |> first, ctx.D, PQ_L)
 hess_ctx = PairwiseQuantileCoreHessCtx(aug.ncore_econ, aug.op, bin_state, aug.core_cf_ref)
 
 ctx_cm = merge(ctx, (obj = aug.obj_pq, pq_op = aug.op, pq_bin_state = bin_state,
@@ -56,9 +57,9 @@ raw_cutoffs = zeros(n_raw(layout))
 for o in 1:ctx.D
     base = raw_index(layout, o, 1)
     Uo = @view ctx.U[:, o]
-    q = [quantile_naive(Uo, r/5) for r in 1:4]
+    q = [quantile_naive(Uo, r/PQ_L) for r in 1:PQ_L-1]
     raw_cutoffs[base] = log(q[1])
-    for k in 2:4
+    for k in 2:PQ_L-1
         gap = log(q[k]) - log(q[k-1])
         raw_cutoffs[base+k-1] = gap > 0 ? log(expm1(gap)) : -5.0
     end
