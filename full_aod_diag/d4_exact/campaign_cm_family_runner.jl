@@ -40,6 +40,17 @@ for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments
           "cm_frechet_level.jl", "cm_frechet_lookup_production.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
           "cm_exact_cache_production.jl", "cm_dual_bank_production.jl", "threaded_cross_hessian.jl", "zc_gram_blas_candidates.jl",
           "hcz_drawchunk_candidate_2026-07-29.jl",
+          # 2026-08-09 CROSS campaign integration. `zc_restriction_operator_ragged.jl` is listed
+          # explicitly (rather than relying on the runtime include() inside build_*_bin_ctx) so the
+          # 4-arg aml-aware ZCRestrictionOperator constructor exists in an OLDER world age than any
+          # context build -- the world-age trap that bit both build_originzc_core_hess_ctx and
+          # build_cm_meanzc_bin_ctx (both since hardened with Base.invokelatest; this is belt and
+          # braces, and costs nothing).
+          "zc_restriction_operator.jl", "zc_restriction_operator_ragged.jl",
+          "cm_originzc_cross_moments.jl", "cm_originzc_cross_target_layout.jl",
+          "cm_originzc_cross_production.jl", "cm_originzc_cross_cplus.jl",
+          "cm_meanzc_cross_target_layout.jl", "cm_meanzc_cross_moments.jl",
+          "cm_meanzc_cross_production.jl", "cm_meanzc_cross_cplus.jl",
           "cm_checkpoint.jl", "cm_originzc_checkpoint.jl", "postmerge_smoke_diagnostics.jl", "cross_hessian_live_stash_2026-07-28.jl"]
     include(joinpath(_D4E, f))
 end
@@ -57,8 +68,15 @@ const MAXTIME        = length(ARGS) >= 5 ? parse(Float64, ARGS[5]) : 30.0
 const DELTAS_OVERRIDE = length(ARGS) >= 6 && !isempty(ARGS[6]) ? parse.(Float64, split(ARGS[6], ",")) : nothing
 const STARTS_OVERRIDE = length(ARGS) >= 7 && !isempty(ARGS[7]) ? parse.(Int, split(ARGS[7], ",")) : nothing
 
-FAMILY in ("flexible_cm", "common_frechet", "cm_meanzc", "origin_zc") ||
+# CM+ZC-CROSS / OZC-CROSS campaign integration (2026-08-09): the two CROSS families are selectable
+# HERE, as first-class families, INSTEAD of (not alongside) their diagonal counterparts in a given
+# campaign wave -- see run_full_campaign_supervisor.sh's FAMILIES array. They reuse the same start
+# manifest, the same nu coordinates, and the same drivers; only the target layout differs.
+FAMILY in ("flexible_cm", "common_frechet", "cm_meanzc", "origin_zc", "cm_meanzc_cross", "origin_zc_cross") ||
     error("campaign_cm_family_runner: unknown family $FAMILY")
+const IS_CROSS    = endswith(FAMILY, "_cross")
+const IS_MEANZC_F = FAMILY in ("cm_meanzc", "cm_meanzc_cross")
+const IS_OZC_F    = FAMILY in ("origin_zc", "origin_zc_cross")
 DIRECTION in ("upper", "lower") || error("campaign_cm_family_runner: direction must be upper|lower, got $DIRECTION")
 const FIND_SMALLEST = DIRECTION == "upper"
 
@@ -67,8 +85,12 @@ const W = 100_000
 const DRAW_DESIGN = :sobol_randomized
 const DRAW_SEED = 20260719
 const CM_L = 50
-const MEANZC_K = 1
-const ORIGINZC_K = 1
+# 2026-08-09 (CROSS campaign integration): these are now FALLBACKS, used only when the start
+# manifest's own config block does not record the K it was built at. The manifest is authoritative
+# when it says anything -- see MEANZC_K/ORIGINZC_K resolution below. Keeping the historical values
+# here means a manifest without those keys behaves exactly as before.
+const MEANZC_K_FALLBACK = 1
+const ORIGINZC_K_FALLBACK = 1
 
 lp("="^100)
 lp("CAMPAIGN CM-FAMILY RUNNER -- ", Dates.now(), "  family=", FAMILY, " direction=", DIRECTION,
@@ -83,7 +105,7 @@ lp("julia threads=", Threads.nthreads(), " BLAS threads=", BLAS.get_num_threads(
 # exact_winner_pair_parallel and the H_CZ/H_EZ candidates of the real parallelism they need,
 # silently inflating wall time (~2x, no error, no correctness change) rather than failing loudly.
 # Warn, don't error -- an operator may have a deliberate reason to run fewer threads.
-FAMILY in ("cm_meanzc", "origin_zc") && Threads.nthreads() < 10 &&
+(IS_MEANZC_F || IS_OZC_F) && Threads.nthreads() < 10 &&   # 2026-08-09: the CROSS variants share the same H_ZZ/H_CZ/H_EZ backends (and have a strictly LARGER restriction block), so the same thread-starvation warning applies at least as strongly
     lp("WARNING: family=", FAMILY, " is running with Threads.nthreads()=", Threads.nthreads(),
        " < 10 -- the validated H_ZZ/H_CZ/H_EZ backend speedups assume >=10 Julia threads for ",
        "core_hessian_backend=exact_winner_pair_parallel's own parallelism; expect real but ",
@@ -98,6 +120,95 @@ isempty(starts) && error("STARTS_OVERRIDE=$STARTS_OVERRIDE matched no manifest s
 nu_meanzc = jf64(manifest["shared_extra_coordinates"]["cm_meanzc_nu"])
 nu_originzc = jf64(manifest["shared_extra_coordinates"]["origin_zc_nu"])
 lp(">> manifest loaded: ", length(starts), " starts, nu_meanzc=", nu_meanzc, " |nu_originzc|=", length(nu_originzc))
+
+# ---------------------------------------------------------------------------------------------
+# K resolution + nu-length agreement (2026-08-09, CROSS campaign integration).
+#
+# The manifest's `shared_extra_coordinates` nu vectors are sized at the K the MANIFEST was built
+# at (`three_starts_search.jl`'s own MEANZC_K/ORIGINZC_K, recorded in its config block), while this
+# runner previously hardcoded its own K constants. Those two only ever agreed by convention -- a
+# manifest built at K=2 fed to this runner's K=1 constant produces a w0 whose eta_nu block is the
+# WRONG LENGTH for the driver being called. That latent mismatch is pre-existing (not introduced by
+# the CROSS work), but the CROSS families make it live, because they are naturally run at K>=2:
+# at K_pair=1 the K_pair^2 cross grid has exactly one combo, (1,1), so the cross family is
+# IDENTICAL to the diagonal one and the campaign arm would be scientifically vacuous.
+#
+# Resolution: the manifest is authoritative when it records K; the historical constants are used
+# only as a fallback for manifests predating those keys; and the nu length is ASSERTED against
+# n_eta either way, so a mismatch is a loud error before any KNITRO solve rather than a confusing
+# dimension failure 40 minutes in. The CROSS families deliberately reuse their diagonal
+# counterpart's K and nu vector unchanged -- n_eta is genuinely identical between the two layouts
+# (K_mean for CM+ZC, K_mean*D for origin-ZC; the cross extension adds NO outer parameters), which
+# is exactly why no new manifest key or nu-lift change is needed.
+# ---------------------------------------------------------------------------------------------
+_mcfg = get(manifest, "config", Dict{String,Any}())
+_mget_int(key, fallback) = haskey(_mcfg, key) ? Int(_mcfg[key]) : fallback
+const MEANZC_K   = _mget_int("meanzc_K_mean", MEANZC_K_FALLBACK)
+const ORIGINZC_K = _mget_int("originzc_K_mean", ORIGINZC_K_FALLBACK)
+lp(">> K resolution: MEANZC_K=", MEANZC_K, " ORIGINZC_K=", ORIGINZC_K,
+   haskey(_mcfg, "meanzc_K_mean") ? "  (from manifest config)" : "  (manifest has no K keys -- using historical runner fallbacks $(MEANZC_K_FALLBACK)/$(ORIGINZC_K_FALLBACK))")
+if IS_MEANZC_F
+    length(nu_meanzc) == MEANZC_K ||
+        error("campaign_cm_family_runner: manifest cm_meanzc_nu has length $(length(nu_meanzc)) but " *
+              "n_eta(SharedByPower[Cross]Layout) = K_mean = $MEANZC_K -- refusing to build a w0 whose " *
+              "eta_nu block is the wrong length for the driver. Rebuild the manifest at the intended K, " *
+              "or run against a manifest whose config block records the matching meanzc_K_mean.")
+end
+if IS_OZC_F
+    const _D_MANIFEST = _mget_int("D", 20)
+    length(nu_originzc) == ORIGINZC_K * _D_MANIFEST ||
+        error("campaign_cm_family_runner: manifest origin_zc_nu has length $(length(nu_originzc)) but " *
+              "n_eta(OriginByPower[Cross]Layout) = K_mean*D = $(ORIGINZC_K)*$(_D_MANIFEST) = $(ORIGINZC_K*_D_MANIFEST) " *
+              "-- refusing to build a w0 whose eta_nu block is the wrong length for the driver.")
+end
+# ---------------------------------------------------------------------------------------------
+# REQUIRED scientific parameters neither driver defaults (2026-08-09). PRE-EXISTING BREAKAGE, found
+# by running this runner end to end and CONFIRMED against the unmodified BASE families first:
+#
+#   cm_meanzc / flexible_cm / common_frechet -> UndefKeywordError: `include_truncated_moment`
+#   origin_zc                                -> UndefKeywordError: `inner_lower_limit`
+#
+# i.e. EVERY family arm of this runner has been unable to launch since those two parameters were
+# (correctly) made required-with-no-default by the 2026-08-05 truncated-power and 2026-08-06
+# lower-limit hardening passes -- this runner was never updated to supply them. That is exactly the
+# intended consequence CLAUDE.md describes for the ~200 old diagnostic scripts, except this one is a
+# production campaign entry point, so it has to be fixed rather than left to throw.
+#
+# Supplied EXPLICITLY, never defaulted inside a call chain: from the manifest's own config block when
+# the manifest records them (the manifest is the run's scientific provenance), otherwise from the
+# named constants below, whose values are the current production spec:
+#   include_truncated_moment = true   -- eq.35+eq.36, the corrected flexible-CM/CM+ZC production spec
+#   inner_lower_limit        = -10.0  -- docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md
+# Every OTHER scientific parameter these drivers take already defaults to the production value
+# (sigma=3.0, gravity_exclude_cells=Brazil-Korea, exclude_diagonal_gravity=true,
+# destination_sample=:exclude_row, A_coordinate_mode=:powered_aspace) and is left alone.
+#
+# NOT changed, deliberately: `meanzc_profiled_level`/`originzc_profiled_level` (Variant D, the focal
+# k*=sigma-1 mean-row omission) stay at the drivers' `nothing` default unless the manifest asks for
+# them. Turning Variant D on would be a real scientific change to the BASE arms' campaign behavior,
+# which is not this task's to make -- but note it IS the intended production spec at K>=2, so a
+# campaign wanting it must set `profiled_level` in its manifest config block.
+const INCLUDE_TRUNCATED_MOMENT_FALLBACK = true
+const INNER_LOWER_LIMIT_FALLBACK        = -10.0
+const INCLUDE_TRUNCATED_MOMENT = haskey(_mcfg, "include_truncated_moment") ? Bool(_mcfg["include_truncated_moment"]) : INCLUDE_TRUNCATED_MOMENT_FALLBACK
+const INNER_LOWER_LIMIT        = haskey(_mcfg, "inner_lower_limit") ? Float64(_mcfg["inner_lower_limit"]) : INNER_LOWER_LIMIT_FALLBACK
+const PROFILED_LEVEL           = haskey(_mcfg, "profiled_level") && _mcfg["profiled_level"] !== nothing ? Int(_mcfg["profiled_level"]) : nothing
+lp(">> required scientific params: include_truncated_moment=", INCLUDE_TRUNCATED_MOMENT,
+   haskey(_mcfg, "include_truncated_moment") ? " (manifest)" : " (runner constant)",
+   "  inner_lower_limit=", INNER_LOWER_LIMIT,
+   haskey(_mcfg, "inner_lower_limit") ? " (manifest)" : " (runner constant)",
+   "  profiled_level=", PROFILED_LEVEL === nothing ? "nothing (Variant D OFF)" : string(PROFILED_LEVEL))
+
+if IS_CROSS
+    _kpair_cross = IS_MEANZC_F ? MEANZC_K : ORIGINZC_K
+    _kpair_cross >= 2 ||
+        lp("WARNING: family=", FAMILY, " is running at K_pair=", _kpair_cross, ". The K_pair^2 cross-power ",
+           "grid has exactly ONE combo (1,1) at K_pair=1, i.e. this run is mathematically IDENTICAL to the ",
+           "diagonal family it is meant to be compared against -- the campaign arm carries no new ",
+           "information. Use a manifest built at K>=2 for a meaningful CROSS wave.")
+    lp(">> CROSS family: ", _kpair_cross^2, " ordered (k1,k2) restrictions per origin pair (vs ",
+       _kpair_cross, " diagonal); n_eta UNCHANGED, so w0/eta_nu keep their diagonal-family length.")
+end
 
 const SNAPS = nested_grid_sequence([10, 20, 50])
 const PROBS_L50 = SNAPS[CM_L]
@@ -178,27 +289,54 @@ for delta in DELTAS, st in starts
     lp("inner_dual_warm_start_reuse = allowed_not_used (resume_from=nothing, fresh dual bank per cell)")
     lp("exact_cache_reuse = allowed_when_key_matches_not_used (resume_from=nothing, fresh SafeExactCache per cell)")
 
-    w0 = FAMILY == "cm_meanzc"  ? vcat(w_a, log.(nu_meanzc)) :
-         FAMILY == "origin_zc" ? vcat(w_a, log.(nu_originzc)) : copy(w_a)
+    # 2026-08-09: the CROSS families take the SAME nu lift as their diagonal counterparts -- n_eta is
+    # identical between the two layouts (see the K-resolution block above), so this needed widening
+    # only to recognize the new family strings, not to change any coordinate construction.
+    w0 = IS_MEANZC_F ? vcat(w_a, log.(nu_meanzc)) :
+         IS_OZC_F    ? vcat(w_a, log.(nu_originzc)) : copy(w_a)
 
     t0 = time()
     errored = false; errmsg = ""
     result = nothing
     try
-        if FAMILY == "origin_zc"
+        if IS_OZC_F
             fn = FIND_SMALLEST ? run_originzc_upper_checkpointed : run_originzc_lower_checkpointed
+            # 2026-08-09: OZC-CROSS selects itself purely through power_target_layout -- the
+            # distribution_restriction/K arguments are IDENTICAL to the diagonal family's (same
+            # outer parameter space), which is exactly the property that makes the two directly
+            # comparable at matched K. See cm_originzc_config.jl's own docstring.
             result = fn(w0; W = W, delta = delta, draw_design = DRAW_DESIGN, draw_seed = DRAW_SEED,
                 distribution_restriction = :origin_specific_moments_zero_covariance,
                 K_mean = ORIGINZC_K, K_pair = ORIGINZC_K,
+                power_target_layout = IS_CROSS ? :origin_by_power_cross : :origin_by_power,
+                inner_lower_limit = INNER_LOWER_LIMIT,          # REQUIRED, no driver default -- see resolution block above
+                originzc_profiled_level = PROFILED_LEVEL,
                 ckpt_dir = ckdir, run_id = label, label = label,
                 checkpoint_interval_s = 3600.0, maxtime_real = MAXTIME, verbose = true)
         else
             fn = FIND_SMALLEST ? run_cm_upper_checkpointed : run_cm_lower_checkpointed
             extra = FAMILY == "common_frechet" ? (marginal_restriction = :common_frechet, cm_hessian_backend = :structured, cm_gradient_backend = :cplus) :
-                    FAMILY == "cm_meanzc"      ? (cm_extension = :cm_plus_moments, meanzc_K_mean = MEANZC_K, meanzc_K_pair = MEANZC_K) :
+                    IS_MEANZC_F                ? (cm_extension = :cm_plus_moments, meanzc_K_mean = MEANZC_K, meanzc_K_pair = MEANZC_K,
+                                                  # 2026-08-09: CM+ZC-CROSS selects itself purely through
+                                                  # meanzc_target_layout -- same cm_extension, same K, same
+                                                  # eta_nu length as the diagonal family.
+                                                  meanzc_target_layout = IS_CROSS ? :shared_by_power_cross : :shared_by_power,
+                                                  meanzc_profiled_level = PROFILED_LEVEL) :
                     NamedTuple()
+            # common_frechet is FORCED single-family regardless of the resolved value. Two-family
+            # (eq.35+eq.36) common-Frechet is NOT production-reachable through this driver at all:
+            # build_cm_frechet_production_context requires moment_representation=:dense_reference for
+            # include_truncated_moment=true, which collides with prepare_production_run's hard ban on
+            # dense bundles -- documented in cm_checkpoint.jl's own comment on that branch and in
+            # multistart_seed_generator.jl's COMMON_FRECHET spec ("single-family... matching the one
+            # variant that actually is production-reachable"). Passing `true` here would make the
+            # common_frechet arm fail at context construction rather than run the wrong spec, but it
+            # would still be a needless failure, so it is pinned rather than left to the resolver.
+            itm_family = FAMILY == "common_frechet" ? false : INCLUDE_TRUNCATED_MOMENT
             result = fn(w0; W = W, delta = delta, draw_design = DRAW_DESIGN, draw_seed = DRAW_SEED,
                 L = CM_L, contrasts = :orthonormal, probs = PROBS_L50,
+                include_truncated_moment = itm_family,   # REQUIRED, no driver default -- see resolution block above
+                inner_lower_limit = INNER_LOWER_LIMIT,   # REQUIRED, no driver default
                 ckpt_dir = ckdir, run_id = label, label = label,
                 checkpoint_interval_s = 3600.0, maxtime_real = MAXTIME, verbose = true, extra...)
         end

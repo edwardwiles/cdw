@@ -90,7 +90,13 @@ for _dep in (:build_pivot_elimination, :cm_w0_from_calibration, :OriginByPowerLa
              :build_raw_mean_pair_matrix_levels, :solve_base_state,
              :originzc_profiled_nu_value, :meanzc_profiled_nu_value, :classify_inner_result,
              :is_verified_success, :sha256_of_matrix, :default_gravity_exclude_cells_brazil_korea,
-             :nested_grid_sequence, :attach_compressed_factual_workspace, :CS)
+             :nested_grid_sequence, :attach_compressed_factual_workspace, :CS,
+             # 2026-08-09 CROSS integration: the K_pair^2 cross-power-grid layouts and their
+             # (:operator-only) context builders. Listed here so a caller whose include list predates
+             # the CROSS families gets THIS clear message rather than an UndefVarError from deep
+             # inside build_family several minutes into a campaign.
+             :OriginByPowerCrossLayout, :build_originzc_cross_production_context,
+             :SharedByPowerCrossLayout, :build_cm_meanzc_cross_production_context)
     isdefined(Main, _dep) ||
         error("multistart_seed_generator.jl requires `$(_dep)` to already be defined -- include the " *
               "full d4_exact family machinery (see this file's header comment) before this file.")
@@ -108,17 +114,32 @@ using Random, LinearAlgebra, SHA, Serialization, Printf
 One requested production family for seed qualification. `kind` selects the machinery:
 `:origin_zc` (origin-specific ZC, `run_originzc_upper_checkpointed`'s value-only path),
 `:cm_zc` (CM(L-grid, common-flexible) + K-moment ZC combined, `run_cm_upper_checkpointed`'s
-`cm_extension=:cm_plus_moments` value-only path), or `:common_frechet` (single-family CDF-only
+`cm_extension=:cm_plus_moments` value-only path), `:common_frechet` (single-family CDF-only
 common Fréchet, `marginal_restriction=:common_frechet`, `cm_extension=:cm_only` -- confirmed
 2026-08-08 that the two-family/eq.35+eq.36 variant is not reachable through the current production
-driver at all, see docs/audits/reproducible-multistart-generator-2026-08-08/MASTER.md).
+driver at all, see docs/audits/reproducible-multistart-generator-2026-08-08/MASTER.md), or -- added
+2026-08-09 -- `:origin_zc_cross` / `:cm_zc_cross`, the K_pair^2 ordered cross-power-grid variants
+of the two ZC kinds (`OriginByPowerCrossLayout` / `SharedByPowerCrossLayout`).
 
-`L`/`contrasts`/`probs`/`include_truncated_moment`/`meanzc_basis` are consulted only by `:cm_zc`
-and `:common_frechet` kinds; ignored (but still required, for a uniform struct) by `:origin_zc`.
+WHY THE CROSS VARIANTS ARE SEPARATE `kind` SYMBOLS RATHER THAN A FLAG ON THE EXISTING KINDS -- this
+is a reproducibility-correctness requirement, not a style choice. `family_spec_descriptor` (below)
+feeds `compute_manifest_digest`, and it encodes exactly `(id, kind, K_mean, K_pair, L, contrasts,
+include_truncated_moment, meanzc_basis, probs)`. A diagonal spec and a cross spec agree on EVERY
+one of those except `id` -- the cross extension adds no outer parameters and changes no K. So a
+boolean/enum layout field bolted onto the existing kinds would leave two genuinely different
+economic problems sharing a digest whenever their ids happened to match (e.g. two campaign
+revisions both calling their ZC arm `:ZC_K3`), silently certifying one run's seeds as reproducing
+the other's. Distinct `kind` symbols make the descriptor differ structurally. `assert_distinct_
+family_descriptors` (below) additionally makes any FUTURE collision impossible to introduce
+silently, whatever mechanism a later spec field uses.
+
+`L`/`contrasts`/`probs`/`include_truncated_moment`/`meanzc_basis` are consulted only by the
+`:cm_zc`/`:cm_zc_cross`/`:common_frechet` kinds; ignored (but still required, for a uniform
+struct) by `:origin_zc`/`:origin_zc_cross`.
 """
 struct FamilySeedSpec
     id::Symbol
-    kind::Symbol                 # :origin_zc | :cm_zc | :common_frechet
+    kind::Symbol                 # :origin_zc | :cm_zc | :common_frechet | :origin_zc_cross | :cm_zc_cross
     K_mean::Int
     K_pair::Int
     L::Int
@@ -127,6 +148,10 @@ struct FamilySeedSpec
     include_truncated_moment::Bool
     meanzc_basis::Symbol
 end
+
+"The two K_pair^2 cross-power-grid kinds (2026-08-09). Used by every `kind`-dispatching branch below so a new cross kind can never be added to one branch and forgotten in another."
+const CROSS_SEED_KINDS = (:origin_zc_cross, :cm_zc_cross)
+is_cross_seed_kind(kind::Symbol) = kind in CROSS_SEED_KINDS
 
 """
     resolve_cm_probs(L) -> Vector{Float64}
@@ -159,6 +184,31 @@ function common_frechet_family_spec(id::Symbol; L::Int, contrasts::Symbol = :ort
     FamilySeedSpec(id, :common_frechet, 0, 0, L, contrasts, probs, false, :direct)
 end
 
+# --- 2026-08-09: the two K_pair^2 cross-power-grid variants. Same signatures as their diagonal
+# counterparts above (same outer-parameter space, so nothing else about a spec changes) -- only the
+# `kind` symbol differs, which is what makes the descriptor/digest differ. K_pair>=2 is REQUIRED,
+# not merely recommended: at K_pair=1 the cross grid has exactly one combo, (1,1), so the spec would
+# be mathematically identical to the diagonal family while carrying a different id/digest -- a
+# reproducibility record that claims a distinction it does not have. K_pair=0 is meaningless for the
+# same reason it is refused in CMMeanZCConfig (the cross grid IS the pair block).
+function origin_zc_cross_family_spec(id::Symbol; K_mean::Int, K_pair::Int)
+    K_pair >= 2 || error("origin_zc_cross_family_spec($id): K_pair must be >= 2, got $K_pair " *
+                         "(K_pair^2 = $(K_pair^2) restrictions per origin pair; at K_pair=1 the cross grid " *
+                         "is identical to the diagonal family -- use origin_zc_family_spec instead)")
+    K_pair <= K_mean || error("origin_zc_cross_family_spec($id): K_pair=$K_pair must satisfy K_pair <= K_mean=$K_mean")
+    FamilySeedSpec(id, :origin_zc_cross, K_mean, K_pair, 0, :orthonormal, nothing, false, :direct)
+end
+
+function cm_zc_cross_family_spec(id::Symbol; K_mean::Int, K_pair::Int, L::Int,
+                                  contrasts::Symbol = :orthonormal,
+                                  probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
+    K_pair >= 2 || error("cm_zc_cross_family_spec($id): K_pair must be >= 2, got $K_pair " *
+                         "(K_pair^2 = $(K_pair^2) restrictions per origin pair; at K_pair=1 the cross grid " *
+                         "is identical to the diagonal family -- use cm_zc_family_spec instead)")
+    K_pair <= K_mean || error("cm_zc_cross_family_spec($id): K_pair=$K_pair must satisfy K_pair <= K_mean=$K_mean")
+    FamilySeedSpec(id, :cm_zc_cross, K_mean, K_pair, L, contrasts, probs, false, :direct)
+end
+
 # ============================================================================
 # 2. Five-family production preset (task section 10). Not hard-wired into the core generator.
 # ============================================================================
@@ -184,6 +234,35 @@ function production_five_family_seed_specs(ctx)
         cm_zc_family_spec(:CM_MEAN3; K_mean = 3, K_pair = 0, L = 50),
         origin_zc_family_spec(:ORIGIN_ZC_K3; K_mean = 3, K_pair = 3),
         cm_zc_family_spec(:CMZC_K3; K_mean = 3, K_pair = 3, L = 50),
+    ]
+end
+
+"""
+    production_five_family_cross_seed_specs(ctx) -> Vector{FamilySeedSpec}
+
+2026-08-09: the CROSS wave of the five-family comparison -- byte-identical to
+`production_five_family_seed_specs` except that the two ZC arms are replaced by their K_pair^2
+cross-power-grid counterparts, which is exactly the substitution this campaign is meant to study
+("selectable INSTEAD of the two current ZC families"). The three non-ZC arms (`U_MEAN3`,
+`COMMON_FRECHET`, `CM_MEAN3`) are deliberately UNCHANGED and share their diagonal-wave ids: they
+are genuinely the same families, so a cross wave and a diagonal wave should reproduce identical
+seeds for them, and giving them distinct ids would destroy that useful cross-check.
+
+The two ZC arms take NEW ids (`ORIGIN_ZC_CROSS_K3` / `CMZC_CROSS_K3`) as well as new `kind`s --
+belt and braces, since the ids also appear in human-facing output where `ORIGIN_ZC_K3` meaning two
+different things across waves would be a genuine reading hazard.
+
+Same K (3/3) and same L (50) as the diagonal wave, on purpose: matched K is what makes a
+diagonal-vs-cross comparison interpretable at all (the cross extension adds no outer parameters, so
+at matched K the two families differ ONLY in the pair block).
+"""
+function production_five_family_cross_seed_specs(ctx)
+    return [
+        origin_zc_family_spec(:U_MEAN3; K_mean = 3, K_pair = 0),
+        common_frechet_family_spec(:COMMON_FRECHET; L = 50),
+        cm_zc_family_spec(:CM_MEAN3; K_mean = 3, K_pair = 0, L = 50),
+        origin_zc_cross_family_spec(:ORIGIN_ZC_CROSS_K3; K_mean = 3, K_pair = 3),
+        cm_zc_cross_family_spec(:CMZC_CROSS_K3; K_mean = 3, K_pair = 3, L = 50),
     ]
 end
 
@@ -233,6 +312,40 @@ function family_spec_descriptor(spec::FamilySeedSpec)
 end
 
 """
+    assert_distinct_family_descriptors(family_specs)
+
+2026-08-09 (CROSS integration). Hard-fails if any two specs in a requested family list produce the
+SAME `family_spec_descriptor`. Two specs with the same descriptor are, as far as
+`compute_manifest_digest` can tell, the same family -- so the digest would certify a run as
+reproducing a configuration it never actually ran, and per-family results would be attributed
+ambiguously.
+
+This exists because the collision is genuinely easy to reintroduce: the descriptor encodes only the
+fields listed in `family_spec_descriptor`, and the CROSS families demonstrate that a real,
+Delta*-changing distinction can live entirely OUTSIDE those fields (they differ from their diagonal
+counterparts in NO scientific parameter -- same K_mean, K_pair, L, contrasts, basis -- only in the
+restriction's target formula). Distinct `kind` symbols close that specific case; this guard closes
+every future one, whatever mechanism a later spec field uses, and it costs one string comparison
+per campaign. Called unconditionally from `compute_manifest_digest`.
+"""
+function assert_distinct_family_descriptors(family_specs::Vector{FamilySeedSpec})
+    seen = Dict{String,Symbol}()
+    for s in family_specs
+        d = family_spec_descriptor(s)
+        if haskey(seen, d)
+            error("assert_distinct_family_descriptors: specs :$(seen[d]) and :$(s.id) produce the " *
+                  "IDENTICAL family_spec_descriptor:\n  $d\n" *
+                  "They are indistinguishable to compute_manifest_digest, so the reproducibility digest " *
+                  "would not separate them. If they are genuinely different families, give them different " *
+                  "`kind` symbols (as :origin_zc_cross/:cm_zc_cross do) or add the distinguishing field to " *
+                  "family_spec_descriptor. Refusing to compute a digest that cannot tell them apart.")
+        end
+        seen[d] = s.id
+    end
+    return nothing
+end
+
+"""
     compute_manifest_digest(ctx, family_specs, W) -> String
 
 Stand-in for a true `ScientificManifest.jl` digest -- confirmed 2026-08-08 that
@@ -244,6 +357,7 @@ scientific parameter changes the digest. Swap this for the real manifest digest 
 `ScientificManifest.jl` is merged into this branch's ancestry.
 """
 function compute_manifest_digest(ctx, family_specs::Vector{FamilySeedSpec}, W::Int)
+    assert_distinct_family_descriptors(family_specs)   # 2026-08-09: see that function's docstring
     grav = join(sort(collect(ctx.gravity_exclude_cells)), ";")
     desc = "sigma=$(ctx.σ)|W=$(W)|bi=$(ctx.bi)|muHat=$(ctx.μHat)|" *
            "destination_sample=$(ctx.destination_sample)|exclude_diagonal_gravity=$(ctx.exclude_diagonal_gravity)|" *
@@ -412,6 +526,17 @@ function build_family(ctx, spec::FamilySeedSpec)
         aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
         pcx = build_originzc_production_context(ctx, CS, layout; aml = aml)
         return FamilyBuild(spec, pcx, layout, aml)
+    elseif spec.kind == :origin_zc_cross
+        # 2026-08-09: identical construction to :origin_zc except the layout type and the context
+        # builder (OZC-CROSS is :operator-only by construction, so it takes no moment_representation
+        # kwarg -- see build_originzc_cross_production_context's own docstring). Variant D applies
+        # unchanged: ActiveMeanLayout only ever touches the MEAN block, which is byte-identical
+        # between the two layouts.
+        layout = OriginByPowerCrossLayout(ctx.D, spec.K_mean, spec.K_pair)
+        kstar = profiled_level_for(ctx, spec.K_mean)
+        aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
+        pcx = build_originzc_cross_production_context(ctx, CS, layout; aml = aml)
+        return FamilyBuild(spec, pcx, layout, aml)
     elseif spec.kind == :cm_zc
         layout = SharedByPowerLayout(spec.K_mean, spec.K_pair)
         kstar = profiled_level_for(ctx, spec.K_mean)
@@ -419,6 +544,15 @@ function build_family(ctx, spec::FamilySeedSpec)
         pcx = build_cm_meanzc_production_context(ctx, CS; L = spec.L, K_mean = spec.K_mean, K_pair = spec.K_pair,
             include_truncated_moment = spec.include_truncated_moment, contrasts = spec.contrasts,
             meanzc_basis = spec.meanzc_basis, probs = spec.probs, moment_representation = :operator, aml = aml)
+        return FamilyBuild(spec, pcx, layout, aml)
+    elseif spec.kind == :cm_zc_cross
+        # 2026-08-09: see the :origin_zc_cross branch above -- same reasoning, CM-family analog.
+        layout = SharedByPowerCrossLayout(spec.K_mean, spec.K_pair)
+        kstar = profiled_level_for(ctx, spec.K_mean)
+        aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
+        pcx = build_cm_meanzc_cross_production_context(ctx, CS; L = spec.L, K_mean = spec.K_mean, K_pair = spec.K_pair,
+            include_truncated_moment = spec.include_truncated_moment, contrasts = spec.contrasts,
+            meanzc_basis = spec.meanzc_basis, probs = spec.probs, aml = aml)
         return FamilyBuild(spec, pcx, layout, aml)
     elseif spec.kind == :common_frechet
         # cm_hessian_backend=:structured required: build_cm_frechet_production_context's own
@@ -454,7 +588,16 @@ K_mean=0 -- it is the strictly simpler base `ctx.obj`, which is exactly what "ze
 means anyway (origin-ZC's restriction columns are pure ADDITIONS on top of `ctx.obj`; removing all
 of them is identical to evaluating `ctx.obj` directly, not a degenerate case of the ZC machinery).
 """
-function companion_implied_nu_originzc(ctx, x_free::AbstractVector{Float64}, layout_target::OriginByPowerLayout; eval_id::Int = 0)
+# 2026-08-09 (CROSS integration): signature widened from `::OriginByPowerLayout` to also accept
+# `::OriginByPowerCrossLayout`. The BODY is already layout-agnostic -- it reads only
+# `layout_target.K_mean`, `n_eta(layout_target)` and `target_index(layout_target, o, k)`, all of
+# which are byte-identical formulas between the two layouts (the cross extension changes the PAIR
+# target formula only, and this function never touches the pair block: it solves the truly
+# UNRESTRICTED companion, which has no ZC structure at all). Found by
+# test_cross_seed_family_dispatch_2026-08-09.jl -- the solver-free wiring gate could not have caught
+# it, since it never calls this.
+function companion_implied_nu_originzc(ctx, x_free::AbstractVector{Float64},
+        layout_target::Union{OriginByPowerLayout,OriginByPowerCrossLayout}; eval_id::Int = 0)
     K_mean = layout_target.K_mean
     Zraw_all, _ = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, 0; μ = ctx.μHat)
     base = solve_base_state(collect(x_free), ctx)
@@ -498,9 +641,12 @@ end
 "Derived focal nu value at this economic point (nothing for common_frechet / non-profiled families) -- pure algebra, no solver call. Unrelated to the companion-LFD nu policy above: this ONE coordinate is not independently identified (collinearity, not a modeling choice), see section 8's header."
 function derived_focal_nu(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64})
     fb.aml === nothing && return nothing
-    if fb.spec.kind == :origin_zc
+    # 2026-08-09: the cross kinds use the SAME derived focal value as their diagonal counterparts --
+    # nu_star = cf_denom/cf_num comes from the autarky/counterfactual price-index moment in the base
+    # ECONOMIC block (autarky_cf.jl), which the pairwise-ZC target layout does not touch at all.
+    if fb.spec.kind in (:origin_zc, :origin_zc_cross)
         return originzc_profiled_nu_value(x_free, ctx)
-    elseif fb.spec.kind == :cm_zc
+    elseif fb.spec.kind in (:cm_zc, :cm_zc_cross)
         return meanzc_profiled_nu_value(x_free, ctx)
     end
     return nothing
@@ -550,14 +696,21 @@ end
 
 function evaluate_family(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64}; eval_id::Int = 0)
     t0 = time()
-    if fb.spec.kind == :origin_zc
-        nu0_dense = companion_implied_nu_originzc(ctx, x_free, fb.layout::OriginByPowerLayout; eval_id = eval_id)
+    # 2026-08-09: the cross kinds go through the IDENTICAL evaluation path as their diagonal
+    # counterparts. Both `companion_implied_nu_*` helpers and both `*_production_value_verified_
+    # screened` evaluators are layout-agnostic: the companion nu comes from the truly UNRESTRICTED
+    # companion solve (no ZC structure at all, so no layout to be aware of), and the screened
+    # evaluators just forward to archOZ_verified_state/archC_meanzc_verified_state, which read the
+    # layout off the context `build_family` already built. Only the `fb.layout` type assertion below
+    # has to widen.
+    if fb.spec.kind in (:origin_zc, :origin_zc_cross)
+        nu0_dense = companion_implied_nu_originzc(ctx, x_free, fb.layout::Union{OriginByPowerLayout,OriginByPowerCrossLayout}; eval_id = eval_id)
         nu0_active = fb.aml === nothing ? nu0_dense : nu0_dense[setdiff(1:length(nu0_dense), fb.aml.dense_omit_idx)]
         focal_nu = derived_focal_nu(ctx, fb, x_free)
         nu_dense = dense_nu_for_solve(fb, nu0_active, focal_nu)
         K, base, verify = cm_originzc_production_value_verified_screened(x_free, nu_dense, fb.pcx; eval_id = eval_id)
         full_vec = vcat(x_free, nu_dense)
-    elseif fb.spec.kind == :cm_zc
+    elseif fb.spec.kind in (:cm_zc, :cm_zc_cross)
         nu0_dense = companion_implied_nu_cmzc(ctx, x_free, fb.spec; eval_id = eval_id)
         nu0_active = fb.aml === nothing ? nu0_dense : nu0_dense[setdiff(1:length(nu0_dense), fb.aml.dense_omit_idx)]
         focal_nu = derived_focal_nu(ctx, fb, x_free)

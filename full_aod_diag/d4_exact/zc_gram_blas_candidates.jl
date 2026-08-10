@@ -46,6 +46,7 @@ mutable struct ZCRawWeightedWorkspace
     HZZraw::Matrix{Float64}
     tvec::Vector{Float64}
     tasks::Vector{Task}
+    sqrtS::Vector{Float64}   # length-W scratch: sqrt.(S), hoisted out of the SYRK weighting loop (2026-08-10)
 end
 
 """
@@ -71,7 +72,7 @@ function build_zc_raw_weighted_workspace(op::ZCRestrictionOperator, W::Int)
         @views Phi[:, cols] .= op.Zpairraw_all[k]
     end
     return ZCRawWeightedWorkspace(W, nx, Phi, similar(Phi), zeros(nx), zeros(nx, nx), zeros(nx),
-        Vector{Task}(undef, Threads.nthreads()))
+        Vector{Task}(undef, Threads.nthreads()), Vector{Float64}(undef, W))
 end
 
 "Rebuild (or reuse, if already the right size) `ws` for the current `(W, n_restriction(op))` -- campaign-lifetime constant in practice, same idiom as this codebase's other `ensure_*_scratch!` functions."
@@ -134,9 +135,15 @@ function zc_gram_blas_syrk!(HZZ::AbstractMatrix{Float64}, ws::ZCRawWeightedWorks
     nx = ws.nx; W = ws.W
     size(HZZ) == (nx, nx) || error("zc_gram_blas_syrk!: size(HZZ)=$(size(HZZ)) != ($nx,$nx)")
     Phi = ws.Phi; RW = ws.RW
+    # sqrt(S[w]) hoisted out of the column loop (2026-08-10): it is column-invariant, so the old
+    # in-loop form evaluated W*nx (~1.8e8 at W=1e5, nx=1770) square roots per call instead of W.
+    sq = ws.sqrtS
+    @inbounds @simd for w in 1:W
+        sq[w] = sqrt(S[w])
+    end
     @inbounds for j in 1:nx
-        for w in 1:W
-            RW[w, j] = sqrt(S[w]) * Phi[w, j]
+        @simd for w in 1:W
+            RW[w, j] = sq[w] * Phi[w, j]
         end
     end
     HZZraw = ws.HZZraw

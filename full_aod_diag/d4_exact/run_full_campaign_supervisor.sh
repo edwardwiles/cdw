@@ -18,7 +18,26 @@ STATE="$OUTROOT/campaign_state.json"
 PROCMAN="$OUTROOT/process_manifest.json"
 SUPLOG="$OUTROOT/supervisor.log"
 
-FAMILIES=(flexible_cm common_frechet cm_meanzc origin_zc unrestricted)
+# 2026-08-09 (CROSS campaign integration): env-overridable, so a campaign can run the K_pair^2
+# cross-power ZC families INSTEAD of their diagonal counterparts without editing this file. Default
+# is byte-identical to the historical hardcoded five. Set e.g.
+#   CAMPAIGN_FAMILIES="flexible_cm common_frechet cm_meanzc_cross origin_zc_cross unrestricted"
+# The list is validated here (fail fast, before any chain is launched) rather than only inside the
+# Julia runner -- a typo'd family name would otherwise start N-1 real chains and only kill the Nth,
+# leaving a half-run campaign to clean up. Note run_campaign_wave.sh reads the SAME variable, and
+# this supervisor exports it below so the two can never disagree.
+# shellcheck disable=SC2206
+FAMILIES=(${CAMPAIGN_FAMILIES:-flexible_cm common_frechet cm_meanzc origin_zc unrestricted})
+VALID_FAMILIES=(flexible_cm common_frechet cm_meanzc origin_zc cm_meanzc_cross origin_zc_cross unrestricted)
+for fam in "${FAMILIES[@]}"; do
+  ok=0
+  for v in "${VALID_FAMILIES[@]}"; do [ "$fam" = "$v" ] && ok=1 && break; done
+  if [ "$ok" -ne 1 ]; then
+    echo "run_full_campaign_supervisor.sh: unknown family '$fam' in CAMPAIGN_FAMILIES; valid: ${VALID_FAMILIES[*]}" >&2
+    exit 2
+  fi
+done
+export CAMPAIGN_FAMILIES="${FAMILIES[*]}"
 
 lp() { echo "$(date -Is) $*" | tee -a "$SUPLOG"; }
 

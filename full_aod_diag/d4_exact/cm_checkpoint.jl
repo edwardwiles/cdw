@@ -38,6 +38,15 @@ isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath
 isdefined(Main, :aod_pow_matrix) || include(joinpath(@__DIR__, "compressed_live.jl"))   # k=(sigma-1) narrow fix: aod_pow_matrix
 isdefined(Main, :autarky_cf_scalars) || include(joinpath(@__DIR__, "autarky_cf.jl"))   # k=(sigma-1) narrow fix: autarky_cf_scalars
 isdefined(Main, :CallbackHealthRecord) || include(joinpath(@__DIR__, "cm_callback_health.jl"))   # 2026-08-06 outer-production-closeout: fake-success guard + assert_two_family_capabilities!
+# CM+ZC-CROSS driver-integration task (2026-08-09): the K_pair^2 cross-power CM+ZC restriction
+# family (SharedByPowerCrossLayout, build_cm_meanzc_cross_production_context,
+# cm_meanzc_cross_production_gradient(_cplus)) -- self-guarded includes, same convention as every
+# other dependency in this block. The _cplus include is REQUIRED, not optional: cm_gradient_backend=
+# :cplus is this driver's DEFAULT, so without it the family would be unusable in its own default
+# configuration (the mistake made and corrected for OZC-CROSS, see cm_originzc_cross_cplus.jl).
+isdefined(Main, :SharedByPowerCrossLayout) || include(joinpath(@__DIR__, "cm_meanzc_cross_target_layout.jl"))
+isdefined(Main, :build_cm_meanzc_cross_production_context) || include(joinpath(@__DIR__, "cm_meanzc_cross_production.jl"))
+isdefined(Main, :cm_meanzc_cross_production_gradient_cplus) || include(joinpath(@__DIR__, "cm_meanzc_cross_cplus.jl"))
 
 """
     assert_two_family_capabilities!(label, pcx, is_meanzc, is_frechet, include_truncated_moment, threaded_bins)
@@ -86,7 +95,7 @@ function assert_two_family_capabilities!(label::AbstractString, pcx, is_meanzc::
     return nothing
 end
 
-const CM_CHECKPOINT_SCHEMA = 10
+const CM_CHECKPOINT_SCHEMA = 11   # 10 -> 11 (CM+ZC-CROSS, 2026-08-09): adds `meanzc_target_layout`, see CMCheckpointV11
 
 """
     meanzc_profiled_nu_value(xf, ctx) -> Float64
@@ -571,6 +580,122 @@ cm_feature_operator_fingerprint(cm_moment_spec::Symbol, L::Int, cm_feature_schem
                                  contrasts::Symbol, ncm::Int) =
     string(hash((cm_moment_spec, L, cm_feature_schema_version, contrasts, ncm)))
 
+"""
+    CMCheckpointV11
+
+Schema 11 (CM+ZC-CROSS, 2026-08-09). `CMCheckpointV10` plus ONE new field:
+
+- `meanzc_target_layout::Symbol`: `:shared_by_power` (the pre-existing diagonal-only pairwise-ZC
+  block) or `:shared_by_power_cross` (the K_pair^2 ordered cross-power grid). Irrelevant when
+  `cm_extension == :cm_only`.
+
+WHY THIS NEEDED A SCHEMA BUMP RATHER THAN A DERIVED/INFERRED VALUE: before this task CM+ZC
+persisted NO layout field at all -- unlike origin-ZC, which has had one since
+`cm_originzc_checkpoint.jl`'s own schema. The layout is not recoverable from any other stored
+field: `(cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, eta_nu)` are all IDENTICAL
+between the diagonal and cross families at matched K (the cross extension adds no outer
+parameters and changes no outer-vector length -- only the INNER restriction-column count and the
+target formula). So a schema-10 file and a cross run are byte-indistinguishable on every existing
+field while describing genuinely different economic problems with different Δ*. `run_cm_upper_
+checkpointed` hard-refuses a resume mismatch on this field, in the same no-escape-hatch style it
+already applies to `cm_extension`/`meanzc_K_mean`/`destination_sample`.
+
+Schema-10 files ARE auto-upgraded (`upgrade_schema10_to_v11`), filling `:shared_by_power` --
+CORRECT by provenance, not a guess: every schema-10 file was written before the cross layout
+existed anywhere in this codebase, so `:shared_by_power` is the only value consistent with such a
+file. This is the identical argument `upgrade_schema8_to_v9` makes for `A_coordinate_mode=:legacy_z`.
+The schema-9-and-older hard refusal (a genuinely different CM dual block) is UNCHANGED and still
+fires -- this bump does not reopen it.
+
+`MEANZC_MOMENT_LAYOUT_VERSION` is deliberately NOT bumped: it tracks
+`wrap_moments_with_cm_meanzc`'s own column ORDER for the diagonal family, which the cross family
+does not touch (it is a separate `aug`/operator built by `build_cm_meanzc_cross_augmented_obj`).
+Bumping it would needlessly invalidate resumes of in-flight diagonal runs while adding nothing:
+the new `meanzc_target_layout` field plus its hard resume-refusal is the actual protection here.
+"""
+struct CMCheckpointV11
+    schema::Int
+    run_id::String
+    label::String
+    branch::Symbol
+    find_smallest::Bool
+    delta::Float64
+    W::Int
+    draw_seed::Int
+    draw_design::Symbol
+    draw_checksum_uniform::String
+    draw_checksum_transformed::String
+    cm_L::Int
+    cm_probs::Vector{Float64}
+    cm_contrasts::Symbol
+    cm_grid_rule::Symbol
+    cm_basis::Symbol
+    cm_hessian_backend::Symbol
+    cm_gradient_backend::Symbol
+    cm_extension::Symbol
+    meanzc_K_mean::Int
+    meanzc_K_pair::Int
+    meanzc_basis::Symbol
+    moment_layout_version::Int
+    g::Float64
+    zfree::Vector{Float64}
+    eta_nu::Vector{Float64}
+    logA_full::Matrix{Float64}
+    dual_warm_start::Vector{Float64}
+    bandwidth_cache::Dict{Int,Float64}
+    best_feasible::Any
+    n_eval::Int
+    n_grad::Int
+    wall_elapsed::Float64
+    wall_budget_remaining::Float64
+    checkpoint_reason::Symbol
+    knitro_version::String
+    destination_sample::Symbol
+    row_idx::Union{Nothing,Int}
+    D_dest::Int
+    marginal_restriction::Symbol
+    A_coordinate_mode::Symbol
+    cm_moment_spec::Symbol
+    cm_feature_family_count::Int
+    cm_feature_schema_version::Int
+    cm_feature_operator_checksum::String
+    # ---- NEW (schema 11): CM+ZC pairwise-ZC target layout (2026-08-09 CM+ZC-CROSS task) ----
+    meanzc_target_layout::Symbol
+end
+
+"Same atomic-ish discipline as the V6/V8/V9/V10 methods -- new method (multiple dispatch), those methods unchanged/untouched."
+function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV11)
+    tmp = path * ".tmp"
+    serialize(tmp, ckpt)
+    mv(tmp, path; force = true)
+    return path
+end
+
+"""
+    upgrade_schema10_to_v11(old::CMCheckpointV10) -> CMCheckpointV11
+
+Fills `meanzc_target_layout = :shared_by_power`. CORRECT by provenance, not a guess: every
+schema-10 file was written before `SharedByPowerCrossLayout` existed anywhere in this codebase, so
+the diagonal layout is the only value consistent with such a file. Also bumps the stored `schema`
+field to 11 so the loader's own `ckpt.schema == CM_CHECKPOINT_SCHEMA` check (below) passes on the
+upgraded object -- an upgraded schema-10 file IS a valid schema-11 checkpoint in every respect
+once this one unambiguous field is supplied.
+"""
+function upgrade_schema10_to_v11(old::CMCheckpointV10)
+    return CMCheckpointV11(CM_CHECKPOINT_SCHEMA, old.run_id, old.label, old.branch, old.find_smallest, old.delta,
+        old.W, old.draw_seed, old.draw_design, old.draw_checksum_uniform, old.draw_checksum_transformed,
+        old.cm_L, old.cm_probs, old.cm_contrasts, old.cm_grid_rule, old.cm_basis, old.cm_hessian_backend,
+        old.cm_gradient_backend, old.cm_extension, old.meanzc_K_mean, old.meanzc_K_pair, old.meanzc_basis,
+        old.moment_layout_version,
+        old.g, old.zfree, old.eta_nu, old.logA_full, old.dual_warm_start, old.bandwidth_cache, old.best_feasible,
+        old.n_eval, old.n_grad, old.wall_elapsed, old.wall_budget_remaining, old.checkpoint_reason,
+        old.knitro_version, old.destination_sample, old.row_idx, old.D_dest,
+        old.marginal_restriction, old.A_coordinate_mode,
+        old.cm_moment_spec, old.cm_feature_family_count, old.cm_feature_schema_version,
+        old.cm_feature_operator_checksum,
+        :shared_by_power)
+end
+
 "Atomic-ish checkpoint write, same discipline as `save_checkpoint` (D20Checkpoint): serialize to a .tmp file then mv, so a crash mid-write never leaves a half-written checkpoint."
 function save_cm_checkpoint(path::AbstractString, ckpt::CMCheckpointV10)
     tmp = path * ".tmp"
@@ -685,9 +810,18 @@ function load_cm_checkpoint(path::AbstractString)
     # spec would corrupt the resumed state, not just mislabel it). Try schema 10 first; any older
     # schema that successfully deserializes under the pre-existing chain is HARD-REFUSED below
     # (not upgraded) -- deliberately breaking the schema-2..9 auto-upgrade chain at this one step.
+    # CM+ZC-CROSS (2026-08-09): schema 11 added `meanzc_target_layout`. Unlike the 9->10 step,
+    # schema-10 files ARE auto-upgraded here (`upgrade_schema10_to_v11`, filling :shared_by_power)
+    # -- correct by provenance, see that function's own docstring. Try 11 first, then 10, then the
+    # pre-existing pre-10 chain (which stays HARD-REFUSED below, unchanged).
     local ckpt, is_pre10
     try
-        ckpt = deserialize(path)::CMCheckpointV10
+        ckpt = deserialize(path)::CMCheckpointV11
+        is_pre10 = false
+    catch e11
+        (e11 isa TypeError || e11 isa EOFError || e11 isa MethodError) || rethrow()
+    try
+        ckpt = upgrade_schema10_to_v11(deserialize(path)::CMCheckpointV10)
         is_pre10 = false
     catch e10
         (e10 isa TypeError || e10 isa EOFError || e10 isa MethodError) || rethrow()
@@ -728,6 +862,7 @@ function load_cm_checkpoint(path::AbstractString)
         end
         is_pre10 = true
     end
+    end   # closes the schema-11 try/catch added 2026-08-09 (CM+ZC-CROSS schema bump)
     if ckpt.schema == 1
         error("load_cm_checkpoint($path): schema=1, expected $(CM_CHECKPOINT_SCHEMA) -- schema-1 " *
               "checkpoints stored Delta as `-zeta_star` (remediation task Part A, finding F1), NOT the " *
@@ -890,6 +1025,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # CMMeanZCConfig uses, not re-derived here.
         meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,   # only consulted when cm_extension=:cm_plus_moments
         meanzc_basis::Symbol = :direct,
+        # CM+ZC-CROSS (2026-08-09): :shared_by_power (pre-existing diagonal-only pairwise-ZC block,
+        # zero behavior change for every existing caller) | :shared_by_power_cross (the K_pair^2
+        # ordered cross-power grid, E[z_o^k1 z_p^k2] = nu_k1*nu_k2). Direct analog of
+        # run_originzc_upper_checkpointed's own `power_target_layout`. See CMMeanZCConfig's
+        # docstring (cm_meanzc_config.jl) for why this field is safe to default despite CLAUDE.md's
+        # no-silent-scientific-defaults rule -- the short version: the default reproduces the
+        # pre-existing family exactly, and the real hazard (running cross while a checkpoint/cache/
+        # campaign thinks it is diagonal) is closed structurally by the persisted checkpoint field +
+        # hard resume refusal + a distinct exact-cache family_tag + distinct campaign identity.
+        meanzc_target_layout::Symbol = :shared_by_power,
         meanzc_nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
         # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
         # the same name. DEFAULT FLIPPED 2026-08-01 (user-directed) -- see
@@ -1040,12 +1185,21 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # archC_base_state path). Pass `cm_moment_families` explicitly, matching this driver's own
     # `include_truncated_moment` -- `meanzc_resolve_K` itself never reads `cfg.cm`'s other fields,
     # so no other CMConfig field needs threading through here.
-    meanzc_K_mean, meanzc_K_pair = meanzc_resolve_K(CMMeanZCConfig(cm_extension = cm_extension,
+    # CM+ZC-CROSS (2026-08-09): build the config ONCE with meanzc_target_layout included, so
+    # `_meanzc_validate` (called inside both helpers) rejects an invalid layout symbol, and the
+    # cross-specific K_pair>=1 requirement, up front -- before ctx/draws/KNITRO cost anything.
+    _meanzc_cfg = CMMeanZCConfig(cm_extension = cm_extension,
         meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair, meanzc_basis = meanzc_basis,
-        cm = CMConfig(cm_moment_families = include_truncated_moment ? 2 : 1)))
+        meanzc_target_layout = meanzc_target_layout,
+        cm = CMConfig(cm_moment_families = include_truncated_moment ? 2 : 1))
+    meanzc_K_mean, meanzc_K_pair = meanzc_resolve_K(_meanzc_cfg)
     is_meanzc = cm_extension !== :cm_only
+    is_meanzc_cross = is_meanzc && meanzc_target_layout === :shared_by_power_cross   # CM+ZC-CROSS
+    is_meanzc && _meanzc_validate(_meanzc_cfg)   # also validates meanzc_target_layout itself
     is_meanzc && lp("[", label, "] cm_extension=", cm_extension, " K_mean=", meanzc_K_mean,
-                     " K_pair=", meanzc_K_pair, " meanzc_basis=", meanzc_basis)
+                     " K_pair=", meanzc_K_pair, " meanzc_basis=", meanzc_basis,
+                     " meanzc_target_layout=", meanzc_target_layout,
+                     is_meanzc_cross ? "  [CM+ZC-CROSS: $(meanzc_K_pair^2) ordered (k1,k2) restrictions per origin pair]" : "")
     (marginal_restriction === :common_frechet && is_meanzc) &&
         error("run_cm_upper_checkpointed($label): marginal_restriction=:common_frechet is not yet " *
               "combined with cm_extension=:$cm_extension (the meanzc extension) -- these are " *
@@ -1082,6 +1236,19 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
                   "meanzc_basis=:$meanzc_basis -- refusing to resume under a different moment-column " *
                   "layout (the outer vector's own dimension/meaning depends on K_mean; there is no safe " *
                   "override for this, unlike cm_gradient_backend).")
+        # CM+ZC-CROSS (2026-08-09): the pairwise-ZC target layout changes the INNER restriction-column
+        # count (K_pair vs K_pair^2 blocks) and the target formula, hence the stored dual_warm_start's
+        # own dimension and meaning -- and, unlike every field checked just above, it is NOT
+        # recoverable from any other stored field (the two layouts share cm_extension, K_mean, K_pair,
+        # meanzc_basis, and eta_nu length exactly; see CMCheckpointV11's docstring). Same
+        # no-escape-hatch discipline: refuse outright.
+        (!is_meanzc || resumed.meanzc_target_layout == meanzc_target_layout) ||
+            error("run_cm_upper_checkpointed($label): meanzc_target_layout MISMATCH on resume -- " *
+                  "checkpoint was written with meanzc_target_layout=:$(resumed.meanzc_target_layout), this " *
+                  "call requests :$meanzc_target_layout -- refusing to resume under a different pairwise-ZC " *
+                  "restriction (diagonal K_pair blocks vs the K_pair^2 ordered cross-power grid are " *
+                  "genuinely different economic problems with different Delta*, and the stored " *
+                  "dual_warm_start has a different length under each).")
         # exclude-ROW-destination release (2026-07-24): destination_sample changes n_free (D^2 vs
         # D*D_dest) exactly like cm_extension/K_mean does -- no safe override, hard-refuse on
         # mismatch (same discipline as the meanzc check just above).
@@ -1171,7 +1338,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         is_meanzc || error("run_cm_upper_checkpointed($label): meanzc_profiled_level requires cm_extension!=:cm_only (is_meanzc)")
         1 <= meanzc_profiled_level <= meanzc_K_mean ||
             error("run_cm_upper_checkpointed($label): meanzc_profiled_level=$meanzc_profiled_level out of range 1:$meanzc_K_mean")
-        meanzc_shared_layout = SharedByPowerLayout(meanzc_K_mean, meanzc_K_pair)
+        # CM+ZC-CROSS (2026-08-09): Variant D is built+verified for SharedByPowerCrossLayout too
+        # (D4 FD gate verify_cmzc_cross_gradient_d4_2026-08-09.jl check (C), including the
+        # d_delta_d_nu_star cross-coupling term specifically) -- ActiveMeanLayout only ever touches
+        # the MEAN block, which is byte-identical between the two layouts. The base MUST be the
+        # layout actually in use, though: aml.base flows into
+        # d_delta_dual_d_eta_active_and_nustar_shared_cross's own type assertion, and building it
+        # against the wrong layout type would be caught there rather than producing a wrong number.
+        meanzc_shared_layout = is_meanzc_cross ? SharedByPowerCrossLayout(meanzc_K_mean, meanzc_K_pair) :
+                                                  SharedByPowerLayout(meanzc_K_mean, meanzc_K_pair)
         meanzc_aml = ActiveMeanLayout(meanzc_shared_layout, ctx.bi, meanzc_profiled_level, ctx.D)
         lp("[", label, "] k=(sigma-1) row-omission fix ACTIVE (Variant D): meanzc_profiled_level=", meanzc_profiled_level,
            " -- shared nu_", meanzc_profiled_level, " DERIVED via cf_denom/cf_num (autarky_cf.jl); ",
@@ -1251,7 +1426,13 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # passthrough kwarg. prepare_production_run wraps the result in a type-safe ProductionContext,
     # derives the live backend manifest, and fatally asserts the OperatorPsiBundle invariant before
     # this driver does anything else with pcx.
-    family_tag_pre = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
+    # CM+ZC-CROSS (2026-08-09): :cm_meanzc_cross is a DISTINCT family tag, not cosmetic. It keys the
+    # exact-eval cache (`family_tag` below, reused verbatim from this variable's value) -- and at
+    # identical (K_mean,K_pair) the diagonal and cross families produce genuinely different Delta*,
+    # so a cache-key collision between them would be a SILENT WRONG ANSWER, not a performance nit.
+    # Mirrors cm_originzc_checkpoint.jl's own :origin_zc vs :origin_zc_cross split exactly.
+    family_tag_pre = is_meanzc_cross ? :cm_meanzc_cross :
+                     is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
     # 2026-08-06 (paired-basis-preconditioning pilot continuation): NOTE this driver's own
     # prepare_production_run FATALLY requires an OperatorPsiBundle result (production_bundle_api.jl
     # -- "Production runners may only construct OperatorPsiBundle... use DenseReferenceDiagnostics.
@@ -1278,8 +1459,18 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # conflicts with `prepare_production_run`'s hard ban on dense bundles below) still correctly
     # refuses two-family common-Frechet through this driver -- this fix makes plain (single-family)
     # common-Frechet reachable again, it does not relax the two-family restriction.
+    # CM+ZC-CROSS (2026-08-09): build_cm_meanzc_cross_production_context is CM+ZC-CROSS's own context
+    # builder (:operator-only by construction, no moment_representation kwarg at all -- that family
+    # never had a dense-reference branch to opt out of, see its own docstring). It cannot be replaced
+    # by passing a layout to build_cm_meanzc_production_context: that builder calls
+    # build_cm_meanzc_augmented_obj, which builds the DIAGONAL Zpairraw_all (K_pair blocks) -- the
+    # cross grid needs build_raw_cross_pair_matrix_levels' K_pair^2 blocks instead.
     prepared = prepare_production_run(family_tag_pre, "run_cm_upper_checkpointed",
-        () -> is_meanzc ?
+        () -> is_meanzc_cross ?
+            build_cm_meanzc_cross_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
+                include_truncated_moment = include_truncated_moment,
+                contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, aml = meanzc_aml) :
+            is_meanzc ?
             build_cm_meanzc_production_context(ctx, CS; L = L, K_mean = meanzc_K_mean, K_pair = meanzc_K_pair,
                 include_truncated_moment = include_truncated_moment,
                 contrasts = contrasts, meanzc_basis = meanzc_basis, probs = probs, moment_representation = :operator,
@@ -1302,7 +1493,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # confirmed-working entry point -- never a second, direct low-level call.
     CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] && (CM_LIVE_PCX_STASH[] = pcx)
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
-    family_tag = is_meanzc ? :cm_meanzc : (is_frechet ? :common_frechet : :flexible_cm)
+    family_tag = family_tag_pre   # CM+ZC-CROSS (2026-08-09): ONE source of truth for the family
+    # identity, instead of the two independently-written-out ternaries this line and family_tag_pre
+    # used to be. They were already required to agree (family_tag keys the exact-eval cache;
+    # family_tag_pre keys prepare_production_run's backend manifest), and adding a third arm to only
+    # one of them would silently reintroduce exactly the cross/diagonal cache collision the
+    # :cm_meanzc_cross tag exists to prevent.
     dual_bank = use_dual_bank ? RestrictedDualBank(dual_bank_size) : nothing   # Phase D remediation (2026-07-26)
     # ZC Hessian backend production integration (2026-08-01): cm_meanzc's own validated production
     # BLAS-thread recommendation (8, see ZC_GRAM_BACKEND_DEFAULT's docstring) is applied here ONLY
@@ -1310,8 +1506,14 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     # `run_cm_upper_checkpointed` is SHARED by flexible_cm/common_frechet/cm_meanzc, and neither
     # sibling family was part of this optimization's validation, so their existing zero-behavior-
     # change default (`nothing` -> ambient thread count untouched) is deliberately left alone.
+    # 2026-08-10: this gate used to test `family_tag === :cm_meanzc`, which the 2026-08-09 CM+ZC-CROSS
+    # arm (`family_tag == :cm_meanzc_cross`) silently fell through -- so the family with the LARGER
+    # H_ZZ gram ran at ambient (=1) BLAS threads while the diagonal family got the validated 8. Keyed
+    # on `is_meanzc` (== `cm_extension !== :cm_only`) instead of enumerating tags, so a future third
+    # CM+ZC layout arm cannot fall through the same crack. The two non-CM+ZC siblings
+    # (flexible_cm/common_frechet) still take the untouched-ambient path, as before.
     effective_blas_threads = blas_threads !== nothing ? blas_threads :
-        (family_tag === :cm_meanzc ? ZC_GRAM_BLAS_THREADS_DEFAULT[] : nothing)
+        (is_meanzc ? ZC_GRAM_BLAS_THREADS_DEFAULT[] : nothing)
     effective_blas_threads !== nothing && BLAS.set_num_threads(effective_blas_threads)   # allocation/Hessian port task §6.3 -- process-scoped (not restored), see blas_thread_policy.jl
     print_active_layout_banner(ctx, mode_label)
     print_screen_startup_banner(mode_label)
@@ -1333,6 +1535,9 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     else
         print_production_backend_manifest(resolve_flexible_cm_manifest(; cctx = pcx.cctx, blas_threads = effective_blas_threads,
             cm_extension = cm_extension, meanzc_K_mean = meanzc_K_mean, meanzc_K_pair = meanzc_K_pair,
+            meanzc_target_layout = meanzc_target_layout,   # CM+ZC-CROSS (2026-08-09): so the persisted
+            # backend manifest records `family=:cm_meanzc_cross` rather than mislabelling a K_pair^2
+            # cross run as the diagonal family in its own provenance record.
             bundle_type = real_bundle_type))   # allocation/Hessian port task §2; effective_blas_threads
             # (not the raw kwarg) so the manifest records what was ACTUALLY applied, including
             # cm_meanzc's own ZC_GRAM_BLAS_THREADS_DEFAULT[] auto-selection above.
@@ -1467,7 +1672,7 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         cm_moment_spec_now = cm_family_count_now == 2 ? :cdf_plus_truncated_power_1msigma : :cdf_only
         cm_feature_schema_version_now = 1
         cm_feature_checksum_now = cm_feature_operator_fingerprint(cm_moment_spec_now, L, cm_feature_schema_version_now, contrasts, pcx.aug.ncm)
-        ckpt = CMCheckpointV10(CM_CHECKPOINT_SCHEMA, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
+        ckpt = CMCheckpointV11(CM_CHECKPOINT_SCHEMA, run_id, label, (find_smallest ? :cm_upper : :cm_lower), find_smallest, delta, W, draw_seed,
             draw_design, ctx.draw_meta.checksum_uniform, ctx.draw_meta.checksum_transformed,
             L, collect(probs), contrasts, cm_grid_rule, :cumulative, cm_hessian_backend, cm_gradient_backend,
             cm_extension, meanzc_K_mean, meanzc_K_pair, meanzc_basis, MEANZC_MOMENT_LAYOUT_VERSION,
@@ -1476,7 +1681,8 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
             maxtime_real - (time() - t_start), reason, knitro_version,
             destination_sample, ctx.row_idx, ctx.D_dest,
             marginal_restriction, A_coordinate_mode,
-            cm_moment_spec_now, cm_family_count_now, cm_feature_schema_version_now, cm_feature_checksum_now)
+            cm_moment_spec_now, cm_family_count_now, cm_feature_schema_version_now, cm_feature_checksum_now,
+            meanzc_target_layout)   # NEW schema 11 (CM+ZC-CROSS, 2026-08-09) -- see CMCheckpointV11
         path = joinpath(ckpt_dir, "$(label)_latest.jls")
         save_cm_checkpoint(path, ckpt)
         last_ckpt_t[] = time()
@@ -1560,7 +1766,23 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         matched = shared !== nothing && shared.w == w
         base = matched ? shared.base : nothing
         verify_c = matched ? shared.verify : nothing
-        gfull, meta = if is_meanzc
+        gfull, meta = if is_meanzc_cross
+            # CM+ZC-CROSS (2026-08-09): BOTH gradient backends are wired for this layout, mirroring
+            # the base family's own two-way branch just below. `:cplus` is this driver's DEFAULT, so
+            # it MUST dispatch to CM+ZC-CROSS's own C+ implementation (cm_meanzc_cross_cplus.jl) --
+            # NOT to cm_meanzc_production_gradient_cplus, which is diagonal-family-only (it calls
+            # d_delta_dual_d_eta_nu_vec / meanzc_fixed_contribution internally and would compute a
+            # silently WRONG gradient against the K_pair^2 cross-grid restriction block). Both paths
+            # return the same shape (econ block + n_eta_active/K_mean eta block), verified equal to
+            # rel 1e-16..1e-19 by verify_cmzc_cross_cplus_ab_d4_2026-08-09.jl.
+            if cm_gradient_backend == :cplus
+                cm_meanzc_cross_production_gradient_cplus(xf, νvec, pcx, ctx, pe, cplus_pool, cplus_ws;
+                    base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            else
+                cm_meanzc_cross_production_gradient(xf, νvec, pcx, ctx, pe;
+                    base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            end
+        elseif is_meanzc
             if cm_gradient_backend == :cplus
                 cm_meanzc_production_gradient_cplus(xf, νvec, pcx, ctx, pe, cplus_pool, cplus_ws;
                     base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)

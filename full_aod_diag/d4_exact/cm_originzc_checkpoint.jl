@@ -25,6 +25,13 @@ isdefined(Main, :prepare_production_run) || include(joinpath(@__DIR__, "producti
 isdefined(Main, :default_gravity_exclude_cells_brazil_korea) || include(joinpath(@__DIR__, "country_resolve.jl"))
 isdefined(Main, :aod_pow_matrix) || include(joinpath(@__DIR__, "compressed_live.jl"))   # k=(sigma-1) narrow fix: aod_pow_matrix
 isdefined(Main, :autarky_cf_scalars) || include(joinpath(@__DIR__, "autarky_cf.jl"))   # k=(sigma-1) narrow fix: autarky_cf_scalars
+# OZC-CROSS driver-integration task (2026-08-09): the already-built/verified K_pair^2 cross-power
+# restriction family (OriginByPowerCrossLayout, build_originzc_cross_production_context,
+# cm_originzc_cross_production_gradient) -- self-guarded includes, same convention as every other
+# dependency in this block.
+isdefined(Main, :OriginByPowerCrossLayout) || include(joinpath(@__DIR__, "cm_originzc_cross_target_layout.jl"))
+isdefined(Main, :build_originzc_cross_production_context) || include(joinpath(@__DIR__, "cm_originzc_cross_production.jl"))
+isdefined(Main, :cm_originzc_cross_production_gradient_cplus) || include(joinpath(@__DIR__, "cm_originzc_cross_cplus.jl"))   # 2026-08-09: OZC-CROSS's own Backend C+ gradient, required because cm_gradient_backend=:cplus is this driver's DEFAULT
 
 const CM_CHECKPOINT_SCHEMA_V5 = 5
 
@@ -714,8 +721,12 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     # proportional -- a genuine KKT rank deficiency, not merely an off-manifold-search hazard).
     aml = nothing
     if originzc_profiled_level !== nothing
-        layout isa OriginByPowerLayout ||
-            error("run_originzc_upper_checkpointed($label): originzc_profiled_level requires power_target_layout=:origin_by_power, got layout=$(typeof(layout))")
+        # OZC-CROSS driver-integration task (2026-08-09): Variant D (focal k*=sigma-1 mean-row
+        # omission) is already built+verified for OriginByPowerCrossLayout too (bit-identical
+        # Delta* pre/post, see verify_ozc_cross_variant_d_d20_2026-08-09.jl) -- ActiveMeanLayout
+        # only ever touches the MEAN block, which is byte-identical between the two layouts.
+        layout isa OriginByPowerLayout || layout isa OriginByPowerCrossLayout ||
+            error("run_originzc_upper_checkpointed($label): originzc_profiled_level requires power_target_layout=:origin_by_power or :origin_by_power_cross, got layout=$(typeof(layout))")
         1 <= originzc_profiled_level <= layout.K_mean ||
             error("run_originzc_upper_checkpointed($label): originzc_profiled_level=$originzc_profiled_level out of range 1:$(layout.K_mean)")
         aml = ActiveMeanLayout(layout, ctx.bi, originzc_profiled_level, D)
@@ -760,8 +771,17 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     # prepare_production_run wraps the result in a type-safe ProductionContext, derives the live
     # backend manifest, and fatally asserts the OperatorPsiBundle invariant before this driver does
     # anything else with pcx.
+    # OZC-CROSS driver-integration task (2026-08-09): build_originzc_cross_production_context is
+    # OZC-CROSS's own context builder (:operator-only by construction, no moment_representation
+    # kwarg at all -- see that function's own docstring, this family never had a dense-reference
+    # branch to opt out of in the first place). build_originzc_production_context (the base
+    # family's builder) asserts layout isa OriginByPowerLayout||SharedByPowerLayout internally and
+    # would hard-error on OriginByPowerCrossLayout, so this dispatches on layout type rather than
+    # calling it unconditionally.
     prepared = prepare_production_run(:origin_zc, "run_originzc_upper_checkpointed",
-        () -> build_originzc_production_context(ctx, CS, layout; moment_representation = :operator, aml = aml))
+        () -> layout isa OriginByPowerCrossLayout ?
+            build_originzc_cross_production_context(ctx, CS, layout; aml = aml) :
+            build_originzc_production_context(ctx, CS, layout; moment_representation = :operator, aml = aml))
     pcx = prepared.ctx.inner
     pcx = with_screen_counters(pcx)   # 2026-07-24 release (Part B step 7): attach live screen counters for this run
     exact_cache = use_exact_cache ? cm_production_exact_cache() : nothing   # Phase C remediation (2026-07-26)
@@ -774,6 +794,9 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
             " resolved_active_threshold=", th.threshold, " stored_in_objective_bundle=", th.threshold)
     flush(stdout)
     print_production_backend_manifest(resolve_origin_zc_manifest(; octx = pcx.octx, blas_threads = blas_threads,
+        power_target_layout = power_target_layout,   # OZC-CROSS (2026-08-09): so the persisted backend
+        # manifest records `family=:origin_zc_cross` rather than mislabelling a K_pair^2 cross run as
+        # the diagonal family in its own provenance record.
         bundle_type = Symbol(nameof(typeof(pcx.ctx_cm.obj)))))   # 2026-07-25 continuation: pass the REAL octx this driver just built via build_originzc_production_context -- was previously called with no octx at all, so it always fell back to reporting the pre-port dense_architecture_a path regardless of what actually ran. moment_representation threading task (2026-07-29): bundle_type is now also the REAL type, read off pcx AFTER build_originzc_production_context above.
     write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))   # architecture/production-operator-bundle-hardening-2026-07-30 (task §7): live manifest, replaces the static print above as the source of truth
     D2_econ = length(w0) - n_eta_active
@@ -863,11 +886,18 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         νvec = aml === nothing ? νvec_active : scatter_nu_eff(aml, νvec_active, originzc_profiled_nu_value(xf, ctx))
         local base, verify
         # L/contrasts have no meaning for origin-ZC (no CM grid) -- 0/:none sentinels; family_tag
-        # (:origin_zc, fixed per driver) plus a FRESH per-call cache (never shared across driver
-        # invocations/configs) are what actually prevent cross-config collision here.
+        # distinguishes the base diagonal-only family (:origin_zc) from OZC-CROSS
+        # (:origin_zc_cross, 2026-08-09 driver-integration task) -- at identical (K_mean,K_pair)
+        # these are GENUINELY DIFFERENT restrictions with different Delta* (confirmed: 0.0095 vs
+        # 0.0667 at the same D20/W=100k/K=3/3 point), so a cache-key collision between them would
+        # be a silent-wrong-answer bug, not a performance nit, even though `exact_cache` is also a
+        # FRESH per-call Dict (never shared across driver invocations) that would not actually
+        # collide today -- this tag makes that non-collision an invariant of the key itself,
+        # not an accident of call-site scoping.
         cache_key = exact_cache === nothing ? nothing :
             CMProductionEvalKey(collect(xf), collect(νvec), delta, find_smallest, pcx.ctx_cm.obj.inner_loop_opt,
-                :origin_zc, 0, :none, K_mean, K_pair, A_coordinate_mode, context_fingerprint(pcx.ctx_cm))
+                (layout isa OriginByPowerCrossLayout ? :origin_zc_cross : :origin_zc), 0, :none, K_mean, K_pair,
+                A_coordinate_mode, context_fingerprint(pcx.ctx_cm))
         try
             base, verify = cm_cache_lookup_or_compute!(exact_cache, cache_key, () -> begin
                 _, b, v = cm_originzc_production_value_verified_screened(xf, νvec, pcx; counters = pcx.screen_counters,
@@ -908,7 +938,25 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         matched = shared !== nothing && shared.w == w
         base = matched ? shared.base : nothing
         verify_c = matched ? shared.verify : nothing
-        gfull, meta = if cm_gradient_backend == :cplus
+        gfull, meta = if layout isa OriginByPowerCrossLayout
+            # OZC-CROSS driver-integration task (2026-08-09): BOTH gradient backends are wired for
+            # this layout, mirroring the base family's own two-way branch below. `:cplus` is this
+            # driver's DEFAULT, so it must dispatch to OZC-CROSS's own C+ implementation
+            # (cm_originzc_cross_cplus.jl) -- NOT to cm_originzc_production_gradient_cplus, which is
+            # base-family-only (it calls the diagonal-only d_delta_dual_d_eta_origin_vec/
+            # originzc_fixed_contribution internally and would compute a silently WRONG gradient
+            # against the K_pair^2 cross-grid restriction block). An earlier draft hard-errored here
+            # instead; that avoided the silently-wrong outcome but left the family unusable under its
+            # own driver's default config, so the missing backend is now implemented rather than
+            # refused. Both paths return the same shape (econ block + n_eta_active/n_eta eta block).
+            if cm_gradient_backend == :cplus
+                cm_originzc_cross_production_gradient_cplus(xf, νvec, pcx, ctx, pe, cplus_pool, cplus_ws;
+                    base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            else
+                cm_originzc_cross_production_gradient(xf, νvec, pcx, ctx, pe;
+                    base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+            end
+        elseif cm_gradient_backend == :cplus
             cm_originzc_production_gradient_cplus(xf, νvec, pcx, ctx, pe, cplus_pool, cplus_ws;
                 base = base, verify = verify_c, threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
         else

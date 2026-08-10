@@ -101,20 +101,46 @@ function build_cm_meanzc_bin_ctx(ctx, aug; threaded_bins::Bool = true,
     # own D=4 correctness gate, not assumed from reading alone).
     isdefined(Main, :ZCRestrictionOperator) || include(joinpath(@__DIR__, "zc_restriction_operator.jl"))
     aug_aml = hasproperty(aug, :aml) ? aug.aml : nothing   # fix/zc-profile-focal-sigmaminus1-mean-2026-08-07
+    # 2026-08-09 (CM+ZC-CROSS Variant D wiring) WORLD-AGE FIX: the `include()` on the line above runs
+    # INSIDE this function body, at runtime -- any method it defines is only visible to code compiled
+    # AFTER this frame was entered (Base.include bumps the global world counter; a currently-executing
+    # frame stays pinned to the world age it was entered at). Calling the just-defined 4-arg
+    # ZCRestrictionOperator constructor directly in this same frame throws a MethodError whenever
+    # zc_restriction_operator_ragged.jl was NOT already included at top level by the caller's own
+    # include list -- confirmed live 2026-08-09 (`MethodError: no method matching
+    # ZCRestrictionOperator(::Vector{Matrix{Float64}}, ::Vector{Matrix{Float64}}, ::Int64,
+    # ::ActiveMeanLayout{...})`), on the first cold-process call with an aml-active aug. This is the
+    # SAME pre-existing bug class already found and fixed in `build_originzc_core_hess_ctx`
+    # (cm_hessian_architectures.jl, 2026-08-09) -- that fix's own comment noted "the same pattern
+    # exists elsewhere"; this is the elsewhere. It bites the BASE diagonal CM+ZC family identically
+    # (meanzc_profiled_level + :operator), not just CM+ZC-CROSS -- production scripts happen to
+    # survive it only by listing zc_restriction_operator_ragged.jl in their own top-level includes.
+    # Base.invokelatest is the standard, zero-behavior-change fix; negligible cost (once per context
+    # build, not per inner-solve call).
     aug_aml === nothing || !aug_aml.active || include(joinpath(@__DIR__, "zc_restriction_operator_ragged.jl"))
     meanzc_zc_op = inner_fg_backend === :operator ?
         ((aug_aml === nothing || !aug_aml.active) ?
             ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D) :
-            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D, aug_aml)) : nothing
-    meanzc_zc_layout = inner_fg_backend === :operator ? SharedByPowerLayout(aug.K_mean, aug.K_pair) : nothing
+            Base.invokelatest(ZCRestrictionOperator, aug.Zraw_all, aug.Zpairraw_all, D, aug_aml)) : nothing
+    # CM+ZC-CROSS (2026-08-09): the ONE edit this otherwise-unmodified shared builder needs. `aug`
+    # NamedTuples produced by `build_cm_meanzc_cross_augmented_obj` (cm_meanzc_cross_moments.jl)
+    # carry an explicit `layout` field (a `SharedByPowerCrossLayout`); every pre-existing `aug` from
+    # `build_cm_meanzc_augmented_obj` has NO such field and therefore falls through to the identical
+    # `SharedByPowerLayout(aug.K_mean, aug.K_pair)` construction as before -- ZERO behavior change
+    # for every existing caller. This mirrors how origin-ZC's own `build_originzc_core_hess_ctx`
+    # already reads `aug.layout` off the aug (cm_hessian_architectures.jl:1954), which is exactly
+    # why OZC-CROSS needed no edit there at all.
+    aug_layout = hasproperty(aug, :layout) ? aug.layout : nothing
+    meanzc_zc_layout = inner_fg_backend === :operator ?
+        (aug_layout === nothing ? SharedByPowerLayout(aug.K_mean, aug.K_pair) : aug_layout) : nothing
     # CM+ZC E/C/Z block-partition + H_CZ/H_ZZ release (2026-07-27): DEDICATED raw-ZC-feature state
     # for the NEW direct H_CZ/H_ZZ Hessian primitives, built ALWAYS (independent of
     # inner_fg_backend, unlike `meanzc_zc_op`/`meanzc_zc_layout` above -- see CMBinHessCtx's own
     # `hzz_zc_op` field docstring for why this is a separate object, not a repurposing of those).
     hzz_zc_op = (aug_aml === nothing || !aug_aml.active) ?
         ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D) :
-        ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, D, aug_aml)
-    hzz_zc_layout = SharedByPowerLayout(aug.K_mean, aug.K_pair)
+        Base.invokelatest(ZCRestrictionOperator, aug.Zraw_all, aug.Zpairraw_all, D, aug_aml)   # 2026-08-09: world-age fix, see meanzc_zc_op branch above for the full explanation
+    hzz_zc_layout = aug_layout === nothing ? SharedByPowerLayout(aug.K_mean, aug.K_pair) : aug_layout   # CM+ZC-CROSS: see meanzc_zc_layout's comment above
     hzz_zc_ws = ZCRestrictionWorkspace(hzz_zc_op)
     n_families = hasproperty(aug, :n_families) ? aug.n_families : 1   # 2026-08-05 truncated-power task
     # 2026-08-05 truncated-power task: same Pow/family2-table construction as build_cm_bin_ctx

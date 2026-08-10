@@ -1922,10 +1922,19 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
         # ActiveMeanLayout load-order dependency on every OTHER caller of zc_restriction_operator.jl
         # -- see that file's own header comment); only include it when actually needed. Re-including
         # is safe/idempotent (it only (re)defines a method, not a struct).
+        # 2026-08-09 (OZC-CROSS Variant D wiring): the include() just above/below runs INSIDE this
+        # function body, at runtime -- any method it (re)defines is only visible to code compiled
+        # AFTER this frame was entered, per Julia's world-age rules (Base.include bumps the global
+        # world counter; a currently-executing frame stays pinned to the world age it was entered
+        # at). Calling the just-(re)defined 4-arg ZCRestrictionOperator constructor directly in this
+        # same frame throws "MethodError: ... too new" -- confirmed live 2026-08-09, first cold-
+        # process call with fg_backend=:operator and aug_aml.active=true. Base.invokelatest is the
+        # standard, zero-behavior-change fix (bypasses the frame's fixed world snapshot for this one
+        # call); negligible cost since this runs once per context build, not per inner-solve call.
         aug_aml === nothing || !aug_aml.active || include(joinpath(@__DIR__, "zc_restriction_operator_ragged.jl"))
         fg_zc_op = (aug_aml === nothing || !aug_aml.active) ?
             ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2)) :
-            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2), aug_aml)
+            Base.invokelatest(ZCRestrictionOperator, aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2), aug_aml)
         fg_layout = aug.layout
     else
         fg_zc_op = nothing
@@ -1941,7 +1950,7 @@ function build_originzc_core_hess_ctx(aug, ctx = nothing; core_hessian_backend::
         aug_aml === nothing || !aug_aml.active || include(joinpath(@__DIR__, "zc_restriction_operator_ragged.jl"))
         hzz_zc_op = (aug_aml === nothing || !aug_aml.active) ?
             ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2)) :
-            ZCRestrictionOperator(aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2), aug_aml)
+            Base.invokelatest(ZCRestrictionOperator, aug.Zraw_all, aug.Zpairraw_all, size(aug.Zraw_all[1], 2), aug_aml)   # 2026-08-09: world-age fix, see fg_zc_op branch above for full explanation
         hzz_zc_layout = aug.layout
         hzz_zc_ws = ZCRestrictionWorkspace(hzz_zc_op)
     else

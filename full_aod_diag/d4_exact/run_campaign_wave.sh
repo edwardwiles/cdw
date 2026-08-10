@@ -57,11 +57,24 @@ launch() {
   NAMES+=("$name")
 }
 
-launch flexible_cm   julia --project="$ROOT" -t "$THREADS" "$D4E/campaign_cm_family_runner.jl"     flexible_cm    "$DIRECTION" "$MANIFEST" "$OUTROOT" "$MAXTIME" "$DELTAS_CSV" "$STARTS_CSV"
-launch common_frechet julia --project="$ROOT" -t "$THREADS" "$D4E/campaign_cm_family_runner.jl"     common_frechet "$DIRECTION" "$MANIFEST" "$OUTROOT" "$MAXTIME" "$DELTAS_CSV" "$STARTS_CSV"
-launch cm_meanzc      julia --project="$ROOT" -t "$THREADS" "$D4E/campaign_cm_family_runner.jl"     cm_meanzc      "$DIRECTION" "$MANIFEST" "$OUTROOT" "$MAXTIME" "$DELTAS_CSV" "$STARTS_CSV"
-launch origin_zc      julia --project="$ROOT" -t "$THREADS" "$D4E/campaign_cm_family_runner.jl"     origin_zc      "$DIRECTION" "$MANIFEST" "$OUTROOT" "$MAXTIME" "$DELTAS_CSV" "$STARTS_CSV"
-launch unrestricted   julia --project="$ROOT" -t "$THREADS" "$D4E/campaign_unrestricted_runner.jl"  "$DIRECTION" "$MANIFEST" "$OUTROOT" "$MAXTIME" "$DELTAS_CSV" "$STARTS_CSV"
+# 2026-08-09 (CROSS campaign integration): the family list is now a variable, so a wave can run the
+# K_pair^2 cross-power ZC families INSTEAD of their diagonal counterparts without editing this file.
+# Default is byte-identical to the historical hardcoded five, so an operator who sets nothing gets
+# exactly the previous behavior.
+#   CAMPAIGN_FAMILIES="flexible_cm common_frechet cm_meanzc_cross origin_zc_cross unrestricted"
+# `unrestricted` is the one family with its own separate runner script (self-contained include list,
+# matching smoke_delta1_unrestricted.jl's convention); every other name goes to the CM family runner,
+# which validates it against its own whitelist and errors on an unknown one.
+CAMPAIGN_FAMILIES="${CAMPAIGN_FAMILIES:-flexible_cm common_frechet cm_meanzc origin_zc unrestricted}"
+echo "campaign_families = [$CAMPAIGN_FAMILIES]"
+# shellcheck disable=SC2086  -- unquoted on purpose: word splitting IS the mechanism here
+for fam in $CAMPAIGN_FAMILIES; do
+  if [ "$fam" = "unrestricted" ]; then
+    launch "$fam" julia --project="$ROOT" -t "$THREADS" "$D4E/campaign_unrestricted_runner.jl" "$DIRECTION" "$MANIFEST" "$OUTROOT" "$MAXTIME" "$DELTAS_CSV" "$STARTS_CSV"
+  else
+    launch "$fam" julia --project="$ROOT" -t "$THREADS" "$D4E/campaign_cm_family_runner.jl" "$fam" "$DIRECTION" "$MANIFEST" "$OUTROOT" "$MAXTIME" "$DELTAS_CSV" "$STARTS_CSV"
+  fi
+done
 
 echo "launched PIDs: ${PIDS[*]}"
 

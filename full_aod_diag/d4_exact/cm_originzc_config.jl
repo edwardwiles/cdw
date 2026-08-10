@@ -9,7 +9,17 @@
 # `cm_extension`. A single run is either CM-family (`cm_extension`) or
 # origin-family (`distribution_restriction`), never both -- see
 # `originzc_resolve_K`'s docstring.
+#
+# OZC-CROSS driver-integration task (2026-08-09): this file now also accepts
+# `power_target_layout=:origin_by_power_cross` (`OriginByPowerCrossLayout`,
+# cm_originzc_cross_target_layout.jl) -- the K_pair^2 ordered cross-power-grid
+# pairwise-ZC restriction. Identical outer-parameter space to
+# `:origin_by_power` (same `n_eta`/`target_index`/mean-block formulas, see
+# that layout's own docstring), so it is threaded through wherever
+# `:origin_by_power` is, with `OriginByPowerCrossLayout` substituted.
 # ============================================================================
+
+isdefined(Main, :OriginByPowerCrossLayout) || include(joinpath(@__DIR__, "cm_originzc_cross_target_layout.jl"))
 
 """
     OriginZCConfig(; distribution_restriction=:unrestricted, K_mean=0, K_pair=0,
@@ -24,10 +34,14 @@
   zero-covariance moments, K_pair>=1 -- the genuine new economic restriction).
 - `K_mean`/`K_pair::Int`: power levels (`0 <= K_pair <= K_mean`).
 - `power_target_layout::Symbol`: `:origin_by_power` (this arm's own new
-  layout, one nu_{o,k} per origin) or `:shared_by_power` (the existing
-  CM+meanzc convention, reused here WITHOUT any CM block -- a legitimate but
-  separate diagnostic configuration, see the math note's `:unrestricted`
-  reproduction test).
+  layout, one nu_{o,k} per origin, diagonal-only `K_pair` pairwise-ZC
+  moments) | `:shared_by_power` (the existing CM+meanzc convention, reused
+  here WITHOUT any CM block -- a legitimate but separate diagnostic
+  configuration, see the math note's `:unrestricted` reproduction test) |
+  `:origin_by_power_cross` (OZC-CROSS, 2026-08-09: identical nu_{o,k} outer
+  space to `:origin_by_power`, but the FULL ordered `K_pair^2` cross-power
+  grid per origin pair instead of the diagonal-only `K_pair`, see
+  `OriginByPowerCrossLayout`, cm_originzc_cross_target_layout.jl).
 - `meanzc_basis::Symbol`: `:direct` only for `:origin_by_power` (no anchored
   analog, math note Section 3 -- hard error otherwise); `:direct` or
   `:anchored` for `:shared_by_power` (delegates to the existing meanzc
@@ -83,12 +97,12 @@ function originzc_resolve_K(cfg::OriginZCConfig)
 end
 
 function _originzc_validate(cfg::OriginZCConfig)
-    cfg.power_target_layout in (:shared_by_power, :origin_by_power) ||
-        error("OriginZCConfig: power_target_layout must be :shared_by_power or :origin_by_power, got $(cfg.power_target_layout)")
+    cfg.power_target_layout in (:shared_by_power, :origin_by_power, :origin_by_power_cross) ||
+        error("OriginZCConfig: power_target_layout must be :shared_by_power, :origin_by_power, or :origin_by_power_cross, got $(cfg.power_target_layout)")
     K_mean, K_pair = originzc_resolve_K(cfg)   # raises on any inconsistency
-    if cfg.power_target_layout === :origin_by_power
+    if cfg.power_target_layout in (:origin_by_power, :origin_by_power_cross)
         cfg.meanzc_basis === :direct ||
-            error("OriginZCConfig: power_target_layout=:origin_by_power supports meanzc_basis=:direct only (no anchored analog -- math note Section 3), got $(cfg.meanzc_basis)")
+            error("OriginZCConfig: power_target_layout=:$(cfg.power_target_layout) supports meanzc_basis=:direct only (no anchored analog -- math note Section 3), got $(cfg.meanzc_basis)")
     else
         cfg.meanzc_basis in (:direct, :anchored) ||
             error("OriginZCConfig: meanzc_basis must be :direct or :anchored, got $(cfg.meanzc_basis)")
@@ -119,12 +133,18 @@ end
 `nothing` for `:unrestricted` (no layout at all -- callers must branch on
 this exactly as `meanzc_resolve_K`'s `:cm_only` convention). Otherwise
 `make_target_layout(cfg.power_target_layout, D, K_mean, K_pair)`
-(cm_originzc_target_layout.jl).
+(cm_originzc_target_layout.jl) for `:shared_by_power`/`:origin_by_power`;
+`OriginByPowerCrossLayout(D, K_mean, K_pair)` directly (cm_originzc_cross_target_layout.jl,
+OZC-CROSS driver-integration task 2026-08-09) for `:origin_by_power_cross` -- handled here rather
+than inside `make_target_layout` itself to avoid that function needing a forward reference to a
+type defined in a file included AFTER it (cm_originzc_cross_target_layout.jl includes
+cm_originzc_target_layout.jl, not the reverse).
 """
 function originzc_make_layout(cfg::OriginZCConfig, D::Int)
     _originzc_validate(cfg)
     K_mean, K_pair = originzc_resolve_K(cfg)
     K_mean == 0 && return nothing
+    cfg.power_target_layout === :origin_by_power_cross && return OriginByPowerCrossLayout(D, K_mean, K_pair)
     return make_target_layout(cfg.power_target_layout, D, K_mean, K_pair)
 end
 
@@ -144,6 +164,31 @@ function originzc_default_nu_bounds(ctx, layout::SharedByPowerLayout)
     return meanzc_default_nu_bounds(ctx, layout.K_mean)
 end
 function originzc_default_nu_bounds(ctx, layout::OriginByPowerLayout)
+    D = layout.D
+    bounds = Vector{NTuple{2,Float64}}(undef, n_eta(layout))
+    for k in 1:layout.K_mean
+        Uk = frechet_power_feature(ctx.U, k, ctx.μHat)
+        for o in 1:D
+            lo_o = minimum(@view Uk[:, o]); hi_o = maximum(@view Uk[:, o])
+            lo_o > 0 || error("originzc_default_nu_bounds: non-positive lower bound at origin=$o level=$k (lo=$lo_o) -- log(nu) undefined")
+            bounds[target_index(layout, o, k)] = (log(lo_o / 4), log(hi_o * 4))
+        end
+    end
+    return bounds
+end
+"""
+    originzc_default_nu_bounds(ctx, layout::OriginByPowerCrossLayout)
+
+OZC-CROSS driver-integration task (2026-08-09): identical body to the `OriginByPowerLayout` method
+above, given its own method (rather than widening that method's own signature to a `Union`, the
+smaller/more surgical diff) since a bounds box is a per-`nu_{o,k}` (mean-block) quantity -- the
+cross layout's mean/nu space (`n_eta`/`target_index`) is byte-identical to `OriginByPowerLayout`'s
+own (see that layout's docstring, cm_originzc_cross_target_layout.jl), so the SAME per-origin,
+per-level Frechet-power-quantile box derivation applies unchanged; only the PAIR block differs
+between the two layouts, and pair targets are never boxed directly (only the underlying nu_{o,k}
+coordinates are).
+"""
+function originzc_default_nu_bounds(ctx, layout::OriginByPowerCrossLayout)
     D = layout.D
     bounds = Vector{NTuple{2,Float64}}(undef, n_eta(layout))
     for k in 1:layout.K_mean

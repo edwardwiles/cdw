@@ -106,13 +106,20 @@ and `hessian_backend` are read directly off it, not asserted.
 """
 function resolve_flexible_cm_manifest(; cctx, blas_threads::Union{Nothing,Int},
         cm_extension::Symbol = :cm_only, meanzc_K_mean::Int = 0, meanzc_K_pair::Int = 0,
+        meanzc_target_layout::Symbol = :shared_by_power,   # CM+ZC-CROSS (2026-08-09): :shared_by_power
+        # (diagonal, the pre-existing family -- default preserves every existing caller's reported
+        # family symbol byte-for-byte) | :shared_by_power_cross. Reported as a DISTINCT family symbol
+        # because a startup manifest that labelled a K_pair^2 cross run as plain `cm_meanzc` would be
+        # actively misleading in exactly the artifact (the run's own provenance record) an analyst
+        # later uses to tell the two apart.
         bundle_type::Symbol = :PsiObjectiveBundleImplicit)   # moment_representation threading task
         # (2026-07-29): the calling driver's ACTUAL `typeof(pcx.ctx_cm.obj)` -- see
         # resolve_unrestricted_manifest's identical field for the full rationale. Only
         # run_cm_upper_checkpointed passes this explicitly; other/older callers keep reporting the
         # pre-port default unchanged.
     is_meanzc = cm_extension !== :cm_only
-    family = is_meanzc ? :cm_meanzc : :flexible_cm
+    is_meanzc_cross = is_meanzc && meanzc_target_layout === :shared_by_power_cross
+    family = is_meanzc_cross ? :cm_meanzc_cross : (is_meanzc ? :cm_meanzc : :flexible_cm)
     # port/shared-winner-pair-core-hessian-production-2026-07-25 (task §5), CORRECTED 2026-07-25
     # continuation: this manifest is printed at DRIVER STARTUP, before any inner solve has run --
     # `cctx.core_cf_ref[]` is thus *always* still `nothing`/unset at print time regardless of
@@ -233,17 +240,21 @@ this manifest prints at driver STARTUP, before any inner solve, so
 backend will actually run. See `resolve_flexible_cm_manifest`'s identical fix.
 """
 function resolve_origin_zc_manifest(; octx = nothing, blas_threads::Union{Nothing,Int},
+        power_target_layout::Symbol = :origin_by_power,   # OZC-CROSS (2026-08-09): see
+        # resolve_flexible_cm_manifest's identical `meanzc_target_layout` kwarg for the rationale.
+        # Default preserves every existing caller's reported family symbol byte-for-byte.
         bundle_type::Symbol = :PsiObjectiveBundleImplicit)   # moment_representation threading task
         # (2026-07-29): the calling driver's ACTUAL `typeof(pcx.ctx_cm.obj)`, not asserted -- mirrors
         # resolve_unrestricted_manifest's identical fix. Only run_originzc_upper_checkpointed passes
         # this explicitly; the one other caller (a standalone benchmark script) never did and keeps
         # reporting the true pre-port value unchanged.
     core_configured = octx !== nothing && octx.core_hessian_backend !== :dense_reference
+    is_cross = power_target_layout === :origin_by_power_cross
     return (
-        family = :origin_zc,
+        family = is_cross ? :origin_zc_cross : :origin_zc,
         bundle_type = bundle_type,
         core_representation = core_configured ? :compressed_winner_form : :compressed,
-        restriction_representation = :pairwise_zero_covariance,
+        restriction_representation = is_cross ? :pairwise_zero_covariance_cross_power_grid : :pairwise_zero_covariance,
         hessian_backend = core_configured ? :partitioned_winner_pair_core_dense_restriction : :dense_architecture_a,
         core_hessian_backend = octx === nothing ? :dense_reference : octx.core_hessian_backend,
         core_hessian_workers = octx === nothing ? 0 : octx.core_hessian_workers,
