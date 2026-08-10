@@ -183,19 +183,53 @@ Same finite-sample pattern the earlier `pairwise_grid_common_marginal` restricti
 - `family_start_chain.jl`'s `call_driver` arm. This family fits the uniform convention with no
   wrapper (unlike `UNRESTRICTED`); `L`/`min_crossed` arrive generically through `fam_kwargs()`.
 
-**Deliberately NOT done — needs the user's call.** `protocols/paper_upper_v1.toml` is frozen by its
-own header: *"Once any cell of this protocol has started, THIS FILE MUST NOT BE MUTATED. Any
-substantive change requires a new protocol version (`paper_upper_v2.toml`) with its own root output
-tree."* Adding a 6th family is a larger change than the in-place `protocol_sha` re-freezes this
-branch has done after bug fixes, and the two options have different costs:
+**Deliberately NOT done, and now confirmed as the user's decision (2026-08-10): leave the protocol
+alone — code only, decide later.** `protocols/paper_upper_v1.toml` is frozen by its own header
+(*"Once any cell of this protocol has started, THIS FILE MUST NOT BE MUTATED"*), and a live
+`paper_upper_v1` campaign was in fact running on this host while this work was done
+(`screen -S paperupper_resume`, `repo_scratch/paper_upper_v1/resume_remaining_screen.sh`), which
+makes leaving it untouched clearly right rather than merely cautious.
 
-- **`paper_upper_v2.toml`** — clean provenance, but a fresh output root: the existing five-family
-  results are not reused.
-- **In-place re-freeze** — reuses existing results, but a protocol that was declared immutable
-  changes meaning after cells have run.
+Consequence: the family is fully runnable today via its own driver and qualifies through the seed
+generator (`paper_six_family_seed_specs`), but `launch_wave.sh` / `paper_upper_v1.toml` still run
+five families. Still pending whenever the protocol question is revisited: the
+`[families.PAIRWISE_QUANTILE]` block, `launch_wave.sh`'s hardcoded `FAMILIES=(...)` array, the
+`[concurrency]` recompute (5→6 families per start), and the `[projection]` nesting edges.
 
-Also still pending, and cheap once that is decided: `launch_wave.sh`'s hardcoded `FAMILIES=(...)`
-array, the `[concurrency]` recompute (5→6 families per start), and the `[projection]` nesting edges.
+## Campaign target (user, 2026-08-10): W=100,000, L=10 if feasible, else L=5
+
+All other settings as previous production (σ=3.0, `draw_design=:sobol_randomized`,
+`draw_seed=20260719`, `destination_sample=:exclude_row`, `inner_lower_limit=-10.0`, Brazil–Korea
+gravity exclusions). `L` is genuinely new to this family and has no production precedent.
+
+**Scale at D=20** (memory is not the constraint — this host has ~3 TB, ~2.3 TB free):
+
+| L | moment rows | outer cutoff coords | dense `HRR` | T4 tables | KNITRO packed H |
+|---|---|---|---|---|---|
+| 5 | 3,120 | 80 | 0.08 GB | 0.03 GB | 0.04 GB |
+| 10 | 15,570 | 180 | 1.94 GB | 0.76 GB | 0.97 GB |
+
+**Wall-clock is the real constraint.** Prior profiling measured the L=5/W=100k inner solve at
+407 s, of which ~78% is the T1–T4 Hessian table build. Rows grow 5× from L=5 to L=10 and the dense
+Hessian blocks scale ≈ rows², with each T4 combo growing `(L-1)^4` = 256 → 6561 (≈25×). So a naive
+projection is **hours per inner solve at L=10**, and an outer bound search needs hundreds of them.
+That is consistent with the earlier `pairwise_grid_common_marginal` restriction, which at D=20/L=10
+took ~27 min per inner solve at W=80,000.
+
+**If L=10 is too slow via the dense-Hessian path, the designed escape hatch already exists and
+should be tried before falling back to L=5**: `pairwise_quantile_hvp.jl` (built 2026-08-09) supplies
+a Hessian-vector-product path that avoids building T3/T4 at all — precisely the block that dominates
+and precisely the block whose cost explodes with `L`. It has a D=4 A/B test
+(`test_pairwise_quantile_d4_hvp_ab.jl`) and a D=20 profile harness
+(`profile_pairwise_quantile_d20_hvp_ab.jl`), but has NOT been exercised at L=10. Its open question
+is whether the CG/Interior inner-algorithm switch it requires costs more in iterations than it saves
+per callback.
+
+A feasibility probe (one value-only inner solve at W=100,000 for L=5 then L=10, `δ=50` so the
+early-abort threshold is `Inf` and cannot be mistaken for a failure) was launched under
+`screen -S pq_L10_probe`, logging to `logs/pq_W100k_L5_L10_probe.log`, script
+`full_aod_diag/d4_exact/probe_pairwise_quantile_W100k_L5_L10.jl`. **Its result is not yet in as of
+this writing** — read that log before assuming either answer.
 
 ---
 
