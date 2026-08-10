@@ -194,9 +194,23 @@ end
 check_tol("Hessian: packed round-trip", maximum(abs.(Hrecon .- HfullR)), 1e-12)
 
 # ==== CHECK 8-9: cutoff gradient (fixed-dual boundary-crossing shortcut, exact vs slow O(W)) ====
+# SIGN CONVENTION (corrected 2026-08-10, outer-loop task): `r_current` must be `r` in the SAME
+# convention the production solve uses -- `pairwise_quantile_forward!` SUBTRACTS the restriction
+# contribution into its accumulator (`arg0[w] -= Rw`, pairwise_quantile_operator.jl:50), exactly as
+# the economic block does (`st.arg0 .-= st.econ_buf`, pairwise_quantile_production.jl:118), so
+# starting from zeros gives `r = -G_R*lambda_R` directly and NOTHING should be negated here.
+#
+# These two lines previously read `r_current = -r0` and `psi_scalar.(-a0)`. That negated BOTH the
+# reference r and the brute-force recompute, which made CHECK 8-9 self-consistent under a convention
+# no real solve ever uses -- and consequently blind to the sign of `fixed_dual_delta_f`'s own `dR`.
+# A genuine sign error there passed this test for exactly that reason (found 2026-08-10 by
+# comparing against a full fixed-dual recompute at a REAL converged dual; see
+# debug_pq_cutoff_sign_isolate.jl EXPERIMENT 0 and the fix note in
+# pairwise_quantile_cutoff_gradient.jl). With the convention corrected, CHECK 8-9 now genuinely
+# gates that sign: it fails if `dR` is flipped back.
 r0 = zeros(W)
 pairwise_quantile_forward!(r0, lambda_M, lambda_P, op, state)
-r_current = -r0
+r_current = r0
 f0 = sum(psi_scalar.(r_current)) / W
 
 function slow_full_delta(U, op, Qmod, lambda_M, lambda_P, f0)
@@ -208,7 +222,7 @@ function slow_full_delta(U, op, Qmod, lambda_M, lambda_P, f0)
     end
     a0 = zeros(W)
     pairwise_quantile_forward!(a0, lambda_M, lambda_P, op, st)
-    fnew = sum(psi_scalar.(-a0)) / W
+    fnew = sum(psi_scalar.(a0)) / W
     return fnew - f0, st
 end
 

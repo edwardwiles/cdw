@@ -109,9 +109,13 @@ function fixed_dual_delta_f(op::PairwiseQuantileOperator, state::PairwiseQuantil
         b_old == b_new && continue   # can happen at a shared boundary point; no actual change
         k_crossed += 1
 
-        dR = 0.0
-        b_old <= nlast && (dR -= lambda_M[o, b_old])
-        b_new <= nlast && (dR += lambda_M[o, b_new])
+        # dG = change in this draw's RESTRICTION moment-row contribution (G_R*lambda_R) when its bin
+        # for origin `o` moves b_old -> b_new. The per-draw centering constant `C_lambda`
+        # (pairwise_quantile_operator.jl:36) is bin-INDEPENDENT and therefore cancels exactly in this
+        # difference -- it is deliberately not recomputed here.
+        dG = 0.0
+        b_old <= nlast && (dG -= lambda_M[o, b_old])
+        b_new <= nlast && (dG += lambda_M[o, b_new])
         for p in 1:D
             p == o && continue
             bp = bin[w, p]
@@ -119,18 +123,57 @@ function fixed_dual_delta_f(op::PairwiseQuantileOperator, state::PairwiseQuantil
             pidx = pair_index(op, o, p)
             (op1, op2) = pairs[pidx]
             if op1 == o
-                b_old <= nlast && (dR -= lambda_P[b_old, bp, pidx])
-                b_new <= nlast && (dR += lambda_P[b_new, bp, pidx])
+                b_old <= nlast && (dG -= lambda_P[b_old, bp, pidx])
+                b_new <= nlast && (dG += lambda_P[b_new, bp, pidx])
             else
-                b_old <= nlast && (dR -= lambda_P[bp, b_old, pidx])
-                b_new <= nlast && (dR += lambda_P[bp, b_new, pidx])
+                b_old <= nlast && (dG -= lambda_P[bp, b_old, pidx])
+                b_new <= nlast && (dG += lambda_P[bp, b_new, pidx])
             end
         end
+        # SIGN (bug fixed 2026-08-10, outer-loop task -- see this function's docstring): the
+        # production operator builds r by SUBTRACTING the restriction contribution
+        # (`arg0[w] -= Rw`, pairwise_quantile_forward!:50, matching the economic block's own
+        # `arg0 .-= econ_buf`), so r = -zeta - E*lambda_E - G_R*lambda_R and the change in r is
+        # MINUS the change in G_R*lambda_R. This function previously used `dR = dG` and was
+        # nonetheless "validated" by test_pairwise_quantile_d4_dense_oracle.jl, because that test
+        # built its own reference as `r_current = -forward!(zeros)` and evaluated `psi_scalar.(-a0)`
+        # -- negating BOTH sides, so the two sign errors cancelled and the check passed under a
+        # convention no real solve ever uses. Confirmed live against a full fixed-dual recompute at
+        # the real converged dual (debug_pq_cutoff_sign_isolate.jl, EXPERIMENT 0): with `dR = dG`
+        # the shortcut disagreed with the full recompute in sign on 5/5 probed cutoffs.
+        dR = -dG
 
         Rw_old = r_current[w]
         delta_f += psi_scalar(Rw_old + dR) - psi_scalar(Rw_old)
     end
     return (delta_f / op.W, k_crossed)
+end
+
+"""
+    cutoff_probe_points(op, Qcol, o, r, nc; min_crossed) -> (q_up, q_down)
+
+The up/down secant probe points `cutoff_secant_gradient!` uses for physical cutoff `(o,r)`:
+`bandwidth_target` in each direction, clamped to respect the neighbour ordering
+`q_{o,r-1} < q_{o,r} < q_{o,r+1}` (`-Inf`/`+Inf` implicitly at `r=1`/`r=nc`).
+
+Factored out (outer-loop task, 2026-08-10) so the reoptimized-FD validation gate
+(`d_delta_dual_d_cutoff_fd`, pairwise_quantile_outer_production.jl) can re-solve the inner dual at
+EXACTLY the same probe points the analytic secant used, rather than at some arbitrary `h`. That
+matters here in a way it does not for a smooth parameter: the fixed-dual objective is a genuine
+step function of `q`, so an FD taken at a step that crosses ZERO draws returns exactly 0.0 and an
+FD taken at a step crossing a very different number of draws measures a different secant of the
+same staircase -- in both cases a bandwidth artifact that looks exactly like a gradient bug (see
+memory `feedback-fd-bandwidth-mismatch-looks-like-a-bug`). One shared helper, two call sites, so
+the gate can never silently drift out of sync with the thing it is gating.
+"""
+function cutoff_probe_points(op::PairwiseQuantileOperator, Qcol::AbstractVector{Float64},
+        o::Int, r::Int, nc::Int; min_crossed::Int)
+    q_old = Qcol[r]
+    lo_bound = r == 1 ? -Inf : Qcol[r-1]
+    hi_bound = r == nc ? Inf : Qcol[r+1]
+    q_up = bandwidth_target(op, o, q_old, :up, min_crossed, hi_bound)
+    q_down = bandwidth_target(op, o, q_old, :down, min_crossed, lo_bound)
+    return (q_up, q_down)
 end
 
 """
@@ -174,11 +217,7 @@ function cutoff_secant_gradient!(grad_raw::AbstractVector{Float64}, op::Pairwise
 
         for r in 1:nc
             q_old = Qcol[r]
-            lo_bound = r == 1 ? -Inf : Qcol[r-1]
-            hi_bound = r == nc ? Inf : Qcol[r+1]
-
-            q_up = bandwidth_target(op, o, q_old, :up, min_crossed, hi_bound)
-            q_down = bandwidth_target(op, o, q_old, :down, min_crossed, lo_bound)
+            (q_up, q_down) = cutoff_probe_points(op, Qcol, o, r, nc; min_crossed = min_crossed)
             (df_up, k_up) = q_up > q_old ? fixed_dual_delta_f(op, state, o, r, q_up, lambda_M, lambda_P, r_current) : (0.0, 0)
             (df_down, k_down) = q_down < q_old ? fixed_dual_delta_f(op, state, o, r, q_down, lambda_M, lambda_P, r_current) : (0.0, 0)
 
