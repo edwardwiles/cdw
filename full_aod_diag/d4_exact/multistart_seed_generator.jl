@@ -127,12 +127,16 @@ common Fréchet, `marginal_restriction=:common_frechet`, `cm_extension=:cm_only`
 2026-08-08 that the two-family/eq.35+eq.36 variant is not reachable through the current production
 driver at all, see docs/audits/reproducible-multistart-generator-2026-08-08/MASTER.md).
 
+`:pairwise_quantile` (pairwise-quantile-independence, `run_pairwise_quantile_upper_checkpointed`'s
+value-only path) reuses `L` as its number of quantile BINS per origin, and is the only kind that
+consults `min_crossed`.
+
 `L`/`contrasts`/`probs`/`include_truncated_moment`/`meanzc_basis` are consulted only by `:cm_zc`
 and `:common_frechet` kinds; ignored (but still required, for a uniform struct) by `:origin_zc`.
 """
 struct FamilySeedSpec
     id::Symbol
-    kind::Symbol                 # :origin_zc | :cm_zc | :common_frechet
+    kind::Symbol                 # :origin_zc | :cm_zc | :common_frechet | :unrestricted | :cm_only | :pairwise_quantile
     K_mean::Int
     K_pair::Int
     L::Int
@@ -140,6 +144,17 @@ struct FamilySeedSpec
     probs::Union{Nothing,Vector{Float64}}
     include_truncated_moment::Bool
     meanzc_basis::Symbol
+    # ---- pairwise-quantile-independence family (2026-08-10) ----
+    # Secant bandwidth (in draws crossed) for that family's cutoff outer gradient. `0` for every
+    # other kind, meaning "not applicable" -- the SAME off-sentinel convention this struct already
+    # uses for `K_mean`/`K_pair`/`L` on families that have no such concept (e.g.
+    # `origin_zc_family_spec` passes `L = 0`), not a silently-substituted value.
+    #
+    # NOTE it is genuinely unused at THIS layer even for :pairwise_quantile: seed qualification is
+    # value-only (`evaluate_family` calls a `*_value_verified_screened` entry point and never takes
+    # an outer gradient), so `min_crossed` is carried here only so the spec fully determines the
+    # production context the driver layer will later build, not because the seed evaluation reads it.
+    min_crossed::Int
 end
 
 """
@@ -159,18 +174,35 @@ function resolve_cm_probs(L::Int)
 end
 
 function origin_zc_family_spec(id::Symbol; K_mean::Int, K_pair::Int)
-    FamilySeedSpec(id, :origin_zc, K_mean, K_pair, 0, :orthonormal, nothing, false, :direct)
+    FamilySeedSpec(id, :origin_zc, K_mean, K_pair, 0, :orthonormal, nothing, false, :direct, 0)
 end
 
 function cm_zc_family_spec(id::Symbol; K_mean::Int, K_pair::Int, L::Int,
                             contrasts::Symbol = :orthonormal,
                             probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
-    FamilySeedSpec(id, :cm_zc, K_mean, K_pair, L, contrasts, probs, false, :direct)
+    FamilySeedSpec(id, :cm_zc, K_mean, K_pair, L, contrasts, probs, false, :direct, 0)
 end
 
 function common_frechet_family_spec(id::Symbol; L::Int, contrasts::Symbol = :orthonormal,
                                      probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
-    FamilySeedSpec(id, :common_frechet, 0, 0, L, contrasts, probs, false, :direct)
+    FamilySeedSpec(id, :common_frechet, 0, 0, L, contrasts, probs, false, :direct, 0)
+end
+
+"""
+    pairwise_quantile_family_spec(id; L, min_crossed) -> FamilySeedSpec
+
+Pairwise-quantile-independence family (2026-08-10). `L` is the number of quantile BINS per origin
+(NOT a CM contrast-grid size -- this family has no CM grid), so `contrasts`/`probs`/
+`include_truncated_moment`/`meanzc_basis`/`K_mean`/`K_pair` all take their off sentinels.
+
+Both `L` and `min_crossed` are REQUIRED with no default, matching this restriction's own convention
+everywhere else (CLAUDE.md's no-silent-defaults rule): both are genuine modelling choices, and
+`min_crossed` in particular must be chosen against the campaign's own `W`.
+"""
+function pairwise_quantile_family_spec(id::Symbol; L::Int, min_crossed::Int)
+    L >= 2 || error("pairwise_quantile_family_spec($id): L (quantile bins) must be >= 2, got $L")
+    min_crossed >= 1 || error("pairwise_quantile_family_spec($id): min_crossed must be >= 1, got $min_crossed")
+    FamilySeedSpec(id, :pairwise_quantile, 0, 0, L, :none, nothing, false, :direct, min_crossed)
 end
 
 """
@@ -184,7 +216,7 @@ point -- no nu lift, no companion solve (there is nothing to lift; this IS the c
 families' own nu policies solve internally).
 """
 function unrestricted_family_spec(id::Symbol)
-    FamilySeedSpec(id, :unrestricted, 0, 0, 0, :orthonormal, nothing, false, :direct)
+    FamilySeedSpec(id, :unrestricted, 0, 0, 0, :orthonormal, nothing, false, :direct, 0)
 end
 
 """
@@ -199,7 +231,7 @@ just evaluates that companion directly as ITS OWN family, rather than as an inte
 """
 function cm_only_family_spec(id::Symbol; L::Int, contrasts::Symbol = :orthonormal,
                               probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
-    FamilySeedSpec(id, :cm_only, 0, 0, L, contrasts, probs, false, :direct)
+    FamilySeedSpec(id, :cm_only, 0, 0, L, contrasts, probs, false, :direct, 0)
 end
 
 # ============================================================================
@@ -252,6 +284,28 @@ function paper_five_family_seed_specs(ctx)
         origin_zc_family_spec(:ORIGIN_ZC; K_mean = 3, K_pair = 3),
         cm_zc_family_spec(:CM_PLUS_ZC; K_mean = 3, K_pair = 3, L = 50),
     ]
+end
+
+"""
+    paper_six_family_seed_specs(ctx; pq_L, pq_min_crossed) -> Vector{FamilySeedSpec}
+
+`paper_five_family_seed_specs` plus the pairwise-quantile-independence family as family #6
+(2026-08-10). SEPARATE function, not an edit of the five-family one, deliberately: the five-family
+list is what `protocols/paper_upper_v1.toml` currently freezes, and silently changing what that
+function returns would change the meaning of an already-started protocol. A caller opts into six
+families by name.
+
+`pq_L`/`pq_min_crossed` are required (no defaults) -- see `pairwise_quantile_family_spec`. For
+guidance: `pq_min_crossed` at roughly 1% of the campaign's `W` sits inside the same switching-mass
+band the economic A-block's own bandwidth selector targets, and is where the analytic-vs-reoptimized
+FD agreement was measured best (docs/PAIRWISE_QUANTILE_OUTER_LOOP_STATUS_2026-08-10.md section on
+bandwidth sensitivity). NOTE also, confirmed live at real D=20: this family's inner solve does NOT
+converge at W=8000 (an unbounded/infeasible inner solve at the calibration point) but is clean at
+W>=20000 for L=2 and L=3 -- do not seed it at small W.
+"""
+function paper_six_family_seed_specs(ctx; pq_L::Int, pq_min_crossed::Int)
+    return vcat(paper_five_family_seed_specs(ctx),
+                [pairwise_quantile_family_spec(:PAIRWISE_QUANTILE; L = pq_L, min_crossed = pq_min_crossed)])
 end
 
 # ============================================================================
@@ -496,6 +550,13 @@ function build_family(ctx, spec::FamilySeedSpec)
         pcx = build_cm_frechet_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
             contrasts = spec.contrasts, probs = spec.probs, cm_hessian_backend = :structured, moment_representation = :operator)
         return FamilyBuild(spec, pcx, nothing, nothing)
+    elseif spec.kind == :pairwise_quantile
+        # This family has no nu/eta layout and no ActiveMeanLayout analog (its restriction rows are
+        # quantile-bin indicators, none exactly collinear with the autarky/counterfactual moment),
+        # so both of those FamilyBuild slots are `nothing` -- same as :common_frechet.
+        pcx = build_pairwise_quantile_production_context(ctx, PairwiseQuantileCutoffLayout(ctx.D, spec.L);
+            min_crossed = spec.min_crossed)
+        return FamilyBuild(spec, pcx, nothing, nothing)
     elseif spec.kind == :unrestricted
         # paper_upper_v1 extension: `pcx` slot holds the RangedScreenContext (fast_range_screen.jl),
         # built fresh per candidate for the same stale-buffer-safety reason build_family never
@@ -648,6 +709,18 @@ function evaluate_family(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64}; 
         focal_nu = nothing
         K, base, verify = cm_frechet_production_value_verified_screened(x_free, fb.pcx; eval_id = eval_id)
         full_vec = x_free
+    elseif fb.spec.kind == :pairwise_quantile
+        # The restriction's own outer coordinates here are CUTOFFS, not nu targets, so there is no
+        # companion-LFD "implied nu" step: the analogous data-derived starting value is the
+        # empirical-quantile cutoff vector (pairwise_quantile_start_cutoffs), which depends only on
+        # the draws and not on the candidate's economic point -- so it is the same for every
+        # candidate, by construction. `nu_values` in the returned FamilyLiftResult therefore records
+        # those cutoffs (the family's actual restriction coordinates) and `nu_policy` says so.
+        cuts0 = pairwise_quantile_start_cutoffs(ctx, fb.pcx.layout)
+        nu0_active = cuts0
+        focal_nu = nothing
+        K, base, verify = pairwise_quantile_production_value_verified_screened(x_free, cuts0, fb.pcx; eval_id = eval_id)
+        full_vec = vcat(x_free, cuts0)
     elseif fb.spec.kind == :unrestricted
         nu0_active = Float64[]
         focal_nu = nothing
@@ -664,8 +737,13 @@ function evaluate_family(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64}; 
     wall = time() - t0
     cls = classify_inner_result(verify)
     layout_desc = fb.aml === nothing ? "dense" : "active_omit=$(fb.aml.dense_omit_idx)_kstar_focal=$(fb.aml.kstar)"
+    # nu_policy records HOW this family's restriction coordinates were chosen. :companion_lfd_implied
+    # is the ZC/CM families' own companion-LFD lift; the pairwise-quantile family's cutoffs come from
+    # the draws' empirical quantiles instead, so labelling them :companion_lfd_implied would be
+    # simply false in the recorded provenance.
+    nu_policy = fb.spec.kind == :pairwise_quantile ? :empirical_quantile_cutoffs : :companion_lfd_implied
     return FamilyLiftResult(fb.spec.id, fb.spec.kind, sha256_of_vector(full_vec), nu0_active,
-        :companion_lfd_implied, focal_nu,
+        nu_policy, focal_nu,
         verify.Delta_dual, is_verified_success(verify), verify.inner_status, Symbol(string(cls)),
         sha256_of_string(layout_desc), wall)
 end

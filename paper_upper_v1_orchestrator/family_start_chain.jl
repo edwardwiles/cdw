@@ -120,6 +120,14 @@ function call_driver(w0::Vector{Float64}; extra::NamedTuple)
         return run_cm_upper_checkpointed(w0; kw...)
     elseif driver == "run_originzc_upper_checkpointed"
         return run_originzc_upper_checkpointed(w0; kw...)
+    elseif driver == "run_pairwise_quantile_upper_checkpointed"
+        # Pairwise-quantile-independence family (2026-08-10). Fits the uniform convention with no
+        # wrapper: same `common` scientific kwargs, same objective_mode/gp_fixed Stage B mechanism,
+        # same NamedTuple return shape (.knitro_status/.n_eval/.n_grad/.best) run_stage reads. Its
+        # own two required kwargs, `L` (quantile bins) and `min_crossed` (cutoff-gradient secant
+        # bandwidth), arrive generically through fam_kwargs() from the protocol's
+        # [families.<ID>.kwargs] sub-table -- no per-family kwarg-NAME logic is needed here.
+        return run_pairwise_quantile_upper_checkpointed(w0; kw...)
     else
         error("call_driver: unknown driver '$driver' for family $FAMILY_ID -- Unrestricted goes through call_unrestricted_driver, not call_driver")
     end
