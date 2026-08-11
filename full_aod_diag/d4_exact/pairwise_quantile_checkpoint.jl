@@ -207,6 +207,15 @@ function run_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Float
         blas_threads::Union{Nothing,Int} = nothing,
         use_exact_cache::Bool = true,
         mass_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
+        # Economic-block backend for the OUTER gradient. `:cplus` is the FACTORIZED representation
+        # (lfix_factorized.jl) that never materializes the W x D x Ddest price tensors -- the same
+        # backend origin-ZC/CM+ZC/common-Frechet already have adapters for. `:dense` is the older
+        # path, kept as the reference the gate compares against
+        # (test_pairwise_quantile_cplus_gate.jl: economic block agrees to 3.4e-17, restriction tail
+        # bit-identical, 4.42x faster at real D=20/W=100,000). Not a scientific parameter -- it
+        # changes how the same gradient is computed, not what problem is solved -- so it carries a
+        # default, like A_coordinate_mode.
+        gradient_backend::Symbol = :cplus,
         )
     lp(xs...) = (println(xs...); flush(stdout))
 
@@ -223,6 +232,8 @@ function run_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Float
         error("run_pairwise_quantile_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
     objective_mode in (:min_gp, :min_delta_fixed_gp) ||
         error("run_pairwise_quantile_upper_checkpointed($label): objective_mode must be :min_gp|:min_delta_fixed_gp, got :$objective_mode")
+    gradient_backend in (:cplus, :dense) ||
+        error("run_pairwise_quantile_upper_checkpointed($label): gradient_backend must be :cplus|:dense, got :$gradient_backend")
     objective_mode == :min_delta_fixed_gp && gp_fixed === nothing &&
         error("run_pairwise_quantile_upper_checkpointed($label): objective_mode=:min_delta_fixed_gp requires gp_fixed " *
               "(this mode has no meaning with gp free -- it minimizes Delta* AT a fixed gp).")
@@ -357,6 +368,11 @@ function run_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Float
     flush(stdout)
     write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))
     econ_ws = get_or_build_econ_a_grad_ws(W)
+    # Backend C+ workspaces: built ONCE for the whole run, never per gradient call -- that reuse is
+    # the entire point of the backend (see pairwise_quantile_cplus_workspaces).
+    cplus_pool, cplus_ws = gradient_backend === :cplus ?
+        pairwise_quantile_cplus_workspaces(ctx_cm) : (nothing, nothing)
+    lp("[", label, "] outer-gradient economic backend: :", gradient_backend)
 
     # ---- 11a. the FIXED cutoffs: report them, and on resume verify them EXACTLY ----
     # Different cutoffs are a different restriction, not a different search over the same one, so
@@ -520,9 +536,15 @@ function run_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Float
         matched = shared !== nothing && shared.w == w
         base = matched ? shared.base : nothing
         verify_c = matched ? shared.verify : nothing
-        gfull, meta = pairwise_quantile_production_gradient(xf, masses, pcx, ctx, pe;
-            base = base, verify = verify_c, econ_ws = econ_ws,
-            threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        gfull, meta = if gradient_backend === :cplus
+            pairwise_quantile_production_gradient_cplus(xf, masses, pcx, ctx, pe, cplus_pool, cplus_ws;
+                base = base, verify = verify_c,
+                threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        else
+            pairwise_quantile_production_gradient(xf, masses, pcx, ctx, pe;
+                base = base, verify = verify_c, econ_ws = econ_ws,
+                threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        end
         n_grad[] += 1
         # gfull's economic block is ALWAYS the z-space gradient; rescale it by the constant scalar
         # -theta_cm when the outer search is actually in a-space -- same block as every other

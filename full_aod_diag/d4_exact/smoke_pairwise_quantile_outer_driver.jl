@@ -46,7 +46,8 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
           "pairwise_quantile_production.jl", "pairwise_quantile_mass_gradient.jl",
-          "pairwise_quantile_outer_production.jl", "pairwise_quantile_checkpoint.jl"]
+          "pairwise_quantile_outer_production.jl", "pairwise_quantile_cplus.jl",
+          "pairwise_quantile_checkpoint.jl"]
     include(joinpath(_D4E, f))
 end
 using Random, LinearAlgebra, Serialization, SpecialFunctions, Printf
