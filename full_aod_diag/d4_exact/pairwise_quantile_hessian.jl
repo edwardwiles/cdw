@@ -106,21 +106,6 @@ function _assign_canonical_combos(tuples::Vector{NTuple{N,Int}}) where {N}
     return canon_idx, perm, canon_list
 end
 
-"Per-thread scratch for the deduped T3 ((L-1)^3 x ncanon3) / T4 ((L-1)^4 x ncanon4) canonical
-table build. Mirrors `PairwiseQuantileThreadScratch`'s own shape/lifecycle exactly, generalized
-from the 1-way/2-way tables to the 3-way/4-way canonical ones."
-struct PairwiseQuantileHessThreadScratch
-    T3tab::Vector{Array{Float64,4}}   # [tid] -> (L-1)x(L-1)x(L-1) x ncanon3
-    T4tab::Vector{Array{Float64,5}}   # [tid] -> (L-1)x(L-1)x(L-1)x(L-1) x ncanon4
-end
-
-function PairwiseQuantileHessThreadScratch(ncanon3::Int, ncanon4::Int, L::Int)
-    nt = Threads.nthreads()
-    nc = L - 1
-    return PairwiseQuantileHessThreadScratch(
-        [zeros(nc, nc, nc, ncanon3) for _ in 1:nt], [zeros(nc, nc, nc, nc, ncanon4) for _ in 1:nt])
-end
-
 """
     PairwiseQuantileHessianTables(op::PairwiseQuantileOperator)
 
@@ -157,7 +142,6 @@ mutable struct PairwiseQuantileHessianTables
     quad_canon_idx::Vector{Int}
     quad_perm::Vector{NTuple{4,Int}}
     quad_canonical_list::Vector{NTuple{4,Int}}
-    hess_tls::PairwiseQuantileHessThreadScratch
 end
 
 function PairwiseQuantileHessianTables(op::PairwiseQuantileOperator)
@@ -179,8 +163,7 @@ function PairwiseQuantileHessianTables(op::PairwiseQuantileOperator)
     # all L bins so no second, differently-shaped builder is needed.
     return PairwiseQuantileHessianTables(zeros(D, L), zeros(L, L, npair), zeros(nc, nc, nc, ncanon3),
         zeros(nc, nc, nc, nc, ncanon4), 0.0, triple_opq, quad_oooo,
-        triple_canon_idx, triple_perm, triple_canonical_list, quad_canon_idx, quad_perm, quad_canonical_list,
-        PairwiseQuantileHessThreadScratch(ncanon3, ncanon4, L))
+        triple_canon_idx, triple_perm, triple_canonical_list, quad_canon_idx, quad_perm, quad_canonical_list)
 end
 
 "Read T3 at ORIGINAL combo index `tidx` and its own (a,b,c) bin triple (matching `triple_opq[tidx]`'s
@@ -209,11 +192,11 @@ ONE per-Hessian-callback refresh of all four raw table families, weighted by `h 
 built via the SAME threaded static-chunk/fixed-order-reduction builder the transpose uses
 (`build_pairwise_quantile_tables_threaded!`), just weighted by `h` instead of `Psi'(q_w)`.
 
-`T3`/`T4` (handover doc "Verified finding #1"+"#2", 2026-08-09): scatter into the DEDUPED canonical
-tables (`tabs.T3`/`tabs.T4`, sized `ncanon3=C(D,3)`/`ncanon4=C(D,4)`, ~3x fewer combos than the raw
-`triple_opq`/`quad_oooo` lists) via the SAME static-chunk/fixed-order-reduction threading discipline
-as T1/T2 (`Threads.@threads :static`, per-thread scratch in `tabs.hess_tls`, never atomics) --
-previously a single-threaded pass over the FULL redundant combo lists.
+`T3`/`T4`: scatter into the DEDUPED canonical tables (`tabs.T3`/`tabs.T4`, sized
+`ncanon3=C(D,3)`/`ncanon4=C(D,4)`, ~3x fewer combos than the raw `triple_opq`/`quad_oooo` lists),
+with COMBOS on the outer loop and threads partitioned over COMBOS rather than draws -- see the
+block comment at the loop for the measured op and memory counts that motivate both choices, and for
+the (deliberate, gated) change in summation order.
 """
 function build_pairwise_quantile_hessian_tables!(tabs::PairwiseQuantileHessianTables, op::PairwiseQuantileOperator,
         h::AbstractVector{Float64}, tls::PairwiseQuantileThreadScratch)
@@ -223,70 +206,67 @@ function build_pairwise_quantile_hessian_tables!(tabs::PairwiseQuantileHessianTa
     bin = op.bin
     W = op.W
     nlast = UInt8(op.L - 1)   # last ACTIVE bin index; bin L (implicit zero) is > nlast
-    nt = Threads.nthreads()
-    hess_tls = tabs.hess_tls
 
-    # SCATTER using ONLY the canonical (sorted-origin) representative list -- ncanon3/ncanon4
-    # entries, NOT the 3x-redundant `triple_opq`/`quad_oooo` lists (see `_assign_canonical_combos`'s
-    # correctness note: scattering all redundant role-variants into the shared canonical table would
-    # N-way OVERCOUNT, not just waste work). Each canonical tuple is already origin-sorted, so no
-    # permutation is needed here at all -- (a,b,c) written directly matches the canonical axis order
-    # `read_T3`/`read_T4` (below) expect; permutation is applied ONLY at read time, for an arbitrary
-    # caller-supplied (o,p,q,...)-ordered combo.
+    # ---- T3 / T4 scatter: COMBOS OUTER, DRAWS INNER, threaded over COMBOS ----------------------
+    #
+    # This loop order and threading strategy are both deliberate, and both are the opposite of what
+    # the first version did (draws outer, combos inner, threaded over draws with a private full copy
+    # of every table per thread). Measured op/memory counts at D=20, W=100,000 that motivated the
+    # change:
+    #
+    #                                       L=5              L=10
+    #   scatter adds  W*(C(D,3)+C(D,4))     598.5 M          598.5 M     (L-independent)
+    #   per-thread reduction adds            21.0 M          521.9 M     <- pure overhead
+    #   per-thread scratch (x16 threads)      0.16 GB          3.89 GB   <- most of the RSS
+    #
+    # 1. LOOP ORDER. With combos inner, the write target `T4[a,b,c,d,k]` is a random cell of the
+    #    WHOLE table -- a 248.9 MB working set at L=10, so essentially every one of ~485M writes
+    #    missed cache. With combos outer, a thread works inside ONE combo's slice at a time:
+    #    `(L-1)^4` = 6561 doubles = 52 KB, which sits in L2. The draw loop then reads `bin[:,o]`
+    #    columns and `h` contiguously.
+    #
+    # 2. THREADING OVER COMBOS, NOT DRAWS. Each combo `k` owns table slice `[..., k]` exclusively,
+    #    so threads write to DISJOINT memory and no per-thread copy and no reduction are needed at
+    #    all -- deleting `PairwiseQuantileHessThreadScratch` and, at L=10, 521.9 M reduction adds
+    #    (46% of the total add count) and 3.89 GB of scratch. `:dynamic` because the per-combo cost
+    #    is uniform but the combo counts (1140 / 4845) do not divide evenly across threads.
+    #
+    # ⚠️ SUMMATION ORDER CHANGED, so this is NOT bit-identical to the previous version: each cell is
+    # now one sequential sum over `w in 1:W` instead of `nt` partial sums merged in a fixed order.
+    # It is still fully DETERMINISTIC and now independent of thread count (which the old fixed-order
+    # reduction only achieved for a fixed `nt`). The gate is `test_pairwise_quantile_d4_dense_oracle.jl`,
+    # which compares the centered block against an INDEPENDENT dense reference at 1e-8 -- the right
+    # gate for a summation-order change, and a stronger one than self-comparison.
     T3 = tabs.T3; fill!(T3, 0.0)
     triples_canon = tabs.triple_canonical_list
-    for t in 1:nt
-        fill!(hess_tls.T3tab[t], 0.0)
-    end
-    Threads.@threads :static for tid in 1:nt
-        lo = 1 + div((tid - 1) * W, nt)
-        hi = div(tid * W, nt)
-        T3loc = hess_tls.T3tab[tid]
-        @inbounds for w in lo:hi
-            hw = h[w]
-            for k in 1:length(triples_canon)
-                (o, p, q) = triples_canon[k]
-                a = bin[w, o]
-                a > nlast && continue
-                b = bin[w, p]
-                b > nlast && continue
-                c = bin[w, q]
-                c > nlast && continue
-                T3loc[a, b, c, k] += hw
-            end
+    Threads.@threads :dynamic for k in 1:length(triples_canon)
+        (o, p, q) = triples_canon[k]
+        @inbounds for w in 1:W
+            a = bin[w, o]
+            a > nlast && continue
+            b = bin[w, p]
+            b > nlast && continue
+            c = bin[w, q]
+            c > nlast && continue
+            T3[a, b, c, k] += h[w]
         end
-    end
-    for tid in 1:nt   # fixed order 1:nt (not completion order) -> deterministic
-        T3 .+= hess_tls.T3tab[tid]
     end
 
     T4 = tabs.T4; fill!(T4, 0.0)
     quads_canon = tabs.quad_canonical_list
-    for t in 1:nt
-        fill!(hess_tls.T4tab[t], 0.0)
-    end
-    Threads.@threads :static for tid in 1:nt
-        lo = 1 + div((tid - 1) * W, nt)
-        hi = div(tid * W, nt)
-        T4loc = hess_tls.T4tab[tid]
-        @inbounds for w in lo:hi
-            hw = h[w]
-            for k in 1:length(quads_canon)
-                (o1, o2, o3, o4) = quads_canon[k]
-                a = bin[w, o1]
-                a > nlast && continue
-                b = bin[w, o2]
-                b > nlast && continue
-                c = bin[w, o3]
-                c > nlast && continue
-                d = bin[w, o4]
-                d > nlast && continue
-                T4loc[a, b, c, d, k] += hw
-            end
+    Threads.@threads :dynamic for k in 1:length(quads_canon)
+        (o1, o2, o3, o4) = quads_canon[k]
+        @inbounds for w in 1:W
+            a = bin[w, o1]
+            a > nlast && continue
+            b = bin[w, o2]
+            b > nlast && continue
+            c = bin[w, o3]
+            c > nlast && continue
+            d = bin[w, o4]
+            d > nlast && continue
+            T4[a, b, c, d, k] += h[w]
         end
-    end
-    for tid in 1:nt
-        T4 .+= hess_tls.T4tab[tid]
     end
     return tabs
 end
