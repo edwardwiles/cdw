@@ -23,7 +23,10 @@ end
 using LinearAlgebra, Printf
 
 W = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : error("usage: julia profile_pairwise_quantile_d20.jl <W> <L>")
-PQ_L = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : error("usage: julia profile_pairwise_quantile_d20.jl <W> <L>")
+PQ_L = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : error("usage: julia profile_pairwise_quantile_d20.jl <W> <L> [cutoff_source]")
+# Version B needs an EXPLICIT cutoff source (no default in production); this profiler defaults to
+# the campaign's own choice, the theoretical Frechet quantiles, and takes an override in ARGS[3].
+CUTOFF_SOURCE = length(ARGS) >= 3 ? Symbol(ARGS[3]) : :frechet_theoretical
 println("=== D20 profiling, W=$W, L=$PQ_L ===")
 flush(stdout)
 
@@ -39,7 +42,9 @@ x_free_calib = ctx.θ0_up[ctx.free_idx]
 layout = PairwiseQuantileMassLayout(ctx.D, PQ_L)
 
 t_aug = @elapsed begin
-    global aug = build_pairwise_quantile_augmented_obj(ctx, layout, pairwise_quantile_fixed_cutoffs(ctx.U, PQ_L; cutoff_source = CUTOFF_SOURCE))
+    global Zfeat = pairwise_quantile_frechet_features(ctx.U, ctx.μHat)   # restriction is on the Frechet z
+    global aug = build_pairwise_quantile_augmented_obj(ctx, layout, Zfeat,
+        pairwise_quantile_fixed_cutoffs(Zfeat, PQ_L; cutoff_source = CUTOFF_SOURCE, mu_frechet = ctx.μHat))
 end
 println("augmented obj + PairwiseQuantileOperator build (incl. presort): ", round(t_aug, digits=2), "s")
 flush(stdout)

@@ -26,46 +26,78 @@
 # ================================================================================================
 
 """
-    pairwise_quantile_fixed_cutoffs(U::AbstractMatrix{Float64}, L::Int; cutoff_source::Symbol) -> Matrix{Float64}
+    pairwise_quantile_frechet_features(U::AbstractMatrix{Float64}, mu_frechet::Float64) -> Matrix{Float64}
+
+The Fréchet PRODUCTIVITY draws `z_o(w) = U_o(w)^{-mu_frechet}` that this restriction is stated on.
+
+**This restriction is on the Fréchet `z`, not on the underlying `U`** (user directive, 2026-08-10).
+`ctx.U` in this codebase holds Exp(1) draws (`draw_design.jl`: `U = -log(1-U01)`, one shared
+transform for every design), so `z_o` is exactly Fréchet with shape `1/mu_frechet` and scale 1:
+`P(z_o <= x) = exp(-x^(-1/mu_frechet))`. `mu_frechet` is `ctx.μHat` and is REQUIRED with no default.
+
+Delegates to `frechet_power_feature(U, 1, mu)` (`cm_meanzc_moments.jl`) rather than writing
+`U.^(-mu)` again -- that function's own docstring instructs callers not to reintroduce a second
+copy of the formula anywhere, and this restriction is not an exception. (The standalone D=4 dense
+oracle carries a byte-for-byte copy of it, as it already does for `packed_pair_index`, purely
+because it deliberately avoids the ~90-file production include chain; production code always goes
+through this wrapper.)
+
+Note `z` is a strictly DECREASING function of `U`, so bin 1 in `z` (lowest productivity) is the
+HIGHEST-`U` bin. Everything downstream indexes bins in `z` order, which is the order the math note
+and the economics both speak in.
+"""
+function pairwise_quantile_frechet_features(U::AbstractMatrix{Float64}, mu_frechet::Float64)
+    mu_frechet > 0 ||
+        error("pairwise_quantile_frechet_features: mu_frechet must be > 0, got $mu_frechet")
+    return frechet_power_feature(U, 1, mu_frechet)
+end
+
+"""
+    pairwise_quantile_fixed_cutoffs(Z::AbstractMatrix{Float64}, L::Int; cutoff_source::Symbol,
+                                    mu_frechet::Float64) -> Matrix{Float64}
 
 Builds the `(L-1) x D` FIXED cutoff matrix `Q[r,o] = q_{o,r}` that defines this restriction's bins
-for the entire campaign. `cutoff_source` is REQUIRED with no default (CLAUDE.md's no-silent-defaults
-rule): the whole meaning of the restriction depends on where its bins are, and a run recorded
-without it is not reproducible.
+for the entire campaign, **in Fréchet productivity space**: `Z` is
+`pairwise_quantile_frechet_features(ctx.U, ctx.μHat)`, and every cutoff is a level of `z`, not of
+`U`. `cutoff_source` and `mu_frechet` are REQUIRED with no default (CLAUDE.md's
+no-silent-defaults rule): the whole meaning of the restriction depends on where its bins are, and a
+run recorded without them is not reproducible.
 
-  - `:frechet_theoretical` -- the THEORETICAL population quantiles of each origin's calibrated
-    marginal. In this codebase `ctx.U` holds Exp(1) draws (`draw_design.jl`: `U = -log(1-U01)`,
-    one shared transform for every design), and the Fréchet productivity is `z_o = U_o^{-mu_hat}`,
-    a strictly DECREASING bijection of `U_o`. So the population `r/L` quantile of `U_o` is
-    `-log(1 - r/L)`, identical across origins, and binning `U` there is the SAME partition of
-    draws as binning `z` at its own Fréchet quantiles `(-log(r/L))^{-mu_hat}` -- only the bin
-    LABELS are reversed, and this restriction is invariant to relabelling bins (it constrains bin
-    masses and the independence of bin memberships, neither of which depends on the labels).
-    Cutoffs common across origins is NOT the same thing as masses common across origins; the
-    latter would silently add a marginal restriction and is forbidden (see
-    `PairwiseQuantileMassState`).
-  - `:empirical_quantile` -- each origin's OWN empirical `r/L` quantile of `U[:,o]`, using the same
-    `sorted[clamp(round(Int, (r/L)*W),1,W)]` convention version A's `pairwise_quantile_start_cutoffs`
-    used. This is the setting that makes version B reproduce version A exactly at `mu = 1/L`
-    (the equivalence anchor).
+  - `:frechet_theoretical` -- the THEORETICAL population `r/L` quantiles of the Fréchet marginal,
+    solved in closed form from `P(z <= q) = exp(-q^(-1/mu)) = r/L`:
+
+        q_r = (-log(r/L))^(-mu_frechet)          r = 1..L-1, strictly increasing in r
+
+    Every origin's `z_o` has the SAME calibrated marginal (Fréchet, shape `1/mu`, scale 1) by
+    construction of the draws, so these cutoffs are identical across origins. That is NOT the same
+    thing as masses common across origins -- the latter would silently add a marginal restriction
+    and is forbidden (see `PairwiseQuantileMassState`). It also carries no Monte Carlo error: the
+    bins sit where the model says they sit, not where this particular draw sample happens to put
+    them.
+  - `:empirical_quantile` -- each origin's OWN empirical `r/L` quantile of `Z[:,o]`, using the
+    `sorted[clamp(round(Int, (r/L)*W),1,W)]` convention version A used. This is the setting under
+    which version B reproduces version A's moment matrix at `mu = 1/L` (the equivalence anchor);
+    it absorbs the draws' own marginal sampling error into the bin edges.
 
 Both choices are legitimate; neither is a default.
 """
-function pairwise_quantile_fixed_cutoffs(U::AbstractMatrix{Float64}, L::Int; cutoff_source::Symbol)
-    W, D = size(U)
+function pairwise_quantile_fixed_cutoffs(Z::AbstractMatrix{Float64}, L::Int; cutoff_source::Symbol,
+                                          mu_frechet::Float64)
+    W, D = size(Z)
     L >= 2 || error("pairwise_quantile_fixed_cutoffs: L (n_bins) must be >= 2, got $L")
+    mu_frechet > 0 || error("pairwise_quantile_fixed_cutoffs: mu_frechet must be > 0, got $mu_frechet")
     nc = L - 1
     Q = Matrix{Float64}(undef, nc, D)
     if cutoff_source === :frechet_theoretical
         for r in 1:nc
-            qr = -log(1.0 - r / L)
+            qr = (-log(r / L))^(-mu_frechet)
             for o in 1:D
                 Q[r, o] = qr
             end
         end
     elseif cutoff_source === :empirical_quantile
         for o in 1:D
-            s = sort(collect(@view U[:, o]))
+            s = sort(collect(@view Z[:, o]))
             for r in 1:nc
                 Q[r, o] = s[clamp(round(Int, (r / L) * W), 1, W)]
             end
@@ -86,19 +118,22 @@ function pairwise_quantile_fixed_cutoffs(U::AbstractMatrix{Float64}, L::Int; cut
 end
 
 """
-    PairwiseQuantileOperator(U::Matrix{Float64}, L::Int, Q::Matrix{Float64})
+    PairwiseQuantileOperator(Z::Matrix{Float64}, L::Int, Q::Matrix{Float64})
 
-`U` is `ctx.U` (W x D raw draws, immutable for the whole campaign), `L` the number of quantile BINS
-per origin (`L>=2`), `Q` the `(L-1) x D` FIXED cutoffs from `pairwise_quantile_fixed_cutoffs`.
-`L` and `Q` are both REQUIRED arguments -- no defaults (CLAUDE.md).
+`Z` is the FRECHET PRODUCTIVITY draw matrix (`pairwise_quantile_frechet_features(ctx.U, ctx.muHat)`,
+W x D, immutable for the whole campaign) -- NOT `ctx.U`. This restriction is stated on `z`, so its
+bins are bins of `z` and its cutoffs are levels of `z`. `L` is the number of quantile BINS per
+origin (`L>=2`), `Q` the `(L-1) x D` FIXED cutoffs from `pairwise_quantile_fixed_cutoffs`. All
+three are REQUIRED arguments -- no defaults (CLAUDE.md).
 
 Builds, ONCE:
-  - `bin[w,o] in 1:L` (`W x D`, `UInt8`) via `searchsortedfirst(Q[:,o], U[w,o])` -- the SAME
+  - `bin[w,o] in 1:L` (`W x D`, `UInt8`) via `searchsortedfirst(Q[:,o], Z[w,o])` -- the SAME
     convention `cm_hessian_architectures.jl::compute_bin_indices` /
     `common_marginals_interval.jl::compute_bin_indices` already use (bin k covers
     `(Q[k-1,o], Q[k,o]]`, bin 1 covers `(-Inf, Q[1,o]]`, bin L covers `(Q[L-1,o], Inf)`), reused
-    rather than reinvented. `U_o` is a.s.-continuous, so the `<=`-vs-`<` boundary convention is a
-    probability-zero event and does not affect the math note's equivalence proofs.
+    rather than reinvented. `z_o` is a.s.-continuous, so the `<=`-vs-`<` boundary convention is a
+    probability-zero event and does not affect the math note's equivalence proofs. Bin 1 is the
+    LOWEST-productivity bin, bin L the highest.
   - `pairs = packed_pair_index(D)` (REUSED from `cm_meanzc_moments.jl`, `(o,p)` with `o<p`,
     o-outer-loop-major) -- the SAME ordering convention every other pair-indexed quantity in this
     codebase uses.
@@ -131,8 +166,8 @@ struct PairwiseQuantileOperator
     quad_combos::Vector{Tuple{Int,Int}}
 end
 
-function PairwiseQuantileOperator(U::AbstractMatrix{Float64}, L::Int, Q::AbstractMatrix{Float64})
-    W, D = size(U)
+function PairwiseQuantileOperator(Z::AbstractMatrix{Float64}, L::Int, Q::AbstractMatrix{Float64})
+    W, D = size(Z)
     D >= 2 || error("PairwiseQuantileOperator: D must be >= 2, got $D")
     L >= 2 || error("PairwiseQuantileOperator: L (n_bins) must be >= 2, got $L")
     size(Q) == (L - 1, D) || error("PairwiseQuantileOperator: size(Q)=$(size(Q)) != ($(L-1),$D)")
@@ -146,7 +181,7 @@ function PairwiseQuantileOperator(U::AbstractMatrix{Float64}, L::Int, Q::Abstrac
     @inbounds for o in 1:D
         qcol = @view Qc[:, o]
         for w in 1:W
-            bin[w, o] = UInt8(searchsortedfirst(qcol, U[w, o]))
+            bin[w, o] = UInt8(searchsortedfirst(qcol, Z[w, o]))
         end
     end
 

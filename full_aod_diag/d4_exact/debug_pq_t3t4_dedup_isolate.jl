@@ -29,8 +29,10 @@ nc = L - 1
 # A's version of this script did) we choose cutoffs that reproduce the desired bin pattern -- here
 # just the quantiles of uniform draws, which is enough to exercise every T3/T4 combo.
 U = rand(W, D)
-Q = pairwise_quantile_fixed_cutoffs(U, L; cutoff_source = :empirical_quantile)
-op = PairwiseQuantileOperator(U, L, Q)
+MU_FRECHET = 1.0 / 6.0   # synthetic; the T3/T4 dedup is bin-pattern-only and mu-independent
+Zs = frechet_power_feature(U, 1, MU_FRECHET)
+Q = pairwise_quantile_fixed_cutoffs(Zs, L; cutoff_source = :empirical_quantile, mu_frechet = MU_FRECHET)
+op = PairwiseQuantileOperator(Zs, L, Q)
 println("L=", L, "  npair=", op.npair, "  triple_combos=", length(op.triple_combos), "  quad_combos=", length(op.quad_combos))
 
 h = rand(W) .+ 0.1

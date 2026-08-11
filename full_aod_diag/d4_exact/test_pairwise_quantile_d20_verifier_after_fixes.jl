@@ -43,7 +43,9 @@ flush(stdout)
 
 x_free_calib = ctx.θ0_up[ctx.free_idx]
 layout = PairwiseQuantileMassLayout(ctx.D, PQ_L)
-aug = build_pairwise_quantile_augmented_obj(ctx, layout, pairwise_quantile_fixed_cutoffs(ctx.U, PQ_L; cutoff_source = CUTOFF_SOURCE))
+Zfeat = pairwise_quantile_frechet_features(ctx.U, ctx.μHat)   # the restriction is on the Frechet z
+aug = build_pairwise_quantile_augmented_obj(ctx, layout, Zfeat,
+    pairwise_quantile_fixed_cutoffs(Zfeat, PQ_L; cutoff_source = CUTOFF_SOURCE, mu_frechet = ctx.μHat))
 mass_state = PairwiseQuantileMassState(ctx.D, PQ_L)
 hess_ctx = PairwiseQuantileCoreHessCtx(aug.ncore_econ, aug.op, mass_state, aug.core_cf_ref)
 ctx_cm = merge(ctx, (obj = aug.obj_pq, pq_op = aug.op, pq_mass_state = mass_state,

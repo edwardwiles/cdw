@@ -146,7 +146,9 @@ check("T1: checkpoint raw_masses has the right width", length(ck.raw_masses) == 
 check("T1: checkpoint records the FIXED cutoff matrix itself", size(ck.cutoffs) == (L_SMOKE - 1, ctx.D) &&
       all(isfinite, ck.cutoffs))
 check("T1: recorded cutoffs are bit-identical to regenerating them from cutoff_source",
-      ck.cutoffs == pairwise_quantile_fixed_cutoffs(ctx.U, L_SMOKE; cutoff_source = CUTOFF_SOURCE))
+      ck.cutoffs == pairwise_quantile_fixed_cutoffs(
+          pairwise_quantile_frechet_features(ctx.U, ctx.μHat), L_SMOKE;
+          cutoff_source = CUTOFF_SOURCE, mu_frechet = ctx.μHat))
 check("T1: checkpoint records sigma and draw provenance", ck.sigma == ctx.σ && ck.W == W_SMOKE &&
       ck.draw_seed == 20260719 && ck.draw_design == :sobol_randomized)
 

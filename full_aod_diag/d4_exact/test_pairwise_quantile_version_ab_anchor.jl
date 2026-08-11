@@ -96,90 +96,56 @@ lp("ctx: D=", ctx.D, " D_dest=", ctx.D_dest, " W=", ctx.W, " sigma=", ctx.σ)
 
 layout = PairwiseQuantileMassLayout(ctx.D, L_A)
 MIN_BIN_COUNT = max(10, W_A ÷ (2 * L_A^2))
+Zfeat = pairwise_quantile_frechet_features(ctx.U, ctx.μHat)   # the restriction is on the Frechet z
 pcx = build_pairwise_quantile_production_context(ctx, layout;
     cutoff_source = :empirical_quantile, min_bin_count = MIN_BIN_COUNT)
 ctx_cm = pcx.ctx_cm
 
-# --- 1. the fixed cutoffs reproduce version A's own empirical-quantile construction -------------
-# Version A built its start point by taking each origin's empirical r/L quantile, then encoding it
-# through the softplus-ordered transform (log q_1, log(expm1(gap_k))) and decoding it back. That
-# round-trip is exact in exact arithmetic; this reproduces the same quantiles directly, and the
-# check below confirms the two constructions agree to floating point.
-function version_a_style_quantiles(U, L)
+# --- 1. version B's FRECHET-z partition is version A's U partition, with labels reversed --------
+# Version A binned the raw Exp(1) draws `U`; version B bins the Frechet productivity
+# `z = U^(-muHat)` (user directive 2026-08-10). `z` is a strictly DECREASING bijection of `U`, so
+# the two partitions are the SAME partition of draws with the bin labels reversed
+# (z-bin b <-> u-bin L+1-b), and the restriction -- bin masses plus independence of bin memberships
+# -- is invariant to relabelling bins. At `mu = 1/L` the targets are label-invariant too, so `Delta*`
+# must agree.
+#
+# The one place they cannot agree exactly is the half-open boundary convention: `searchsortedfirst`
+# makes bins `(q_{k-1}, q_k]`, and reversing the order flips which end is closed. The empirical
+# quantile IS one of the draws, so a draw sitting exactly on a cutoff can land on the other side.
+# That is measured below rather than assumed.
+function version_a_u_quantiles(U, L)
     W, D = size(U)
     Q = Matrix{Float64}(undef, L - 1, D)
     for o in 1:D
         Uo = sort(@view U[:, o])
-        n = length(Uo)
         for r in 1:L-1
-            Q[r, o] = Uo[clamp(round(Int, (r / L) * n), 1, n)]
+            Q[r, o] = Uo[clamp(round(Int, (r / L) * W), 1, W)]
         end
     end
     return Q
 end
-Q_a = version_a_style_quantiles(ctx.U, L_A)
-check("fixed cutoffs == version A's own empirical-quantile construction",
-      ctx_cm.pq_cutoffs == Q_a,
-      "max|diff|=$(maximum(abs, ctx_cm.pq_cutoffs .- Q_a))")
-# Bin-assignment checksum, printed so it can be compared against the version-A reference run's own
-# (ref_versionA_anchor_point.jl in the detached version-A worktree). Agreement is NOT automatic:
-# version A reached its cutoffs through a log/softplus encode-decode round trip, and a draw sitting
-# exactly ON a cutoff (the empirical quantile IS one of the draws) could land in a different bin
-# under a 1-ulp difference. If the checksums match, the two versions partition the same draws the
-# same way and Delta* must agree to solver reproducibility, not merely to the 4 significant digits
-# of the recorded reference.
-lp("bin checksum: sum(bin) = ", sum(Int(b) for b in ctx_cm.pq_op.bin),
-   "   hash(bin) = ", hash(ctx_cm.pq_op.bin))
-lp("fixed cutoffs, origin 1 = ", ctx_cm.pq_cutoffs[:, 1])
-
-# --- 1b. the ONE thing that stops this anchor being bit-exact, measured rather than assumed -------
-# Version A never used the empirical quantiles directly: it ENCODED them into raw outer coordinates
-# (`log q_1`, `log(expm1(gap_k))`) and DECODED them back (`exp`, `softplus`) on every outer point.
-# That round trip is exact in real arithmetic and 1-ulp-lossy in floating point, and the empirical
-# quantile IS one of the draws -- so a draw sitting exactly ON a cutoff can land in a different bin
-# under a decoded cutoff that is one ulp below the quantile. This block reproduces version A's own
-# transform (the production copy was deleted with the rest of the cutoff machinery, so it is
-# restated here, marked as a diagnostic) and COUNTS the affected draws, so the residual Delta*
-# difference below is attributed rather than hand-waved.
-_va_softplus(x::Float64) = x > 0.0 ? x + log1p(exp(-x)) : log1p(exp(x))
-function version_a_roundtrip_cutoffs(Q::Matrix{Float64})
-    nc, D = size(Q)
-    Qout = similar(Q)
-    for o in 1:D
-        raw = Vector{Float64}(undef, nc)
-        raw[1] = log(Q[1, o])
-        for k in 2:nc
-            raw[k] = log(expm1(log(Q[k, o]) - log(Q[k-1, o])))
-        end
-        logq = Vector{Float64}(undef, nc)
-        logq[1] = raw[1]
-        for k in 2:nc
-            logq[k] = logq[k-1] + _va_softplus(raw[k])
-        end
-        for k in 1:nc
-            Qout[k, o] = exp(logq[k])
-        end
-    end
-    return Qout
+Q_u = version_a_u_quantiles(ctx.U, L_A)
+bin_a = Matrix{UInt8}(undef, ctx.W, ctx.D)
+for o in 1:ctx.D, w in 1:ctx.W
+    bin_a[w, o] = UInt8(searchsortedfirst(@view(Q_u[:, o]), ctx.U[w, o]))
 end
-Q_rt = version_a_roundtrip_cutoffs(ctx_cm.pq_cutoffs)
-op_rt = PairwiseQuantileOperator(ctx.U, L_A, Q_rt)
-n_bin_diff = count(!=(0), Int.(op_rt.bin) .- Int.(ctx_cm.pq_op.bin))
+bin_a_rev = UInt8(L_A + 1) .- bin_a          # relabelled into z order
 n_assign = ctx.D * ctx.W
-lp("version-A log/softplus round trip moves ", n_bin_diff, " of ", n_assign,
-   " bin assignments (", round(100 * n_bin_diff / n_assign, sigdigits = 3), "%);",
-   " max|Q_roundtrip - Q| = ", maximum(abs, Q_rt .- ctx_cm.pq_cutoffs))
-# Every moved draw must be one that sits EXACTLY on a cutoff -- that is the whole mechanism. If a
-# draw strictly inside a bin moved, the explanation would be wrong and something else is going on.
+n_bin_diff = count(!=(0), Int.(ctx_cm.pq_op.bin) .- Int.(bin_a_rev))
+lp("partition vs version A (relabelled): ", n_bin_diff, " of ", n_assign, " assignments differ (",
+   round(100 * n_bin_diff / n_assign, sigdigits = 3), "%)")
 on_boundary = 0
 for o in 1:ctx.D, w in 1:ctx.W
-    op_rt.bin[w, o] == ctx_cm.pq_op.bin[w, o] && continue
-    any(r -> ctx.U[w, o] == ctx_cm.pq_cutoffs[r, o], 1:L_A-1) && (global on_boundary += 1)
+    ctx_cm.pq_op.bin[w, o] == bin_a_rev[w, o] && continue
+    (any(r -> ctx.U[w, o] == Q_u[r, o], 1:L_A-1) ||
+     any(r -> Zfeat[w, o] == ctx_cm.pq_cutoffs[r, o], 1:L_A-1)) && (global on_boundary += 1)
 end
-check("every bin assignment the round trip moves is a draw sitting exactly ON a cutoff",
+check("every differing assignment is a draw sitting exactly ON a cutoff (boundary convention only)",
       on_boundary == n_bin_diff, "$on_boundary of $n_bin_diff")
-check("the round trip moves at most one draw per (origin, cutoff)",
-      n_bin_diff <= ctx.D * (L_A - 1), "$n_bin_diff moved, $(ctx.D * (L_A - 1)) cutoffs")
+check("at most 2 boundary draws per cutoff differ",
+      n_bin_diff <= 2 * ctx.D * (L_A - 1), "$n_bin_diff vs $(2 * ctx.D * (L_A - 1))")
+lp("bin checksum: sum(bin) = ", sum(Int(b) for b in ctx_cm.pq_op.bin))
+lp("fixed Frechet-z cutoffs, origin 1 = ", ctx_cm.pq_cutoffs[:, 1])
 
 # --- 2. mu = 1/L decodes exactly -----------------------------------------------------------------
 mass0 = uniform_mass_raw(layout)
@@ -219,8 +185,9 @@ lp("block KKT: E = ", verify.kkt_resid_E, "  marginalbin = ", verify.kkt_resid_m
    "  pairindep = ", verify.kkt_resid_pairindep)
 check("inner solve is VerifiedSolved", classify_inner_result(verify) == VerifiedSolved)
 
+rel = NaN
 if isfinite(EXPECTED)
-    rel = abs(verify.Delta_dual - EXPECTED) / abs(EXPECTED)
+    global rel = abs(verify.Delta_dual - EXPECTED) / abs(EXPECTED)
     @printf("relative difference vs version A's reference value: %.3e\n", rel)
     # Threshold 5e-4. Two things set it, neither of them a tuning knob:
     #   - the recorded reference in the status doc carries 4 significant digits, so 5e-4 is the
@@ -238,41 +205,15 @@ else
        "Pass the reference as ARGS[3] to gate it.")
 end
 
-# --- 5. closing the loop: at version A's OWN (round-tripped) cutoffs, agreement is BIT-EXACT -----
-# Sections 1b and 4 together say the residual difference is entirely the 2-draw partition change,
-# but they say it by attribution. This checks it directly: rebuild the version-B context on `Q_rt`
-# -- the cutoffs version A actually decoded, one ulp from the empirical quantiles -- so the two
-# versions now partition the draws identically. The moment matrices are then element-for-element
-# equal, and `Delta*` must agree to solver reproducibility, not to 4 significant digits.
-#
-# The context is assembled by hand here rather than through
-# `build_pairwise_quantile_production_context`, deliberately: that function derives its cutoffs from
-# an explicit `cutoff_source` and has no override, and adding one just to let a test inject cutoffs
-# would put a silent back door in the production surface (CLAUDE.md). Everything below uses the same
-# public constructors the production builder uses, in the same order.
-if isfinite(EXPECTED) && n_bin_diff > 0
-    lp("\n--- 5. re-solve at version A's OWN round-tripped cutoffs (identical partition) ---")
-    aug_rt = build_pairwise_quantile_augmented_obj(ctx, layout, Q_rt)
-    mass_rt = PairwiseQuantileMassState(ctx.D, L_A)
-    hess_rt = PairwiseQuantileCoreHessCtx(aug_rt.ncore_econ, aug_rt.op, mass_rt, aug_rt.core_cf_ref)
-    ctx_rt = merge(ctx, (obj = aug_rt.obj_pq, pq_op = aug_rt.op, pq_mass_state = mass_rt,
-                         pq_core_cf_ref = aug_rt.core_cf_ref, pq_hess_ctx = hess_rt,
-                         pq_econ_ctx = ctx, pq_layout = layout, pq_cutoffs = Q_rt,
-                         pq_cutoff_source = :version_a_roundtrip_diagnostic,
-                         pq_min_bin_count = MIN_BIN_COUNT))
-    check("round-tripped context reproduces version A's bin assignment exactly",
-          aug_rt.op.bin == op_rt.bin)
-    _, verify_rt = archPQ_verified_state(xf, mass0, ctx_rt)
-    @printf("Delta_dual at version A's own cutoffs = %.17g   (version A: %.17g)\n",
-            verify_rt.Delta_dual, EXPECTED)
-    rel_rt = abs(verify_rt.Delta_dual - EXPECTED) / abs(EXPECTED)
-    @printf("relative difference: %.3e\n", rel_rt)
-    # 1e-12: solver reproducibility, not "close". Both sides solve the SAME convex problem from the
-    # same start with the same deterministic KNITRO settings, so anything above round-off here would
-    # mean the moment matrices are not in fact identical.
-    check("at an identical partition, version B reproduces version A to solver reproducibility",
-          rel_rt < 1e-12, "rel=$rel_rt")
-end
+# --- 5. (removed) -------------------------------------------------------------------------------
+# An earlier draft re-solved at cutoffs "mirroring" version A's own U-cutoffs
+# (`qZ_r = (qU_{L-r})^(-muHat)`), on the assumption that the direct empirical-z construction would
+# differ from version A's partition by a few boundary draws and the mirrored one would close that
+# gap. Section 1 measured the opposite: the direct construction reproduces version A's partition
+# with ZERO differing assignments out of D*W, while the mirrored one differs in 2 per cutoff
+# (`sort(Z)[round(rW/L)]` and `(sort(U)[round((L-r)W/L)])^(-mu)` pick adjacent order statistics).
+# The mirrored leg was therefore strictly weaker than the check above it, and is deleted rather than
+# kept with a loosened assertion.
 
 lp("")
 lp(ALL_PASS[] ? "VERSION-A/B EQUIVALENCE ANCHOR PASSED" : "ANCHOR FAILED -- see above")

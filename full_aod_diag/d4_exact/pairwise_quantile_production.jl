@@ -15,17 +15,18 @@ isdefined(Main, :WinnerPairHessCtx) || include(joinpath(@__DIR__, "core_exact_he
 isdefined(Main, :WinnerZCCrossScratch) || include(joinpath(@__DIR__, "winner_pair_cross_hessian.jl"))
 
 """
-    build_pairwise_quantile_augmented_obj(ctx, layout, Q) -> (obj_pq, ncore_econ, core_cf_ref, op, D)
+    build_pairwise_quantile_augmented_obj(ctx, layout, Z, Q) -> (obj_pq, ncore_econ, core_cf_ref, op, D)
 
 `ctx.obj` (`obj0`) is the economic-only `PsiObjectiveBundleImplicit` (e.g. from `d4_exact_setup`).
 Builds the true no-H `OperatorPsiBundle` for `[economic | marginal | pair]`, mirroring
 `cm_originzc_moments.jl`'s `:operator` construction verbatim (same field list, same
-`outer_constr_index_new` convention), plus this restriction's operator over the FIXED cutoffs `Q`
-(version B -- `Q` is a required argument, built by `pairwise_quantile_fixed_cutoffs` from an
-explicit `cutoff_source`; there is no cutoff default and none is invented here).
+`outer_constr_index_new` convention), plus this restriction's operator over the FRECHET
+productivity draws `Z` and the FIXED cutoffs `Q` (version B -- both are required arguments, built by
+`pairwise_quantile_frechet_features` and `pairwise_quantile_fixed_cutoffs` from an explicit
+`cutoff_source`; there is no cutoff default and none is invented here).
 """
 function build_pairwise_quantile_augmented_obj(ctx, layout::PairwiseQuantileMassLayout,
-                                               Q::AbstractMatrix{Float64})
+                                               Z::AbstractMatrix{Float64}, Q::AbstractMatrix{Float64})
     obj0 = ctx.obj
     ncore_econ = obj0.d
     D = ctx.D
@@ -39,7 +40,9 @@ function build_pairwise_quantile_augmented_obj(ctx, layout::PairwiseQuantileMass
         U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
         use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
         inner_loop_opt = obj0.inner_loop_opt)
-    op = PairwiseQuantileOperator(ctx.U, layout.L, Q)
+    size(Z) == size(ctx.U) ||
+        error("build_pairwise_quantile_augmented_obj: size(Z)=$(size(Z)) != size(ctx.U)=$(size(ctx.U))")
+    op = PairwiseQuantileOperator(Z, layout.L, Q)
     return (obj_pq = obj_pq, ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, op = op, D = D)
 end
 
@@ -246,9 +249,12 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
         HRR = octx.HRR
         fill_pairwise_quantile_hessian_raw!(HRR, op, octx.tabs)
         center_and_scale_pairwise_quantile_hessian!(HRR, op, octx.mass_state, octx.tabs)
-        # HRR is symmetric by construction (fill_pairwise_quantile_hessian_raw! mirrors both
-        # triangles; the centering identity applied in place is itself symmetric in (I,J)) -- read
-        # directly at pack time below, no extra 0.5*(HRR[i,j]+HRR[j,i]) defensive pass needed.
+        # HRR is stored LOWER-TRIANGLE ONLY (2026-08-10): KNITRO is handed a packed UPPER triangle,
+        # so every unordered pair is read exactly once and mirroring it into both halves was ~242M
+        # redundant stores plus ~242M redundant centering flops per callback for a half nothing
+        # reads. `_lo_write!` (pairwise_quantile_hessian.jl) stores each pair at `[max(i,j),min(i,j)]`
+        # and the centering pass touches only `I >= J`; the packed write below reads exactly that
+        # triangle, by column.
 
         # WinnerPairHessCtx's own convention: H_EE is (1+ncolI) x (1+ncolI) = NCORE x NCORE, so
         # ncolI = NCORE-1; pairwise_quantile_cross_hessian_block! fills a (ncolI+1) x n_rows = NCORE
@@ -263,9 +269,39 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
         # Direct packed write: select the correct source block per (i,j) instead of assembling a
         # dense Hfull first (handover doc fix #1) -- H_EE via hee_packed's own packed index, H_E,R
         # via HEQ, H_MM/MP/PP via HRR, each already in its final (correctly signed/scaled) form.
-        k = 0
-        @inbounds for i in 1:n
-            if i <= NCORE
+        #
+        # PERFORMANCE (2026-08-10). At D=20/L=10/W=100,000 this block MEASURED 86.16 s of a 96.72 s
+        # Hessian callback -- 46% of the entire 1323 s inner solve (logs/pq_L10_blockprofile.log).
+        # Two things were wrong with the obvious loop, and both are fixed here:
+        #
+        #  1. STRIDE. `HRR[i-NCORE, j-NCORE]` with `i` fixed and `j` running walks a ROW of a
+        #     COLUMN-MAJOR matrix: stride `n_rows` = 15,570 doubles = 124 KB, i.e. a cache miss and
+        #     usually a TLB miss on essentially every one of ~121M reads. `HRR` is symmetric --
+        #     `fill_pairwise_quantile_hessian_raw!` mirrors both triangles and the centering
+        #     identity `(H - t*r' - r*t' + S*t*t')/W` is symmetric in (I,J) -- so reading
+        #     `HRR[j-NCORE, i-NCORE]` instead walks a CONTIGUOUS COLUMN and returns the identical
+        #     value. That is now more than an optimization: it is the ONLY populated triangle (see
+        #     above). The D=4 dense oracle checks the packed vector against a full symmetric dense
+        #     reference every run, so this is a gated property, not an assumption.
+        #  2. SERIAL. The running counter `k` looked sequential, but its value at the start of row
+        #     `i` is closed-form, `k0(i) = (i-1)*n - (i-1)*(i-2)/2`, so rows are independent and the
+        #     loop threads with no reduction and no ordering concern. Writes are disjoint by
+        #     construction: row `i` owns exactly `k0(i)+1 : k0(i)+(n-i+1)`, and every packed slot
+        #     belongs to exactly one row.
+        #
+        # SCHEDULE: `:dynamic`, NOT the `:static` used elsewhere in this restriction. The rows of an
+        # upper triangle have length `n-i+1`, so contiguous static chunks are badly imbalanced --
+        # the thread owning the first 1/nt of the rows does ~31x the work of the thread owning the
+        # last 1/nt at nt=16, capping the speedup near 8x. `:static` is used in the T1-T4 scatter
+        # because that loop feeds a REDUCTION whose order must be fixed for bit-reproducibility;
+        # here there is no reduction at all (each packed slot is written exactly once, by one
+        # thread), so the schedule cannot affect the output by even one ulp.
+        #
+        # Correctness is unaffected: same values, same packed positions. Any numerical movement here
+        # is a bug, not a tolerance -- the D=4 oracle's packed round-trip check gates it.
+        Threads.@threads :dynamic for i in 1:n
+            k = (i - 1) * n - div((i - 1) * (i - 2), 2)
+            @inbounds if i <= NCORE
                 for j in i:NCORE
                     k += 1
                     evalResult.hess[k] = hee_packed[_pk_upper(i, j, NCORE)]
@@ -275,9 +311,9 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
                     evalResult.hess[k] = HEQ[i, j - NCORE]
                 end
             else
-                for j in i:n
-                    k += 1
-                    evalResult.hess[k] = HRR[i - NCORE, j - NCORE]
+                ii = i - NCORE
+                @simd for j in i:n
+                    evalResult.hess[k+j-i+1] = HRR[j - NCORE, ii]   # column walk; HRR symmetric
                 end
             end
         end

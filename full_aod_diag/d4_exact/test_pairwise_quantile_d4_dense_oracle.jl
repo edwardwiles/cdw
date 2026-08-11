@@ -63,6 +63,16 @@ end
 # deliberately does not depend on. The two definitions above are copied byte-for-byte from
 # cm_meanzc_moments.jl:68-82.
 
+"Frechet productivity feature z = U^(-mu*k). Copied BYTE-FOR-BYTE from cm_meanzc_moments.jl:145-149,
+for the same reason `packed_pair_index` above is: this standalone oracle deliberately avoids the
+~90-file production include chain. Production NEVER duplicates this formula -- it goes through
+`pairwise_quantile_frechet_features`, which calls the real one."
+function frechet_power_feature(U::AbstractMatrix{Float64}, k::Real, μ::Float64)
+    Q = similar(U)
+    @inbounds @. Q = exp(-μ * k * log(U))
+    return Q
+end
+
 "Psi(x) at a single point, matching cc_algo/Psi.jl's Psi! piecewise formula exactly. Test-local
 (version A kept it in pairwise_quantile_cutoff_gradient.jl, which no longer exists); production
 never evaluates Psi this way, it goes through obj.Psi!."
@@ -95,11 +105,26 @@ const W = 6000
 const L = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5   # test-file convenience only, see header note
 const NC = L - 1
 println("=== D4 dense oracle (VERSION B: fixed cutoffs, free masses), L=$L (n_free_bins=$NC) ===")
+# Synthetic Exp(1)-like draws, then the FRECHET productivity z = U^(-mu) the restriction is
+# actually stated on (user directive 2026-08-10). MU_FRECHET is a test parameter, not a default:
+# nothing here depends on its value except that it be positive, since z is a strictly monotone
+# transform of U and every check below is stated in z-space.
 U = rand(W, D) .* 3.0 .+ 0.3   # positive support, matches ctx.U's own convention
+const MU_FRECHET = 1.0 / 6.0
+Zf = frechet_power_feature(U, 1, MU_FRECHET)
 
 layout = PairwiseQuantileMassLayout(D, L)
-Q = pairwise_quantile_fixed_cutoffs(U, L; cutoff_source = :empirical_quantile)
-op = PairwiseQuantileOperator(U, L, Q)
+Q = pairwise_quantile_fixed_cutoffs(Zf, L; cutoff_source = :empirical_quantile, mu_frechet = MU_FRECHET)
+op = PairwiseQuantileOperator(Zf, L, Q)
+# The theoretical-Frechet source must also be constructible and ordered at this L (it is the
+# production campaign's own choice), even though the checks below use the empirical one.
+let Qth = pairwise_quantile_fixed_cutoffs(Zf, L; cutoff_source = :frechet_theoretical, mu_frechet = MU_FRECHET)
+    check("theoretical Frechet cutoffs are strictly ordered and common across origins",
+          all(diff(Qth[:, 1]) .> 0) && all(o -> Qth[:, o] == Qth[:, 1], 1:D))
+    # Closed form check: P(z <= q_r) = exp(-q_r^(-1/mu)) must equal r/L exactly.
+    check_tol("theoretical Frechet cutoffs satisfy P(z<=q_r) == r/L",
+              maximum(abs, [exp(-Qth[r, 1]^(-1 / MU_FRECHET)) - r / L for r in 1:L-1]), 1e-14)
+end
 npair = op.npair
 nrow = n_total_rows(D, L)
 
@@ -255,8 +280,18 @@ check_tol("Hessian: sum(h) matches S", abs(tabs.S - S_dense), 1e-9)
 HfullR = zeros(nrow, nrow)
 fill_pairwise_quantile_hessian_raw!(HfullR, op, tabs)
 center_and_scale_pairwise_quantile_hessian!(HfullR, op, state, tabs)
-check_tol("Hessian: full centered block vs INDEPENDENT centered-dense reference", maximum(abs.(HfullR .- Hdense)), 1e-8)
-check_tol("Hessian: HfullR symmetric", maximum(abs.(HfullR .- HfullR')), 1e-10)
+# HRR is stored LOWER-TRIANGLE ONLY since 2026-08-10 (`_lo_write!`): KNITRO is handed a packed UPPER
+# triangle, so each unordered pair is read exactly once and mirroring it was pure waste. The dense
+# reference is a genuinely full symmetric matrix, so the comparison is against its lower triangle,
+# and the upper half of HfullR must be untouched zeros -- checked, because a stray write there would
+# mean some block is still mirroring and the two halves could silently disagree.
+lo_mask = [i >= j for i in 1:nrow, j in 1:nrow]
+check_tol("Hessian: centered LOWER triangle vs INDEPENDENT centered-dense reference",
+          maximum(abs.((HfullR .- Hdense)[lo_mask])), 1e-8)
+check("Hessian: upper triangle is untouched (nothing mirrors any more)",
+      all(HfullR[i, j] == 0.0 for i in 1:nrow, j in 1:nrow if i < j))
+check_tol("Hessian: the dense REFERENCE is symmetric (so one stored triangle loses nothing)",
+          maximum(abs.(Hdense .- Hdense')), 1e-10)
 
 hvec = zeros(div(nrow * (nrow + 1), 2))
 pack_upper_pairwise_quantile_hessian!(hvec, HfullR, nrow)
@@ -266,7 +301,11 @@ for i in 1:nrow, j in i:nrow
     global k += 1
     Hrecon[i, j] = hvec[k]; Hrecon[j, i] = hvec[k]
 end
-check_tol("Hessian: packed round-trip", maximum(abs.(Hrecon .- HfullR)), 1e-12)
+# The packed vector is what KNITRO actually receives, so it is checked against the INDEPENDENT dense
+# reference (full, symmetric), not merely against the half-stored HfullR -- i.e. this asserts that
+# the upper-triangle-only hand-off loses nothing.
+check_tol("Hessian: packed vector reconstructs the FULL dense reference",
+          maximum(abs.(Hrecon .- Hdense)), 1e-8)
 
 # ==== CHECK 8: closed-form d(Delta_dual)/dmu vs FD of the FIXED-DUAL objective ====
 # SIGN CONVENTION (corrected 2026-08-10, carried into version B): `r` must be in the SAME convention

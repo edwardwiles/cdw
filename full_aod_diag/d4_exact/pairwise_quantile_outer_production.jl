@@ -90,13 +90,23 @@ function build_pairwise_quantile_production_context(ctx, layout::PairwiseQuantil
         error("build_pairwise_quantile_production_context: ctx.D=$(ctx.D) != layout.D=$(layout.D)")
     W = size(ctx.U, 1)
 
-    Q = pairwise_quantile_fixed_cutoffs(ctx.U, layout.L; cutoff_source = cutoff_source)
-    aug = build_pairwise_quantile_augmented_obj(ctx, layout, Q)
+    # The restriction is stated on the FRECHET PRODUCTIVITY z_o = U_o^(-muHat), not on the Exp(1)
+    # draws `ctx.U` themselves (user directive, 2026-08-10). Z is built once here, via the shared
+    # `frechet_power_feature`, and used for BOTH the cutoffs and the bin assignment; nothing
+    # downstream keeps it, since only `op.bin` is ever read again.
+    hasproperty(ctx, :μHat) ||
+        error("build_pairwise_quantile_production_context: ctx carries no μHat -- this restriction " *
+              "is defined on the Frechet productivity z = U^(-μHat) and cannot be built without it.")
+    Z = pairwise_quantile_frechet_features(ctx.U, ctx.μHat)
+
+    Q = pairwise_quantile_fixed_cutoffs(Z, layout.L; cutoff_source = cutoff_source,
+                                        mu_frechet = ctx.μHat)
+    aug = build_pairwise_quantile_augmented_obj(ctx, layout, Z, Q)
     bin_report = assert_pairwise_quantile_bins_nondegenerate(aug.op; min_bin_count = min_bin_count)
 
-    println(stdout, "cm_restriction_basis [pairwise_quantile] = quantile bins (L=", layout.L,
-            "), FIXED cutoffs (source=:", cutoff_source, "), FREE bin masses; n_total_rows=",
-            n_total_rows(ctx.D, layout.L))
+    println(stdout, "cm_restriction_basis [pairwise_quantile] = FRECHET-z quantile bins (L=", layout.L,
+            "), FIXED cutoffs (source=:", cutoff_source, ", muHat=", ctx.μHat,
+            "), FREE bin masses; n_total_rows=", n_total_rows(ctx.D, layout.L))
     println(stdout, "pairwise_quantile outer mass coordinates: n_raw=", n_raw(layout),
             " (origin-major, stick-breaking simplex transform); occupancy: min marginal bin=",
             bin_report.min_marginal_count, ", min joint cell=", bin_report.min_joint_count,
@@ -108,9 +118,11 @@ function build_pairwise_quantile_production_context(ctx, layout::PairwiseQuantil
     ctx_cm = merge(ctx, (obj = aug.obj_pq, pq_op = aug.op, pq_mass_state = mass_state,
                           pq_core_cf_ref = aug.core_cf_ref, pq_hess_ctx = hess_ctx,
                           pq_econ_ctx = ctx, pq_layout = layout, pq_cutoffs = Q,
-                          pq_cutoff_source = cutoff_source, pq_min_bin_count = min_bin_count))
+                          pq_cutoff_source = cutoff_source, pq_min_bin_count = min_bin_count,
+                          pq_mu_frechet = ctx.μHat))
     return (ctx_cm = ctx_cm, aug = aug, hess_ctx = hess_ctx, layout = layout, Q = Q,
-            cutoff_source = cutoff_source, min_bin_count = min_bin_count, bin_report = bin_report)
+            cutoff_source = cutoff_source, min_bin_count = min_bin_count, bin_report = bin_report,
+            mu_frechet = ctx.μHat)
 end
 
 """

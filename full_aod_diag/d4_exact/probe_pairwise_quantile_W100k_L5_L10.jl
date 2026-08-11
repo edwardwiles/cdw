@@ -37,10 +37,13 @@ lp(xs...) = (println(xs...); flush(stdout))
 # threshold is Inf and cannot be mistaken for a failure. L=5 runs first as the known-good control.
 # ================================================================================================
 GRAV = default_gravity_exclude_cells_brazil_korea()
-CASES = [(100_000, 5), (100_000, 10)]
+# Version B production pre-flight: the campaign's own cutoff source is the THEORETICAL Frechet
+# quantiles (user directive 2026-08-10 -- the restriction is on the Frechet), overridable from ARGS.
+const CUTOFF_SOURCE = length(ARGS) >= 1 ? Symbol(ARGS[1]) : :frechet_theoretical
+CASES = length(ARGS) >= 3 ? [(parse(Int, ARGS[2]), parse(Int, ARGS[3]))] : [(100_000, 5), (100_000, 10)]
 for (W, L) in CASES
     lp("="^90)
-    lp("CASE W=", W, " L=", L, "  n_total_rows=", n_total_rows(20, L), "  n_raw=", (L-1)*20)
+    lp("CASE W=", W, " L=", L, "  cutoff_source=:", CUTOFF_SOURCE, "  n_total_rows=", n_total_rows(20, L), "  n_raw=", (L-1)*20)
     flush(stdout)
     t_ctx = time()
     ctx_raw = d20_real_setup_design(W=W, δ=50.0, find_smallest=true, draw_design=:sobol_randomized,
@@ -52,7 +55,7 @@ for (W, L) in CASES
     layout = PairwiseQuantileMassLayout(ctx.D, L)
     t_pcx = time()
     pcx = build_pairwise_quantile_production_context(ctx, layout;
-        cutoff_source = :empirical_quantile, min_bin_count = max(10, W ÷ (2 * L^2)))
+        cutoff_source = CUTOFF_SOURCE, min_bin_count = max(10, W ÷ (2 * L^2)))
     lp("  production context built in ", round(time()-t_pcx, digits=1), "s")
     flush(stdout)
     geo = build_aspace_geometry(ctx)

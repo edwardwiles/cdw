@@ -31,6 +31,25 @@ function pair_row(D::Integer, pidx::Integer, a::Integer, b::Integer, L::Integer)
     return n_marginal_rows(Int(D), Int(L)) + (Int(pidx) - 1) * nc^2 + (Int(b) - 1) * nc + Int(a)
 end
 
+"""
+    _lo_write!(H, i, j, v)
+
+Store `v` at the LOWER-triangle position of the unordered index pair `(i,j)` -- `H[max(i,j), min(i,j)]`
+-- and nowhere else.
+
+WHY ONLY ONE TRIANGLE (2026-08-10). `H_RR` is symmetric, and its only consumer is the packed
+upper-triangular vector KNITRO is handed (`KN_DENSE_ROWMAJOR`), which reads each unordered pair
+exactly once. Mirroring every value into both triangles therefore did ~2x the stores and ~2x the
+centering arithmetic for a half that nothing ever read. The LOWER triangle is the one kept because
+the packed write walks it by COLUMN (`HRR[j, i]` with `j >= i`), which is the contiguous direction
+in Julia's column-major layout -- see the packed-write comment in
+`pairwisequantile_hess_cb_builder`. Diagonal entries (`i == j`) are written once, as before.
+"""
+@inline function _lo_write!(H::AbstractMatrix{Float64}, i::Int, j::Int, v::Float64)
+    @inbounds H[max(i, j), min(i, j)] = v
+    return nothing
+end
+
 "origin_slot(op,pidx,o): 1 if o==pairs[pidx][1], 2 if o==pairs[pidx][2], else 0 (disjoint)."
 function origin_slot(op::PairwiseQuantileOperator, pidx::Int, o::Int)
     (p, q) = op.pairs[pidx]
@@ -306,9 +325,7 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
         (o, p) = op.pairs[pidx]
         for b in 1:nc, a in 1:nc
             i = marginal_row(o, a, L); j = marginal_row(p, b, L)
-            v = T2[a, b, pidx]
-            HfullR[i, j] = v
-            HfullR[j, i] = v
+            _lo_write!(HfullR, i, j, T2[a, b, pidx])
         end
     end
 
@@ -324,22 +341,19 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
             slot = origin_slot(op, pidx, o)
             if slot == 1                       # o == p: Raw[a,(b,c)] = delta(a,b)*T2[a,c,pidx]
                 for c in 1:nc, a in 1:nc
-                    v = T2[a, c, pidx]
                     i = marginal_row(o, a, L); j = pair_row(D, pidx, a, c, L)
-                    HfullR[i, j] = v; HfullR[j, i] = v
+                    _lo_write!(HfullR, i, j, T2[a, c, pidx])
                 end
             elseif slot == 2                   # o == q: Raw[a,(b,c)] = delta(a,c)*T2[b,a,pidx]
                 for b in 1:nc, a in 1:nc
-                    v = T2[b, a, pidx]
                     i = marginal_row(o, a, L); j = pair_row(D, pidx, b, a, L)
-                    HfullR[i, j] = v; HfullR[j, i] = v
+                    _lo_write!(HfullR, i, j, T2[b, a, pidx])
                 end
             else                                # disjoint: genuine 3-way, Raw[a,(b,c)] = T3[a,b,c]
                 tidx = op.triple_lookup[o, pidx]
                 for c in 1:nc, b in 1:nc, a in 1:nc
-                    v = read_T3(tabs, tidx, a, b, c)
                     i = marginal_row(o, a, L); j = pair_row(D, pidx, b, c, L)
-                    HfullR[i, j] = v; HfullR[j, i] = v
+                    _lo_write!(HfullR, i, j, read_T3(tabs, tidx, a, b, c))
                 end
             end
         end
@@ -357,9 +371,8 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
                 combo = op.quad_lookup[pidx1, pidx2]
                 combo == 0 && error("fill_pairwise_quantile_hessian_raw!: missing quad combo for disjoint ($pidx1,$pidx2)")
                 for d in 1:nc, c in 1:nc, b in 1:nc, a in 1:nc
-                    v = read_T4(tabs, combo, a, b, c, d)
                     i = pair_row(D, pidx1, a, b, L); j = pair_row(D, pidx2, c, d, L)
-                    HfullR[i, j] = v; HfullR[j, i] = v
+                    _lo_write!(HfullR, i, j, read_T4(tabs, combo, a, b, c, d))
                 end
             elseif nshared == 1
                 s = s1 != 0 ? s1 : s2
@@ -376,9 +389,8 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
                     other2_val = (o3 == s) ? d : c
                     bin_u = (other1 == u) ? other1_val : other2_val
                     bin_v = (other1 == u) ? other2_val : other1_val
-                    val = read_T3(tabs, tidx, bin_s_1, bin_u, bin_v)
                     i = pair_row(D, pidx1, a, b, L); j = pair_row(D, pidx2, c, d, L)
-                    HfullR[i, j] = val; HfullR[j, i] = val
+                    _lo_write!(HfullR, i, j, read_T3(tabs, tidx, bin_s_1, bin_u, bin_v))
                 end
             else
                 error("fill_pairwise_quantile_hessian_raw!: pidx1=$pidx1 pidx2=$pidx2 share $nshared>1 origins -- impossible for distinct pairs")
@@ -428,10 +440,16 @@ function center_and_scale_pairwise_quantile_hessian!(HfullR::AbstractMatrix{Floa
     end
     S = tabs.S
     invM = 1.0 / op.W
-    @inbounds for J in 1:nrow
+    # LOWER TRIANGLE ONLY (`I >= J`) -- the upper half of `HfullR` is never written by
+    # `fill_pairwise_quantile_hessian_raw!` and never read by anything (see `_lo_write!`). Threaded
+    # over `J` for the same reason the packed write is: columns are independent, there is no
+    # reduction, and the schedule therefore cannot change the result by an ulp. `:dynamic` because
+    # the column lengths are triangular and static chunks would be badly imbalanced.
+    Threads.@threads :dynamic for J in 1:nrow
         tJ = t[J]; rJ = r[J]
-        for I in 1:nrow
-            HfullR[I, J] = (HfullR[I, J] - tJ * r[I] - t[I] * rJ + S * t[I] * tJ) * invM
+        StJ = S * tJ
+        @inbounds @simd for I in J:nrow
+            HfullR[I, J] = (HfullR[I, J] - tJ * r[I] - t[I] * rJ + t[I] * StJ) * invM
         end
     end
     return HfullR
@@ -445,13 +463,19 @@ own convention exactly (`hvec[k] = 0.5*(HfullR[i,j]+HfullR[j,i])` for `i<=j` -- 
 symmetrization even though `HfullR` is already built symmetric by construction here, same
 "mirror both triangles" discipline flagged in this codebase's own Hessian-symmetry memory note).
 `length(hvec) == nrow*(nrow+1)/2`.
+
+Reads the LOWER triangle (`HfullR[j, i]`, `j >= i`), which since 2026-08-10 is the only half
+`fill_pairwise_quantile_hessian_raw!` populates -- so the previous defensive
+`0.5*(HfullR[i,j]+HfullR[j,i])` symmetrization is gone: it would now average a real value with a
+structural zero. The symmetry it was defending is instead enforced upstream, by `_lo_write!` storing
+each unordered pair exactly once.
 """
 function pack_upper_pairwise_quantile_hessian!(hvec::AbstractVector{Float64}, HfullR::AbstractMatrix{Float64}, nrow::Int)
     length(hvec) == div(nrow * (nrow + 1), 2) || error("pack_upper_pairwise_quantile_hessian!: length(hvec) mismatch")
     k = 0
     @inbounds for i in 1:nrow, j in i:nrow
         k += 1
-        hvec[k] = 0.5 * (HfullR[i, j] + HfullR[j, i])
+        hvec[k] = HfullR[j, i]
     end
     return hvec
 end

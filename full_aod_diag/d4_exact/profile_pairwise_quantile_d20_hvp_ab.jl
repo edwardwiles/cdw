@@ -43,7 +43,9 @@ x_free_calib = ctx.θ0_up[ctx.free_idx]
 layout = PairwiseQuantileMassLayout(ctx.D, PQ_L)
 
 t_aug = @elapsed begin
-    global aug = build_pairwise_quantile_augmented_obj(ctx, layout, pairwise_quantile_fixed_cutoffs(ctx.U, PQ_L; cutoff_source = CUTOFF_SOURCE))
+    global Zfeat = pairwise_quantile_frechet_features(ctx.U, ctx.μHat)   # restriction is on the Frechet z
+    global aug = build_pairwise_quantile_augmented_obj(ctx, layout, Zfeat,
+        pairwise_quantile_fixed_cutoffs(Zfeat, PQ_L; cutoff_source = CUTOFF_SOURCE, mu_frechet = ctx.μHat))
 end
 println("augmented obj + PairwiseQuantileOperator build (incl. presort): ", round(t_aug, digits=2), "s")
 flush(stdout)

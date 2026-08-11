@@ -38,7 +38,9 @@ x_free_calib = ctx.θ0_up[ctx.free_idx]
 println("ctx.D = ", ctx.D, "  size(ctx.U) = ", size(ctx.U), "  L = ", PQ_L)
 
 layout = PairwiseQuantileMassLayout(ctx.D, PQ_L)
-aug = build_pairwise_quantile_augmented_obj(ctx, layout, pairwise_quantile_fixed_cutoffs(ctx.U, PQ_L; cutoff_source = CUTOFF_SOURCE))
+Zfeat = pairwise_quantile_frechet_features(ctx.U, ctx.μHat)   # the restriction is on the Frechet z
+aug = build_pairwise_quantile_augmented_obj(ctx, layout, Zfeat,
+    pairwise_quantile_fixed_cutoffs(Zfeat, PQ_L; cutoff_source = CUTOFF_SOURCE, mu_frechet = ctx.μHat))
 println("obj_pq.outer_constr_index = ", aug.obj_pq.outer_constr_index, "  ncore_econ = ", aug.ncore_econ,
         "  n_total_rows(D) = ", n_total_rows(ctx.D, PQ_L))
 check("outer_constr_index == ncore_econ + n_total_rows(D)", aug.obj_pq.outer_constr_index == aug.ncore_econ + n_total_rows(ctx.D, PQ_L))
