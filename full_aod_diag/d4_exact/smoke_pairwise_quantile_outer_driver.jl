@@ -7,11 +7,11 @@
 #
 # Proves:
 #   1. the driver runs end-to-end at real D=20: context build, layout, bounds, KNITRO outer solve,
-#      both callbacks, final verification -- no crash in the gp/zfree/raw_cutoffs plumbing;
+#      both callbacks, final verification -- no crash in the gp/zfree/raw_masses plumbing;
 #   2. it writes a checkpoint that round-trips through its own loader with the outer point intact;
 #   3. resume from that checkpoint reconstructs the same outer point and continues;
-#   4. the outer gradient's two blocks are both live -- the run actually MOVES the cutoff
-#      coordinates, not just the economic ones (a gradient that were silently zero on the cutoff
+#   4. the outer gradient's two blocks are both live -- the run actually MOVES the MASS
+#      coordinates, not just the economic ones (a gradient that were silently zero on the mass
 #      block would still "run fine" and produce a plausible-looking result);
 #   5. objective_mode=:min_delta_fixed_gp works, same mechanism as every other family;
 #   6. the no-defaults rule is enforced: omitting a scientific kwarg raises UndefKeywordError.
@@ -42,10 +42,10 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           # ---- this family ----
           "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "operator_psi_bundle.jl",
           "cm_callback_health.jl", "shared_a_gradient.jl", "operator_verification.jl",
-          "pairwise_quantile_cutoff_transform.jl", "pairwise_quantile_bin_context.jl",
+          "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
-          "pairwise_quantile_production.jl", "pairwise_quantile_cutoff_gradient.jl",
+          "pairwise_quantile_production.jl", "pairwise_quantile_mass_gradient.jl",
           "pairwise_quantile_outer_production.jl", "pairwise_quantile_checkpoint.jl"]
     include(joinpath(_D4E, f))
 end
@@ -61,15 +61,19 @@ end
 const W_SMOKE   = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 20_000
 const L_SMOKE   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 3
 const MAXT      = length(ARGS) >= 3 ? parse(Float64, ARGS[3]) : 300.0
-# min_crossed at ~1% of W: inside the 0.3%-3% switching-mass band the economic A-block's own
-# bandwidth selector targets (composite_gradient.jl:196-213), and the band where section 2c of
-# test_pairwise_quantile_outer_gradient_fd.jl measured the analytic/FD ratio closest to 1.
-const MIN_CROSSED = max(25, round(Int, 0.01 * W_SMOKE))
+# Version B's two extra required modelling choices. `:empirical_quantile` is picked here (rather
+# than :frechet_theoretical) because it is the setting under which mu=1/L reproduces version A's
+# moment matrix exactly, so this smoke and the version-A/B equivalence anchor
+# (test_pairwise_quantile_version_ab_anchor.jl) describe the same restriction.
+const CUTOFF_SOURCE = :empirical_quantile
+# Floor at half the EXPECTED joint-cell occupancy (W/L^2): derived from this run's own W and L
+# rather than typed in, and strict enough that a genuinely starved cell still fails.
+const MIN_BIN_COUNT = max(10, W_SMOKE ÷ (2 * L_SMOKE^2))
 const GRAV = default_gravity_exclude_cells_brazil_korea()
 
 lp("="^100)
-lp("pairwise-quantile OUTER DRIVER smoke: W=", W_SMOKE, " L=", L_SMOKE, " min_crossed=", MIN_CROSSED,
-   " maxtime=", MAXT, "s")
+lp("pairwise-quantile OUTER DRIVER smoke (FREE MASSES): W=", W_SMOKE, " L=", L_SMOKE,
+   " cutoff_source=:", CUTOFF_SOURCE, " min_bin_count=", MIN_BIN_COUNT, " maxtime=", MAXT, "s")
 lp("="^100)
 
 ctx_raw = d20_real_setup_design(W = W_SMOKE, δ = 0.1, find_smallest = true, draw_design = :sobol_randomized,
@@ -80,13 +84,19 @@ lp("ctx: D=", ctx.D, " D_dest=", ctx.D_dest, " W=", ctx.W, " sigma=", ctx.σ)
 
 geo = build_aspace_geometry(ctx)
 w_cal_econ = cm_w0_from_calibration(ctx, geo.pe, :powered_aspace)
-layout = PairwiseQuantileCutoffLayout(ctx.D, L_SMOKE)
-cut0 = pairwise_quantile_start_cutoffs(ctx, layout)
-w0 = vcat(w_cal_econ, cut0)
+layout = PairwiseQuantileMassLayout(ctx.D, L_SMOKE)
+mass0 = uniform_mass_raw(layout)   # mu = 1/L
+w0 = vcat(w_cal_econ, mass0)
 lp("n_total_rows(D=", ctx.D, ", L=", L_SMOKE, ") = ", n_total_rows(ctx.D, L_SMOKE),
    "   n_raw = ", n_raw(layout), "   length(w0) = ", length(w0))
 check("w0 length == D*Ddest + n_raw", length(w0) == ctx.D * ctx.D_dest + n_raw(layout))
-check("start cutoffs are all finite", all(isfinite, cut0))
+check("start masses are all finite", all(isfinite, mass0))
+begin
+    st_chk = PairwiseQuantileMassState(ctx.D, L_SMOKE)
+    set_pairwise_quantile_masses!(st_chk, mass0, layout)
+    check("start masses decode to mu == 1/L exactly",
+          maximum(abs, st_chk.mu .- 1.0 / L_SMOKE) < 1e-14)
+end
 
 TMP = mktempdir()
 lp("scratch ckpt_dir = ", TMP)
@@ -94,8 +104,8 @@ lp("scratch ckpt_dir = ", TMP)
 common = (W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
           σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0,
           destination_sample = :exclude_row, exclude_diagonal_gravity = true,
-          gravity_exclude_cells = GRAV, L = L_SMOKE, min_crossed = MIN_CROSSED,
-          A_coordinate_mode = :powered_aspace)
+          gravity_exclude_cells = GRAV, L = L_SMOKE, cutoff_source = CUTOFF_SOURCE,
+          min_bin_count = MIN_BIN_COUNT, A_coordinate_mode = :powered_aspace)
 
 # ------------------------------------------------------------------------------------------------
 # TEST 1: objective_mode=:min_gp, end to end
@@ -125,28 +135,35 @@ end
 
 # ---- 2. checkpoint round-trip ----
 ck = load_pairwise_quantile_checkpoint(r1.ckpt_path)
-check("T1: checkpoint round-trips through its own loader", ck isa PairwiseQuantileCheckpointV1)
-check("T1: checkpoint records this family's own fields", ck.L == L_SMOKE && ck.min_crossed == MIN_CROSSED &&
+check("T1: checkpoint round-trips through its own loader", ck isa PairwiseQuantileMassCheckpointV1)
+check("T1: checkpoint records this family's own fields", ck.L == L_SMOKE &&
+      ck.cutoff_source == CUTOFF_SOURCE && ck.min_bin_count == MIN_BIN_COUNT &&
       ck.n_raw == n_raw(layout) && ck.D == ctx.D)
-check("T1: checkpoint raw_cutoffs has the right width", length(ck.raw_cutoffs) == n_raw(layout))
+check("T1: checkpoint raw_masses has the right width", length(ck.raw_masses) == n_raw(layout))
+# The cutoffs themselves must be recorded, not just the rule that produced them: :empirical_quantile
+# depends on the draws, so the symbol alone does not pin the numbers and a run recorded without them
+# is not reproducible.
+check("T1: checkpoint records the FIXED cutoff matrix itself", size(ck.cutoffs) == (L_SMOKE - 1, ctx.D) &&
+      all(isfinite, ck.cutoffs))
+check("T1: recorded cutoffs are bit-identical to regenerating them from cutoff_source",
+      ck.cutoffs == pairwise_quantile_fixed_cutoffs(ctx.U, L_SMOKE; cutoff_source = CUTOFF_SOURCE))
 check("T1: checkpoint records sigma and draw provenance", ck.sigma == ctx.σ && ck.W == W_SMOKE &&
       ck.draw_seed == 20260719 && ck.draw_design == :sobol_randomized)
 
-# ---- 4. did the CUTOFF block actually move? ----
-# The point of this check: an outer gradient whose cutoff block was silently zero (the exact failure
-# mode a ZC-style closed-form envelope derivative would have produced here -- zero almost everywhere
-# because Delta_dual is a step function of each cutoff) would still run to completion and return a
-# perfectly plausible result. The only way to see it is to look at whether the cutoffs MOVED.
-cut_moved = maximum(abs, ck.raw_cutoffs .- cut0)
-lp("  max |raw_cutoff moved from start| = ", cut_moved)
+# ---- 4. did the MASS block actually move? ----
+# The point of this check: an outer gradient whose restriction block was silently zero would still
+# run to completion and return a perfectly plausible result. The only way to see it is to look at
+# whether the restriction coordinates MOVED.
+mass_moved = maximum(abs, ck.raw_masses .- mass0)
+lp("  max |raw mass coord moved from start| = ", mass_moved)
 # Guarded on n_eval>=1 deliberately: if EVERY point was rejected the checkpoint still records
-# whatever terminal iterate KNITRO reported, and the cutoffs will differ from the start for reasons
-# that have nothing to do with the gradient. Reporting that as evidence the cutoff block is live
+# whatever terminal iterate KNITRO reported, and the masses will differ from the start for reasons
+# that have nothing to do with the gradient. Reporting that as evidence the mass block is live
 # would be a false pass -- it was one, before this guard (seen live at W=8000, where every inner
 # solve was infeasible and n_eval=0 yet this check "passed" with a move of 3.95).
-check("T1: the outer solve actually MOVED the cutoff coordinates (cutoff gradient block is live)",
-      r1.n_eval >= 1 && r1.n_grad >= 1 && cut_moved > 1e-8,
-      "n_eval=$(r1.n_eval) n_grad=$(r1.n_grad) max move = $cut_moved")
+check("T1: the outer solve actually MOVED the mass coordinates (mass gradient block is live)",
+      r1.n_eval >= 1 && r1.n_grad >= 1 && mass_moved > 1e-8,
+      "n_eval=$(r1.n_eval) n_grad=$(r1.n_grad) max move = $mass_moved")
 
 # ------------------------------------------------------------------------------------------------
 # TEST 2: resume
@@ -167,11 +184,28 @@ try
         W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
         σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0, destination_sample = :exclude_row,
         exclude_diagonal_gravity = true, gravity_exclude_cells = GRAV,
-        L = L_SMOKE + 1, min_crossed = MIN_CROSSED, A_coordinate_mode = :powered_aspace)
+        L = L_SMOKE + 1, cutoff_source = CUTOFF_SOURCE, min_bin_count = MIN_BIN_COUNT,
+        A_coordinate_mode = :powered_aspace)
 catch e
     global mismatch_caught = occursin("L MISMATCH", sprint(showerror, e))
 end
 check("T2: resuming under a DIFFERENT L is a hard error, not a silent override", mismatch_caught)
+
+# Different cutoffs are a DIFFERENT restriction, not a different search over the same one -- so the
+# cutoff_source guard must be a hard error on the same footing as the L guard.
+cutoff_mismatch_caught = false
+try
+    run_pairwise_quantile_upper_checkpointed(nothing; find_smallest = true, ckpt_dir = ck1,
+        label = "pq_smoke_badcutoff", maxtime_real = 5.0, verbose = false, resume_from = r1.ckpt_path,
+        W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
+        σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0, destination_sample = :exclude_row,
+        exclude_diagonal_gravity = true, gravity_exclude_cells = GRAV,
+        L = L_SMOKE, cutoff_source = :frechet_theoretical, min_bin_count = MIN_BIN_COUNT,
+        A_coordinate_mode = :powered_aspace)
+catch e
+    global cutoff_mismatch_caught = occursin("cutoff_source MISMATCH", sprint(showerror, e))
+end
+check("T2: resuming under a DIFFERENT cutoff_source is a hard error", cutoff_mismatch_caught)
 
 # ------------------------------------------------------------------------------------------------
 # TEST 3: objective_mode=:min_delta_fixed_gp
@@ -202,22 +236,27 @@ check("T3: :min_delta_fixed_gp without gp_fixed is a hard error", mode_guard)
 # ------------------------------------------------------------------------------------------------
 lp("\n", "="^100); lp("TEST 4: scientific parameters have NO defaults (CLAUDE.md rule)")
 for (name, kwargs) in (
-        (:σHat,        (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
-                          inner_lower_limit = -10.0, z_halfwidth = 30.0, destination_sample = :exclude_row,
-                          exclude_diagonal_gravity = true, gravity_exclude_cells = GRAV,
-                          L = L_SMOKE, min_crossed = MIN_CROSSED)),
-        (:draw_seed,   (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, σHat = 3.0,
-                          inner_lower_limit = -10.0, z_halfwidth = 30.0, destination_sample = :exclude_row,
-                          exclude_diagonal_gravity = true, gravity_exclude_cells = GRAV,
-                          L = L_SMOKE, min_crossed = MIN_CROSSED)),
-        (:L,           (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
-                          σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0,
-                          destination_sample = :exclude_row, exclude_diagonal_gravity = true,
-                          gravity_exclude_cells = GRAV, min_crossed = MIN_CROSSED)),
-        (:min_crossed, (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
-                          σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0,
-                          destination_sample = :exclude_row, exclude_diagonal_gravity = true,
-                          gravity_exclude_cells = GRAV, L = L_SMOKE)))
+        (:σHat,          (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
+                            inner_lower_limit = -10.0, z_halfwidth = 30.0, destination_sample = :exclude_row,
+                            exclude_diagonal_gravity = true, gravity_exclude_cells = GRAV,
+                            L = L_SMOKE, cutoff_source = CUTOFF_SOURCE, min_bin_count = MIN_BIN_COUNT)),
+        (:draw_seed,     (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, σHat = 3.0,
+                            inner_lower_limit = -10.0, z_halfwidth = 30.0, destination_sample = :exclude_row,
+                            exclude_diagonal_gravity = true, gravity_exclude_cells = GRAV,
+                            L = L_SMOKE, cutoff_source = CUTOFF_SOURCE, min_bin_count = MIN_BIN_COUNT)),
+        (:L,             (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
+                            σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0,
+                            destination_sample = :exclude_row, exclude_diagonal_gravity = true,
+                            gravity_exclude_cells = GRAV, cutoff_source = CUTOFF_SOURCE,
+                            min_bin_count = MIN_BIN_COUNT)),
+        (:cutoff_source, (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
+                            σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0,
+                            destination_sample = :exclude_row, exclude_diagonal_gravity = true,
+                            gravity_exclude_cells = GRAV, L = L_SMOKE, min_bin_count = MIN_BIN_COUNT)),
+        (:min_bin_count, (; W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed = 20260719,
+                            σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0,
+                            destination_sample = :exclude_row, exclude_diagonal_gravity = true,
+                            gravity_exclude_cells = GRAV, L = L_SMOKE, cutoff_source = CUTOFF_SOURCE)))
     caught = false
     try
         run_pairwise_quantile_upper_checkpointed(copy(w0); find_smallest = true, ckpt_dir = TMP,

@@ -13,7 +13,7 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "cm_originzc_target_layout.jl", "cm_meanzc_moments.jl", "cm_meanzc_production.jl",
           "cm_originzc_moments.jl", "cm_originzc_production.jl", "operator_psi_bundle.jl",
           "cm_callback_health.jl", "compressed_factual_buffer_reuse.jl",
-          "pairwise_quantile_cutoff_transform.jl", "pairwise_quantile_bin_context.jl",
+          "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl"]
     include(joinpath(D4X, f))
 end
@@ -24,20 +24,23 @@ D = 4
 W = 500
 L = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5   # test-file convenience only
 nc = L - 1
-U = randn(W, D)
-op = PairwiseQuantileOperator(U, L)
+# Synthetic draws + synthetic cutoffs: under version B the bin assignment is a campaign constant
+# owned by the operator, so instead of overwriting a mutable bin array after the fact (what version
+# A's version of this script did) we choose cutoffs that reproduce the desired bin pattern -- here
+# just the quantiles of uniform draws, which is enough to exercise every T3/T4 combo.
+U = rand(W, D)
+Q = pairwise_quantile_fixed_cutoffs(U, L; cutoff_source = :empirical_quantile)
+op = PairwiseQuantileOperator(U, L, Q)
 println("L=", L, "  npair=", op.npair, "  triple_combos=", length(op.triple_combos), "  quad_combos=", length(op.quad_combos))
 
-bin_state = PairwiseQuantileBinState(W, D, L)
-bin_state.bin .= UInt8.(rand(1:L, W, D))   # synthetic bins, no need for real cutoff decode
 h = rand(W) .+ 0.1
 
 tls = build_pairwise_quantile_thread_scratch(D, op.npair, L)
 tabs = PairwiseQuantileHessianTables(op)
-build_pairwise_quantile_hessian_tables!(tabs, op, bin_state, h, tls)
+build_pairwise_quantile_hessian_tables!(tabs, op, h, tls)
 
 # ---- brute force T3: direct scatter over the FULL (redundant) triple_combos list, no dedup ----
-bin = bin_state.bin
+bin = op.bin
 nlast = UInt8(nc)
 T3_brute = zeros(nc, nc, nc, length(op.triple_combos))
 triple_opq = [(o, op.pairs[pidx][1], op.pairs[pidx][2]) for (o, pidx) in op.triple_combos]

@@ -13,7 +13,7 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "cm_originzc_target_layout.jl", "cm_meanzc_moments.jl", "cm_meanzc_production.jl",
           "cm_originzc_moments.jl", "cm_originzc_production.jl", "operator_psi_bundle.jl",
           "cm_callback_health.jl", "compressed_factual_buffer_reuse.jl", "draw_design.jl",
-          "pairwise_quantile_cutoff_transform.jl", "pairwise_quantile_bin_context.jl",
+          "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
           "pairwise_quantile_production.jl"]
@@ -36,39 +36,29 @@ println("context build: ", round(t_ctx, digits=2), "s  D=", ctx.D, "  size(U)=",
 flush(stdout)
 
 x_free_calib = ctx.θ0_up[ctx.free_idx]
-layout = PairwiseQuantileCutoffLayout(ctx.D, PQ_L)
+layout = PairwiseQuantileMassLayout(ctx.D, PQ_L)
 
 t_aug = @elapsed begin
-    global aug = build_pairwise_quantile_augmented_obj(ctx, layout)
+    global aug = build_pairwise_quantile_augmented_obj(ctx, layout, pairwise_quantile_fixed_cutoffs(ctx.U, PQ_L; cutoff_source = CUTOFF_SOURCE))
 end
 println("augmented obj + PairwiseQuantileOperator build (incl. presort): ", round(t_aug, digits=2), "s")
 flush(stdout)
 
-bin_state = PairwiseQuantileBinState(size(ctx.U, 1), ctx.D, PQ_L)
-hess_ctx = PairwiseQuantileCoreHessCtx(aug.ncore_econ, aug.op, bin_state, aug.core_cf_ref)
-ctx_cm = merge(ctx, (obj = aug.obj_pq, pq_op = aug.op, pq_bin_state = bin_state,
+mass_state = PairwiseQuantileMassState(ctx.D, PQ_L)
+hess_ctx = PairwiseQuantileCoreHessCtx(aug.ncore_econ, aug.op, mass_state, aug.core_cf_ref)
+ctx_cm = merge(ctx, (obj = aug.obj_pq, pq_op = aug.op, pq_mass_state = mass_state,
                       pq_core_cf_ref = aug.core_cf_ref, pq_hess_ctx = hess_ctx))
 
-function quantile_naive(v::AbstractVector{Float64}, p::Float64)
-    s = sort(v); n = length(s)
-    return s[clamp(round(Int, p*n), 1, n)]
-end
-raw_cutoffs = zeros(n_raw(layout))
-for o in 1:ctx.D
-    base = raw_index(layout, o, 1)
-    Uo = @view ctx.U[:, o]
-    q = [quantile_naive(Uo, r/PQ_L) for r in 1:PQ_L-1]
-    raw_cutoffs[base] = log(q[1])
-    for k in 2:PQ_L-1
-        gap = log(q[k]) - log(q[k-1])
-        raw_cutoffs[base+k-1] = gap > 0 ? log(expm1(gap)) : -5.0
-    end
-end
+# VERSION B: the outer restriction coordinates are BIN MASSES on the simplex; the canonical
+# starting point is mu = 1/L (uniform_mass_raw) -- exactly version A's fixed target. The
+# cutoffs are no longer outer coordinates at all: they are FIXED at context-build time from
+# CUTOFF_SOURCE (see pairwise_quantile_fixed_cutoffs).
+raw_masses = uniform_mass_raw(layout)
 
 println("\n=== running real KNITRO inner solve (this drives the Hessian callbacks we're profiling) ===")
 flush(stdout)
 t_solve = @elapsed begin
-    global nStatus, x, obj, n_fg, n_hess = archPQ_base_state(x_free_calib, raw_cutoffs, ctx, ctx_cm, layout)
+    global nStatus, x, obj, n_fg, n_hess = archPQ_base_state(x_free_calib, raw_masses, ctx, ctx_cm, layout)
 end
 println("solve: ", round(t_solve, digits=2), "s  nStatus=", nStatus, "  n_fg=", n_fg, "  n_hess=", n_hess)
 flush(stdout)
@@ -95,14 +85,14 @@ t_HEE = @elapsed begin
 end
 @printf("H_EE (winner-pair, unchanged shared backend): %.4fs\n", t_HEE)
 
-t_T1T2 = @elapsed build_pairwise_quantile_hessian_tables!(tabs, op, bin_state, h, tls)
+t_T1T2 = @elapsed build_pairwise_quantile_hessian_tables!(tabs, op, h, tls)
 @printf("T1/T2/T3/T4 raw table build (combined, includes H_MM/MP/PP raw material): %.4fs\n", t_T1T2)
 
 HRR = zeros(n_rows, n_rows)
 t_fill = @elapsed fill_pairwise_quantile_hessian_raw!(HRR, op, tabs)
 @printf("H_MM/MP/PP raw block-fill (from tables): %.4fs\n", t_fill)
 
-t_center = @elapsed center_and_scale_pairwise_quantile_hessian!(HRR, op, tabs)
+t_center = @elapsed center_and_scale_pairwise_quantile_hessian!(HRR, op, mass_state, tabs)
 @printf("centering correction (dense n_rows x n_rows pass): %.4fs\n", t_center)
 
 cross_scratch = ensure_winner_zc_cross_scratch!(Ref{Union{Nothing,WinnerZCCrossScratch}}(nothing), op.W, n_rows)
@@ -111,7 +101,7 @@ t_prep = @elapsed winner_pair_cross_hessian_zc_prep!(cross_scratch, wctx, h)
 
 HEQ = zeros(NCORE, n_rows)
 cross_hess_scratch = PairwiseQuantileCrossHessScratch(D, npair, op.W, NCORE - 1, PQ_L)
-t_cross = @elapsed pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, bin_state, tls, h, cross_hess_scratch)
+t_cross = @elapsed pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, mass_state, tls, h, cross_hess_scratch)
 @printf("H_E,R cross-block (economic x restriction): %.4fs\n", t_cross)
 
 # direct packed write (Hessian-optimization pass, 2026-08-09 -- matches production
@@ -145,10 +135,10 @@ t_total = t_HEE + t_T1T2 + t_fill + t_center + t_prep + t_cross + t_pack
 
 # allocations (separate @allocated call per block, cheap re-run)
 a_HEE = @allocated winner_pair_hessian!(hee_packed, obj, wctx)
-a_T1T2 = @allocated build_pairwise_quantile_hessian_tables!(tabs, op, bin_state, h, tls)
+a_T1T2 = @allocated build_pairwise_quantile_hessian_tables!(tabs, op, h, tls)
 a_fill = @allocated fill_pairwise_quantile_hessian_raw!(HRR, op, tabs)
-a_center = @allocated center_and_scale_pairwise_quantile_hessian!(HRR, op, tabs)
-a_cross = @allocated pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, bin_state, tls, h, cross_hess_scratch)
+a_center = @allocated center_and_scale_pairwise_quantile_hessian!(HRR, op, mass_state, tabs)
+a_cross = @allocated pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, mass_state, tls, h, cross_hess_scratch)
 println("\n=== allocations (bytes, second call so JIT-warm) ===")
 @printf("H_EE: %d   T1/T2/T3/T4 tables: %d   H_MM/MP/PP fill: %d   centering: %d   H_E,R cross: %d\n",
         a_HEE, a_T1T2, a_fill, a_center, a_cross)

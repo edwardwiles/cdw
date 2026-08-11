@@ -101,7 +101,13 @@ function fam_kwargs()
     # re-derived from L alone) -- auto-resolve via the SAME production convention
     # (resolve_cm_probs, multistart_seed_generator.jl) any time the manifest specifies `L` without
     # its own explicit `probs` override.
-    if haskey(kw, :L) && !haskey(kw, :probs)
+    #
+    # EXCEPT for the pairwise-quantile family, whose `L` is its number of quantile BINS and has
+    # nothing to do with a CM contrast grid: `run_pairwise_quantile_upper_checkpointed` has no
+    # `probs` kwarg at all, so injecting one here would make every call to it fail with an
+    # unsupported-keyword MethodError. The guard is on the DRIVER, not on the presence of `L`,
+    # because `L` is exactly what the two families have in common.
+    if haskey(kw, :L) && !haskey(kw, :probs) && FAM["driver"] != "run_pairwise_quantile_upper_checkpointed"
         kw = merge(kw, (probs = resolve_cm_probs(kw.L),))
     end
     return kw
@@ -121,12 +127,15 @@ function call_driver(w0::Vector{Float64}; extra::NamedTuple)
     elseif driver == "run_originzc_upper_checkpointed"
         return run_originzc_upper_checkpointed(w0; kw...)
     elseif driver == "run_pairwise_quantile_upper_checkpointed"
-        # Pairwise-quantile-independence family (2026-08-10). Fits the uniform convention with no
-        # wrapper: same `common` scientific kwargs, same objective_mode/gp_fixed Stage B mechanism,
-        # same NamedTuple return shape (.knitro_status/.n_eval/.n_grad/.best) run_stage reads. Its
-        # own two required kwargs, `L` (quantile bins) and `min_crossed` (cutoff-gradient secant
-        # bandwidth), arrive generically through fam_kwargs() from the protocol's
-        # [families.<ID>.kwargs] sub-table -- no per-family kwarg-NAME logic is needed here.
+        # Pairwise-quantile-independence family (2026-08-10, version B: fixed cutoffs + free bin
+        # masses). Fits the uniform convention with no wrapper: same `common` scientific kwargs,
+        # same objective_mode/gp_fixed Stage B mechanism, same NamedTuple return shape
+        # (.knitro_status/.n_eval/.n_grad/.best) run_stage reads. Its own three required kwargs --
+        # `L` (quantile bins), `cutoff_source` (:frechet_theoretical|:empirical_quantile) and
+        # `min_bin_count` (bin non-degeneracy floor) -- arrive generically through fam_kwargs() from
+        # the protocol's [families.<ID>.kwargs] sub-table, so no per-family kwarg-NAME logic is
+        # needed here. (`cutoff_source` must reach the driver as a Symbol; the protocol reader's own
+        # kwarg coercion handles that the same way it does for every other Symbol-valued kwarg.)
         return run_pairwise_quantile_upper_checkpointed(w0; kw...)
     else
         error("call_driver: unknown driver '$driver' for family $FAMILY_ID -- Unrestricted goes through call_unrestricted_driver, not call_driver")

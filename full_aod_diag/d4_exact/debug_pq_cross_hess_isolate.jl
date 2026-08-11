@@ -16,7 +16,7 @@ cross_scratch = ensure_winner_zc_cross_scratch!(Ref{Union{Nothing,WinnerZCCrossS
 winner_pair_cross_hessian_zc_prep!(cross_scratch, wctx, h)
 HEQ = zeros(NCORE, n_rows)
 cross_hess_scratch = PairwiseQuantileCrossHessScratch(D, npair, aug.op.W, ncore1, PQ_L)
-pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, aug.op, bin_state, build_pairwise_quantile_thread_scratch(D, npair, PQ_L), h, cross_hess_scratch)
+pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, aug.op, mass_state, build_pairwise_quantile_thread_scratch(D, npair, PQ_L), h, cross_hess_scratch)
 
 # brute-force cross derivative: d(g_E[j]) / d(lambda_R[x]) via FD on the FG functor's gradient,
 # for a SMALL sample of (j,x) pairs including the culprit column j=6 (Hfull col index 7 = j+1=7 -> j=6)

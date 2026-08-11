@@ -1,7 +1,7 @@
 include(joinpath(@__DIR__, "debug_pq_fg_check.jl"))   # reuses everything already built there (ctx, st, aug, x0, g, obj, hess_ctx not yet built)
 
 println("\n=== Hessian check ===")
-hess_ctx = PairwiseQuantileCoreHessCtx(ncore1 + 1, aug.op, bin_state, aug.core_cf_ref)
+hess_ctx = PairwiseQuantileCoreHessCtx(ncore1 + 1, aug.op, mass_state, aug.core_cf_ref)
 # NCORE here = ncore1+1 (the +1 is zeta) -- matches WinnerPairHessCtx's own H_EE sizing convention (n=1+ncolI, ncolI=ncore1)
 
 n = obj.outer_constr_index

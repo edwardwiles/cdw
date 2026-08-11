@@ -110,7 +110,7 @@ function pairwise_quantile_hvp!(Hp::AbstractVector{Float64}, st::PairwiseQuantil
     economic_forward!(sc.econ_fwd_buf, p_E, cf, st.econ_ws)   # econ_fwd_buf = E*p_E  (length W)
     sc.u .+= sc.econ_fwd_buf
     fill!(sc.r, 0.0)
-    pairwise_quantile_forward!(sc.r, p_M, p_P, op, st.bin_state)   # r = -(R*p_R)
+    pairwise_quantile_forward!(sc.r, p_M, p_P, op, st.mass_state)   # r = -(R*p_R)
     sc.u .-= sc.r                                          # u = p_ζ + E*p_E + R*p_R
 
     sc.r .= sc.h .* sc.u
@@ -119,7 +119,7 @@ function pairwise_quantile_hvp!(Hp::AbstractVector{Float64}, st::PairwiseQuantil
     economic_transpose!(sc.econ_buf, sc.r, cf, st.econ_ws)   # raw E'*r
     sc.econ_buf ./= M
 
-    pairwise_quantile_transpose!(sc.gM, sc.gP, sc.r, op, st.bin_state, sc.tls, sc.tscratch)
+    pairwise_quantile_transpose!(sc.gM, sc.gP, sc.r, op, st.mass_state, sc.tls, sc.tscratch)
     # transpose! returns -(1/W)*(R_centered'*r); M==W here, so negating gives +(1/M)*R_centered'*r.
     sc.gM .*= -1.0
     sc.gP .*= -1.0
@@ -204,21 +204,21 @@ function inner_loop_KNITRO_pairwisequantile_operator_hvp(obj, st::PairwiseQuanti
 end
 
 """
-    archPQ_base_state_hvp(x_free0, raw_cutoffs, econ_ctx, ctx_cm, layout) -> (nStatus, x, obj, n_fg, n_hess)
+    archPQ_base_state_hvp(x_free0, raw_masses, econ_ctx, ctx_cm, layout) -> (nStatus, x, obj, n_fg, n_hess)
 
 HVP-variant driver, mirrors `archPQ_base_state` (pairwise_quantile_production.jl) exactly except
 for which inner-loop wrapper it calls. `ctx_cm.obj.inner_loop_opt` MUST already point at an hvp
 .opt file before calling this (caller's responsibility, same discipline as
 `inner_loop_internal_compressed_variant`'s callers).
 """
-function archPQ_base_state_hvp(x_free0::AbstractVector, raw_cutoffs::AbstractVector{Float64}, econ_ctx, ctx_cm, layout::PairwiseQuantileCutoffLayout)
+function archPQ_base_state_hvp(x_free0::AbstractVector, raw_masses::AbstractVector{Float64}, econ_ctx, ctx_cm, layout::PairwiseQuantileMassLayout)
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     prime_operator!(obj, θ_econ0, econ_ctx, ctx_cm.pq_core_cf_ref)
 
     st = PairwiseQuantileOperatorState(obj, obj.outer_constr_index - 1 - n_total_rows(ctx_cm.pq_op.D, ctx_cm.pq_op.L),
-        ctx_cm.pq_op, ctx_cm.U, ctx_cm.pq_bin_state, ctx_cm.pq_core_cf_ref)
-    reset_for_solve!(st, raw_cutoffs, layout)
+        ctx_cm.pq_op, ctx_cm.pq_mass_state, ctx_cm.pq_core_cf_ref)
+    reset_for_solve!(st, raw_masses, layout)
 
     nStatus, objSol, x, lambda_, n_fg, n_hess = inner_loop_KNITRO_pairwisequantile_operator_hvp(obj, st)
     return nStatus, x, obj, n_fg, n_hess

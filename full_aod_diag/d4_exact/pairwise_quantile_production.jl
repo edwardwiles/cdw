@@ -15,19 +15,22 @@ isdefined(Main, :WinnerPairHessCtx) || include(joinpath(@__DIR__, "core_exact_he
 isdefined(Main, :WinnerZCCrossScratch) || include(joinpath(@__DIR__, "winner_pair_cross_hessian.jl"))
 
 """
-    build_pairwise_quantile_augmented_obj(ctx, cutoff_layout) -> (obj_pq, ncore_econ, core_cf_ref, op, D)
+    build_pairwise_quantile_augmented_obj(ctx, layout, Q) -> (obj_pq, ncore_econ, core_cf_ref, op, D)
 
 `ctx.obj` (`obj0`) is the economic-only `PsiObjectiveBundleImplicit` (e.g. from `d4_exact_setup`).
 Builds the true no-H `OperatorPsiBundle` for `[economic | marginal | pair]`, mirroring
 `cm_originzc_moments.jl`'s `:operator` construction verbatim (same field list, same
-`outer_constr_index_new` convention).
+`outer_constr_index_new` convention), plus this restriction's operator over the FIXED cutoffs `Q`
+(version B -- `Q` is a required argument, built by `pairwise_quantile_fixed_cutoffs` from an
+explicit `cutoff_source`; there is no cutoff default and none is invented here).
 """
-function build_pairwise_quantile_augmented_obj(ctx, cutoff_layout::PairwiseQuantileCutoffLayout)
+function build_pairwise_quantile_augmented_obj(ctx, layout::PairwiseQuantileMassLayout,
+                                               Q::AbstractMatrix{Float64})
     obj0 = ctx.obj
     ncore_econ = obj0.d
     D = ctx.D
-    D == cutoff_layout.D || error("build_pairwise_quantile_augmented_obj: ctx.D=$D != cutoff_layout.D=$(cutoff_layout.D)")
-    n_rows = n_total_rows(D, cutoff_layout.L)
+    D == layout.D || error("build_pairwise_quantile_augmented_obj: ctx.D=$D != layout.D=$(layout.D)")
+    n_rows = n_total_rows(D, layout.L)
     outer_constr_index_new = obj0.outer_constr_index + n_rows
     core_cf_ref = Ref{Any}(nothing)
     obj_pq = OperatorPsiBundle(δ = obj0.δ, find_smallest = obj0.find_smallest,
@@ -36,7 +39,7 @@ function build_pairwise_quantile_augmented_obj(ctx, cutoff_layout::PairwiseQuant
         U = obj0.U, N = obj0.N, lower_limit = obj0.lower_limit,
         use_cached_x = obj0.use_cached_x, threshold_state = obj0.threshold_state,
         inner_loop_opt = obj0.inner_loop_opt)
-    op = PairwiseQuantileOperator(ctx.U, cutoff_layout.L)
+    op = PairwiseQuantileOperator(ctx.U, layout.L, Q)
     return (obj_pq = obj_pq, ncore_econ = ncore_econ, core_cf_ref = core_cf_ref, op = op, D = D)
 end
 
@@ -46,15 +49,13 @@ end
 Per-inner-solve callable FG state, mirroring `OriginZCOperatorState` exactly: `core_cf_ref` is the
 SAME `Ref{Any}` `prime_operator!` publishes a fresh `CompressedFactual` into (called once per outer
 point, BEFORE the KNITRO solve starts -- same lifecycle point `reset_for_solve!` below refreshes
-`bin_state`).
+`mass_state`).
 """
 mutable struct PairwiseQuantileOperatorState
     obj::Any
     ncore1::Int
     op::PairwiseQuantileOperator
-    bin_state::PairwiseQuantileBinState
-    U::Matrix{Float64}   # same draws op.sorted_z/sorted_idx were built from -- stored (by reference,
-    # no copy) here since PairwiseQuantileOperator itself doesn't carry U, only its presorted form.
+    mass_state::PairwiseQuantileMassState
     core_cf_ref::Ref{Any}
     econ_ws::Union{Nothing,Any}
     econ_ws_for::Any
@@ -64,23 +65,28 @@ mutable struct PairwiseQuantileOperatorState
     n_fg_calls::Int
 end
 
-function PairwiseQuantileOperatorState(obj, ncore1::Int, op::PairwiseQuantileOperator, U::Matrix{Float64},
-        bin_state::PairwiseQuantileBinState, core_cf_ref::Ref{Any})
+function PairwiseQuantileOperatorState(obj, ncore1::Int, op::PairwiseQuantileOperator,
+        mass_state::PairwiseQuantileMassState, core_cf_ref::Ref{Any})
     W = op.W
-    return PairwiseQuantileOperatorState(obj, ncore1, op, bin_state, U, core_cf_ref,
+    return PairwiseQuantileOperatorState(obj, ncore1, op, mass_state, core_cf_ref,
         nothing, nothing, zeros(W), zeros(W), zeros(W), 0)
 end
 
 """
-    reset_for_solve!(st::PairwiseQuantileOperatorState, raw_cutoffs, layout) -> st
+    reset_for_solve!(st::PairwiseQuantileOperatorState, raw_masses, layout) -> st
 
-Call ONCE per outer point, BEFORE the KNITRO solve starts: decodes cutoffs and rebuilds
-`st.bin_state.bin` (`refresh_pairwise_quantile_bins!`) -- the task's own "decode once per outer
-point, never inside a callback" requirement, satisfied structurally by this lifecycle placement.
+Call ONCE per outer point, BEFORE the KNITRO solve starts: decodes the raw outer coordinates into
+this restriction's free bin masses (`set_pairwise_quantile_masses!`) -- the version-B form of the
+"decode once per outer point, never inside a callback" requirement, satisfied structurally by this
+lifecycle placement.
+
+Under version B the BIN ASSIGNMENT is no longer refreshed here at all: the cutoffs are campaign
+constants, so `op.bin` was built once in the operator's constructor and never changes. Only the
+masses are per-outer-point state.
 """
-function reset_for_solve!(st::PairwiseQuantileOperatorState, raw_cutoffs::AbstractVector{Float64},
-        layout::PairwiseQuantileCutoffLayout)
-    refresh_pairwise_quantile_bins!(st.bin_state, st.op, st.U, raw_cutoffs, layout)
+function reset_for_solve!(st::PairwiseQuantileOperatorState, raw_masses::AbstractVector{Float64},
+        layout::PairwiseQuantileMassLayout)
+    set_pairwise_quantile_masses!(st.mass_state, raw_masses, layout)
     st.n_fg_calls = 0
     return st
 end
@@ -117,7 +123,7 @@ function dual_index!(st::PairwiseQuantileOperatorState, x::AbstractVector{Float6
     economic_forward!(st.econ_buf, λ_E, cf, st.econ_ws)
     st.arg0 .-= st.econ_buf
 
-    pairwise_quantile_forward!(st.arg0, λ_M, λ_P, op, st.bin_state)
+    pairwise_quantile_forward!(st.arg0, λ_M, λ_P, op, st.mass_state)
     return st.arg0
 end
 
@@ -147,7 +153,7 @@ function (st::PairwiseQuantileOperatorState)(x::AbstractVector{Float64}, g::Abst
         g_P = reshape(@view(g[2+ncore1+n_mean_flat(D, L) : 1+ncore1+n_mean_flat(D, L)+n_pair_flat(npair, L)]), nc, nc, npair)
         tls = build_pairwise_quantile_thread_scratch(D, npair, L)
         scratch = PairwiseQuantileTransposeScratch(D, npair, L)
-        pairwise_quantile_transpose!(g_M, g_P, st.arg1, op, st.bin_state, tls, scratch)
+        pairwise_quantile_transpose!(g_M, g_P, st.arg1, op, st.mass_state, tls, scratch)
     end
 
     obj.arg0 .= st.arg0
@@ -182,7 +188,7 @@ mutable struct PairwiseQuantileCoreHessCtx
     NCORE::Int
     D::Int
     op::PairwiseQuantileOperator
-    bin_state::PairwiseQuantileBinState
+    mass_state::PairwiseQuantileMassState
     tabs::PairwiseQuantileHessianTables
     tls::PairwiseQuantileThreadScratch
     core_cf_ref::Ref{Any}
@@ -195,12 +201,12 @@ mutable struct PairwiseQuantileCoreHessCtx
     HRR::Matrix{Float64}
 end
 
-function PairwiseQuantileCoreHessCtx(NCORE::Int, op::PairwiseQuantileOperator, bin_state::PairwiseQuantileBinState,
+function PairwiseQuantileCoreHessCtx(NCORE::Int, op::PairwiseQuantileOperator, mass_state::PairwiseQuantileMassState,
         core_cf_ref::Ref{Any})
     D = op.D; L = op.L
     n_rows = n_total_rows(D, L)
     ncolI = NCORE - 1
-    return PairwiseQuantileCoreHessCtx(NCORE, D, op, bin_state, PairwiseQuantileHessianTables(op),
+    return PairwiseQuantileCoreHessCtx(NCORE, D, op, mass_state, PairwiseQuantileHessianTables(op),
         build_pairwise_quantile_thread_scratch(D, op.npair, L), core_cf_ref, nothing, nothing, nothing,
         PairwiseQuantileCrossHessScratch(D, op.npair, op.W, ncolI, L),
         Vector{Float64}(undef, NCORE * (NCORE + 1) ÷ 2), zeros(NCORE, n_rows), zeros(n_rows, n_rows))
@@ -236,10 +242,10 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
         obj.ddPsi!(obj.arg2, obj.arg0)
         h = obj.arg2
 
-        build_pairwise_quantile_hessian_tables!(octx.tabs, op, octx.bin_state, h, octx.tls)
+        build_pairwise_quantile_hessian_tables!(octx.tabs, op, h, octx.tls)
         HRR = octx.HRR
         fill_pairwise_quantile_hessian_raw!(HRR, op, octx.tabs)
-        center_and_scale_pairwise_quantile_hessian!(HRR, op, octx.tabs)
+        center_and_scale_pairwise_quantile_hessian!(HRR, op, octx.mass_state, octx.tabs)
         # HRR is symmetric by construction (fill_pairwise_quantile_hessian_raw! mirrors both
         # triangles; the centering identity applied in place is itself symmetric in (I,J)) -- read
         # directly at pack time below, no extra 0.5*(HRR[i,j]+HRR[j,i]) defensive pass needed.
@@ -251,7 +257,7 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
             op.W, n_rows)
         winner_pair_cross_hessian_zc_prep!(octx.cross_scratch, wctx, h)
         HEQ = octx.HEQ
-        pairwise_quantile_cross_hessian_block!(HEQ, wctx, octx.cross_scratch, op, octx.bin_state, octx.tls, h,
+        pairwise_quantile_cross_hessian_block!(HEQ, wctx, octx.cross_scratch, op, octx.mass_state, octx.tls, h,
             octx.cross_hess_scratch)
 
         # Direct packed write: select the correct source block per (i,j) instead of assembling a
@@ -319,7 +325,7 @@ function inner_loop_KNITRO_pairwisequantile_operator(obj, st::PairwiseQuantileOp
 end
 
 """
-    archPQ_base_state(x_free0, raw_cutoffs, econ_ctx, ctx_cm, layout) -> (nStatus, x, obj)
+    archPQ_base_state(x_free0, raw_masses, econ_ctx, ctx_cm, layout) -> (nStatus, x, obj)
 
 Top-level driver: builds `θ_econ`, primes the economic state (`prime_operator!`), refreshes the
 restriction's bins (`reset_for_solve!`), and runs the real KNITRO inner dual solve.
@@ -332,17 +338,17 @@ reads dimensionality off `ctx.obj` internally; passing the augmented `ctx_cm` th
 17, a real bug caught by this session's own D4 KNITRO run, not a hypothetical). Mirrors origin-ZC's
 own `octx.econ_ctx` field, which exists for exactly this reason.
 
-`ctx_cm` carries `.obj` (the `OperatorPsiBundle`), `.pq_op`/`.pq_bin_state`/`.pq_core_cf_ref`/
+`ctx_cm` carries `.obj` (the `OperatorPsiBundle`), `.pq_op`/`.pq_mass_state`/`.pq_core_cf_ref`/
 `.pq_hess_ctx`/`.m` (the economic `FreeParamMap`, reused unchanged from `econ_ctx`/`ctx`).
 """
-function archPQ_base_state(x_free0::AbstractVector, raw_cutoffs::AbstractVector{Float64}, econ_ctx, ctx_cm, layout::PairwiseQuantileCutoffLayout)
+function archPQ_base_state(x_free0::AbstractVector, raw_masses::AbstractVector{Float64}, econ_ctx, ctx_cm, layout::PairwiseQuantileMassLayout)
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     prime_operator!(obj, θ_econ0, econ_ctx, ctx_cm.pq_core_cf_ref)
 
     st = PairwiseQuantileOperatorState(obj, obj.outer_constr_index - 1 - n_total_rows(ctx_cm.pq_op.D, ctx_cm.pq_op.L),
-        ctx_cm.pq_op, ctx_cm.U, ctx_cm.pq_bin_state, ctx_cm.pq_core_cf_ref)
-    reset_for_solve!(st, raw_cutoffs, layout)
+        ctx_cm.pq_op, ctx_cm.pq_mass_state, ctx_cm.pq_core_cf_ref)
+    reset_for_solve!(st, raw_masses, layout)
 
     nStatus, objSol, x, lambda_, n_fg, n_hess = inner_loop_KNITRO_pairwisequantile_operator(obj, st;
         hess_cb_builder = _ -> pairwisequantile_hess_cb_builder(ctx_cm.pq_hess_ctx))

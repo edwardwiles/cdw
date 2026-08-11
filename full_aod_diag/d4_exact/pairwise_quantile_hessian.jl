@@ -183,7 +183,7 @@ end
 end
 
 """
-    build_pairwise_quantile_hessian_tables!(tabs, op, state, h, tls) -> tabs
+    build_pairwise_quantile_hessian_tables!(tabs, op, h, tls) -> tabs
 
 ONE per-Hessian-callback refresh of all four raw table families, weighted by `h = Psi''(q_w)`
 (caller-supplied, matching every other family's `obj.ddPsi!(arg2,arg0)` convention). `T1`/`T2` are
@@ -197,11 +197,11 @@ as T1/T2 (`Threads.@threads :static`, per-thread scratch in `tabs.hess_tls`, nev
 previously a single-threaded pass over the FULL redundant combo lists.
 """
 function build_pairwise_quantile_hessian_tables!(tabs::PairwiseQuantileHessianTables, op::PairwiseQuantileOperator,
-        state::PairwiseQuantileBinState, h::AbstractVector{Float64}, tls::PairwiseQuantileThreadScratch)
-    build_pairwise_quantile_tables_threaded!(tabs.T1, tabs.T2, tls, op, state, h)
+        h::AbstractVector{Float64}, tls::PairwiseQuantileThreadScratch)
+    build_pairwise_quantile_tables_threaded!(tabs.T1, tabs.T2, tls, op, h)
     tabs.S = sum(h)
 
-    bin = state.bin
+    bin = op.bin
     W = op.W
     nlast = UInt8(op.L - 1)   # last ACTIVE bin index; bin L (implicit zero) is > nlast
     nt = Threads.nthreads()
@@ -390,29 +390,41 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
 end
 
 """
-    center_and_scale_pairwise_quantile_hessian!(HfullR, op, tabs) -> HfullR
+    center_and_scale_pairwise_quantile_hessian!(HfullR, op, state, tabs) -> HfullR
 
 Applies the task's mandatory centering identity `X'WX - r t' - t r' + S t t'` IN PLACE over the
 whole (small, non-draw-indexed) raw block just filled by `fill_pairwise_quantile_hessian_raw!`,
 then scales by `1/M` (`M=W`, matching `zc_restriction_gram!`'s own `1/M` convention). `r_I` is
 `T1[o,a]` for a marginal row, or `T2[a,b,pidx]` itself for a pair row (a pair indicator's own raw
-first moment IS its own diagonal `T2` entry -- no separate accumulator needed). `t_I` is `1/L` for
-marginal rows, `1/L^2` for pair rows.
+first moment IS its own diagonal `T2` entry -- no separate accumulator needed).
+
+VERSION B: `t_I` is now `mu[o,a]` for marginal rows and `mu[o,a]*mu[p,b]` for pair rows
+(version A: the constants `1/L`, `1/L^2`). That substitution is the ENTIRE Hessian edit, and the
+expansion below is why -- writing `H_RR[I,J] = (1/W) sum_w h_w (ind_I - c_I)(ind_J - c_J)` out,
+
+    (1/W)[ sum_w h*ind_I*ind_J  -  c_J sum_w h*ind_I  -  c_I sum_w h*ind_J  +  c_I c_J sum_w h ]
+            \\_______________/
+             the T1-T4 tables: ~78% of inner-solve wall-clock, and INDEPENDENT of the targets
+
+the expensive part (`build_pairwise_quantile_hessian_tables!` /
+`fill_pairwise_quantile_hessian_raw!`) is untouched by the reparameterization. This also means the
+reparameterization buys EXACTNESS of the outer gradient, not inner-solve speed: the row count and
+the T1-T4 cost are identical to version A's.
 """
 function center_and_scale_pairwise_quantile_hessian!(HfullR::AbstractMatrix{Float64}, op::PairwiseQuantileOperator,
-        tabs::PairwiseQuantileHessianTables)
+        state::PairwiseQuantileMassState, tabs::PairwiseQuantileHessianTables)
     D = op.D; npair = op.npair; L = op.L; nc = L - 1
     nrow = n_total_rows(D, L)
-    tM = 1.0 / L; tP = 1.0 / L^2
+    size(state.mu) == (D, nc) ||
+        error("center_and_scale_pairwise_quantile_hessian!: size(state.mu)=$(size(state.mu)) != ($D,$nc)")
     r = Vector{Float64}(undef, nrow)
     t = Vector{Float64}(undef, nrow)
+    pairwise_quantile_target_vector!(t, op, state)   # the ONE definition of c_I (see its docstring)
     @inbounds for o in 1:D, a in 1:nc
-        i = marginal_row(o, a, L)
-        r[i] = tabs.T1[o, a]; t[i] = tM
+        r[marginal_row(o, a, L)] = tabs.T1[o, a]
     end
     @inbounds for pidx in 1:npair, b in 1:nc, a in 1:nc
-        j = pair_row(D, pidx, a, b, L)
-        r[j] = tabs.T2[a, b, pidx]; t[j] = tP
+        r[pair_row(D, pidx, a, b, L)] = tabs.T2[a, b, pidx]
     end
     S = tabs.S
     invM = 1.0 / op.W

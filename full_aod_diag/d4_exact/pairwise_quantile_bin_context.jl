@@ -1,36 +1,113 @@
 # ================================================================================================
-# Bin decode + presorted draws for the pairwise-quantile-independence restriction (draft eq. 32).
+# Fixed-cutoff bin assignment + free-mass state for the pairwise-quantile-independence restriction
+# (draft eq. 32), version B (free-mass reparameterization, 2026-08-10).
 #
 # Two structs, mirroring `zc_restriction_operator.jl`'s ZCRestrictionOperator/*Workspace split:
-#   - PairwiseQuantileOperator: IMMUTABLE, campaign-lifetime (the draws `ctx.U` never change once
-#     the scientific context is built). Holds the presorted-per-origin draws (Section 3 of the
-#     plan -- needed by the O(log W) cutoff-crossing gradient method, pairwise_quantile_cutoff_
-#     gradient.jl) and the pair-index convention (REUSED verbatim from cm_meanzc_moments.jl's
-#     packed_pair_index/pair_oi_to_lin -- no new pair-ordering scheme invented here).
-#   - PairwiseQuantileBinState: MUTABLE, rebuilt exactly once per OUTER point (never inside an
-#     FG/Hessian callback -- this is the task's own load-bearing "decode once" requirement). Holds
-#     the decoded cutoffs Q and the persistent bin[w,o]::UInt8 array.
+#   - PairwiseQuantileOperator: IMMUTABLE, campaign-lifetime. Under version B this now also owns
+#     the CUTOFFS `Q` and the decoded bin assignment `bin[w,o]`, because both are campaign
+#     constants: the cutoffs are fixed once per campaign (that is the whole point of the
+#     reparameterization) and `ctx.U` never changes, so `bin` is computed exactly ONCE, in this
+#     struct's constructor, rather than once per outer point.
+#   - PairwiseQuantileMassState: MUTABLE, refreshed exactly once per OUTER point (never inside an
+#     FG/Hessian callback). Holds the decoded free bin masses `mu[o,a]`, the implied remainder
+#     `mu_last[o] = mu_{o,L}`, and the cumulative masses `Pcum[o,a]` the verifier reports against.
 #
-# Requires pairwise_quantile_cutoff_transform.jl (decode_all_cutoffs!, PairwiseQuantileCutoffLayout)
-# and cm_meanzc_moments.jl (packed_pair_index, pair_oi_to_lin) to already be included.
+# WHAT VERSION A HAD HERE AND WHY IT IS GONE. Version A stored `sorted_z`/`sorted_idx` (each origin's
+# draws presorted, plus the permutation) on the operator, existing SOLELY to let the cutoff-crossing
+# gradient find, in O(log W + k), the draws whose bin membership changes when a cutoff moves. With
+# the cutoffs fixed, no cutoff ever moves, that gradient does not exist, and the presorted arrays
+# have no consumer -- so they are deleted with it, not carried "just in case"
+# (docs/PAIRWISE_QUANTILE_FREE_MASS_REPARAMETERIZATION_HANDOVER_2026-08-10.md section 3.3). One
+# genuine consumer of sorting remains, `pairwise_quantile_fixed_cutoffs` under
+# `:empirical_quantile`, and it sorts locally at context-build time.
+#
+# Requires pairwise_quantile_mass_transform.jl (PairwiseQuantileMassLayout, decode_all_masses!) and
+# cm_meanzc_moments.jl (packed_pair_index, pair_oi_to_lin) to already be included.
 # ================================================================================================
 
 """
-    PairwiseQuantileOperator(U::Matrix{Float64}, L::Int)
+    pairwise_quantile_fixed_cutoffs(U::AbstractMatrix{Float64}, L::Int; cutoff_source::Symbol) -> Matrix{Float64}
 
-`U` is `ctx.U` (W x D raw productivity draws, immutable for the whole campaign). `L` is the number
-of quantile BINS per origin (`L>=2`; `n_cutoffs = L-1` cutoffs partition each origin's draws into
-`L` bins) -- a REQUIRED argument, no default (repo's own no-silent-defaults convention; this is a
-genuine modeling choice, same footing as `min_crossed`/`W`/`draw_seed` elsewhere in this
-restriction). The task's own eq. (32) draft used `L=5` (quintiles); this campaign-lifetime struct
-and everything downstream of it is now genuinely `L`-generic, not hardcoded to quintiles. Builds,
-ONCE:
-  - `sorted_z[:,o]` = `U[:,o]` sorted ascending; `sorted_idx[:,o]` = the corresponding `sortperm`
-    (so `U[sorted_idx[k,o],o] == sorted_z[k,o]`) -- used by the cutoff-crossing gradient method to
-    find, in `O(log W + k)`, exactly the draws whose bin membership changes when `q_{o,r}` moves.
+Builds the `(L-1) x D` FIXED cutoff matrix `Q[r,o] = q_{o,r}` that defines this restriction's bins
+for the entire campaign. `cutoff_source` is REQUIRED with no default (CLAUDE.md's no-silent-defaults
+rule): the whole meaning of the restriction depends on where its bins are, and a run recorded
+without it is not reproducible.
+
+  - `:frechet_theoretical` -- the THEORETICAL population quantiles of each origin's calibrated
+    marginal. In this codebase `ctx.U` holds Exp(1) draws (`draw_design.jl`: `U = -log(1-U01)`,
+    one shared transform for every design), and the Fréchet productivity is `z_o = U_o^{-mu_hat}`,
+    a strictly DECREASING bijection of `U_o`. So the population `r/L` quantile of `U_o` is
+    `-log(1 - r/L)`, identical across origins, and binning `U` there is the SAME partition of
+    draws as binning `z` at its own Fréchet quantiles `(-log(r/L))^{-mu_hat}` -- only the bin
+    LABELS are reversed, and this restriction is invariant to relabelling bins (it constrains bin
+    masses and the independence of bin memberships, neither of which depends on the labels).
+    Cutoffs common across origins is NOT the same thing as masses common across origins; the
+    latter would silently add a marginal restriction and is forbidden (see
+    `PairwiseQuantileMassState`).
+  - `:empirical_quantile` -- each origin's OWN empirical `r/L` quantile of `U[:,o]`, using the same
+    `sorted[clamp(round(Int, (r/L)*W),1,W)]` convention version A's `pairwise_quantile_start_cutoffs`
+    used. This is the setting that makes version B reproduce version A exactly at `mu = 1/L`
+    (the equivalence anchor).
+
+Both choices are legitimate; neither is a default.
+"""
+function pairwise_quantile_fixed_cutoffs(U::AbstractMatrix{Float64}, L::Int; cutoff_source::Symbol)
+    W, D = size(U)
+    L >= 2 || error("pairwise_quantile_fixed_cutoffs: L (n_bins) must be >= 2, got $L")
+    nc = L - 1
+    Q = Matrix{Float64}(undef, nc, D)
+    if cutoff_source === :frechet_theoretical
+        for r in 1:nc
+            qr = -log(1.0 - r / L)
+            for o in 1:D
+                Q[r, o] = qr
+            end
+        end
+    elseif cutoff_source === :empirical_quantile
+        for o in 1:D
+            s = sort(collect(@view U[:, o]))
+            for r in 1:nc
+                Q[r, o] = s[clamp(round(Int, (r / L) * W), 1, W)]
+            end
+        end
+    else
+        error("pairwise_quantile_fixed_cutoffs: cutoff_source must be :frechet_theoretical|:empirical_quantile, " *
+              "got :$cutoff_source (no default -- see this function's docstring)")
+    end
+    @inbounds for o in 1:D
+        for r in 2:nc
+            Q[r, o] > Q[r-1, o] ||
+                error("pairwise_quantile_fixed_cutoffs(:$cutoff_source): cutoffs $(r-1) and $r coincide or " *
+                      "invert at origin=$o (q=$(Q[r-1,o]) then $(Q[r,o])) -- the draws are too coarse for " *
+                      "L=$L bins at this W.")
+        end
+    end
+    return Q
+end
+
+"""
+    PairwiseQuantileOperator(U::Matrix{Float64}, L::Int, Q::Matrix{Float64})
+
+`U` is `ctx.U` (W x D raw draws, immutable for the whole campaign), `L` the number of quantile BINS
+per origin (`L>=2`), `Q` the `(L-1) x D` FIXED cutoffs from `pairwise_quantile_fixed_cutoffs`.
+`L` and `Q` are both REQUIRED arguments -- no defaults (CLAUDE.md).
+
+Builds, ONCE:
+  - `bin[w,o] in 1:L` (`W x D`, `UInt8`) via `searchsortedfirst(Q[:,o], U[w,o])` -- the SAME
+    convention `cm_hessian_architectures.jl::compute_bin_indices` /
+    `common_marginals_interval.jl::compute_bin_indices` already use (bin k covers
+    `(Q[k-1,o], Q[k,o]]`, bin 1 covers `(-Inf, Q[1,o]]`, bin L covers `(Q[L-1,o], Inf)`), reused
+    rather than reinvented. `U_o` is a.s.-continuous, so the `<=`-vs-`<` boundary convention is a
+    probability-zero event and does not affect the math note's equivalence proofs.
   - `pairs = packed_pair_index(D)` (REUSED from `cm_meanzc_moments.jl`, `(o,p)` with `o<p`,
-    `o` outer-loop-major) -- `unordered_pairs = npair = D*(D-1)/2`, the SAME ordering convention
-    every other pair-indexed quantity in this codebase already uses.
+    o-outer-loop-major) -- the SAME ordering convention every other pair-indexed quantity in this
+    codebase uses.
+  - the T3/T4 Hessian combo registries (campaign-lifetime, depend only on D/pairs).
+
+Because `bin` is campaign-constant under version B, EVERY downstream consumer reads `op.bin`, and
+the whole class of "some later solve overwrote the bin state" hazards that version A had to guard
+against (`ensure_pq_bins!`) is gone by construction. The equivalent hazard now attaches to the
+MASSES instead, and is guarded the same way (`ensure_pq_masses!`).
 """
 struct PairwiseQuantileOperator
     D::Int
@@ -38,37 +115,39 @@ struct PairwiseQuantileOperator
     W::Int
     npair::Int
     pairs::Vector{Tuple{Int,Int}}
-    sorted_z::Matrix{Float64}
-    sorted_idx::Matrix{Int}
+    Q::Matrix{Float64}         # (L-1) x D, FIXED cutoffs
+    bin::Matrix{UInt8}         # W x D, campaign-constant bin assignment
     # ---- Hessian table-combo registries (Section 5) -- campaign-lifetime, depend only on D/pairs,
-    # never on draws/duals, so precomputed ONCE here rather than rebuilt inside the Hessian file.
-    # `triple_lookup[o,pidx]` = 1-based index into the T3 combo axis if origin `o` is disjoint from
-    # `pairs[pidx]` (i.e. a genuine 3-way (marginal,pair) combo exists), else 0 (sentinel: NOT a
-    # Dict -- a plain D x npair Int matrix, O(1) lookup, matches the task's "no dictionaries"
-    # instruction). `triple_combos[k] = (o,pidx)` is the inverse map.
+    # never on draws/duals/masses, so precomputed ONCE here rather than rebuilt inside the Hessian
+    # file. `triple_lookup[o,pidx]` = 1-based index into the T3 combo axis if origin `o` is disjoint
+    # from `pairs[pidx]`, else 0 (sentinel: NOT a Dict -- a plain D x npair Int matrix, O(1)
+    # lookup). `triple_combos[k] = (o,pidx)` is the inverse map.
     triple_lookup::Matrix{Int}
     triple_combos::Vector{Tuple{Int,Int}}
     # `quad_lookup[pidx1,pidx2]` = 1-based index into the T4 combo axis if `pairs[pidx1]` and
     # `pairs[pidx2]` share NO origin, for pidx1<pidx2 ONLY (canonical order -- the disjoint block's
-    # transpose, pidx1>pidx2, is obtained by transposing the SAME stored (L-1)^2 x (L-1)^2 sub-block
-    # when filling Hfull, never by storing a second copy). `quad_combos[k]=(pidx1,pidx2)`, pidx1<pidx2.
+    # transpose is obtained by transposing the SAME stored sub-block, never a second copy).
     quad_lookup::Matrix{Int}
     quad_combos::Vector{Tuple{Int,Int}}
 end
 
-function PairwiseQuantileOperator(U::AbstractMatrix{Float64}, L::Int)
+function PairwiseQuantileOperator(U::AbstractMatrix{Float64}, L::Int, Q::AbstractMatrix{Float64})
     W, D = size(U)
     D >= 2 || error("PairwiseQuantileOperator: D must be >= 2, got $D")
     L >= 2 || error("PairwiseQuantileOperator: L (n_bins) must be >= 2, got $L")
+    size(Q) == (L - 1, D) || error("PairwiseQuantileOperator: size(Q)=$(size(Q)) != ($(L-1),$D)")
     pairs = packed_pair_index(D)
     npair = length(pairs)
     npair == div(D * (D - 1), 2) || error("PairwiseQuantileOperator: internal pair-count mismatch")
-    sorted_z = Matrix{Float64}(undef, W, D)
-    sorted_idx = Matrix{Int}(undef, W, D)
+
+    Qc = Matrix{Float64}(Q)   # own copy: the operator is immutable, and a caller mutating its Q
+                              # afterwards would silently desynchronize it from `bin`.
+    bin = Matrix{UInt8}(undef, W, D)
     @inbounds for o in 1:D
-        idx = sortperm(@view U[:, o])
-        sorted_idx[:, o] .= idx
-        sorted_z[:, o] .= @view U[idx, o]
+        qcol = @view Qc[:, o]
+        for w in 1:W
+            bin[w, o] = UInt8(searchsortedfirst(qcol, U[w, o]))
+        end
     end
 
     triple_lookup = zeros(Int, D, npair)
@@ -95,61 +174,157 @@ function PairwiseQuantileOperator(U::AbstractMatrix{Float64}, L::Int)
         end
     end
 
-    return PairwiseQuantileOperator(D, L, W, npair, pairs, sorted_z, sorted_idx,
+    return PairwiseQuantileOperator(D, L, W, npair, pairs, Qc, bin,
         triple_lookup, triple_combos, quad_lookup, quad_combos)
 end
 
-"pair_index(op, o, p) -> Int: O(1) linear index into the 190-pair convention, o,p in either order."
+"pair_index(op, o, p) -> Int: O(1) linear index into the packed pair convention, o,p in either order."
 pair_index(op::PairwiseQuantileOperator, o::Int, p::Int) = pair_oi_to_lin(o, p, op.D)
 
 "n_marginal_rows(D,L) = (L-1)*D; n_pair_rows(D,L) = (L-1)^2*C(D,2); n_total_rows(D,L) = their sum.
-`L` is the number of bins (task's own draft used `L=5`, giving the originally-asserted D=20 counts
-80/3040/3120 -- both are now `L`-generic, no bin count hardcoded)."
+`L` is the number of quantile bins."
 n_marginal_rows(D::Int, L::Int) = (L - 1) * D
 n_pair_rows(D::Int, L::Int) = (L - 1)^2 * div(D * (D - 1), 2)
 n_total_rows(D::Int, L::Int) = n_marginal_rows(D, L) + n_pair_rows(D, L)
 
 """
-    PairwiseQuantileBinState(W::Int, D::Int, L::Int)
+    pairwise_quantile_bin_counts(op::PairwiseQuantileOperator) -> Matrix{Int}
 
-Mutable, rebuilt once per outer point via `refresh_pairwise_quantile_bins!` below.
-`Q[r,o] = q_{o,r}` (`(L-1) x D` physical cutoffs); `bin[w,o] in 1:L` (Wx D, `UInt8`).
+`counts[o,a]` = number of draws in bin `a` of origin `o` (all `L` bins), from the operator's
+campaign-constant `bin`. Cheap (`O(W*D)`), computed at context-build time only -- it feeds the
+non-degeneracy gate below, the data-derived mass box (`default_raw_mass_bounds`) and the
+empirical-mass starting point (`empirical_mass_raw`).
 """
-mutable struct PairwiseQuantileBinState
-    Q::Matrix{Float64}
-    bin::Matrix{UInt8}
+function pairwise_quantile_bin_counts(op::PairwiseQuantileOperator)
+    D = op.D; L = op.L; W = op.W
+    counts = zeros(Int, D, L)
+    bin = op.bin
+    @inbounds for o in 1:D, w in 1:W
+        counts[o, bin[w, o]] += 1
+    end
+    return counts
 end
 
-PairwiseQuantileBinState(W::Int, D::Int, L::Int) = PairwiseQuantileBinState(zeros(L - 1, D), zeros(UInt8, W, D))
-
 """
-    refresh_pairwise_quantile_bins!(state, op, U, raw, layout) -> state
+    pairwise_quantile_joint_min_count(op::PairwiseQuantileOperator) -> (min_count, argmin_cell)
 
-ONE per-outer-point refresh: decode the 80 raw KNITRO coordinates into physical cutoffs `Q`
-(`decode_all_cutoffs!`, `pairwise_quantile_cutoff_transform.jl`), then assign every draw's bin via
-`searchsortedfirst` on each origin's own (now up to date) 4-cutoff column -- the SAME
-`searchsortedfirst(z, u)` convention `cm_hessian_architectures.jl::compute_bin_indices`/
-`common_marginals_interval.jl::compute_bin_indices` already use (returns the smallest k with
-`Q[k,o] >= u`, i.e. bin k covers `(Q[k-1,o], Q[k,o]]`, bin 1 covers `(-Inf, Q[1,o]]`, bin 5 covers
-`(Q[4,o], Inf)`) -- reused verbatim, not reinvented, per the task's "reuse current ... histogram
-infrastructure" instruction. `z_o` is a.s.-continuous, so the `<=`-vs-`<` boundary convention is a
-probability-zero event and does not affect any of the equivalence proofs in the math note.
-
-Caller's responsibility (Section 3 of the plan): call this ONCE per outer point, before starting
-the inner KNITRO dual solve -- NEVER from inside an FG or Hessian callback.
+Smallest occupancy over ALL `L^2` joint cells of ALL `npair` pairs, with the (pidx,a,b) achieving
+it. `O(W*npair)`, context-build time only. A marginal bin can be perfectly healthy while some
+joint cell is empty -- and an empty joint cell means that pair's `(a,b)` moment row is the constant
+`-mu_{o,a}*mu_{p,b}` on every draw, i.e. a row with no draw-side variation at all, which is exactly
+the degeneracy the handover asks be caught loudly rather than handed to KNITRO.
 """
-function refresh_pairwise_quantile_bins!(state::PairwiseQuantileBinState, op::PairwiseQuantileOperator,
-                                          U::AbstractMatrix{Float64}, raw::AbstractVector{Float64},
-                                          layout::PairwiseQuantileCutoffLayout)
-    D = op.D
-    decode_all_cutoffs!(state.Q, raw, layout)
-    bin = state.bin
-    Q = state.Q
-    @inbounds for o in 1:D
-        qcol = @view Q[:, o]
-        for w in 1:op.W
-            bin[w, o] = UInt8(searchsortedfirst(qcol, U[w, o]))
+function pairwise_quantile_joint_min_count(op::PairwiseQuantileOperator)
+    D = op.D; L = op.L; W = op.W; npair = op.npair
+    bin = op.bin; pairs = op.pairs
+    tab = zeros(Int, L, L, npair)
+    @inbounds for w in 1:W, pidx in 1:npair
+        (o, p) = pairs[pidx]
+        tab[bin[w, o], bin[w, p], pidx] += 1
+    end
+    mn = typemax(Int); cell = (0, 0, 0)
+    @inbounds for pidx in 1:npair, b in 1:L, a in 1:L
+        if tab[a, b, pidx] < mn
+            mn = tab[a, b, pidx]; cell = (pidx, a, b)
         end
+    end
+    return (mn, cell)
+end
+
+"""
+    assert_pairwise_quantile_bins_nondegenerate(op; min_bin_count::Int) -> NamedTuple
+
+Hard-errors unless EVERY marginal bin and EVERY joint cell holds at least `min_bin_count` draws.
+`min_bin_count` is REQUIRED with no default: it is a genuine per-campaign choice (it must be read
+against `W` and `L` -- at `W=100,000, L=10` a joint cell holds ~1,000 draws in expectation, at
+`W=20,000, L=10` only ~200), and the handover asks explicitly that degenerate bins fail loudly
+rather than be discovered as a mysterious inner-solve failure later.
+
+Returns the measured occupancy summary for logging/checkpointing, so a run records what it actually
+had rather than only that it passed.
+"""
+function assert_pairwise_quantile_bins_nondegenerate(op::PairwiseQuantileOperator; min_bin_count::Int)
+    min_bin_count >= 1 ||
+        error("assert_pairwise_quantile_bins_nondegenerate: min_bin_count must be >= 1, got $min_bin_count")
+    counts = pairwise_quantile_bin_counts(op)
+    mmin, midx = findmin(counts)
+    if mmin < min_bin_count
+        (o, a) = Tuple(midx)
+        error("assert_pairwise_quantile_bins_nondegenerate: marginal bin (origin=$o, bin=$a) holds only " *
+              "$mmin draws, below min_bin_count=$min_bin_count (W=$(op.W), L=$(op.L)). The fixed cutoffs " *
+              "leave this bin too sparse for its moment row to carry information -- raise W, lower L, or " *
+              "choose a different cutoff_source.")
+    end
+    (jmin, jcell) = pairwise_quantile_joint_min_count(op)
+    if jmin < min_bin_count
+        (pidx, a, b) = jcell
+        (o, p) = op.pairs[pidx]
+        error("assert_pairwise_quantile_bins_nondegenerate: joint cell (origins=($o,$p), cell=($a,$b)) holds " *
+              "only $jmin draws, below min_bin_count=$min_bin_count (W=$(op.W), L=$(op.L)). That pair-" *
+              "independence moment row has essentially no draw-side variation -- raise W, lower L, or " *
+              "choose a different cutoff_source.")
+    end
+    return (min_marginal_count = mmin, min_joint_count = jmin, min_joint_cell = jcell,
+            bin_counts = counts)
+end
+
+"""
+    PairwiseQuantileMassState(D::Int, L::Int)
+
+Mutable per-outer-point state: the decoded FREE bin masses.
+  - `mu[o,a]` (`D x (L-1)`) -- the free masses, indexed exactly as `lambda_M[o,a]` is.
+  - `mu_last[o]` -- the implied remainder `mu_{o,L} = 1 - sum_a mu[o,a] > 0`, never a free
+    coordinate, carried for the verifier's probability report.
+  - `Pcum[o,a] = sum_{j<=a} mu[o,j]` -- the CUMULATIVE masses. The math note
+    (PAIRWISE_QUANTILE_INDEPENDENCE_MATH_NOTE_2026-08-09.md Sections 2-4) states the whole
+    equivalence in cumulative form (`P(z_o<q_r)=p_r`, `F(r,s)=p_r p_s`), so the verifier's
+    factorization residuals are computed against these rather than against `r/L`.
+
+MASSES ARE PER-ORIGIN AND MUST STAY THAT WAY. Making `mu` common across origins would silently
+convert this from a pure DEPENDENCE restriction into "independence AND all origins share one set of
+bin masses" -- a strictly stronger, different restriction (the earlier
+`pairwise_grid_common_marginal` restriction in `trade_robustness_modular_perf` did exactly that; it
+is prior art, not the same object). Nothing in this file or downstream may collapse the `o` index.
+"""
+mutable struct PairwiseQuantileMassState
+    mu::Matrix{Float64}        # D x (L-1)
+    mu_last::Vector{Float64}   # D
+    Pcum::Matrix{Float64}      # D x (L-1)
+end
+
+PairwiseQuantileMassState(D::Int, L::Int) =
+    PairwiseQuantileMassState(zeros(D, L - 1), zeros(D), zeros(D, L - 1))
+
+"""
+    set_pairwise_quantile_masses!(state, raw, layout) -> state
+
+ONE per-outer-point refresh: decode the `n_raw(layout)` raw KNITRO coordinates into free masses
+(`decode_all_masses!`, the stick-breaking transform) and fill the derived remainder/cumulative
+tables.
+
+Caller's responsibility: call this ONCE per outer point, BEFORE starting the inner KNITRO dual
+solve -- NEVER from inside an FG or Hessian callback. This is the same lifecycle contract version A
+imposed on `refresh_pairwise_quantile_bins!`, and for the same reason: everything downstream reads
+`state.mu` as a constant of the inner problem.
+"""
+function set_pairwise_quantile_masses!(state::PairwiseQuantileMassState, raw::AbstractVector{Float64},
+                                       layout::PairwiseQuantileMassLayout)
+    D = layout.D; nb = n_free_bins(layout)
+    size(state.mu) == (D, nb) ||
+        error("set_pairwise_quantile_masses!: size(state.mu)=$(size(state.mu)) != ($D,$nb)")
+    decode_all_masses!(state.mu, state.mu_last, raw, layout)
+    @inbounds for o in 1:D
+        acc = 0.0
+        for a in 1:nb
+            acc += state.mu[o, a]
+            state.Pcum[o, a] = acc
+        end
+        # Structural invariant of the stick-breaking transform, asserted rather than assumed: a
+        # violation here means the decode is wrong, and every centering constant downstream would
+        # be silently wrong with it.
+        (state.mu_last[o] > 0.0 && acc < 1.0) ||
+            error("set_pairwise_quantile_masses!: decoded masses at origin=$o are off the open simplex " *
+                  "(sum of free masses = $acc, remainder = $(state.mu_last[o]))")
     end
     return state
 end

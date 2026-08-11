@@ -8,16 +8,23 @@
 # the SAME `classify_inner_result`/`verification_rejection_reasons` (`oracle.jl`) every other family
 # already uses unchanged (both already read fields via `get(result,:field,default)`, so no edit is
 # needed there). This file adds two things beyond the KKT-residual template, per the task's explicit
-# instruction: (1) all FIVE marginal-bin and all 5x5 joint-cell probabilities (not just the 4x4/4
-# enforced subset), (2) cumulative factorization residuals |P(z_o<q_r,z_p<q_s)-p_r*p_s| for every
-# r,s=1..4, computed from those probabilities via the telescoping map proved in
+# instruction: (1) ALL `L` marginal-bin and all `LxL` joint-cell probabilities (not just the
+# enforced `(L-1)`/`(L-1)^2` subset), (2) cumulative factorization residuals
+# |P(z_o<q_r,z_p<q_s) - P_{o,r}*P_{p,s}| for every r,s = 1..L-1, computed from those probabilities
+# via the telescoping map proved in
 # docs/PAIRWISE_QUANTILE_INDEPENDENCE_MATH_NOTE_2026-08-09.md Section 4 -- no second dense recompute.
 #
+# VERSION B (free-mass reparameterization, 2026-08-10): the cumulative targets are the FREE masses'
+# own cumulative sums `P_{o,r} = sum_{a<=r} mu_{o,a}` (`state.Pcum`) rather than the constants
+# `r/L`, and the probability tables are reported UNDER THE LFD rather than under the unweighted
+# draws -- see the block comment at the report itself for why the version-A form would actively
+# mislead here.
+#
 # `lambda` flattening convention (documented once here, load-bearing for any caller assembling the
-# flat outer-coordinate/dual vector): lambda_M (D x 4) flattens via plain `vec` (a-major, o-minor,
-# i.e. flat[(a-1)*D+o]); lambda_P (4x4xnpair) flattens via plain `vec` (a-fastest, then b, then
-# pidx, i.e. flat[(pidx-1)*16+(b-1)*4+a]) -- `reshape` on the corresponding view recovers each
-# exactly, since Julia's `reshape`/`vec` share one column-major convention.
+# flat outer-coordinate/dual vector): lambda_M (D x (L-1)) flattens via plain `vec` (a-major,
+# o-minor, i.e. flat[(a-1)*D+o]); lambda_P ((L-1)x(L-1)xnpair) flattens via plain `vec` (a-fastest,
+# then b, then pidx) -- `reshape` on the corresponding view recovers each exactly, since Julia's
+# `reshape`/`vec` share one column-major convention.
 #
 # Requires pairwise_quantile_bin_context.jl, pairwise_quantile_operator.jl (forward!/transpose!,
 # build_pairwise_quantile_tables_threaded!) to already be included. `economic_forward!`/
@@ -42,7 +49,7 @@ structure, generalized to this restriction's block names. Returns block-level KK
 probability-table report and cumulative-residual report the task explicitly asks for.
 """
 function verify_inner_solution_operator_pairwisequantile!(zeta::Float64, lambda::AbstractVector{Float64},
-        cf, op::PairwiseQuantileOperator, state::PairwiseQuantileBinState, W::Int,
+        cf, op::PairwiseQuantileOperator, state::PairwiseQuantileMassState, W::Int,
         economic_forward!::Function, economic_transpose!::Function, econ_ws,
         Psi!::Function, dPsi!::Function, ncore1::Int)
     D = op.D; npair = op.npair; L = op.L; nc = L - 1
@@ -82,34 +89,53 @@ function verify_inner_solution_operator_pairwisequantile!(zeta::Float64, lambda:
     kkt_resid_marginalbin = maximum(abs, g_M)
     kkt_resid_pairindep = maximum(abs, g_P)
 
-    # ---- full probability report (task: "even though only the nonredundant subset is enforced") ----
-    ones_w = ones(W)
-    Mcount = zeros(D, L); Pcount = zeros(L, L, npair)
-    build_pairwise_quantile_tables_threaded!(Mcount, Pcount, tls, op, state, ones_w)
-    marginal_prob = Mcount ./ W          # D x L, ALL L bins
-    joint_prob = Pcount ./ W             # L x L x npair, ALL L^2 cells per pair
+    # ---- full probability report, UNDER THE LFD (task: "even though only the nonredundant subset
+    # is enforced") ----
+    #
+    # VERSION B CORRECTION, and it is not cosmetic. Version A built this report from the UNWEIGHTED
+    # draws (`weight = ones(W)`) and compared it to the constants `r/L`. Under version B the targets
+    # are the free masses `mu`, so an unweighted report would show a large "residual" at any point
+    # where `mu` differs from the draws' own bin frequencies -- i.e. it would flag the search doing
+    # exactly what it is supposed to do. The quantity the restriction actually constrains is the
+    # probability under the LEAST-FAVOURABLE measure `m_w = Psi'(r_w)`, and reporting that also makes
+    # this report the human-readable form of the KKT residuals computed just above: `g_M[o,a] = 0`
+    # is exactly `Mraw[o,a]/S_m = mu[o,a]`.
+    #
+    # No extra work: `pairwise_quantile_transpose!` above already built the full `1:L` m-weighted
+    # tables into `scratch.Mraw`/`scratch.Praw` on its way to `g_M`/`g_P`, so this reads them rather
+    # than making a second O(W*(D+npair)) pass (which version A did).
+    S_m = sum(dPsi_r)
+    S_m > 0 || error("verify_inner_solution_operator_pairwisequantile!: sum of LFD weights is $S_m <= 0")
+    marginal_prob = scratch.Mraw ./ S_m   # D x L, ALL L bins, under the LFD
+    joint_prob = scratch.Praw ./ S_m      # L x L x npair, ALL L^2 cells per pair, under the LFD
 
     # ---- cumulative factorization residuals, telescoping map (math note Section 4), O(npair*nc^2) ----
-    p = ntuple(r -> r / L, nc)
+    # Targets are now the free masses' own cumulative sums `Pcum[o,r] = sum_{a<=r} mu[o,a]`
+    # (state.Pcum), not `r/L`. The math note's Sections 2-3 are stated in exactly this cumulative
+    # form (`P(z_o<q_r)=p_r`, `F(r,s)=p_r*p_s`) with `p_r` a constant; version B frees `p_r` and
+    # changes nothing else about the proofs.
+    Pcum = state.Pcum
     cum_resid = zeros(nc, nc, npair)
     @inbounds for pidx in 1:npair
+        (o, p) = op.pairs[pidx]
         for s in 1:nc, rr in 1:nc
             Frs = 0.0
             for b in 1:s, a in 1:rr
                 Frs += joint_prob[a, b, pidx]
             end
-            cum_resid[rr, s, pidx] = abs(Frs - p[rr] * p[s])
+            cum_resid[rr, s, pidx] = abs(Frs - Pcum[o, rr] * Pcum[p, s])
         end
     end
     marginal_cum_resid = zeros(nc, D)
     @inbounds for o in 1:D, rr in 1:nc
-        marginal_cum_resid[rr, o] = abs(sum(@view marginal_prob[o, 1:rr]) - p[rr])
+        marginal_cum_resid[rr, o] = abs(sum(@view marginal_prob[o, 1:rr]) - Pcum[o, rr])
     end
 
     record_operator_verification!()
     return (r = r, f = f, g_lambda = g_lambda, kkt_resid = maximum(abs, g_lambda),
             kkt_resid_E = kkt_resid_E, kkt_resid_marginalbin = kkt_resid_marginalbin,
             kkt_resid_pairindep = kkt_resid_pairindep,
+            mu = copy(state.mu), mu_last = copy(state.mu_last), Pcum = copy(state.Pcum),
             marginal_prob = marginal_prob, joint_prob = joint_prob,
             cumulative_residual = cum_resid, marginal_cumulative_residual = marginal_cum_resid,
             max_cumulative_residual = isempty(cum_resid) ? 0.0 : maximum(cum_resid),
@@ -138,6 +164,6 @@ function assert_pairwise_quantile_d20_counts(D::Int, L::Int)
         npairrows == 3040 || error("pair_rows assertion failed: got $npairrows, expected 3040")
         ntot == 3120 || error("total_rows assertion failed: got $ntot, expected 3120")
     end
-    return (n_bins = L, n_cutoffs = L - 1, outer_cutoff_params = (L - 1) * D, unordered_pairs = npair,
+    return (n_bins = L, n_free_bins = L - 1, outer_mass_params = (L - 1) * D, unordered_pairs = npair,
             marginal_rows = nmarg, pair_rows = npairrows, total_rows = ntot, dense_G_production = false)
 end

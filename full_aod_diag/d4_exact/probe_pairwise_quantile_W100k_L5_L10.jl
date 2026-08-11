@@ -20,10 +20,10 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           # ---- this family ----
           "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "operator_psi_bundle.jl",
           "cm_callback_health.jl", "shared_a_gradient.jl", "operator_verification.jl",
-          "pairwise_quantile_cutoff_transform.jl", "pairwise_quantile_bin_context.jl",
+          "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
-          "pairwise_quantile_production.jl", "pairwise_quantile_cutoff_gradient.jl",
+          "pairwise_quantile_production.jl",
           "pairwise_quantile_outer_production.jl", "pairwise_quantile_checkpoint.jl"]
     include(joinpath(_D4E, f))
 end
@@ -49,21 +49,22 @@ for (W, L) in CASES
     ctx = attach_compressed_factual_workspace(ctx_raw, ctx_raw.D, ctx_raw.D_dest, ctx_raw.W)
     lp("  ctx built in ", round(time()-t_ctx, digits=1), "s")
     flush(stdout)
-    layout = PairwiseQuantileCutoffLayout(ctx.D, L)
+    layout = PairwiseQuantileMassLayout(ctx.D, L)
     t_pcx = time()
-    pcx = build_pairwise_quantile_production_context(ctx, layout; min_crossed = round(Int, 0.01*W))
+    pcx = build_pairwise_quantile_production_context(ctx, layout;
+        cutoff_source = :empirical_quantile, min_bin_count = max(10, W ÷ (2 * L^2)))
     lp("  production context built in ", round(time()-t_pcx, digits=1), "s")
     flush(stdout)
     geo = build_aspace_geometry(ctx)
     w_cal = cm_w0_from_calibration(ctx, geo.pe, :powered_aspace)
     xf = x_free_from_w(vcat(w_cal[1], cm_z_from_a(w_cal[2:end], cm_fixed_theta(ctx),
         precompute_cm_aspace_xy(ctx), geo.pe)), geo.pe)
-    cut0 = pairwise_quantile_start_cutoffs(ctx, layout)
+    mass0 = uniform_mass_raw(layout)   # mu = 1/L, version A's own fixed target
     lp("  starting REAL KNITRO inner solve at ", Base.Libc.strftime(time()), " ...")
     flush(stdout)
     t0 = time()
     try
-        base, v = archPQ_verified_state(xf, cut0, pcx.ctx_cm)
+        base, v = archPQ_verified_state(xf, mass0, pcx.ctx_cm)
         lp("RESULT W=", W, " L=", L, " -> Delta_dual=", v.Delta_dual, " status=", v.inner_status,
            " class=", classify_inner_result(v), " n_fg=", v.n_fg, " n_hess=", v.n_hess,
            " secs=", round(time()-t0, digits=1))
