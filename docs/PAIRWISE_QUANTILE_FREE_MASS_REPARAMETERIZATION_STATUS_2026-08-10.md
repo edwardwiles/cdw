@@ -444,7 +444,134 @@ one pass fewer than version A.
   calls vs dense's 9). Read `PAIRWISE_QUANTILE_HESSIAN_OPTIMIZATION_RESULTS_2026-08-09.md` Part 1
   first. (The HVP path is still *correct* and is still gated here — it is not the speed lever.)
 
-## 9. Still open
+## 9. Follow-up round (same session, after the first commit)
+
+Three further user directives, all implemented and gated.
+
+### 9.1 The restriction is now stated on the FRÉCHET productivity
+
+Previously the code binned `ctx.U` (the Exp(1) draws) at the complementary Exp(1) quantiles and
+argued that this is the *same partition* as binning the Fréchet `z` — true, but with the bin labels
+reversed, which made the cumulative report and the bin ordering read backwards relative to the math
+note and the economics. It now bins `z` directly:
+
+```
+z_o(w) = U_o(w)^(-muHat)         pairwise_quantile_frechet_features  (wraps the shared
+                                 frechet_power_feature -- no second copy of the formula)
+:frechet_theoretical  q_r = (-log(r/L))^(-muHat)        exact population quantile, closed form
+:empirical_quantile   q_r = sorted(z_o)[round(rW/L)]    each origin's own
+```
+
+Bin 1 is now the LOWEST-productivity bin. `muHat` is `ctx.μHat`, required with no default, and is
+recorded on the context. The D=4 oracle checks the closed form directly: `P(z <= q_r) == r/L` to
+**1.1e-16**.
+
+The equivalence anchor got *stronger* as a result. Version B's Fréchet-z partition is version A's
+U-partition relabelled with **0 of 400,000 assignments differing** (it was 2 under U-binning). The
+remaining `Delta*` residual — 0.005233647081 vs version A's 0.005234841196, rel **2.281e-04** — is
+therefore not a partition difference in the construction, and it is not a centering error either.
+It is version A's own 1-ulp-lossy `log`/`softplus` cutoff round trip, which moves **2 of 400,000**
+assignments away from the exact empirical quantiles, both of them draws sitting exactly ON a cutoff.
+Two draws are worth `2 * Delta*/W ≈ 5e-7` of `Delta*`, against the 1.2e-6 observed — the right order.
+Version A is the one that drifted, not version B, and the anchor now measures and prints this rather
+than asserting it.
+
+### 9.2 The L=10 cost: the follow-up note's prediction was wrong, and the profile says where
+
+`PAIRWISE_QUANTILE_HESSIAN_ASSEMBLY_OPPORTUNITY_2026-08-10.md` §2 named the centering pass as "the
+single most promising item" and §4 said to measure first. Measuring first was right:
+
+| block, one Hessian callback at D=20/L=10/W=100k | before |
+|---|---|
+| final packed write | **86.16 s** |
+| T1–T4 raw table build | 4.06 s |
+| H_MM/MP/PP raw block-fill | 2.51 s |
+| H_E,R cross-block | 3.54 s |
+| **centering correction** (the predicted hot spot) | **0.37 s** |
+| H_EE | 0.09 s |
+| sum | 96.72 s |
+
+Assembly is **51% of the 1323 s solve** (so §4's "is assembly dominant?" test passes), but 89% of
+assembly is the **packed write**, i.e. 46% of the entire solve — and the centering pass the note
+proposed threading is 0.4% of it.
+
+Root cause: `HRR[i-NCORE, j-NCORE]` with `i` fixed and `j` running walks a **row** of a column-major
+matrix — stride `n_rows` = 15,570 doubles = 124 KB — so essentially every one of ~121M reads is a
+cache miss. `HRR` is symmetric, so reading `HRR[j-NCORE, i-NCORE]` walks a contiguous **column** and
+returns the identical value. Threaded over `i` as well (the running counter `k` is closed-form,
+`k0(i) = (i-1)n - (i-1)(i-2)/2`, so rows are independent and writes disjoint), with `:dynamic`
+scheduling because triangular row lengths make static chunks badly imbalanced.
+
+### 9.3 Only one triangle is computed now
+
+KNITRO receives a **packed upper triangle** (`KN_DENSE_ROWMAJOR`), so each unordered pair is read
+exactly once — but `fill_pairwise_quantile_hessian_raw!` was mirroring every value into both halves
+and the centering pass was correcting all `nrow²` entries, for a half nothing ever read. Both now
+touch the lower triangle only (`_lo_write!` stores at `[max(i,j), min(i,j)]`), which is precisely
+the half the packed write walks by column; the centering pass is threaded over columns too. The
+defensive `0.5*(H[i,j]+H[j,i])` in `pack_upper_pairwise_quantile_hessian!` is gone — it would now
+average a real value against a structural zero — and the symmetry it defended is enforced upstream
+by storing each pair exactly once.
+
+Gated in the D=4 oracle: centered lower triangle vs the independent dense reference **5.6e-17**; the
+upper triangle asserted untouched; the dense reference asserted symmetric; and the **packed vector**
+— what KNITRO actually receives — checked against the full dense reference at **5.6e-17**. At real
+D=20 the change moves `Delta*` by ~1e-16 relative, i.e. floating-point reassociation only.
+
+### 9.4 Measured effect, and what it does and does not buy
+
+Real D=20, W=100,000, `:frechet_theoretical`, `mu = 1/L`, one verified inner solve at the
+calibration point (`n_fg=6`, `n_hess=5` in both cases):
+
+| L | `Delta*` | before | after |
+|---|---|---|---|
+| 5 | 0.00070555 | — | **38.1 s** |
+| 10 | 0.00300686 | 1084.6 s | **922.5 s** |
+
+So L=10 is ~15% faster and L=5 is unchanged in the ~40 s band. **This does not make L=10 viable for
+an outer search**: at ~15 min per inner solve a 75-minute stage buys about 5 evaluations. The
+profile's own arithmetic says why — after the assembly fix the residual ~646 s is KNITRO factorizing
+a dense ~15,970² KKT system per interior-point iteration, which no amount of faster filling touches.
+That is the structural answer §4 of the note asked for.
+
+## 10. Production run — LAUNCHED
+
+`run_pairwise_quantile_production.jl` + `launch_pairwise_quantile_production.sh`.
+
+Running now: **L=5, `cutoff_source=:frechet_theoretical`, W=100,000**, under
+`screen -S pq_prod_L5`, campaign root
+`/bbkinghome/edav/repo_scratch/pq_freemass_production_2026-08-10/L5_frechet_theoretical`.
+
+It walks the frozen protocol's own delta grid `{0.1, 0.5, 1.0, 2.0}` with the protocol's own
+per-delta stage structure and budgets — **read from `paper_upper_v1.toml` and restated explicitly in
+the runner, with that file left untouched**:
+
+| stage | objective | algorithm | budget |
+|---|---|---|---|
+| A | `:min_gp` | primary, `pin_outer_algorithm` (CG + L-BFGS) | 75 min |
+| B | `:min_delta_fixed_gp` at A's incumbent gp | default | 30 min |
+| C | `:min_gp`, resuming from B (or A) | alternate, `outer_direct_hessopt=:sr1` | 75 min |
+
+All other settings are the protocol's: σ=3.0, `:sobol_randomized`, seed 20260719, `:exclude_row`,
+`exclude_diagonal_gravity`, Brazil–Korea exclusions, `inner_lower_limit=-10`,
+`A_coordinate_mode=:powered_aspace`, `z_halfwidth=30`, `find_smallest=true`. This family's own three
+choices: `L=5`, `cutoff_source=:frechet_theoretical`, `min_bin_count = W/(2L²) = 2000` (half the
+expected joint-cell occupancy, derived from this run's own W and L), `mass_start=:uniform`.
+
+Operationally: the launcher **freezes a `git archive` snapshot** of the exact commit into
+`_source` and **refuses to start from a dirty tree** (a dirty tree would silently run committed-only
+code); every stage skips itself if its checkpoint exists, so the bounded retry loop resumes rather
+than restarts; KNITRO pinned at 13.0.1, which is what every gate here was validated under (the live
+`paper_upper_v1` campaign runs 14.2.0 — do not merge results across the two without re-gating).
+
+Measured occupancy at launch: min marginal bin 19,996, min joint cell 3,966, against the declared
+floor of 2,000.
+
+**L=10 is deliberately not launched as a grid.** At 922 s/solve it cannot make meaningful outer
+progress in a protocol-sized stage; the same runner will do it (`launch_... 10 frechet_theoretical`)
+if a much longer budget is ever allocated, and single-point evaluation at L=10 works today.
+
+## 11. Still open
 
 - `protocols/paper_upper_v1.toml`: the `[families.PAIRWISE_QUANTILE]` block, `launch_wave.sh`'s
   hardcoded `FAMILIES=(...)`, the `[concurrency]` recompute (5→6 families per start), and the

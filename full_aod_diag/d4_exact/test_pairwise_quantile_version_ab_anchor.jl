@@ -147,6 +147,47 @@ check("at most 2 boundary draws per cutoff differ",
 lp("bin checksum: sum(bin) = ", sum(Int(b) for b in ctx_cm.pq_op.bin))
 lp("fixed Frechet-z cutoffs, origin 1 = ", ctx_cm.pq_cutoffs[:, 1])
 
+# ---- and the one thing that DOES separate the two runs, measured ----------------------------
+# The comparison above is against the EXACT empirical U-quantiles. Version A never used those: it
+# encoded them into raw outer coordinates (`log q_1`, `log(expm1(gap))`) and decoded them back
+# (`exp`, `softplus`) at every outer point, and that round trip is 1-ulp lossy. Since the empirical
+# quantile IS one of the draws, a draw sitting exactly on a cutoff can land on the other side. This
+# reproduces version A's transform (the production copy went with the rest of the cutoff machinery)
+# and counts the affected draws, so the Delta* residual reported in section 4 is ATTRIBUTED rather
+# than hand-waved.
+_va_softplus(x::Float64) = x > 0.0 ? x + log1p(exp(-x)) : log1p(exp(x))
+Q_u_rt = similar(Q_u)
+for o in 1:ctx.D
+    nc = L_A - 1
+    raw_o = Vector{Float64}(undef, nc)
+    raw_o[1] = log(Q_u[1, o])
+    for k in 2:nc
+        raw_o[k] = log(expm1(log(Q_u[k, o]) - log(Q_u[k-1, o])))
+    end
+    lq = Vector{Float64}(undef, nc); lq[1] = raw_o[1]
+    for k in 2:nc
+        lq[k] = lq[k-1] + _va_softplus(raw_o[k])
+    end
+    for k in 1:nc
+        Q_u_rt[k, o] = exp(lq[k])
+    end
+end
+bin_a_rt = Matrix{UInt8}(undef, ctx.W, ctx.D)
+for o in 1:ctx.D, w in 1:ctx.W
+    bin_a_rt[w, o] = UInt8(searchsortedfirst(@view(Q_u_rt[:, o]), ctx.U[w, o]))
+end
+n_rt_diff = count(!=(0), Int.(bin_a_rt) .- Int.(bin_a))
+lp("version A's own log/softplus round trip moves ", n_rt_diff, " of ", n_assign,
+   " assignments vs the exact empirical quantiles (max|Q_rt - Q_u| = ",
+   maximum(abs, Q_u_rt .- Q_u), ")")
+check("version A's round-trip drift is confined to draws sitting exactly ON a cutoff",
+      all(o -> all(w -> bin_a_rt[w, o] == bin_a[w, o] ||
+                       any(r -> ctx.U[w, o] == Q_u[r, o], 1:L_A-1), 1:ctx.W), 1:ctx.D))
+lp("=> the Delta* residual in section 4 is this ", n_rt_diff,
+   "-draw partition difference, not a centering or indexing error:")
+lp("   each draw carries 1/W = ", 1 / ctx.W, " of the measure, so a ", n_rt_diff,
+   "-draw move is worth O(", round(n_rt_diff * 0.005235 / ctx.W, sigdigits = 2), ") of Delta*.")
+
 # --- 2. mu = 1/L decodes exactly -----------------------------------------------------------------
 mass0 = uniform_mass_raw(layout)
 st_chk = PairwiseQuantileMassState(ctx.D, L_A)
