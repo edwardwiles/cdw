@@ -396,6 +396,26 @@ function build_lfix_base_cache_pairwise_quantile(x_free0::AbstractVector, ctx_cm
 end
 
 """
+    PQGradTimers()
+
+Optional wall-clock accumulator for `pairwise_quantile_production_gradient`'s four components, so a
+profiler can report a decomposition that SUMS TO THE TOTAL instead of timing the pieces again in
+separate calls (which double-counts warm-up and drifts from what production actually executes --
+the exact sloppiness that produced two wrong profiling conclusions on 2026-08-10/11).
+
+Default is `nothing`, i.e. not passed, i.e. four untaken branches per gradient call -- unmeasurable
+against a multi-second gradient, so there is no "profiling build" to keep in sync with production.
+"""
+mutable struct PQGradTimers
+    t_solve::Float64      # inner re-solve, only when base/verify were not supplied
+    t_cache::Float64      # shared LFix cache build (+ this family's q0 fold and its exact check)
+    t_econ::Float64       # shared economic_A_gradient!
+    t_mass::Float64       # this restriction's closed-form mass gradient
+    t_total::Float64
+end
+PQGradTimers() = PQGradTimers(0.0, 0.0, 0.0, 0.0, 0.0)
+
+"""
     pairwise_quantile_production_gradient(x_free0, raw_masses, pcx, ctx, pe;
                                           base=nothing, verify=nothing, econ_ws=nothing,
                                           kwargs...) -> (g_ext, meta)
@@ -410,11 +430,16 @@ The economic block is NOT reimplemented and NOT modified for this family: it is 
 `LFixBaseCache` built exactly as origin-ZC builds its own (see
 `build_lfix_base_cache_pairwise_quantile`, whose docstring records why that fold is mandatory).
 """
+
 function pairwise_quantile_production_gradient(x_free0::AbstractVector, raw_masses::AbstractVector{Float64},
         pcx, ctx, pe; base::Union{Nothing,BaseDualState} = nothing, verify = nothing,
-        econ_ws::Union{Nothing,EconomicAGradientWorkspace} = nothing, kwargs...)
+        econ_ws::Union{Nothing,EconomicAGradientWorkspace} = nothing,
+        timers::Union{Nothing,PQGradTimers} = nothing, kwargs...)
+    t_enter = time()
     if base === nothing || verify === nothing
+        t0 = time()
         base, verify = archPQ_verified_state(x_free0, raw_masses, pcx.ctx_cm)
+        timers === nothing || (timers.t_solve += time() - t0)
     end
     # Both the q0 restriction fold and the closed-form mass gradient read pcx.ctx_cm.pq_mass_state,
     # which is mutable per-outer-point state some intervening solve may have moved -- see
@@ -426,11 +451,18 @@ function pairwise_quantile_production_gradient(x_free0::AbstractVector, raw_mass
     ws = econ_ws === nothing ? get_or_build_econ_a_grad_ws(Wc) : econ_ws
     # Same workspace for the cache build and the gradient, so the W x D x Ddest tensors are
     # allocated once per process rather than once per gradient call.
+    t0 = time()
     cache = build_lfix_base_cache_pairwise_quantile(x_free0, pcx.ctx_cm, base; verify = verify,
                                                     econ_ws = ws)
+    timers === nothing || (timers.t_cache += time() - t0)
     g_econ = zeros(D * Ddest)
+    t0 = time()
     meta = economic_A_gradient!(g_econ, base, pcx.ctx_cm, pe, ws; cache = cache, kwargs...)
+    timers === nothing || (timers.t_econ += time() - t0)
+    t0 = time()
     g_mass = pairwise_quantile_mass_gradient_vec(base, verify, pcx.ctx_cm, raw_masses)
+    timers === nothing || (timers.t_mass += time() - t0)
+    timers === nothing || (timers.t_total += time() - t_enter)
     return vcat(g_econ, g_mass), meta
 end
 

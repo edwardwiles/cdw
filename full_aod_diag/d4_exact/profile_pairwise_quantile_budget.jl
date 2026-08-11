@@ -250,28 +250,38 @@ t_econ_serial = @elapsed economic_A_gradient!(g_econ2, baseF, ctx_cm, pe, econ_w
 pairwise_quantile_mass_gradient_vec(baseF, verifyF, ctx_cm, mass0)   # warm
 t_mass = @elapsed pairwise_quantile_mass_gradient_vec(baseF, verifyF, ctx_cm, mass0)
 
-# (e) the whole thing, as the driver calls it (warm bandwidth cache = steady state)
+# (e) THE AUTHORITATIVE MEASUREMENT: the driver's own call, instrumented from inside so the
+#     decomposition SUMS TO THE TOTAL. Everything above is a diagnostic on individual pieces (and
+#     the build_lfix_base_cache line above deliberately times the ALLOCATING variant, to show what
+#     the persistent-workspace routing avoids); this is what production actually executes.
+tmr = PQGradTimers()
 pairwise_quantile_production_gradient(xf, mass0, pcx, ctx, pe; base = baseF, verify = verifyF,
-    econ_ws = econ_ws, threaded = true, h_mode = :cached, bandwidth_cache = bwc_cold)
+    econ_ws = econ_ws, threaded = true, h_mode = :cached, bandwidth_cache = bwc_cold)   # warm
+tmr = PQGradTimers()
 t_G = @elapsed pairwise_quantile_production_gradient(xf, mass0, pcx, ctx, pe; base = baseF,
-    verify = verifyF, econ_ws = econ_ws, threaded = true, h_mode = :cached, bandwidth_cache = bwc_cold)
+    verify = verifyF, econ_ws = econ_ws, threaded = true, h_mode = :cached,
+    bandwidth_cache = bwc_cold, timers = tmr)
 
 @printf("\ncb_G!  (outer gradient, steady state: base/verify reused, bandwidth cache warm)  %8.2f s\n", t_G)
-@printf("   SHARED build_lfix_base_cache (serial, %.0f MB alloc)      %8.2f s  (%5.1f%%)\n",
-        a_lfix / 2^20, t_lfix, 100 * t_lfix / t_G)
-@printf("       of which the W x D x Ddest price/pTsigma fill        %8.2f s\n", t_price)
-@printf("   this restriction's q0 fold + exact cross-check           %8.2f s  (%5.1f%%)\n",
-        t_fold_only, 100 * t_fold_only / t_G)
-@printf("   SHARED economic_A_gradient! (threaded, warm bandwidth)   %8.2f s  (%5.1f%%)\n",
-        t_econ_warm, 100 * t_econ_warm / t_G)
-@printf("       same call, threaded=false                           %8.2f s   (threading speedup %.2fx)\n",
+@printf("   LFix cache build + q0 fold + exact check   %8.3f s  (%5.1f%%)   [shared builder, IN PLACE]\n",
+        tmr.t_cache, 100 * tmr.t_cache / tmr.t_total)
+@printf("   SHARED economic_A_gradient! (threaded)     %8.3f s  (%5.1f%%)\n",
+        tmr.t_econ, 100 * tmr.t_econ / tmr.t_total)
+@printf("   this restriction's mass gradient           %8.4f s  (%5.1f%%)\n",
+        tmr.t_mass, 100 * tmr.t_mass / tmr.t_total)
+@printf("   inner re-solve (0 here: base/verify reused)%8.3f s\n", tmr.t_solve)
+@printf("   accounted                                  %8.3f s  of  %8.3f s  (residual %.3f s)\n",
+        tmr.t_cache + tmr.t_econ + tmr.t_mass + tmr.t_solve, tmr.t_total,
+        tmr.t_total - (tmr.t_cache + tmr.t_econ + tmr.t_mass + tmr.t_solve))
+lp("")
+lp("   REFERENCE POINTS for the two shared blocks above:")
+@printf("     build_lfix_base_cache, ALLOCATING variant  %8.3f s  (%.0f MB) -- what passing cache= used to cost\n",
+        t_lfix, a_lfix / 2^20)
+@printf("       of which the serial W x D x Ddest price/pTsigma fill  %8.3f s  (380 independent (o,d) cells, UNthreaded)\n", t_price)
+@printf("     economic_A_gradient! with threaded=false   %8.3f s  (threading speedup %.1fx)\n",
         t_econ_serial, t_econ_serial / max(t_econ_warm, eps()))
-@printf("       same call, COLD bandwidth cache (first grad at a pt) %8.2f s\n", t_econ_cold)
-@printf("   this restriction's mass gradient (closed form)           %8.4f s  (%5.1f%%)\n",
-        t_mass, 100 * t_mass / t_G)
-@printf("   residual / unattributed                                 %8.2f s  (%5.1f%%)\n",
-        t_G - t_lfix - t_fold_only - t_econ_warm - t_mass,
-        100 * (t_G - t_lfix - t_fold_only - t_econ_warm - t_mass) / t_G)
+@printf("     economic_A_gradient! with a COLD bandwidth cache %8.3f s (first gradient at a new point)\n",
+        t_econ_cold)
 
 # ---- what an outer iteration costs, and what dominates ----------------------------------------
 lp("\n", "-"^100)
