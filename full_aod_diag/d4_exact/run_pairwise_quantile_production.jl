@@ -87,14 +87,29 @@ const INNER_LOWER_LIMIT   = -10.0
 const A_COORD_MODE        = :powered_aspace
 const FIND_SMALLEST       = true          # direction = "upper"
 const Z_HALFWIDTH         = 30.0
-# Inner-solve KNITRO options. NOT the shared ek_inner.opt: at L=6/W=100k, 96.6% of KN_solve wall is
-# non-callback time in a dense O(n^3) KKT factorization, and `linsolver auto` was picking a SERIAL
-# solver -- measured at 1.45 average cores under every BLAS thread knob. ek_inner_pq.opt sets
-# linsolver=ma97 (parallel AND deterministic; ma86 is faster still but explicitly non-deterministic,
-# so rejected) with 4 solver threads and par_concurrent_evals off, since we thread our own callbacks
-# and must not let KNITRO evaluate concurrently on top of that. 1.52x, all solvers agreeing on
-# Delta* to ~8e-15. See the file's own header for the full sweep.
-const INNER_OPT           = "ek_inner_pq.opt"
+# Inner-solve KNITRO options. NOT the shared ek_inner.opt: the non-callback time inside KN_solve is
+# a dense O(n^3) KKT factorization (96.6% of the wall at L=10) and `linsolver auto` picks a SERIAL
+# solver -- measured at 1.03 average cores at L=10, under every BLAS thread knob there is. We use
+# linsolver=ma97: parallel AND deterministic (ma86 is comparable but explicitly non-deterministic,
+# so rejected), with par_concurrent_evals OFF because our own callbacks are threaded and two layers
+# of parallelism would oversubscribe the box. All solvers tried agree on Delta* to ~7e-14, so this
+# is a solver setting, not a scientific one.
+#
+# The thread count is L-DEPENDENT and the gain is strongly L-dependent, both measured at W=100k:
+#
+#     L      auto        best ma97          gain
+#     5     19.39 s     15.07 s  (t4)       1.29x
+#     6     30.27 s     19.91 s  (t4)       1.52x
+#    10   1163.29 s    185.89 s  (t10)      6.26x
+#
+# Amdahl, not magic: the factorization is a modest share of a small solve and 96.6% of a large one.
+# Do NOT tune this at a cheap L and extrapolate -- the L=6 sweep understated the L=10 win by 4x.
+#
+# Caveat on the crossover: t4 is the measured optimum at L=5 and L=6 (at L=6, t4 19.91 vs t10 20.01
+# is within noise), and t10 is what was measured at L=10. t4-vs-t10 was NOT swept at L=10, so the
+# threshold below is a reasonable interpolation, not a measured optimum. If a campaign runs at
+# L in 7..9, sweep it rather than trusting this line.
+const INNER_OPT           = PQ_L >= 8 ? "ek_inner_pq_ma97_t10.opt" : "ek_inner_pq.opt"
 # ---- protocol [budgets.discovery_feasible_start] (minutes) ------------------------------------
 const STAGE_A_MIN = 75.0
 const STAGE_B_MIN = 30.0

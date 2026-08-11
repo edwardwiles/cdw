@@ -182,9 +182,27 @@ At L=10 -- see section 5b, written after this paragraph and superseding it -- th
 ~19 minutes. Reducing `n` (the restriction row count, 15,570 of the 15,952 duals) remains the next
 lever, but it is no longer the only thing standing between L=10 and a real outer search.
 
-**Production should use `ek_inner_pq_ma97_t10.opt` at L=10 and the t4 file at L<=6**; the sweep in
-section 3 was run at L=6 and its N=4 optimum should not be assumed to hold at L=10, where the
-bigger matrix sustained 5.06 cores.
+**Production selects the opt file by L** (`run_pairwise_quantile_production.jl`:
+`PQ_L >= 8 ? t10 : t4`). Measured at W=100k:
+
+| L | `auto` | best `ma97` | gain | avg cores (auto -> ma97) |
+|---|---|---|---|---|
+| 5 | 19.39 s | 15.07 s (t4) | 1.29x | 1.97 -> 2.64 |
+| 6 | 30.27 s | 19.91 s (t4) | 1.52x | 1.48 -> 2.56 |
+| 10 | 1163.29 s | 185.89 s (t10) | **6.26x** | 1.03 -> 5.06 |
+
+The `auto` avg-cores column falling 1.97 -> 1.48 -> 1.03 as L grows IS the Amdahl story made
+visible: the threaded part (our callbacks) shrinks from a half to a third to 3.5% of the solve.
+
+t4-vs-t10 was not swept at L=10, so the L>=8 threshold is a reasonable interpolation, not a measured
+optimum. Sweep it if a campaign runs at L in 7..9.
+
+**The live L=5 campaign was deliberately NOT restarted onto this.** Its stages are wall-clock
+budgeted (75/30/75 min), so 1.29x would buy more outer evaluations per stage rather than an earlier
+finish; against that, delta=0.1 was already COMPLETE at `auto` quality, so a restart would leave the
+campaign internally inconsistent across delta cells. There is also a footgun: `run_delta_cell` skips
+any stage whose checkpoint file exists, and checkpoints are written every 120 s DURING a stage, so
+killing mid-stage and re-running would silently treat a partial stage as finished.
 
 ## 7. Corrections to earlier claims in this workstream
 
