@@ -225,11 +225,27 @@ and precisely the block whose cost explodes with `L`. It has a D=4 A/B test
 is whether the CG/Interior inner-algorithm switch it requires costs more in iterations than it saves
 per callback.
 
-A feasibility probe (one value-only inner solve at W=100,000 for L=5 then L=10, `δ=50` so the
-early-abort threshold is `Inf` and cannot be mistaken for a failure) was launched under
-`screen -S pq_L10_probe`, logging to `logs/pq_W100k_L5_L10_probe.log`, script
-`full_aod_diag/d4_exact/probe_pairwise_quantile_W100k_L5_L10.jl`. **Its result is not yet in as of
-this writing** — read that log before assuming either answer.
+### Probe result: **L=10 IS feasible at W=100,000** (measured, not projected)
+
+One value-only inner solve at the real D=20 calibration point, `δ=50` (early-abort threshold `Inf`,
+so it cannot be mistaken for a failure), `JULIA_NUM_THREADS=16`. Log:
+`logs/pq_W100k_L5_L10_probe.log`; script `full_aod_diag/d4_exact/probe_pairwise_quantile_W100k_L5_L10.jl`.
+
+| W | L | rows | Δ* | class | FG / Hess | inner solve |
+|---|---|---|---|---|---|---|
+| 100,000 | 5 | 3,120 | 0.000706 | VerifiedSolved | 6 / 5 | **39.9 s** |
+| 100,000 | 10 | 15,570 | 0.003011 | VerifiedSolved | 6 / 5 | **1084.6 s (18.1 min)** |
+
+So L=10 converges cleanly and is verified — the earlier worry that it might be unattainable at this
+scale is **not** borne out. The cost growth is also milder than the naive `(L-1)^4` projection
+suggested: ~217 s per Hessian call at L=10 vs ~45.7 s measured at L=5, i.e. ≈4.7×, not ≈25×.
+
+**But feasible ≠ practical for a full bound search.** At ~18 min per inner solve, the smoke test's
+own 26-evaluation outer run would take ~8 hours, and a real bound search needs substantially more
+than that. Concretely: L=10 is usable today for single-point evaluation and seed qualification, and
+for an outer search it needs `pairwise_quantile_hvp.jl` (which skips T3/T4 entirely — the block that
+dominates) to be exercised and gated at L=10 first. L=5 at 39.9 s/solve is comfortably practical for
+an outer search right now.
 
 ---
 
