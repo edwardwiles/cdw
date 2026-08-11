@@ -45,7 +45,8 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
           "pairwise_quantile_production.jl", "pairwise_quantile_mass_gradient.jl",
-          "pairwise_quantile_outer_production.jl", "pairwise_quantile_checkpoint.jl"]
+          "pairwise_quantile_outer_production.jl", "pairwise_quantile_cplus.jl",
+          "pairwise_quantile_checkpoint.jl"]
     include(joinpath(_D4E, f))
 end
 using LinearAlgebra, Printf, SpecialFunctions
@@ -177,9 +178,20 @@ lp("PART 2: OUTER ITERATION BREAKDOWN")
 lp("="^100)
 
 # ---- cb_F!: what the driver's objective callback does, split solve vs verify -------------------
-t_F = @elapsed begin
-    global baseF, verifyF = archPQ_verified_state(xf, mass0, ctx_cm)
-end
+#
+# ⚠️ cb_F! is built ADDITIVELY from the PART 1 solve + the verifier, NOT measured independently and
+# then decomposed by subtraction. An earlier version did the latter and produced nonsense at L=10:
+# cb_F! = 1235.84 s against a PART 1 solve of 2378.89 s, i.e. "192.5% of cb_F! is the inner solve"
+# and a -1143 s residual. The cause is real and worth recording: `inner_loop_initial_values`
+# (operator_psi_bundle.jl:122) returns `obj.use_cached_x ? obj.x : zeros(...)`, so CONSECUTIVE
+# solves warm-start from the previous converged dual. PART 2's independent `archPQ_verified_state`
+# was therefore solving from a different starting point than PART 1, taking a different number of
+# interior-point iterations, and the two wall-clocks are simply not the same quantity. (Per this
+# repo's own rule, that changes how long the solve takes, never whether it converges.)
+#
+# `baseF`/`verifyF` still come from a real verified call, because the gradient section below needs
+# them -- but its wall-clock is NOT used in the decomposition.
+global baseF, verifyF = archPQ_verified_state(xf, mass0, ctx_cm)
 # archPQ_verified_state = archPQ_base_state (the KNITRO solve, already measured) + the verifier.
 t_verify = @elapsed begin
     op = ctx_cm.pq_op
@@ -190,13 +202,14 @@ t_verify = @elapsed begin
         ctx_cm.pq_mass_state, op.W, economic_forward!, economic_transpose!, econ_ws_v,
         ctx_cm.obj.Psi!, ctx_cm.obj.dPsi!, ncore1)
 end
-@printf("\ncb_F!  (value: inner solve + verification)   %10.2f s\n", t_F)
-@printf("   of which inner KN_solve (Part 1)          %10.2f s  (%5.1f%%)\n",
+t_F = r1.t_prime + r1.t_solve + t_verify      # additive by construction
+@printf("\ncb_F!  = prime_operator! + inner KN_solve + verifier   %10.2f s\n", t_F)
+@printf("   inner KN_solve (Part 1, same solve)       %10.2f s  (%5.1f%%)\n",
         r1.t_solve, 100 * r1.t_solve / t_F)
-@printf("   of which independent verifier             %10.2f s  (%5.1f%%)\n",
+@printf("   prime_operator!                           %10.2f s  (%5.1f%%)\n",
+        r1.t_prime, 100 * r1.t_prime / t_F)
+@printf("   independent verifier                      %10.2f s  (%5.1f%%)\n",
         t_verify, 100 * t_verify / t_F)
-@printf("   of which prime_operator! + rest           %10.2f s  (%5.1f%%)\n",
-        t_F - r1.t_solve - t_verify, 100 * (t_F - r1.t_solve - t_verify) / t_F)
 
 # ---- cb_G!: the outer gradient, component by component, FULLY attributed --------------------
 # Every line below calls a PRODUCTION function. Nothing is re-implemented at top level (that is what
@@ -273,6 +286,26 @@ t_G = @elapsed pairwise_quantile_production_gradient(xf, mass0, pcx, ctx, pe; ba
 @printf("   accounted                                  %8.3f s  of  %8.3f s  (residual %.3f s)\n",
         tmr.t_cache + tmr.t_econ + tmr.t_mass + tmr.t_solve, tmr.t_total,
         tmr.t_total - (tmr.t_cache + tmr.t_econ + tmr.t_mass + tmr.t_solve))
+
+# ---- and the SAME gradient through Backend C+, which is what production actually runs ----------
+pool_c, ws_c = pairwise_quantile_cplus_workspaces(ctx_cm)
+tmrC = PQGradTimers()
+pairwise_quantile_production_gradient_cplus(xf, mass0, pcx, ctx, pe, pool_c, ws_c; base = baseF,
+    verify = verifyF, threaded = true, h_mode = :cached, bandwidth_cache = Dict{Int,Float64}())  # warm
+bwc_c = Dict{Int,Float64}()
+tmrC = PQGradTimers()
+t_Gc = @elapsed pairwise_quantile_production_gradient_cplus(xf, mass0, pcx, ctx, pe, pool_c, ws_c;
+    base = baseF, verify = verifyF, threaded = true, h_mode = :cached, bandwidth_cache = bwc_c,
+    timers = tmrC)
+@printf("\ncb_G!  via Backend C+ (WHAT PRODUCTION RUNS)                                   %8.2f s\n", t_Gc)
+@printf("   factorized LFix cache + q0 fold            %8.3f s  (%5.1f%%)\n",
+        tmrC.t_cache, 100 * tmrC.t_cache / tmrC.t_total)
+@printf("   composite_gradient_at_Cplus_from_cache     %8.3f s  (%5.1f%%)\n",
+        tmrC.t_econ, 100 * tmrC.t_econ / tmrC.t_total)
+@printf("   this restriction's mass gradient           %8.4f s  (%5.1f%%)\n",
+        tmrC.t_mass, 100 * tmrC.t_mass / tmrC.t_total)
+@printf("   => C+ vs dense speedup on cb_G!            %8.2fx\n", t_G / t_Gc)
+t_G = t_Gc   # the per-iteration budget below reports what production runs
 lp("")
 lp("   REFERENCE POINTS for the two shared blocks above:")
 @printf("     build_lfix_base_cache, ALLOCATING variant  %8.3f s  (%.0f MB) -- what passing cache= used to cost\n",
