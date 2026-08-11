@@ -15,7 +15,8 @@ only 100 and 28 usable evaluations. This investigation found why, and the cause 
 | 2 | H_CZ `:j_parallel` | 2.8× on that block (~10% of an outer eval) | flipped, gated |
 | 3 | `INNER_KEEP_LAST_GOOD_X` (don't NaN a good dual on failure) | cold starts 70%→3%; 1.33× on accepted solves | implemented, **default off** |
 | 4 | `use_dual_bank = true` | 4 → 6 accepted solves | **not** flipped (small sample) |
-| 5 | `canonical_price_precompute` μ-guard | 0.109 s/call, ≈0.4% of wall | flipped |
+| 5 | **`linsolver auto` → `ma97`** (`par_lsnumthreads 10`) | 1.25× on a like-for-like solve; **+23% evaluations** | **flipped**, gated on OZC-CROSS |
+| 6 | `canonical_price_precompute` μ-guard | 0.109 s/call, ≈0.4% of wall | flipped |
 | — | support screens A and B | **0 of 18** failures caught | rejected |
 | — | dual-bank pre-check ("C") | **0** solves knowable at the warm start | rejected |
 | — | `ThresholdAbortState` ("D") | identical to the existing `lower_limit` | rejected |
@@ -59,6 +60,34 @@ H_CZ `:j_parallel` 1.044e-10), i.e. the solver's own tolerance floor. `feastol` 
 > diagonal origin-ZC inherit the change **without evidence**. The mechanism is generic and
 > documented, but the magnitude and the Δ agreement are measured for two families only. Gate the
 > other three before a production campaign leans on this.
+
+## 1b. `linsolver auto` is serial here too — but it is a minor term, not the story
+
+`ek_inner.opt` also had `linsolver auto`, which memory `knitro-linsolver-auto-is-serial-use-ma97`
+records as selecting a **serial** solver in KNITRO 13.0.1 (worth **6.26×** for the pairwise-quantile
+family at L=10, where the dense KKT factorization was 96.6% of the solve). A/B here, same driver,
+same start point, same budget, at opttol 1e-10:
+
+| | `auto` | `ma97`, 10 threads |
+|---|---|---|
+| eval 1, same point | 63.8 s | **51.1 s (1.25×)** |
+| accepted median wall | 60.6 s | 54.3 s (1.12×) |
+| `status 0` median wall | 57.7 s | 43.8 s (1.32×) |
+| accepted median Hessian calls | 22 | 21 (unchanged) |
+| usable evaluations | 13 | **16 (+23%)** |
+
+Δ agrees to **9.5e-11** relative — a solver setting, not a scientific one. Flipped to `ma97`
+(`par_lsnumthreads 10`); `ek_inner_linsolver_auto_PRE_2026-08-11.opt` kept for rollback. `ma86` is
+comparable but KNITRO documents it as **non-deterministic**, so it is rejected on principle; `ma97`
+is the deterministic parallel one.
+
+**Why 1.25× here and 6.26× there — the regimes are opposite.** The cross families' `nx = 1770`
+restriction block makes every Hessian callback cost ~2.7 s, so callbacks swamp the factorization
+(77.7% / 12.1% / 10.2% Hessian / FG / everything-else at 1e-12). That case had cheap callbacks and a
+dominant factorization. This is exactly why that memory warns against extrapolating the knob across
+configurations — and note the same trap caught a prediction made here: a "≤1.11× at most" bound
+derived from the 1e-12 profile understated the result, because the tolerance fix cut Hessian calls
+per solve from 38 to ~20 and thereby *raised* the factorization's share.
 
 ## 2. The `−102` discards were the same bug
 

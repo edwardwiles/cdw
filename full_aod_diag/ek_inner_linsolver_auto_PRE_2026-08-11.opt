@@ -325,7 +325,7 @@ linesearch_maxtrials  3
 #   mklpardiso = 6 = use sparse Intel MKL Pardiso solver always
 #   ma97       = 7 = use parallel, deterministic HSL ma97 solver
 #   ma86       = 8 = use parallel, non-deterministic HSL ma86 solver
-linsolver    ma97
+linsolver    auto
 
 # Whether to use out-of-core version of linsolver=mklpardiso.
 #   no     = 0 = always use in-core version
@@ -725,7 +725,7 @@ par_concurrent_evals  yes
 # Number of threads to use in parallel BLAS.
 #   choose any positive integer, or
 #   0 = determine automatically based on par_numthreads
-par_lsnumthreads 10
+par_lsnumthreads 0
 
 # Number of threads to use in parallel linear solver.
 #   choose any positive integer, or
