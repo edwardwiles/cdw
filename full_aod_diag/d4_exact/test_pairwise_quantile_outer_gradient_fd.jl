@@ -49,7 +49,7 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "cm_originzc_target_layout.jl", "cm_meanzc_moments.jl", "cm_meanzc_production.jl",
           "cm_originzc_moments.jl", "cm_originzc_production.jl", "operator_psi_bundle.jl",
           "cm_callback_health.jl", "compressed_factual_buffer_reuse.jl",
-          "shared_a_gradient.jl", "operator_verification.jl", "cm_screen_bridge.jl",
+          "lfix_base_workspace.jl", "shared_a_gradient.jl", "operator_verification.jl", "cm_screen_bridge.jl",
           "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",

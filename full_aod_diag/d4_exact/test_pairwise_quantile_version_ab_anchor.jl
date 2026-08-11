@@ -54,7 +54,7 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           "dual_bank_ab_harness.jl", "reusable_context.jl", "organic_failure_capture.jl",
           "multistart_seed_generator.jl",   # build_aspace_geometry / cm_w0_from_calibration
           "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "operator_psi_bundle.jl",
-          "cm_callback_health.jl", "shared_a_gradient.jl", "operator_verification.jl",
+          "cm_callback_health.jl", "lfix_base_workspace.jl", "shared_a_gradient.jl", "operator_verification.jl",
           "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",

@@ -338,8 +338,45 @@ warning: it means the fold or the cache is wrong, and every economic gradient bu
 silently wrong.
 """
 function build_lfix_base_cache_pairwise_quantile(x_free0::AbstractVector, ctx_cm, base::BaseDualState;
-        verify = nothing, q0_check_tol::Float64 = 1e-8)
-    cache0 = build_lfix_base_cache(x_free0, ctx_cm, base; validate_dense = false)
+        verify = nothing, q0_check_tol::Float64 = 1e-8,
+        econ_ws::Union{Nothing,EconomicAGradientWorkspace} = nothing)
+    # PERSISTENT-WORKSPACE PATH (2026-08-11). `build_lfix_base_cache` allocates the price and
+    # p^(T-sigma) tensors fresh as `W x D x Ddest` EACH -- 304 MB apiece at W=100,000/D=20/Ddest=19,
+    # ~700 MB per gradient call measured. The tensors' CONTENTS genuinely must be recomputed (they
+    # depend on theta, which moves every outer iteration), but the BUFFERS need not be reallocated:
+    # `build_lfix_base_cache!` (lfix_base_workspace.jl) fills a persistent `LFixBaseWorkspace` in
+    # place, and `economic_A_gradient!` already routes through exactly that when it is handed
+    # `cache === nothing` (shared_a_gradient.jl:454-466).
+    #
+    # Restriction-folded callers could not use it, because they must fold their own `G_R*lambda_R`
+    # into `q0` and therefore have to pass a pre-built `cache=` -- which routes around the
+    # persistent workspace. `EconomicAGradientWorkspace`'s own docstring says as much
+    # ("restriction-folded callers that pass their own pre-built `cache=` are unaffected"), and
+    # origin-ZC and CM+ZC still pay the allocation for this reason.
+    #
+    # There is no actual conflict: build the cache IN PLACE into the same workspace
+    # `economic_A_gradient!` would have used, then apply the fold with `with_q0`, which is a pure
+    # field copy (lfix_cm_aware.jl:47) and does not touch the workspace's own arrays. Passing
+    # `econ_ws` therefore keeps the mandatory q0 fold AND drops the per-gradient allocation.
+    #
+    # NOTE this removes the ALLOCATION, not the compute: neither `build_lfix_base_cache` nor
+    # `build_lfix_base_cache!` threads the `Ddest x D` price/p^(T-sigma) fill (grep: zero
+    # `Threads.@threads` in either), which measured 3.05 s of the 3.32 s at W=100k/L=5. That loop is
+    # embarrassingly parallel over its 380 independent (o,d) cells and is shared by every family --
+    # flagged, deliberately not changed here mid-campaign.
+    cache0 = if econ_ws === nothing
+        build_lfix_base_cache(x_free0, ctx_cm, base; validate_dense = false)
+    else
+        D = ctx_cm.D
+        Ddest = hasproperty(ctx_cm, :D_dest) ? ctx_cm.D_dest : ctx_cm.D
+        Wc = size(ctx_cm.obj.U, 1)
+        lws = econ_ws.lfix_ws
+        if lws === nothing || lws.D != D || lws.Ddest != Ddest || lws.W != Wc
+            lws = build_lfix_base_workspace(D, Ddest, Wc)
+            econ_ws.lfix_ws = lws
+        end
+        build_lfix_base_cache!(lws, x_free0, ctx_cm, base; validate_dense = false)
+    end
     op = ctx_cm.pq_op
     ncore1 = ctx_cm.obj.outer_constr_index - 1 - n_total_rows(op.D, op.L)
     λ_M, λ_P = reshape_pq_duals(base.λstar, op, ncore1)
@@ -383,10 +420,14 @@ function pairwise_quantile_production_gradient(x_free0::AbstractVector, raw_mass
     # which is mutable per-outer-point state some intervening solve may have moved -- see
     # ensure_pq_masses!.
     ensure_pq_masses!(pcx.ctx_cm, raw_masses)
-    cache = build_lfix_base_cache_pairwise_quantile(x_free0, pcx.ctx_cm, base; verify = verify)
     D = pcx.ctx_cm.D
     Ddest = hasproperty(pcx.ctx_cm, :D_dest) ? pcx.ctx_cm.D_dest : pcx.ctx_cm.D
-    ws = econ_ws === nothing ? get_or_build_econ_a_grad_ws(cache.W) : econ_ws
+    Wc = size(pcx.ctx_cm.obj.U, 1)
+    ws = econ_ws === nothing ? get_or_build_econ_a_grad_ws(Wc) : econ_ws
+    # Same workspace for the cache build and the gradient, so the W x D x Ddest tensors are
+    # allocated once per process rather than once per gradient call.
+    cache = build_lfix_base_cache_pairwise_quantile(x_free0, pcx.ctx_cm, base; verify = verify,
+                                                    econ_ws = ws)
     g_econ = zeros(D * Ddest)
     meta = economic_A_gradient!(g_econ, base, pcx.ctx_cm, pe, ws; cache = cache, kwargs...)
     g_mass = pairwise_quantile_mass_gradient_vec(base, verify, pcx.ctx_cm, raw_masses)

@@ -44,7 +44,7 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           "dual_bank_ab_harness.jl", "reusable_context.jl", "organic_failure_capture.jl",
           "multistart_seed_generator.jl",
           "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "operator_psi_bundle.jl",
-          "cm_callback_health.jl", "shared_a_gradient.jl", "operator_verification.jl",
+          "cm_callback_health.jl", "lfix_base_workspace.jl", "shared_a_gradient.jl", "operator_verification.jl",
           "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
@@ -61,8 +61,13 @@ const CUTSRC = length(ARGS) >= 3 ? Symbol(ARGS[3]) : :frechet_theoretical
 const GRAV   = default_gravity_exclude_cells_brazil_korea()
 const OPT_A  = joinpath(@__DIR__, "..", "ek_inner.opt")
 const OPT_B  = joinpath(@__DIR__, "..", "ek_inner_pq_threads10.opt")
+# Arm C is opt-in via ARGS[4] because it raises par_numthreads, which lets KNITRO dispatch
+# evaluation callbacks concurrently onto our SHARED scratch -- see that file's own header. The
+# bit-identical-Delta gate below is what would expose a race.
+const OPT_C  = joinpath(@__DIR__, "..", "ek_inner_pq_threads10_full.opt")
 isfile(OPT_A) || error("missing $OPT_A")
 isfile(OPT_B) || error("missing $OPT_B")
+length(ARGS) < 4 || isfile(OPT_C) || error("missing $OPT_C")
 
 lp("="^96)
 lp("KNITRO LINEAR-ALGEBRA THREADING A/B: W=", W_AB, " L=", L_AB, " cutoff_source=:", CUTSRC)
@@ -108,22 +113,49 @@ function timed_arm(label::AbstractString, optfile::AbstractString)
     return (Delta = v.Delta_dual, wall = wall, n_fg = v.n_fg, n_hess = v.n_hess, cls = cls)
 end
 
-rA_cold = timed_arm("A (cold / JIT-warming)", OPT_A)
-rB      = timed_arm("B (10 BLAS + 10 linear-solver threads)", OPT_B)
-rA_warm = timed_arm("A (warm control, re-run)", OPT_A)
+# ORDER MATTERS. The FIRST solve in a process pays all the JIT for the FG/Hessian callback chain,
+# which at L=10 measured 1161.9 s against a warm 355.3 s -- a 3.3x difference for identical work and
+# identical iteration counts. Every arm is therefore run TWICE and only the SECOND (warm) run of
+# each is compared; the first pass exists solely to warm the process. Memory
+# `feedback-solve-timing-jit-thread-warmstart-pitfalls-2026-08-01` is exactly about this trap, and
+# the first version of this A/B fell into a milder form of it (reporting B against a cold A would
+# have shown a fictitious 3.1x "speedup" from threading).
+rA_cold = timed_arm("A pass 1 (JIT-warming, discarded)", OPT_A)
+rB_cold = timed_arm("B pass 1 (discarded)", OPT_B)
+rC_cold = length(ARGS) >= 4 ? timed_arm("C pass 1 (discarded)", OPT_C) : nothing
+rA_warm = timed_arm("A pass 2 (WARM, reported)", OPT_A)
+rB_warm = timed_arm("B pass 2 (WARM, reported)", OPT_B)
+rC_warm = length(ARGS) >= 4 ? timed_arm("C pass 2 (WARM, reported)", OPT_C) : nothing
 
 lp("\n", "="^96)
-@printf("%-34s %14s %10s %8s %8s\n", "arm", "Delta_dual", "wall(s)", "n_fg", "n_hess")
-for (nm, r) in (("A cold (JIT-warming)", rA_cold), ("B threads=10", rB), ("A warm control", rA_warm))
-    @printf("%-34s %14.10g %10.1f %8d %8d\n", nm, r.Delta, r.wall, r.n_fg, r.n_hess)
+@printf("%-40s %18s %10s %8s %8s\n", "arm", "Delta_dual", "wall(s)", "n_fg", "n_hess")
+rows = Any[("A pass 1 (cold, discarded)", rA_cold), ("B pass 1 (cold, discarded)", rB_cold),
+           ("A pass 2 WARM  (1 thread)", rA_warm), ("B pass 2 WARM  (blas/ls=10)", rB_warm)]
+rC_cold === nothing || push!(rows, ("C pass 1 (cold, discarded)", rC_cold))
+rC_warm === nothing || push!(rows, ("C pass 2 WARM  (all threads=10)", rC_warm))
+for (nm, r) in rows
+    @printf("%-40s %18.16g %10.1f %8d %8d\n", nm, r.Delta, r.wall, r.n_fg, r.n_hess)
 end
-speedup = rA_warm.wall / rB.wall
-@printf("\nWARM A vs B speedup: %.2fx  (%.1fs -> %.1fs)\n", speedup, rA_warm.wall, rB.wall)
+@printf("\nWARM A -> WARM B speedup: %.2fx  (%.1fs -> %.1fs)\n",
+        rA_warm.wall / rB_warm.wall, rA_warm.wall, rB_warm.wall)
+rC_warm === nothing || @printf("WARM A -> WARM C speedup: %.2fx  (%.1fs -> %.1fs)\n",
+        rA_warm.wall / rC_warm.wall, rA_warm.wall, rC_warm.wall)
+@printf("JIT tax on the first solve of a process: %.2fx  (%.1fs cold vs %.1fs warm, same arm)\n",
+        rA_cold.wall / rA_warm.wall, rA_cold.wall, rA_warm.wall)
+rB = rB_warm
 
 ok = true
+global ok
 # The answer must not move. Both arms solve the same convex problem; a threading option changes
 # only the linear algebra's execution, so anything beyond round-off here means the option is doing
 # something it should not be.
+if rC_warm !== nothing
+    relC = abs(rC_warm.Delta - rA_warm.Delta) / max(abs(rA_warm.Delta), eps())
+    @printf("relative |Delta_C - Delta_A_warm| = %.3e\n", relC)
+    println(relC == 0.0 ? "PASS  arm C (par_numthreads=10) is BIT-IDENTICAL -- no sign of a callback race" :
+                          "FAIL  arm C moved the answer -- callbacks are racing on shared scratch, do NOT adopt")
+    global ok &= (relC == 0.0)
+end
 relΔ = abs(rB.Delta - rA_warm.Delta) / max(abs(rA_warm.Delta), eps())
 @printf("relative |Delta_B - Delta_A_warm| = %.3e\n", relΔ)
 global ok &= relΔ < 1e-9
