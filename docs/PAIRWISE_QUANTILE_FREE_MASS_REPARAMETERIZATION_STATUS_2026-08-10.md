@@ -476,31 +476,55 @@ Two draws are worth `2 * Delta*/W ≈ 5e-7` of `Delta*`, against the 1.2e-6 obse
 Version A is the one that drifted, not version B, and the anchor now measures and prints this rather
 than asserting it.
 
-### 9.2 The L=10 cost: the follow-up note's prediction was wrong, and the profile says where
+### 9.2 The L=10 cost — and a CORRECTION to what this document first said
 
-`PAIRWISE_QUANTILE_HESSIAN_ASSEMBLY_OPPORTUNITY_2026-08-10.md` §2 named the centering pass as "the
-single most promising item" and §4 said to measure first. Measuring first was right:
+**⚠️ The first version of this section, and the commit message and status update that went with it,
+claimed the final packed write was 86.16 s and 46% of the L=10 solve. That was wrong by ~45×.** It
+is recorded here rather than quietly edited out, because the way it was wrong is the useful part.
 
-| block, one Hessian callback at D=20/L=10/W=100k | before |
+`PAIRWISE_QUANTILE_HESSIAN_ASSEMBLY_OPPORTUNITY_2026-08-10.md` §2 nominated the centering pass as
+"the single most promising item" and §4 said to measure first. The profile
+(`logs/pq_L10_blockprofile.log`) appeared to say: centering 0.37 s, packed write **86.16 s**, sum of
+blocks 96.72 s, i.e. assembly = 51% of the 1323 s solve and the packed write alone = 46%.
+
+The centering number was right (and threading + the one-triangle change took it to **0.034 s**). The
+packed-write number was an **artifact of the profiler**. `profile_pairwise_quantile_d20.jl` did not
+call the production callback; it hand-inlined a copy of the loop at TOP-LEVEL scope, where
+`HRR`/`HEQ`/`hee_packed`/`n` are non-const globals, so every one of ~127M element accesses was a
+dynamic dispatch. Measured side by side at the identical L=10 dimensions:
+
+| the same loop | wall |
 |---|---|
-| final packed write | **86.16 s** |
-| T1–T4 raw table build | 4.06 s |
-| H_MM/MP/PP raw block-fill | 2.51 s |
-| H_E,R cross-block | 3.54 s |
-| **centering correction** (the predicted hot spot) | **0.37 s** |
-| H_EE | 0.09 s |
-| sum | 96.72 s |
+| inside a function, serial, row-walk — **what production actually ran** | **1.90 s** |
+| inside a function, threaded, column-walk — production today | **0.40 s** |
+| at top-level scope reading non-const globals — **what the profiler measured** | **84.70 s** |
 
-Assembly is **51% of the 1323 s solve** (so §4's "is assembly dominant?" test passes), but 89% of
-assembly is the **packed write**, i.e. 46% of the entire solve — and the centering pass the note
-proposed threading is 0.4% of it.
+The stride fix and the threading in §9.2's earlier draft are real but small (1.90 → 0.40 s). The
+`evalResult.hess` hoist committed alongside them is worth essentially nothing: Julia specializes the
+callback on the concrete `EvalResult`, so that field access was already concrete — the untyped-`Any`
+diagnosis had the right *mechanism* but the wrong *location*. It is kept only because the type
+assertion it added is a cheap tripwire.
 
-Root cause: `HRR[i-NCORE, j-NCORE]` with `i` fixed and `j` running walks a **row** of a column-major
-matrix — stride `n_rows` = 15,570 doubles = 124 KB — so essentially every one of ~121M reads is a
-cache miss. `HRR` is symmetric, so reading `HRR[j-NCORE, i-NCORE]` walks a contiguous **column** and
-returns the identical value. Threaded over `i` as well (the running counter `k` is closed-form,
-`k0(i) = (i-1)n - (i-1)(i-2)/2`, so rows are independent and writes disjoint), with `:dynamic`
-scheduling because triangular row lengths make static chunks badly imbalanced.
+**Corrected accounting at D=20/L=10/W=100k**, per Hessian callback:
+
+| block | wall |
+|---|---|
+| T1–T4 raw table build | 3.48 s |
+| H_E,R cross-block | 3.79 s |
+| H_MM/MP/PP raw block-fill | 1.73 s |
+| final packed write | ~0.40 s |
+| centering correction | 0.03 s |
+| H_EE | 0.08 s |
+| **total assembly** | **≈ 9.5 s** |
+
+With 7 callbacks in a ~1200 s solve that is **≈ 6% of wall-clock, not 51%**. So §4's own decision
+rule — "if the block sum is a small fraction, KNITRO's own work dominates and the honest answer is
+that L=10 is expensive for a structural reason" — resolves the other way: **~94% of the L=10 solve
+is KNITRO**, factorizing a dense ~15,952² KKT system per interior-point iteration.
+
+`profile_pairwise_quantile_d20.jl` now times the **real** callback via
+`pairwisequantile_hess_cb_builder` and prints the sum-of-blocks against it, so this class of error
+cannot recur silently.
 
 ### 9.3 Only one triangle is computed now
 

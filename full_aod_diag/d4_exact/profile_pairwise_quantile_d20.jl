@@ -109,34 +109,45 @@ cross_hess_scratch = PairwiseQuantileCrossHessScratch(D, npair, op.W, NCORE - 1,
 t_cross = @elapsed pairwise_quantile_cross_hessian_block!(HEQ, wctx, cross_scratch, op, mass_state, tls, h, cross_hess_scratch)
 @printf("H_E,R cross-block (economic x restriction): %.4fs\n", t_cross)
 
-# direct packed write (Hessian-optimization pass, 2026-08-09 -- matches production
-# pairwisequantile_hess_cb_builder exactly): no intermediate dense Hfull build/mirror/repack.
-t_pack = @elapsed begin
-    local n = NCORE + n_rows
-    local hvec = Vector{Float64}(undef, n*(n+1)÷2)
-    local k = 0
-    for i in 1:n
-        if i <= NCORE
-            for j in i:NCORE
-                k += 1
-                hvec[k] = hee_packed[_pk_upper(i, j, NCORE)]
-            end
-            for j in NCORE+1:n
-                k += 1
-                hvec[k] = HEQ[i, j - NCORE]
-            end
-        else
-            for j in i:n
-                k += 1
-                hvec[k] = HRR[i - NCORE, j - NCORE]
-            end
-        end
-    end
-end
-@printf("final packed write (direct, no dense Hfull, n=%d): %.4fs\n", NCORE+n_rows, t_pack)
+# ================================================================================================
+# FINAL PACKED WRITE -- timed by calling the REAL production callback, not by replicating it here.
+#
+# ⚠️ THIS BLOCK USED TO BE A HAND-INLINED COPY OF THE PRODUCTION LOOP AT TOP-LEVEL SCOPE, AND ITS
+# NUMBER WAS AN ARTIFACT OF THAT, NOT A PROPERTY OF PRODUCTION. At D=20/L=10/W=100k it reported
+# ~86 s. The real production loop lives inside `pairwisequantile_hess_cb_builder`'s closure, where
+# `HRR`/`HEQ`/`hee_packed`/`n` are captured with concrete types; the copy here read them as
+# NON-CONST GLOBALS, making every one of ~127M element accesses a dynamic dispatch. Measured
+# side-by-side at the identical L=10 dimensions (2026-08-11):
+#
+#     same loop inside a function, serial, row-walk (what production actually ran)   1.90 s
+#     same loop inside a function, threaded, column-walk (production today)          0.40 s
+#     same loop at TOP-LEVEL scope reading non-const globals (what this file did)   84.70 s
+#
+# So the "packed write is 46% of the L=10 solve" conclusion drawn from the old number was wrong by
+# ~45x, and the sub-block sum it fed was wrong with it. Never re-inline a hot production loop into
+# a profiling script's top level: call the real thing.
+# ================================================================================================
+local hess_ctx_prof = PairwiseQuantileCoreHessCtx(NCORE, op, mass_state, aug.core_cf_ref)
+local hess_cb_prof = pairwisequantile_hess_cb_builder(hess_ctx_prof)
+struct _ProfEvalRequest; x::Vector{Float64}; end
+mutable struct _ProfEvalResult; hess::Vector{Float64}; end
+local n_full = NCORE + n_rows
+local prof_result = _ProfEvalResult(Vector{Float64}(undef, div(n_full * (n_full + 1), 2)))
+local prof_request = _ProfEvalRequest(Float64[])
+hess_cb_prof(nothing, nothing, prof_request, prof_result, obj)   # warm up / compile
+t_callback = @elapsed hess_cb_prof(nothing, nothing, prof_request, prof_result, obj)
+@printf("REAL production Hessian callback, end to end (n=%d): %.4fs\n", n_full, t_callback)
+# The packed write is what the whole callback costs beyond the sub-blocks measured above.
+t_pack = max(t_callback - (t_HEE + t_T1T2 + t_fill + t_center + t_prep + t_cross), 0.0)
+@printf("  of which the final packed write (callback minus measured sub-blocks): %.4fs\n", t_pack)
 
 t_total = t_HEE + t_T1T2 + t_fill + t_center + t_prep + t_cross + t_pack
 @printf("\nSUM of measured sub-blocks: %.4fs\n", t_total)
+@printf("REAL callback (independent measurement of the same thing): %.4fs\n", t_callback)
+@printf("=> assembly is %.1f%% of the solve (%d callbacks x %.2fs of %.1fs)\n",
+        100 * n_hess * t_callback / max(t_solve, eps()), n_hess, t_callback, t_solve)
+@printf("=> the remaining %.1f%% is KNITRO's own work (dense %dx%d KKT factorization per IP iteration) + FG\n",
+        100 * (1 - n_hess * t_callback / max(t_solve, eps())), n_full, n_full)
 
 # allocations (separate @allocated call per block, cheap re-run)
 a_HEE = @allocated winner_pair_hessian!(hee_packed, obj, wctx)
