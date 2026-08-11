@@ -8,8 +8,11 @@ Measured at real D=20 data, W=100,000, `cutoff_source=:frechet_theoretical`, 16 
 The claim "KNITRO's internal factorization is 80%+ of the inner-solve wall-clock" was **correct as
 an accounting statement** -- at L=10 it is 96.6% -- but it was being used to imply something false,
 namely that the time was therefore not ours to attack. It was. `linsolver auto` was selecting a
-**serial** linear solver; switching to `ma97` with 4 solver threads is worth **1.52x** on the whole
-inner solve, with `Delta*` unchanged to ~8e-15 relative.
+**serial** linear solver; switching to `ma97` is worth **1.52x at L=6 and 6.26x at L=10** -- an
+L=10 inner solve goes from **1163 s to 186 s** -- with `Delta*` unchanged to ~7e-14 relative.
+
+The L=6 figure badly understates the win, and the reason is Amdahl: at L=6 the factorization is
+about two thirds of the solve, at L=10 it is 96.6%. **Tune this at the L you intend to run.**
 
 The user pushed on the original claim on exactly the right grounds ("usually once I push Claudes on
 that claim it eventually collapses and we learn it's something else"). What collapsed was not the
@@ -142,15 +145,46 @@ been measured on the other families. The finding is very likely to generalise --
 picking a serial solver is not PQ-specific -- but "likely" is not "measured", and the other families
 have live campaigns.
 
+## 5b. The L=10 result -- the one that matters
+
+L=10, W=100k, `probe_pairwise_quantile_omp_threads.jl`, 2nd pass:
+
+| `linsolver` | wall | CPU | avg cores | n_fg/n_hess | `Delta*` |
+|---|---|---|---|---|---|
+| `auto` | 1163.29 s | 1194.97 s | **1.03** | 9 / 8 | 0.003006857760821941 |
+| `ma97` (10 threads) | **185.89 s** | 940.51 s | **5.06** | 8 / 7 | 0.0030068577608221483 |
+
+**6.26x.** Both passes agree (auto 1197.85 / 1163.29; ma97 201.20 / 185.89), both `nStatus=0`,
+both `VerifiedSolved`, `Delta*` agreeing to 7e-14.
+
+Two features of this table are worth more than the headline ratio:
+
+1. **`avg cores = 1.03` on the baseline is an independent confirmation of the 96.6% attribution.**
+   Our callbacks are threaded across 16 Julia threads. If they were a meaningful share of the solve
+   the average would sit well above one. At L=6 it is 1.45 (callbacks ~ a third of the solve); at
+   L=10 it collapses to 1.03 (callbacks 3.5%). The by-difference profile and the core-occupancy
+   measurement agree, by two completely different routes.
+2. **CPU time FELL, 1195 s -> 940 s.** ma97 is not merely spreading the same work across more
+   cores; it does ~1.27x less total work *and* parallelises ~5x. That is why the wall-clock ratio
+   (6.26x) exceeds the core ratio (4.9x). It also converged in one fewer iteration.
+
+At ~186 s per inner solve, L=10 outer search moves from "not viable" to "expensive but real"
+(~100 outer evals in ~5 hours). Section 6 was written before this measurement and is superseded on
+that point.
+
 ## 6. What this does and does not fix
 
 At L=5 (production, `screen -S pq_prod_L5`) the outer loop runs ~17 s/eval and is healthy; 1.52x on
 the inner solve is a straightforward speedup of an already-viable configuration.
 
-At L=10 it is a large absolute saving on a solve that is still dominated by an O(n^3) factorization
-of a ~16k system. 1.52x does not by itself make L=10 outer-search viable. The genuine levers left
-for L=10 are reducing `n` (the restriction row count, 15,570 of the 15,952 duals) rather than
-factorizing the same system faster.
+At L=10 -- see section 5b, written after this paragraph and superseding it -- the measured gain is
+**6.26x**, not 1.52x, and it does change the verdict: an L=10 inner solve is now ~186 s rather than
+~19 minutes. Reducing `n` (the restriction row count, 15,570 of the 15,952 duals) remains the next
+lever, but it is no longer the only thing standing between L=10 and a real outer search.
+
+**Production should use `ek_inner_pq_ma97_t10.opt` at L=10 and the t4 file at L<=6**; the sweep in
+section 3 was run at L=6 and its N=4 optimum should not be assumed to hold at L=10, where the
+bigger matrix sustained 5.06 cores.
 
 ## 7. Corrections to earlier claims in this workstream
 
@@ -163,3 +197,6 @@ Recorded because each was asserted before it was measured:
 - **"HVP is the L=10 lever."** Measured 4.4x *slower* (6084 CG calls vs 9).
 - **"No MKL in KNITRO."** Wrong, from an `ls`; it is statically linked.
 - **"No knob changes the single-threading."** Wrong -- no *BLAS* knob does. `linsolver` does.
+- **"1.52x."** True at L=6, and quoted before L=10 had been measured. The L=10 figure is 6.26x.
+  Tuning a solver at a cheap configuration and extrapolating to the expensive one understated the
+  win by 4x here; it could as easily overstate it.
