@@ -216,6 +216,15 @@ function run_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Float
         # changes how the same gradient is computed, not what problem is solved -- so it carries a
         # default, like A_coordinate_mode.
         gradient_backend::Symbol = :cplus,
+        # KNITRO option file for the INNER solve. Same mechanism (and same name) as the c10 driver's
+        # `inner_opt_override`; `nothing` keeps `d20_real_setup_design`'s shared `ek_inner.opt`.
+        # Production passes "ek_inner_pq.opt", which differs from the shared file in exactly three
+        # settings, all measured on THIS family's KKT structure at L=6/W=100k (see that file's
+        # header): linsolver ma97 instead of auto, par_lsnumthreads/par_blasnumthreads 4 instead of
+        # 0, and par_concurrent_evals off. Worth 1.52x on the inner solve. Not a scientific
+        # parameter -- all four linear solvers tried agree on Delta* to ~8e-15 relative -- but it is
+        # deliberately NOT the shared default, because it has only been measured here.
+        inner_opt_override::Union{Nothing,AbstractString} = nothing,
         )
     lp(xs...) = (println(xs...); flush(stdout))
 
@@ -286,10 +295,22 @@ function run_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Float
     end
 
     # ---- 6. real-data economic context ----
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design,
-        draw_seed = draw_seed, destination_sample = destination_sample,
-        exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells,
-        σHat = σHat, inner_lower_limit = inner_lower_limit)
+    inner_opt_path = inner_opt_override === nothing ? nothing :
+        (isabspath(inner_opt_override) ? String(inner_opt_override) :
+         joinpath(D4X_ROOT, "full_aod_diag", String(inner_opt_override)))
+    if inner_opt_path !== nothing && !isfile(inner_opt_path)
+        error("run_pairwise_quantile_upper_checkpointed($label): inner_opt_override=$inner_opt_override resolves to $inner_opt_path, which does not exist")
+    end
+    ctx = inner_opt_path === nothing ?
+        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design,
+            draw_seed = draw_seed, destination_sample = destination_sample,
+            exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells,
+            σHat = σHat, inner_lower_limit = inner_lower_limit) :
+        d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design,
+            draw_seed = draw_seed, destination_sample = destination_sample,
+            exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells,
+            σHat = σHat, inner_lower_limit = inner_lower_limit, inner_loop_opt = inner_opt_path)
+    lp("  inner KNITRO opt file = ", inner_opt_path === nothing ? "ek_inner.opt (shared default)" : inner_opt_path)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)
     pe = build_pivot_elimination(ctx)
     D = ctx.D

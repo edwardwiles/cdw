@@ -106,7 +106,10 @@ common = (W = W_SMOKE, delta = 0.1, draw_design = :sobol_randomized, draw_seed =
           σHat = 3.0, inner_lower_limit = -10.0, z_halfwidth = 30.0,
           destination_sample = :exclude_row, exclude_diagonal_gravity = true,
           gravity_exclude_cells = GRAV, L = L_SMOKE, cutoff_source = CUTOFF_SOURCE,
-          min_bin_count = MIN_BIN_COUNT, A_coordinate_mode = :powered_aspace)
+          min_bin_count = MIN_BIN_COUNT, A_coordinate_mode = :powered_aspace,
+          # Exercise the SAME inner options production uses, so this gate covers the ma97 /
+          # par_concurrent_evals=no configuration rather than the shared default it does not run on.
+          inner_opt_override = "ek_inner_pq.opt")
 
 # ------------------------------------------------------------------------------------------------
 # TEST 1: objective_mode=:min_gp, end to end

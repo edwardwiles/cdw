@@ -1,0 +1,115 @@
+# ================================================================================================
+# A/B: does giving KNITRO's own linear algebra 10 threads speed up the L=10 inner solve?
+# (user question, 2026-08-11)
+#
+# The stock inner opt file (`full_aod_diag/ek_inner.opt`) runs KNITRO fully single-threaded:
+# `par_numthreads 1`, `par_blasnumthreads 0`, `par_lsnumthreads 0` (0 = "derive from
+# par_numthreads"). At D=20/L=10/W=100,000 the inner dual has n = 15,952 variables and KNITRO
+# factorizes a DENSE ~15,952^2 KKT system per interior-point iteration -- roughly 1.4e12 flops --
+# so a single thread is a plausible dominant cost. `ek_inner_pq_threads10.opt` raises ONLY the
+# BLAS and linear-solver thread counts to 10 (see that file's header for why `par_numthreads` and
+# `par_concurrent_evals` are deliberately left alone).
+#
+# ARM A: ek_inner.opt              (stock, 1 thread)
+# ARM B: ek_inner_pq_threads10.opt (10 BLAS / 10 linear-solver threads)
+#
+# Both arms solve the SAME point, so the answer must not move: the gate is that `Delta_dual` agrees
+# to solver reproducibility AND both verify. A speedup that changed the answer would not be a
+# speedup. Run order is A then B in one process, and each arm's timing is taken on an already
+# JIT-warm code path (the first arm pays compilation; see memory
+# `feedback-solve-timing-jit-thread-warmstart-pitfalls-2026-08-01`) -- so arm A is additionally
+# re-run at the end as a warm control, and it is the WARM A vs B comparison that is reported.
+#
+# Usage:
+#   OPENBLAS_NUM_THREADS=1 JULIA_NUM_THREADS=16 julia --project=. \
+#     full_aod_diag/d4_exact/ab_pairwise_quantile_knitro_threads.jl [W] [L] [cutoff_source]
+# ================================================================================================
+_D4E = joinpath(@__DIR__)
+for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl",
+          "common_marginals_interval.jl", "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl",
+          "three_way_derivatives.jl", "lfix_incremental.jl", "composite_gradient.jl", "composite_gradient_fast.jl",
+          "cm_lookup_kernels.jl", "lfix_cm_aware.jl", "cm_hessian_architectures.jl", "cm_production_bundle.jl",
+          "compressed_factual_buffer_reuse.jl", "cm_screen_bridge.jl", "gradient_workspace.jl",
+          "lfix_factorized.jl", "lfix_factorized_workspace.jl", "lfix_cm_cplus.jl", "nested_quantile_grids.jl",
+          "cm_outer_driver.jl", "cm_config.jl", "cm_meanzc_moments.jl", "cm_meanzc_config.jl",
+          "cm_meanzc_production.jl", "cm_meanzc_cplus.jl", "incumbent_logic.jl", "cm_checkpoint.jl",
+          "cm_originzc_target_layout.jl", "zc_restriction_operator_ragged.jl", "cm_aspace_coordinate.jl",
+          "cm_originzc_moments.jl", "cm_originzc_production.jl", "cm_originzc_cplus.jl", "cm_originzc_config.jl",
+          "cm_originzc_checkpoint.jl", "direction_bounds.jl", "cm_frechet_hessian.jl", "cm_frechet_level.jl",
+          "cm_frechet_lookup_production.jl", "cm_frechet_cplus.jl", "country_resolve.jl",
+          "cross_delta_cache.jl", "compressed_moments.jl", "canonical_price_precompute_workspace.jl",
+          "hard_score_b_cache.jl", "structured_moment_build.jl", "compressed_cc_inner.jl", "compressed_live.jl",
+          "lfix_buffer_reuse.jl", "lfix_base_workspace_pooled.jl", "lfix_kbplus_workspace.jl",
+          "bandwidth_cache_policy.jl", "fast_range_screen.jl", "dual_bank.jl", "negative_cache.jl",
+          "dual_bank_ab_harness.jl", "reusable_context.jl", "organic_failure_capture.jl",
+          "multistart_seed_generator.jl",
+          "core_exact_hessian.jl", "winner_pair_cross_hessian.jl", "operator_psi_bundle.jl",
+          "cm_callback_health.jl", "lfix_base_workspace.jl", "shared_a_gradient.jl", "operator_verification.jl",
+          "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
+          "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
+          "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_verification.jl",
+          "pairwise_quantile_production.jl", "pairwise_quantile_mass_gradient.jl",
+          "pairwise_quantile_outer_production.jl"]
+    include(joinpath(_D4E, f))
+end
+using LinearAlgebra, Printf, SpecialFunctions
+
+lp(xs...) = (println(xs...); flush(stdout))
+const W_AB   = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 100_000
+const L_AB   = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 10
+const CUTSRC = length(ARGS) >= 3 ? Symbol(ARGS[3]) : :frechet_theoretical
+const GRAV   = default_gravity_exclude_cells_brazil_korea()
+const OPTS = [joinpath(@__DIR__, "..", f) for f in split(get(ENV,"PQ_OPTS","ek_inner.opt"), ",")]
+
+lp("="^96)
+lp("KNITRO BLAS BACKEND A/B: W=", W_AB, " L=", L_AB, " cutoff_source=:", CUTSRC)
+for (i,o) in enumerate(OPTS); lp("  arm ", i, ": ", basename(o)); end
+lp("  JULIA_NUM_THREADS=", Threads.nthreads(),
+   "  OPENBLAS_NUM_THREADS=", get(ENV, "OPENBLAS_NUM_THREADS", "<unset>"))
+lp("="^96)
+
+t0 = time()
+ctx_raw = d20_real_setup_design(W = W_AB, δ = 50.0, find_smallest = true, draw_design = :sobol_randomized,
+    draw_seed = 20260719, destination_sample = :exclude_row, exclude_diagonal_gravity = true,
+    gravity_exclude_cells = GRAV, σHat = 3.0, inner_lower_limit = -10.0)
+ctx = attach_compressed_factual_workspace(ctx_raw, ctx_raw.D, ctx_raw.D_dest, ctx_raw.W)
+layout = PairwiseQuantileMassLayout(ctx.D, L_AB)
+pcx = build_pairwise_quantile_production_context(ctx, layout;
+    cutoff_source = CUTSRC, min_bin_count = max(10, W_AB ÷ (2 * L_AB^2)))
+ctx_cm = pcx.ctx_cm
+geo = build_aspace_geometry(ctx)
+w_cal = cm_w0_from_calibration(ctx, geo.pe, :powered_aspace)
+xf = x_free_from_w(vcat(w_cal[1], cm_z_from_a(w_cal[2:end], cm_fixed_theta(ctx),
+    precompute_cm_aspace_xy(ctx), geo.pe)), geo.pe)
+mass0 = uniform_mass_raw(layout)
+lp("context in ", round(time()-t0, digits=1), "s;  inner dual n = ", ctx_cm.obj.outer_constr_index)
+
+"Which BLAS shared objects are actually mapped into THIS process right now."
+blas_maps() = join(sort(unique([m.match for m in eachmatch(r"/[^\s]*(?:openblas|mkl|blas)[^\s]*\.so[^\s]*",
+                   read("/proc/self/maps", String))])), "\n      ")
+
+function timed_arm(label, optfile)
+    ctx_cm.obj.inner_loop_opt = optfile
+    t = time(); base, v = archPQ_verified_state(xf, mass0, ctx_cm); wall = time() - t
+    @printf("  %-34s Delta=%.17g  wall=%8.2fs  n_fg=%d n_hess=%d  %s\n",
+            label, v.Delta_dual, wall, v.n_fg, v.n_hess, string(classify_inner_result(v)))
+    return (Delta=v.Delta_dual, wall=wall, cls=classify_inner_result(v))
+end
+
+lp("\npass 1 (JIT-warming, discarded):")
+for o in OPTS; timed_arm(basename(o), o); end
+lp("\nBLAS shared objects mapped after pass 1:\n      ", blas_maps())
+lp("\npass 2 (WARM, reported):")
+res = [timed_arm(basename(o), o) for o in OPTS]
+
+lp("\n", "="^96)
+ref = res[1]
+for (o, r) in zip(OPTS, res)
+    @printf("%-38s %9.2f s   %6.2fx vs arm 1   Delta match: %s\n", basename(o), r.wall,
+            ref.wall / r.wall, r.Delta == ref.Delta ? "BIT-IDENTICAL" : "DIFFERS")
+end
+allok = all(r -> r.Delta == ref.Delta && r.cls == VerifiedSolved, res)
+lp(allok ? "\nPASS  every arm VerifiedSolved and bit-identical -- differences are pure wall-clock" :
+           "\nFAIL  an arm changed the answer or failed to verify")
+lp("="^96)
+exit(allok ? 0 : 1)

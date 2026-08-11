@@ -87,6 +87,14 @@ const INNER_LOWER_LIMIT   = -10.0
 const A_COORD_MODE        = :powered_aspace
 const FIND_SMALLEST       = true          # direction = "upper"
 const Z_HALFWIDTH         = 30.0
+# Inner-solve KNITRO options. NOT the shared ek_inner.opt: at L=6/W=100k, 96.6% of KN_solve wall is
+# non-callback time in a dense O(n^3) KKT factorization, and `linsolver auto` was picking a SERIAL
+# solver -- measured at 1.45 average cores under every BLAS thread knob. ek_inner_pq.opt sets
+# linsolver=ma97 (parallel AND deterministic; ma86 is faster still but explicitly non-deterministic,
+# so rejected) with 4 solver threads and par_concurrent_evals off, since we thread our own callbacks
+# and must not let KNITRO evaluate concurrently on top of that. 1.52x, all solvers agreeing on
+# Delta* to ~8e-15. See the file's own header for the full sweep.
+const INNER_OPT           = "ek_inner_pq.opt"
 # ---- protocol [budgets.discovery_feasible_start] (minutes) ------------------------------------
 const STAGE_A_MIN = 75.0
 const STAGE_B_MIN = 30.0
@@ -134,7 +142,7 @@ common = (W = W_PROD, draw_design = DRAW_DESIGN, draw_seed = DRAW_SEED, σHat = 
           destination_sample = DESTINATION_SAMPLE, exclude_diagonal_gravity = EXCLUDE_DIAG_GRAV,
           gravity_exclude_cells = GRAV, L = PQ_L, cutoff_source = CUTOFF_SOURCE,
           min_bin_count = MIN_BIN_COUNT, A_coordinate_mode = A_COORD_MODE,
-          find_smallest = FIND_SMALLEST)
+          find_smallest = FIND_SMALLEST, inner_opt_override = INNER_OPT)
 
 "Path of a stage's `<label>_latest.jls` checkpoint."
 ckpt_of(dir, label) = joinpath(dir, "$(label)_latest.jls")
