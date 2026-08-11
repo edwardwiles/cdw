@@ -291,7 +291,13 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
     D = op.D; npair = op.npair; L = op.L; nc = L - 1
     nrow = n_total_rows(D, L)
     size(HfullR) == (nrow, nrow) || error("fill_pairwise_quantile_hessian_raw!: size(HfullR)=$(size(HfullR)) != ($nrow,$nrow)")
-    fill!(HfullR, 0.0)
+    # Threaded zero: at L=10 this is 1.81 GiB, and a serial `fill!` measured 0.315 s of this
+    # function's 1.262 s. Columns are disjoint, so this is embarrassingly parallel.
+    Threads.@threads :static for j in 1:nrow
+        @inbounds @simd for i in 1:nrow
+            HfullR[i, j] = 0.0
+        end
+    end
     T1 = tabs.T1; T2 = tabs.T2
 
     # ---- H_MM same-origin (diagonal, from T1) ----
@@ -316,8 +322,12 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
     end
 
     # ---- H_MP: marginal origin o vs pair pidx=(p,q), p<q ----
-    @inbounds for pidx in 1:npair
-        for o in 1:D
+    # Threaded over pidx. `pair_row` is strictly increasing in pidx and every marginal row index is
+    # below every pair row index, so here i (marginal) < j (pair) always, and `_lo_write!` therefore
+    # stores at [j, i] -- row from the PAIR, column from the MARGINAL. Two iterations with different
+    # pidx write disjoint ROW blocks, so there is no race.
+    Threads.@threads :dynamic for pidx in 1:npair
+        @inbounds for o in 1:D
             slot = origin_slot(op, pidx, o)
             if slot == 1                       # o == p: Raw[a,(b,c)] = delta(a,b)*T2[a,c,pidx]
                 for c in 1:nc, a in 1:nc
@@ -340,9 +350,17 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
     end
 
     # ---- H_PP: pidx1 vs pidx2, pidx1<pidx2 ----
-    @inbounds for pidx1 in 1:npair-1
+    # The dominant block of the whole assembly: npair*(npair-1)/2 pair-of-pairs, each nc^4 cells
+    # (at D=20/L=10 that is 17,955 x 6,561 ~ 118M writes).
+    #
+    # Threaded over pidx1. Since pidx1 < pidx2 and `pair_row` is strictly increasing in pidx, i < j
+    # always, so `_lo_write!` stores at [j, i] -- row from pidx2, COLUMN from pidx1. Distinct pidx1
+    # therefore own disjoint column blocks and cannot race. `:dynamic` because the pidx2 loop is
+    # triangular: pidx1=1 does npair-1 inner iterations and pidx1=npair-1 does exactly one, so
+    # static chunks would leave most threads idle.
+    Threads.@threads :dynamic for pidx1 in 1:npair-1
         (o1, o2) = op.pairs[pidx1]
-        for pidx2 in pidx1+1:npair
+        @inbounds for pidx2 in pidx1+1:npair
             (o3, o4) = op.pairs[pidx2]
             s1 = (o1 == o3 || o1 == o4) ? o1 : 0
             s2 = (o2 == o3 || o2 == o4) ? o2 : 0
@@ -361,16 +379,23 @@ function fill_pairwise_quantile_hessian_raw!(HfullR::AbstractMatrix{Float64}, op
                 opidx = pair_index(op, other1, other2)
                 tidx = op.triple_lookup[s, opidx]
                 (u, _v) = op.pairs[opidx]   # u < _v, sorted order of (other1,other2)
-                for d in 1:nc, c in 1:nc, b in 1:nc, a in 1:nc
-                    bin_s_1 = (o1 == s) ? a : b
-                    bin_s_2 = (o3 == s) ? c : d
-                    bin_s_1 == bin_s_2 || continue
-                    other1_val = (o1 == s) ? b : a
-                    other2_val = (o3 == s) ? d : c
-                    bin_u = (other1 == u) ? other1_val : other2_val
-                    bin_v = (other1 == u) ? other2_val : other1_val
+                # The shared origin forces bin_s_1 == bin_s_2, so of the nc^4 (a,b,c,d) cells only
+                # nc^3 are ever written -- the old form enumerated all nc^4 and threw away 8/9 of
+                # them on a `continue`. Enumerate the surviving cells directly instead: pick the
+                # SHARED origin's bin `bs` once, then the two non-shared origins' bins freely, and
+                # reconstruct (a,b,c,d). Identical writes, nc^3 iterations instead of nc^4.
+                s_is_first_1 = (o1 == s)    # loop-invariant: which slot of pidx1 carries s
+                s_is_first_2 = (o3 == s)    # ditto for pidx2
+                o1_is_u      = (other1 == u)
+                for bs in 1:nc, ov1 in 1:nc, ov2 in 1:nc
+                    a = s_is_first_1 ? bs  : ov1
+                    b = s_is_first_1 ? ov1 : bs
+                    c = s_is_first_2 ? bs  : ov2
+                    d = s_is_first_2 ? ov2 : bs
+                    bin_u = o1_is_u ? ov1 : ov2
+                    bin_v = o1_is_u ? ov2 : ov1
                     i = pair_row(D, pidx1, a, b, L); j = pair_row(D, pidx2, c, d, L)
-                    _lo_write!(HfullR, i, j, read_T3(tabs, tidx, bin_s_1, bin_u, bin_v))
+                    _lo_write!(HfullR, i, j, read_T3(tabs, tidx, bs, bin_u, bin_v))
                 end
             else
                 error("fill_pairwise_quantile_hessian_raw!: pidx1=$pidx1 pidx2=$pidx2 share $nshared>1 origins -- impossible for distinct pairs")
