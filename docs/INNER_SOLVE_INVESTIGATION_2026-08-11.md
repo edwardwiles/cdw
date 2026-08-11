@@ -11,15 +11,37 @@ only 100 and 28 usable evaluations. This investigation found why, and the cause 
 
 | # | change / finding | measured effect | status |
 |---|---|---|---|
-| 1 | **`opttol`/`opttol_abs` 1e-12 → 1e-10** | **3.25× usable evaluations**; `−102` class eliminated | **flipped**, gated on both CROSS families |
+| 1 | **`opttol`/`opttol_abs` 1e-12 → 1e-10** | **3.25× usable evaluations**; `−102` class eliminated | measured; **opt-in only** (see §0b) |
 | 2 | H_CZ `:j_parallel` | 2.8× on that block (~10% of an outer eval) | flipped, gated |
-| 3 | `INNER_KEEP_LAST_GOOD_X` (don't NaN a good dual on failure) | cold starts 70%→3%; 1.33× on accepted solves | implemented, **default off** |
+| 3 | `INNER_KEEP_LAST_GOOD_X` (don't NaN a good dual on failure) | cold starts 70%→3%; 1.33× on accepted solves | **default ON**, in production |
 | 4 | `use_dual_bank = true` | 4 → 6 accepted solves | **not** flipped (small sample) |
-| 5 | **`linsolver auto` → `ma97`** (`par_lsnumthreads 10`) | 1.25× on a like-for-like solve; **+23% evaluations** | **flipped**, gated on OZC-CROSS |
+| 5 | **`linsolver auto` → `ma97`** (`par_lsnumthreads 10`) | 1.25× on a like-for-like solve; **+23% evaluations** | measured; **opt-in only** (see §0b) |
 | 6 | `canonical_price_precompute` μ-guard | 0.109 s/call, ≈0.4% of wall | flipped |
 | — | support screens A and B | **0 of 18** failures caught | rejected |
 | — | dual-bank pre-check ("C") | **0** solves knowable at the warm start | rejected |
 | — | `ThresholdAbortState` ("D") | identical to the existing `lower_limit` | rejected |
+
+## 0b. Both `.opt` changes are OPT-IN, not the production default
+
+`full_aod_diag/ek_inner.opt` is shared by **all five families and every driver**, and the two solver
+changes below are gated on the CROSS families only. Rather than let `flexible_cm`,
+`common_frechet` and diagonal origin-ZC inherit them untested, `ek_inner.opt` is left **byte-identical
+to its pre-2026-08-11 state** and the tuned settings ship as a separate file:
+
+```
+full_aod_diag/ek_inner_tuned_2026-08-11.opt     opttol/opttol_abs 1e-10, linsolver ma97, par_lsnumthreads 10
+```
+
+Opt in per run via the `inner_loop_opt` kwarg now exposed on `run_originzc_upper_checkpointed`:
+
+```julia
+run_originzc_upper_checkpointed(w0; ...,
+    inner_loop_opt = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner_tuned_2026-08-11.opt"))
+```
+
+Make it the default only after gating the other three families — that is step 1 of §8. The A/B arms
+(`ek_inner_opttol_1e-10.opt`, `ek_inner_opttol_1e-08.opt`, `ek_inner_ma97.opt`) are retained because
+the test scripts reference them.
 
 ## 1. The headline: the inner solve was chasing an unreachable tolerance
 
@@ -53,7 +75,7 @@ Both sit in the same class as the two flips already accepted this session (BLAS 
 H_CZ `:j_parallel` 1.044e-10), i.e. the solver's own tolerance floor. `feastol` is **untouched** at
 1e-12, so this changes when KNITRO is satisfied about *optimality*, never about *feasibility*.
 
-`ek_inner.opt` is now 1e-10; the original is preserved as `ek_inner_opttol_1e-12_PRE_2026-08-11.opt`.
+**Not the production default** — see §0b. `ek_inner.opt` keeps 1e-12; opt in via `ek_inner_tuned_2026-08-11.opt`.
 
 > **Scope limit, stated plainly.** `ek_inner.opt` is shared by **all five families and every
 > driver**, but this is gated only on OZC-CROSS and CM+ZC-CROSS. `flexible_cm`, `common_frechet` and
@@ -76,8 +98,8 @@ same start point, same budget, at opttol 1e-10:
 | accepted median Hessian calls | 22 | 21 (unchanged) |
 | usable evaluations | 13 | **16 (+23%)** |
 
-Δ agrees to **9.5e-11** relative — a solver setting, not a scientific one. Flipped to `ma97`
-(`par_lsnumthreads 10`); `ek_inner_linsolver_auto_PRE_2026-08-11.opt` kept for rollback. `ma86` is
+Δ agrees to **9.5e-11** relative — a solver setting, not a scientific one. **Not the production
+default** — see §0b; it ships in `ek_inner_tuned_2026-08-11.opt`. `ma86` is
 comparable but KNITRO documents it as **non-deterministic**, so it is rejected on principle; `ma97`
 is the deterministic parallel one.
 
@@ -256,7 +278,9 @@ wave at the new tolerance**, not longer single runs.
 
 ## 8. Ranked next steps
 
-1. **Gate the three untested families** on the `opttol` flip (§1) — it is already live for them.
+1. **Gate the three untested families** on the `opttol` + `ma97` settings (§1, §1b), then make
+   `ek_inner_tuned_2026-08-11.opt` the default. They are currently opt-in, so nothing is at risk
+   meanwhile — but the 3.25× is also not being collected by default.
 2. **Cross multistart wave** at 1e-10, per the 8h write-up's recommendation.
 3. **Decide `INNER_KEEP_LAST_GOOD_X`** (§4) — recommended on, worth 1.33× generally and more in the
    endgame.

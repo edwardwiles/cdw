@@ -148,5 +148,11 @@ point's solution. This is a SPEED change (CLAUDE.md: warm/cold start affects how
 there, never whether the optimum is reachable) -- it must not, and does not, change any accept/reject
 outcome by itself.
 """
-const INNER_KEEP_LAST_GOOD_X = Ref{Bool}(false)
+# 2026-08-11: flipped to `true` for the production merge. Measured (clean A/B, both arms at
+# opttol 1e-10, only this flag differing): cold starts 70% -> 3%, accepted solves 22 -> 16 Hessian
+# calls, 60.6s -> 45.6s (1.33x). Modest in normal search; the per-solve spread shows it is worth
+# considerably more in the tightly-clustered endgame where long searches actually stall (the
+# 2026-08-10 CM+ZC run re-evaluated the IDENTICAL point at evals 25/26/28 while stalling). Set to
+# `false` to restore the historical NaN-on-failure behaviour.
+const INNER_KEEP_LAST_GOOD_X = Ref{Bool}(true)
 
