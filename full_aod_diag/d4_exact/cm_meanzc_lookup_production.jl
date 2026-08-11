@@ -17,10 +17,15 @@ _adapt_hess_cb_for_meanzc_operator(hess_cb) =
 
 "KNITRO FG callback: ONE combined callback for f and g every invocation (this codebase's established `KN_add_eval_callback(kc, true, ...)` protocol -- mirrors every other lookup/operator callback in this codebase)."
 function _callbackEvalFG_inner_meanzc_operator!(kc, cb, evalRequest, evalResult, userParams)
-    st = userParams
-    x = evalRequest.x
-    f = st(x, evalResult.objGrad)
-    evalResult.obj[1] = f <= st.obj.lower_limit ? -KNITRO.KN_INFINITY : f
+    # 2026-08-11 profiling: see the twin comment in cm_originzc_lookup_production.jl. @cmhess_prof
+    # (gated by CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[], default false) NOT @prof, so this costs a
+    # single Ref check in production -- it fires once per inner KNITRO iteration.
+    @cmhess_prof "meanZC_FG_callback" begin
+        st = userParams
+        x = evalRequest.x
+        f = st(x, evalResult.objGrad)
+        evalResult.obj[1] = f <= st.obj.lower_limit ? -KNITRO.KN_INFINITY : f
+    end
     return 0
 end
 

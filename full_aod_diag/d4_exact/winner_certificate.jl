@@ -135,9 +135,18 @@ function canonical_price_precompute(θ_full::AbstractVector, ctx)
     # function scope and returns before any other call to this function happens.
     ws = hasproperty(ctx, :canonical_price_ws) ? ctx.canonical_price_ws : nothing
     if ws !== nothing && ws.W == W && ws.D == D
-        ws.mulU .= μ .* ws.logU
-        ws.UPow .= U .^ (-μ)
-        ws.UσPow .= γo.Uσ .^ (-μ)
+        # 2026-08-11: all three of these depend on mu ONLY (given U/Uσ, which this workspace already
+        # treats as campaign-constant -- see logU). They were rebuilt on EVERY call regardless, which
+        # at real D=20/W=100,000 is 2 x (W*D) = 4e6 non-integer `^` evaluations per call for arrays
+        # whose contents cannot have changed: mu = θ_full[1] is not a free outer coordinate under the
+        # D=20 layout. Refill only when mu actually moves; correct under any layout that DOES vary
+        # mu, since the guard rebuilds then. See CanonicalPricePrecomputeWorkspace's own comment.
+        if ws.mu_filled != μ
+            ws.mulU .= μ .* ws.logU
+            ws.UPow .= U .^ (-μ)
+            ws.UσPow .= γo.Uσ .^ (-μ)
+            ws.mu_filled = μ
+        end
         mulU, UPow, UσPow = ws.mulU, ws.UPow, ws.UσPow
     else
         mulU = μ .* log.(U)

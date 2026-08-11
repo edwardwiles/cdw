@@ -67,10 +67,17 @@ end
 
 "KNITRO FG callback protocol: this codebase's `KN_add_eval_callback(kc, true, ...)` registration calls ONE combined callback for both f and g every invocation -- mirrors `_callbackEvalFG_inner_cmlookup!` exactly (see cm_lookup_production.jl / cm_frechet_lookup_production.jl for the same pattern and the KNITRO-wiring bug this must not repeat)."
 function _callbackEvalFG_inner_originzc_operator!(kc, cb, evalRequest, evalResult, userParams)
-    st = userParams
-    x = evalRequest.x
-    f = st(x, evalResult.objGrad)
-    evalResult.obj[1] = f <= st.obj.lower_limit ? -KNITRO.KN_INFINITY : f
+    # 2026-08-11 profiling: this path had NO timing label at all, so a whole-run profile could only
+    # report the FG share as an unmeasured residual (outer wall minus Hessian-callback total). Uses
+    # @cmhess_prof, NOT @prof, so it is gated by CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] (default
+    # false = a single Ref check, zero overhead) rather than PROF_ENABLED[] (default true) -- this
+    # fires once per inner KNITRO iteration in production and must cost nothing when not profiling.
+    @cmhess_prof "originZC_FG_callback" begin
+        st = userParams
+        x = evalRequest.x
+        f = st(x, evalResult.objGrad)
+        evalResult.obj[1] = f <= st.obj.lower_limit ? -KNITRO.KN_INFINITY : f
+    end
     return 0
 end
 

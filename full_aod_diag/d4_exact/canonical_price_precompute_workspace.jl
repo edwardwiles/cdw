@@ -25,12 +25,28 @@ mutable struct CanonicalPricePrecomputeWorkspace
     mulU::Matrix{Float64}
     UPow::Matrix{Float64}
     UσPow::Matrix{Float64}
+    # 2026-08-11: mu used to fill mulU/UPow/UσPow, so canonical_price_precompute can skip refilling
+    # them when mu has not moved. NaN sentinel => "never filled", and NaN != NaN makes the first
+    # call always rebuild without a separate flag.
+    #
+    # WHY THIS IS SAFE, and why it is exactly as safe as what this workspace already does: mulU,
+    # UPow and UσPow depend ONLY on (U, γ.Uσ, mu). This struct already treats U as campaign-constant
+    # -- `logU` is filled once at construction and reused forever -- so keying the other three on mu
+    # alone rests on precisely the same assumption that `logU` already rests on. If U could change
+    # under a live workspace, `logU` would already be wrong today.
+    #
+    # It does NOT assume mu is fixed: when mu changes the arrays are rebuilt. That matters because
+    # mu is campaign-constant only under the D=20 layout (context_real_d20.jl's
+    # `free_idx = vcat(3 + Dact, Aod_offset+1:...)` covers gp and the A_od block, not mu = θ_full[1])
+    # -- other layouts/modes may vary it, and they stay correct here.
+    mu_filled::Float64
 end
 
 "One-time build: matches ctx.U's shape (W x D) and ctx.γ.Uσ's own shape for UσPow."
 function build_canonical_price_precompute_workspace(ctx)
     U = ctx.U
-    return CanonicalPricePrecomputeWorkspace(size(U, 1), ctx.D, log.(U), similar(U), similar(U), similar(ctx.γ.Uσ))
+    return CanonicalPricePrecomputeWorkspace(size(U, 1), ctx.D, log.(U), similar(U), similar(U),
+                                             similar(ctx.γ.Uσ), NaN)
 end
 
 """

@@ -171,8 +171,36 @@ both W=100,000 and W=500,000 -- see `ZC_HESSIAN_BACKEND_CLOSEOUT_MASTER_2026-08-
 `ZC_COMPILE_FREE_BACKEND_AB_2026-08-01.csv`. `:draw_chunk_thread_local` remains available as a
 selectable diagnostic fallback (unchanged behavior, not removed). Applies to CM+ZC only -- origin-ZC
 has no CM-grid block, hence no H_CZ.
+
+Flipped to `:j_parallel` (2026-08-11, hcz_btranspose_candidate_2026-08-11.jl). The 2026-08-11
+outer-eval profile found H_CZ_prep had OVERTAKEN H_ZZ as the largest block of the CM+ZC Hessian
+callback (2.122 s vs 1.745 s) once the 2026-08-10 BLAS-thread gate fix gave H_ZZ its validated 8
+threads. `:j_parallel` partitions over restriction COLUMNS instead of draws, which (a) removes the
+per-worker accumulator entirely -- 882 MB at 32 workers on the cross shape, ~0 now -- and the serial
+cross-worker reduction with it, and (b) reads each ZcS column ONCE rather than once per (x,j) pair,
+cutting streamed traffic 26.4 GB -> 1.3 GB per call. Measured at the REAL production shapes, min of
+3 reps, `julia -t 32`:
+
+    CM+ZC-CROSS (nz=1770): 1.779 s -> 0.632 s @20 workers;  1.185 -> 0.422 @32   (2.8x)
+    CM+ZC diagonal (nz=630): 0.568 s -> 0.234 s @20 workers;  0.488 -> 0.175 @32   (2.8x)
+
+and it is the only one of the three that keeps scaling: 1->32 workers gives 8.6x for
+:draw_chunk_reordered, 8.0x for :draw_chunk_btranspose (which PLATEAUS after 16 as its scratch and
+reduction grow), and 21-22x for :j_parallel.
+
+BOTH CM+ZC families are covered by this one flip because `build_cm_meanzc_bin_ctx` and its Hessian
+blocks are reused verbatim by the cross family -- there is one H_CZ code path, not two.
+
+TOLERANCE-LEVEL, not bit-identical: each cell is summed over all W in a single pass rather than as
+per-worker partial sums added in wk order. Measured agreement 3.7e-15 (diagonal) / 5.0e-15 (cross)
+relative, against HCZ_CANDIDATE_TOL = 1e-9. This is the same class of change as the 2026-08-10 BLAS
+thread-count flip: it perturbs the Hessian at the 1e-15 level, which moves the inner solve's iterate
+sequence and hence Delta_dual at the solver's own ~1e-11 tolerance floor -- so runs are NOT
+bit-reproducible against results produced before this flip. `:draw_chunk_btranspose` (bit-identical
+to `:draw_chunk_reordered`, and the better choice in the 4-16 worker range) and both older backends
+remain selectable.
 """
-const HCZ_PREP_BACKEND_DEFAULT = Ref{Symbol}(:draw_chunk_reordered)
+const HCZ_PREP_BACKEND_DEFAULT = Ref{Symbol}(:j_parallel)
 const HCZ_PREP_DRAWCHUNK_WORKERS_DEFAULT = Ref{Int}(resolve_cross_hessian_workers_default())
 
 """
@@ -210,8 +238,39 @@ function hcz_prep_dispatch!(bin_zc_ws::BinZCrossScratch, backend::Symbol,
         # exercised. Fixed before merge.
         cctx.bin_zc_drawchunk = ensure_bin_zc_drawchunk_scratch!(cctx.bin_zc_drawchunk, bin_zc_ws.D, bin_zc_ws.L, bin_zc_ws.nz, workers)
         bin_zc_cross_hessian_fill_drawchunk_reordered!(bin_zc_ws, cctx.bin_zc_drawchunk, Bidx, ZcS; workers = workers, Pow = Pow)
+    elseif backend === :draw_chunk_btranspose
+        # 2026-08-11: bin-major thread-local accumulator (hcz_btranspose_candidate_2026-08-11.jl).
+        # Same loop order and partition as :draw_chunk_reordered, accumulator permuted to
+        # (L+1, D, nz, workers) so the ~51 live bin targets for a fixed (x,j) are contiguous and
+        # L1-resident instead of spanning ~14MB at stride D*nz. Bit-identical result.
+        # Uses its OWN scratch field (cctx.bin_zc_btranspose) -- the two layouts are not
+        # interchangeable, so they must not share a buffer.
+        isdefined(Main, :ensure_bin_zc_btranspose_scratch!) ||
+            error("hcz_prep_dispatch!: backend=:draw_chunk_btranspose requires hcz_btranspose_candidate_2026-08-11.jl to be included")
+        BIN_ZC_BTRANSPOSE_SCRATCH[] = ensure_bin_zc_btranspose_scratch!(BIN_ZC_BTRANSPOSE_SCRATCH[], bin_zc_ws.D, bin_zc_ws.L, bin_zc_ws.nz, workers)
+        bin_zc_cross_hessian_fill_drawchunk_btranspose!(bin_zc_ws, BIN_ZC_BTRANSPOSE_SCRATCH[], Bidx, ZcS; workers = workers, Pow = Pow)
+    elseif backend === :j_parallel
+        # 2026-08-11: parallelise over restriction COLUMNS j rather than draws w
+        # (hcz_btranspose_candidate_2026-08-11.jl). Different j write to disjoint output cells, so
+        # this needs NO thread-local accumulator and NO cross-worker reduction -- and its j-outer /
+        # x-inner order reads each ZcS column once instead of D times. Measured 2.8x over
+        # :draw_chunk_reordered at 32 workers on the CM+ZC-CROSS shape, with ~0 scratch instead of
+        # 882 MB. Tolerance-level (not bit-identical): each cell is summed over all W in one pass
+        # rather than per-worker chunks, agreeing to ~5e-15 relative vs HCZ_CANDIDATE_TOL = 1e-9.
+        isdefined(Main, :bin_zc_cross_hessian_fill_jparallel!) ||
+            error("hcz_prep_dispatch!: backend=:j_parallel requires hcz_btranspose_candidate_2026-08-11.jl to be included")
+        bin_zc_cross_hessian_fill_jparallel!(bin_zc_ws, Bidx, ZcS; workers = workers, Pow = Pow)
     else
-        error("hcz_prep_dispatch!: unknown backend :$backend (must be :origin_owned|:draw_chunk_thread_local|:draw_chunk_reordered)")
+        error("hcz_prep_dispatch!: unknown backend :$backend (must be :origin_owned|:draw_chunk_thread_local|:draw_chunk_reordered|:draw_chunk_btranspose|:j_parallel)")
     end
     return bin_zc_ws
 end
+
+# 2026-08-11: HCZ_PREP_BACKEND_DEFAULT[] is now :j_parallel, whose kernel lives in the candidate
+# file below. Included HERE (at the end of this file, after BinZCrossDrawChunkScratch exists so the
+# candidate's own `isdefined(...) || include(...)` guard short-circuits and cannot recurse) rather
+# than added to ~40 production scripts' include lists one by one -- every one of which would
+# otherwise fail at the first Hessian callback with "backend=:j_parallel requires
+# hcz_btranspose_candidate_2026-08-11.jl to be included". Same idiom this codebase uses throughout.
+isdefined(Main, :bin_zc_cross_hessian_fill_jparallel!) ||
+    include(joinpath(@__DIR__, "hcz_btranspose_candidate_2026-08-11.jl"))

@@ -22,7 +22,13 @@ println("="^78)
 println("Section 1: real D=20/W=80,000 context")
 println("="^78)
 lp(">>> building real D=20/W=80000 context...")
-ctx0 = d20_real_setup(W = 80_000, δ = 1.0, find_smallest = true, destination_sample = :exclude_row)
+# 2026-08-11: `inner_lower_limit` became a REQUIRED kwarg (no default) in the 2026-08-06
+# lower-limit/hotpath task, which left this script throwing UndefKeywordError before its first
+# check -- one of the ~200 scripts CLAUDE.md records as intentionally broken by that hardening.
+# Supplying the production value explicitly is compliance with that rule, not a workaround; the
+# value is irrelevant to what this script tests (workspace caching), but it must be stated.
+ctx0 = d20_real_setup(W = 80_000, δ = 1.0, find_smallest = true, destination_sample = :exclude_row,
+                      inner_lower_limit = -10.0)
 x_free_calib = ctx0.θ0_up[ctx0.free_idx]
 θfull_calib = CS.reconstruct_full(x_free_calib, ctx0.m)
 
