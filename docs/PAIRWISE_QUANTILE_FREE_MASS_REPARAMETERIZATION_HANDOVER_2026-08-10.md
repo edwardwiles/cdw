@@ -145,10 +145,39 @@ So:
 
 **Set expectations honestly: this reparameterization does NOT make the inner solve faster.** Same
 row count, same T1–T4 cost. Measured 2026-08-10 at real D=20, W=100,000: L=5 → 39.9 s/solve,
-L=10 → 1084.6 s/solve (both `VerifiedSolved`). The user wants L=10, so if a full outer bound search
-at L=10 is the target, the lever is `pairwise_quantile_hvp.jl` (it skips T3/T4 entirely) — gate it at
-L=10 as a separate piece of work. What this reparameterization buys is an **exact** outer gradient,
-not speed.
+L=10 → 1084.6 s/solve (both `VerifiedSolved`). What this reparameterization buys is an **exact**
+outer gradient, not speed.
+
+> ⚠️ **`pairwise_quantile_hvp.jl` is NOT the fix for L=10 cost — it has already been measured and
+> rejected.** An earlier draft of this handover said it was "the lever"; that was wrong, and the
+> evidence was already in this repo. The 2026-08-09 session ran a decisive controlled A/B at real
+> D=20/W=100,000 (`profile_pairwise_quantile_d20_hvp_ab.jl`, both variants verifier-confirmed
+> correct, duals agreeing to ~1e-8):
+>
+> | variant | n_hess(-vec) calls | wall-clock |
+> |---|---|---|
+> | dense (`hessopt=exact`) | 9 | **343.72 s** |
+> | HVP (`hessopt=5`, CG) | **6084** | **1512.30 s** |
+>
+> Each HVP callback is far cheaper, but CG needed 676× more of them — **4.4× slower overall**, and
+> the verdict recorded there is "HVP is not adopted for production." That is a genuine
+> algorithm-conditioning property of this problem, not a warm-start artifact. See
+> `PAIRWISE_QUANTILE_HESSIAN_OPTIMIZATION_RESULTS_2026-08-09.md` Part 1 and memory
+> `pairwise-quantile-hessian-optimization-2026-08-09`.
+>
+> Whether the ratio narrows at L=10 (per-HVP-call cost is roughly `L`-independent, while the dense
+> callback grows steeply with `L`) is a *reasonable but unmeasured* hypothesis, and CG's iteration
+> count would also be expected to grow with the larger, worse-conditioned system. Do not act on it
+> without an A/B at L=10.
+
+**What the measured evidence actually points at for L=10 cost.** The same 2026-08-09 session
+delivered a real 7.0× via T3/T4 dedup + threading (407.4 s → 57.8 s at L=5/W=100k, 10 threads) and
+identified what is left: *"the cross-block and final-packed-write blocks are NOT threaded and are
+now the callback's new bottleneck (7.09 s combined) if further speedup is ever wanted."* Those two
+blocks scale badly in `L` — the packed write is `O(n_rows²)`, and `n_rows` goes 3,120 → 15,570 from
+L=5 to L=10. A sub-block profile at L=10 (`profile_pairwise_quantile_d20.jl 100000 10`, results in
+`logs/pq_L10_blockprofile.log`) is the right way to confirm where the time actually goes before
+optimizing anything.
 
 ### 2.4 A free simplification
 
@@ -292,8 +321,10 @@ Required gates, in order:
   small `h` and treat disagreement as a bug — it is an adaptive bandwidth-selected secant whose own
   docstring says a sub-`h_floor=1e-4` probe reproduces a "known-wrong" gradient. Gate it by
   bit-identity against `composite_gradient_at_fast`, as the current gate does.
-- Do **not** expect a speedup (§2.3). If L=10 outer search performance is the goal, that is
-  `pairwise_quantile_hvp.jl`, a separate task.
+- Do **not** expect a speedup (§2.3), and do **not** reach for `pairwise_quantile_hvp.jl` as the
+  L=10 performance fix — it was measured at real D=20/W=100k and rejected (4.4× slower, CG needs
+  6084 calls vs dense's 9). Read `PAIRWISE_QUANTILE_HESSIAN_OPTIMIZATION_RESULTS_2026-08-09.md`
+  Part 1 before forming any plan that involves it.
 - Do **not** push any branch to a remote without asking.
 - Per CLAUDE.md: push the session's deliverables to Dropbox under a new dated subfolder before
   finishing, and check any long-running job with `ps` + `tail` within ~60 s of launching it.

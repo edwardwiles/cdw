@@ -216,14 +216,22 @@ projection is **hours per inner solve at L=10**, and an outer bound search needs
 That is consistent with the earlier `pairwise_grid_common_marginal` restriction, which at D=20/L=10
 took ~27 min per inner solve at W=80,000.
 
-**If L=10 is too slow via the dense-Hessian path, the designed escape hatch already exists and
-should be tried before falling back to L=5**: `pairwise_quantile_hvp.jl` (built 2026-08-09) supplies
-a Hessian-vector-product path that avoids building T3/T4 at all — precisely the block that dominates
-and precisely the block whose cost explodes with `L`. It has a D=4 A/B test
-(`test_pairwise_quantile_d4_hvp_ab.jl`) and a D=20 profile harness
-(`profile_pairwise_quantile_d20_hvp_ab.jl`), but has NOT been exercised at L=10. Its open question
-is whether the CG/Interior inner-algorithm switch it requires costs more in iterations than it saves
-per callback.
+⚠️ **`pairwise_quantile_hvp.jl` is NOT the escape hatch — it was measured and rejected.** An
+earlier revision of this document said it "should be tried before falling back to L=5"; that was
+wrong. The 2026-08-09 session already ran the decisive controlled A/B at real D=20/W=100,000
+(`profile_pairwise_quantile_d20_hvp_ab.jl`), both variants verifier-confirmed correct with duals
+agreeing to ~1e-8:
+
+| variant | n_hess(-vec) calls | wall-clock |
+|---|---|---|
+| dense (`hessopt=exact`) | 9 | **343.72 s** |
+| HVP (`hessopt=5`, CG) | **6084** | **1512.30 s** |
+
+Each HVP callback is far cheaper, but CG needs 676× more of them — **4.4× slower overall**, verdict
+"not adopted for production", and explicitly a conditioning property rather than a warm-start
+artifact. See `PAIRWISE_QUANTILE_HESSIAN_OPTIMIZATION_RESULTS_2026-08-09.md` Part 1. Whether the
+ratio narrows at L=10 is an unmeasured hypothesis in both directions and must not be acted on
+without an L=10 A/B.
 
 ### Probe result: **L=10 IS feasible at W=100,000** (measured, not projected)
 
@@ -243,9 +251,9 @@ suggested: ~217 s per Hessian call at L=10 vs ~45.7 s measured at L=5, i.e. ≈4
 **But feasible ≠ practical for a full bound search.** At ~18 min per inner solve, the smoke test's
 own 26-evaluation outer run would take ~8 hours, and a real bound search needs substantially more
 than that. Concretely: L=10 is usable today for single-point evaluation and seed qualification, and
-for an outer search it needs `pairwise_quantile_hvp.jl` (which skips T3/T4 entirely — the block that
-dominates) to be exercised and gated at L=10 first. L=5 at 39.9 s/solve is comfortably practical for
-an outer search right now.
+for an outer search the remaining lever is the un-threaded cross-block and packed-write path (see
+the HVP note above for why the HVP route is not it). L=5 at 39.9 s/solve is comfortably practical
+for an outer search right now.
 
 ---
 

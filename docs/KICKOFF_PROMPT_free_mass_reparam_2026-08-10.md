@@ -22,7 +22,10 @@ Three things worth knowing before you plan:
    block, and the HVP path. See handover section 2.
 2. This buys exactness, NOT speed. Inner-solve cost is unchanged (measured, real D=20/W=100k:
    L=5 = 39.9 s/solve, L=10 = 1084.6 s/solve, both VerifiedSolved). L=10 outer-search performance is
-   a separate task (`pairwise_quantile_hvp.jl`).
+   a separate task -- and NOT via `pairwise_quantile_hvp.jl`, which was already measured at that
+   exact scale and rejected (4.4x SLOWER: CG needs 6084 Hessian-vector calls vs dense's 9). Read
+   `docs/PAIRWISE_QUANTILE_HESSIAN_OPTIMIZATION_RESULTS_2026-08-09.md` Part 1 before forming any
+   plan involving it.
 3. Because the objective is now smooth, a plain small-h reoptimized FD is a valid ground truth and
    you should expect ~1e-5 relative agreement or better, like origin-ZC's gate. A few percent is NOT
    good enough here — that would mean something is wrong.
