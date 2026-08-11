@@ -297,23 +297,41 @@ function pairwisequantile_hess_cb_builder(octx::PairwiseQuantileCoreHessCtx)
         # here there is no reduction at all (each packed slot is written exactly once, by one
         # thread), so the schedule cannot affect the output by even one ulp.
         #
-        # Correctness is unaffected: same values, same packed positions. Any numerical movement here
-        # is a bug, not a tolerance -- the D=4 oracle's packed round-trip check gates it.
+        #  3. DYNAMIC DISPATCH -- and this turned out to be the whole story. The KNITRO callback
+        #     signature is untyped, so `evalResult` is inferred `Any`; `evalResult.hess[k] = v` is
+        #     then a dynamic `getproperty` returning `Any` followed by a dynamic `setindex!`, ONCE
+        #     PER ENTRY, ~128M times. Measured at D=20/L=10/W=100k: 86.16 s before, and still
+        #     84.41 s after the stride and threading fixes above -- i.e. ~660 ns/entry, some 6x
+        #     worse than even a random DRAM access, because the cost was never memory-bound. The
+        #     field is a plain `Vector{Float64}` on a mutable struct (KNITRO.jl `EvalResult`,
+        #     C_wrapper.jl:238 -- `unsafe_wrap`ped once at construction, not per access), so
+        #     hoisting it ONCE with a type assertion makes the whole loop concrete.
+        #
+        #     The assertion is deliberate rather than a bare local: if KNITRO.jl ever changes that
+        #     field's type, this errors loudly instead of silently reverting to ~84 s per callback.
+        #
+        # Correctness is unaffected by any of the three: same values, same packed positions. Any
+        # numerical movement here is a bug, not a tolerance -- the D=4 oracle's packed round-trip
+        # check gates it.
+        hess_out = evalResult.hess::Vector{Float64}
+        length(hess_out) == div(n * (n + 1), 2) ||
+            error("pairwisequantile_hess_cb_builder: KNITRO's hess buffer is $(length(hess_out)) " *
+                  "long, expected n*(n+1)/2 = $(div(n * (n + 1), 2)) for n=$n")
         Threads.@threads :dynamic for i in 1:n
             k = (i - 1) * n - div((i - 1) * (i - 2), 2)
             @inbounds if i <= NCORE
                 for j in i:NCORE
                     k += 1
-                    evalResult.hess[k] = hee_packed[_pk_upper(i, j, NCORE)]
+                    hess_out[k] = hee_packed[_pk_upper(i, j, NCORE)]
                 end
                 for j in NCORE+1:n
                     k += 1
-                    evalResult.hess[k] = HEQ[i, j - NCORE]
+                    hess_out[k] = HEQ[i, j - NCORE]
                 end
             else
                 ii = i - NCORE
                 @simd for j in i:n
-                    evalResult.hess[k+j-i+1] = HRR[j - NCORE, ii]   # column walk; HRR symmetric
+                    hess_out[k+j-i+1] = HRR[j - NCORE, ii]   # column walk; HRR lower triangle
                 end
             end
         end
