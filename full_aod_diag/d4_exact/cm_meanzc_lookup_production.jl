@@ -150,7 +150,10 @@ function inner_loop_internal_meanzc_operator(obj, θ_ext::AbstractVector, cctx::
         obj.x .= x
         return obj.H_save, x, nStatus, n_fg, n_hess
     else
-        obj.x .= NaN
+        # 2026-08-11: only clear the warm-start slot when INNER_KEEP_LAST_GOOD_X[] is false.
+        # See that Ref's docstring -- the historical NaN discards the last SUCCESSFUL dual, forcing
+        # every post-failure solve cold, which at a high failure rate is nearly all of them.
+        INNER_KEEP_LAST_GOOD_X[] || (obj.x .= NaN)
         return -1e10, x, nStatus, n_fg, n_hess
     end
 end

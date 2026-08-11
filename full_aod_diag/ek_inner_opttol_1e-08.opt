@@ -644,12 +644,12 @@ objrange     1e+20
 # Specifies the final relative stopping tolerance for the KKT (optimality)
 # error. Smaller values of opttol result in a higher degree of accuracy in
 # the solution with respect to optimality.
-opttol       1e-10
+opttol       1e-08
 
 # Specifies the final absolute stopping tolerance for the KKT (optimality)
 # error. Smaller values of opttol_abs result in a higher degree of accuracy
 # in the solution with respect to optimality.
-opttol_abs   1e-10
+opttol_abs   1e-08
 
 # Whether to generate a csv solution file.
 #   no     = 0 = no csv solution file is generated

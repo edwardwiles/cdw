@@ -203,6 +203,33 @@ function cm_production_value_verified_screened(x_free0::AbstractVector, pcx;
 end
 
 """
+    RESTRICTION_SUPPORT_DIAG
+
+Opt-in recorder (default `nothing` = one `=== nothing` check, zero cost) for the 2026-08-11
+restriction-support screen study. Set to a `Vector{Any}` to have every ATTEMPTED restricted
+evaluation append `(nu = copy(nufull), ok = <did the inner solve succeed>)`.
+
+Why this rather than reading the driver's trace: `reject_point`/`CMExpectedSolveFailure` fires
+BEFORE `n_eval[] += 1` (oracle.jl:32, cb_F!), so the driver's trace records ONLY the attempts that
+succeeded -- the failures this study is about are invisible in it. This records both outcomes at the
+one place that sees them.
+"""
+const RESTRICTION_SUPPORT_DIAG = Ref{Any}(nothing)
+
+"Run `f()`, appending (nu, ok) to the diagnostic buffer when enabled. Rethrows unchanged."
+function _with_support_diag(f, nufull)
+    RESTRICTION_SUPPORT_DIAG[] === nothing && return f()
+    try
+        r = f()
+        push!(RESTRICTION_SUPPORT_DIAG[], (nu = collect(Float64, nufull), ok = true))
+        return r
+    catch e
+        e isa CMExpectedSolveFailure && push!(RESTRICTION_SUPPORT_DIAG[], (nu = collect(Float64, nufull), ok = false))
+        rethrow()
+    end
+end
+
+"""
     cm_meanzc_production_value_verified_screened(x_free0, νvec, pcx; counters=nothing, use_witness=false) -> (K, base, verify)
 
 Screened drop-in replacement for `cm_meanzc_production_value_verified` (cm_meanzc_production.jl,
@@ -231,7 +258,9 @@ function cm_originzc_production_value_verified_screened(x_free0::AbstractVector,
                                                           use_witness::Bool = false,
                                                           dual_bank::Union{Nothing,RestrictedDualBank} = nothing, eval_id::Int = 0)
     cm_screen_precheck!(x_free0, pcx.ctx_cm; counters = counters, use_witness = use_witness)
-    base, verify = archOZ_verified_state(x_free0, νfull, pcx.ctx_cm; dual_bank = dual_bank, eval_id = eval_id)
+    base, verify = _with_support_diag(νfull) do
+        archOZ_verified_state(x_free0, νfull, pcx.ctx_cm; dual_bank = dual_bank, eval_id = eval_id)
+    end
     K = pcx.ctx_cm.obj.H_save
     return K, base, verify
 end

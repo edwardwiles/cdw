@@ -122,3 +122,31 @@ function assert_no_fake_success!(label::AbstractString, health::CallbackHealthRe
     end
     return nothing
 end
+
+"""
+    INNER_KEEP_LAST_GOOD_X
+
+When a restricted inner solve FAILS, should `obj.x` keep the last SUCCESSFUL dual iterate instead of
+being reset to NaN?
+
+`false` (default) is the historical behaviour: the failure branch writes `obj.x .= NaN`. NaN is this
+codebase's idiom for "no warm start" -- `inner_loop_initial_values` is
+`obj.use_cached_x && norm(obj.x) < 1e6 ? obj.x : zeros(...)`, and `norm(NaN) < 1e6` is false, so the
+NEXT solve starts cold from zeros. Measured 2026-08-11 at the OZC-CROSS incumbent, where ~82% of
+attempts fail: 18 of 22 inner solves began at exactly f = 0, i.e. cold, because each failure had
+wiped the previous SUCCESSFUL dual.
+
+`true` leaves `obj.x` untouched on failure, so the next solve warm-starts from the last accepted
+solve rather than from zeros. The failing solve's own (possibly diverged) iterate is NEVER stored --
+`obj.x` is only ever written with an ACCEPTED solve's `x` -- so this cannot propagate a garbage
+warm start; it only stops discarding a good one.
+
+Safety: `obj.x` is a warm-start slot, not a result. Verification reads the RETURNED `inner_x`, not
+`obj.x`; the driver checkpoints it as `dual_warm_start`; and `select_warm_start_restricted` already
+guards with `all(isfinite, obj.x)`. So no consumer can mistake a retained iterate for the current
+point's solution. This is a SPEED change (CLAUDE.md: warm/cold start affects how fast KNITRO gets
+there, never whether the optimum is reachable) -- it must not, and does not, change any accept/reject
+outcome by itself.
+"""
+const INNER_KEEP_LAST_GOOD_X = Ref{Bool}(false)
+

@@ -8,6 +8,21 @@ commit `f897485` (parent `4df5254`, `origin/production/fullA-exact`). Not pushed
 
 ## 0. Summary
 
+> **Update 2026-08-11 — the cause of the `-102` stalls is now known, and it was not the kernels.**
+> `full_aod_diag/ek_inner.opt` set `opttol = opttol_abs = 1e-12` against a documented ~1e-11
+> achievable floor, so both runs spent most of their budget pursuing an accuracy the problem cannot
+> deliver, and `-102` (`FEAS_NO_IMPROVE`, "desired dual-feasibility accuracy could not be achieved")
+> is exactly what that produces. At `opttol = 1e-10` the `-102` class disappears entirely and the
+> same driver gets **3.25x more usable evaluations in the same budget**. See
+> `INNER_SOLVE_INVESTIGATION_2026-08-11.md`.
+>
+> **The kappa values below are unaffected** -- every incumbent was feasible and passed
+> `is_verified_success`, which does not depend on how long the solver ground before reporting. What
+> changes is Section 4's diagnosis: "the searches, not the compute, were the binding constraint" now
+> has a concrete cause, and a rerun at the corrected tolerance would get roughly 3x the evaluations
+> per hour.
+
+
 **Both δ=1.0 upper-bound runs completed. Neither exhausted its 8-hour budget, and neither converged.**
 
 | family | κ | status | wall | evals (feasible / verified) |

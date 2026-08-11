@@ -543,6 +543,12 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # own kwarg of the same name. Production value -10.0
         # (docs/audits/fullA-lower-limit-and-hotpath-2026-08-06/MASTER.md).
         inner_lower_limit::Float64,
+        # 2026-08-11: the inner KNITRO options file, previously hard-coded inside
+        # d20_real_setup_design. Exposed because it carries opttol/opttol_abs, which are SOLVER
+        # TOLERANCES a production run should state rather than inherit silently -- and because the
+        # 2026-08-11 A/B needs to vary them through the real driver rather than a side harness.
+        # Default is the unchanged production file, so no existing caller changes behaviour.
+        inner_loop_opt::AbstractString = joinpath(D4X_ROOT, "full_aod_diag", "ek_inner.opt"),
         power_target_layout::Symbol = :origin_by_power, meanzc_basis::Symbol = :direct,
         nu_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
         # sigma3 campaign prep (2026-07-30): passthrough to d20_real_setup_design's own kwargs of
@@ -687,7 +693,7 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         end
     end
 
-    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat, inner_lower_limit = inner_lower_limit)
+    ctx = d20_real_setup_design(W = W, δ = delta, find_smallest = find_smallest, draw_design = draw_design, draw_seed = draw_seed, destination_sample = destination_sample, exclude_diagonal_gravity = exclude_diagonal_gravity, gravity_exclude_cells = gravity_exclude_cells, σHat = σHat, inner_lower_limit = inner_lower_limit, inner_loop_opt = inner_loop_opt)
     ctx = attach_compressed_factual_workspace(ctx, ctx.D, ctx.D_dest, W)   # Phase E remediation (2026-07-26): cf_build (moments! closures below) reuses this instead of allocating fresh every call
     pe = build_pivot_elimination(ctx)
     D = ctx.D

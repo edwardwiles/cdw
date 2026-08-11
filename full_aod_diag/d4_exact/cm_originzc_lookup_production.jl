@@ -65,6 +65,24 @@ function inner_loop_KNITRO_originzc_operator(obj, st::OriginZCOperatorState; hes
     end
 end
 
+"""
+    INNER_SOLVE_TRACE
+
+Opt-in per-inner-solve recorder (default `nothing` = one `=== nothing` check, zero cost) for the
+2026-08-11 abort-cost study. Set to a `Vector{Any}`; each inner solve appends
+`(status, n_fg, n_hess, wall, f_first, first_below)` where `f_first` is the objective at the FIRST
+FG evaluation (i.e. at the warm start KNITRO was handed) and `first_below` is the 1-based index of
+the first FG call at or under `obj.lower_limit` (0 = never).
+
+The question it answers: when a solve is doomed -- `f <= lower_limit` already at the initial point --
+how much work does KNITRO still do before returning? Aggregate counters cannot answer this because
+they mix doomed and healthy solves.
+"""
+const INNER_SOLVE_TRACE = Ref{Any}(nothing)
+const _IST_nfg = Ref{Int}(0)
+const _IST_f1 = Ref{Float64}(NaN)
+const _IST_first_below = Ref{Int}(0)
+
 "KNITRO FG callback protocol: this codebase's `KN_add_eval_callback(kc, true, ...)` registration calls ONE combined callback for both f and g every invocation -- mirrors `_callbackEvalFG_inner_cmlookup!` exactly (see cm_lookup_production.jl / cm_frechet_lookup_production.jl for the same pattern and the KNITRO-wiring bug this must not repeat)."
 function _callbackEvalFG_inner_originzc_operator!(kc, cb, evalRequest, evalResult, userParams)
     # 2026-08-11 profiling: this path had NO timing label at all, so a whole-run profile could only
@@ -76,6 +94,11 @@ function _callbackEvalFG_inner_originzc_operator!(kc, cb, evalRequest, evalResul
         st = userParams
         x = evalRequest.x
         f = st(x, evalResult.objGrad)
+        if INNER_SOLVE_TRACE[] !== nothing
+            _IST_nfg[] += 1
+            _IST_nfg[] == 1 && (_IST_f1[] = f)
+            (_IST_first_below[] == 0 && f <= st.obj.lower_limit) && (_IST_first_below[] = _IST_nfg[])
+        end
         evalResult.obj[1] = f <= st.obj.lower_limit ? -KNITRO.KN_INFINITY : f
     end
     return 0
@@ -129,8 +152,15 @@ function inner_loop_internal_originzc_operator(obj, θ_ext::AbstractVector, octx
     st = octx.fg_lookup_st::OriginZCOperatorState
     reset_for_solve!(st, collect(νfull))
 
+    if INNER_SOLVE_TRACE[] !== nothing
+        _IST_nfg[] = 0; _IST_f1[] = NaN; _IST_first_below[] = 0
+    end
+    _ist_t0 = INNER_SOLVE_TRACE[] === nothing ? 0.0 : time()
     nStatus, objSol, x, lambda_, n_fg, n_hess = inner_loop_KNITRO_originzc_operator(obj, st;
         hess_cb_builder = _ -> archA_partitioned_hess_cb_builder(octx))
+    INNER_SOLVE_TRACE[] !== nothing && push!(INNER_SOLVE_TRACE[],
+        (status = nStatus, n_fg = n_fg, n_hess = n_hess, wall = time() - _ist_t0,
+         f_first = _IST_f1[], first_below = _IST_first_below[]))
 
     CS.INNER_SOLVE_COUNT[] += 1
     if nStatus ∉ [0, -100, -101, -103]
@@ -140,7 +170,10 @@ function inner_loop_internal_originzc_operator(obj, θ_ext::AbstractVector, octx
         obj.x .= x
         return obj.H_save, x, nStatus, n_fg, n_hess
     else
-        obj.x .= NaN
+        # 2026-08-11: only clear the warm-start slot when INNER_KEEP_LAST_GOOD_X[] is false.
+        # See that Ref's docstring -- the historical NaN discards the last SUCCESSFUL dual, forcing
+        # every post-failure solve cold, which at a high failure rate is nearly all of them.
+        INNER_KEEP_LAST_GOOD_X[] || (obj.x .= NaN)
         return -1e10, x, nStatus, n_fg, n_hess
     end
 end
