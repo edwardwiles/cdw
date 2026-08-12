@@ -457,7 +457,7 @@ function run_case(; D::Int, W::Int, L::Int, G::Int, n_families::Int, seed::Int,
           worst / scale < 1e-10, @sprintf("max abs %.3e (scale %.3e)", worst, scale))
 
     # ---- H_R,CM: the genuinely NEW block ---------------------------------------------------------
-    tabs_x = CMPQCrossHessTables(D, npair, L, Lcm + 1; n_families = n_families)
+    tabs_x = CMPQCrossHessTables(D, npair, L, Lcm + 1; n_families = n_families, nO = nO)
     Pow_here = n_families == 2 ? frechet_power_feature(U, sigmaHat - 1, muHat) : nothing
     build_cmpq_cross_hess_tables!(tabs_x, op, Bidx, h, ref; Pow = Pow_here)
     HRC = zeros(nrow, ncm)

@@ -280,16 +280,33 @@ mutable struct CMPQCrossHessTables
     Ypow::Union{Nothing,Array{Float64,3}}
     Hcmpow::Union{Nothing,Matrix{Float64}}
     Gbins::Int
+    # Per-thread `nrow x nO` scratch for `fill_cmpq_cm_cross_block!`'s per-threshold-block raw slab.
+    # ONE PER THREAD, owned here (campaign-lifetime) rather than allocated inside the fill: that
+    # allocation was 463 KB on EVERY Hessian callback at D=20/L=5, against this codebase's standing
+    # "no per-callback vectors, matrices, closures" discipline.
+    #
+    # SIZED BY `Threads.maxthreadid()`, NOT `Threads.nthreads()`, and that distinction is a real bug
+    # this file hit on its first run: `nthreads()` counts only the DEFAULT pool, while `threadid()`
+    # can land anywhere in `1:maxthreadid()` -- under `julia --threads=8` a `:dynamic` task ran on
+    # thread 9 (the interactive-pool thread) and indexed one past the end. `:static` would have
+    # pinned ids into `1:nthreads()` and hidden it; `:dynamic` did not. Any threadid-indexed scratch
+    # in this codebase sized by `nthreads()` and consumed under `:dynamic` has the same exposure.
+    blk::Vector{Matrix{Float64}}
 end
 
-function CMPQCrossHessTables(D::Int, npair::Int, L::Int, Gbins::Int; n_families::Int)
+function CMPQCrossHessTables(D::Int, npair::Int, L::Int, Gbins::Int; n_families::Int, nO::Int,
+                             nthreads_use::Int = max(Threads.maxthreadid(), Threads.nthreads()))
     nc = L - 1
     n_families in (1, 2) || error("CMPQCrossHessTables: n_families must be 1 or 2, got $n_families")
+    nO >= 1 || error("CMPQCrossHessTables: nO must be >= 1, got $nO")
     fam2 = n_families == 2
+    nrow = n_cmpq_restr_rows(D, L)
+    nt = max(1, nthreads_use)
     return CMPQCrossHessTables(zeros(Gbins, nc, nc, D * npair), zeros(Gbins, nc, D), zeros(D, Gbins),
         fam2 ? zeros(Gbins, nc, nc, D * npair) : nothing,
         fam2 ? zeros(Gbins, nc, D) : nothing,
-        fam2 ? zeros(D, Gbins) : nothing, Gbins)
+        fam2 ? zeros(D, Gbins) : nothing, Gbins,
+        [Matrix{Float64}(undef, nrow, nO) for _ in 1:nt])
 end
 
 """
@@ -445,12 +462,31 @@ function fill_cmpq_cm_cross_block!(HRC::AbstractMatrix{Float64}, op::PairwiseQua
     Xpow = tabs.Xpow; Ypow = tabs.Ypow; Hcmpow = tabs.Hcmpow
     Gb = tabs.Gbins
     invW = 1.0 / W
-    # Per-threshold-block scratch: raw block (nrow x nO), then the contrast product.
-    blk = Matrix{Float64}(undef, nrow, nO)
+    nfam = fam2 ? 2 : 1
+    size(tabs.blk[1]) == (nrow, nO) ||
+        error("fill_cmpq_cm_cross_block!: tabs.blk is $(size(tabs.blk[1])), expected ($nrow,$nO) -- " *
+              "the tables were built for a different (D,L,nO)")
+    length(tabs.blk) >= Threads.maxthreadid() ||
+        error("fill_cmpq_cm_cross_block!: tabs.blk has $(length(tabs.blk)) per-thread slabs but " *
+              "Threads.maxthreadid()=$(Threads.maxthreadid()) -- the tables were built under a " *
+              "smaller thread pool. Rebuild them, or the :dynamic loop below will index past the end.")
 
-    for fam in 1:(fam2 ? 2 : 1)
+    # THREADED over the flattened (family, threshold-block) index. Safe by construction and with no
+    # reduction: block `(fam,l)` writes ONLY columns `colbase + (l-1)*nO+1 : colbase + l*nO` of
+    # `HRC`, and those ranges are disjoint across `(fam,l)`. Each task takes its own `nrow x nO`
+    # slab from `tabs.blk`, so the raw fill does not race either. `:dynamic` because the per-block
+    # cost is uniform but `nfam*Lcm` does not divide evenly across threads.
+    #
+    # Deterministic: every HRC entry is written exactly once, by one task, from reads of tables that
+    # are already complete -- so the result does not depend on thread count. The D=4 dense oracle
+    # checks this block against `(1/W) G_R' diag(h) G_CM` on every run, which is what makes that a
+    # gated property rather than an argument.
+    Threads.@threads :dynamic for lin in 1:(nfam * Lcm)
+        fam = div(lin - 1, Lcm) + 1
+        l = mod(lin - 1, Lcm) + 1
         colbase = (fam - 1) * nO * Lcm
-        for l in 1:Lcm
+        blk = tabs.blk[Threads.threadid()]
+        begin
             @inbounds for oi in 1:nO
                 o = origins[oi]
                 # rcm = sum_w h_w * CM_col(l,o); reflected for eq.36.

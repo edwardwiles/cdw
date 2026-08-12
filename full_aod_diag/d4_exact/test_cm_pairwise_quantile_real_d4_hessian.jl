@@ -54,7 +54,8 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_production.jl",
           "cm_pairwise_quantile_config.jl", "cm_pairwise_quantile_moments.jl",
-          "cm_pairwise_quantile_hessian.jl", "cm_pairwise_quantile_hessian_assembly.jl",
+          "cm_pairwise_quantile_hessian.jl", "cm_pairwise_quantile_cross_hessian_fast.jl",
+          "cm_pairwise_quantile_hessian_assembly.jl",
           "cm_pairwise_quantile_lookup_kernels.jl", "cm_pairwise_quantile_production.jl"]
     include(joinpath(D4X, f))
 end
@@ -231,7 +232,27 @@ function run_case(; L::Int, G::Int, n_families::Int, contrasts::Symbol, mass_sta
               size(octx.cctx.Ews) == (0, 0), "size=$(size(octx.cctx.Ews))")
     end
 
-    # ---- CHECK 5: the direct sig read == the gated extractors -------------------------------------
+    # ---- CHECK 4b: the FAST H_E,R is BIT-IDENTICAL to the shared serial one ------------------------
+# The optimized block (threaded over slot, transposed accumulation, bins hoisted) changes the LOOP
+# STRUCTURE only, and the threading axis is chosen so that each output row `j` is written by exactly
+# one task with the draw order unchanged. That makes bit-identity the RIGHT gate -- a tolerance here
+# would silently accept a genuine reassociation, and this block is 46.8% of the callback so a
+# reassociation is exactly what an over-eager future edit would introduce.
+HEQ_fast = copy(octx.HEQ_pq)                       # produced above by the :fast backend
+was_backend = octx.her_backend
+octx.her_backend = :shared
+cmpq_fill_hessian_blocks!(octx, obj)
+HEQ_shared = copy(octx.HEQ_pq)
+octx.her_backend = was_backend
+cmpq_fill_hessian_blocks!(octx, obj)               # restore the :fast state for later checks
+check("4b  fast H_E,R == shared serial H_E,R, BIT-IDENTICAL",
+      HEQ_fast == HEQ_shared,
+      @sprintf("max|diff| %.3e over %d entries", maximum(abs, HEQ_fast .- HEQ_shared),
+               length(HEQ_fast)))
+check("4b' the fast backend is the DEFAULT (a gate on an unused path gates nothing)",
+      was_backend === :fast, "her_backend=:$(was_backend)")
+
+# ---- CHECK 5: the direct sig read == the gated extractors -------------------------------------
     HRR_x = zeros(n_restr, n_restr)
     extract_cmpq_HRR!(HRR_x, octx.HRR_pq, D, L, cmpq.refIndex1)
     okR = true

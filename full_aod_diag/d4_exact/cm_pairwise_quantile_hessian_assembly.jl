@@ -55,6 +55,8 @@ isdefined(Main, :build_bin_tables_threaded!) || include(joinpath(@__DIR__, "cm_h
 isdefined(Main, :PairwiseQuantileCrossHessScratch) ||
     include(joinpath(@__DIR__, "pairwise_quantile_cross_hessian.jl"))
 isdefined(Main, :cmpq_to_pq_row) || include(joinpath(@__DIR__, "cm_pairwise_quantile_hessian.jl"))
+isdefined(Main, :cmpq_pq_cross_hessian_block_fast!) ||
+    include(joinpath(@__DIR__, "cm_pairwise_quantile_cross_hessian_fast.jl"))
 
 """
     CMPQCoreHessCtx
@@ -92,6 +94,12 @@ mutable struct CMPQCoreHessCtx
     tls::PairwiseQuantileThreadScratch
     tabs_x::CMPQCrossHessTables
     cross_hess_scratch::PairwiseQuantileCrossHessScratch
+    # H_E,R backend. `:fast` = cmpq_pq_cross_hessian_block_fast! (threaded over slot, transposed
+    # accumulation, bins hoisted); `:shared` = the standalone family's serial
+    # pairwise_quantile_cross_hessian_block!, kept as the BIT-IDENTITY reference the D=4 gate
+    # compares against. Not a scientific parameter -- the two produce the same bits.
+    her_backend::Symbol
+    her_fast::CMPQCrossHessFastScratch
     # ---- CM's own machinery ----
     cctx::CMBinHessCtx
     Pow::Union{Nothing,Matrix{Float64}}
@@ -162,13 +170,14 @@ function build_cmpq_hess_ctx(ctx, cmpq, fg_state)
     # the claim is checked live rather than argued.
     cctx.Ews = Matrix{Float64}(undef, 0, 0)
 
-    tabs_x = CMPQCrossHessTables(D, npair, L, Lcm + 1; n_families = cmpq.n_families)
+    tabs_x = CMPQCrossHessTables(D, npair, L, Lcm + 1; n_families = cmpq.n_families, nO = nO)
     return CMPQCoreHessCtx(NCORE, D, L, n_restr, ncm, Lcm, nO, cmpq.n_families,
         cmpq.origins, cmpq.refIndex1, cmpq.R,
         cmpq.op, cmpq.mass_state, PairwiseQuantileMassState(D, L),
         PairwiseQuantileHessianTables(cmpq.op),
         build_pairwise_quantile_thread_scratch(D, npair, L), tabs_x,
         PairwiseQuantileCrossHessScratch(D, npair, W, NCORE - 1, L),
+        :fast, CMPQCrossHessFastScratch(npq, NCORE - 1),
         cctx, cmpq.Pow, cctx.use_threaded_bins,
         cmpq.core_cf_ref, nothing, nothing,
         Ref{Union{Nothing,WinnerZCCrossScratch}}(nothing),
@@ -234,8 +243,13 @@ function cmpq_fill_hessian_blocks!(octx::CMPQCoreHessCtx, obj)
     zc_ws = ensure_winner_zc_cross_scratch!(octx.zc_cross_ws, W, n_total_rows(D, L))
     @cmhess_prof "cmpq_H_ER" begin
         winner_pair_cross_hessian_zc_prep!(zc_ws, wctx, h)
-        pairwise_quantile_cross_hessian_block!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
-                                               octx.tls, h, octx.cross_hess_scratch)
+        if octx.her_backend === :fast
+            cmpq_pq_cross_hessian_block_fast!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
+                                              octx.tls, h, octx.cross_hess_scratch, octx.her_fast)
+        else
+            pairwise_quantile_cross_hessian_block!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
+                                                   octx.tls, h, octx.cross_hess_scratch)
+        end
     end
 
     # ---- H_R,CM: the one genuinely new block -----------------------------------------------------
