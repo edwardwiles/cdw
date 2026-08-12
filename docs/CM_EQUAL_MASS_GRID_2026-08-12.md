@@ -209,10 +209,81 @@ cannot be confused.
 
 ---
 
-## 8. Open items for the user
+## 8. Follow-up (same session): closing the bare-`L` gap
 
+The first pass made `L` mean buckets on the routes that go through `resolve_cm_probs` — the protocol
+orchestrator and the seed-spec constructors. It left one reachable route that did **not**: calling
+`run_cm_upper_checkpointed(...; L = 50)` with **no `probs`** fell through to
+`precalc_common_marginals_cdf`'s own `probs === nothing` branch, `range(1/L,(L-1)/L,length=L)`.
+Measured at L=50 that is 50 levels → **51 buckets, 49 of mass 0.0195918 and 2 of mass 0.02**. So
+`L = 50` still meant two different restrictions depending on whether the caller also passed a grid.
+
+**Fixed.** `run_cm_upper_checkpointed` now resolves the grid itself:
+
+* `probs` omitted → `L` is read as a **bucket count**, `probs = cm_equal_mass_probs(L)`, then
+  `L = length(probs)`. Logged on every run.
+* `probs` supplied → `L` is the **level count** and must equal `length(probs)`, else a hard error
+  naming the buckets-vs-levels distinction.
+
+Either way `L == length(probs)` holds from that line onward, which is what every builder below
+requires. Note this also changes bare `L = 10` calls in old scripts from 10 levels to 10 buckets
+(9 levels) — the same scientific change, applied consistently, rather than a second silent grid.
+
+**New gate**: `test_cm_grid_l_means_buckets_2026-08-12.jl` — **103/103 PASS**. It checks the *promise*
+(bucket masses re-derived from cutpoints, not the cutpoint formula asserted) across all six routes
+that can state an `L`: `cm_equal_mass_probs`, `resolve_cm_probs`, the three `*_family_spec`
+constructors, `paper_upper_v1.toml`'s own `L` through `fam_kwargs()`'s translation, a bare-`L`
+driver call, and family #7's `cm_pq_probs_grid`. Plus negative controls that the old default and the
+dyadic grid really are *not* equal-mass, so the gate has content.
+
+**End-to-end proof of the bare-`L` route**, real D=20/W=20,000 through the real driver, 60s budget:
+
+```
+[bare_L50] CM grid: L=50 equal-mass buckets (mass 0.02 each) -> 49 cutpoints k/50, k=1..49 (probs was not supplied)
+checkpoint cm_L         = 49   (LEVEL count)
+checkpoint length(probs)= 49
+buckets induced         = 50
+unique bucket masses    = [0.02]
+VERDICT: 50 equal-mass buckets? true
+```
+
+(`knitro_status = -401` is the 60s wall-clock limit — this smoke gates grid resolution reaching the
+solver, not the quality of the outer optimum. It did find a feasible incumbent, `Δ = 0.943 ≤ 1`.)
+
+---
+
+## 9. Is this in production? — **No, and here is exactly where it is**
+
+Stated plainly because it is the question that matters:
+
+* The change lives on **`feature/pq-free-mass-reparam-2026-08-10`** (worktree
+  `cdw_worktrees/pq-outer-loop-2026-08-10`), commits `d0ee304` + the follow-up above.
+* `git branch --contains` reports it on **that branch only**. It is **not merged into
+  `production/fullA-exact`** and **not pushed to origin**.
+* That branch is **97 commits ahead of `production/fullA-exact`, which is itself 7 commits ahead of
+  the merge base** — the two have diverged, so this is a merge to plan, not a fast-forward.
+* **No campaign has been re-run.** Every completed and in-flight `paper_upper_v1` result at `L = 50`
+  is on the old dyadic grid, and per §7 an old checkpoint resumed today stays on it.
+
+So: *if a campaign is launched from this branch*, `L = 50` gives 50 equal-mass buckets on every
+route. Nothing currently running is using it.
+
+**Also noticed while checking that** (reported, not fixed — out of scope): this branch does **not**
+carry the 2026-08-03 "require scientific params" hardening that `CLAUDE.md` describes.
+`run_cm_upper_checkpointed` here still defaults `W::Int = 80000`, `L::Int = 10`,
+`draw_seed::Int = 20260719`, `delta::Float64 = 1.0` and `σHat = 3.0`. `L` is named explicitly in that
+rule's own parameter list, so a caller who omits `L` entirely still silently gets a 10-bucket CM.
+Worth a deliberate pass before this branch is merged.
+
+---
+
+## 10. Open items for the user
+
+0. **Merging this to `production/fullA-exact`** (§9) — the change is branch-local and no campaign
+   uses it yet.
 1. **`CMConfig`'s `:equal` rule still means levels, not buckets** (§3). Deliberate, to avoid silently
-   redefining ~40 diagnostic/benchmark scripts. Flag if you want it unified.
+   redefining ~40 diagnostic/benchmark scripts. It is now the *only* remaining route on which "L"
+   does not mean buckets, and it is benchmark-only. Flag if you want it unified.
 2. **Existing `L=50` CM results are on the old grid** (§7). Nothing was re-run; the paper campaign's
    completed waves are dyadic-grid results.
 3. **Two pre-existing broken CM gates** found while running the gate set (§5): the `:interval` arm of
