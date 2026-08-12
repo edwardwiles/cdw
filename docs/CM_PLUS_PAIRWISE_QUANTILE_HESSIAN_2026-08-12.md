@@ -312,6 +312,9 @@ family needs 16, and **4 at D=20/L=5** where the standalone family needs 80.
 | `test_cm_pairwise_quantile_outer_gradient_fd.jl` | **11/11** (new) |
 | `test_cm_pairwise_quantile_d20_hessian_solve.jl` W=20k | **PASS**, nStatus=0 |
 | `test_cm_pairwise_quantile_d20_hessian_solve.jl` W=100k | **PASS**, nStatus=0 |
+| `test_cm_pairwise_quantile_outer_production.jl` | **20/20** (new) |
+| `test_cm_pairwise_quantile_driver_argguards.jl` | **34/34** (new) |
+| `test_cm_pairwise_quantile_campaign_smoke.jl` D=20 W=20k | **28/28** (new) |
 
 ---
 
@@ -386,6 +389,36 @@ standalone driver, both consequences of what the family *is*:
   production `n_x` the FG-only path hit `-400` after 16,734 evaluations. Also hardened symmetrically
   this session — supplying a Hessian builder while the option file is *not* `hessopt=exact` is now a
   hard error too, closing the silent-quasi-Newton hole in the other direction.
+
+### 8b.3a The campaign smoke: the real outer loop, at real D=20
+
+`test_cm_pairwise_quantile_campaign_smoke.jl`, W=20,000, L=5/G=50/two families/orthonormal,
+120 s stage budget. **28/28.**
+
+* The outer KNITRO problem is built with **384 variables** (380 economic + **4** shared masses; the
+  standalone family would need 80 here) and one nonlinear constraint.
+* 3 function evaluations, 2 gradient evaluations, exit on the time limit at a **feasible** point:
+  `gp = 0.97886`, `Delta = 0.3313`, `verified = true`. So the whole chain -- verified state ->
+  combined gradient -> KNITRO -> incumbent -> checkpoint -- runs.
+* The checkpoint round-trips, and **resume works**: `n_eval` 3 → 7, with `w0` reconstructed from
+  canonical z-space rather than supplied.
+* **All six resume-mismatch guards fire** (L, `cm_grid_size`, `cm_moment_families`, `contrasts`,
+  sigma, direction). A guard nobody has watched fail is not known to be a guard.
+
+`test_cm_pairwise_quantile_driver_argguards.jl` (**34/34**) covers the checks that fire before any
+context build, so it re-runs in ~2 minutes after any driver edit: the option file, the `L | G`
+structural condition (both directions -- L ∈ {3,4,7} refused, L ∈ {2,5,10,25} accepted), every
+enumerated kwarg, the arithmetic joint-cell floor, and `UndefKeywordError` on **every** scientific
+kwarg individually.
+
+**One live finding worth keeping.** The smoke ran against the pre-fix driver, where the
+"builder supplied + option file not exact" error was raised from *inside* the outer KNITRO callback.
+It did fire, but KNITRO surfaced it as
+`Warning: Knitro encounters an exception in puts callback: ErrorException(...)` -- i.e. as a warning
+in its own log, not as a clean Julia error at the call site. That is exactly the failure mode memory
+`feedback-archC-verified-state-direct-call-knitro-callback-err` describes, observed live, and it is
+why the check now also runs at argument time using KNITRO's own parser on a throwaway context. The
+argument-time path is the one gated above; the in-callback one remains as the backstop.
 
 ### 8b.4 What was deliberately **not** done
 
