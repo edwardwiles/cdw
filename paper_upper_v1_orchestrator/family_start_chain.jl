@@ -43,7 +43,26 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl", "c
           "c10_d20_production_driver.jl",
           "flexible_theta.jl", "flexible_theta_aspace_production.jl", "outer_coordinate_layout.jl",
           "c10_d20_production_driver_unified.jl",
-          "multistart_seed_generator.jl"]
+          "multistart_seed_generator.jl",
+          # CM + pairwise-quantile family (#7, 2026-08-12). The pairwise-quantile BASE files are
+          # dependencies of it -- this family's restriction rows ARE the standalone family's rows at
+          # a mu common across origins, so it reuses that family's operator, thread scratch, Hessian
+          # tables and economic cross block wholesale (see cm_pairwise_quantile_hessian.jl's header).
+          #
+          # DELIBERATELY NOT INCLUDED: `pairwise_quantile_checkpoint.jl`. That file defines the
+          # STANDALONE family's own campaign driver, which `call_driver` already has an arm for but
+          # which is NOT currently reachable from this script (the include was never added; standalone
+          # PQ campaign runs go through run_pq_multistart_seed_chain.jl instead). Adding it here as a
+          # side effect of wiring family #7 would silently change which driver that arm resolves to,
+          # mid-campaign, on a family another session is actively working on. Flagged, not fixed here.
+          "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
+          "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
+          "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_production.jl",
+          "cm_pairwise_quantile_config.jl", "cm_pairwise_quantile_moments.jl",
+          "cm_pairwise_quantile_hessian.jl", "cm_pairwise_quantile_hessian_assembly.jl",
+          "cm_pairwise_quantile_lookup_kernels.jl", "cm_pairwise_quantile_production.jl",
+          "cm_pairwise_quantile_verification.jl", "cm_pairwise_quantile_outer_production.jl",
+          "cm_pairwise_quantile_checkpoint.jl"]
     include(joinpath(D4E, f))
 end
 
@@ -94,6 +113,10 @@ end
 #    source of truth for family-defining kwargs.
 # ============================================================================
 
+# `const` is illegal inside a function body, so this lives at module level next to its only user.
+const NO_PROBS_DRIVERS = ("run_pairwise_quantile_upper_checkpointed",
+                          "run_cm_pairwise_quantile_upper_checkpointed")
+
 function fam_kwargs()
     haskey(FAM, "kwargs") || return NamedTuple()
     kw = NamedTuple(sym(k) => (v isa String ? sym(v) : v) for (k, v) in FAM["kwargs"] if k != "notes")
@@ -102,12 +125,21 @@ function fam_kwargs()
     # (resolve_cm_probs, multistart_seed_generator.jl) any time the manifest specifies `L` without
     # its own explicit `probs` override.
     #
-    # EXCEPT for the pairwise-quantile family, whose `L` is its number of quantile BINS and has
-    # nothing to do with a CM contrast grid: `run_pairwise_quantile_upper_checkpointed` has no
-    # `probs` kwarg at all, so injecting one here would make every call to it fail with an
-    # unsupported-keyword MethodError. The guard is on the DRIVER, not on the presence of `L`,
-    # because `L` is exactly what the two families have in common.
-    if haskey(kw, :L) && !haskey(kw, :probs) && FAM["driver"] != "run_pairwise_quantile_upper_checkpointed"
+    # EXCEPT for the two families whose `L` is a number of quantile BINS and has nothing to do with
+    # a CM contrast grid. Neither driver has a `probs` kwarg at all, so injecting one here would
+    # make every call to them fail with an unsupported-keyword MethodError. The guard is on the
+    # DRIVER, not on the presence of `L`, because `L` is exactly what these families share with the
+    # CM ones.
+    #
+    #   run_pairwise_quantile_upper_checkpointed     -- `L` = quantile bins per origin; no CM grid.
+    #   run_cm_pairwise_quantile_upper_checkpointed  -- `L` = PQ bins on the SHARED reference
+    #       marginal, while the CM grid arrives separately as `cm_grid_size`. This family DOES have
+    #       a CM grid, but builds it internally and passes `probs` to CM itself, because it needs
+    #       the explicit `k/G` grid rather than CM's default (whose spacing is 0.0195918 at G=50, so
+    #       NO L divides it -- memory `cm-default-grid-is-not-k-over-g`). Injecting
+    #       `resolve_cm_probs(kw.L)` here would therefore be wrong twice over: wrong grid, derived
+    #       from the wrong L.
+    if haskey(kw, :L) && !haskey(kw, :probs) && !(FAM["driver"] in NO_PROBS_DRIVERS)
         kw = merge(kw, (probs = resolve_cm_probs(kw.L),))
     end
     return kw
@@ -137,6 +169,22 @@ function call_driver(w0::Vector{Float64}; extra::NamedTuple)
         # needed here. (`cutoff_source` must reach the driver as a Symbol; the protocol reader's own
         # kwarg coercion handles that the same way it does for every other Symbol-valued kwarg.)
         return run_pairwise_quantile_upper_checkpointed(w0; kw...)
+    elseif driver == "run_cm_pairwise_quantile_upper_checkpointed"
+        # CM + pairwise-quantile family (#7, 2026-08-12). Fits the uniform convention with no
+        # wrapper: same `common` scientific kwargs, same objective_mode/gp_fixed Stage B mechanism,
+        # same NamedTuple return shape (.knitro_status/.n_eval/.n_grad/.best) run_stage reads.
+        #
+        # Its own required kwargs arrive generically through fam_kwargs() from the protocol's
+        # [families.<ID>.kwargs] sub-table -- `L` (PQ bins on the shared reference marginal),
+        # `cm_grid_size` (G, which L must divide), `cm_moment_families` (1 = eq.35, 2 = +eq.36),
+        # `contrasts`, `min_bin_count`, `mass_start`, and `inner_opt`.
+        #
+        # `inner_opt` is REQUIRED and must be the exact-Hessian file ("ek_inner_cmpq.opt"). That is
+        # not a tuning preference: measured at production n_x=412, the FG-only path hits -400 after
+        # 16,734 evaluations while the exact-Hessian path reaches nStatus=0 in twelve. A protocol
+        # arm that omits it fails with UndefKeywordError; one that names a non-exact file fails
+        # inside the inner registration. Both are deliberate hard errors, not silent downgrades.
+        return run_cm_pairwise_quantile_upper_checkpointed(w0; kw...)
     else
         error("call_driver: unknown driver '$driver' for family $FAMILY_ID -- Unrestricted goes through call_unrestricted_driver, not call_driver")
     end

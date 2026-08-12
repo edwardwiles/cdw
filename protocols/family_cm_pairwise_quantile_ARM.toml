@@ -1,0 +1,70 @@
+# ================================================================================================
+# Campaign ARM for the CM + pairwise-quantile family (family #7), 2026-08-12.
+#
+# THIS IS A FRAGMENT, NOT A RUNNABLE PROTOCOL. Paste the `[families.*]` block below into whichever
+# protocol you want this family to run under; it needs that protocol's own `[scientific]`,
+# `[budgets]`, `[algorithms]` and seed sections to be a complete manifest.
+#
+# WHY IT IS NOT ALREADY IN `paper_upper_v1.toml`: that protocol is frozen (see
+# `paper_upper_v1_orchestrator/freeze_protocol_source.sh`) and governs campaigns that have already
+# run. Adding a sixth family to it retroactively would change the definition of a completed
+# campaign, which is the user's call, not a wiring detail. Everything on the CODE side is done --
+# `family_start_chain.jl` has the include and the `call_driver` arm, and `NO_PROBS_DRIVERS`
+# correctly exempts this driver from CM's `probs` auto-injection.
+#
+# THE ONE THING TO GET RIGHT WHEN PASTING: `L` here means PQ BINS on the shared reference marginal
+# (4 free masses at L=5), while the CM grid arrives separately as `cm_grid_size`. In the CM families
+# above it, `L` means the CM grid size. They are different quantities with the same key name, which
+# is exactly why `resolve_cm_pairwise_quantile_config` returns `n_cm_levels` under a distinct name
+# and why this driver is on the `NO_PROBS_DRIVERS` exemption list.
+# ================================================================================================
+
+[families.CM_PLUS_PAIRWISE_QUANTILE]
+driver = "run_cm_pairwise_quantile_upper_checkpointed"
+delta_restoration_driver = "run_cm_pairwise_quantile_upper_checkpointed"   # objective_mode=:min_delta_fixed_gp
+
+[families.CM_PLUS_PAIRWISE_QUANTILE.kwargs]
+L = 5                        # PQ bins on the SHARED reference marginal -> 4 free outer masses
+cm_grid_size = 50            # CM's grid G; L MUST divide it (each PQ bin a union of CM cells)
+cm_moment_families = 2       # 1 = eq.35 only; 2 = eq.35 + eq.36 (truncated power)
+contrasts = "orthonormal"
+min_bin_count = 1            # non-degeneracy floor per marginal bin AND per joint cell
+mass_start = "uniform"       # :uniform (mu = 1/L) | :empirical (the draws' own bin frequencies)
+inner_opt = "ek_inner_cmpq.opt"   # REQUIRED and must be the EXACT-Hessian file -- see notes
+notes = """
+CM grid (49 levels on the explicit k/G grid, two moment families) + pairwise-quantile independence
+on a SHARED reference marginal. The per-origin marginal rows the standalone pairwise-quantile family
+carries are DROPPED here because CM plus the L-1 level rows imply them exactly -- gated as a span
+statement in the D=4 dense oracle (max relative LS residual 9.7e-15; re-adding them makes the stack
+rank deficient by exactly D*(L-1)) and measured at a real solved point by the verifier
+(max cumulative residual over the dropped rows: 5.2e-14).
+
+WHAT THIS FAMILY BUYS: the outer mass block collapses from D*(L-1) = 80 to L-1 = 4 at D=20/L=5.
+WHAT IT COSTS: the inner solve is larger -- 4906 restriction+CM rows against the standalone
+family's 3120, n_x = 5288 at D=20.
+
+MEASURED at real D=20 (W=20,000 and W=100,000, sigma=3.0, exclude_row, pseudorandom/20260719,
+calibration point): inner solve nStatus=0 in 8 and 6 FG evaluations respectively (7 and 5 Hessian
+callbacks), 29.6s and 42.3s, |grad| 1.0e-11 and 1.7e-12.
+
+`inner_opt` is NOT a tuning preference. The FG-only path at production n_x hit -400 after 16,734
+evaluations; the exact Hessian reaches nStatus=0 in twelve. Naming a non-exact option file is a hard
+error inside the inner registration, and omitting the kwarg is an UndefKeywordError -- neither is a
+silent quasi-Newton downgrade.
+
+NO `probs` KWARG, deliberately. This family builds CM's grid internally and passes `probs`
+explicitly, because it needs the k/G grid rather than CM's default (whose spacing is 0.0195918 at
+G=50, so NO L divides it). The orchestrator's `NO_PROBS_DRIVERS` list exempts this driver from the
+auto-injection every other CM family relies on.
+
+NO `cutoff_source` KWARG, deliberately. Unlike the standalone pairwise-quantile family, this one
+does not choose where its cutoffs sit: they are SELECTED (bit-identically) from CM's own threshold
+array so that each PQ bin is a union of CM grid cells. `:empirical_quantile` cutoffs would differ
+across origins and would not be CM grid points, so the superset identity fails and a shared mu is
+not even well defined.
+
+KNOWN GAP, quantified: this family has no `:cplus` factorized economic-gradient adapter (the
+standalone pairwise-quantile family's is worth 4.42x at real D=20/W=100k). The dense shared
+`economic_A_gradient!` path is used unconditionally. This affects OUTER-loop wall-clock only, not
+any result.
+"""

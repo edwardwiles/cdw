@@ -167,6 +167,18 @@ function inner_loop_KNITRO_cmpairwisequantile_operator(obj, st::CMPairwiseQuanti
         KNITRO.KN_load_param_file(kc, obj.inner_loop_opt)
 
         n_hess = Ref(0)
+        # The SYMMETRIC hard error to the one below, added 2026-08-12 when the campaign path was
+        # wired: a caller that DID supply a builder but pointed at an option file whose `hessopt` is
+        # not `exact` would silently get a quasi-Newton solve. Measured consequence at production n:
+        # `-400` after 16,734 FG evaluations instead of `nStatus=0` in twelve. Both directions are
+        # now errors, so "which Hessian is this solve using" cannot be wrong silently in either.
+        if hess_cb_builder !== nothing && KNITRO.KN_get_int_param(kc, "hessopt") != 1
+            error("inner_loop_KNITRO_cmpairwisequantile_operator: a Hessian callback builder was " *
+                  "supplied but the option file $(obj.inner_loop_opt) does not request " *
+                  "hessopt=exact, so the builder would be silently ignored and the solve would run " *
+                  "quasi-Newton. Point at ek_inner_cmpq.opt, or pass hess_cb_builder=nothing to say " *
+                  "the FG-only solve is intended.")
+        end
         if KNITRO.KN_get_int_param(kc, "hessopt") == 1
             hess_cb_builder === nothing &&
                 error("inner_loop_KNITRO_cmpairwisequantile_operator: the option file " *
