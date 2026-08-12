@@ -471,6 +471,69 @@ win, not a micro-optimization.
 
 ---
 
+### 8b.6 H_E,R rewritten — 1.93x on the callback, for BOTH families
+
+The production-scale profile (§6) named `cmpq_H_ER` at **46.8%** as the only real target. It is the
+*standalone* pairwise-quantile family's cross block, reused here at replicated μ. It already
+exploited the two structural facts that matter — the winner assignment (one economic row per draw
+per slot, not all 381) and the PQ sparsity (210 active cells per draw, not 3120) — but it was
+**serial**, while both its siblings in `threaded_cross_hessian.jl` had been threaded. Three separate
+problems in one loop:
+
+1. **Not threaded.** Threading over `slot` is safe *and bit-identical*: `j = slot + (o−1)·Ddest`
+   means `j ≡ slot (mod Ddest)`, so slots write disjoint rows and each row keeps the original draw
+   order. No reduction, no atomics.
+2. **Cache-hostile scatter.** It accumulated into a *row* of a column-major matrix — consecutive
+   columns strided by `NCORE = 382` doubles, so ~399M accumulations each touched a fresh cache line
+   across 9.5 MB. Accumulating transposed makes one `j`'s working set a contiguous 25 KB column.
+3. **380 redundant strided loads per (slot, draw).** `bin[w,p]` strides by `W` and was read twice
+   per pair to recover 20 distinct values. Hoisted to 20.
+
+Also dropped the length-`W` `v` buffer, materialized then read back one element at a time.
+
+**Measured, real D=20/W=100,000, interleaved in one process, best-of-3:**
+
+| | `:shared` (old) | new | |
+|---|---:|---:|---|
+| whole Hessian callback, 8 threads | 3.435 s | **1.776 s** | **1.93x** |
+| whole Hessian callback, 3 threads | 4.681 s | 3.330 s | 1.41x |
+| implied H_E,R block | ~1.88 s | ~0.25 s | **~7.4x** |
+
+`cmpq_H_ER` fell from **46.8% to 12.4%** of the callback — from dominant to fifth, behind
+`H_RR_tables` (24.3%), `H_CC_tables` (23.8%), `H_RCM_tables` (15.3%) and `H_ECM_fill` (14.9%). The
+profile is now flat; there is no single obvious next target.
+
+The 3-thread row is there deliberately: it is a proxy for a contended box, and the change is still
+a clear win when starved of threads. There is no regime in which it loses — and it *cannot* raise
+peak thread demand, because `Threads.@threads` distributes over the pool Julia already started, and
+during this block 7 of 8 threads were previously idle while the rest of the callback already used
+all 8.
+
+**Correctness.** Bit-identical to the code it replaced: `max|diff| = 0.000e+00` over **1,191,840
+entries** at real D=20, at **both** 8 and 3 Julia threads, and across all five D=4 configurations.
+
+**It replaced the old implementation outright — there is no switch.** A second implementation behind
+a flag is a silent regression waiting to happen, and the check it would have enabled (bit-identity
+against the old code) only establishes *unchanged*; the exact Gram reference establishes *correct*,
+against a reference sharing no code with what it tests. The old code is in git (`bdd0163`).
+
+**Gated after the fold-in, in BOTH families:**
+
+| gate | result |
+|---|---|
+| CM+PQ `test_..._real_d4_hessian.jl` | **121/121**; E×R vs exact Gram, 3.3e-15 – 1.5e-14 |
+| CM+PQ `test_..._d4_dense_oracle.jl` | **136/136** |
+| PQ-only `test_pairwise_quantile_real_d4_knitro.jl` | **ALL PASSED**, nStatus=0 |
+| PQ-only `test_pairwise_quantile_d20_verifier_after_fixes.jl` **W=100k** | **ALL PASSED**, nStatus=0, n_fg=7, n_hess=6, 18.0 s, kkt_resid 8.9e-13 |
+
+That last row required fixing the script first: it referenced `CUTOFF_SOURCE` and never defined it,
+so it had been **unrunnable as committed** — it burned a 64 s context build and died on
+`UndefVarError`. Pre-existing and unrelated to this work, but it means the standalone family's
+production-scale confidence did not come from that script. Now a required argument, not a default,
+since `cutoff_source` decides which restriction is being solved.
+
+---
+
 ## 9. What is left
 
 **The family is campaign-ready.** Everything from the moment rows to a checkpointed, resumable

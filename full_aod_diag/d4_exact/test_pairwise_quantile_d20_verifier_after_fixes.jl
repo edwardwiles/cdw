@@ -31,7 +31,16 @@ function check(name::AbstractString, cond::Bool)
 end
 
 W = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : error("usage: julia test_pairwise_quantile_d20_verifier_after_fixes.jl <W> <L>")
-PQ_L = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : error("usage: julia test_pairwise_quantile_d20_verifier_after_fixes.jl <W> <L>")
+PQ_L = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : error("usage: julia test_pairwise_quantile_d20_verifier_after_fixes.jl <W> <L> <cutoff_source>")
+# CUTOFF_SOURCE was REFERENCED at line 48 but never defined -- this script could not run at all as
+# committed (`UndefVarError` after a 64 s context build). Pre-existing, unrelated to any Hessian
+# change; found 2026-08-12 when the H_E,R restructure needed this family's own D=20 gate. Made a
+# REQUIRED argument rather than given a default: it decides WHERE the fixed cutoffs sit and so
+# decides which restriction is being solved, which is exactly the class of parameter this repo does
+# not default (CLAUDE.md).
+CUTOFF_SOURCE = length(ARGS) >= 3 ? Symbol(ARGS[3]) : error("usage: julia test_pairwise_quantile_d20_verifier_after_fixes.jl <W> <L> <cutoff_source:frechet_theoretical|empirical_quantile>")
+CUTOFF_SOURCE in (:frechet_theoretical, :empirical_quantile) ||
+    error("cutoff_source must be :frechet_theoretical|:empirical_quantile, got :$CUTOFF_SOURCE")
 
 t_ctx = @elapsed begin
     global ctx = d20_real_setup_design(; W = W, δ = 1.0, find_smallest = true,
