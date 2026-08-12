@@ -189,8 +189,27 @@ Block sources:
 For the two CM blocks, build a `CMBinHessCtx` through `build_cm_bin_ctx(ctx, aug)` with a synthesized
 `aug` NamedTuple (`L=Lcm`, `origins`, `refIndex1`, `z=z_cm`, `ncore=ncore_econ`, `ncm`, `contrasts`,
 `core_cf_ref`, `n_families`) — the adapter pattern this repo already uses for the profiled-restricted
-production bridge. `fill_cm_HCC!` writes into `cctx.Hfull` at CM's own `[NCORE | ncm]` offsets, so
-read the `ncm×ncm` corner out of it rather than trying to redirect its offsets.
+production bridge.
+
+Specifics already traced, so the next session does not have to re-read
+`cm_hessian_architectures.jl` (2237 lines) to find them:
+
+* **H_CM,CM.** `build_bin_tables!(cctx, nothing, h; fill_S=false)` → `prefix_sum_tables!(cctx;
+  fill_S=false)` → `fill_cm_HCC!(cctx.Hfull, cctx, W)`. Passing `H=nothing` is safe *only* with
+  `fill_S=false` (that is the branch that never touches the dense economic columns; the function
+  hard-errors otherwise). `fill_cm_HCC!` writes at CM's own offsets
+  `rows = NCORE + (l-1)*nO+1 : NCORE + l*nO` (and `+ncm_cdf` for the eq.36 sub-block), and it fills
+  **both** triangles. So read the `ncm×ncm` corner `cctx.Hfull[NCORE+1:NCORE+ncm, NCORE+1:NCORE+ncm]`
+  out of it — do not try to redirect its offsets.
+* **H_E,CM.** `winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, ws, l, origins, refIndex1, M;
+  Hraw_EC_pow=…)` is **per threshold block** `l` (it fills `NCORE×nO`, not the whole block), and its
+  `ws` is a `WinnerBinCrossScratch` that must first be populated by
+  `winner_pair_cross_hessian_fill!` — it reads `ws.QCScum/NuCScum/SOnlyCScum/QCfCScum`. That
+  prerequisite is the one remaining unread layer; budget for it. After each `l`, apply the contrast
+  on the right (`Hraw_EC * R`, or `Hraw_EC` directly when `R === nothing`) exactly as
+  `hessian_cm_structured!` does, and write into columns `(l-1)*nO+1 : l*nO` of this family's CM
+  column range. Note `use_direct_hcz`/`ncore_core` splitting in that call site is CM+ZC's widened-
+  layout concern and does **not** apply here (`ncore_core == NCORE` for this family).
 
 **Free strong gate available:** H_EE is computed by *both* families' stacks. Assemble it from each and
 require agreement — two independent routes to the same block, at no extra derivation.
