@@ -211,6 +211,27 @@ function run_cm_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Fl
     isfile(inner_opt_path) ||
         error("run_cm_pairwise_quantile_upper_checkpointed($label): inner_opt=$inner_opt resolves to " *
               "$inner_opt_path, which does not exist")
+    # And it must actually request an exact Hessian. `inner_loop_KNITRO_cmpairwisequantile_operator`
+    # already refuses this combination, but it only gets the chance from INSIDE the outer KNITRO
+    # callback -- after a ~80s real-data context build, and where a thrown Julia error may surface as
+    # an opaque KN_RC_CALLBACK_ERR instead of this message (memory
+    # `feedback-archC-verified-state-direct-call-knitro-callback-err`). Checked here instead, in
+    # milliseconds, using KNITRO's OWN parser on a throwaway context rather than by grepping the
+    # file: the .opt format has comments and aliases, and a textual check would be the kind of
+    # almost-right validation that passes when it should not.
+    let kc_probe = KNITRO.KN_new()
+        try
+            KNITRO.KN_load_param_file(kc_probe, inner_opt_path)
+            KNITRO.KN_get_int_param(kc_probe, "hessopt") == 1 ||
+                error("run_cm_pairwise_quantile_upper_checkpointed($label): inner_opt=$inner_opt does " *
+                      "not request hessopt=exact. This family's inner solve does not converge at " *
+                      "production n without the exact Hessian -- measured at n_x=412, the FG-only " *
+                      "path reached -400 after 16,734 evaluations while the exact-Hessian path " *
+                      "reached nStatus=0 in twelve. Pass ek_inner_cmpq.opt.")
+        finally
+            KNITRO.KN_free(kc_probe)
+        end
+    end
     lp("[", label, "] CM + pairwise-quantile family: L=", L, " PQ bins on a SHARED reference marginal, ",
        "CM grid G=", cm_grid_size, " (", cm_grid_size - 1, " levels, ", cm_moment_families,
        " family/families, contrasts=:", contrasts, "), min_bin_count=", min_bin_count, " of W=", W,

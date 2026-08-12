@@ -315,6 +315,92 @@ family needs 16, and **4 at D=20/L=5** where the standalone family needs 80.
 
 ---
 
+## 8b. Campaign readiness: the wiring between the mathematics and a run
+
+Four new files plus one orchestrator edit, all ported from the standalone family's own layer
+function for function.
+
+| Piece | File | Gate |
+|---|---|---|
+| Verifier (**three** blocks) | `cm_pairwise_quantile_verification.jl` | §8b.1 |
+| Production context, verified state, combined gradient, FD ground truth | `cm_pairwise_quantile_outer_production.jl` | §8b.1–8b.2 |
+| Checkpointed outer driver + resume | `cm_pairwise_quantile_checkpoint.jl` | §8b.3 |
+| Orchestrator include + `call_driver` arm + `NO_PROBS_DRIVERS` | `paper_upper_v1_orchestrator/family_start_chain.jl` | §8b.4 |
+| Ready-to-paste protocol arm | `protocols/family_cm_pairwise_quantile_ARM.toml` | — |
+
+### 8b.1 The verifier has three blocks, not two
+
+The standalone family recomputes `[E | restriction]`. This one recomputes
+`[E | level+pair | CM-grid]` and carries a fourth block residual, `kkt_resid_cm`. That is not
+bookkeeping: the CM grid is a term of the per-draw dual index, and a verifier that omitted it would
+report a **wrong `Delta_dual`** while every residual it did compute still looked fine.
+
+Measured at real D=4, L=5/G=50/two families/orthonormal, at a non-uniform μ:
+
+* all four block KKT residuals ≤ **1.2e-13** from the independent recompute;
+* `classify_inner_result` → **`VerifiedSolved`** under the shared acceptance gate (memory
+  `feedback-lfd-ok-verification-gate-required`: `FiniteSolved && within_budget` is *not* one).
+
+**And the redundancy claim, measured at a real solved point.** The dense oracle proves the dropped
+per-origin marginal rows are implied *as a span statement*. The verifier now measures whether they
+actually hold, under the LFD, on every solve:
+
+| | residual |
+|---|---|
+| enforced level rows | 2.27e-14 |
+| **dropped per-origin marginals** | **5.17e-14** |
+| pairwise factorization | 4.87e-14 |
+
+### 8b.2 The `q0` fold — two blocks, with a negative control
+
+The mandatory `q0` fold must add **both** `-G_R λ_R` and `-G_CM λ_CM`. `q0` is the per-draw *level*
+the economic block linearizes around, so omitting either term linearizes about the wrong base point
+and produces an economic gradient wrong by an amount unrelated to the restriction's own gradient.
+The argument that the CM rows do not depend on θ is true about the *derivative* and irrelevant here
+(memory `feedback-q0-restriction-fold-is-a-level-not-a-derivative`).
+
+| fold | max\|q0 − r_verified\| |
+|---|---|
+| **both blocks** | **9.9e-14** |
+| level+pair only | 1.90e+02 |
+| neither | 1.14e+02 |
+
+A ratio of 1.9e15 between the first two rows is what makes the first row a real check rather than a
+tautology. The mismatch is a hard error in `build_lfix_base_cache_cmpq`, so this cannot regress
+silently.
+
+Combined gradient: length `D·Ddest + (L-1)`; the mass tail is **bit-identical** to
+`cmpq_mass_gradient_vec`; coordinate 1 agrees with a reoptimized FD *through the production layer*
+at rel 1.1e-9. **20/20.**
+
+### 8b.3 The driver
+
+`run_cm_pairwise_quantile_{upper,lower}_checkpointed`, with `CMPairwiseQuantileCheckpointV1`
+(name grep-verified unique — `deserialize` resolves by NAME, memory
+`feedback-julia-serialization-type-name-collision`). Two family-specific differences from the
+standalone driver, both consequences of what the family *is*:
+
+* **No `cutoff_source`.** This family does not choose where its cutoffs sit — they are selected
+  bit-identically from CM's own threshold array so each PQ bin is a union of CM grid cells.
+* **`inner_opt` is required and must be the exact-Hessian file.** Not a tuning preference: at
+  production `n_x` the FG-only path hit `-400` after 16,734 evaluations. Also hardened symmetrically
+  this session — supplying a Hessian builder while the option file is *not* `hessopt=exact` is now a
+  hard error too, closing the silent-quasi-Newton hole in the other direction.
+
+### 8b.4 What was deliberately **not** done
+
+* **`pairwise_quantile_checkpoint.jl` was not added to the orchestrator's include list.** The
+  standalone PQ arm in `call_driver` is currently unreachable from that script — a pre-existing gap;
+  those campaigns go through `run_pq_multistart_seed_chain.jl`. Fixing it as a side effect of wiring
+  family #7 would change which driver that arm resolves to, mid-campaign, on a family another
+  session is actively working on.
+* **`protocols/paper_upper_v1.toml` was not edited.** It is frozen and governs completed campaigns;
+  adding a sixth family retroactively is the user's call. The arm is a paste-ready fragment instead.
+* **No `:cplus` factorized economic-gradient adapter** for this family. The standalone family's is
+  worth 4.42x at real D=20/W=100k. This affects outer-loop wall-clock only, not any result.
+
+---
+
 ## 9. What is left, in order
 
 1. **Checkpoint layer.** Model on `pairwise_quantile_checkpoint.jl`. Nothing mathematical is
