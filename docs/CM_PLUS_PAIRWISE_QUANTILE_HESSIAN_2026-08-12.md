@@ -328,8 +328,10 @@ family needs 16, and **4 at D=20/L=5** where the standalone family needs 80.
 3. **Campaign selectability**, i.e. a `family_tag` and the orchestrator arm. Note memory
    `feedback-hzz-blas-thread-gate-and-family-tag-gates`: performance gates keyed on `family_tag`
    starve new families. Key on capability.
-4. **Then** revisit the block profile at production `W` and decide on threading
-   `fill_cmpq_cm_cross_block!` (§6.1).
+4. **Performance is not on the critical path.** The production-scale profile is in hand (§6) and the
+   inner solve already converges in 5 callbacks / 42 s at W=100k. The one identified target,
+   `cmpq_H_ER` at 46.8%, belongs to the standalone PQ family and needs its own gate — do not fold it
+   into this family's wiring work.
 
 ---
 
