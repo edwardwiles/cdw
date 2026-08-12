@@ -1,0 +1,307 @@
+# =============================================================================================
+# paper_upper_v1 -- frozen protocol manifest for the reproducible five-family upper-bound paper
+# campaign. Once any cell of this protocol has started, THIS FILE MUST NOT BE MUTATED. Any
+# substantive change requires a new protocol version (paper_upper_v2.toml) with its own root
+# output tree -- never edit paper_upper_v1's own numbers after launch.
+#
+# Consumed by: run_paper_upper_bounds.jl (protocols/../run_paper_upper_bounds.jl). Every value an
+# orchestrator/cell script needs must be read from here, not hardcoded/re-derived in Julia.
+# =============================================================================================
+
+[protocol]
+name = "paper_upper_v1"
+created_utc = "2026-08-08"
+description = "Five-family (Unrestricted/Common Marginals/Common Frechet/Origin-ZC/CM+ZC) upper-bound discovery + cross-family projection + final polish, delta in {0.1,0.5,1,2}, W=100000, 10 common starting points."
+
+# -------------------------------------------------------------------------------------------
+# 1. Canonical source
+# -------------------------------------------------------------------------------------------
+[source]
+repo = "/bbkinghome/edav/cdw"
+base_branch = "origin/production/fullA-exact"
+base_sha = "4df5254"                                  # "Document the multistart seed generator"
+# paper_upper_v1's OWN protocol branch, built on top of base_sha with two additive, non-scientific
+# extensions (both required for this protocol, neither changes any family's scientific definition):
+#   1. multistart_seed_generator.jl: two new FamilySeedSpec kinds (:unrestricted, :cm_only) so the
+#      SAME generator can qualify seeds against all five paper families, not just the three
+#      ZC-flavor kinds the original release covered. Reuses existing production evaluators
+#      (evaluate_fullA_screened_ranged / cm_production_value_verified_screened) verbatim.
+#   2. cm_checkpoint.jl / cm_originzc_checkpoint.jl: new objective_mode kwarg (default :min_gp =
+#      ZERO behavior change / bit-identical to base_sha). :min_delta_fixed_gp is an ADDITIVE
+#      alternate KNITRO NLP framing over the IDENTICAL free-coordinate box/value/gradient
+#      machinery -- gp pinned (via the already-drafted gp_fixed patch), no Delta<=delta
+#      constraint, objective=Delta_dual itself -- mirroring run_profile_checkpointed's own
+#      unconstrained pattern for the Unrestricted family. This is Stage B / Stage R0's fixed-gp
+#      Delta* restoration primitive for the 4 non-Unrestricted families.
+# protocol_branch/protocol_sha are filled in by scripts/freeze_protocol_source.sh at launch time
+# (records the exact commit these two extensions were committed as) -- placeholder until then.
+protocol_branch = "protocol/paper-upper-v1-2026-08-08"
+protocol_sha = "95caa4cac43508c51aaafc2325fb324a52371fb0"                        # filled at launch; hard-refuse launch if still this value
+require_clean_worktree = true                          # launcher refuses to run from a dirty git worktree
+
+[source.recorded_versions]
+# Filled in at launch by scripts/freeze_protocol_source.sh (julia --version, KNITRO version via
+# KNITRO.KN_get_release, BLAS vendor/threads, data file sha256, draw checksum). Placeholders here
+# document the EXPECTED values from this session's own confirmed environment.
+julia_version = "1.12.6"
+julia_toolchain = "juliaup"                             # NOT /opt/shared_sw -- see project CLAUDE.md
+knitro_dir = "/opt/shared_sw/knitro/14.2.0"
+data_dir_env = "REAL_DATA_DIR"                          # default full_aod_diag/../real_data/noah_D20 if unset
+
+# -------------------------------------------------------------------------------------------
+# 2. Scientific specification (frozen; identical across all five families except the restriction
+#    itself -- no family gets redundant mean moments added "for comparability")
+# -------------------------------------------------------------------------------------------
+[scientific]
+D = 20
+focal_country = "France"
+sigma = 3.0
+W = 100000
+draw_design = "sobol_randomized"
+draw_seed = 20260719
+destination_sample = "exclude_row"
+exclude_diagonal_gravity = true
+gravity_exclude_cells = "default_gravity_exclude_cells_brazil_korea"   # resolved dynamically from countries.csv, not hardcoded
+inner_lower_limit = -10.0
+A_coordinate_mode = "powered_aspace"
+direction = "upper"          # find_smallest=true convention (direction_bounds.jl / multistart_seed_generator.jl)
+find_smallest = true
+bound = "upper_only"
+deltas = [0.1, 0.5, 1.0, 2.0]
+z_halfwidth = 30.0
+verification_backend = "operator"     # UNRESTRICTED_VERIFICATION_BACKEND_DEFAULT / CM_*_VERIFICATION_BACKEND_DEFAULT = :operator (no dense_reference, no dense G)
+
+[scientific.verification_tolerances]
+primal_dual_gap_tol = 1.0e-3
+mean_m_resid_tol = 1.0e-6
+max_abs_moment_kkt_resid_tol = 1.0e-3
+m_min_floor = 0.0
+
+# -------------------------------------------------------------------------------------------
+# Family definitions. `driver` is the exact production entry point; `kwargs` are passed through
+# verbatim (plus the [scientific] block above, applied to every family identically). No family's
+# kwargs here add a restriction not already implied by its own name.
+# -------------------------------------------------------------------------------------------
+
+[families.UNRESTRICTED]
+driver = "run_polish_checkpointed_unified"
+delta_restoration_driver = "run_profile_checkpointed"          # pre-existing, unmerged-nowhere-else-needed: objective=Delta_dual directly, gp fixed by construction
+notes = "No CM, no ZC. layout=fixed-theta OuterCoordinateLayout (theta fixed at calibration; matches the other 4 families' own fixed-theta convention)."
+
+[families.COMMON_MARGINALS]
+driver = "run_cm_upper_checkpointed"
+delta_restoration_driver = "run_cm_upper_checkpointed"          # objective_mode=:min_delta_fixed_gp
+[families.COMMON_MARGINALS.kwargs]
+marginal_restriction = "common_flexible"
+cm_extension = "cm_only"
+L = 50
+contrasts = "orthonormal"
+include_truncated_moment = false
+notes = "Current flexible-CM restriction, no ZC. No redundant mean moments added."
+
+[families.COMMON_FRECHET]
+driver = "run_cm_upper_checkpointed"
+delta_restoration_driver = "run_cm_upper_checkpointed"
+[families.COMMON_FRECHET.kwargs]
+marginal_restriction = "common_frechet"
+cm_extension = "cm_only"
+L = 50
+contrasts = "orthonormal"
+include_truncated_moment = false
+notes = """
+Current production Common-Frechet restriction is SINGLE-FAMILY (CDF-basis only,
+include_truncated_moment=false) -- confirmed 2026-08-08 (multistart_seed_generator.jl's own
+release audit) that the two-family eq.35+eq.36 variant is NOT reachable through the current
+production driver (build_cm_frechet_production_context's dense-Hessian requirement under
+include_truncated_moment=true conflicts with the operator-bundle-only production ban, i.e. would
+require dense_reference, which this protocol never uses). This IS 'the current Common-Frechet
+restriction' per the task brief's own instruction to use current production definitions unchanged
+-- flagged explicitly here rather than silently treated as the originally-envisioned two-family
+version.
+"""
+
+[families.ORIGIN_ZC]
+driver = "run_originzc_upper_checkpointed"
+delta_restoration_driver = "run_originzc_upper_checkpointed"
+[families.ORIGIN_ZC.kwargs]
+distribution_restriction = "origin_specific_moments_zero_covariance"
+K_mean = 3
+K_pair = 3
+power_target_layout = "origin_by_power"
+originzc_profiled_level = 2       # kstar = sigma-1 = 2, Variant D focal row-omission (K_mean=3 >= kstar)
+notes = "No CM. K_mean=K_pair=3, powers={1,2,3}."
+
+[families.CM_PLUS_ZC]
+driver = "run_cm_upper_checkpointed"
+delta_restoration_driver = "run_cm_upper_checkpointed"
+[families.CM_PLUS_ZC.kwargs]
+marginal_restriction = "common_flexible"
+cm_extension = "cm_plus_moments"
+L = 50
+contrasts = "orthonormal"
+include_truncated_moment = false
+meanzc_K_mean = 3
+meanzc_K_pair = 3
+meanzc_profiled_level = 2         # kstar = sigma-1 = 2, Variant D focal row-omission
+meanzc_basis = "direct"
+notes = "Current flexible-CM restriction + K_mean=K_pair=3 ZC moments, powers={1,2,3}."
+
+# -------------------------------------------------------------------------------------------
+# 3. Multistart seed generation (Addendum A/B/C + concurrent-wave correction)
+# -------------------------------------------------------------------------------------------
+[seeds]
+generator = "generate_multistart_seeds"                # full_aod_diag/d4_exact/multistart_seed_generator.jl
+family_specs = "paper_five_family_seed_specs"           # paper_upper_v1 extension -- NOT production_five_family_seed_specs
+number_of_starts = 10
+include_calibration = true
+randomized_noncalibration_starts = 9
+seed_delta_max = 1.0                                    # Delta* < 1.0 qualification ceiling (addendum B)
+seed_delta_qualification_tolerance = 0.02               # accept Delta* <= 1.0 - tolerance = 0.98 (explicit, not floating-point <1.0)
+seed_requires_all_five_families = true
+master_rng_seed = 0x0000000000000002                    # DISTINCT from any prior campaign's seed (0x1 used previously) -- immutable once seed generation starts
+A_scale = 0.01                                           # revised 2026-08-08: real empirical scan (still running in the background, see
+                                                          # seeds/scale_scan_report.txt) showed (A_scale,gp_scale)=(0.02,0.2) -- this manifest's
+                                                          # own first frozen choice -- at 0/5 acceptance across 5 trials; (0.01,0.1) and (0.01,0.4)
+                                                          # also 0/5; (0.01,0.2) was the ONLY cell scanned so far with any acceptance (1/5).
+                                                          # Killed the first real seed-generation attempt (which had not yet accepted any
+                                                          # non-calibration seed) and restarted with this value rather than risk exhausting
+                                                          # max_attempts=200 at a scale the scan already suggests is too tight. Small trial
+                                                          # counts (n=5/cell) mean this is still a noisy signal, not a fully-converged optimum --
+                                                          # revisit if the real generation itself also struggles to reach M=10.
+gp_scale = 0.2
+max_attempts = 200
+min_seed_distance = 0.0
+radius_mode = "uniform_radius"
+initial_infeasible_restoration_budget_minutes = 30       # Stage R0 budget (addendum C)
+output_dir = "seeds"                                     # relative to campaign root
+
+[seeds.scale_scan]
+# Empirical (A_scale, gp_scale) grid to try BEFORE the real 10-seed generation run, evaluated via
+# evaluate_attempt(...) directly at a handful of trial attempt_ids (task section: "A_scale/gp_scale
+# are NOT tuned defaults -- scan a small grid first"). Populated by scripts/scan_seed_scales.jl;
+# results recorded in seeds/scale_scan_report.json before [seeds].A_scale/gp_scale are frozen.
+candidate_A_scales = [0.01, 0.02, 0.04, 0.08]
+candidate_gp_scales = [0.1, 0.2, 0.4]
+trial_attempts_per_cell = 5
+
+# -------------------------------------------------------------------------------------------
+# 4. Algorithms (identical for every cell of a given kind, every family, every phase)
+# -------------------------------------------------------------------------------------------
+[algorithms]
+primary = "pin_cg_lbfgs"          # pin_outer_algorithm=true -> KNITRO algorithm=2 (Interior/CG) + hessopt=6 (L-BFGS)
+alternate = "direct_sr1"          # outer_direct_hessopt=:sr1 -> KNITRO algorithm=Direct + hessopt=SR1
+opt_file = "csw_outer_wallclock_sr1.opt"
+[algorithms.primary_kwargs]
+pin_outer_algorithm = true
+[algorithms.alternate_kwargs]
+outer_direct_hessopt = "sr1"
+
+# -------------------------------------------------------------------------------------------
+# 5. Stage time budgets (minutes). Section 8 (feasible start) / Addendum C (infeasible start).
+# -------------------------------------------------------------------------------------------
+[budgets]
+maximum_discovery_cell_budget_minutes = 180
+maximum_final_polish_cell_budget_minutes = 180
+
+[budgets.discovery_feasible_start]     # delta=0.1 with seed already Delta*<=0.1, OR delta>0.1 continuation cells
+stage_A_primary_push_minutes = 75
+stage_B_fixed_gp_restoration_minutes = 30
+stage_C_alternate_push_minutes = 75
+
+[budgets.discovery_infeasible_start]   # delta=0.1 cell whose seed has 0.1 < Delta*(seed) < 1 (addendum C)
+stage_R0_initial_restoration_minutes = 30
+stage_A_primary_push_minutes = 60
+stage_B_fixed_gp_restoration_minutes = 30
+stage_C_alternate_push_minutes = 60
+
+[budgets.projection]                   # Phase II, per parent->child edge per delta
+restoration_minutes = 45
+push_minutes = 45
+
+[budgets.final_polish]                 # Phase III, per winning family/delta candidate
+stage_P1_fixed_gp_restoration_minutes = 45
+stage_P2_primary_push_minutes = 75
+stage_P3_alternate_polish_minutes = 60
+
+# -------------------------------------------------------------------------------------------
+# 6. Convergence-status thresholds (Section 9 / Addendum I)
+# -------------------------------------------------------------------------------------------
+[convergence]
+material_improvement_window_major_iters = 10
+material_gp_improvement_threshold = 1.0e-5
+material_delta_improvement_threshold = 1.0e-4
+stalled_no_improvement_window_minutes = 20
+statuses = ["CONVERGED", "TIME_LIMIT_PROGRESSING", "TIME_LIMIT_STALLED", "NO_FEASIBLE_IMPROVEMENT",
+            "START_NOT_RESTORED_TO_DELTA", "SOLVER_FAILURE", "CALLBACK_FAILURE"]
+continuation_priority = { converged = 0, time_limit_stalled = 1, time_limit_progressing_slow = 2, time_limit_progressing_material = 3, solver_or_callback_failure = 4 }
+
+# -------------------------------------------------------------------------------------------
+# 7. Projection graph (Phase II, Section 13-14)
+# -------------------------------------------------------------------------------------------
+[projection]
+edges = [
+    { parent = "UNRESTRICTED",     child = "COMMON_MARGINALS" },
+    { parent = "UNRESTRICTED",     child = "ORIGIN_ZC" },
+    { parent = "COMMON_MARGINALS", child = "COMMON_FRECHET" },
+    { parent = "COMMON_MARGINALS", child = "CM_PLUS_ZC" },
+    { parent = "ORIGIN_ZC",        child = "CM_PLUS_ZC" },
+]
+inheritance_edges = [
+    { relaxed = "CM_PLUS_ZC",   stricter_of = ["COMMON_MARGINALS", "ORIGIN_ZC", "UNRESTRICTED"] },
+    { relaxed = "COMMON_FRECHET", stricter_of = ["COMMON_MARGINALS", "UNRESTRICTED"] },
+    { relaxed = "COMMON_MARGINALS", stricter_of = ["UNRESTRICTED"] },
+    { relaxed = "ORIGIN_ZC",     stricter_of = ["UNRESTRICTED"] },
+]
+max_simultaneous_projection_jobs = 10
+
+# -------------------------------------------------------------------------------------------
+# 8. Concurrency / scheduling (base prompt corrected by the final addendum: 2 starts x 5
+#    families = 10 simultaneous Phase-I jobs, NOT 5)
+# -------------------------------------------------------------------------------------------
+[concurrency]
+julia_threads_per_process = 10
+max_simultaneous_processes = 10
+phase1_starts_per_wave = 2
+phase1_families_per_start = 5
+phase1_jobs_per_wave = 10                 # 2 starts x 5 families
+phase1_total_waves = 5                    # 10 starts / 2 per wave
+phase2_max_simultaneous_jobs = 10
+phase3_max_simultaneous_jobs = 10
+cores_per_process = 10
+total_cores_required_per_wave = 100
+openblas_num_threads = 1
+omp_num_threads = 1
+cpu_affinity_policy = "disjoint_taskset_per_process"    # 10 disjoint 10-core taskset ranges per wave
+
+# -------------------------------------------------------------------------------------------
+# 9. Checkpoint / resume policy
+# -------------------------------------------------------------------------------------------
+[checkpoint]
+checkpoint_interval_s = 90.0
+resume_bundle_format = "julia_serialization"            # .jls, atomic tmp-then-mv write, versioned schema
+hard_refuse_hash_mismatch_on_resume = true
+base_result_immutable = true
+extension_root = "convergence_extensions"                 # never overwrites paper_upper_v1/ itself
+
+# -------------------------------------------------------------------------------------------
+# 10. Output tree
+# -------------------------------------------------------------------------------------------
+[output]
+root = "/bbkinghome/edav/repo_scratch/paper_upper_v1/"
+structure = ["protocol", "seeds", "phase1_discovery", "phase2_projection", "phase3_final_polish",
+             "convergence_extensions", "summaries"]
+
+[output.summaries]
+files = ["direct_results.csv", "projection_results.csv", "final_results.csv",
+         "convergence_dashboard.csv", "paper_table.csv", "provenance.json"]
+
+# -------------------------------------------------------------------------------------------
+# 11. Strict exclusions (Section 25) -- enforced by orchestrator assertions, not just documented
+# -------------------------------------------------------------------------------------------
+[exclusions]
+ad_hoc_extra_polish = false
+artificial_mean_constraints_for_comparability = false
+reduced_used = false
+dense_reference_production = false
+change_lower_limit_from_minus10 = false
+silent_continuation_beyond_base_budget = false

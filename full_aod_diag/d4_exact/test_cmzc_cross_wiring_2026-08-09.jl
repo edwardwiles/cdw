@@ -39,7 +39,8 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           # Included last: it hard-checks that every dependency above is already defined, which
           # doubles as a load-order gate for the four CROSS symbols added to that check on
           # 2026-08-09.
-          "country_resolve.jl", "multistart_seed_generator.jl"]
+          "country_resolve.jl", "fast_range_screen.jl",
+          "multistart_seed_generator.jl"]
     include(joinpath(D4X, f))
 end
 using Printf, Serialization, SHA, Random, LinearAlgebra

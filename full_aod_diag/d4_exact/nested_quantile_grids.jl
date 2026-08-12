@@ -1,5 +1,19 @@
 # Continuation 13, Section 6: genuinely nested quantile-probability grids.
 #
+# ⚠️ NO LONGER THE PRODUCTION GRID (2026-08-12). The live CM/CM+ZC/Common-Fréchet campaign path
+# (`resolve_cm_probs` -> `paper_upper_v1_orchestrator/family_start_chain.jl`) now resolves to
+# `cm_equal_mass_probs(L)` (common_marginals_moments.jl): `k/L` for `k=1..L-1`, i.e. exactly `L`
+# buckets of mass `1/L`, per the user's specification that "L = 50 means 50 equally sized buckets".
+# This file's dyadic grid is NOT equal-mass -- measured at L=50 it gives 50 levels, hence 51
+# buckets, whose masses are only ever 0.015625 or 0.03125.
+#
+# It is kept, unchanged, because the property below is real and is a different property: genuine
+# NESTING across L. Equal-mass grids nest only when the sizes divide (Q_10 ⊂ Q_20, Q_10 ⊂ Q_50, but
+# Q_20 ⊄ Q_50 since 20 ∤ 50), so anything that needs a nested L-ladder over {10,20,50} specifically
+# -- `c13_d20_cm_upper_continuation.jl`'s warm-start continuation, `CMConfig`'s `:nested_family`
+# rule and `cm_production_stage_runner.jl` -- still calls `nested_grid_sequence` directly and is
+# untouched. For a nested EQUAL-MASS ladder, choose sizes that divide (e.g. {10,50}).
+#
 # The Continuation 12 L=10/20/50 grids used `k/L` for k=1:L-1. This gives L=10's 9 cutpoints as
 # an exact subset of L=20's 19 (both multiples of 0.05) -- but L=50's 49 cutpoints (multiples of
 # 0.02) are NOT a superset of L=20's 19 (0.05 is not a multiple of 0.02), confirmed directly in

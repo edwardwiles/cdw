@@ -1,0 +1,10 @@
+seed_id=S0 verdict=feasible_start Delta_star=0.0007055537640493786 gp=0.9840278851786317 delta_probe=0.1
+seed_id=S1 verdict=feasible_start Delta_star=0.007657103075030843 gp=0.983189782975387 delta_probe=0.1
+seed_id=S2 verdict=feasible_start Delta_star=0.03201907433535824 gp=0.9794891495417916 delta_probe=0.1
+seed_id=S3 verdict=feasible_start Delta_star=0.003002755141364527 gp=0.9835952385550133 delta_probe=0.1
+seed_id=S4 verdict=feasible_start Delta_star=0.011386820195110482 gp=0.9815036193814537 delta_probe=0.1
+seed_id=S5 verdict=feasible_start Delta_star=0.012361811802042755 gp=0.9816239765680658 delta_probe=0.1
+seed_id=S6 verdict=feasible_start Delta_star=0.009105044446249303 gp=0.9818618340694555 delta_probe=0.1
+seed_id=S7 verdict=feasible_start Delta_star=0.008023122229170298 gp=0.9835541690899962 delta_probe=0.1
+seed_id=S8 verdict=feasible_start Delta_star=0.007023674587216969 gp=0.982882003364507 delta_probe=0.1
+seed_id=S9 verdict=feasible_start Delta_star=0.006608257987329221 gp=0.9819779547761807 delta_probe=0.1

@@ -29,7 +29,8 @@ for f in ["draw_design.jl", "winners.jl", "oracle.jl", "common_marginals_moments
           "cm_meanzc_cross_target_layout.jl", "cm_meanzc_cross_moments.jl", "cm_meanzc_cross_production.jl", "cm_meanzc_cross_cplus.jl",
           "cm_frechet_level.jl", "cm_frechet_lookup_production.jl", "cm_frechet_hessian.jl", "cm_frechet_hessian_threaded.jl", "cm_frechet_cplus.jl",
           "cm_exact_cache_production.jl", "cm_dual_bank_production.jl", "country_resolve.jl",
-          "cm_checkpoint.jl", "cm_originzc_checkpoint.jl", "multistart_seed_generator.jl"]
+          "cm_checkpoint.jl", "cm_originzc_checkpoint.jl", "fast_range_screen.jl",
+          "multistart_seed_generator.jl"]
     include(joinpath(_D4E, f))
 end
 using Printf

@@ -522,6 +522,17 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         W::Int = 80000, delta::Float64 = 1.0, draw_design::Symbol = :sobol_randomized, draw_seed::Int = 20260719,
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
+        gp_fixed::Union{Nothing,Float64} = nothing,   # 2026-08-08 polish-exercise port (campaign
+        # dev worktree only, NOT applied to the live production tip): origin-ZC analog of
+        # run_cm_upper_checkpointed's own gp_fixed (cm_checkpoint.jl) -- this family never had it.
+        # When set, pins the outer gp coordinate's box bounds to [gp_fixed, gp_fixed] (degenerate
+        # single-point box), so the outer solve only optimizes over A_nonpivot + eta_nu while gp is
+        # held fixed by the caller's own bisection loop. `nothing` (default): zero behavior change.
+        objective_mode::Symbol = :min_gp,   # paper_upper_v1 extension (2026-08-08): identical
+        # meaning/mechanism to run_cm_upper_checkpointed's own objective_mode (cm_checkpoint.jl) --
+        # `:min_delta_fixed_gp` requires gp_fixed set, drops the Delta<=delta constraint entirely,
+        # and makes Delta_dual itself the KNITRO objective, mirroring run_profile_checkpointed's
+        # unconstrained pattern for the Unrestricted family. See that kwarg's own docstring.
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "originzc_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
@@ -644,6 +655,11 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         error("run_originzc_upper_checkpointed($label): destination_sample must be :exclude_row|:all_legacy, got :$destination_sample")
     A_coordinate_mode in (:legacy_z, :powered_aspace) ||
         error("run_originzc_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
+    objective_mode in (:min_gp, :min_delta_fixed_gp) ||
+        error("run_originzc_upper_checkpointed($label): objective_mode must be :min_gp|:min_delta_fixed_gp, got :$objective_mode")
+    objective_mode == :min_delta_fixed_gp && gp_fixed === nothing &&
+        error("run_originzc_upper_checkpointed($label): objective_mode=:min_delta_fixed_gp requires gp_fixed to be set " *
+              "(this mode has no meaning with gp free -- it minimizes Delta* AT a fixed gp).")
     lp("[", label, "] A_coordinate_mode=", A_coordinate_mode,
        A_coordinate_mode == :powered_aspace ? " (transformed-A, PRODUCTION DEFAULT since five-family finish task §8)" : " (legacy-z, explicit replication mode)")
     lp("[", label, "] distribution_restriction=", distribution_restriction, " power_target_layout=", power_target_layout,
@@ -832,6 +848,15 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     w_hi_econ = vcat(gp_hi, w0[2:D2_econ] .+ z_halfwidth)
     w_lo = vcat(w_lo_econ, [bounds[k][1] for k in 1:n_eta_active])
     w_hi = vcat(w_hi_econ, [bounds[k][2] for k in 1:n_eta_active])
+    if gp_fixed !== nothing
+        gp_lo <= gp_fixed <= gp_hi ||
+            error("run_originzc_upper_checkpointed($label): gp_fixed=$gp_fixed outside the family's own gp box [$gp_lo, $gp_hi]")
+        isapprox(w0[1], gp_fixed; atol = 1e-10) ||
+            error("run_originzc_upper_checkpointed($label): gp_fixed=$gp_fixed but w0[1]=$(w0[1]) -- caller must " *
+                  "construct w0 with the SAME pinned gp value, not rely on KNITRO to move it there.")
+        w_lo[1] = gp_fixed
+        w_hi[1] = gp_fixed
+    end
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
@@ -847,8 +872,8 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
     KNITRO.KN_set_var_upbnds_all(kc, w_hi)
     KNITRO.KN_set_var_primal_init_values_all(kc, w0)
-    cIndices = KNITRO.KN_add_cons(kc, 1)
-    KNITRO.KN_set_con_upbnd(kc, cIndices[1], delta)
+    cIndices = objective_mode == :min_gp ? KNITRO.KN_add_cons(kc, 1) : Int32[]
+    objective_mode == :min_gp && KNITRO.KN_set_con_upbnd(kc, cIndices[1], delta)
 
     last_F_state = Ref{Any}(nothing)
     best_feasible = Ref{Any}(resumed !== nothing ? resumed.best_feasible : nothing)
@@ -915,14 +940,26 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
             reject_point(w[1], "run_originzc_upper_checkpointed($label): infeasible/failed inner solve at this point")
         end
         Δ = verify.Delta_dual
-        evalResult.obj[1] = find_smallest ? w[1] : -w[1]
-        evalResult.c[1] = Δ
+        if objective_mode == :min_gp
+            evalResult.obj[1] = find_smallest ? w[1] : -w[1]
+            evalResult.c[1] = Δ
+        else   # :min_delta_fixed_gp -- gp is pinned (degenerate box), objective IS Delta itself
+            evalResult.obj[1] = Δ
+        end
         n_eval[] += 1
         last_F_state[] = (w = copy(w), base = base, verify = verify)
+        # `delta` remains a purely informational "has the target been reached" threshold in
+        # :min_delta_fixed_gp mode (never a KNITRO constraint there -- cIndices=Int32[] above).
         feasible = isfinite(Δ) && Δ <= delta + 1e-6
         verified = is_verified_success(verify)
-        is_new_best = feasible && verified &&
-            is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
+        is_new_best = if objective_mode == :min_gp
+            feasible && verified &&
+                is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
+        else
+            # :min_delta_fixed_gp: track the best (smallest) VERIFIED Delta* seen so far, even if
+            # the target `delta` was never reached (paper_upper_v1 Stage R0, addendum §D).
+            verified && is_better_profile(Δ, best_feasible[] === nothing ? nothing : best_feasible[].Delta)
+        end
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, n_eval = n_eval[], t = prior_wall + (time() - t_start))
             do_checkpoint(:new_best, collect(w))
@@ -976,7 +1013,6 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         # even assembled -- gfull is already complete (length D2_econ+n_eta_active) here. Nothing
         # left to do at this call site.
         n_grad[] += 1
-        evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
         # Transformed-A restricted-family port: gfull is ALWAYS the z-space gradient (unchanged
         # cm_originzc_production_gradient_cplus/cm_originzc_production_gradient); rescale the
         # A-block (indices 2:D2_econ) by the constant scalar -theta_cm when the outer search is
@@ -984,12 +1020,24 @@ function run_originzc_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = no
         if A_coordinate_mode == :powered_aspace
             gfull[2:D2_econ] .*= -theta_cm
         end
-        evalResult.jac .= gfull
+        if objective_mode == :min_gp
+            evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
+            evalResult.jac .= gfull
+        else
+            # :min_delta_fixed_gp: Delta itself is the objective -- gfull IS d(Delta)/d(w) over the
+            # full free vector already; index-1 (d/dgp) is simply ignored by KNITRO since gp's box
+            # is degenerate there.
+            evalResult.objGrad .= gfull
+        end
         return 0
     end
 
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
-    KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
+    if objective_mode == :min_gp
+        KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
+    else
+        KNITRO.KN_set_cb_grad(kc, cb, cb_G!)
+    end
 
     if outer_direct_hessopt !== nothing
         assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_originzc_upper_checkpointed($label)")

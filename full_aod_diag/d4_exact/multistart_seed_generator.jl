@@ -68,9 +68,18 @@
 #   cm_checkpoint.jl              (meanzc_profiled_nu_value)
 #   oracle.jl                     (classify_inner_result, is_verified_success, sha256_of_matrix)
 #   country_resolve.jl            (default_gravity_exclude_cells_brazil_korea)
-#   nested_quantile_grids.jl      (nested_grid_sequence)
+#   common_marginals_moments.jl   (cm_equal_mass_probs -- THE production CM grid since 2026-08-12;
+#                                   `nested_quantile_grids.jl`/`nested_grid_sequence` is NO LONGER a
+#                                   dependency of this file, see `resolve_cm_probs`)
 #   compressed_factual_buffer_reuse.jl (attach_compressed_factual_workspace -- REQUIRED once per
 #                                   ctx, before any real family evaluation; see generate_multistart_seeds)
+#   fast_range_screen.jl          (build_ranged_screen_context, evaluate_fullA_screened_ranged --
+#                                   paper_upper_v1 extension, :unrestricted family kind only; pulls
+#                                   in its own chain -- compressed_live.jl, compressed_moments.jl,
+#                                   structured_moment_build.jl, compressed_cc_inner.jl, dual_bank.jl,
+#                                   etc. -- see c10_d20_production_driver.jl's own include list for
+#                                   the full canonical order, or test_multistart_seed_generator.jl's
+#                                   include list for a validated concrete example)
 #   `CS` (the CounterfactualSensitivity module) already bound in Main -- same convention as every
 #   other cm_*_production.jl file (see cc_algo/include_cc_algo.jl).
 #
@@ -90,13 +99,25 @@ for _dep in (:build_pivot_elimination, :cm_w0_from_calibration, :OriginByPowerLa
              :build_raw_mean_pair_matrix_levels, :solve_base_state,
              :originzc_profiled_nu_value, :meanzc_profiled_nu_value, :classify_inner_result,
              :is_verified_success, :sha256_of_matrix, :default_gravity_exclude_cells_brazil_korea,
-             :nested_grid_sequence, :attach_compressed_factual_workspace, :CS,
+             # MERGE 2026-08-12: `:nested_grid_sequence` is deliberately NOT in this list any more.
+             # `resolve_cm_probs` no longer calls it (it resolves to `cm_equal_mass_probs`), and
+             # nothing else in this file does -- keeping it would demand an include this file has no
+             # use for. `nested_quantile_grids.jl` itself is untouched and still required by its own
+             # direct callers.
+             :cm_equal_mass_probs, :attach_compressed_factual_workspace, :CS,
              # 2026-08-09 CROSS integration: the K_pair^2 cross-power-grid layouts and their
              # (:operator-only) context builders. Listed here so a caller whose include list predates
              # the CROSS families gets THIS clear message rather than an UndefVarError from deep
              # inside build_family several minutes into a campaign.
              :OriginByPowerCrossLayout, :build_originzc_cross_production_context,
-             :SharedByPowerCrossLayout, :build_cm_meanzc_cross_production_context)
+             :SharedByPowerCrossLayout, :build_cm_meanzc_cross_production_context,
+             # paper_upper_v1 extension (2026-08-08): :unrestricted / :cm_only family kinds, added
+             # so this SAME reusable generator can qualify seeds against the plain (no-ZC)
+             # Unrestricted and Common-Marginals families too, not just the three ZC-flavor kinds
+             # the original release covered. Reuses `evaluate_fullA_screened_ranged`'s own
+             # `build_ranged_screen_context(ctx)` companion -- the exact per-point value-only
+             # verified evaluator `run_polish_checkpointed_unified` itself calls (fast_range_screen.jl).
+             :build_ranged_screen_context, :evaluate_fullA_screened_ranged)
     isdefined(Main, _dep) ||
         error("multistart_seed_generator.jl requires `$(_dep)` to already be defined -- include the " *
               "full d4_exact family machinery (see this file's header comment) before this file.")
@@ -133,20 +154,49 @@ the other's. Distinct `kind` symbols make the descriptor differ structurally. `a
 family_descriptors` (below) additionally makes any FUTURE collision impossible to introduce
 silently, whatever mechanism a later spec field uses.
 
+`:pairwise_quantile` (pairwise-quantile-independence, `run_pairwise_quantile_upper_checkpointed`'s
+value-only path) reuses `L` as its number of quantile BINS per origin, and is the only kind that
+consults `cutoff_source`, `min_bin_count` and `mass_start`.
+
 `L`/`contrasts`/`probs`/`include_truncated_moment`/`meanzc_basis` are consulted only by the
-`:cm_zc`/`:cm_zc_cross`/`:common_frechet` kinds; ignored (but still required, for a uniform
-struct) by `:origin_zc`/`:origin_zc_cross`.
+CM-flavored kinds (`:cm_zc`/`:cm_zc_cross`/`:common_frechet`/`:cm_only`); ignored (but still
+required, for a uniform struct) by `:origin_zc`/`:origin_zc_cross`/`:unrestricted`.
 """
 struct FamilySeedSpec
     id::Symbol
-    kind::Symbol                 # :origin_zc | :cm_zc | :common_frechet | :origin_zc_cross | :cm_zc_cross
+    # MERGE 2026-08-12: the union of both lines of development -- production's CROSS kinds
+    # (2026-08-09) and this branch's paper_upper_v1 / pairwise-quantile kinds (2026-08-08/10).
+    kind::Symbol                 # :origin_zc | :cm_zc | :common_frechet | :origin_zc_cross |
+                                 # :cm_zc_cross | :unrestricted | :cm_only | :pairwise_quantile
     K_mean::Int
     K_pair::Int
+    # For the CM-flavored kinds (:cm_zc / :common_frechet / :cm_only) `L` is the CM grid size in
+    # equal-mass BUCKETS (2026-08-12): `L = 50` means 50 buckets of mass 1/50, whose grid
+    # (`probs`, below) therefore has `L-1 = 49` cutpoints. The CM builders' own `L` kwarg counts
+    # LEVELS, so `build_family` passes `cm_n_levels(spec) = length(spec.probs)`, never `spec.L`.
+    # For :pairwise_quantile, `L` is quantile BINS per origin and has no CM-grid meaning at all.
     L::Int
     contrasts::Symbol
     probs::Union{Nothing,Vector{Float64}}
     include_truncated_moment::Bool
     meanzc_basis::Symbol
+    # ---- pairwise-quantile-independence family, version B: fixed cutoffs + free masses
+    #      (2026-08-10) ----
+    # `:none`/`0` on every other kind, meaning "not applicable" -- the SAME off-sentinel convention
+    # this struct already uses for `K_mean`/`K_pair`/`L`/`contrasts` on families that have no such
+    # concept (e.g. `origin_zc_family_spec` passes `L = 0`), not a silently-substituted value.
+    #
+    # `cutoff_source` (where the FIXED quantile cutoffs sit) and `min_bin_count` (the bin
+    # non-degeneracy floor) are exactly the two extra arguments this family's production-context
+    # builder requires, so carrying them here is what makes the spec fully determine the context the
+    # driver layer will later build. `mass_start` is the starting-value policy the seed evaluation
+    # itself uses (the analog of the ZC/CM kinds' companion-LFD "implied nu" lift).
+    #
+    # Version A carried `min_crossed` here instead -- the cutoff-gradient secant bandwidth. It is
+    # gone with that gradient; version B's outer gradient is closed-form and has no bandwidth.
+    cutoff_source::Symbol
+    min_bin_count::Int
+    mass_start::Symbol
 end
 
 "The two K_pair^2 cross-power-grid kinds (2026-08-09). Used by every `kind`-dispatching branch below so a new cross kind can never be added to one branch and forgotten in another."
@@ -156,32 +206,128 @@ is_cross_seed_kind(kind::Symbol) = kind in CROSS_SEED_KINDS
 """
     resolve_cm_probs(L) -> Vector{Float64}
 
-Resolves the L-grid cutpoints the SAME way the real production campaign runner does
-(`campaign_cm_family_runner.jl`: `nested_grid_sequence([10,20,50])[CM_L]`), not the weaker
-`cm_equal_grid_probs(L)` equal-spacing default some prior scratch scripts silently fell back to.
-Falls back to the plain equal-spacing grid only for `L` values outside the validated nested
-family `{10,20,50}` (documented, not silent).
+Resolves a CM family's declared grid size `L` -- **a number of equal-mass BUCKETS** -- to its
+`L-1` closed-form probability cutpoints, `cm_equal_mass_probs(L)` (common_marginals_moments.jl).
+Uniform in `L`: no special-cased set of "validated" sizes, no fallback branch.
+
+**CHANGED 2026-08-12 (user-directed, scientific -- not a refactor).** This previously returned
+`nested_grid_sequence([10,20,50])[L]` for `L in {10,20,50}` and `range(1/L,(L-1)/L,length=L)`
+otherwise. Neither is an equal-mass grid, and the two disagreed with each other, so the same
+nominal `L` meant a different restriction depending on its value:
+
+| `L` | old grid | old buckets | old bucket masses |
+|-----|----------|-------------|-------------------|
+| 50  | dyadic largest-gap bisection | 51 | only 0.015625 or 0.03125 |
+| 37  | `range(1/37,36/37,length=37)` | 38 | ~0.0263 except the two ends |
+| now | `k/L`, `k=1..L-1`            | `L` | exactly `1/L`, every bucket |
+
+The user's specification is "`L = 50` means 50 equally sized buckets, quantiles in closed form from
+the Fréchet CDF, no empirical quantiles anywhere" -- which is the third row.
+
+**The return has length `L-1`, not `L`.** `p=1` is excluded on purpose (structurally zero moment
+column / singular KKT -- see `cm_equal_mass_probs`' own docstring for the buckets-vs-levels split).
+So a caller pairing this with a CM builder's `L` kwarg -- which counts LEVELS -- must pass
+`length(probs)`, NOT the bucket count it handed to this function. `build_family` below does exactly
+that via `cm_n_levels`; `precalc_common_marginals_cdf`'s own `length(probs) == L` assertion catches
+any site that forgets.
+
+**Nesting trade-off, disclosed.** The dyadic grid's reason to exist was genuine nesting across
+`L in {10,20,50}` (`nested_quantile_grids.jl`, Continuation 13 §6 -- so that a kappa(L) comparison
+reads as "more restrictions -> weakly lower kappa"). Equal-mass grids nest only when the sizes
+divide: `Q_10 subset Q_20` and `Q_10 subset Q_50` still hold, `Q_20 subset Q_50` does NOT (20 does
+not divide 50). Nothing on the live production path depends on it -- `paper_upper_v1` runs `L=50`
+only, and the multi-L users (`c13_d20_cm_upper_continuation.jl`, `cm_production_stage_runner.jl`'s
+`:nested_family` rule) call `nested_grid_sequence` directly and are untouched by this change. A
+fully-nested equal-mass ladder is available by choosing sizes that divide (e.g. `{10,50}`).
 """
-function resolve_cm_probs(L::Int)
-    if L in (10, 20, 50)
-        return nested_grid_sequence([10, 20, 50])[L]
-    end
-    return collect(range(1 / L, (L - 1) / L, length = L))
+resolve_cm_probs(L::Int) = cm_equal_mass_probs(L)
+
+"""
+    cm_n_levels(spec::FamilySeedSpec) -> Int
+
+Number of CM moment LEVELS `spec`'s grid actually has: `length(spec.probs)`, which is the single
+authority. **NOT `spec.L`** -- that field is the family's declared grid size in equal-mass BUCKETS
+(`L = 50` means 50 buckets), and an `L`-bucket grid has `L-1` interior cutpoints. Deriving from the
+grid itself rather than from `L-1` also keeps a caller who passes an explicit non-equal-mass `probs`
+(e.g. the legacy `nested_grid_sequence` grid, whose length IS `L`) working unchanged.
+"""
+function cm_n_levels(spec::FamilySeedSpec)
+    spec.probs === nothing &&
+        error("cm_n_levels($(spec.id)): CM-family kind :$(spec.kind) requires an explicit probs " *
+              "grid on the spec -- the number of CM moment levels is length(probs), and there is " *
+              "no defaulting of a scientific parameter here (CLAUDE.md).")
+    return length(spec.probs)
 end
 
 function origin_zc_family_spec(id::Symbol; K_mean::Int, K_pair::Int)
-    FamilySeedSpec(id, :origin_zc, K_mean, K_pair, 0, :orthonormal, nothing, false, :direct)
+    FamilySeedSpec(id, :origin_zc, K_mean, K_pair, 0, :orthonormal, nothing, false, :direct, :none, 0, :none)
 end
 
 function cm_zc_family_spec(id::Symbol; K_mean::Int, K_pair::Int, L::Int,
                             contrasts::Symbol = :orthonormal,
                             probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
-    FamilySeedSpec(id, :cm_zc, K_mean, K_pair, L, contrasts, probs, false, :direct)
+    FamilySeedSpec(id, :cm_zc, K_mean, K_pair, L, contrasts, probs, false, :direct, :none, 0, :none)
 end
 
 function common_frechet_family_spec(id::Symbol; L::Int, contrasts::Symbol = :orthonormal,
                                      probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
-    FamilySeedSpec(id, :common_frechet, 0, 0, L, contrasts, probs, false, :direct)
+    FamilySeedSpec(id, :common_frechet, 0, 0, L, contrasts, probs, false, :direct, :none, 0, :none)
+end
+
+"""
+    pairwise_quantile_family_spec(id; L, cutoff_source, min_bin_count, mass_start) -> FamilySeedSpec
+
+Pairwise-quantile-independence family, version B (fixed cutoffs + free bin masses, 2026-08-10).
+`L` is the number of quantile BINS per origin (NOT a CM contrast-grid size -- this family has no CM
+grid), so `contrasts`/`probs`/`include_truncated_moment`/`meanzc_basis`/`K_mean`/`K_pair` all take
+their off sentinels.
+
+All four arguments are REQUIRED with no default, matching this restriction's own convention
+everywhere else (CLAUDE.md's no-silent-defaults rule): every one of them changes what problem is
+being solved or where the search starts, and `min_bin_count` in particular must be read against the
+campaign's own `W` and `L`.
+"""
+function pairwise_quantile_family_spec(id::Symbol; L::Int, cutoff_source::Symbol, min_bin_count::Int,
+                                        mass_start::Symbol)
+    L >= 2 || error("pairwise_quantile_family_spec($id): L (quantile bins) must be >= 2, got $L")
+    cutoff_source in (:frechet_theoretical, :empirical_quantile) ||
+        error("pairwise_quantile_family_spec($id): cutoff_source must be " *
+              ":frechet_theoretical|:empirical_quantile, got :$cutoff_source")
+    min_bin_count >= 1 ||
+        error("pairwise_quantile_family_spec($id): min_bin_count must be >= 1, got $min_bin_count")
+    mass_start in (:uniform, :empirical) ||
+        error("pairwise_quantile_family_spec($id): mass_start must be :uniform|:empirical, got :$mass_start")
+    FamilySeedSpec(id, :pairwise_quantile, 0, 0, L, :none, nothing, false, :direct,
+                   cutoff_source, min_bin_count, mass_start)
+end
+
+"""
+    unrestricted_family_spec(id) -> FamilySeedSpec
+
+paper_upper_v1 extension (2026-08-08): the plain, wholly unrestricted family -- no CM grid, no ZC
+moments. `K_mean`/`K_pair`/`L`/`contrasts`/`probs` are unused (uniform struct only); qualification
+calls `evaluate_fullA_screened_ranged` directly (see `build_family`/`evaluate_family` below), the
+same value-only verified evaluator `run_polish_checkpointed_unified` itself uses at a candidate
+point -- no nu lift, no companion solve (there is nothing to lift; this IS the companion the other
+families' own nu policies solve internally).
+"""
+function unrestricted_family_spec(id::Symbol)
+    FamilySeedSpec(id, :unrestricted, 0, 0, 0, :orthonormal, nothing, false, :direct, :none, 0, :none)
+end
+
+"""
+    cm_only_family_spec(id; L, contrasts=:orthonormal, probs=resolve_cm_probs(L)) -> FamilySeedSpec
+
+paper_upper_v1 extension (2026-08-08): plain flexible Common-Marginals, `cm_extension=:cm_only`
+(no ZC moments) -- `run_cm_upper_checkpointed`'s own default extension. `K_mean`/`K_pair` are
+unused (uniform struct only, always 0). Qualification reuses the EXACT SAME plain-CM builder/
+evaluator pair (`build_cm_production_context` + `cm_production_value_verified_screened`) the
+`:cm_zc` kind's own `companion_implied_nu_cmzc` already calls as its companion solve -- this spec
+just evaluates that companion directly as ITS OWN family, rather than as an internal nu-lift step.
+"""
+function cm_only_family_spec(id::Symbol; L::Int, contrasts::Symbol = :orthonormal,
+                              probs::Union{Nothing,Vector{Float64}} = resolve_cm_probs(L))
+    FamilySeedSpec(id, :cm_only, 0, 0, L, contrasts, probs, false, :direct, :none, 0, :none)
 end
 
 # --- 2026-08-09: the two K_pair^2 cross-power-grid variants. Same signatures as their diagonal
@@ -196,7 +342,13 @@ function origin_zc_cross_family_spec(id::Symbol; K_mean::Int, K_pair::Int)
                          "(K_pair^2 = $(K_pair^2) restrictions per origin pair; at K_pair=1 the cross grid " *
                          "is identical to the diagonal family -- use origin_zc_family_spec instead)")
     K_pair <= K_mean || error("origin_zc_cross_family_spec($id): K_pair=$K_pair must satisfy K_pair <= K_mean=$K_mean")
-    FamilySeedSpec(id, :origin_zc_cross, K_mean, K_pair, 0, :orthonormal, nothing, false, :direct)
+    # MERGE 2026-08-12: the trailing `:none, 0, :none` are the pairwise-quantile family's
+    # `cutoff_source`/`min_bin_count`/`mass_start` off-sentinels. This branch widened
+    # `FamilySeedSpec` from 9 fields to 12 for family #6; production's cross constructors
+    # (2026-08-09) still passed 9 positionally, so the merged struct and these calls
+    # disagreed -- a MethodError at spec-construction time, caught by running the cross
+    # gates rather than by the merge resolving cleanly. Same sentinels every non-PQ kind uses.
+    FamilySeedSpec(id, :origin_zc_cross, K_mean, K_pair, 0, :orthonormal, nothing, false, :direct, :none, 0, :none)
 end
 
 function cm_zc_cross_family_spec(id::Symbol; K_mean::Int, K_pair::Int, L::Int,
@@ -206,7 +358,13 @@ function cm_zc_cross_family_spec(id::Symbol; K_mean::Int, K_pair::Int, L::Int,
                          "(K_pair^2 = $(K_pair^2) restrictions per origin pair; at K_pair=1 the cross grid " *
                          "is identical to the diagonal family -- use cm_zc_family_spec instead)")
     K_pair <= K_mean || error("cm_zc_cross_family_spec($id): K_pair=$K_pair must satisfy K_pair <= K_mean=$K_mean")
-    FamilySeedSpec(id, :cm_zc_cross, K_mean, K_pair, L, contrasts, probs, false, :direct)
+    # MERGE 2026-08-12: the trailing `:none, 0, :none` are the pairwise-quantile family's
+    # `cutoff_source`/`min_bin_count`/`mass_start` off-sentinels. This branch widened
+    # `FamilySeedSpec` from 9 fields to 12 for family #6; production's cross constructors
+    # (2026-08-09) still passed 9 positionally, so the merged struct and these calls
+    # disagreed -- a MethodError at spec-construction time, caught by running the cross
+    # gates rather than by the merge resolving cleanly. Same sentinels every non-PQ kind uses.
+    FamilySeedSpec(id, :cm_zc_cross, K_mean, K_pair, L, contrasts, probs, false, :direct, :none, 0, :none)
 end
 
 # ============================================================================
@@ -264,6 +422,54 @@ function production_five_family_cross_seed_specs(ctx)
         origin_zc_cross_family_spec(:ORIGIN_ZC_CROSS_K3; K_mean = 3, K_pair = 3),
         cm_zc_cross_family_spec(:CMZC_CROSS_K3; K_mean = 3, K_pair = 3, L = 50),
     ]
+end
+
+"""
+    paper_five_family_seed_specs(ctx) -> Vector{FamilySeedSpec}
+
+The `paper_upper_v1` protocol's actual five scientific families (protocols/paper_upper_v1.toml),
+in cheap-to-expensive qualification order: Unrestricted (one companion-only solve) -> Common
+Marginals (`cm_only`, one plain-CM solve) -> Common-Fréchet (single-family CDF-only, the one
+variant production actually reaches -- see `production_five_family_seed_specs`'s own docstring)
+-> Origin-ZC K_mean=K_pair=3 (companion + restricted, two solves) -> CM+ZC K_mean=K_pair=3
+(companion + restricted, two solves). Distinct from `production_five_family_seed_specs` (which
+qualifies three ZC-flavor K_mean=3/K_pair=0-or-3 variants for a different, non-paper comparison) --
+this is the exact five-family set the paper protocol freezes: no redundant mean moments added to
+Unrestricted or Common Marginals, family definitions unchanged from their standing production
+meaning.
+"""
+function paper_five_family_seed_specs(ctx)
+    return [
+        unrestricted_family_spec(:UNRESTRICTED),
+        cm_only_family_spec(:COMMON_MARGINALS; L = 50),
+        common_frechet_family_spec(:COMMON_FRECHET; L = 50),
+        origin_zc_family_spec(:ORIGIN_ZC; K_mean = 3, K_pair = 3),
+        cm_zc_family_spec(:CM_PLUS_ZC; K_mean = 3, K_pair = 3, L = 50),
+    ]
+end
+
+"""
+    paper_six_family_seed_specs(ctx; pq_L, pq_cutoff_source, pq_min_bin_count, pq_mass_start)
+        -> Vector{FamilySeedSpec}
+
+`paper_five_family_seed_specs` plus the pairwise-quantile-independence family as family #6
+(2026-08-10). SEPARATE function, not an edit of the five-family one, deliberately: the five-family
+list is what `protocols/paper_upper_v1.toml` currently freezes, and silently changing what that
+function returns would change the meaning of an already-started protocol. A caller opts into six
+families by name.
+
+Every `pq_*` argument is required (no defaults) -- see `pairwise_quantile_family_spec`. NOTE,
+confirmed live at real D=20: this family's inner solve does NOT converge at W=8000 (an
+unbounded/infeasible inner solve at the calibration point) but is clean at W>=20000 for L=2 and
+L=3 -- do not seed it at small W. `pq_min_bin_count` must leave every JOINT cell populated, not
+just every marginal bin: a joint cell holds ~W/L^2 draws in expectation.
+"""
+function paper_six_family_seed_specs(ctx; pq_L::Int, pq_cutoff_source::Symbol, pq_min_bin_count::Int,
+                                      pq_mass_start::Symbol)
+    return vcat(paper_five_family_seed_specs(ctx),
+                [pairwise_quantile_family_spec(:PAIRWISE_QUANTILE; L = pq_L,
+                    cutoff_source = pq_cutoff_source, min_bin_count = pq_min_bin_count,
+                    mass_start = pq_mass_start)])
 end
 
 # ============================================================================
@@ -541,7 +747,9 @@ function build_family(ctx, spec::FamilySeedSpec)
         layout = SharedByPowerLayout(spec.K_mean, spec.K_pair)
         kstar = profiled_level_for(ctx, spec.K_mean)
         aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
-        pcx = build_cm_meanzc_production_context(ctx, CS; L = spec.L, K_mean = spec.K_mean, K_pair = spec.K_pair,
+        # `L = cm_n_levels(spec)`, NOT `spec.L`: `spec.L` is the declared grid size in equal-mass
+        # BUCKETS, the CM builders' `L` counts LEVELS, and the two differ by one (2026-08-12).
+        pcx = build_cm_meanzc_production_context(ctx, CS; L = cm_n_levels(spec), K_mean = spec.K_mean, K_pair = spec.K_pair,
             include_truncated_moment = spec.include_truncated_moment, contrasts = spec.contrasts,
             meanzc_basis = spec.meanzc_basis, probs = spec.probs, moment_representation = :operator, aml = aml)
         return FamilyBuild(spec, pcx, layout, aml)
@@ -550,7 +758,13 @@ function build_family(ctx, spec::FamilySeedSpec)
         layout = SharedByPowerCrossLayout(spec.K_mean, spec.K_pair)
         kstar = profiled_level_for(ctx, spec.K_mean)
         aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
-        pcx = build_cm_meanzc_cross_production_context(ctx, CS; L = spec.L, K_mean = spec.K_mean, K_pair = spec.K_pair,
+        # MERGE 2026-08-12, buckets-vs-levels: `L = cm_n_levels(spec)`, NOT `spec.L`. This family
+        # (added on production 2026-08-09) is CM-flavored and takes its grid from
+        # `resolve_cm_probs`, which on this side of the merge returns `spec.L - 1` equal-mass
+        # cutpoints -- so passing `spec.L` here would hand a 50-BUCKET count to an argument that
+        # counts LEVELS and hard-error against a 49-long grid. Same fix the four pre-existing CM
+        # builder call sites got; see `cm_n_levels`.
+        pcx = build_cm_meanzc_cross_production_context(ctx, CS; L = cm_n_levels(spec), K_mean = spec.K_mean, K_pair = spec.K_pair,
             include_truncated_moment = spec.include_truncated_moment, contrasts = spec.contrasts,
             meanzc_basis = spec.meanzc_basis, probs = spec.probs, aml = aml)
         return FamilyBuild(spec, pcx, layout, aml)
@@ -560,9 +774,30 @@ function build_family(ctx, spec::FamilySeedSpec)
         # hard-errors otherwise ("needs a real CMBinHessCtx") -- confirmed live 2026-08-08 at real
         # D20/W=20000. Matches the real campaign runner's own cm_hessian_backend=:structured
         # convention for every CM-family builder call.
-        pcx = build_cm_frechet_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
+        # `L = cm_n_levels(spec)` -- buckets vs levels, see the :cm_zc branch above.
+        pcx = build_cm_frechet_production_context(ctx, CS; L = cm_n_levels(spec), include_truncated_moment = spec.include_truncated_moment,
             contrasts = spec.contrasts, probs = spec.probs, cm_hessian_backend = :structured, moment_representation = :operator)
         return FamilyBuild(spec, pcx, nothing, nothing)
+    elseif spec.kind == :pairwise_quantile
+        # This family has no nu/eta layout and no ActiveMeanLayout analog (its restriction rows are
+        # quantile-bin indicators, none exactly collinear with the autarky/counterfactual moment),
+        # so both of those FamilyBuild slots are `nothing` -- same as :common_frechet.
+        pcx = build_pairwise_quantile_production_context(ctx, PairwiseQuantileMassLayout(ctx.D, spec.L);
+            cutoff_source = spec.cutoff_source, min_bin_count = spec.min_bin_count)
+        return FamilyBuild(spec, pcx, nothing, nothing)
+    elseif spec.kind == :unrestricted
+        # paper_upper_v1 extension: `pcx` slot holds the RangedScreenContext (fast_range_screen.jl),
+        # built fresh per candidate for the same stale-buffer-safety reason build_family never
+        # reuses a context across candidates for the ZC/CM kinds (see this function's own docstring).
+        rsc = build_ranged_screen_context(ctx)
+        return FamilyBuild(spec, rsc, nothing, nothing)
+    elseif spec.kind == :cm_only
+        # Exactly companion_implied_nu_cmzc's own companion-builder call (section 8 above), just
+        # evaluated here as ITS OWN family rather than as an internal nu-lift step.
+        # `L = cm_n_levels(spec)` -- buckets vs levels, see the :cm_zc branch above.
+        pcx0 = build_cm_production_context(ctx, CS; L = cm_n_levels(spec), include_truncated_moment = spec.include_truncated_moment,
+            contrasts = spec.contrasts, probs = spec.probs, moment_representation = :operator)
+        return FamilyBuild(spec, pcx0, nothing, nothing)
     else
         error("build_family: unknown family kind :$(spec.kind) for spec $(spec.id)")
     end
@@ -624,7 +859,10 @@ function companion_implied_nu_cmzc(ctx, x_free::AbstractVector{Float64}, spec::F
     K_mean = spec.K_mean
     D = ctx.D
     Zraw_all, _ = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, 0; μ = ctx.μHat)
-    pcx0 = build_cm_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
+    # `L = cm_n_levels(spec)` -- buckets vs levels (2026-08-12). This companion MUST be built on the
+    # same grid as the CM+ZC family it lifts nu for, so it reads the identical spec field the
+    # `:cm_zc` branch of `build_family` does.
+    pcx0 = build_cm_production_context(ctx, CS; L = cm_n_levels(spec), include_truncated_moment = spec.include_truncated_moment,
         contrasts = spec.contrasts, probs = spec.probs, moment_representation = :operator)
     _, base, verify = cm_production_value_verified_screened(collect(x_free), pcx0; eval_id = eval_id)
     is_verified_success(verify) || throw(CMExpectedSolveFailure(
@@ -717,17 +955,48 @@ function evaluate_family(ctx, fb::FamilyBuild, x_free::AbstractVector{Float64}; 
         nu_dense = dense_nu_for_solve(fb, nu0_active, focal_nu)
         K, base, verify = cm_meanzc_production_value_verified_screened(x_free, nu_dense, fb.pcx; eval_id = eval_id)
         full_vec = vcat(x_free, nu_dense)
-    else
+    elseif fb.spec.kind == :common_frechet
         nu0_active = Float64[]
         focal_nu = nothing
         K, base, verify = cm_frechet_production_value_verified_screened(x_free, fb.pcx; eval_id = eval_id)
+        full_vec = x_free
+    elseif fb.spec.kind == :pairwise_quantile
+        # The restriction's own outer coordinates here are bin MASSES on the simplex, not nu
+        # targets, so there is no companion-LFD "implied nu" step: the analogous starting value is
+        # `pairwise_quantile_start_masses` under the spec's own declared policy, which depends only
+        # on the draws (and the fixed cutoffs) and not on the candidate's economic point -- so it is
+        # the same for every candidate, by construction. `nu_values` in the returned
+        # FamilyLiftResult therefore records those raw mass coordinates (the family's actual
+        # restriction coordinates) and `nu_policy` says which policy produced them.
+        mass0 = pairwise_quantile_start_masses(fb.pcx.ctx_cm.pq_op, fb.pcx.layout; policy = fb.spec.mass_start)
+        nu0_active = mass0
+        focal_nu = nothing
+        K, base, verify = pairwise_quantile_production_value_verified_screened(x_free, mass0, fb.pcx; eval_id = eval_id)
+        full_vec = vcat(x_free, mass0)
+    elseif fb.spec.kind == :unrestricted
+        nu0_active = Float64[]
+        focal_nu = nothing
+        verify, _prof_meta = evaluate_fullA_screened_ranged(collect(x_free), ctx, fb.pcx;
+            moment_representation = :compressed, use_cache = false, use_witness = false)
+        full_vec = x_free
+    else
+        @assert fb.spec.kind == :cm_only "evaluate_family: unknown family kind :$(fb.spec.kind) for spec $(fb.spec.id)"
+        nu0_active = Float64[]
+        focal_nu = nothing
+        K, base, verify = cm_production_value_verified_screened(x_free, fb.pcx; eval_id = eval_id)
         full_vec = x_free
     end
     wall = time() - t0
     cls = classify_inner_result(verify)
     layout_desc = fb.aml === nothing ? "dense" : "active_omit=$(fb.aml.dense_omit_idx)_kstar_focal=$(fb.aml.kstar)"
+    # nu_policy records HOW this family's restriction coordinates were chosen. :companion_lfd_implied
+    # is the ZC/CM families' own companion-LFD lift; the pairwise-quantile family's bin masses come
+    # from its own declared starting policy instead, so labelling them :companion_lfd_implied would
+    # be simply false in the recorded provenance.
+    nu_policy = fb.spec.kind == :pairwise_quantile ?
+        Symbol("pq_mass_start_", fb.spec.mass_start) : :companion_lfd_implied
     return FamilyLiftResult(fb.spec.id, fb.spec.kind, sha256_of_vector(full_vec), nu0_active,
-        :companion_lfd_implied, focal_nu,
+        nu_policy, focal_nu,
         verify.Delta_dual, is_verified_success(verify), verify.inner_status, Symbol(string(cls)),
         sha256_of_string(layout_desc), wall)
 end
@@ -991,11 +1260,33 @@ function generate_multistart_seeds(ctx;
                     sid = "S$(length(accepted))"
                     push!(accepted, AcceptedSeed(sid, global_attempt_id, res.w_econ, res.economic_digest, res.gp,
                         res.A_radius, res.A_radius, res.gp_fraction, res.family_results))
-                    if length(accepted) >= M
-                        stop_reason = :target_reached
-                        block_loop_done = true
-                        break
-                    end
+                end
+                # Live progress + incremental checkpoint (2026-08-08): without this, a long real
+                # run gives ZERO visibility until it either finishes or is killed -- confirmed live
+                # this is a genuine usability problem, not a cosmetic one, when running unattended
+                # overnight. Prints one line per attempt and re-writes the FULL output set (cheap;
+                # write_seed_set overwrites in place) after every attempt, not just on acceptance,
+                # so `tail -f attempts.csv` / re-reading seeds/manifest.jls at any time reflects
+                # real, current progress -- including whatever has been accepted SO FAR if this
+                # process is killed mid-run.
+                println("[multistart] attempt ", global_attempt_id, "/", max_attempts, " block=", block_id,
+                    " accepted=", accepted_flag, reason === nothing ? "" : " reason=$(reason)",
+                    " families_reached=", length(res.families_attempted), "/", length(family_specs),
+                    " progress=", length(accepted), "/", M, " wall=", round(res.wall_seconds, digits = 1), "s")
+                flush(stdout)
+                let interim_request = (M = M, direction = direction, delta_max = delta_max,
+                        family_ids = [s.id for s in family_specs], W = W, rng_seed = rng_seed, A_scale = A_scale,
+                        gp_scale = gp_scale, max_attempts = max_attempts, include_calibration = include_calibration,
+                        min_seed_distance = min_seed_distance, max_concurrency = max_concurrency,
+                        radius_mode = radius_mode, output_dir = String(output_dir), scale_schedule = scale_schedule)
+                    interim = MultiStartSeedSet(manifest_digest, src_sha, interim_request, accepted, ledger,
+                        global_attempt_id, length(accepted), :in_progress)
+                    write_seed_set(interim, output_dir)
+                end
+                if accepted_flag && length(accepted) >= M
+                    stop_reason = :target_reached
+                    block_loop_done = true
+                    break
                 end
             end
         end

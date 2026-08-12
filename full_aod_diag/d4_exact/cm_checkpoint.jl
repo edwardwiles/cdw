@@ -962,6 +962,25 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         outer_direct_hessopt::Union{Nothing,Symbol} = nothing,
         maxtime_real::Float64 = 180.0, opt_file::String = "csw_outer_wallclock_sr1.opt",
         z_halfwidth::Float64 = 30.0,
+        gp_fixed::Union{Nothing,Float64} = nothing,   # 2026-08-08 polish-exercise port (campaign
+        # dev worktree only, NOT applied to the live production tip): when set, pins the outer gp
+        # coordinate's box bounds to [gp_fixed, gp_fixed] (a degenerate single-point box), so the
+        # outer solve only optimizes over A_nonpivot (+ eta_nu for meanzc) while gp is held fixed by
+        # the caller's own bisection loop. `nothing` (default): zero behavior change, gp remains
+        # free within [gp_lo, gp_hi]. Ported verbatim from the uncommitted 2026-08-05 draft in
+        # cdw_worktrees/fullA-continuation-polish-2026-08-03 (never merged to production).
+        objective_mode::Symbol = :min_gp,   # paper_upper_v1 extension (2026-08-08): `:min_gp`
+        # (default) is the ORIGINAL, unchanged NLP -- minimize/maximize gp subject to Delta<=delta.
+        # `:min_delta_fixed_gp` is a NEW NLP over the SAME free coordinates/box/value+gradient
+        # machinery, framed the other way: gp is REQUIRED fixed (via gp_fixed, checked below),
+        # there is NO Delta<=delta constraint, and the objective is Delta_dual itself -- exactly
+        # mirroring run_profile_checkpointed's own unconstrained-objective=Delta pattern
+        # (c10_d20_production_driver.jl) for the Unrestricted family, applied here to the CM /
+        # Common-Fréchet / CM+ZC families via their own already-validated cm_*_production_value_
+        # verified_screened / cm_*_production_gradient(_cplus) functions -- NO new scientific
+        # code, only a different KNITRO objective/constraint framing over the identical
+        # mathematical objects the :min_gp mode already uses. This is the paper_upper_v1
+        # protocol's Stage B / Stage R0 "fixed-gp Delta* restoration" primitive.
         ckpt_dir::AbstractString, run_id::String = string(Dates.now()), label::String = "cm_upper",
         checkpoint_interval_s::Float64 = 90.0, resume_from::Union{Nothing,AbstractString} = nothing,
         verbose::Bool = true,
@@ -1153,6 +1172,37 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     ckpt_dir = abspath(ckpt_dir)
     mkpath(ckpt_dir)
 
+    # 2026-08-12 equal-mass-grid task: THE CM GRID RESOLUTION, and the one place `L`'s two meanings
+    # meet. Omit `probs` and `L` is read as a number of equal-mass BUCKETS (the user-facing meaning:
+    # "L = 50 means 50 equally sized buckets"), resolved to its `L-1` cutpoints here. Supply `probs`
+    # and `L` is the LEVEL count and must match it -- that is the form
+    # `paper_upper_v1_orchestrator/family_start_chain.jl::fam_kwargs()` sends, and the form the ~200
+    # existing scripts that pass an explicit grid already use. Either way `L == length(probs)` holds
+    # from this line onward, which is what every builder below (and
+    # `precalc_common_marginals_cdf`'s own assertion) requires. See `cm_equal_mass_probs`
+    # (common_marginals_moments.jl) for the full buckets-vs-levels split and why `p=1` is excluded.
+    if probs === nothing
+        # `L` HERE IS A NUMBER OF EQUAL-MASS BUCKETS (2026-08-12, user-directed): "L = 50" means 50
+        # equally sized buckets, so the grid is `k/L` for `k=1..L-1` and the LEVEL count is `L-1`.
+        # Resolving it here rather than falling through to `precalc_common_marginals_cdf`'s own
+        # `probs === nothing` branch is the point: that branch builds `range(1/L,(L-1)/L,length=L)`,
+        # which at L=50 is 50 levels -> 51 buckets, 49 of mass 0.0195918 and 2 of mass 0.02 --
+        # measured, not assumed. Leaving it reachable from this production entry point would mean
+        # "L = 50" silently meant two different restrictions depending on whether the caller also
+        # passed `probs`. It does not any more: bare `L = 50` here IS 50 equal-mass buckets.
+        probs = cm_equal_mass_probs(L)
+        lp("[", label, "] CM grid: L=", L, " equal-mass buckets (mass ", 1 / L, " each) -> ",
+           length(probs), " cutpoints k/", L, ", k=1..", L - 1, " (probs was not supplied)")
+        L = length(probs)
+    else
+        length(probs) == L ||
+            error("run_cm_upper_checkpointed($label): L=$L but length(probs)=$(length(probs)) -- " *
+                  "once `probs` is supplied explicitly, this driver's L counts CM moment LEVELS and " *
+                  "must equal the number of cutpoints in it. If L came from a config surface it is a " *
+                  "number of equal-mass BUCKETS, and an L-bucket grid has L-1 levels (p=1 is excluded: " *
+                  "it is a structurally zero moment column, hence a singular KKT). Pass " *
+                  "L=length(probs), or omit `probs` entirely and let L=$L be read as a bucket count.")
+    end
     cm_gradient_backend in (:reference, :cplus) ||
         error("run_cm_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
     destination_sample in (:exclude_row, :all_legacy) ||
@@ -1161,6 +1211,11 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         error("run_cm_upper_checkpointed($label): marginal_restriction must be :common_flexible|:common_frechet, got :$marginal_restriction")
     A_coordinate_mode in (:legacy_z, :powered_aspace) ||
         error("run_cm_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
+    objective_mode in (:min_gp, :min_delta_fixed_gp) ||
+        error("run_cm_upper_checkpointed($label): objective_mode must be :min_gp|:min_delta_fixed_gp, got :$objective_mode")
+    objective_mode == :min_delta_fixed_gp && gp_fixed === nothing &&
+        error("run_cm_upper_checkpointed($label): objective_mode=:min_delta_fixed_gp requires gp_fixed to be set " *
+              "(this mode has no meaning with gp free -- it minimizes Delta* AT a fixed gp).")
     lp("[", label, "] A_coordinate_mode=", A_coordinate_mode,
        A_coordinate_mode == :powered_aspace ? " (transformed-A, PRODUCTION DEFAULT since five-family finish task §8)" : " (legacy-z, explicit replication mode)")
     lp("[", label, "] cm_gradient_backend=", cm_gradient_backend,
@@ -1596,6 +1651,15 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     w_hi_econ = vcat(gp_hi, w0[2:D2_econ] .+ z_halfwidth)
     w_lo = is_meanzc ? vcat(w_lo_econ, [nu_bounds[k][1] for k in 1:n_eta_active_meanzc]) : w_lo_econ
     w_hi = is_meanzc ? vcat(w_hi_econ, [nu_bounds[k][2] for k in 1:n_eta_active_meanzc]) : w_hi_econ
+    if gp_fixed !== nothing
+        gp_lo <= gp_fixed <= gp_hi ||
+            error("run_cm_upper_checkpointed($label): gp_fixed=$gp_fixed outside the family's own gp box [$gp_lo, $gp_hi]")
+        isapprox(w0[1], gp_fixed; atol = 1e-10) ||
+            error("run_cm_upper_checkpointed($label): gp_fixed=$gp_fixed but w0[1]=$(w0[1]) -- caller must " *
+                  "construct w0 with the SAME pinned gp value, not rely on KNITRO to move it there.")
+        w_lo[1] = gp_fixed
+        w_hi[1] = gp_fixed
+    end
 
     kc = KNITRO.KN_new()
     KNITRO.KN_load_param_file(kc, joinpath(@__DIR__, opt_file))
@@ -1611,8 +1675,12 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     KNITRO.KN_set_var_lobnds_all(kc, w_lo)
     KNITRO.KN_set_var_upbnds_all(kc, w_hi)
     KNITRO.KN_set_var_primal_init_values_all(kc, w0)
-    cIndices = KNITRO.KN_add_cons(kc, 1)
-    KNITRO.KN_set_con_upbnd(kc, cIndices[1], delta)
+    # :min_delta_fixed_gp mirrors run_profile_checkpointed's own unconstrained-objective=Delta NLP
+    # (Int32[] eval-callback constraint indices, no KN_add_cons at all) -- gp is already pinned to
+    # a degenerate box above via gp_fixed, so there is nothing left for a Delta<=delta constraint
+    # to gate; Delta itself becomes the objective cb_F!/cb_G! write below.
+    cIndices = objective_mode == :min_gp ? KNITRO.KN_add_cons(kc, 1) : Int32[]
+    objective_mode == :min_gp && KNITRO.KN_set_con_upbnd(kc, cIndices[1], delta)
 
     last_F_state = Ref{Any}(nothing)
     best_feasible = Ref{Any}(resumed !== nothing ? resumed.best_feasible : nothing)
@@ -1731,10 +1799,17 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # machine precision, and the two diverge (by a real, if usually small, amount) at
         # tail-active points.
         Δ = verify.Delta_dual
-        evalResult.obj[1] = find_smallest ? w[1] : -w[1]
-        evalResult.c[1] = Δ
+        if objective_mode == :min_gp
+            evalResult.obj[1] = find_smallest ? w[1] : -w[1]
+            evalResult.c[1] = Δ
+        else   # :min_delta_fixed_gp -- gp is pinned (degenerate box), objective IS Delta itself
+            evalResult.obj[1] = Δ
+        end
         n_eval[] += 1
         last_F_state[] = (w = copy(w), base = base, verify = verify)
+        # `delta` remains a purely informational "has the target been reached" threshold in
+        # :min_delta_fixed_gp mode (never a KNITRO constraint there -- see the cIndices=Int32[]
+        # setup above), matching what paper_upper_v1's Stage R0 needs to know either way.
         feasible = isfinite(Δ) && Δ <= delta + 1e-6
         # AUD-04 gate (matches c10_d20_production_driver.jl's cb_F! pattern): feasibility
         # (Delta<=delta) alone is not a verified solve -- KNITRO's own statuses 0/-100/-101/-103
@@ -1742,8 +1817,16 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # classify_inner_result(verify) == VerifiedSolved before this point may become the
         # incumbent -- see docs/fullA_independent_audit_remediation.md AUD-04.
         verified = is_verified_success(verify)
-        is_new_best = feasible && verified &&
-            is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
+        is_new_best = if objective_mode == :min_gp
+            feasible && verified &&
+                is_better_polish(w[1], best_feasible[] === nothing ? nothing : best_feasible[].gp, find_smallest)
+        else
+            # :min_delta_fixed_gp: track the best (smallest) VERIFIED Delta* seen so far,
+            # regardless of whether it has reached the target `delta` yet -- Stage R0 explicitly
+            # needs the best-restored point even when the target is not reached (paper_upper_v1
+            # addendum §D), matching run_profile_checkpointed's own is_better_profile pattern.
+            verified && is_better_profile(Δ, best_feasible[] === nothing ? nothing : best_feasible[].Delta)
+        end
         if is_new_best
             best_feasible[] = (gp = w[1], w = copy(w), Delta = Δ, n_eval = n_eval[], t = prior_wall + (time() - t_start))
             do_checkpoint(:new_best, collect(w))
@@ -1824,7 +1907,6 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         # even assembled -- gfull is already complete (length D2_econ+n_eta_active_meanzc) here.
         # Nothing left to do at this call site.
         n_grad[] += 1
-        evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
         # Transformed-A restricted-family port: gfull is ALWAYS the z-space gradient (the shared
         # numerical kernel -- cm_production_gradient_cplus/cm_meanzc_production_gradient_cplus/
         # cm_frechet_production_gradient_cplus, ALL unchanged) regardless of A_coordinate_mode;
@@ -1836,13 +1918,28 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
         if A_coordinate_mode == :powered_aspace
             gfull[2:D2_econ] .*= -theta_cm
         end
-        evalResult.jac .= gfull
+        if objective_mode == :min_gp
+            evalResult.objGrad .= 0.0; evalResult.objGrad[1] = find_smallest ? 1.0 : -1.0
+            evalResult.jac .= gfull
+        else
+            # :min_delta_fixed_gp: Delta itself is the objective -- gfull IS d(Delta)/d(w) over the
+            # FULL free vector already (including its index-1 d/dgp entry, which KNITRO simply
+            # ignores since gp's box is degenerate there -- nothing to zero out or special-case).
+            evalResult.objGrad .= gfull
+        end
         last_activity_t[] = time(); last_activity_kind[] = :cb_G!
         return 0
     end
 
     cb = KNITRO.KN_add_eval_callback(kc, true, cIndices, cb_F!)
-    KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
+    if objective_mode == :min_gp
+        KNITRO.KN_set_cb_grad(kc, cb, cb_G!, jacIndexCons = fill(cIndices[1], D2), jacIndexVars = xIndices)
+    else
+        # :min_delta_fixed_gp mirrors run_profile_checkpointed's own unconstrained registration
+        # (c10_d20_production_driver.jl: `KNITRO.KN_set_cb_grad(kc, cb, cb_G!)`, no jac kwargs at
+        # all) -- there is no constraint jacobian to register, only a dense objective gradient.
+        KNITRO.KN_set_cb_grad(kc, cb, cb_G!)
+    end
 
     if outer_direct_hessopt !== nothing
         assert_outer_algorithm_direct!(kc, outer_direct_hessopt === :sr1 ? KNITRO_HESSOPT_SR1 : KNITRO_HESSOPT_BFGS; context = "run_cm_upper_checkpointed($label)")

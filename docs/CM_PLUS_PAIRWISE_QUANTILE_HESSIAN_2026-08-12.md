@@ -1,0 +1,578 @@
+# CM + pairwise-quantile (family #7): the exact Hessian, D=20 convergence, and the outer gradient
+
+Session of 2026-08-12, continuing from `docs/CM_PLUS_PAIRWISE_QUANTILE_STATUS_2026-08-12.md`.
+Worktree `/bbkinghome/edav/cdw_worktrees/pq-outer-loop-2026-08-10`, branch
+`feature/pq-free-mass-reparam-2026-08-10`, commits `d1992c0` → `c08d44d` → `<final>`.
+**Not pushed to any remote.**
+
+---
+
+## 1. Status at a glance
+
+| Piece | Before this session | Now | Gate |
+|---|---|---|---|
+| Moment rows, shared-μ kernels, redundancy | done | done | D=4 dense oracle |
+| Composed inner FG | done | done | real D=4, 54/54 |
+| `H_RR`, `H_E,R`, `H_R,CM` | done | done | dense Gram, ≤ 7.7e-15 |
+| `H_CM,CM`, `H_E,CM` | **not wired** | **wired** | see §3 |
+| **Packed assembler + callback registration** | **NOT BUILT** | **BUILT** | §3, 121/121 |
+| Real D=4 solve, `hessopt=exact` | — | **`nStatus=0`** | §4 |
+| Real D=20 solve, `hessopt=exact` | — | **`nStatus=0`** | §5 |
+| Per-callback block profile | — | **measured** | §6 |
+| Outer gradient (reoptimized FD) | closed form only | **gated end-to-end** | §7 |
+| Checkpoint / campaign selectability | not started | not started | §9 |
+
+The family now runs under `ek_inner_cmpq.opt` and converges at production scale. What is left
+before it can enter the five-family campaign is wiring, not mathematics — §9.
+
+---
+
+## 2. What was built
+
+Three files touched, one added, plus three test files.
+
+* `cm_pairwise_quantile_hessian.jl` (+): `cmpq_pq_row_map`, `cmpq_pk_upper`, `pack_cmpq_hessian!`.
+  These live here, not with the production wiring, so the **standalone dense oracle** — which loads
+  no production stack at all — can still gate the packing.
+* `cm_pairwise_quantile_hessian_assembly.jl` (**new**): `CMPQCoreHessCtx`, `build_cmpq_hess_ctx`,
+  `cmpq_fill_hessian_blocks!`, `cmpq_hess_cb_builder`. This is where the production stack enters
+  (`WinnerPairHessCtx`, `CMBinHessCtx`, `WinnerBinCrossScratch`).
+* `cm_pairwise_quantile_production.jl`: `cm_pairwise_quantile_attach(...; build_hessian_ctx)` and
+  `cmpq_hess_builder_for`.
+
+### 2.1 Two wiring changes that break old call sites on purpose
+
+* `cm_pairwise_quantile_attach(ctx, cmpq; build_hessian_ctx)` — required, not defaulted.
+* `archCMPQ_base_state(...; hess_cb_builder)` — required, not defaulted. Previously it defaulted to
+  `nothing`, which would have made "which Hessian is this solve using" an invisible property of a
+  call site. Callers now pass `cmpq_hess_builder_for(ctx_cm)` or an explicit `nothing`.
+
+Populating the Hessian context does **not** by itself register a callback, so the existing hard
+error ("production option file requests `hessopt=exact` but no builder was supplied") still fires,
+and is still checked in the FG gate.
+
+### 2.2 One buffer released, checked rather than argued
+
+`build_cm_bin_ctx` allocates `cctx.Ews`, a `W × NCORE` scratch — **321 MB** at D=20/W=100k/NCORE=401.
+It feeds only `_fill_cm_HEE!`'s dense fallbacks, which this operator-native family never takes
+(`ncore_core == NCORE`, and H_EE comes from `winner_pair_hessian!` directly). It is released to `0×0`
+at context build. That is not left as an argument: the D=4 Hessian gate calls `_fill_cm_HEE!`
+against the shrunken `cctx` on every case and checks it still produces the right H_EE.
+
+---
+
+## 3. The assembler, and how it is gated
+
+`x = [ζ; λ_E(ncore1); λ_L(L-1); λ_P((L-1)²·npair); λ_CM(ncm)]`, `n = NCORE + n_restr + ncm`.
+
+| Block | Source | Status |
+|---|---|---|
+| `H_EE` | `winner_pair_hessian!` + `WinnerPairHessCtx` | verbatim |
+| `H_E,R` | `pairwise_quantile_cross_hessian_block!` @ replicated μ, `sig`-selected | reuse |
+| `H_RR` | PQ raw fill + centering @ replicated μ, `sig`-selected | reuse |
+| `H_R,CM` | `build_cmpq_cross_hess_tables!` + `fill_cmpq_cm_cross_block!` | the one new block |
+| `H_CM,CM` | `build_bin_tables_threaded!` → `prefix_sum_tables_threaded!` → `fill_cm_HCC!` | wired |
+| `H_E,CM` | `winner_pair_cross_hessian_fill!` → `winner_pair_cross_hessian_cm_block!` per `l` | wired |
+
+Three details that were traced rather than guessed, and are now asserted in code:
+
+* `build_bin_tables!(cctx, nothing, h; fill_S=false)` — `H === nothing` is admissible **only** on
+  that branch. This family is operator-native and has no dense `H` at all, so `fill_S=false` is not
+  an optimization, it is the only admissible call.
+* `fill_cm_HCC!` writes at CM's own offsets and fills **both** triangles, so the `ncm×ncm` corner is
+  read back out of `cctx.Hfull` rather than having its offsets redirected. `cctx.NCORE` is set to
+  this family's economic width precisely so that corner lands where it is expected.
+* `winner_pair_cross_hessian_cm_block!` is per threshold block and needs a `WinnerBinCrossScratch`
+  populated once per callback by `winner_pair_cross_hessian_fill!`. CM+ZC's `use_direct_hcz` /
+  `ncore_core` split does **not** apply (`ncore_core == NCORE`, asserted at build).
+
+### 3.1 The `n_restr × n_restr` copy that is not made
+
+`H_RR` and `H_E,R` arrive in the *standalone* PQ family's larger row space. Rather than copy the
+sub-block out, the packed write reads through a precomputed monotone row map `sig`. The copy would
+have been **74 MB written + 78 MB read per callback** at D=20/L=5. `extract_cmpq_HRR!` /
+`extract_cmpq_HER!` still exist and are still gated (dense oracle check 10b); the real-context gate
+additionally checks the direct `sig` read is **bit-identical** to them, so the two routes cannot
+drift.
+
+### 3.2 The packed write
+
+Modelled on `pairwisequantile_hess_cb_builder`, carrying all three of its measured fixes: column
+walks of the two symmetric blocks, the closed-form packed row offset `k0(i) = (i-1)n - (i-1)(i-2)/2`
+with `:dynamic` scheduling, and `evalResult.hess` hoisted once with a type assertion. Measured cost
+at D=20: **~26 ms of a 1.5 s callback (1.7%)** — i.e. the thing that was 46% of the standalone
+family's inner solve before its own fix is a rounding error here.
+
+`H_RC` and `H_EC` are the only blocks read by row. Left that way deliberately — see §6 for why the
+profile says that is the right call, and for what would change the answer.
+
+---
+
+## 4. Real D=4, `hessopt=exact`: 121/121
+
+`test_cm_pairwise_quantile_real_d4_hessian.jl`, five configurations
+(L=5/G=10/fam1, L=5/G=50/fam2, L=5/G=10/fam2/**orthonormal**, L=2/G=50/fam1, L=10/G=50/fam2).
+
+### 4.1 The reference is exact, not a finite difference
+
+`r` is **linear** in the inner variables, so `H = (1/W) M' diag(h) M` exactly with
+`M = [1 | E | G_R | G_CM]`. And because `r` is linear, `M` itself can be read out of the production
+operator with no dense-G machinery: `r(0) = 0`, so `M[:,j] = -dual_index!(st, e_j)` **exactly**,
+column by column. That gives an independent dense reference covering all six blocks — including the
+economic ones the standalone oracle cannot see — with no derivative approximation anywhere. (`M` is
+built in the test, at D=4/W=8000, purely as a reference; production never materializes it.)
+
+The linearity premise is itself checked: `-M·x` reproduces `dual_index!(st,x)` to ≤ 4.9e-16.
+
+### 4.2 What it measured
+
+Worst relative deviation per block pair, over all five cases:
+
+| Block pair | worst rel | | Block pair | worst rel |
+|---|---|---|---|---|
+| E × E | 3.6e-14 | | R × R | 8.3e-16 |
+| E × R | 1.6e-14 | | R × CM | 2.8e-15 |
+| E × CM | 4.9e-15 | | CM × CM | 4.1e-14 |
+
+Four further gates, all passing at every case:
+
+* **H_EE by two independent routes.** `winner_pair_hessian!` (this family's) vs
+  `fill_core_hessian_upper!` / `_fill_cm_HEE!` (CM's, `:exact_winner_pair_parallel` — a different
+  workspace and a different fill): ≤ **6.6e-15**. Free strong gate, two stacks, one block.
+* **H·d == FD of the analytic gradient**, ≤ **6.0e-9**. This is the one that checks the assembled H
+  is the Hessian *of the f the FG callback returns*, not merely of the Gram identity — it would
+  catch the linearity premise being wrong, not just a mis-assembly.
+* **Threaded vs serial CM bin tables** give the same packed vector, ≤ 2.1e-14.
+* **`cmpq_pk_upper` == `_pk_upper` == a literal running counter** (three routes to the packed index).
+
+### 4.3 Real KNITRO solves
+
+| Case | nStatus | n_fg | n_hess | Δ_dual | \|grad\| |
+|---|---|---|---|---|---|
+| L=5, G=10, fam 1 | **0** | 11 | 10 | 1.6346 | 2.4e-13 |
+| L=5, G=50, fam 2 (n_x=412) | **0** | 12 | 11 | 1.9622 | 5.8e-13 |
+| L=5, G=10, fam 2, orthonormal | **0** | 11 | 10 | 1.6948 | 2.5e-14 |
+
+The FG-only path at the same `n_x=412` point measured **16,734 FG evaluations and `-400`**. The
+exact Hessian takes it to `nStatus=0` in twelve.
+
+### 4.4 The dense oracle, extended: 136/136 (was 116)
+
+Checks 13–15 gate the packed write against the full Gram identity with a *synthetic* economic block
+(placement does not care what `E` is), **bit-identically** — it is pure data movement, so a tolerance
+would be the wrong instrument. Two things make it more than a tautology:
+
+* the two blocks that arrive in the standalone family's larger row space are handed in
+  **NaN-poisoned** everywhere except the rows `sig` selects, so a single stray read of a dropped row
+  surfaces as a NaN rather than as a small error;
+* a negative control confirms a transposed `H_R,CM` is rejected, so check 14a is genuinely testing
+  that block's orientation.
+
+The reference had to be **explicitly symmetrized** first: `M'(h.*M)` via BLAS computes `[i,j]` and
+`[j,i]` in different orders, so without that the bit-identity claim would have been testing BLAS's
+rounding rather than the packing.
+
+---
+
+## 5. Real D=20: it converges
+
+`d20_real_setup_design(W, δ=1.0, find_smallest=true, draw_design=:pseudorandom, draw_seed=20260719,
+destination_sample=:exclude_row, σHat=3.0, inner_lower_limit=-10.0)`, L=5, G=50, families=2,
+contrasts `:orthonormal`, `mass_start=:uniform`, at the calibration point.
+
+`n_x = 5288 = NCORE 382 + n_restr 3044 + ncm 1862`; 13,984,116 packed entries; npair=190, Lcm=49,
+nO=19.
+
+| W | nStatus | n_fg | n_hess | wall | Δ_dual | \|grad\| | Hessian callbacks / solve |
+|---|---|---|---|---|---|---|---|
+| 20,000 | **0** | 8 | 7 | 29.6 s | 0.195205480388 | 1.0e-11 | 10.6 s of 29.6 s |
+| **100,000** | **0** | 6 | 5 | 42.3 s | 0.028738400455 | 1.7e-12 | 27.6 s of 42.3 s |
+
+Structural gates at W=100k: 2,000,000 (draw, origin) bin cells cross-checked between the z-space
+route and CM's integer bin map, all agreeing; minimum joint-cell occupancy 3,800.
+
+The **unread standalone-PQ rows cost 2.4%** at D=20/L=5 (3120 computed, 3044 read) — the prior
+estimate was ~5%.
+
+Production scale converges in **five Hessian callbacks**, and the residual `~15 s` outside the
+callbacks is the O(n³) KKT factorization at n=5288. Δ_dual falls from 0.195 at W=20k to 0.0287 at
+W=100k, which is the expected direction (see memory `d20-realdata-w-sensitivity`: small W overstates
+the divergence at a fixed point); these are single points at the calibration θ, not frontier values.
+
+---
+
+## 6. The per-callback block profile — and a corrected cost model
+
+3 warm repeats after a discarded JIT pass, D=20, L=5, G=50, families=2, 8 Julia threads. Both `W`
+are shown because the ranking *changes* between them, and only the W=100,000 column is production.
+
+| Block | W=20k s/cb | W=20k share | **W=100k s/cb** | **W=100k share** | scales with W? |
+|---|---:|---:|---:|---:|---|
+| `cmpq_H_ER` | 0.4355 | 29.3% | **2.5560** | **46.8%** | yes |
+| `cmpq_H_CC_tables` | 0.3046 | 20.5% | 0.7883 | 14.4% | yes |
+| `cmpq_H_RR_tables` | 0.1271 | 8.6% | 0.6336 | 11.6% | yes |
+| `cmpq_H_ECM_fill` | 0.0822 | 5.5% | 0.5254 | 9.6% | yes |
+| `cmpq_H_RCM_tables` | 0.0987 | 6.6% | 0.4750 | 8.7% | yes |
+| `cmpq_H_RCM_fill` | 0.2822 | **19.0%** | 0.2249 | **4.1%** | no |
+| `cmpq_H_CC_fill` | 0.1098 | 7.4% | 0.1231 | 2.3% | no |
+| `cmpq_H_EE` | 0.0141 | 0.9% | 0.0916 | 1.7% | yes |
+| `cmpq_H_RR_fill` | 0.0137 | 0.9% | 0.0191 | 0.4% | no |
+| `cmpq_H_ECM_blocks` | 0.0150 | 1.0% | 0.0172 | 0.3% | no |
+| `cmpq_H_RR_center` | 0.0026 | 0.2% | 0.0036 | 0.1% | no |
+| packed write (unlabelled residual) | ~0.026 | ~1.7% | ~0.056 | ~1.0% | no |
+| **total** | **1.511** | | **5.514** | | |
+
+**This corrects the prior status doc's cost model.** That doc predicted the new `X`-table build
+(`O(W·npair·D)`, 380M increments at W=100k) would be "the dominant new cost this family adds to the
+Hessian callback". Measured at production `W` it is **8.7%**, sixth on the list.
+
+At W=100k, 5 callbacks × 5.51 s = 27.6 s of the 42.3 s solve; the remaining ~15 s is the O(n³) KKT
+factorization at n=5288.
+
+### 6.2 Nothing was optimized off the back of this, and what the profile actually points at
+
+Running both `W` was the point: `cmpq_H_RCM_fill` looks like a 19% target at W=20,000 and is 4.1% at
+production scale, because it does not scale with `W` while five other blocks do. Optimizing it off
+the small-`W` profile would have been work aimed at the wrong term — the exact trap the
+"profile before optimizing" instruction exists to avoid.
+
+The real target at production scale is **`cmpq_H_ER` at 46.8%** — `pairwise_quantile_cross_hessian_block!`,
+whose winner-slot scatter is `O(Ddest·W·(D+npair))` = 399M increments at D=20/W=100k, the largest
+single operation count in the callback. Two facts about it that decide what to do next:
+
+* It is **not this family's code**. It is the standalone pairwise-quantile family's cross block,
+  reused here at replicated μ. That family is in production. Changing it needs its own gate against
+  its own results, exactly as the prior session declined to fix that family's per-callback scratch
+  reallocation in passing.
+* It is computed as a **superset**: 3120 rows for the 3044 this family reads, i.e. 2.4% waste — so
+  the win is not in specializing it to this family, it is in the block itself.
+
+So: identified, measured, and left alone. Any change to it should be gated against the standalone
+family's own results and, per the box caveat below, benchmarked with interleaved arms.
+
+**Wall-clock caveat, recorded in the driver itself.** This box was at load 74 during these runs and
+hosts other campaigns. What is reported is a **within-run block share** (every block paying the same
+load) plus operation counts and dimensions — not a cross-run speed claim. A single-run A/B here is
+worthless; per the standing rule, arms must be interleaved.
+
+**Wall-clock caveat, recorded in the driver itself.** This box was at load 74 during these runs and
+hosts other campaigns. What is reported is a **within-run block share** (every block paying the same
+load) plus operation counts and dimensions — not a cross-run speed claim. A single-run A/B here is
+worthless; per the standing rule, arms must be interleaved.
+
+---
+
+## 7. The outer gradient, gated end to end
+
+The closed form (`cm_pq_dC_dmu` → `d_delta_dual_d_mu_shared` → `chain_cmpq_mass_gradient_to_raw`) was
+already gated against a **fixed-dual** finite difference in the dense oracle. That is necessary but
+not sufficient: it tests the algebra at an arbitrary `(ζ, λ)`, not the envelope-theorem claim, whose
+ground truth **re-solves** the inner problem at each probe.
+
+`test_cm_pairwise_quantile_outer_gradient_fd.jl` supplies that. Every FD probe is a full, fresh
+`hessopt=exact` KNITRO solve. Real D=4, L=5, G=50, families=2, orthonormal.
+
+**Enforced point (non-uniform μ = [0.36986, 0.12329, 0.30822, 0.09863]):**
+
+| h | rel L2 | max\|diff\| | cosine |
+|---|---|---|---|
+| 1e-3 | 1.141e-05 | 7.32e-05 | 0.999999999997 |
+| 1e-4 | 1.140e-07 | 7.31e-07 | 1.000000000000 |
+| 1e-5 | **1.690e-09** | 9.23e-09 | 0.9999999999999999 |
+
+Clean `h²` convergence — the ladder is doing what it is for (truncation error falling as `h²`,
+solver noise rising as `1/h`), and the threshold was not moved to meet the number. The standalone
+family reaches 4.1e-10 on its own gate; this is the same order.
+
+At uniform μ (reported, not enforced): 1.020e-09 at h=1e-5, same `h²` ladder.
+
+**Both negative controls fire:**
+
+* a sign-flipped gradient anti-correlates with FD at cosine **−1.000000000000**;
+* the **one-slot product rule** — dropping the `b`-slot of `d(μ_a μ_b)/d(μ_c)`, the natural
+  plausible-looking transcription error this family's own docstring warns about — fails the same
+  gate at rel **1.075**.
+
+The gate is enforced at non-uniform μ because at `μ = 1/L` the partner index is provably
+unobservable (measured at 1.3e-9 in the dense oracle). At L=2 the one-slot control cannot fire and
+is reported SKIP, never PASS.
+
+Note this is where the family pays off: **4 outer mass coordinates at D=4** where the standalone
+family needs 16, and **4 at D=20/L=5** where the standalone family needs 80.
+
+---
+
+## 8. Full gate inventory, as run on this machine
+
+| Gate | Result |
+|---|---|
+| `test_cm_pairwise_quantile_d4_dense_oracle.jl` | **136/136** (was 116) |
+| `test_cm_pairwise_quantile_real_d4_fg.jl` | **54/54** |
+| `test_cm_pairwise_quantile_real_d4_hessian.jl` | **121/121** (new) |
+| `test_cm_pairwise_quantile_outer_gradient_fd.jl` | **11/11** (new) |
+| `test_cm_pairwise_quantile_d20_hessian_solve.jl` W=20k | **PASS**, nStatus=0 |
+| `test_cm_pairwise_quantile_d20_hessian_solve.jl` W=100k | **PASS**, nStatus=0 |
+| `test_cm_pairwise_quantile_outer_production.jl` | **20/20** (new) |
+| `test_cm_pairwise_quantile_driver_argguards.jl` | **34/34** (new) |
+| `test_cm_pairwise_quantile_campaign_smoke.jl` D=20 W=20k | **28/28** (new) |
+| `test_cm_pairwise_quantile_cplus_gate.jl` D=20 **W=100k** | **ALL PASS** (new), 5.36x |
+
+---
+
+## 8b. Campaign readiness: the wiring between the mathematics and a run
+
+Four new files plus one orchestrator edit, all ported from the standalone family's own layer
+function for function.
+
+| Piece | File | Gate |
+|---|---|---|
+| Verifier (**three** blocks) | `cm_pairwise_quantile_verification.jl` | §8b.1 |
+| Production context, verified state, combined gradient, FD ground truth | `cm_pairwise_quantile_outer_production.jl` | §8b.1–8b.2 |
+| Checkpointed outer driver + resume | `cm_pairwise_quantile_checkpoint.jl` | §8b.3 |
+| Orchestrator include + `call_driver` arm + `NO_PROBS_DRIVERS` | `paper_upper_v1_orchestrator/family_start_chain.jl` | §8b.4 |
+| Ready-to-paste protocol arm | `protocols/family_cm_pairwise_quantile_ARM.toml` | — |
+
+### 8b.1 The verifier has three blocks, not two
+
+The standalone family recomputes `[E | restriction]`. This one recomputes
+`[E | level+pair | CM-grid]` and carries a fourth block residual, `kkt_resid_cm`. That is not
+bookkeeping: the CM grid is a term of the per-draw dual index, and a verifier that omitted it would
+report a **wrong `Delta_dual`** while every residual it did compute still looked fine.
+
+Measured at real D=4, L=5/G=50/two families/orthonormal, at a non-uniform μ:
+
+* all four block KKT residuals ≤ **1.2e-13** from the independent recompute;
+* `classify_inner_result` → **`VerifiedSolved`** under the shared acceptance gate (memory
+  `feedback-lfd-ok-verification-gate-required`: `FiniteSolved && within_budget` is *not* one).
+
+**And the redundancy claim, measured at a real solved point.** The dense oracle proves the dropped
+per-origin marginal rows are implied *as a span statement*. The verifier now measures whether they
+actually hold, under the LFD, on every solve:
+
+| | residual |
+|---|---|
+| enforced level rows | 2.27e-14 |
+| **dropped per-origin marginals** | **5.17e-14** |
+| pairwise factorization | 4.87e-14 |
+
+### 8b.2 The `q0` fold — two blocks, with a negative control
+
+The mandatory `q0` fold must add **both** `-G_R λ_R` and `-G_CM λ_CM`. `q0` is the per-draw *level*
+the economic block linearizes around, so omitting either term linearizes about the wrong base point
+and produces an economic gradient wrong by an amount unrelated to the restriction's own gradient.
+The argument that the CM rows do not depend on θ is true about the *derivative* and irrelevant here
+(memory `feedback-q0-restriction-fold-is-a-level-not-a-derivative`).
+
+| fold | max\|q0 − r_verified\| |
+|---|---|
+| **both blocks** | **9.9e-14** |
+| level+pair only | 1.90e+02 |
+| neither | 1.14e+02 |
+
+A ratio of 1.9e15 between the first two rows is what makes the first row a real check rather than a
+tautology. The mismatch is a hard error in `build_lfix_base_cache_cmpq`, so this cannot regress
+silently.
+
+Combined gradient: length `D·Ddest + (L-1)`; the mass tail is **bit-identical** to
+`cmpq_mass_gradient_vec`; coordinate 1 agrees with a reoptimized FD *through the production layer*
+at rel 1.1e-9. **20/20.**
+
+### 8b.3 The driver
+
+`run_cm_pairwise_quantile_{upper,lower}_checkpointed`, with `CMPairwiseQuantileCheckpointV1`
+(name grep-verified unique — `deserialize` resolves by NAME, memory
+`feedback-julia-serialization-type-name-collision`). Two family-specific differences from the
+standalone driver, both consequences of what the family *is*:
+
+* **No `cutoff_source`.** This family does not choose where its cutoffs sit — they are selected
+  bit-identically from CM's own threshold array so each PQ bin is a union of CM grid cells.
+* **`inner_opt` is required and must be the exact-Hessian file.** Not a tuning preference: at
+  production `n_x` the FG-only path hit `-400` after 16,734 evaluations. Also hardened symmetrically
+  this session — supplying a Hessian builder while the option file is *not* `hessopt=exact` is now a
+  hard error too, closing the silent-quasi-Newton hole in the other direction.
+
+### 8b.3a The campaign smoke: the real outer loop, at real D=20
+
+`test_cm_pairwise_quantile_campaign_smoke.jl`, W=20,000, L=5/G=50/two families/orthonormal,
+120 s stage budget. **28/28.**
+
+* The outer KNITRO problem is built with **384 variables** (380 economic + **4** shared masses; the
+  standalone family would need 80 here) and one nonlinear constraint.
+* 3 function evaluations, 2 gradient evaluations, exit on the time limit at a **feasible** point:
+  `gp = 0.97886`, `Delta = 0.3313`, `verified = true`. So the whole chain -- verified state ->
+  combined gradient -> KNITRO -> incumbent -> checkpoint -- runs.
+* The checkpoint round-trips, and **resume works**: `n_eval` 3 → 7, with `w0` reconstructed from
+  canonical z-space rather than supplied.
+* **All six resume-mismatch guards fire** (L, `cm_grid_size`, `cm_moment_families`, `contrasts`,
+  sigma, direction). A guard nobody has watched fail is not known to be a guard.
+
+`test_cm_pairwise_quantile_driver_argguards.jl` (**34/34**) covers the checks that fire before any
+context build, so it re-runs in ~2 minutes after any driver edit: the option file, the `L | G`
+structural condition (both directions -- L ∈ {3,4,7} refused, L ∈ {2,5,10,25} accepted), every
+enumerated kwarg, the arithmetic joint-cell floor, and `UndefKeywordError` on **every** scientific
+kwarg individually.
+
+**One live finding worth keeping.** The smoke ran against the pre-fix driver, where the
+"builder supplied + option file not exact" error was raised from *inside* the outer KNITRO callback.
+It did fire, but KNITRO surfaced it as
+`Warning: Knitro encounters an exception in puts callback: ErrorException(...)` -- i.e. as a warning
+in its own log, not as a clean Julia error at the call site. That is exactly the failure mode memory
+`feedback-archC-verified-state-direct-call-knitro-callback-err` describes, observed live, and it is
+why the check now also runs at argument time using KNITRO's own parser on a throwaway context. The
+argument-time path is the one gated above; the in-callback one remains as the backstop.
+
+### 8b.4 What was deliberately **not** done
+
+* **`pairwise_quantile_checkpoint.jl` was not added to the orchestrator's include list.** The
+  standalone PQ arm in `call_driver` is currently unreachable from that script — a pre-existing gap;
+  those campaigns go through `run_pq_multistart_seed_chain.jl`. Fixing it as a side effect of wiring
+  family #7 would change which driver that arm resolves to, mid-campaign, on a family another
+  session is actively working on.
+* **`protocols/paper_upper_v1.toml` was not edited.** It is frozen and governs completed campaigns;
+  adding a sixth family retroactively is the user's call. The arm is a paste-ready fragment instead.
+---
+
+### 8b.5 Backend C+ (factorized economic gradient) — **5.36x**
+
+`cm_pairwise_quantile_cplus.jl`, a near-verbatim port of the standalone family's adapter. The
+driver now takes `gradient_backend = :cplus | :dense`, defaulting to `:cplus`. Measured at **real
+D=20, W=100,000**, L=5/G=50/two families/orthonormal, three **interleaved** repetitions (dense,
+cplus, dense, cplus, …) so both arms pay the same load drift on a box at load 70+:
+
+| | dense | C+ | |
+|---|---:|---:|---|
+| min | 8.659 s | **1.616 s** | **5.36x** |
+| mean | 8.836 s | 1.836 s | |
+
+| check | measured |
+|---|---|
+| economic block, dense vs C+ | max abs **3.5e-16**, relative **1.6e-15** (standard: 1e-6) |
+| restriction tail | **bit-identical**, max\|diff\| = 0.0 |
+| `q0` vs independently recomputed `r` | 1.33e-14 in **both** paths |
+| dense `q0` vs C+ `q0` | 5.1e-15 |
+| **negative control**: C+ `q0` with only the level+pair fold | **1.634** (vs 1.33e-14 with both) |
+
+**Why the C+ decomposition argument survives this family's extra block.**
+`composite_gradient_at_Cplus_from_cache` requires only that the restriction term in `q_s(θ)` be
+constant across outer `(gp, A_od)` probes. Both blocks are: the level/pair rows are indicators of a
+campaign-constant bin assignment, and the CM-grid rows are indicators on CM's own fixed thresholds —
+including the eq.36 `Pow` weights, which depend on `σ` and `μHat`, both campaign constants and **not**
+free outer coordinates. So that shared function is reused **unmodified**, as in all five other
+adapters.
+
+**One refactor, and it matters more here than for any other family.** The `q0` fold is now a single
+function, `cmpq_restriction_q0_contribution!`, called by *both* cache builders, with its exact
+cross-check likewise shared. Every other family folds one restriction block; this one folds two, so
+"both paths fold both blocks" was precisely the invariant most likely to rot the next time someone
+edited one of them. The negative control above is what would catch it if it did.
+
+At ~7 s saved per gradient call and one gradient per outer KNITRO iteration, this is a real campaign
+win, not a micro-optimization.
+
+---
+
+### 8b.6 H_E,R rewritten — 1.93x on the callback, for BOTH families
+
+The production-scale profile (§6) named `cmpq_H_ER` at **46.8%** as the only real target. It is the
+*standalone* pairwise-quantile family's cross block, reused here at replicated μ. It already
+exploited the two structural facts that matter — the winner assignment (one economic row per draw
+per slot, not all 381) and the PQ sparsity (210 active cells per draw, not 3120) — but it was
+**serial**, while both its siblings in `threaded_cross_hessian.jl` had been threaded. Three separate
+problems in one loop:
+
+1. **Not threaded.** Threading over `slot` is safe *and bit-identical*: `j = slot + (o−1)·Ddest`
+   means `j ≡ slot (mod Ddest)`, so slots write disjoint rows and each row keeps the original draw
+   order. No reduction, no atomics.
+2. **Cache-hostile scatter.** It accumulated into a *row* of a column-major matrix — consecutive
+   columns strided by `NCORE = 382` doubles, so ~399M accumulations each touched a fresh cache line
+   across 9.5 MB. Accumulating transposed makes one `j`'s working set a contiguous 25 KB column.
+3. **380 redundant strided loads per (slot, draw).** `bin[w,p]` strides by `W` and was read twice
+   per pair to recover 20 distinct values. Hoisted to 20.
+
+Also dropped the length-`W` `v` buffer, materialized then read back one element at a time.
+
+**Measured, real D=20/W=100,000, interleaved in one process, best-of-3:**
+
+| | `:shared` (old) | new | |
+|---|---:|---:|---|
+| whole Hessian callback, 8 threads | 3.435 s | **1.776 s** | **1.93x** |
+| whole Hessian callback, 3 threads | 4.681 s | 3.330 s | 1.41x |
+| implied H_E,R block | ~1.88 s | ~0.25 s | **~7.4x** |
+
+`cmpq_H_ER` fell from **46.8% to 12.4%** of the callback — from dominant to fifth, behind
+`H_RR_tables` (24.3%), `H_CC_tables` (23.8%), `H_RCM_tables` (15.3%) and `H_ECM_fill` (14.9%). The
+profile is now flat; there is no single obvious next target.
+
+The 3-thread row is there deliberately: it is a proxy for a contended box, and the change is still
+a clear win when starved of threads. There is no regime in which it loses — and it *cannot* raise
+peak thread demand, because `Threads.@threads` distributes over the pool Julia already started, and
+during this block 7 of 8 threads were previously idle while the rest of the callback already used
+all 8.
+
+**Correctness.** Bit-identical to the code it replaced: `max|diff| = 0.000e+00` over **1,191,840
+entries** at real D=20, at **both** 8 and 3 Julia threads, and across all five D=4 configurations.
+
+**It replaced the old implementation outright — there is no switch.** A second implementation behind
+a flag is a silent regression waiting to happen, and the check it would have enabled (bit-identity
+against the old code) only establishes *unchanged*; the exact Gram reference establishes *correct*,
+against a reference sharing no code with what it tests. The old code is in git (`bdd0163`).
+
+**Gated after the fold-in, in BOTH families:**
+
+| gate | result |
+|---|---|
+| CM+PQ `test_..._real_d4_hessian.jl` | **121/121**; E×R vs exact Gram, 3.3e-15 – 1.5e-14 |
+| CM+PQ `test_..._d4_dense_oracle.jl` | **136/136** |
+| PQ-only `test_pairwise_quantile_real_d4_knitro.jl` | **ALL PASSED**, nStatus=0 |
+| PQ-only `test_pairwise_quantile_d20_verifier_after_fixes.jl` **W=100k** | **ALL PASSED**, nStatus=0, n_fg=7, n_hess=6, 18.0 s, kkt_resid 8.9e-13 |
+
+That last row required fixing the script first: it referenced `CUTOFF_SOURCE` and never defined it,
+so it had been **unrunnable as committed** — it burned a 64 s context build and died on
+`UndefVarError`. Pre-existing and unrelated to this work, but it means the standalone family's
+production-scale confidence did not come from that script. Now a required argument, not a default,
+since `cutoff_source` decides which restriction is being solved.
+
+---
+
+## 9. What is left
+
+**The family is campaign-ready.** Everything from the moment rows to a checkpointed, resumable
+outer driver behind the orchestrator's `call_driver` is built and gated. What remains is a decision
+and two optional improvements, not missing machinery:
+
+1. **Paste the arm into a protocol and pick starts.** `protocols/family_cm_pairwise_quantile_ARM.toml`
+   is ready. `paper_upper_v1.toml` was deliberately not edited (frozen, governs completed
+   campaigns). Multistart seeds come from the existing generator — do **not** hand-invent starting
+   points (memory `reference-multistart-seed-generator`), and note its `A_scale`/`gp_scale` are not
+   tuned defaults: scan a small grid at your own `W`/`delta_max` first.
+2. **Inner-callback performance** (optional, and *not* on the critical path — the inner solve
+   already converges in 5 callbacks / 42 s at W=100k). The one target the production-scale profile
+   identifies is `cmpq_H_ER` at 46.8%, which belongs to the **standalone** PQ family and needs its
+   own gate against its own results.
+
+Two pre-existing issues found while wiring, flagged rather than changed:
+
+* The standalone PQ arm in `call_driver` is **unreachable** from `family_start_chain.jl` — the
+  include was never added. Those campaigns go through `run_pq_multistart_seed_chain.jl` instead.
+  Left alone: another session is actively working on that family.
+* `cctx.Ews` (321 MB at D=20/W=100k) is dead weight on any no-dense-H path. Released here; the
+  other families building a `CMBinHessCtx` may still be carrying it. **Not checked.**
+
+---
+
+## 10. Things worth not rediscovering
+
+* The `M`-extraction trick (`M[:,j] = -dual_index!(st, e_j)`, exact because `r` is affine) gives any
+  operator-native family a full dense Hessian reference at test scale with no dense-G machinery and
+  no finite difference. It generalizes to every family in this codebase whose `r` is linear in the
+  inner variables — which is all of them.
+* A BLAS-computed `M' diag(h) M` is **not** bit-symmetric. Any test claiming bit-identity against a
+  transposed read must symmetrize it explicitly first.
+* `cctx.Ews` is dead weight for every operator-native family, not just this one — 321 MB at
+  D=20/W=100k. The other families that build a `CMBinHessCtx` on a no-dense-H path may be carrying
+  it too; worth a look, but it was out of scope here and is **not** claimed to have been checked.
+* The packed write, which was 46% of the standalone family's inner solve before its own fix, is
+  1.7% here. The three fixes carried over from it are load-bearing and should not be "simplified".
+* `mean_m = 1.0` exactly at both D=4 outer-gradient points. That is not a bug — it is
+  `(1/W) Σ Ψ'(r_w)` at a converged inner solution, where the ζ stationarity condition
+  `∂f/∂ζ = 1 - (1/W) Σ Ψ'(r) = 0` pins it.
