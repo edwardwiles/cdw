@@ -252,35 +252,72 @@ solver, not the quality of the outer optimum. It did find a feasible incumbent, 
 
 ---
 
-## 9. Is this in production? — **No, and here is exactly where it is**
+## 9. Is this in production? — **Yes, as of 2026-08-12: `origin/production/fullA-exact = e49c0ed`**
 
-Stated plainly because it is the question that matters:
+⚠️ **This section previously said "No".** That was true when written and is now superseded — the
+branch was merged and pushed later the same session, on the user's instruction. Recorded as a
+correction rather than silently rewritten, because the earlier version was pushed to Dropbox.
 
-* The change lives on **`feature/pq-free-mass-reparam-2026-08-10`** (worktree
-  `cdw_worktrees/pq-outer-loop-2026-08-10`), commits `d0ee304` + the follow-up above.
-* `git branch --contains` reports it on **that branch only**. It is **not merged into
-  `production/fullA-exact`** and **not pushed to origin**.
-* That branch is **97 commits ahead of `production/fullA-exact`, which is itself 7 commits ahead of
-  the merge base** — the two have diverged, so this is a merge to plan, not a fast-forward.
-* **No campaign has been re-run.** Every completed and in-flight `paper_upper_v1` result at `L = 50`
-  is on the old dyadic grid, and per §7 an old checkpoint resumed today stays on it.
+* Merge commit **`e49c0ed`**, a clean fast-forward of `production/fullA-exact` (`184750c` → `e49c0ed`;
+  first parent is the old production tip, so no history was rewritten). Pushed to
+  `git@github.com:edwardwiles/cdw.git`. **Rollback point: `184750c`.**
+* The merge lands far more than this grid change: `paper_upper_v1` (protocol *and* orchestrator),
+  the pairwise-quantile family (#6) and CM+PQ (#7) did not exist on production at all. Production's
+  own 7 commits (CROSS families, `linsolver ma97`, the inner-opttol fix, `H_CZ :j_parallel`, the
+  shared-`.opt` opt-in) are preserved and reconciled, not overwritten.
+* Still true from the old text: **no campaign has been re-run**, and per §7 an old checkpoint
+  resumed today stays on the old dyadic grid. Every completed `paper_upper_v1` result at `L = 50`
+  predates this change.
 
-So: *if a campaign is launched from this branch*, `L = 50` gives 50 equal-mass buckets on every
-route. Nothing currently running is using it.
+**One file conflicted** — `multistart_seed_generator.jl`, three hunks, all additive divergence,
+resolved as unions. **The conflict resolution was not the merge.** Three further defects existed
+only in the merged tree, and each was found by running something rather than by the merge resolving
+cleanly:
 
-**Also noticed while checking that** (reported, not fixed — out of scope): this branch does **not**
-carry the 2026-08-03 "require scientific params" hardening that `CLAUDE.md` describes.
-`run_cm_upper_checkpointed` here still defaults `W::Int = 80000`, `L::Int = 10`,
+1. `build_family`'s `:cm_zc_cross` branch passed `L = spec.L`. That family (production, 2026-08-09)
+   is CM-flavoured and takes its grid from `resolve_cm_probs`, which now returns `L-1` equal-mass
+   cutpoints — so it handed a 50-**bucket** count to an argument counting **levels** and hard-errored
+   against a 49-long grid. Now `cm_n_levels(spec)`, the same fix the four pre-existing CM builder
+   call sites carry. `evaluate_family` and `companion_implied_nu_cmzc` already route the cross kinds
+   through the diagonal path and were already correct.
+2. The merged dependency guard is the **union** of both sides' required symbols, so all 28 consumers
+   of `multistart_seed_generator.jl` need both sets. **26 branch-side consumers lacked the CROSS
+   symbols — including `paper_upper_v1_orchestrator/family_start_chain.jl`, the live campaign cell
+   runner, which died at include time.** 2 production-side cross tests lacked `fast_range_screen.jl`.
+   All 28 fixed; CROSS ordering copied from `test_cross_seed_family_dispatch_2026-08-09.jl`.
+3. The branch widened `FamilySeedSpec` from 9 fields to 12 for family #6, but production's
+   `origin_zc_cross`/`cm_zc_cross` constructors still passed 9 positionally — `MethodError` at spec
+   construction. Both widened with the same `:none`/`0`/`:none` off-sentinels every other non-PQ
+   kind uses.
+
+Gates on the merged tree, **both sides of the merge**:
+
+| gate | result |
+|---|---|
+| `test_cmzc_cross_wiring_2026-08-09.jl` (production side) | **29/29 ALL PASS** |
+| `test_cross_seed_family_dispatch_2026-08-09.jl` (production side) | **15/15 ALL PASS** |
+| `test_cm_pairwise_quantile_d4_dense_oracle.jl` (family #7) | **136/136** |
+| `test_multistart_seed_generator.jl` | **892/892**, 0 failed, 0 errored |
+| `test_cm_grid_l_means_buckets_2026-08-12.jl` | **103/103** |
+| `family_start_chain.jl` | loads through every include (dies only on a deliberately bogus protocol path) |
+
+**Still open, and now more urgent because it is on production**: this tree does **not** carry the
+2026-08-03 "require scientific params" hardening that `CLAUDE.md` describes.
+`run_cm_upper_checkpointed` still defaults `W::Int = 80000`, `L::Int = 10`,
 `draw_seed::Int = 20260719`, `delta::Float64 = 1.0` and `σHat = 3.0`. `L` is named explicitly in that
-rule's own parameter list, so a caller who omits `L` entirely still silently gets a 10-bucket CM.
-Worth a deliberate pass before this branch is merged.
+rule's own parameter list, so a caller who omits `L` entirely silently gets a 10-bucket CM. Worth a
+deliberate pass.
+
+**Note for the family #7 owner**: family #7 was merged to production as it stood at branch tip
+`7fc668f`. Your notes have it as "ready EXCEPT seeds". Nothing about it was changed by this merge
+beyond the include-list additions in item 2 above.
 
 ---
 
 ## 10. Open items for the user
 
-0. **Merging this to `production/fullA-exact`** (§9) — the change is branch-local and no campaign
-   uses it yet.
+0. **DONE — merged and pushed** (§9): `origin/production/fullA-exact = e49c0ed`. Rollback point
+   `184750c`. No campaign has been re-run on the new grid yet; that is the next decision.
 1. **`CMConfig`'s `:equal` rule still means levels, not buckets** (§3). Deliberate, to avoid silently
    redefining ~40 diagnostic/benchmark scripts. It is now the *only* remaining route on which "L"
    does not mean buckets, and it is benchmark-only. Flag if you want it unified.
