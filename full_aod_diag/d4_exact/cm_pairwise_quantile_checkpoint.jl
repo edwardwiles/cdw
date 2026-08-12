@@ -20,12 +20,9 @@
 #      preference here: measured at production `n_x=412`, the FG-only path hits `-400` after 16,734
 #      evaluations while the exact-Hessian path reaches `nStatus=0` in twelve. Passing a non-exact
 #      file is now a hard error inside `inner_loop_KNITRO_cmpairwisequantile_operator` itself.
-#   4. NO `:cplus` GRADIENT BACKEND. The standalone family has a factorized economic-block adapter
-#      (`pairwise_quantile_production_gradient_cplus`, 4.42x at real D=20/W=100k). No such adapter
-#      has been built or gated for this family, so `gradient_backend` is not a parameter here and
-#      the dense shared `economic_A_gradient!` path is used unconditionally. This is a known,
-#      quantified gap, NOT an oversight -- see the closing note of
-#      docs/CM_PLUS_PAIRWISE_QUANTILE_HESSIAN_2026-08-12.md.
+#   4. `gradient_backend` defaults to `:cplus`, the factorized economic-block representation
+#      (`cm_pairwise_quantile_cplus.jl`), exactly as the standalone family's driver does. `:dense`
+#      remains available and is the reference the C+ gate compares against.
 #
 # NO SCIENTIFIC PARAMETER IS DEFAULTED. Every kwarg that changes what economic problem is solved is
 # a bare Julia keyword, so omitting it raises `UndefKeywordError` before the body runs (CLAUDE.md).
@@ -167,6 +164,12 @@ function run_cm_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Fl
         blas_threads::Union{Nothing,Int} = nothing,
         use_exact_cache::Bool = true,
         mass_bounds::Union{Nothing,Vector{NTuple{2,Float64}}} = nothing,
+        # Economic-block backend for the OUTER gradient. `:cplus` is the FACTORIZED representation
+        # (lfix_factorized.jl) that never materializes the W x D x Ddest price tensors; `:dense` is
+        # the older path, kept as the reference `test_cm_pairwise_quantile_cplus_gate.jl` compares
+        # against. NOT a scientific parameter -- it changes how the same gradient is computed, not
+        # what problem is solved -- so it carries a default, like A_coordinate_mode.
+        gradient_backend::Symbol = :cplus,
         )
     lp(xs...) = (println(xs...); flush(stdout))
 
@@ -182,6 +185,8 @@ function run_cm_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Fl
         error("run_cm_pairwise_quantile_upper_checkpointed($label): A_coordinate_mode must be :legacy_z|:powered_aspace, got :$A_coordinate_mode")
     objective_mode in (:min_gp, :min_delta_fixed_gp) ||
         error("run_cm_pairwise_quantile_upper_checkpointed($label): objective_mode must be :min_gp|:min_delta_fixed_gp, got :$objective_mode")
+    gradient_backend in (:cplus, :dense) ||
+        error("run_cm_pairwise_quantile_upper_checkpointed($label): gradient_backend must be :cplus|:dense, got :$gradient_backend")
     objective_mode == :min_delta_fixed_gp && gp_fixed === nothing &&
         error("run_cm_pairwise_quantile_upper_checkpointed($label): objective_mode=:min_delta_fixed_gp requires gp_fixed.")
     L >= 2 || error("run_cm_pairwise_quantile_upper_checkpointed($label): L (PQ bins) must be >= 2, got $L")
@@ -353,6 +358,11 @@ function run_cm_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Fl
        " resolved_active_threshold=", th.threshold)
     write_backend_manifest_atomic(prepared.manifest, joinpath(ckpt_dir, "$(label)_backend_manifest.json"))
     econ_ws = get_or_build_econ_a_grad_ws(W)
+    # Backend C+ workspaces: built ONCE for the whole run, never per gradient call -- that reuse is
+    # the entire point of the backend.
+    cplus_pool, cplus_ws = gradient_backend === :cplus ?
+        cm_pairwise_quantile_cplus_workspaces(ctx_cm) : (nothing, nothing)
+    lp("[", label, "] outer-gradient economic backend: :", gradient_backend)
 
     # ---- 11a. the DERIVED cutoffs: report them, and on resume verify them EXACTLY ----
     z_cm = cmpq.z_cm
@@ -516,9 +526,15 @@ function run_cm_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Fl
         matched = shared !== nothing && shared.w == w
         base = matched ? shared.base : nothing
         verify_c = matched ? shared.verify : nothing
-        gfull, meta = cm_pairwise_quantile_production_gradient(xf, masses, pcx, ctx, pe;
-            base = base, verify = verify_c, econ_ws = econ_ws,
-            threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        gfull, meta = if gradient_backend === :cplus
+            cm_pairwise_quantile_production_gradient_cplus(xf, masses, pcx, ctx, pe, cplus_pool,
+                cplus_ws; base = base, verify = verify_c,
+                threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        else
+            cm_pairwise_quantile_production_gradient(xf, masses, pcx, ctx, pe;
+                base = base, verify = verify_c, econ_ws = econ_ws,
+                threaded = true, h_mode = :cached, bandwidth_cache = bandwidth_cache)
+        end
         n_grad[] += 1
         # gfull's economic block is ALWAYS the z-space gradient; rescale by the constant -theta_cm
         # when the outer search is in a-space. The mass block is coordinate-mode-INDEPENDENT by
@@ -587,6 +603,7 @@ function run_cm_pairwise_quantile_upper_checkpointed(w0::Union{Nothing,Vector{Fl
             L = L, G = cm_grid_size, n_families = cm_moment_families, contrasts = contrasts,
             cm_thresholds = copy(z_cm), pq_cutoffs = copy(Qfixed),
             min_bin_count = min_bin_count, mass_start = mass_start, n_raw = n_cut,
+            gradient_backend = gradient_backend,
             screen_summary = as_namedtuple(pcx.screen_counters))
 end
 

@@ -251,6 +251,75 @@ function cmpq_mass_gradient_vec(base::BaseDualState, verify, ctx_cm,
 end
 
 """
+    cmpq_restriction_q0_contribution!(contrib, ctx_cm, base) -> contrib
+
+`contrib = -(G_R*lambda_R + G_CM*lambda_CM)` at the converged duals -- the term the plain economic
+`q0` is missing, for BOTH of this family's restriction blocks.
+
+THE ONE DEFINITION of that fold, called by the dense path (`build_lfix_base_cache_cmpq`) AND the
+Backend C+ path (`build_lfix_base_cache_cmpq_C!`). It is factored out rather than written twice on
+purpose: this family has TWO blocks to fold where every other family has one, so "the two paths
+each fold both blocks" is exactly the invariant most likely to rot when someone edits one of them.
+Now there is nothing to keep in sync.
+
+`contrib` is OVERWRITTEN (not accumulated into), and both operators SUBTRACT into it, which is why
+the caller ADDS the result to `cache.q0`. Same operators the inner solve itself uses -- never a
+hand-written second copy of the moment algebra.
+"""
+function cmpq_restriction_q0_contribution!(contrib::Vector{Float64}, ctx_cm, base::BaseDualState)
+    cmpq = ctx_cm.cmpq_ctx
+    op = cmpq.op
+    Lcm = cmpq.Lcm; nO = cmpq.nO
+    ncm_cdf = nO * Lcm
+    length(contrib) == op.W ||
+        error("cmpq_restriction_q0_contribution!: length(contrib)=$(length(contrib)) != W=$(op.W)")
+    fill!(contrib, 0.0)
+    λ_L, λ_P, λ_CM = reshape_cmpq_duals_lambda(base.λstar, op, cmpq.ncore1)
+
+    # (1) level + pair rows
+    cm_pq_forward!(contrib, λ_L, λ_P, op, ctx_cm.cmpq_mass_state, cmpq.refIndex1)
+
+    # (2) the CM grid -- the block the standalone family has no analogue of
+    λmat_block = zeros(nO, Lcm); λmat_ext = zeros(nO, Lcm + 1); cm_contrib = zeros(op.W)
+    λ_cdf = cmpq.Pow === nothing ? λ_CM : (@view λ_CM[1:ncm_cdf])
+    apply_contrast!(λmat_block, reshape(λ_cdf, nO, Lcm), cmpq.R)
+    suffix_sums!(λmat_ext, λmat_block)
+    cumulative_forward_contribution!(cm_contrib, cmpq.Bidx, cmpq.refIndex1, cmpq.origins, λmat_ext)
+    contrib .-= cm_contrib
+    if cmpq.Pow !== nothing
+        λmat_block2 = zeros(nO, Lcm); λmat_ext2 = zeros(nO, Lcm + 1); cm_contrib2 = zeros(op.W)
+        λ_pow = @view λ_CM[ncm_cdf+1 : 2*ncm_cdf]
+        apply_contrast!(λmat_block2, reshape(λ_pow, nO, Lcm), cmpq.R)
+        suffix_sums!(λmat_ext2, λmat_block2)
+        cumulative_forward_contribution_pow!(cm_contrib2, cmpq.Bidx, cmpq.refIndex1, cmpq.origins,
+                                             λmat_ext2, cmpq.Pow)
+        contrib .-= cm_contrib2
+    end
+    return contrib
+end
+
+"""
+    cmpq_assert_q0_matches_r(q0_new, verify, tol, where) -> nothing
+
+The exact cross-check both cache builders run: `q0` corrected by the fold above must equal the
+verifier's INDEPENDENTLY recomputed `r`, since both are
+`r = -zeta - E*lambda_E - G_R*lambda_R - G_CM*lambda_CM` by two different routes. A HARD ERROR, not
+a warning -- a mismatch means one of the two folds is missing or wrong, and every economic gradient
+built on that cache would be silently wrong. Shared for the same reason the fold itself is.
+"""
+function cmpq_assert_q0_matches_r(q0_new::AbstractVector{Float64}, verify, tol::Float64,
+                                  where::AbstractString)
+    (verify === nothing || !hasproperty(verify, :r_current)) && return nothing
+    err = maximum(abs, q0_new .- verify.r_current)
+    err <= tol ||
+        error("$where: corrected q0 disagrees with the independently recomputed r by " *
+              "max|diff|=$err (tol=$tol). These are the same quantity by two routes -- a mismatch " *
+              "means one of the TWO restriction folds (level+pair, CM-grid) is missing or wrong, " *
+              "and every economic gradient built on it would be silently wrong. Refusing to continue.")
+    return nothing
+end
+
+"""
     build_lfix_base_cache_cmpq(x_free0, ctx_cm, base; verify=nothing, q0_check_tol=1e-8, econ_ws=nothing)
         -> LFixBaseCache
 
@@ -296,41 +365,10 @@ function build_lfix_base_cache_cmpq(x_free0::AbstractVector, ctx_cm, base::BaseD
         build_lfix_base_cache!(lws, x_free0, ctx_cm, base; validate_dense = false)
     end
 
-    cmpq = ctx_cm.cmpq_ctx
-    op = cmpq.op
-    D = op.D; Lcm = cmpq.Lcm; nO = cmpq.nO; ncm = cmpq.ncm
-    ncm_cdf = nO * Lcm
-    λ_L, λ_P, λ_CM = reshape_cmpq_duals_lambda(base.λstar, op, cmpq.ncore1)
-
-    contrib = zeros(op.W)
-    cm_pq_forward!(contrib, λ_L, λ_P, op, ctx_cm.cmpq_mass_state, cmpq.refIndex1)   # -= G_R*lambda_R
-    # ---- and the CM-grid block, which the standalone family has no analogue of ------------------
-    λmat_block = zeros(nO, Lcm); λmat_ext = zeros(nO, Lcm + 1); cm_contrib = zeros(op.W)
-    λ_cdf = cmpq.Pow === nothing ? λ_CM : (@view λ_CM[1:ncm_cdf])
-    apply_contrast!(λmat_block, reshape(λ_cdf, nO, Lcm), cmpq.R)
-    suffix_sums!(λmat_ext, λmat_block)
-    cumulative_forward_contribution!(cm_contrib, cmpq.Bidx, cmpq.refIndex1, cmpq.origins, λmat_ext)
-    contrib .-= cm_contrib
-    if cmpq.Pow !== nothing
-        λmat_block2 = zeros(nO, Lcm); λmat_ext2 = zeros(nO, Lcm + 1); cm_contrib2 = zeros(op.W)
-        λ_pow = @view λ_CM[ncm_cdf+1 : 2*ncm_cdf]
-        apply_contrast!(λmat_block2, reshape(λ_pow, nO, Lcm), cmpq.R)
-        suffix_sums!(λmat_ext2, λmat_block2)
-        cumulative_forward_contribution_pow!(cm_contrib2, cmpq.Bidx, cmpq.refIndex1, cmpq.origins,
-                                             λmat_ext2, cmpq.Pow)
-        contrib .-= cm_contrib2
-    end
-
+    contrib = zeros(ctx_cm.cmpq_ctx.op.W)
+    cmpq_restriction_q0_contribution!(contrib, ctx_cm, base)   # BOTH blocks; see that function
     q0_new = cache0.q0 .+ contrib
-    if verify !== nothing && hasproperty(verify, :r_current)
-        err = maximum(abs, q0_new .- verify.r_current)
-        err <= q0_check_tol ||
-            error("build_lfix_base_cache_cmpq: corrected q0 disagrees with the independently " *
-                  "recomputed r by max|diff|=$err (tol=$q0_check_tol). These are the same quantity " *
-                  "by two routes -- a mismatch means one of the TWO restriction folds (level+pair, " *
-                  "CM-grid) is missing or wrong, and every economic gradient built on it would be " *
-                  "silently wrong. Refusing to continue.")
-    end
+    cmpq_assert_q0_matches_r(q0_new, verify, q0_check_tol, "build_lfix_base_cache_cmpq")
     return with_q0(cache0, q0_new)
 end
 

@@ -52,7 +52,7 @@ for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl",
           "cm_pairwise_quantile_config.jl", "cm_pairwise_quantile_moments.jl",
           "cm_pairwise_quantile_hessian.jl", "cm_pairwise_quantile_hessian_assembly.jl",
           "cm_pairwise_quantile_lookup_kernels.jl", "cm_pairwise_quantile_production.jl",
-          "cm_pairwise_quantile_verification.jl", "cm_pairwise_quantile_outer_production.jl",
+          "cm_pairwise_quantile_verification.jl", "cm_pairwise_quantile_outer_production.jl", "cm_pairwise_quantile_cplus.jl",
           "cm_pairwise_quantile_checkpoint.jl"]
     include(joinpath(D4X, f))
 end
