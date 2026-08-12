@@ -315,6 +315,7 @@ family needs 16, and **4 at D=20/L=5** where the standalone family needs 80.
 | `test_cm_pairwise_quantile_outer_production.jl` | **20/20** (new) |
 | `test_cm_pairwise_quantile_driver_argguards.jl` | **34/34** (new) |
 | `test_cm_pairwise_quantile_campaign_smoke.jl` D=20 W=20k | **28/28** (new) |
+| `test_cm_pairwise_quantile_cplus_gate.jl` D=20 **W=100k** | **ALL PASS** (new), 5.36x |
 
 ---
 
@@ -429,8 +430,44 @@ argument-time path is the one gated above; the in-callback one remains as the ba
   session is actively working on.
 * **`protocols/paper_upper_v1.toml` was not edited.** It is frozen and governs completed campaigns;
   adding a sixth family retroactively is the user's call. The arm is a paste-ready fragment instead.
-* **No `:cplus` factorized economic-gradient adapter** for this family. The standalone family's is
-  worth 4.42x at real D=20/W=100k. This affects outer-loop wall-clock only, not any result.
+---
+
+### 8b.5 Backend C+ (factorized economic gradient) — **5.36x**
+
+`cm_pairwise_quantile_cplus.jl`, a near-verbatim port of the standalone family's adapter. The
+driver now takes `gradient_backend = :cplus | :dense`, defaulting to `:cplus`. Measured at **real
+D=20, W=100,000**, L=5/G=50/two families/orthonormal, three **interleaved** repetitions (dense,
+cplus, dense, cplus, …) so both arms pay the same load drift on a box at load 70+:
+
+| | dense | C+ | |
+|---|---:|---:|---|
+| min | 8.659 s | **1.616 s** | **5.36x** |
+| mean | 8.836 s | 1.836 s | |
+
+| check | measured |
+|---|---|
+| economic block, dense vs C+ | max abs **3.5e-16**, relative **1.6e-15** (standard: 1e-6) |
+| restriction tail | **bit-identical**, max\|diff\| = 0.0 |
+| `q0` vs independently recomputed `r` | 1.33e-14 in **both** paths |
+| dense `q0` vs C+ `q0` | 5.1e-15 |
+| **negative control**: C+ `q0` with only the level+pair fold | **1.634** (vs 1.33e-14 with both) |
+
+**Why the C+ decomposition argument survives this family's extra block.**
+`composite_gradient_at_Cplus_from_cache` requires only that the restriction term in `q_s(θ)` be
+constant across outer `(gp, A_od)` probes. Both blocks are: the level/pair rows are indicators of a
+campaign-constant bin assignment, and the CM-grid rows are indicators on CM's own fixed thresholds —
+including the eq.36 `Pow` weights, which depend on `σ` and `μHat`, both campaign constants and **not**
+free outer coordinates. So that shared function is reused **unmodified**, as in all five other
+adapters.
+
+**One refactor, and it matters more here than for any other family.** The `q0` fold is now a single
+function, `cmpq_restriction_q0_contribution!`, called by *both* cache builders, with its exact
+cross-check likewise shared. Every other family folds one restriction block; this one folds two, so
+"both paths fold both blocks" was precisely the invariant most likely to rot the next time someone
+edited one of them. The negative control above is what would catch it if it did.
+
+At ~7 s saved per gradient call and one gradient per outer KNITRO iteration, this is a real campaign
+win, not a micro-optimization.
 
 ---
 
@@ -445,9 +482,7 @@ and two optional improvements, not missing machinery:
    campaigns). Multistart seeds come from the existing generator — do **not** hand-invent starting
    points (memory `reference-multistart-seed-generator`), and note its `A_scale`/`gp_scale` are not
    tuned defaults: scan a small grid at your own `W`/`delta_max` first.
-2. **`:cplus` economic-gradient adapter** (optional). The standalone family's is worth 4.42x at
-   real D=20/W=100k. Outer wall-clock only; no result changes.
-3. **Inner-callback performance** (optional, and *not* on the critical path — the inner solve
+2. **Inner-callback performance** (optional, and *not* on the critical path — the inner solve
    already converges in 5 callbacks / 42 s at W=100k). The one target the production-scale profile
    identifies is `cmpq_H_ER` at 46.8%, which belongs to the **standalone** PQ family and needs its
    own gate against its own results.

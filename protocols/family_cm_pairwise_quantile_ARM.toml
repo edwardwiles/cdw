@@ -63,8 +63,9 @@ array so that each PQ bin is a union of CM grid cells. `:empirical_quantile` cut
 across origins and would not be CM grid points, so the superset identity fails and a shared mu is
 not even well defined.
 
-KNOWN GAP, quantified: this family has no `:cplus` factorized economic-gradient adapter (the
-standalone pairwise-quantile family's is worth 4.42x at real D=20/W=100k). The dense shared
-`economic_A_gradient!` path is used unconditionally. This affects OUTER-loop wall-clock only, not
-any result.
+The outer gradient uses Backend C+ (the factorized economic representation) by default. Measured at
+real D=20/W=100,000 over three INTERLEAVED repetitions: 8.659s -> 1.616s per gradient call, 5.36x,
+with the economic block agreeing with the dense reference to 3.5e-16 absolute and the restriction
+tail BIT-IDENTICAL. Add `gradient_backend = "dense"` to this kwargs block to fall back to the dense
+reference path; it is not a scientific parameter (same gradient, different representation).
 """
