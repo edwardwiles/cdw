@@ -163,6 +163,14 @@ if path === :unqualified
     exit(0)
 end
 
+# PQ_PROBE_ONLY=1 stops here, after the verdict is measured and written. This is what the campaign's
+# preflight uses to answer "how many seeds fall into each category under PQ" WITHOUT committing to
+# the ~24h of stages -- one inner solve per seed rather than 4 delta cells x 180 min.
+if get(ENV, "PQ_PROBE_ONLY", "0") != "0"
+    lp("PQ_PROBE_ONLY set -- verdict recorded, stages NOT run.")
+    exit(0)
+end
+
 "Run one delta cell: R0 (infeasible start, delta_1 only) -> A -> B -> C, each resuming from the last."
 function run_delta_cell(delta::Float64, is_first::Bool)
     tag = replace(string(delta), "." => "p")
