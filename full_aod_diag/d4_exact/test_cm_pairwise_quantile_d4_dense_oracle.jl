@@ -79,7 +79,8 @@ dpsi_scalar(x::Float64) = x <= 1.0 ? exp(x) : (exp(1) * x)
 for f in ["common_marginals_moments.jl", "common_marginals_interval.jl", "cm_lookup_kernels.jl",
           "pairwise_quantile_mass_transform.jl", "pairwise_quantile_bin_context.jl",
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
-          "cm_pairwise_quantile_config.jl", "cm_pairwise_quantile_moments.jl"]
+          "cm_pairwise_quantile_config.jl", "cm_pairwise_quantile_moments.jl",
+          "cm_pairwise_quantile_hessian.jl"]
     include(joinpath(D4X, f))
 end
 
@@ -417,6 +418,94 @@ function run_case(; D::Int, W::Int, L::Int, G::Int, n_families::Int, seed::Int,
     else
         println("  SKIP  9a/9c index-slip control: L=$L gives one free bin, so mu[a] and mu[b] are " *
                 "the same coordinate and the index slip is not a distinguishable error")
+    end
+
+    # ============================================================================================
+    # CHECK 10-12 -- THE HESSIAN.
+    # `r` is LINEAR in the inner variables, so the exact inner Hessian is the weighted Gram matrix
+    # `H = (1/W) M' diag(h) M` with `M = [1 | E | G_R | G_CM]` and `h_w = Psi''(r_w)`. That gives a
+    # dense reference for the restriction-side blocks with no derivative approximation at all: it is
+    # the SAME identity the production code exploits, evaluated the slow, obvious way.
+    # (Economic blocks are out of scope here, exactly as the standalone family's oracle scopes them
+    # out -- they are the shared, separately-gated winner-pair backend.)
+    # ============================================================================================
+    ddpsi_scalar(x::Float64) = x <= 1.0 ? exp(x) : exp(1)
+    r0 = copy(fwd_dense) .+ 0.3
+    h = ddpsi_scalar.(r0)
+
+    # ---- H_RR via the standalone family's machinery at a REPLICATED shared mu, then extracted ----
+    npq = n_total_rows(D, L)
+    nrow = n_cmpq_restr_rows(D, L)
+    pq_state = PairwiseQuantileMassState(D, L)
+    cmpq_replicate_shared_mu!(pq_state, state)
+    check("10a replicated mu equals the shared mu in every origin row",
+          all(pq_state.mu[o, a] == state.mu[a] for o in 1:D, a in 1:nc))
+    tabs_pq = PairwiseQuantileHessianTables(op)
+    build_pairwise_quantile_hessian_tables!(tabs_pq, op, h, tls)
+    HRR_pq = zeros(npq, npq)
+    fill_pairwise_quantile_hessian_raw!(HRR_pq, op, tabs_pq)
+    center_and_scale_pairwise_quantile_hessian!(HRR_pq, op, pq_state, tabs_pq)
+    HRR = zeros(nrow, nrow)
+    extract_cmpq_HRR!(HRR, HRR_pq, D, L, ref)
+    HRR_ref = (G_R' * (h .* G_R)) ./ W
+    worst = 0.0
+    for J in 1:nrow, I in J:nrow
+        worst = max(worst, abs(HRR[I, J] - HRR_ref[I, J]))
+    end
+    scale = maximum(abs, HRR_ref)
+    check("10b H_RR (PQ machinery @ replicated mu, extracted) == (1/W) G_R' diag(h) G_R",
+          worst / scale < 1e-10, @sprintf("max abs %.3e (scale %.3e)", worst, scale))
+
+    # ---- H_R,CM: the genuinely NEW block ---------------------------------------------------------
+    tabs_x = CMPQCrossHessTables(D, npair, L, Lcm + 1; n_families = n_families)
+    Pow_here = n_families == 2 ? frechet_power_feature(U, sigmaHat - 1, muHat) : nothing
+    build_cmpq_cross_hess_tables!(tabs_x, op, Bidx, h, ref; Pow = Pow_here)
+    HRC = zeros(nrow, ncm)
+    fill_cmpq_cm_cross_block!(HRC, op, state, tabs_x, origins, ref, Lcm, R, W)
+    HRC_ref = (G_R' * (h .* CMd)) ./ W
+    e11 = maximum(abs, HRC .- HRC_ref) / max(1e-300, maximum(abs, HRC_ref))
+    check("11  H_R,CM (NEW mixed-resolution block) == (1/W) G_R' diag(h) G_CM",
+          e11 < 1e-10, @sprintf("max rel %.3e", e11))
+    # Split the report by row family and by CM feature family, so a failure localizes immediately
+    # instead of collapsing to one number.
+    e11a = maximum(abs, HRC[1:nc, :] .- HRC_ref[1:nc, :]) / max(1e-300, maximum(abs, HRC_ref[1:nc, :]))
+    e11b = maximum(abs, HRC[nc+1:end, :] .- HRC_ref[nc+1:end, :]) /
+           max(1e-300, maximum(abs, HRC_ref[nc+1:end, :]))
+    check("11a   ...level rows x CM", e11a < 1e-10, @sprintf("max rel %.3e", e11a))
+    check("11b   ...pair rows x CM", e11b < 1e-10, @sprintf("max rel %.3e", e11b))
+    if n_families == 2
+        ncm_cdf = nO * Lcm
+        e11c = maximum(abs, HRC[:, 1:ncm_cdf] .- HRC_ref[:, 1:ncm_cdf]) /
+               max(1e-300, maximum(abs, HRC_ref[:, 1:ncm_cdf]))
+        e11d = maximum(abs, HRC[:, ncm_cdf+1:end] .- HRC_ref[:, ncm_cdf+1:end]) /
+               max(1e-300, maximum(abs, HRC_ref[:, ncm_cdf+1:end]))
+        check("11c   ...eq.35 CM columns", e11c < 1e-10, @sprintf("max rel %.3e", e11c))
+        check("11d   ...eq.36 CM columns (reflected 1{U>c} read)", e11d < 1e-10, @sprintf("max rel %.3e", e11d))
+    end
+
+    # ---- CHECK 12: a NEGATIVE CONTROL on the new block's mixed-resolution read -------------------
+    # The natural error is to read the CM axis at PQ resolution -- i.e. to use the PQ-bin-level table
+    # where the CM-cell-level one is needed, which is the same thing as evaluating the CM cumulative
+    # indicator at the wrong threshold. Emulate it by reading the CM axis one grid level off; that
+    # must disagree, or the check above is not actually testing the CM axis at all.
+    if Lcm >= 2
+        HRC_wrong = zeros(nrow, ncm)
+        Xs = tabs_x.X; Ys = tabs_x.Y; Hs = tabs_x.Hcm
+        for l in 1:Lcm
+            lw = min(l + 1, Lcm)      # off-by-one on the CM threshold axis
+            for oi in 1:nO
+                o = origins[oi]
+                rcm = Hs[o, lw] - Hs[ref, lw]
+                for a in 1:nc
+                    HRC_wrong[cmpq_level_row(a), (l-1)*nO+oi] =
+                        ((Ys[lw, a, o] - Ys[lw, a, ref]) - state.mu[a] * rcm) / W
+                end
+            end
+        end
+        dev = maximum(abs, HRC_wrong[1:nc, 1:nO*Lcm] .- HRC_ref[1:nc, 1:nO*Lcm]) /
+              max(1e-300, maximum(abs, HRC_ref[1:nc, 1:nO*Lcm]))
+        check("12  NEGATIVE CONTROL fires: reading the CM axis one level off disagrees",
+              dev > 1e-3, @sprintf("max rel %.3e (want >> 0)", dev))
     end
     return nothing
 end
