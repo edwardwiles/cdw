@@ -68,7 +68,9 @@
 #   cm_checkpoint.jl              (meanzc_profiled_nu_value)
 #   oracle.jl                     (classify_inner_result, is_verified_success, sha256_of_matrix)
 #   country_resolve.jl            (default_gravity_exclude_cells_brazil_korea)
-#   nested_quantile_grids.jl      (nested_grid_sequence)
+#   common_marginals_moments.jl   (cm_equal_mass_probs -- THE production CM grid since 2026-08-12;
+#                                   `nested_quantile_grids.jl`/`nested_grid_sequence` is NO LONGER a
+#                                   dependency of this file, see `resolve_cm_probs`)
 #   compressed_factual_buffer_reuse.jl (attach_compressed_factual_workspace -- REQUIRED once per
 #                                   ctx, before any real family evaluation; see generate_multistart_seeds)
 #   fast_range_screen.jl          (build_ranged_screen_context, evaluate_fullA_screened_ranged --
@@ -97,7 +99,7 @@ for _dep in (:build_pivot_elimination, :cm_w0_from_calibration, :OriginByPowerLa
              :build_raw_mean_pair_matrix_levels, :solve_base_state,
              :originzc_profiled_nu_value, :meanzc_profiled_nu_value, :classify_inner_result,
              :is_verified_success, :sha256_of_matrix, :default_gravity_exclude_cells_brazil_korea,
-             :nested_grid_sequence, :attach_compressed_factual_workspace, :CS,
+             :cm_equal_mass_probs, :attach_compressed_factual_workspace, :CS,
              # paper_upper_v1 extension (2026-08-08): :unrestricted / :cm_only family kinds, added
              # so this SAME reusable generator can qualify seeds against the plain (no-ZC)
              # Unrestricted and Common-Marginals families too, not just the three ZC-flavor kinds
@@ -139,6 +141,11 @@ struct FamilySeedSpec
     kind::Symbol                 # :origin_zc | :cm_zc | :common_frechet | :unrestricted | :cm_only | :pairwise_quantile
     K_mean::Int
     K_pair::Int
+    # For the CM-flavored kinds (:cm_zc / :common_frechet / :cm_only) `L` is the CM grid size in
+    # equal-mass BUCKETS (2026-08-12): `L = 50` means 50 buckets of mass 1/50, whose grid
+    # (`probs`, below) therefore has `L-1 = 49` cutpoints. The CM builders' own `L` kwarg counts
+    # LEVELS, so `build_family` passes `cm_n_levels(spec) = length(spec.probs)`, never `spec.L`.
+    # For :pairwise_quantile, `L` is quantile BINS per origin and has no CM-grid meaning at all.
     L::Int
     contrasts::Symbol
     probs::Union{Nothing,Vector{Float64}}
@@ -166,17 +173,57 @@ end
 """
     resolve_cm_probs(L) -> Vector{Float64}
 
-Resolves the L-grid cutpoints the SAME way the real production campaign runner does
-(`campaign_cm_family_runner.jl`: `nested_grid_sequence([10,20,50])[CM_L]`), not the weaker
-`cm_equal_grid_probs(L)` equal-spacing default some prior scratch scripts silently fell back to.
-Falls back to the plain equal-spacing grid only for `L` values outside the validated nested
-family `{10,20,50}` (documented, not silent).
+Resolves a CM family's declared grid size `L` -- **a number of equal-mass BUCKETS** -- to its
+`L-1` closed-form probability cutpoints, `cm_equal_mass_probs(L)` (common_marginals_moments.jl).
+Uniform in `L`: no special-cased set of "validated" sizes, no fallback branch.
+
+**CHANGED 2026-08-12 (user-directed, scientific -- not a refactor).** This previously returned
+`nested_grid_sequence([10,20,50])[L]` for `L in {10,20,50}` and `range(1/L,(L-1)/L,length=L)`
+otherwise. Neither is an equal-mass grid, and the two disagreed with each other, so the same
+nominal `L` meant a different restriction depending on its value:
+
+| `L` | old grid | old buckets | old bucket masses |
+|-----|----------|-------------|-------------------|
+| 50  | dyadic largest-gap bisection | 51 | only 0.015625 or 0.03125 |
+| 37  | `range(1/37,36/37,length=37)` | 38 | ~0.0263 except the two ends |
+| now | `k/L`, `k=1..L-1`            | `L` | exactly `1/L`, every bucket |
+
+The user's specification is "`L = 50` means 50 equally sized buckets, quantiles in closed form from
+the Fréchet CDF, no empirical quantiles anywhere" -- which is the third row.
+
+**The return has length `L-1`, not `L`.** `p=1` is excluded on purpose (structurally zero moment
+column / singular KKT -- see `cm_equal_mass_probs`' own docstring for the buckets-vs-levels split).
+So a caller pairing this with a CM builder's `L` kwarg -- which counts LEVELS -- must pass
+`length(probs)`, NOT the bucket count it handed to this function. `build_family` below does exactly
+that via `cm_n_levels`; `precalc_common_marginals_cdf`'s own `length(probs) == L` assertion catches
+any site that forgets.
+
+**Nesting trade-off, disclosed.** The dyadic grid's reason to exist was genuine nesting across
+`L in {10,20,50}` (`nested_quantile_grids.jl`, Continuation 13 §6 -- so that a kappa(L) comparison
+reads as "more restrictions -> weakly lower kappa"). Equal-mass grids nest only when the sizes
+divide: `Q_10 subset Q_20` and `Q_10 subset Q_50` still hold, `Q_20 subset Q_50` does NOT (20 does
+not divide 50). Nothing on the live production path depends on it -- `paper_upper_v1` runs `L=50`
+only, and the multi-L users (`c13_d20_cm_upper_continuation.jl`, `cm_production_stage_runner.jl`'s
+`:nested_family` rule) call `nested_grid_sequence` directly and are untouched by this change. A
+fully-nested equal-mass ladder is available by choosing sizes that divide (e.g. `{10,50}`).
 """
-function resolve_cm_probs(L::Int)
-    if L in (10, 20, 50)
-        return nested_grid_sequence([10, 20, 50])[L]
-    end
-    return collect(range(1 / L, (L - 1) / L, length = L))
+resolve_cm_probs(L::Int) = cm_equal_mass_probs(L)
+
+"""
+    cm_n_levels(spec::FamilySeedSpec) -> Int
+
+Number of CM moment LEVELS `spec`'s grid actually has: `length(spec.probs)`, which is the single
+authority. **NOT `spec.L`** -- that field is the family's declared grid size in equal-mass BUCKETS
+(`L = 50` means 50 buckets), and an `L`-bucket grid has `L-1` interior cutpoints. Deriving from the
+grid itself rather than from `L-1` also keeps a caller who passes an explicit non-equal-mass `probs`
+(e.g. the legacy `nested_grid_sequence` grid, whose length IS `L`) working unchanged.
+"""
+function cm_n_levels(spec::FamilySeedSpec)
+    spec.probs === nothing &&
+        error("cm_n_levels($(spec.id)): CM-family kind :$(spec.kind) requires an explicit probs " *
+              "grid on the spec -- the number of CM moment levels is length(probs), and there is " *
+              "no defaulting of a scientific parameter here (CLAUDE.md).")
+    return length(spec.probs)
 end
 
 function origin_zc_family_spec(id::Symbol; K_mean::Int, K_pair::Int)
@@ -555,7 +602,9 @@ function build_family(ctx, spec::FamilySeedSpec)
         layout = SharedByPowerLayout(spec.K_mean, spec.K_pair)
         kstar = profiled_level_for(ctx, spec.K_mean)
         aml = kstar === nothing ? nothing : ActiveMeanLayout(layout, ctx.bi, kstar, ctx.D)
-        pcx = build_cm_meanzc_production_context(ctx, CS; L = spec.L, K_mean = spec.K_mean, K_pair = spec.K_pair,
+        # `L = cm_n_levels(spec)`, NOT `spec.L`: `spec.L` is the declared grid size in equal-mass
+        # BUCKETS, the CM builders' `L` counts LEVELS, and the two differ by one (2026-08-12).
+        pcx = build_cm_meanzc_production_context(ctx, CS; L = cm_n_levels(spec), K_mean = spec.K_mean, K_pair = spec.K_pair,
             include_truncated_moment = spec.include_truncated_moment, contrasts = spec.contrasts,
             meanzc_basis = spec.meanzc_basis, probs = spec.probs, moment_representation = :operator, aml = aml)
         return FamilyBuild(spec, pcx, layout, aml)
@@ -565,7 +614,8 @@ function build_family(ctx, spec::FamilySeedSpec)
         # hard-errors otherwise ("needs a real CMBinHessCtx") -- confirmed live 2026-08-08 at real
         # D20/W=20000. Matches the real campaign runner's own cm_hessian_backend=:structured
         # convention for every CM-family builder call.
-        pcx = build_cm_frechet_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
+        # `L = cm_n_levels(spec)` -- buckets vs levels, see the :cm_zc branch above.
+        pcx = build_cm_frechet_production_context(ctx, CS; L = cm_n_levels(spec), include_truncated_moment = spec.include_truncated_moment,
             contrasts = spec.contrasts, probs = spec.probs, cm_hessian_backend = :structured, moment_representation = :operator)
         return FamilyBuild(spec, pcx, nothing, nothing)
     elseif spec.kind == :pairwise_quantile
@@ -584,7 +634,8 @@ function build_family(ctx, spec::FamilySeedSpec)
     elseif spec.kind == :cm_only
         # Exactly companion_implied_nu_cmzc's own companion-builder call (section 8 above), just
         # evaluated here as ITS OWN family rather than as an internal nu-lift step.
-        pcx0 = build_cm_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
+        # `L = cm_n_levels(spec)` -- buckets vs levels, see the :cm_zc branch above.
+        pcx0 = build_cm_production_context(ctx, CS; L = cm_n_levels(spec), include_truncated_moment = spec.include_truncated_moment,
             contrasts = spec.contrasts, probs = spec.probs, moment_representation = :operator)
         return FamilyBuild(spec, pcx0, nothing, nothing)
     else
@@ -639,7 +690,10 @@ function companion_implied_nu_cmzc(ctx, x_free::AbstractVector{Float64}, spec::F
     K_mean = spec.K_mean
     D = ctx.D
     Zraw_all, _ = build_raw_mean_pair_matrix_levels(ctx.U, K_mean, 0; μ = ctx.μHat)
-    pcx0 = build_cm_production_context(ctx, CS; L = spec.L, include_truncated_moment = spec.include_truncated_moment,
+    # `L = cm_n_levels(spec)` -- buckets vs levels (2026-08-12). This companion MUST be built on the
+    # same grid as the CM+ZC family it lifts nu for, so it reads the identical spec field the
+    # `:cm_zc` branch of `build_family` does.
+    pcx0 = build_cm_production_context(ctx, CS; L = cm_n_levels(spec), include_truncated_moment = spec.include_truncated_moment,
         contrasts = spec.contrasts, probs = spec.probs, moment_representation = :operator)
     _, base, verify = cm_production_value_verified_screened(collect(x_free), pcx0; eval_id = eval_id)
     is_verified_success(verify) || throw(CMExpectedSolveFailure(

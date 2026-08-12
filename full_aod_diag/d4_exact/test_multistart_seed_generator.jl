@@ -110,22 +110,45 @@ end
     @test isapprox(d2.combined_standardized_distance, sqrt(d2.rms_A_distance^2 + d2.gp_distance^2); atol = 1e-12)
 end
 
-@testset "resolve_cm_probs: matches production nested-grid convention at validated L, not equal-spacing" begin
-    p50 = resolve_cm_probs(50)
-    @test length(p50) == 50
-    @test issorted(p50)
-    @test p50 == nested_grid_sequence([10, 20, 50])[50]
-    equal50 = collect(range(1 / 50, 49 / 50, length = 50))
-    @test p50 != equal50   # confirms this is genuinely the nested grid, not the equal-spacing fallback
-    p37 = resolve_cm_probs(37)   # outside the validated {10,20,50} family -> documented equal-spacing fallback
-    @test p37 == collect(range(1 / 37, 36 / 37, length = 37))
+# 2026-08-12 (user-directed, scientific): `resolve_cm_probs` now resolves L to L EQUAL-MASS buckets.
+# This testset previously asserted the OPPOSITE convention (that it returns the dyadic
+# `nested_grid_sequence([10,20,50])[L]` at L in {10,20,50} and the `range(1/L,(L-1)/L,length=L)`
+# equal-SPACING grid elsewhere) -- it is rewritten, not deleted, because the old assertions were a
+# correct description of the old behavior and the new ones must be an equally sharp description of
+# the new one, including explicit negative controls against both grids it replaced.
+@testset "resolve_cm_probs: L equal-mass buckets, L-1 closed-form cutpoints, uniform in L" begin
+    for L in (10, 20, 37, 50)
+        p = resolve_cm_probs(L)
+        @test length(p) == L - 1              # BUCKETS in, LEVELS out -- p=1 excluded
+        @test issorted(p)
+        @test p == collect((1:(L - 1)) ./ L)
+        # every bucket has mass exactly 1/L, including the two end buckets
+        masses = [p[1]; diff(p); 1 - p[end]]
+        @test length(masses) == L
+        @test all(m -> isapprox(m, 1 / L; atol = 1e-12), masses)
+        @test 0.0 < p[1] && p[end] < 1.0      # neither degenerate endpoint is a cutpoint
+        # p -> 1-p symmetry: theoretical_u_threshold's derivation relies on it (see its docstring)
+        @test Set(round.(1 .- p, digits = 12)) == Set(round.(p, digits = 12))
+    end
+    # NEGATIVE CONTROLS: it is neither of the two grids it replaced.
+    @test resolve_cm_probs(50) != nested_grid_sequence([10, 20, 50])[50]      # not the dyadic grid
+    @test resolve_cm_probs(50) != collect(range(1 / 50, 49 / 50, length = 50))  # not equal-SPACING
+    @test resolve_cm_probs(37) != collect(range(1 / 37, 36 / 37, length = 37))  # no fallback branch left
+    # The dyadic grid's buckets really are unequal (this is what the change fixes), measured not asserted:
+    g = nested_grid_sequence([10, 20, 50])[50]
+    @test sort(unique(round.([g[1]; diff(g); 1 - g[end]], digits = 10))) == [0.015625, 0.03125]
+    # L=1 imposes nothing and must hard-error rather than return an empty grid.
+    @test_throws ErrorException resolve_cm_probs(1)
 end
 
 @testset "FamilySeedSpec constructors + production_five_family_seed_specs shape" begin
     s1 = origin_zc_family_spec(:U_MEAN3; K_mean = 3, K_pair = 0)
     @test s1.kind == :origin_zc && s1.K_mean == 3 && s1.K_pair == 0
     s2 = cm_zc_family_spec(:CM_MEAN3; K_mean = 3, K_pair = 0, L = 50)
-    @test s2.kind == :cm_zc && s2.L == 50 && s2.probs !== nothing && length(s2.probs) == 50
+    # spec.L is the grid size in equal-mass BUCKETS; the grid it carries has L-1 cutpoints, and
+    # cm_n_levels(spec) -- what build_family passes as the CM builders' `L` -- is that level count.
+    @test s2.kind == :cm_zc && s2.L == 50 && s2.probs !== nothing && length(s2.probs) == 49
+    @test cm_n_levels(s2) == 49
     s3 = common_frechet_family_spec(:COMMON_FRECHET; L = 50)
     @test s3.kind == :common_frechet
 end
@@ -134,7 +157,8 @@ end
     su = unrestricted_family_spec(:UNRESTRICTED)
     @test su.kind == :unrestricted
     sc = cm_only_family_spec(:COMMON_MARGINALS; L = 50)
-    @test sc.kind == :cm_only && sc.L == 50 && sc.probs !== nothing && length(sc.probs) == 50
+    @test sc.kind == :cm_only && sc.L == 50 && sc.probs !== nothing && length(sc.probs) == 49
+    @test cm_n_levels(sc) == 49
 end
 
 @testset "json_scalar / csv-safe encoding: escapes and round-trips the shapes this file emits" begin

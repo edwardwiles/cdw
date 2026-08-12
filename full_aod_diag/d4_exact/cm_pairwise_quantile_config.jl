@@ -48,6 +48,17 @@
 #   not on the grid). Measured: all four of L in {2,5,10,25} FAIL the superset test on the default
 #   grid, and all four PASS on an explicit k/50 grid.
 #
+# UPDATE 2026-08-12 (same day, later): the CM PRODUCTION path has since moved to this exact grid --
+# `resolve_cm_probs(L)` now returns `cm_equal_mass_probs(L) == (1:(L-1))./L`, so `cm_pq_probs_grid(G)`
+# and `cm_equal_mass_probs(G)` are now numerically IDENTICAL. They are deliberately NOT unified into
+# one call: this family must keep passing its own grid explicitly, both because its `L` (PQ bins) and
+# its `G` (CM grid) are different numbers -- so `resolve_cm_probs(spec.L)` would be the wrong grid
+# derived from the wrong quantity -- and because the superset condition `L | G` is load-bearing here
+# and must not silently follow whatever CM's production grid does next. `family_start_chain.jl`'s
+# NO_PROBS_DRIVERS exemption exists for exactly this reason and still applies. What DID change is
+# that CM's default is no longer a trap for this family; the paragraph above is kept because the
+# measurement it records is what motivated building the grid explicitly in the first place.
+#
 # So this family does not rely on CM's default. It builds CM on the EXPLICIT k/G grid
 # `probs = (1:(G-1))/G` via `precalc_common_marginals_cdf`'s already-existing `probs=` kwarg (the
 # same mechanism `nested_quantile_grids.jl` uses -- no new machinery, and no change to CM required

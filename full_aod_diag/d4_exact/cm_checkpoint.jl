@@ -1027,6 +1027,21 @@ function run_cm_upper_checkpointed(w0::Union{Nothing,Vector{Float64}} = nothing;
     ckpt_dir = abspath(ckpt_dir)
     mkpath(ckpt_dir)
 
+    # 2026-08-12 equal-mass-grid task: this driver's `L` is a number of CM moment LEVELS, and must
+    # equal `length(probs)` whenever an explicit grid is supplied. `precalc_common_marginals_cdf`
+    # already asserts this, but only several layers down and with a message that does not say WHY
+    # the two can disagree -- so state it here, at the boundary a caller actually controls. The way
+    # to get this wrong since the equal-mass change is to pass the CONFIG-level grid size (a number
+    # of equal-mass BUCKETS, e.g. `L = 50` from a protocol manifest) together with that grid's
+    # `L-1 = 49` cutpoints; `paper_upper_v1_orchestrator/family_start_chain.jl::fam_kwargs()` does
+    # the buckets->levels translation for the production path. See `cm_equal_mass_probs`
+    # (common_marginals_moments.jl) for the full buckets-vs-levels split.
+    (probs === nothing || length(probs) == L) ||
+        error("run_cm_upper_checkpointed($label): L=$L but length(probs)=$(length(probs)) -- this " *
+              "driver's L counts CM moment LEVELS, which must equal the number of cutpoints in " *
+              "`probs`. If L came from a config surface it is a number of equal-mass BUCKETS, and " *
+              "an L-bucket grid has L-1 levels (p=1 is excluded: it is a structurally zero moment " *
+              "column, hence a singular KKT). Pass L=length(probs).")
     cm_gradient_backend in (:reference, :cplus) ||
         error("run_cm_upper_checkpointed($label): cm_gradient_backend must be :reference|:cplus, got :$cm_gradient_backend")
     destination_sample in (:exclude_row, :all_legacy) ||

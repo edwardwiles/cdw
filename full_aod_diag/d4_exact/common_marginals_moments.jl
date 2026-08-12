@@ -51,6 +51,49 @@ n_cm_moments(D::Int, L::Int; include_truncated_moment::Bool) =
     include_truncated_moment ? 2 * (D - 1) * L : (D - 1) * L
 
 """
+    cm_equal_mass_probs(n_buckets::Int) -> Vector{Float64}
+
+**THE production CM probability grid, 2026-08-12 (user-directed).** `n_buckets` equal-mass buckets
+of the reference Fréchet marginal, i.e. the cutpoints `k/n_buckets` for `k = 1..n_buckets-1`. Every
+bucket has mass EXACTLY `1/n_buckets` (closed form; no empirical quantile anywhere -- these
+probability levels are turned into `U`-space cutoffs by `theoretical_u_threshold` below, which is
+the exact Fréchet/Exp(1) quantile).
+
+**BUCKETS vs LEVELS -- the one thing to get right about this function.** It returns
+`n_buckets - 1` numbers, not `n_buckets`. "L = 50" means 50 equally sized buckets, which need 49
+interior cutpoints. `p = 1` is NOT one of them and must never be added to make the count come out
+at `L`: its CDF contrast `1{U_o <= Inf} - 1{U_ref <= Inf}` is identically zero, i.e. a structurally
+ZERO moment column and hence a singular KKT -- not merely an uninformative row. (`p = 0` is
+degenerate the same way, from the other end.) Consequently:
+
+  * every CM *config* surface (`protocols/*.toml`'s `L`, `FamilySeedSpec.L`, `CMConfig.cm_grid_size`)
+    states a number of BUCKETS, and
+  * every CM *core* function's `L` argument (`precalc_common_marginals_cdf` and everything it feeds
+    -- bin tables, Hessian architecture, `n_cm_moments`) is a number of LEVELS,
+
+so the config->core translation is `n_levels = length(probs)`, which is the single authority and is
+already enforced by `precalc_common_marginals_cdf`'s own `length(probs) == L` assertion. Family #7
+(CM+PQ) reached the same shape independently and for the same reason -- see
+`cm_pairwise_quantile_config.jl`'s "WHY G-1 LEVELS AND NOT G" block, whose `cm_pq_probs_grid(G)` is
+this exact grid.
+
+**What this replaced.** Until 2026-08-12 the production campaign injected
+`nested_grid_sequence([10,20,50])[L]` (`resolve_cm_probs`, multistart_seed_generator.jl): `L`
+levels, hence `L+1` buckets, of DYADIC mass -- measured at L=50, 51 buckets whose masses are only
+ever 0.015625 or 0.03125, never 0.02. CM's own bare default (`probs === nothing`,
+`cm_equal_grid_probs`) is a third grid again: `L` levels evenly spaced over `[1/L, (L-1)/L]`, so
+spacing 0.0195918 at L=50, also not equal-mass. Neither is what "L equally sized buckets" means, and
+this function is now what the production path resolves to. See
+`docs/CM_EQUAL_MASS_GRID_2026-08-12.md` for the change record and the before/after Δ*.
+"""
+function cm_equal_mass_probs(n_buckets::Int)
+    n_buckets >= 2 ||
+        error("cm_equal_mass_probs: n_buckets must be >= 2 (a 1-bucket grid has no interior " *
+              "cutpoint and imposes no restriction at all), got $n_buckets")
+    return collect((1:(n_buckets - 1)) ./ n_buckets)
+end
+
+"""
     theoretical_u_threshold(p::Real) -> Float64
 
 2026-08-05 (user-directed): the CLOSED-FORM (not Monte-Carlo/order-statistic-estimated) `U`-space
@@ -75,7 +118,10 @@ Derivation (`T=1`, the confirmed convention -- see `frechet_productivity_from_ex
     statement -- no inequality-direction rewrite needed anywhere downstream.
   - Grid-symmetry check: this codebase's own equal-probability grid
     (`range(1/L,(L-1)/L,length=L)`) is symmetric under `p -> 1-p` (i.e. `{1-probs[l]} ==
-    {probs[L+1-l]}` as a SET), so evaluating `theoretical_u_threshold` AT the grid's own `probs`
+    {probs[L+1-l]}` as a SET) -- and so, re-checked 2026-08-12, is the equal-mass production grid
+    that replaced it on the production path (`cm_equal_mass_probs`: `1 - k/L = (L-k)/L`, and
+    `k = 1..L-1 <-> L-k = 1..L-1` is a bijection of the grid onto itself), so this whole derivation
+    carries over to it unchanged. Evaluating `theoretical_u_threshold` AT the grid's own `probs`
     values (rather than at `1 .- probs`) tests the exact same SET of L Fréchet-quantile levels,
     just re-indexed -- and, conveniently, `-log.(1 .- probs)` is monotonically INCREASING in
     `probs` (required: the bin-index architecture needs `z` sorted ascending), which is exactly

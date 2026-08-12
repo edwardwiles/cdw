@@ -53,6 +53,9 @@ lp("gp_cal = ", gp_cal)
 TMP = mktempdir()
 lp("scratch ckpt_dir = ", TMP)
 
+const CM_GRID_BUCKETS = 50
+const CM_PROBS_L50 = resolve_cm_probs(CM_GRID_BUCKETS)
+
 results = Dict{Symbol,Any}()
 
 # ---- 1. CM-only (plain flexible CM, cm_extension=:cm_only) at objective_mode=:min_delta_fixed_gp ----
@@ -60,8 +63,10 @@ lp("="^100); lp("TEST 1: run_cm_upper_checkpointed, cm_extension=:cm_only, objec
 ckpt1 = joinpath(TMP, "cm_only_mindelta")
 r1 = try
     run_cm_upper_checkpointed(copy(w_cal_econ); find_smallest = true, W = W_SMOKE, delta = 0.1,
-        draw_design = :sobol_randomized, draw_seed = 20260719, L = 50, contrasts = :orthonormal,
-        probs = resolve_cm_probs(50),
+        # CM grid: 50 equal-mass BUCKETS -> 49 LEVELS. `L` here is the driver's level count, so it
+        # is derived from the grid rather than restated (2026-08-12, cm_equal_mass_probs).
+        draw_design = :sobol_randomized, draw_seed = 20260719, L = length(CM_PROBS_L50), contrasts = :orthonormal,
+        probs = CM_PROBS_L50,
         marginal_restriction = :common_flexible, cm_extension = :cm_only,
         include_truncated_moment = false, inner_lower_limit = -10.0,
         gp_fixed = gp_cal, objective_mode = :min_delta_fixed_gp,
@@ -81,8 +86,10 @@ lp("="^100); lp("TEST 2: run_cm_upper_checkpointed, cm_extension=:cm_only, objec
 ckpt2 = joinpath(TMP, "cm_only_mingp")
 r2 = try
     run_cm_upper_checkpointed(copy(w_cal_econ); find_smallest = true, W = W_SMOKE, delta = 3.0,
-        draw_design = :sobol_randomized, draw_seed = 20260719, L = 50, contrasts = :orthonormal,
-        probs = resolve_cm_probs(50),
+        # CM grid: 50 equal-mass BUCKETS -> 49 LEVELS. `L` here is the driver's level count, so it
+        # is derived from the grid rather than restated (2026-08-12, cm_equal_mass_probs).
+        draw_design = :sobol_randomized, draw_seed = 20260719, L = length(CM_PROBS_L50), contrasts = :orthonormal,
+        probs = CM_PROBS_L50,
         marginal_restriction = :common_flexible, cm_extension = :cm_only,
         include_truncated_moment = false, inner_lower_limit = -10.0,
         maxtime_real = 45.0, ckpt_dir = ckpt2, label = "smoke_cmonly_mingp", checkpoint_interval_s = 20.0,

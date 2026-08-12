@@ -113,6 +113,24 @@ approximately-equal-probability cutpoints, `range(1/L, (L-1)/L, length=L)`.
 Identical to `precalc_common_marginals_cdf`'s own pre-existing `probs===nothing`
 default (verified: this function is only ever used to make that convention an
 explicit, callable, documented artifact -- not a new convention).
+
+⚠️ **THIS IS NOT THE EQUAL-MASS GRID, AND IT IS NOT THE PRODUCTION GRID (2026-08-12).**
+"approximately-equal-probability" above is literal: `range(1/L,(L-1)/L,length=L)` is
+`L` levels with spacing `(L-2)/(L(L-1))`, which is 0.0195918 at `L=50`, NOT 0.02 --
+so the `L+1` buckets it induces are not equal-mass, and no `L` divides its spacing
+(memory `cm-default-grid-is-not-k-over-g`). The production CM/CM+ZC/Common-Fréchet
+grid is `cm_equal_mass_probs(L)` (common_marginals_moments.jl): `k/L` for `k=1..L-1`,
+`L` buckets of mass exactly `1/L`, reached via `resolve_cm_probs`.
+
+This function is kept UNCHANGED on purpose. It is paired with a matching `L = L`
+by ~40 historical diagnostic/benchmark scripts (`probs = cm_equal_grid_probs(L)`
+then `build_cm_production_context(...; L = L, probs = probs)`), whose internal
+comparisons are self-consistent under it; and `CMConfig`'s `:equal` rule, its only
+non-script caller, drives benchmark harnesses (`c14_*`, `matched_outer_benchmark_cm_*`),
+not the live campaign — `run_cm_upper_checkpointed` takes `probs` explicitly and treats
+`cm_grid_rule` as checkpoint metadata only. Changing it would silently redefine those
+runs' restriction while fixing nothing on the production path. Use `cm_equal_mass_probs`
+for anything new.
 """
 cm_equal_grid_probs(L::Int) = collect(range(1 / L, (L - 1) / L, length = L))
 

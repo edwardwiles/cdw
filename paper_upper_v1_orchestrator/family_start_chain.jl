@@ -139,8 +139,22 @@ function fam_kwargs()
     #       NO L divides it -- memory `cm-default-grid-is-not-k-over-g`). Injecting
     #       `resolve_cm_probs(kw.L)` here would therefore be wrong twice over: wrong grid, derived
     #       from the wrong L.
+    #
+    # BUCKETS -> LEVELS, the one translation in this file (2026-08-12). The manifest's `L` is the
+    # CM grid size in equal-mass BUCKETS -- `L = 50` means 50 buckets of mass exactly 1/50 -- and
+    # `resolve_cm_probs` returns that grid's `L-1` interior cutpoints (`p=1` excluded: structurally
+    # zero moment column, singular KKT; see `cm_equal_mass_probs`). Every CM driver/builder below
+    # this line counts LEVELS in its own `L` kwarg, so `L` is overwritten with `length(probs)`
+    # here, once, and the invariant `L == length(probs)` then holds everywhere downstream (it is
+    # independently enforced by `precalc_common_marginals_cdf` and by `run_cm_upper_checkpointed`'s
+    # own top-of-function check). Consequence, disclosed rather than hidden: a checkpoint written
+    # from a manifest `L = 50` records `cm_L = 49`. That is the level count, and it is correct.
     if haskey(kw, :L) && !haskey(kw, :probs) && !(FAM["driver"] in NO_PROBS_DRIVERS)
-        kw = merge(kw, (probs = resolve_cm_probs(kw.L),))
+        probs = resolve_cm_probs(kw.L)
+        lp("[fam_kwargs] CM grid: L=", kw.L, " equal-mass buckets (mass ", 1 / kw.L, " each) -> ",
+           length(probs), " cutpoints k/", kw.L, " for k=1..", kw.L - 1,
+           "; driver kwarg L is the LEVEL count ", length(probs), ", not the bucket count ", kw.L)
+        kw = merge(kw, (L = length(probs), probs = probs))
     end
     return kw
 end
