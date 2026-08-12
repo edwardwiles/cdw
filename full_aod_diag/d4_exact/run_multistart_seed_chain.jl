@@ -1,4 +1,5 @@
 _D4E = joinpath(@__DIR__)
+const D4X = _D4E   # the include block below is shared verbatim with the CM+PQ smoke, which names it D4X
 for f in ["draw_design.jl", "context_real_d20.jl", "winners.jl", "oracle.jl",
           "common_marginals_moments.jl", "common_marginals_interval.jl",
           "instrumentation.jl", "oracle_fast.jl", "gravity_elimination.jl", "three_way_derivatives.jl",
