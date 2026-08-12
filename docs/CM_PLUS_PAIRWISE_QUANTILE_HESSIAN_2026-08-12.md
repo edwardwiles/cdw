@@ -434,23 +434,31 @@ argument-time path is the one gated above; the in-callback one remains as the ba
 
 ---
 
-## 9. What is left, in order
+## 9. What is left
 
-1. **Checkpoint layer.** Model on `pairwise_quantile_checkpoint.jl`. Nothing mathematical is
-   outstanding — the outer gradient is exact and gated, and the inner solve converges.
-2. **A verifier.** The standalone family has
-   `verify_inner_solution_operator_pairwisequantile!` (independent forward/transpose recompute,
-   per-block KKT residuals, probability tables). This family needs its analogue before
-   `classify_inner_result`/`lfd_ok` can gate its campaign results — see memory
-   `feedback-lfd-ok-verification-gate-required`: `FiniteSolved && within_budget` is **not** enough.
-   The D=20 solves above report `|grad| ~ 1e-11`, which is a stationarity check, not a verification.
-3. **Campaign selectability**, i.e. a `family_tag` and the orchestrator arm. Note memory
-   `feedback-hzz-blas-thread-gate-and-family-tag-gates`: performance gates keyed on `family_tag`
-   starve new families. Key on capability.
-4. **Performance is not on the critical path.** The production-scale profile is in hand (§6) and the
-   inner solve already converges in 5 callbacks / 42 s at W=100k. The one identified target,
-   `cmpq_H_ER` at 46.8%, belongs to the standalone PQ family and needs its own gate — do not fold it
-   into this family's wiring work.
+**The family is campaign-ready.** Everything from the moment rows to a checkpointed, resumable
+outer driver behind the orchestrator's `call_driver` is built and gated. What remains is a decision
+and two optional improvements, not missing machinery:
+
+1. **Paste the arm into a protocol and pick starts.** `protocols/family_cm_pairwise_quantile_ARM.toml`
+   is ready. `paper_upper_v1.toml` was deliberately not edited (frozen, governs completed
+   campaigns). Multistart seeds come from the existing generator — do **not** hand-invent starting
+   points (memory `reference-multistart-seed-generator`), and note its `A_scale`/`gp_scale` are not
+   tuned defaults: scan a small grid at your own `W`/`delta_max` first.
+2. **`:cplus` economic-gradient adapter** (optional). The standalone family's is worth 4.42x at
+   real D=20/W=100k. Outer wall-clock only; no result changes.
+3. **Inner-callback performance** (optional, and *not* on the critical path — the inner solve
+   already converges in 5 callbacks / 42 s at W=100k). The one target the production-scale profile
+   identifies is `cmpq_H_ER` at 46.8%, which belongs to the **standalone** PQ family and needs its
+   own gate against its own results.
+
+Two pre-existing issues found while wiring, flagged rather than changed:
+
+* The standalone PQ arm in `call_driver` is **unreachable** from `family_start_chain.jl` — the
+  include was never added. Those campaigns go through `run_pq_multistart_seed_chain.jl` instead.
+  Left alone: another session is actively working on that family.
+* `cctx.Ews` (321 MB at D=20/W=100k) is dead weight on any no-dense-H path. Released here; the
+  other families building a `CMBinHessCtx` may still be carrying it. **Not checked.**
 
 ---
 
