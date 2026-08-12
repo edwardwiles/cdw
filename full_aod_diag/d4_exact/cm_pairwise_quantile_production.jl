@@ -28,6 +28,8 @@
 
 isdefined(Main, :CMPairwiseQuantileOperatorState) ||
     include(joinpath(@__DIR__, "cm_pairwise_quantile_lookup_kernels.jl"))
+isdefined(Main, :CMPQCoreHessCtx) ||
+    include(joinpath(@__DIR__, "cm_pairwise_quantile_hessian_assembly.jl"))
 
 """
     build_cm_pairwise_quantile_context(ctx, cfg::CMPairwiseQuantileConfig; inner_opt=nothing) -> NamedTuple
@@ -201,6 +203,11 @@ end
 ONCE per outer point: build `theta_econ`, prime the economic state (`prime_operator!`), decode this
 family's shared masses (`reset_for_solve!`), and run the real KNITRO inner dual solve.
 
+`hess_cb_builder` is REQUIRED, not defaulted: pass `cmpq_hess_builder_for(ctx_cm)` for a production
+(`hessopt=exact`) solve, or an explicit `nothing` for an FG-only option file. Omitting it would make
+"which Hessian is this solve using" an invisible property of a call site, which is exactly the class
+of silent-default this repo does not allow.
+
 `econ_ctx` MUST be the ORIGINAL, unaugmented economic context -- NOT `ctx_cm`, whose `.obj` is the
 restriction-augmented `OperatorPsiBundle`. `cf_build`/`prime_operator!` read dimensionality off
 `ctx.obj` internally, and passing the augmented context corrupts `cf.oci` (confirmed live for the
@@ -208,7 +215,7 @@ standalone family: it gave `cf.oci-1 = 129` instead of the correct economic-only
 caught by a D=4 KNITRO run, see `archPQ_base_state`'s own docstring).
 """
 function archCMPQ_base_state(x_free0::AbstractVector, raw_masses::AbstractVector{Float64},
-                             econ_ctx, ctx_cm; hess_cb_builder = nothing)
+                             econ_ctx, ctx_cm; hess_cb_builder)
     obj = ctx_cm.obj
     θ_econ0 = CS.reconstruct_full(x_free0, ctx_cm.m)
     prime_operator!(obj, θ_econ0, econ_ctx, ctx_cm.cmpq_core_cf_ref)
@@ -221,16 +228,43 @@ function archCMPQ_base_state(x_free0::AbstractVector, raw_masses::AbstractVector
 end
 
 """
-    cm_pairwise_quantile_attach(ctx, cmpq) -> ctx_cm
+    cm_pairwise_quantile_attach(ctx, cmpq; build_hessian_ctx) -> ctx_cm
 
 Merges the family's campaign state onto the economic context, giving the `ctx_cm` shape the rest of
 the family (and `archCMPQ_base_state`) expects: `.obj` is the augmented bundle, and the family's own
 handles are namespaced under `cmpq_*` so nothing collides with the standalone PQ family's `pq_*`
 fields if both are ever attached to the same context in a comparison harness.
+
+`build_hessian_ctx` decides whether `ctx_cm.cmpq_hess_ctx` is populated (`CMPQCoreHessCtx`, needed
+for `hessopt=exact`) or left `nothing`. It is a WIRING switch, not a scientific one -- it changes
+only which buffers exist, never what problem is solved -- but it is required rather than defaulted
+anyway, because building it is not free (CM's `Ttab`/`CT` family plus this family's `X` tables) and
+a caller doing an FG-only diagnostic should have to say so out loud. Note that populating it does
+NOT by itself register a Hessian callback: `archCMPQ_base_state` still takes the builder explicitly,
+so "production option file + no builder" stays the hard error it is meant to be.
 """
-function cm_pairwise_quantile_attach(ctx, cmpq)
+function cm_pairwise_quantile_attach(ctx, cmpq; build_hessian_ctx::Bool)
     ctx_cm = merge(ctx, (obj = cmpq.obj_cmpq, cmpq_op = cmpq.op, cmpq_mass_state = cmpq.mass_state,
                          cmpq_core_cf_ref = cmpq.core_cf_ref, cmpq_ctx = cmpq))
     st = cm_pairwise_quantile_fg_state(cmpq, ctx_cm)
-    return merge(ctx_cm, (cmpq_fg_state = st,))
+    ctx_cm = merge(ctx_cm, (cmpq_fg_state = st,))
+    octx = build_hessian_ctx ? build_cmpq_hess_ctx(ctx, cmpq, st) : nothing
+    return merge(ctx_cm, (cmpq_hess_ctx = octx,))
+end
+
+"""
+    cmpq_hess_builder_for(ctx_cm) -> Function
+
+The `hess_cb_builder` argument `archCMPQ_base_state`/`inner_loop_KNITRO_cmpairwisequantile_operator`
+expect, for a `ctx_cm` attached with `build_hessian_ctx=true`. Hard-errors (rather than returning
+`nothing` and letting the registration silently fall through to a quasi-Newton solve) if the context
+was attached without one.
+"""
+function cmpq_hess_builder_for(ctx_cm)
+    octx = ctx_cm.cmpq_hess_ctx
+    octx === nothing &&
+        error("cmpq_hess_builder_for: this context was attached with build_hessian_ctx=false, so " *
+              "there is no CMPQCoreHessCtx to build a callback from. Re-attach with " *
+              "build_hessian_ctx=true.")
+    return _ -> cmpq_hess_cb_builder(octx)
 end

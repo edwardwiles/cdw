@@ -67,7 +67,9 @@ function run_case(; L::Int, G::Int, n_families::Int, mass_start::Symbol, seed::I
     cfg = CMPairwiseQuantileConfig(L = L, cm_grid_size = G, cm_moment_families = n_families,
                                   contrasts = :anchored, min_bin_count = 1, mass_start = mass_start)
     cmpq = build_cm_pairwise_quantile_context(ctx, cfg; inner_opt = FGONLY_OPT)
-    ctx_cm = cm_pairwise_quantile_attach(ctx, cmpq)
+    # FG-only gate: no Hessian context is built at all, so nothing in this file can accidentally
+    # exercise the exact-Hessian path (that has its own gate, test_cm_pairwise_quantile_real_d4_hessian.jl).
+    ctx_cm = cm_pairwise_quantile_attach(ctx, cmpq; build_hessian_ctx = false)
     st = ctx_cm.cmpq_fg_state
     D = ctx.D; nc = L - 1
     n_restr = cmpq.n_restr
@@ -172,7 +174,8 @@ function run_case(; L::Int, G::Int, n_families::Int, mass_start::Symbol, seed::I
     if do_solve
         println("  --- REAL KNITRO inner solve, FG only (", basename(FGONLY_OPT), ") ---")
         t0 = time()
-        nStatus, xsol, objb, n_fg, n_hess = archCMPQ_base_state(x_free_calib, raw_masses, ctx, ctx_cm)
+        nStatus, xsol, objb, n_fg, n_hess = archCMPQ_base_state(x_free_calib, raw_masses, ctx, ctx_cm;
+                                                                hess_cb_builder = nothing)
         el = time() - t0
         # Delta_dual = -f at the returned point, recomputed through the FG functor itself (the
         # verifier's own reporting convention; `archCMPQ_base_state` deliberately does not return
@@ -198,13 +201,13 @@ function run_case(; L::Int, G::Int, n_families::Int, mass_start::Symbol, seed::I
         # The production option file asks for an exact Hessian; with no builder supplied that must be
         # a HARD ERROR, not a silent quasi-Newton downgrade.
         cmpq_prod = build_cm_pairwise_quantile_context(ctx, cfg; inner_opt = PROD_OPT)
-        ctx_prod = cm_pairwise_quantile_attach(ctx, cmpq_prod)
+        ctx_prod = cm_pairwise_quantile_attach(ctx, cmpq_prod; build_hessian_ctx = false)
         θe = CS.reconstruct_full(x_free_calib, ctx_prod.m)
         prime_operator!(ctx_prod.obj, θe, ctx, cmpq_prod.core_cf_ref)
         reset_for_solve!(ctx_prod.cmpq_fg_state, raw_masses)
         threw = false
         try
-            archCMPQ_base_state(x_free_calib, raw_masses, ctx, ctx_prod)
+            archCMPQ_base_state(x_free_calib, raw_masses, ctx, ctx_prod; hess_cb_builder = nothing)
         catch e
             threw = occursin("hessopt=exact", sprint(showerror, e))
         end

@@ -89,6 +89,139 @@ function cmpq_to_pq_row(I::Integer, D::Integer, L::Integer, ref::Integer)
 end
 
 """
+    cmpq_pq_row_map(D, L, ref) -> Vector{Int}
+
+`sig[I] = cmpq_to_pq_row(I, D, L, ref)` materialized once (campaign-lifetime) so the packed write
+never recomputes the branch per entry. STRICTLY INCREASING, by `cmpq_to_pq_row`'s own docstring --
+and note the tail is AFFINE (`sig[I] = n_marginal_rows(D,L) + I - (L-1)` for every pair row), so a
+column walk of `HRR_pq[sig[J], sig[I]]` over `J` is contiguous except for the first `L-1` entries.
+"""
+function cmpq_pq_row_map(D::Integer, L::Integer, ref::Integer)
+    nrow = n_cmpq_restr_rows(Int(D), Int(L))
+    sig = Vector{Int}(undef, nrow)
+    @inbounds for I in 1:nrow
+        sig[I] = cmpq_to_pq_row(I, Int(D), Int(L), Int(ref))
+    end
+    return sig
+end
+
+"""
+    cmpq_pk_upper(i, j, n) -> Int
+
+Row-major upper-triangular packed index of `(i,j)`, `i <= j`, within an `n x n` matrix -- the SAME
+convention `winner_pair_hessian!` (`core_exact_hessian.jl`) fills its own packed `hee_packed` with,
+via a single running counter across both its zeta-row and lambda-lambda loops, and the same closed
+form `pairwise_quantile_production.jl::_pk_upper` carries. Duplicated here (rather than reached for
+across a file this one does not depend on) so the standalone dense oracle, which loads no production
+stack at all, can still gate the packing; the oracle checks it against a literal running counter and
+the real-context Hessian gate checks it against `_pk_upper` itself, so the two copies cannot drift
+silently.
+"""
+@inline cmpq_pk_upper(i::Int, j::Int, n::Int) = (i - 1) * (n + 1) - div((i - 1) * i, 2) + (j - i + 1)
+
+"""
+    pack_cmpq_hessian!(hess_out, hee_packed, HEQ_pq, HEC, HRR_pq, HRC, HCC, sig,
+                       NCORE, n_restr, ncm) -> hess_out
+
+Writes KNITRO's packed ROW-MAJOR UPPER triangle for
+`x = [zeta; lambda_E(ncore1); lambda_L(L-1); lambda_P((L-1)^2*npair); lambda_CM(ncm)]`,
+i.e. `n = NCORE + n_restr + ncm` with `NCORE = 1 + ncore1`, selecting the correct source block per
+`(i,j)` instead of assembling a dense `n x n` first.
+
+Sources, each already in its final (signed, scaled, contrast-applied) form:
+
+| rows \\ cols | `1:NCORE`        | `NCORE+1:nR`          | `nR+1:n`        |
+|---|---|---|---|
+| `1:NCORE`    | `hee_packed`     | `HEQ_pq[i, sig[.]]`   | `HEC[i,.]`      |
+| `NCORE+1:nR` |                  | `HRR_pq[sig,sig]`     | `HRC[.,.]`      |
+| `nR+1:n`     |                  |                       | `HCC[.,.]`      |
+
+`HEQ_pq`/`HRR_pq` are the STANDALONE pairwise-quantile family's blocks at a replicated shared `mu`
+(see this file's header): `sig` selects this family's sub-block, and because `sig` is strictly
+increasing, `HRR_pq[sig[J], sig[I]]` with `J >= I` always lands in the LOWER triangle -- the only
+half `fill_pairwise_quantile_hessian_raw!`/`center_and_scale_pairwise_quantile_hessian!` populate.
+`HCC` must have BOTH triangles populated (which is what `fill_cm_HCC!` does); it is read by column,
+`HCC[jj, ii]`, for the same cache reason.
+
+THREE MEASURED PERFORMANCE PROPERTIES, carried over verbatim from
+`pairwisequantile_hess_cb_builder`'s own packed write, where they were measured at D=20/L=10/W=100k
+(86.16 s -> the callback stopped being the bottleneck):
+
+ 1. COLUMN WALKS. `HRR_pq`/`HCC` are read transposed (`[j, i]`, not `[i, j]`) so the inner loop
+    walks a contiguous column of a column-major matrix rather than striding a row. Both blocks are
+    symmetric, so the value is identical; for `HRR_pq` it is also the ONLY populated triangle.
+ 2. CLOSED-FORM ROW OFFSET. `k0(i) = (i-1)*n - (i-1)*(i-2)/2` is the packed index just before row
+    `i`, so rows are independent and the loop threads with no reduction and no ordering concern --
+    every packed slot belongs to exactly one row. `:dynamic` because upper-triangle rows have
+    length `n-i+1` and static chunks are badly imbalanced (~31x at 16 threads).
+ 3. HOISTED, TYPE-ASSERTED OUTPUT. `hess_out` is taken as a concrete `Vector{Float64}` argument
+    rather than re-read from KNITRO's untyped `evalResult` per entry -- that dynamic `getproperty`
+    +`setindex!` per entry, not memory, was the entire cost of the standalone family's own packed
+    write (~660 ns/entry). The caller does the assertion once.
+
+`HRC`/`HEC` are the only blocks read by ROW here (stride `n_restr`/`NCORE`). Left that way
+deliberately for now: at D=20/L=5 that is 5.7M+0.7M of 14.1M packed entries, against a table BUILD
+of 380M increments, so a transpose-on-fill would be optimizing the wrong term. Revisit only with a
+per-callback block profile in hand.
+"""
+function pack_cmpq_hessian!(hess_out::Vector{Float64}, hee_packed::Vector{Float64},
+        HEQ_pq::AbstractMatrix{Float64}, HEC::AbstractMatrix{Float64},
+        HRR_pq::AbstractMatrix{Float64}, HRC::AbstractMatrix{Float64},
+        HCC::AbstractMatrix{Float64}, sig::Vector{Int},
+        NCORE::Int, n_restr::Int, ncm::Int)
+    nR = NCORE + n_restr
+    n = nR + ncm
+    length(hess_out) == div(n * (n + 1), 2) ||
+        error("pack_cmpq_hessian!: hess buffer is $(length(hess_out)) long, expected " *
+              "n*(n+1)/2 = $(div(n * (n + 1), 2)) for n=$n")
+    length(hee_packed) == div(NCORE * (NCORE + 1), 2) ||
+        error("pack_cmpq_hessian!: hee_packed is $(length(hee_packed)) long, expected " *
+              "$(div(NCORE * (NCORE + 1), 2)) for NCORE=$NCORE")
+    length(sig) == n_restr ||
+        error("pack_cmpq_hessian!: length(sig)=$(length(sig)) != n_restr=$n_restr")
+    size(HEC) == (NCORE, ncm) || error("pack_cmpq_hessian!: size(HEC)=$(size(HEC)) != ($NCORE,$ncm)")
+    size(HRC) == (n_restr, ncm) || error("pack_cmpq_hessian!: size(HRC)=$(size(HRC)) != ($n_restr,$ncm)")
+    size(HCC) == (ncm, ncm) || error("pack_cmpq_hessian!: size(HCC)=$(size(HCC)) != ($ncm,$ncm)")
+    size(HEQ_pq, 1) == NCORE ||
+        error("pack_cmpq_hessian!: size(HEQ_pq,1)=$(size(HEQ_pq,1)) != NCORE=$NCORE")
+
+    Threads.@threads :dynamic for i in 1:n
+        k = (i - 1) * n - div((i - 1) * (i - 2), 2)
+        @inbounds if i <= NCORE
+            for j in i:NCORE
+                k += 1
+                hess_out[k] = hee_packed[cmpq_pk_upper(i, j, NCORE)]
+            end
+            for j in NCORE+1:nR
+                k += 1
+                hess_out[k] = HEQ_pq[i, sig[j-NCORE]]
+            end
+            for j in nR+1:n
+                k += 1
+                hess_out[k] = HEC[i, j-nR]
+            end
+        elseif i <= nR
+            ii = i - NCORE
+            si = sig[ii]
+            for j in i:nR
+                hess_out[k+j-i+1] = HRR_pq[sig[j-NCORE], si]   # column walk, lower triangle
+            end
+            k += nR - i + 1
+            for j in nR+1:n
+                k += 1
+                hess_out[k] = HRC[ii, j-nR]
+            end
+        else
+            ii = i - nR
+            @simd for j in i:n
+                hess_out[k+j-i+1] = HCC[j-nR, ii]              # column walk, both triangles filled
+            end
+        end
+    end
+    return hess_out
+end
+
+"""
     cmpq_replicate_shared_mu!(pq_state::PairwiseQuantileMassState, state::CMPQMassState) -> pq_state
 
 Fills every origin's row of a standalone-family mass state with THIS family's single shared `mu`, so

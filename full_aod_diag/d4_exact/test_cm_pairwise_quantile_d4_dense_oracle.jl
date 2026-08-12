@@ -507,6 +507,101 @@ function run_case(; D::Int, W::Int, L::Int, G::Int, n_families::Int, seed::Int,
         check("12  NEGATIVE CONTROL fires: reading the CM axis one level off disagrees",
               dev > 1e-3, @sprintf("max rel %.3e (want >> 0)", dev))
     end
+
+    # ============================================================================================
+    # CHECK 13-15 -- THE PACKED WRITE.
+    # `pack_cmpq_hessian!` is pure PLACEMENT: given the six blocks it must reproduce the packed
+    # upper triangle of the full `n x n` Hessian for
+    # `x = [zeta; lambda_E(NCORE-1); lambda_L; lambda_P; lambda_CM]`. It is gated here against the
+    # full Gram identity `(1/W) M' diag(h) M`, `M = [1 | E | G_R | G_CM]`, with a SYNTHETIC economic
+    # block `E` -- this oracle has no economic context, and placement does not care what E is. (The
+    # REAL economic blocks, and this same identity through the production callback, are gated in
+    # test_cm_pairwise_quantile_real_d4_hessian.jl, which does have a CompressedFactual.)
+    #
+    # The two blocks that arrive in the STANDALONE pairwise-quantile family's larger row space
+    # (`H_RR`, `H_E,R`) are handed in NaN-POISONED everywhere except the rows `sig` selects. So this
+    # is not only "does it place the right value", it is also "does it ever touch a row this family
+    # dropped" -- a single stray read shows up as a NaN in the packed vector, not as a small error.
+    # ============================================================================================
+    NCORE_syn = 3                                   # 1 zeta/"ones" column + 2 synthetic economic
+    E_syn = randn(MersenneTwister(seed + 77), W, NCORE_syn - 1)
+    Mfull = hcat(ones(W), E_syn, G_R, CMd)
+    n_all = NCORE_syn + nrow + ncm
+    size(Mfull, 2) == n_all || error("oracle CHECK 13: M has $(size(Mfull,2)) columns, expected $n_all")
+    Href = (Mfull' * (h .* Mfull)) ./ W
+    # Symmetrized EXPLICITLY, and this is not cosmetic: `M'*(h.*M)` via BLAS computes `[i,j]` as
+    # `sum_w M[w,i]*(h[w]*M[w,j])` and `[j,i]` as `sum_w M[w,j]*(h[w]*M[w,i])` -- equal in exact
+    # arithmetic, NOT bit-identical in Float64. The packed write reads the transposed entry for the
+    # two symmetric blocks it column-walks, so without this the BIT-IDENTICAL claim below would be
+    # testing BLAS's rounding, not the packing. `(a+b)/2` is commutative in Float64, so after this
+    # `Href[i,j] === Href[j,i]` exactly.
+    Href = (Href .+ Href') ./ 2
+
+    # the packed-index formula against a literal running counter (the real-context gate additionally
+    # checks it against production's own `_pk_upper`)
+    ok_pk = true; kpk = 0
+    for i in 1:NCORE_syn, j in i:NCORE_syn
+        kpk += 1
+        cmpq_pk_upper(i, j, NCORE_syn) == kpk || (ok_pk = false)
+    end
+    check("13  cmpq_pk_upper == a literal row-major upper-triangular running counter", ok_pk,
+          "$kpk entries")
+
+    sig = cmpq_pq_row_map(D, L, ref)
+    check("13a sig == cmpq_to_pq_row, strictly increasing, within the standalone family's rows",
+          all(sig[I] == cmpq_to_pq_row(I, D, L, ref) for I in 1:nrow) &&
+          all(sig[I] < sig[I+1] for I in 1:nrow-1) && sig[end] <= npq,
+          "sig[1]=$(sig[1]) sig[end]=$(sig[end]) of npq=$npq")
+
+    hee_syn = Vector{Float64}(undef, div(NCORE_syn * (NCORE_syn + 1), 2))
+    kh = 0
+    for i in 1:NCORE_syn, j in i:NCORE_syn
+        kh += 1
+        hee_syn[kh] = Href[i, j]
+    end
+    # NaN everywhere the packed write must never read
+    HRRpq_syn = fill(NaN, npq, npq)
+    HEQpq_syn = fill(NaN, NCORE_syn, npq)
+    for J in 1:nrow
+        sJ = sig[J]
+        for I in J:nrow
+            HRRpq_syn[sig[I], sJ] = Href[NCORE_syn+I, NCORE_syn+J]
+        end
+        for i in 1:NCORE_syn
+            HEQpq_syn[i, sJ] = Href[i, NCORE_syn+J]
+        end
+    end
+    HEC_syn = Href[1:NCORE_syn, NCORE_syn+nrow+1:n_all]
+    HRC_syn = Href[NCORE_syn+1:NCORE_syn+nrow, NCORE_syn+nrow+1:n_all]
+    HCC_syn = Href[NCORE_syn+nrow+1:n_all, NCORE_syn+nrow+1:n_all]
+
+    hvec = Vector{Float64}(undef, div(n_all * (n_all + 1), 2))
+    pack_cmpq_hessian!(hvec, hee_syn, HEQpq_syn, HEC_syn, HRRpq_syn, HRC_syn, HCC_syn, sig,
+                       NCORE_syn, nrow, ncm)
+    check("14  packed vector contains no NaN (no dropped-row read)", !any(isnan, hvec))
+    # Pure data movement, so this is BIT-IDENTICAL, not a tolerance.
+    kk = 0; ok_pack = true; worst_pack = 0.0
+    for i in 1:n_all, j in i:n_all
+        kk += 1
+        hvec[kk] === Href[i, j] || (ok_pack = false)
+        worst_pack = max(worst_pack, abs(hvec[kk] - Href[i, j]))
+    end
+    check("14a packed vector == packed upper triangle of (1/W) M' diag(h) M, BIT-IDENTICAL",
+          ok_pack && kk == length(hvec), @sprintf("%d entries, max abs dev %.3e", kk, worst_pack))
+
+    # NEGATIVE CONTROL: a transposed read of the H_R,CM block (the one block read by ROW) must break
+    # the packing -- otherwise CHECK 14a is not actually testing that block's orientation.
+    if nrow != ncm && min(nrow, ncm) >= 2
+        HRC_wrong = Matrix(HRC_syn')                       # ncm x nrow, deliberately wrong shape
+        threw = false
+        try
+            pack_cmpq_hessian!(similar(hvec), hee_syn, HEQpq_syn, HEC_syn, HRRpq_syn, HRC_wrong,
+                               HCC_syn, sig, NCORE_syn, nrow, ncm)
+        catch
+            threw = true
+        end
+        check("15  NEGATIVE CONTROL: a transposed H_R,CM is rejected by the shape checks", threw)
+    end
     return nothing
 end
 
