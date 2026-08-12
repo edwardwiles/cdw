@@ -111,9 +111,16 @@ const Z_HALFWIDTH         = 30.0
 # L in 7..9, sweep it rather than trusting this line.
 const INNER_OPT           = PQ_L >= 8 ? "ek_inner_pq_ma97_t10.opt" : "ek_inner_pq.opt"
 # ---- protocol [budgets.discovery_feasible_start] (minutes) ------------------------------------
-const STAGE_A_MIN = 75.0
-const STAGE_B_MIN = 30.0
-const STAGE_C_MIN = 75.0
+# The DEFAULTS are the protocol's own numbers and are what makes a cell comparable to the other
+# five families -- do not change them. The env overrides exist for deliberately longer single-cell
+# runs (e.g. "give this one delta cell 6 hours overnight and see whether more search tightens the
+# bound"), where the SCIENTIFIC settings must stay identical but the resource allocation is the
+# whole point of the experiment. A run that sets them prints a loud banner, so no result can be
+# mistaken for a protocol-budget cell after the fact.
+const STAGE_A_MIN = parse(Float64, get(ENV, "PQ_STAGE_A_MIN", "75.0"))
+const STAGE_B_MIN = parse(Float64, get(ENV, "PQ_STAGE_B_MIN", "30.0"))
+const STAGE_C_MIN = parse(Float64, get(ENV, "PQ_STAGE_C_MIN", "75.0"))
+const BUDGETS_ARE_PROTOCOL = (STAGE_A_MIN == 75.0 && STAGE_B_MIN == 30.0 && STAGE_C_MIN == 75.0)
 # ---- this family's own required choices ------------------------------------------------------
 # Half the EXPECTED joint-cell occupancy W/L^2 -- derived from this run's own W and L, so it moves
 # correctly with both, and strict enough that a genuinely starved cell still hard-errors.
@@ -129,7 +136,15 @@ lp("PAIRWISE-QUANTILE (Frechet-z, free masses) PRODUCTION: L=", PQ_L, " cutoff_s
 lp("W=", W_PROD, " sigma=", SIGMA, " deltas=", DELTAS, " min_bin_count=", MIN_BIN_COUNT,
    " mass_start=:", MASS_START)
 lp("campaign root: ", CAMPAIGN_ROOT)
-lp("budgets (min): A=", STAGE_A_MIN, " B=", STAGE_B_MIN, " C=", STAGE_C_MIN, "  (protocol section 8)")
+lp("budgets (min): A=", STAGE_A_MIN, " B=", STAGE_B_MIN, " C=", STAGE_C_MIN,
+   BUDGETS_ARE_PROTOCOL ? "  (protocol section 8)" : "  <-- NON-PROTOCOL, set via PQ_STAGE_*_MIN")
+if !BUDGETS_ARE_PROTOCOL
+    lp("!"^96)
+    lp("!! NON-PROTOCOL BUDGETS. Protocol section 8 is A=75 B=30 C=75 min. This cell is NOT directly")
+    lp("!! comparable on SEARCH EFFORT to a protocol-budget cell or to the other five families.")
+    lp("!! Every scientific setting is unchanged; only the time allocation differs.")
+    lp("!"^96)
+end
 lp("="^96)
 
 const GRAV = default_gravity_exclude_cells_brazil_korea()
