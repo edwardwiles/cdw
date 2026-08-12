@@ -20,12 +20,23 @@
 # ================================================================================================
 set -uo pipefail
 
-PQ_L="${1:?usage: launch_pairwise_quantile_production.sh <L> <cutoff_source> [deltas_csv]}"
-CUTOFF_SOURCE="${2:?usage: launch_pairwise_quantile_production.sh <L> <cutoff_source> [deltas_csv]}"
+USAGE="usage: launch_pairwise_quantile_production.sh <L> <cutoff_source> [deltas_csv] [campaign_root]"
+PQ_L="${1:?$USAGE}"
+CUTOFF_SOURCE="${2:?$USAGE}"
 DELTAS="${3:-0.1,0.5,1.0,2.0}"
 
 WORKTREE=/bbkinghome/edav/cdw_worktrees/pq-outer-loop-2026-08-10
-CAMPAIGN_ROOT=/bbkinghome/edav/repo_scratch/pq_freemass_production_2026-08-10/L${PQ_L}_${CUTOFF_SOURCE}
+# Campaign root. The default is the original 2026-08-10 campaign's directory, kept so existing
+# invocations resume exactly as before. A 4th argument (or PQ_CAMPAIGN_ROOT) overrides it.
+#
+# WHY THIS EXISTS (2026-08-12): the root used to be hardcoded, and re-running the launcher for a
+# SINGLE delta cell silently did three wrong things at once, none of them visible from the command
+# line -- it reused the already-frozen `_source`, so the run executed the OLD commit and none of the
+# caller's newer code or env-var options; it therefore also ignored PQ_STAGE_*_MIN, because that
+# option did not exist in the frozen runner; and it landed in a directory where that cell's stage
+# checkpoints already existed, so every stage was skipped and the run was a no-op. A fresh root
+# freezes the CURRENT commit and starts clean, which is what a re-run almost always means.
+CAMPAIGN_ROOT="${4:-${PQ_CAMPAIGN_ROOT:-/bbkinghome/edav/repo_scratch/pq_freemass_production_2026-08-10/L${PQ_L}_${CUTOFF_SOURCE}}}"
 SRC_DIR="$CAMPAIGN_ROOT/_source"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 LOG="$CAMPAIGN_ROOT/run_${STAMP}.log"
@@ -66,6 +77,9 @@ export ZIENA_LICENSE=/etc/sharedsw_licenses/ziena.txt
 export KNITRODIR=/opt/shared_sw/knitro/13.0.1
 export LD_LIBRARY_PATH="/opt/shared_sw/knitro/13.0.1/lib:${LD_LIBRARY_PATH:-}"
 log "env: JULIA_NUM_THREADS=$JULIA_NUM_THREADS OPENBLAS_NUM_THREADS=$OPENBLAS_NUM_THREADS KNITRO=$KNITRODIR"
+# Recorded because they change the RESULT's search effort, not just its speed, and are otherwise
+# invisible in this log. Empty means the runner's protocol defaults (75/30/75) apply.
+log "stage budget overrides: A=${PQ_STAGE_A_MIN:-<protocol 75>} B=${PQ_STAGE_B_MIN:-<protocol 30>} C=${PQ_STAGE_C_MIN:-<protocol 75>}"
 
 cd "$SRC_DIR" || exit 4
 
