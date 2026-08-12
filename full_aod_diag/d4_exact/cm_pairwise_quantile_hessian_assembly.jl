@@ -211,7 +211,11 @@ function cmpq_fill_hessian_blocks!(octx::CMPQCoreHessCtx, obj)
               "winner-pair context's economic width disagrees with this family's layout")
 
     # ---- H_EE: shared winner-pair backend, stays in ITS OWN packed form (never unpacked) ----------
-    winner_pair_hessian!(octx.hee_packed, obj, wctx)
+    # Every block below is timed under `@cmhess_prof` (cm_hessian_subblock_profiling.jl), the same
+    # opt-in, off-by-default instrumentation CM's own callback uses -- a single Ref check when
+    # disabled, which is what production runs with. Labels are `cmpq_*` so a `prof_summary()` after a
+    # run separates this family's blocks from anything else in the same store.
+    @cmhess_prof "cmpq_H_EE" winner_pair_hessian!(octx.hee_packed, obj, wctx)
 
     # ---- h = Psi''(r), the one weight vector every remaining block contracts against --------------
     obj.ddPsi!(obj.arg2, obj.arg0)
@@ -221,43 +225,47 @@ function cmpq_fill_hessian_blocks!(octx::CMPQCoreHessCtx, obj)
     cmpq_replicate_shared_mu!(octx.pq_state, octx.state)
 
     # ---- H_RR, as a superset, via the standalone family's gated machinery -------------------------
-    build_pairwise_quantile_hessian_tables!(octx.tabs_pq, octx.op, h, octx.tls)
-    fill_pairwise_quantile_hessian_raw!(octx.HRR_pq, octx.op, octx.tabs_pq)
-    center_and_scale_pairwise_quantile_hessian!(octx.HRR_pq, octx.op, octx.pq_state, octx.tabs_pq)
+    @cmhess_prof "cmpq_H_RR_tables" build_pairwise_quantile_hessian_tables!(octx.tabs_pq, octx.op, h, octx.tls)
+    @cmhess_prof "cmpq_H_RR_fill" fill_pairwise_quantile_hessian_raw!(octx.HRR_pq, octx.op, octx.tabs_pq)
+    @cmhess_prof "cmpq_H_RR_center" center_and_scale_pairwise_quantile_hessian!(octx.HRR_pq, octx.op,
+                                                                               octx.pq_state, octx.tabs_pq)
 
     # ---- H_E,R, likewise ---------------------------------------------------------------------
     zc_ws = ensure_winner_zc_cross_scratch!(octx.zc_cross_ws, W, n_total_rows(D, L))
-    winner_pair_cross_hessian_zc_prep!(zc_ws, wctx, h)
-    pairwise_quantile_cross_hessian_block!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
-                                           octx.tls, h, octx.cross_hess_scratch)
+    @cmhess_prof "cmpq_H_ER" begin
+        winner_pair_cross_hessian_zc_prep!(zc_ws, wctx, h)
+        pairwise_quantile_cross_hessian_block!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
+                                               octx.tls, h, octx.cross_hess_scratch)
+    end
 
     # ---- H_R,CM: the one genuinely new block -----------------------------------------------------
-    build_cmpq_cross_hess_tables!(octx.tabs_x, octx.op, octx.cctx.Bidx, h, octx.refIndex1;
-                                  Pow = octx.Pow)
-    fill_cmpq_cm_cross_block!(octx.HRC, octx.op, octx.state, octx.tabs_x, octx.origins,
-                              octx.refIndex1, Lcm, octx.R, W)
+    @cmhess_prof "cmpq_H_RCM_tables" build_cmpq_cross_hess_tables!(octx.tabs_x, octx.op, octx.cctx.Bidx,
+                                                                  h, octx.refIndex1; Pow = octx.Pow)
+    @cmhess_prof "cmpq_H_RCM_fill" fill_cmpq_cm_cross_block!(octx.HRC, octx.op, octx.state, octx.tabs_x,
+                                                            octx.origins, octx.refIndex1, Lcm, octx.R, W)
 
     # ---- H_CM,CM: CM's own tables. `H=nothing` is admissible ONLY with fill_S=false ---------------
-    if octx.threaded_bins
+    @cmhess_prof "cmpq_H_CC_tables" if octx.threaded_bins
         build_bin_tables_threaded!(octx.cctx, octx.cctx.tls, nothing, h; fill_S = false)
         prefix_sum_tables_threaded!(octx.cctx; fill_S = false)
     else
         build_bin_tables!(octx.cctx, nothing, h; fill_S = false)
         prefix_sum_tables!(octx.cctx; fill_S = false)
     end
-    fill_cm_HCC!(octx.cctx.Hfull, octx.cctx, W)
+    @cmhess_prof "cmpq_H_CC_fill" fill_cm_HCC!(octx.cctx.Hfull, octx.cctx, W)
 
     # ---- H_E,CM: CM's winner-bin cross, filled ONCE then sliced per threshold block ---------------
     # `winner_pair_cross_hessian_fill!` recomputes `ddPsi!(obj.arg2, obj.arg0)` internally: same
     # inputs, same buffer, same values -- `h` above is an alias of `obj.arg2` and is unchanged by it.
     cm_ws = ensure_winner_bin_cross_scratch!(octx.cm_cross_ws, wctx.ncolI, D, Lcm)
-    winner_pair_cross_hessian_fill!(wctx, cm_ws, obj, octx.cctx.Bidx; Pow = octx.Pow)
+    @cmhess_prof "cmpq_H_ECM_fill" winner_pair_cross_hessian_fill!(wctx, cm_ws, obj, octx.cctx.Bidx;
+                                                                   Pow = octx.Pow)
     fam2 = octx.n_families == 2
     Hraw_EC = octx.cctx.Hraw_EC
     Hraw_EC2 = fam2 ? octx.cctx.Hraw_EC2 : nothing
     ncm_cdf = nO * Lcm
     R = octx.R
-    @inbounds for l in 1:Lcm
+    @cmhess_prof "cmpq_H_ECM_blocks" @inbounds for l in 1:Lcm
         winner_pair_cross_hessian_cm_block!(Hraw_EC, wctx, cm_ws, l, octx.origins, octx.refIndex1, W;
                                             Hraw_EC_pow = Hraw_EC2)
         # The `:orthonormal` contrast is applied per threshold block on the RIGHT (`block * R`),
@@ -296,7 +304,7 @@ an optimization, never as a precondition. Its miss path recomputes `r` through t
 function cmpq_hess_cb_builder(octx::CMPQCoreHessCtx)
     return (kc, cb, evalRequest, evalResult, userParams) -> begin
         obj = userParams
-        operator_prep_for_hessian!(octx.fg_state, evalRequest.x)
+        @cmhess_prof "cmpq_prep_r" operator_prep_for_hessian!(octx.fg_state, evalRequest.x)
         cmpq_fill_hessian_blocks!(octx, obj)
         # Hoisted ONCE with a type assertion: re-reading `evalResult.hess` per entry through the
         # untyped callback signature was measured at ~660 ns/entry for the standalone family and was
@@ -305,8 +313,9 @@ function cmpq_hess_cb_builder(octx::CMPQCoreHessCtx)
         hess_out = evalResult.hess::Vector{Float64}
         HCC = @view octx.cctx.Hfull[octx.NCORE+1 : octx.NCORE+octx.ncm,
                                     octx.NCORE+1 : octx.NCORE+octx.ncm]
-        pack_cmpq_hessian!(hess_out, octx.hee_packed, octx.HEQ_pq, octx.HEC, octx.HRR_pq,
-                           octx.HRC, HCC, octx.sig, octx.NCORE, octx.n_restr, octx.ncm)
+        @cmhess_prof "cmpq_pack" pack_cmpq_hessian!(hess_out, octx.hee_packed, octx.HEQ_pq, octx.HEC,
+                                                   octx.HRR_pq, octx.HRC, HCC, octx.sig,
+                                                   octx.NCORE, octx.n_restr, octx.ncm)
         octx.n_hess_calls += 1
         return 0
     end
