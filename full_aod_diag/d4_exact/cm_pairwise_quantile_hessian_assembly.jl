@@ -16,6 +16,12 @@
 #
 #   H_EE     `winner_pair_hessian!` + `WinnerPairHessCtx`             (shared winner-pair backend)
 #   H_E,R    `pairwise_quantile_cross_hessian_block!` at replicated mu, sub-selected by `sig`
+#            (restructured 2026-08-12 for BOTH families at once -- threaded over slot, transposed
+#            accumulation, hoisted bins. There is ONE implementation: the pre-restructure serial
+#            code was deleted rather than kept as a switchable reference, so it cannot be turned
+#            back on by accident. It is in git if it is ever needed. Correctness is gated by the
+#            exact Gram reference in test_cm_pairwise_quantile_real_d4_hessian.jl, which proves the
+#            block CORRECT rather than merely unchanged.)
 #   H_RR     PQ raw fill + centering at replicated mu, sub-selected by `sig`
 #   H_R,CM   `build_cmpq_cross_hess_tables!` + `fill_cmpq_cm_cross_block!`   <- the only new algebra
 #   H_CM,CM  CM's `build_bin_tables!` -> `prefix_sum_tables!` -> `fill_cm_HCC!`
@@ -55,8 +61,6 @@ isdefined(Main, :build_bin_tables_threaded!) || include(joinpath(@__DIR__, "cm_h
 isdefined(Main, :PairwiseQuantileCrossHessScratch) ||
     include(joinpath(@__DIR__, "pairwise_quantile_cross_hessian.jl"))
 isdefined(Main, :cmpq_to_pq_row) || include(joinpath(@__DIR__, "cm_pairwise_quantile_hessian.jl"))
-isdefined(Main, :cmpq_pq_cross_hessian_block_fast!) ||
-    include(joinpath(@__DIR__, "cm_pairwise_quantile_cross_hessian_fast.jl"))
 
 """
     CMPQCoreHessCtx
@@ -94,12 +98,6 @@ mutable struct CMPQCoreHessCtx
     tls::PairwiseQuantileThreadScratch
     tabs_x::CMPQCrossHessTables
     cross_hess_scratch::PairwiseQuantileCrossHessScratch
-    # H_E,R backend. `:fast` = cmpq_pq_cross_hessian_block_fast! (threaded over slot, transposed
-    # accumulation, bins hoisted); `:shared` = the standalone family's serial
-    # pairwise_quantile_cross_hessian_block!, kept as the BIT-IDENTITY reference the D=4 gate
-    # compares against. Not a scientific parameter -- the two produce the same bits.
-    her_backend::Symbol
-    her_fast::CMPQCrossHessFastScratch
     # ---- CM's own machinery ----
     cctx::CMBinHessCtx
     Pow::Union{Nothing,Matrix{Float64}}
@@ -177,7 +175,6 @@ function build_cmpq_hess_ctx(ctx, cmpq, fg_state)
         PairwiseQuantileHessianTables(cmpq.op),
         build_pairwise_quantile_thread_scratch(D, npair, L), tabs_x,
         PairwiseQuantileCrossHessScratch(D, npair, W, NCORE - 1, L),
-        :fast, CMPQCrossHessFastScratch(npq, NCORE - 1),
         cctx, cmpq.Pow, cctx.use_threaded_bins,
         cmpq.core_cf_ref, nothing, nothing,
         Ref{Union{Nothing,WinnerZCCrossScratch}}(nothing),
@@ -243,13 +240,8 @@ function cmpq_fill_hessian_blocks!(octx::CMPQCoreHessCtx, obj)
     zc_ws = ensure_winner_zc_cross_scratch!(octx.zc_cross_ws, W, n_total_rows(D, L))
     @cmhess_prof "cmpq_H_ER" begin
         winner_pair_cross_hessian_zc_prep!(zc_ws, wctx, h)
-        if octx.her_backend === :fast
-            cmpq_pq_cross_hessian_block_fast!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
-                                              octx.tls, h, octx.cross_hess_scratch, octx.her_fast)
-        else
-            pairwise_quantile_cross_hessian_block!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
-                                                   octx.tls, h, octx.cross_hess_scratch)
-        end
+        pairwise_quantile_cross_hessian_block!(octx.HEQ_pq, wctx, zc_ws, octx.op, octx.pq_state,
+                                               octx.tls, h, octx.cross_hess_scratch)
     end
 
     # ---- H_R,CM: the one genuinely new block -----------------------------------------------------

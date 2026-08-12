@@ -48,7 +48,7 @@ for f in ["context.jl", "winners.jl", "oracle.jl", "common_marginals_moments.jl"
           "pairwise_quantile_operator.jl", "pairwise_quantile_hessian.jl",
           "pairwise_quantile_cross_hessian.jl", "pairwise_quantile_production.jl",
           "cm_pairwise_quantile_config.jl", "cm_pairwise_quantile_moments.jl",
-          "cm_pairwise_quantile_hessian.jl", "cm_pairwise_quantile_cross_hessian_fast.jl",
+          "cm_pairwise_quantile_hessian.jl",
           "cm_pairwise_quantile_hessian_assembly.jl",
           "cm_pairwise_quantile_lookup_kernels.jl", "cm_pairwise_quantile_production.jl"]
     include(joinpath(D4X, f))
@@ -151,44 +151,6 @@ end
 @printf("  %-22s %8.4f s total  %8.4f s/callback\n", "SUM(labelled)", tot, tot / NREP)
 flush(stdout)
 CM_HESSIAN_SUBBLOCK_PROFILING_ENABLED[] = false
-
-# ---- INTERLEAVED A/B of the H_E,R backend, in ONE process ---------------------------------------
-# The cross-run comparison (this profile vs an earlier one) is NOT a measurement on this box: blocks
-# that were not touched at all moved by 1.3-2.2x between two such runs, which is pure load drift.
-# `her_backend` is a switch, so the honest measurement is available: alternate :fast and :shared in
-# the SAME process, at the SAME point, and report best-of. Both produce a bit-identical HEQ (gated at
-# D=4), so this times two routes to one answer.
-function her_ab(octx, obj, nrep::Int)
-    tf = Float64[]; ts = Float64[]
-    was = octx.her_backend
-    for rep in 1:nrep
-        octx.her_backend = :fast
-        push!(tf, @elapsed cmpq_fill_hessian_blocks!(octx, obj))
-        octx.her_backend = :shared
-        push!(ts, @elapsed cmpq_fill_hessian_blocks!(octx, obj))
-    end
-    octx.her_backend = was
-    return (tf, ts)
-end
-let
-    # Warm both branches first so JIT lands outside the timed reps.
-    octx.her_backend = :fast;   cmpq_fill_hessian_blocks!(octx, ctx_cm.obj)
-    octx.her_backend = :shared; cmpq_fill_hessian_blocks!(octx, ctx_cm.obj)
-    octx.her_backend = :fast
-    tf, ts = her_ab(octx, ctx_cm.obj, 3)
-    println("\n=== H_E,R backend A/B, INTERLEAVED, whole-callback wall (3 reps) ===")
-    for r in 1:3
-        @printf("  rep %d:  :fast %.3f s   :shared %.3f s\n", r, tf[r], ts[r])
-    end
-    @printf("  best-of: :fast %.3f s   :shared %.3f s   whole-callback speedup %.2fx\n",
-            minimum(tf), minimum(ts), minimum(ts) / minimum(tf))
-    # The DIFFERENCE is attributable to H_E,R alone: every other block runs identical code in both
-    # arms, so `t_shared - t_fast` is exactly the time the restructure removed from that one block.
-    # Reported as a saving rather than as a block-level ratio, because this A/B does not measure the
-    # fast block in isolation -- only its effect on the callback.
-    @printf("  time removed from H_E,R: %.3f s per callback\n", minimum(ts) - minimum(tf))
-    flush(stdout)
-end
 
 # ---- the real inner solve ----------------------------------------------------------------------
 println("\n=== REAL KNITRO inner solve, hessopt=exact (", basename(PROD_OPT), ") ===")

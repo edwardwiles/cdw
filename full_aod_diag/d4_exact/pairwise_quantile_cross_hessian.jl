@@ -53,13 +53,20 @@ mutable struct PairwiseQuantileCrossHessScratch
     # call into this n_rows-long buffer via the SHARED `pairwise_quantile_target_vector!` rather
     # than recomputed inline at each of this block's four centering sites.
     tvec::Vector{Float64}
+    # TRANSPOSED accumulator for the bilateral scatter, `n_total_rows x nbilateral` (9.5 MB at
+    # D=20/L=5). Added 2026-08-12 with the scatter restructure: the old code accumulated into a ROW
+    # of the column-major output view, so consecutive columns strided by NCORE=382 doubles and
+    # essentially every one of ~399M accumulations touched a fresh cache line across a 9.5 MB block.
+    # Accumulating transposed makes one `j`'s working set a contiguous 25 KB column, and the
+    # transpose is paid once per callback on 1.2M entries instead of per increment.
+    Bt::Matrix{Float64}
 end
 
 function PairwiseQuantileCrossHessScratch(D::Int, npair::Int, W::Int, nbilateral::Int, L::Int)
     return PairwiseQuantileCrossHessScratch(
         zeros(D, L), zeros(L, L, npair), zeros(D, L), zeros(L, L, npair),
         zeros(D, L), zeros(L, L, npair), Vector{Float64}(undef, W), zeros(nbilateral),
-        zeros(n_total_rows(D, L)))
+        zeros(n_total_rows(D, L)), zeros(n_total_rows(D, L), nbilateral))
 end
 
 """
@@ -85,29 +92,21 @@ complexity as this restriction's forward pass, NOT `O(Ddest*W*n_rows)` (n_rows=3
 draw only scatters into the handful of cells it is ACTIVE in, never a full row of length n_rows.
 """
 function pairwise_quantile_cross_hessian_block!(HEQ::AbstractMatrix{Float64}, wctx, ws,
-        op::PairwiseQuantileOperator, state::PairwiseQuantileMassState, tls::PairwiseQuantileThreadScratch,
-        S::AbstractVector{Float64}, cross_hess_scratch::PairwiseQuantileCrossHessScratch)
+        op::PairwiseQuantileOperator, state::PairwiseQuantileMassState,
+        tls::PairwiseQuantileThreadScratch, S::AbstractVector{Float64},
+        cross_hess_scratch::PairwiseQuantileCrossHessScratch)
     D = op.D; npair = op.npair; W = op.W; L = op.L; nc = L - 1
     nrow = n_total_rows(D, L)
     ncolI = wctx.ncolI
-    size(HEQ) == (ncolI + 1, nrow) || error("pairwise_quantile_cross_hessian_block!: size(HEQ)=$(size(HEQ)) != ($(ncolI+1),$nrow)")
+    size(HEQ) == (ncolI + 1, nrow) ||
+        error("pairwise_quantile_cross_hessian_block!: size(HEQ)=$(size(HEQ)) != ($(ncolI+1),$nrow)")
     length(S) == W || error("pairwise_quantile_cross_hessian_block!: length(S)=$(length(S)) != W=$W")
-
     M = W
-    # version B: per-row centering constants c_I = mu[o,a] / mu[o,a]*mu[p,b] (version A: 1/L, 1/L^2).
-    # Materialized once per call by the shared target-vector builder, then indexed by row below.
     tvec = cross_hess_scratch.tvec
     pairwise_quantile_target_vector!(tvec, op, state)
-    nlast = UInt8(nc)   # last ACTIVE bin index; bin L (implicit zero) is > nlast
+    nlast = UInt8(nc)
 
-    # ---- row 1: S-only, no nu -- reduces to the plain S-weighted marginal/pair tables ----
-    # CENTERING (bug found + fixed live, 2026-08-09): winner_pair_cross_hessian_zc_block!'s own `Z`
-    # argument is documented as an ALREADY-CENTERED feature matrix -- this restriction's own raw
-    # bin-indicator lookups are NOT centered by construction, so the `-t*(sum of weights)` term
-    # (the "subtract the moment targets analytically" convention, already used in
-    # pairwise_quantile_transpose!) must be applied here too. Confirmed live via a real-KNITRO-
-    # context finite-difference check (debug_pq_cross_hess_isolate.jl): row 1 was off by ~2 orders
-    # of magnitude before this fix (raw sum only, no centering).
+    # ---- row 1 (S-only) -- unchanged, and already threaded inside the table builder --------------
     Mtab_S = cross_hess_scratch.Mtab_S; Ptab_S = cross_hess_scratch.Ptab_S
     fill!(Mtab_S, 0.0); fill!(Ptab_S, 0.0)
     build_pairwise_quantile_tables_threaded!(Mtab_S, Ptab_S, tls, op, S)
@@ -122,11 +121,7 @@ function pairwise_quantile_cross_hessian_block!(HEQ::AbstractMatrix{Float64}, wc
         row1[x] = (Ptab_S[a, b, pidx] - tvec[x] * S_sum) / M
     end
 
-    # ---- Snu-weighted tables: feed BOTH the NuZ-style correction AND (implicitly, via Snu itself
-    # having already been computed by winner_pair_cross_hessian_zc_prep!) the bilateral scatter's
-    # per-slot weight v[w]=Snu[w]*y[w,slot]. Same centering fix as row1 above -- NuZ[x] must be
-    # built from the CENTERED feature (Snu-weighted sum minus t_x*sum(Snu)), matching
-    # winner_pair_cross_hessian_zc_block!'s own `NuZ[x] = sum_w Snu[w]*Z[w,x]` with centered Z.
+    # ---- Snu-weighted correction tables -- unchanged ---------------------------------------------
     Mtab_Snu = cross_hess_scratch.Mtab_Snu; Ptab_Snu = cross_hess_scratch.Ptab_Snu
     fill!(Mtab_Snu, 0.0); fill!(Ptab_Snu, 0.0)
     build_pairwise_quantile_tables_threaded!(Mtab_Snu, Ptab_Snu, tls, op, ws.Snu)
@@ -139,57 +134,65 @@ function pairwise_quantile_cross_hessian_block!(HEQ::AbstractMatrix{Float64}, wc
     end
 
     nbilateral = wctx.has_cf ? ncolI - 1 : ncolI
-    bilateral_block = @view HEQ[2:1+nbilateral, :]
-    fill!(bilateral_block, 0.0)
+    Bt = cross_hess_scratch.Bt
+    (size(Bt, 1) == nrow && size(Bt, 2) >= nbilateral) ||
+        error("pairwise_quantile_cross_hessian_block!: scratch Bt is $(size(Bt)), needs ($nrow, >= $nbilateral)")
+    fill!(Bt, 0.0)
+    v_winner_sum = cross_hess_scratch.v_winner_sum
+    fill!(v_winner_sum, 0.0)
 
     y = wctx.y; winner = wctx.winner; Ddest = wctx.Ddest
     pairs = op.pairs
-    bin = op.bin   # campaign-constant under version B (fixed cutoffs) -- owned by the operator
-    v = cross_hess_scratch.v
-    # v_winner_sum[j] = sum_{w: this draw's own winner-slot combo is j} v[w] -- the PER-J,
-    # winner-conditioned weight total (bug fix, 2026-08-09, found via the same isolated FD check
-    # that caught row1's missing centering): each bilateral row j sums v[w] only over the SUBSET of
-    # draws whose actual winner matches j (not all W draws), so its own centering correction needs
-    # `t_x * v_winner_sum[j]`, NOT a global `t_x*sum(v)` -- computed here in the SAME winner-loop
-    # pass, no extra O(W) traversal.
-    v_winner_sum = cross_hess_scratch.v_winner_sum
-    fill!(v_winner_sum, 0.0)
-    @inbounds for slot in 1:Ddest
-        for w in 1:W
-            v[w] = ws.Snu[w] * y[w, slot]
-        end
-        wcol = @view winner[:, slot]
-        for w in 1:W
-            o_ = wcol[w]
+    bin = op.bin
+    Snu = ws.Snu
+    nmarg = n_marginal_rows(D, L)
+
+    # ---- THE SCATTER: threaded over slot, transposed accumulation, bins hoisted per draw ----------
+    Threads.@threads :dynamic for slot in 1:Ddest
+        # One D-length bin buffer per task (19 tiny allocations per callback, not per draw).
+        b = Vector{UInt8}(undef, D)
+        @inbounds for w in 1:W
+            o_ = winner[w, slot]
             j = slot + (o_ - 1) * Ddest
-            vw = v[w]
-            v_winner_sum[j] += vw
+            vw = Snu[w] * y[w, slot]
+            v_winner_sum[j] += vw          # j is unique to this slot -- no race
+            col = @view Bt[:, j]           # contiguous 3120-double column
             for o in 1:D
-                a = bin[w, o]
-                a <= nlast && (bilateral_block[j, marginal_row(o, a, L)] += vw)
+                b[o] = bin[w, o]           # 20 strided loads, once per (slot, draw)
+            end
+            for o in 1:D
+                a = b[o]
+                a <= nlast && (col[(o - 1) * nc + a] += vw)     # == marginal_row(o,a,L)
             end
             for pidx in 1:npair
                 (p, q) = pairs[pidx]
-                a = bin[w, p]; b = bin[w, q]
-                (a <= nlast && b <= nlast) && (bilateral_block[j, pair_row(D, pidx, a, b, L)] += vw)
+                a = b[p]; bq = b[q]
+                if a <= nlast && bq <= nlast
+                    col[nmarg + (pidx - 1) * nc * nc + (bq - 1) * nc + a] += vw   # == pair_row(...)
+                end
             end
         end
     end
 
+    # ---- centering + pi_vec correction, threaded over j (disjoint rows of HEQ) --------------------
     pi_vec = wctx.pi_vec
-    @inbounds for j in 1:nbilateral
+    Threads.@threads :dynamic for j in 1:nbilateral
         pij = pi_vec[j]
         vwj = v_winner_sum[j]
-        for o in 1:D, a in 1:nc
-            x = marginal_row(o, a, L)
-            HEQ[j+1, x] = invM_apply(bilateral_block[j, x] - tvec[x] * vwj, pij, Mtab_Snu[o, a], M)
-        end
-        for pidx in 1:npair, b in 1:nc, a in 1:nc
-            x = pair_row(D, pidx, a, b, L)
-            HEQ[j+1, x] = invM_apply(bilateral_block[j, x] - tvec[x] * vwj, pij, Ptab_Snu[a, b, pidx], M)
+        @inbounds begin
+            colj = @view Bt[:, j]
+            for o in 1:D, a in 1:nc
+                x = marginal_row(o, a, L)
+                HEQ[j+1, x] = invM_apply(colj[x] - tvec[x] * vwj, pij, Mtab_Snu[o, a], M)
+            end
+            for pidx in 1:npair, b2 in 1:nc, a in 1:nc
+                x = pair_row(D, pidx, a, b2, L)
+                HEQ[j+1, x] = invM_apply(colj[x] - tvec[x] * vwj, pij, Ptab_Snu[a, b2, pidx], M)
+            end
         end
     end
 
+    # ---- cf row -- unchanged --------------------------------------------------------------------
     if wctx.has_cf
         jcf = ncolI
         row_cf = @view HEQ[jcf+1, :]
@@ -202,12 +205,11 @@ function pairwise_quantile_cross_hessian_block!(HEQ::AbstractMatrix{Float64}, wc
             x = marginal_row(o, a, L)
             row_cf[x] = (Mtab_cf[o, a] - tvec[x] * crs_sum) / M
         end
-        @inbounds for pidx in 1:npair, b in 1:nc, a in 1:nc
-            x = pair_row(D, pidx, a, b, L)
-            row_cf[x] = (Ptab_cf[a, b, pidx] - tvec[x] * crs_sum) / M
+        @inbounds for pidx in 1:npair, b2 in 1:nc, a in 1:nc
+            x = pair_row(D, pidx, a, b2, L)
+            row_cf[x] = (Ptab_cf[a, b2, pidx] - tvec[x] * crs_sum) / M
         end
     end
-
     return HEQ
 end
 
